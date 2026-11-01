@@ -4,7 +4,7 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -202,4 +202,32 @@ test('a process never releases a lock that is no longer its own', async () => {
   const other = writeLock({ pid: process.pid, start: null, role: 'app', token: 'someone-else' });
   assert.strictEqual(await holder.end(), 0);
   assert.strictEqual(readFileSync(LOCK, 'utf8'), other);
+});
+
+test('a reap file left by a reaper that died is reaped by the same rule, then the lock is taken', () => {
+  writeLock({ pid: deadPid(), start: null, role: 'cli', token: 'dead-holder' });
+  writeFileSync(`${LOCK}.reap-dead-holder`, JSON.stringify({ pid: deadPid(), start: null, role: 'reap', token: 'dead-reaper' }));
+  lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli');
+  assert.strictEqual(readLock().pid, process.pid);
+  assert.deepStrictEqual(readdirSync('.bb-data').filter((e) => e.includes('.reap-')), []);
+});
+
+test("a contender never touches a live reaper's file, nor the lock it is reaping", () => {
+  const lock = writeLock({ pid: deadPid(), start: null, role: 'cli', token: 'dead-holder' });
+  const reaper = JSON.stringify({ pid: process.ppid, start: null, role: 'reap', token: 'live-reaper' });
+  writeFileSync(`${LOCK}.reap-dead-holder`, reaper);
+  assert.throws(() => lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli', 300), /still removing a stale/);
+  assert.strictEqual(readFileSync(LOCK, 'utf8'), lock);
+  assert.strictEqual(readFileSync(`${LOCK}.reap-dead-holder`, 'utf8'), reaper);
+});
+
+test('after taking the lock, temp files and reap files of dead processes are removed', () => {
+  mkdirSync('.bb-data', { recursive: true });
+  const dead = deadPid();
+  writeFileSync(`${LOCK}.${dead}-00000000-0000-4000-8000-000000000000`, '{}');
+  writeFileSync(`${LOCK}.reap-orphan`, JSON.stringify({ pid: dead, start: null, role: 'reap', token: 'orphan' }));
+  const live = `${LOCK}.reap-busy`;
+  writeFileSync(live, JSON.stringify({ pid: process.ppid, start: null, role: 'reap', token: 'busy' }));
+  lockLocalDatabase(localDatabaseDir('my-app-main'), 'cli');
+  assert.deepStrictEqual(readdirSync('.bb-data').sort(), ['my-app-main.lock', 'my-app-main.lock.reap-busy']);
 });

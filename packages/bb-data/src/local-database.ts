@@ -11,9 +11,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { linkSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Dirent } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, type Dirent } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { hasInitializedPgliteDataDir } from './engines/pglite-engine.js';
 
 /** Local Building Block data, relative to the app root (the dev server's working directory). */
@@ -95,15 +95,36 @@ export function requireLocalDatabaseDir(block: string | undefined, options?: { m
 // ── One process per local database ──────────────────────────────────────────
 // PGlite runs PostgreSQL inside one process: two processes on one data directory
 // corrupt it. So the dev mock (role `app`) and the CLI (role `cli`) both take
-// `<dataDir>.lock`, next to the data directory, BEFORE they open PGlite:
-//   - Acquire: hard-link a complete record `{ pid, start, role, token }` to the
-//     lock path. link(2) fails with EEXIST when the lock exists (like O_EXCL), and
-//     a reader never sees a half-written record.
-//   - Stale: the holder's pid is dead, or now belongs to a process with another
-//     start time (pid reused). Take over by renaming the lock to a unique name,
-//     checking that it is the record that was inspected, deleting it, and
-//     acquiring again. A fresh lock moved by mistake is linked back.
-//   - Release: when the process exits, only if the lock still holds our record.
+// `<dataDir>.lock`, next to the data directory, BEFORE they open PGlite.
+//
+// Records. Every file of the protocol holds one record `{ pid, start, role, token }`
+// (start: the process start time, to tell a reused pid apart; token: random, new
+// for every file created). A file is created only by hard-linking a complete
+// record from a private temp file: link(2) fails with EEXIST when the path exists
+// (the O_EXCL guarantee), never replaces it, and a reader never sees half a record.
+//
+// Acquire: link our record to the lock path P. If P exists, read its record X:
+//   - X's process is alive: wait or refuse. A live lock is never touched.
+//   - X's process is dead (or its pid now belongs to a process with another start
+//     time): reap X, then try again.
+// Reap X at P: create `P.reap-<X.token>` (link, so at most one reaper per record).
+// Holding it, re-read P; if P still holds X, unlink P. Then unlink the reap file.
+// If the reap file exists: its holder is alive → back off; dead → reap the reap
+// file by the same rule (bounded depth), then try again.
+// Release: on exit, unlink P only if it still holds our record.
+//
+// Safety: a record at a path Q is removed only (a) by its own process, which first
+// checks Q still holds its record, or (b) by the one holder of `Q.reap-<token>`,
+// after it saw the record's process dead and, while holding the reap file, saw Q
+// still holding that record. Nothing renames or moves a file. Take any record X
+// whose process is alive: (a) doesn't apply to other processes; (b) requires X's
+// process to have been seen dead, and a dead process stays dead, so no reaper
+// targets X. In (b) the unlink can only hit X: while the reaper holds
+// `Q.reap-<X.token>`, X can leave Q only through that reaper (its owner is dead),
+// and no other record can appear at Q while X is there (link fails). A reap file
+// is a record under the same rules, so a live reaper keeps it. Hence a live
+// process's lock is never removed, and two live processes never both hold P.
+//
 // A process that already holds the lock (several `Database`s with one fullId)
 // gets it again.
 
@@ -113,7 +134,7 @@ interface LockRecord {
   pid: number;
   /** Start time of `pid`, to tell a reused pid apart; null where it can't be read. */
   start: string | null;
-  role: LocalDatabaseRole;
+  role: LocalDatabaseRole | 'reap';
   token: string;
 }
 
@@ -187,25 +208,83 @@ function releaseOnExit(path: string, raw: string): void {
   heldLocks.set(path, raw);
 }
 
-/** Remove a stale lock without ever removing a fresh one. */
-function removeStaleLock(path: string, inspected: string): void {
-  const aside = `${path}.stale-${process.pid}-${randomUUID()}`;
+/** The reap file for a record: named by its token, or by a hash of an unreadable record. */
+function reapPath(path: string, inspected: string): string {
+  const token = parseRecord(inspected)?.token;
+  const key =
+    typeof token === 'string' && /^[\w-]{1,64}$/.test(token)
+      ? token
+      : createHash('sha256').update(inspected).digest('hex').slice(0, 32);
+  return `${path}.reap-${key}`;
+}
+
+const MAX_REAP_DEPTH = 4;
+
+/**
+ * Remove the record `inspected` from `path`, whose process was seen dead (see the
+ * safety argument above). Returns false when another live reaper holds it, so
+ * the caller backs off.
+ */
+function reap(path: string, inspected: string, depth = 0): boolean {
+  const reaper = reapPath(path, inspected);
+  const record = newRecord('reap');
+  const tmp = tempPath(path);
+  writeFileSync(tmp, record);
   try {
-    renameSync(path, aside);
+    linkSync(tmp, reaper);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
-    throw e;
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+    const other = readRaw(reaper);
+    if (other === null) return true; // that reaper finished; try again
+    const holder = parseRecord(other);
+    if (holder && isHolderAlive(holder)) return false;
+    return depth < MAX_REAP_DEPTH && reap(reaper, other, depth + 1);
+  } finally {
+    rmSync(tmp, { force: true });
   }
-  if (readRaw(aside) !== inspected) {
-    // Another process replaced the stale lock between our read and our rename:
-    // put its fresh lock back, unless yet another one already took its place.
-    try {
-      linkSync(aside, path);
-    } catch {
-      /* the path is taken again; that holder owns it */
+  try {
+    testHook('takeover');
+    if (readRaw(path) === inspected) rmSync(path, { force: true });
+  } finally {
+    rmSync(reaper, { force: true }); // ours: only we remove it while we live
+  }
+  return true;
+}
+
+/**
+ * After taking the lock: remove reap files left by reapers that died, and temp
+ * files left by processes that died. Reap files go by the same rule as locks.
+ */
+function removeOrphans(path: string): void {
+  const dir = dirname(path);
+  const base = basename(path);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const file = join(dir, entry);
+    if (entry.startsWith(`${base}.reap-`)) {
+      const raw = readRaw(file);
+      const holder = raw === null ? null : parseRecord(raw);
+      if (raw !== null && !(holder && isHolderAlive(holder))) reap(file, raw);
+      continue;
     }
+    // `<lock>.<pid>-<uuid>`: a temp file whose process is gone (a link to it, if
+    // any, is a separate name and stays).
+    const pid = entry.startsWith(`${base}.`) ? /^(\d+)-[0-9a-f-]{36}$/.exec(entry.slice(base.length + 1))?.[1] : undefined;
+    if (pid && !isHolderAlive({ pid: Number(pid), start: null, role: 'app', token: '' })) rmSync(file, { force: true });
   }
-  rmSync(aside, { force: true });
+}
+
+function newRecord(role: LockRecord['role']): string {
+  return JSON.stringify({ pid: process.pid, start: ownStartTime(), role, token: randomUUID() } satisfies LockRecord);
+}
+
+function tempPath(path: string): string {
+  return `${path}.${process.pid}-${randomUUID()}`;
 }
 
 function inUseMessage(dataDir: string, holder: LockRecord, path: string): string {
@@ -221,6 +300,23 @@ function inUseMessage(dataDir: string, holder: LockRecord, path: string): string
 
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Test seam: with `BLOCKS_TEST_DB_LOCK_HOOKS=<dir>`, each protocol step announces
+ * itself as `<dir>/<pid>.<step>`; a step listed in `BLOCKS_TEST_DB_LOCK_PAUSE`
+ * stops there (the first time) until `<dir>/<pid>.<step>.go` exists. Lets tests
+ * force a given interleaving of several processes.
+ */
+const pausedSteps = new Set<string>();
+function testHook(step: 'stale-inspected' | 'takeover' | 'live-holder'): void {
+  const dir = process.env.BLOCKS_TEST_DB_LOCK_HOOKS;
+  if (!dir) return;
+  writeFileSync(join(dir, `${process.pid}.${step}`), '');
+  if (pausedSteps.has(step) || !(process.env.BLOCKS_TEST_DB_LOCK_PAUSE ?? '').split(',').includes(step)) return;
+  pausedSteps.add(step);
+  const go = join(dir, `${process.pid}.${step}.go`);
+  while (!existsSync(go)) sleepSync(20);
 }
 
 /**
@@ -243,28 +339,42 @@ export function lockLocalDatabase(
 ): string {
   const path = lockPath(dataDir);
   mkdirSync(dirname(path), { recursive: true });
-  const raw = JSON.stringify({ pid: process.pid, start: ownStartTime(), role, token: randomUUID() } satisfies LockRecord);
-  const tmp = `${path}.${process.pid}-${randomUUID()}`;
+  const raw = newRecord(role);
+  const tmp = tempPath(path);
   writeFileSync(tmp, raw);
   const deadline = Date.now() + waitMs;
   let announced = false;
   try {
     for (;;) {
+      let taken = true;
       try {
         linkSync(tmp, path);
-        releaseOnExit(path, raw);
-        return dataDir;
       } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+        taken = false;
+      }
+      if (taken) {
+        releaseOnExit(path, raw);
+        try {
+          removeOrphans(path);
+        } catch {
+          /* best-effort cleanup; the lock is ours either way */
+        }
+        return dataDir;
       }
       const inspected = readRaw(path);
       if (inspected === null) continue; // released meanwhile
       const holder = parseRecord(inspected);
       if (!holder || !isHolderAlive(holder)) {
-        removeStaleLock(path, inspected);
+        testHook('stale-inspected');
+        if (!reap(path, inspected)) {
+          if (Date.now() > deadline) throw new Error(`Another process is still removing a stale ${path}. Try again.`);
+          sleepSync(50); // another live process is reaping that record
+        }
         continue;
       }
       if (holder.pid === process.pid) return dataDir; // already ours
+      testHook('live-holder');
       if ((role === 'cli' && holder.role === 'app') || Date.now() > deadline) {
         throw new Error(inUseMessage(dataDir, holder, path));
       }
