@@ -3,9 +3,12 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { execSync } from 'node:child_process';
-import { writeFileSync, unlinkSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { execFile, execSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { isBuiltin } from 'node:module';
+import type { AddressInfo } from 'node:net';
+import { promisify } from 'node:util';
+import { writeFileSync, unlinkSync, mkdtempSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -503,5 +506,67 @@ try {
       assert.ok(result.includes('ERROR:Blocks API URL not configured'), `Expected the not-configured error, got: ${result}`);
       assert.ok(result.includes('that needs Node.js 22.3 or later'), `Expected the error to name the Node.js requirement, got: ${result}`);
     });
+  });
+});
+
+describe('Node.js client and a config.json an older deploy wrote', () => {
+  /** Run a client call in a fresh app whose `.blocks-sandbox/config.json` is `config`, against a stub API that counts calls. */
+  async function callWith(config: (stub: string) => object, env: (stub: string) => Record<string, string> = () => ({})) {
+    let calls = 0;
+    const server = createServer((_req, res) => {
+      calls++;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ jsonrpc: '2.0', result: 'stub', id: 1 }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const stub = `http://127.0.0.1:${(server.address() as AddressInfo).port}/aws-blocks/api`;
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-client-legacy-'));
+    try {
+      mkdirSync(join(dir, '.blocks-sandbox'));
+      writeFileSync(join(dir, '.blocks-sandbox', 'config.json'), JSON.stringify(config(stub)));
+      writeFileSync(
+        join(dir, 'test.mjs'),
+        `import { ApiNamespaceClient } from 'file://${CLIENT_MODULE}';\n` +
+          "try { console.log('RESULT ' + await ApiNamespaceClient('api').hello()); } catch (e) { console.log('ERROR ' + e.message); }\n",
+      );
+      const { stdout } = await promisify(execFile)(process.execPath, ['test.mjs'], {
+        cwd: dir,
+        env: { PATH: process.env.PATH, HOME: process.env.HOME, ...env(stub) },
+        timeout: 10_000,
+      });
+      return { stdout, calls };
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('refuses a production config.json, without calling it', async () => {
+    const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment: 'production' }));
+    assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed production stack .*written by an older deploy/);
+    assert.match(stdout, /npx --no -- blocks dev.*BLOCKS_API_URL/);
+    assert.strictEqual(calls, 0);
+  });
+
+  it('refuses a sandbox config.json with an https URL', async () => {
+    const { stdout } = await callWith(() => ({ apiUrl: 'https://abc.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api', environment: 'sandbox' }));
+    assert.match(stdout, /ERROR \.blocks-sandbox\/config\.json points at the deployed sandbox stack/);
+  });
+
+  it('calls the stack BLOCKS_API_URL names on purpose', async () => {
+    const { stdout, calls } = await callWith(
+      () => ({ apiUrl: 'https://legacy.example/aws-blocks/api', environment: 'production' }),
+      (stub) => ({ BLOCKS_API_URL: stub }),
+    );
+    assert.match(stdout, /RESULT stub/);
+    assert.strictEqual(calls, 1);
+  });
+
+  it("uses a dev server's config.json, local or blocks sandbox's", async () => {
+    for (const environment of ['local', 'sandbox']) {
+      const { stdout, calls } = await callWith((stub) => ({ apiUrl: stub, environment }));
+      assert.match(stdout, /RESULT stub/, environment);
+      assert.strictEqual(calls, 1, environment);
+    }
   });
 });

@@ -7,6 +7,8 @@ import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
+import { migrateLegacyDeployedConfig } from './deployed-config.js';
+import { join } from 'node:path';
 import { ignoreClosedOutput, log } from './log.js';
 import { runCapture } from './run-command.js';
 import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
@@ -171,6 +173,7 @@ export async function destroy(options: DestroyOptions) {
   ignoreClosedOutput();
   return trackCommand('destroy', async () => {
     log.progress('🗑️  Destroying production stack...');
+    migrateLegacyDeployedConfig(join(options.projectRoot, '.blocks-sandbox'));
 
     // The same environment as the production deploy: `.env.production` can set
     // AWS_PROFILE and AWS_REGION (an exported variable wins), so without it the
