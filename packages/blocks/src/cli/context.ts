@@ -14,6 +14,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
 import type * as CoreScriptsModule from '@aws-blocks/core/scripts';
+import { loadCoreScripts } from './core-load.js';
 import { CliError, UsageError } from './errors.js';
 import { Output, type OutputStream } from './output.js';
 import type { Globals, ParsedInvocation } from './parse.js';
@@ -497,6 +498,6 @@ export function processDeps(): CliDeps {
 		spawn: spawnChild,
 		chdir: (dir) => process.chdir(dir),
 		argv: process.argv,
-		core: () => import('@aws-blocks/core/scripts'),
+		core: loadCoreScripts,
 	};
 }
