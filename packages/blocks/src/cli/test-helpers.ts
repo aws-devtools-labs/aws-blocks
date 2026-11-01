@@ -52,6 +52,9 @@ const NO_AWS: Partial<CoreScripts> = {
 	openConsole: async () => {
 		throw new Error('openConsole is not faked in this test');
 	},
+	deployedStackExists: async () => {
+		throw new Error('deployedStackExists is not faked in this test');
+	},
 };
 
 /** Run the CLI in this process with fake seams. */

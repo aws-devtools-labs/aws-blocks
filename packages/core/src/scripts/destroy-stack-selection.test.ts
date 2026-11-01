@@ -210,6 +210,27 @@ describe('the production destroy of a stack that does not exist', { skip }, () =
     assert.strictEqual(await stackExists(failing(named('AccessDenied', 'not authorized')), describe, 's'), undefined);
     assert.strictEqual(await stackExists(failing(named('ValidationError', 'Rate exceeded')), describe, 's'), undefined);
   });
+
+  it('looks a deployed stack up with the deploy credentials, in the Region given or configured', async () => {
+    const moduleUrl = new URL('./destroy.js', import.meta.url).href;
+    const lookup = async (env: Record<string, string>, options: Record<string, unknown>) => {
+      const script = `const mod = await import(${JSON.stringify(moduleUrl)}); console.log(String(await mod.deployedStackExists(${JSON.stringify({ projectRoot: root, ...options })})));`;
+      const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+        cwd: root,
+        env: { HOME: root, AWS_BLOCKS_DISABLE_TELEMETRY: '1', ...env },
+        timeout: 60_000,
+      });
+      return stdout.trim();
+    };
+    const aws = { AWS_ACCESS_KEY_ID: 'AKIDTEST', AWS_SECRET_ACCESS_KEY: 'secret', AWS_ENDPOINT_URL_CLOUDFORMATION: endpoint };
+    assert.strictEqual(await lookup({ ...aws, AWS_REGION: 'us-east-1' }, { stackName: 'live-prod' }), 'true');
+    assert.strictEqual(await lookup({ ...aws, AWS_REGION: 'us-east-1' }, { stackName: 'gone-prod' }), 'false');
+    assert.strictEqual(await lookup(aws, { stackName: 'gone-prod', region: 'eu-west-1' }), 'false');
+    // No Region to look in, or a lookup that fails otherwise: unknown.
+    assert.strictEqual(await lookup(aws, { stackName: 'live-prod' }), 'undefined');
+    const unreachable = { ...aws, AWS_ENDPOINT_URL_CLOUDFORMATION: 'http://127.0.0.1:9', AWS_REGION: 'us-east-1' };
+    assert.strictEqual(await lookup(unreachable, { stackName: 'live-prod' }), 'undefined');
+  });
 });
 
 describe('cdkListedStacks', () => {

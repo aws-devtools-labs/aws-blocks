@@ -4,7 +4,7 @@
 import { loadProductionEnv } from './ensure-secrets.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
-import { environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
+import { type DeploymentTargetOptions, environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
@@ -50,20 +50,36 @@ export async function stackExists(
   }
 }
 
+export interface DeployedStackOptions extends DeploymentTargetOptions {
+  stackName: string;
+  /** The Region to look in. Default: the Region CDK deploys to. */
+  region?: string;
+}
+
 /**
- * Look up `stackName` with the credentials and Region CDK destroys with (see
- * `assertAwsCredentials`): CDK uses environment access keys before AWS_PROFILE,
- * and SDK clients do not read `cdk.json`. `undefined` without a Region.
+ * Whether CloudFormation has the stack, looked up with the credentials and Region
+ * CDK deploys with (see `assertAwsCredentials`): CDK uses environment access keys
+ * before AWS_PROFILE, and SDK clients do not read `cdk.json`. `false` only when the
+ * stack does not exist; `undefined` without a Region, or when the lookup fails
+ * otherwise (no credentials, AccessDenied, no network).
  */
-async function productionStackExists(projectRoot: string, stackName: string): Promise<boolean | undefined> {
-  const { region, profile } = await resolveDeploymentTarget({ projectRoot });
+export async function deployedStackExists(options: DeployedStackOptions): Promise<boolean | undefined> {
+  const target = await resolveDeploymentTarget(options);
+  const region = options.region ?? target.region;
   if (!region) return undefined;
-  // Loaded only when a destroy runs, like the other SDK clients of the scripts.
+  // Loaded only when a lookup runs, like the other SDK clients of the scripts.
   const { CloudFormationClient, DescribeStacksCommand } = await import('@aws-sdk/client-cloudformation');
-  const credentials = profile ? undefined : environmentAccessKeys();
-  const cfn = new CloudFormationClient({ region, profile, ...(credentials ? { credentials } : {}), maxAttempts: 2 });
+  const credentials = target.profile ? undefined : environmentAccessKeys(options.env);
+  // SDK clients read AWS_PROFILE from process.env, not from `options.env`.
+  const profile = target.profile ?? (credentials ? undefined : options.env?.AWS_PROFILE || undefined);
+  const cfn = new CloudFormationClient({
+    region,
+    profile,
+    ...(credentials ? { credentials } : {}),
+    maxAttempts: 2,
+  });
   try {
-    return await stackExists(cfn, (StackName) => new DescribeStacksCommand({ StackName }), stackName);
+    return await stackExists(cfn, (StackName) => new DescribeStacksCommand({ StackName }), options.stackName);
   } finally {
     cfn.destroy();
   }
@@ -167,7 +183,7 @@ export async function destroy(options: DestroyOptions) {
 
     if (options.stackName) {
       assertAppDefinesStack(options, options.stackName, cdkEnv);
-      if ((await productionStackExists(options.projectRoot, options.stackName)) === false) {
+      if ((await deployedStackExists({ projectRoot: options.projectRoot, stackName: options.stackName })) === false) {
         const { region } = await resolveDeploymentTarget({ projectRoot: options.projectRoot });
         console.log(`\nℹ️  There is no stack ${options.stackName} in Region ${region}; nothing to delete.`);
         return;

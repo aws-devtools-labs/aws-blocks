@@ -613,31 +613,41 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
  * `.blocks-sandbox/outputs.json`, which a production deploy rewrites with its
  * own stack alone. The Region is the one the sandbox was deployed to, when
  * `last-deploy.json` recorded it; otherwise the sandbox's configured Region.
+ * When neither record names the stack (a sandbox that the old npm-script
+ * wrappers deployed, then a production deploy), CloudFormation is asked: only a
+ * stack that does not exist is refused.
  */
 export async function sandboxConsole(ctx: Context): Promise<number> {
 	const root = ctx.enterRoot();
 	const stack = await sandboxStack(ctx, root);
+	if (stack === null) {
+		throw new CliError('no sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing).', {
+			where: [`project: ${root}`],
+			hint: 'blocks sandbox deploy',
+		});
+	}
 	const last = readLastDeploy(root, 'sandbox');
-	let outputs: Record<string, unknown> = {};
+	let outputs: unknown;
 	try {
-		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8')) as Record<string, unknown>;
+		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
 	} catch {
 		// No outputs: only last-deploy.json can show that the sandbox was deployed.
 	}
-	if (stack === null || (last?.stack !== stack && !(stack in outputs))) {
-		throw new CliError(
-			stack === null
-				? 'no sandbox on this machine (.blocks-sandbox/sandbox-id.txt is missing).'
-				: `no deploy of the sandbox stack ${stack} is recorded on this machine.`,
-			{ where: [`project: ${root}`], hint: 'blocks sandbox deploy' },
-		);
-	}
+	const recorded =
+		last?.stack === stack || (typeof outputs === 'object' && outputs !== null && Object.hasOwn(outputs, stack));
 	const core = await ctx.core();
-	const configured = await core.describeDeploymentCredentials({ env: stageEnv(ctx.env, root, 'sandbox'), projectRoot: root });
+	const env = stageEnv(ctx.env, root, 'sandbox');
+	const configured = await core.describeDeploymentCredentials({ env, projectRoot: root });
 	// The Region goes into a URL: only a Region code.
 	const region = [last?.stack === stack ? last.region : null, configured.region].find(
 		(candidate): candidate is string => typeof candidate === 'string' && REGION_PATTERN.test(candidate),
 	);
+	if (!recorded && (await core.deployedStackExists({ stackName: stack, region, env, projectRoot: root })) === false) {
+		throw new CliError(`the sandbox stack ${stack} does not exist${region ? ` in ${region}` : ''}.`, {
+			where: [`project: ${root}`, `credentials: ${configured.credentials}`],
+			hint: 'blocks sandbox deploy',
+		});
+	}
 	await core.openConsole({ stackId: stack, region });
 	return ExitCode.Ok;
 }

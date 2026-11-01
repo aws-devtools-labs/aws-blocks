@@ -559,15 +559,52 @@ describe('lifecycle commands', () => {
 		const watch = await runCli(['sandbox', 'console'], { cwd: root, core });
 		assert.strictEqual(watch.code, 0, watch.stderr);
 		assert.deepStrictEqual(opened.pop(), { stackId: 'demo-jdoe-abc123', region: 'ap-south-1' });
-		// Nothing recorded for the sandbox, or no sandbox at all: exit 1, nothing opened.
-		writeFileSync(join(sandboxFile, 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
-		const none = await runCli(['sandbox', 'console'], { cwd: root, core });
-		assert.strictEqual(none.code, 1);
-		assert.match(none.stderr, /^Error: no deploy of the sandbox stack demo-jdoe-abc123 is recorded on this machine\.\n(.*\n)*Try: blocks sandbox deploy\n/);
-		const noId = await runCli(['sandbox', 'console'], { cwd: fixtureApp(), core });
+		// No sandbox at all: exit 1, nothing opened, and no lookup.
+		const lookups: unknown[] = [];
+		const noId = await runCli(['sandbox', 'console'], {
+			cwd: fixtureApp(),
+			core: { ...core, deployedStackExists: async (options) => (lookups.push(options), true) },
+		});
 		assert.strictEqual(noId.code, 1);
 		assert.match(noId.stderr, /^Error: no sandbox on this machine/);
+		assert.deepStrictEqual([opened, lookups], [[], []]);
+	});
+
+	it('looks up a sandbox stack that no record on this machine names, and refuses only one that does not exist', async () => {
+		const opened: unknown[] = [];
+		const lookups: { stackName: string; region?: string; projectRoot?: string; env?: NodeJS.ProcessEnv }[] = [];
+		const withLookup = (exists: boolean | undefined) => ({
+			openConsole: async (options: unknown) => void opened.push(options),
+			deployedStackExists: async (options: (typeof lookups)[number]) => (lookups.push(options), exists),
+		});
+		// A sandbox that the old npm-script wrappers deployed records no last-deploy.json, and a production
+		// deploy then rewrote outputs.json with its own stack alone.
+		const root = withSandboxId(fixtureApp());
+		writeFileSync(join(root, '.blocks-sandbox', 'outputs.json'), JSON.stringify({ 'demo-prod': { ApiUrl: 'https://p' } }));
+		writeFileSync(join(root, '.env.local'), 'AWS_REGION=ap-south-1\n');
+		const live = await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(true) });
+		assert.strictEqual(live.code, 0, live.stderr);
+		assert.deepStrictEqual(opened.pop(), { stackId: 'demo-jdoe-abc123', region: 'ap-south-1' });
+		const [lookup] = lookups.splice(0);
+		assert.deepStrictEqual(
+			{ stackName: lookup.stackName, region: lookup.region, projectRoot: lookup.projectRoot },
+			{ stackName: 'demo-jdoe-abc123', region: 'ap-south-1', projectRoot: root },
+		);
+		// The lookup uses the sandbox's credentials: .env.local applies.
+		assert.strictEqual(lookup.env?.AWS_REGION, 'ap-south-1');
+		// A lookup that cannot tell (no credentials, no network) does not refuse.
+		const unknown = await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(undefined) });
+		assert.strictEqual(unknown.code, 0, unknown.stderr);
+		assert.deepStrictEqual(opened.pop(), { stackId: 'demo-jdoe-abc123', region: 'ap-south-1' });
+		const gone = await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(false) });
+		assert.strictEqual(gone.code, 1);
+		assert.match(gone.stderr, /^Error: the sandbox stack demo-jdoe-abc123 does not exist in ap-south-1\.\n(.*\n)*Try: blocks sandbox deploy\n/);
 		assert.deepStrictEqual(opened, []);
+		// A recorded sandbox opens without a lookup.
+		lookups.splice(0);
+		writeFileSync(join(root, '.blocks-sandbox', 'outputs.json'), JSON.stringify({ 'demo-jdoe-abc123': {} }));
+		assert.strictEqual((await runCli(['sandbox', 'console'], { cwd: root, core: withLookup(false) })).code, 0);
+		assert.deepStrictEqual(lookups, []);
 	});
 
 	it('forgets the deleted sandbox in last-deploy.json, outputs.json and config.json, and keeps the rest', async () => {
@@ -592,8 +629,13 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-prod': { ApiUrl: 'https://p' } });
 		assert.ok(!existsSync(join(dir, 'config.json')));
 		assert.ok(existsSync(join(dir, 'sandbox-id.txt')));
-		const console = await runCli(['sandbox', 'console'], { cwd: root, core: { openConsole: async () => {} } });
+		// No record names the deleted sandbox any more, and CloudFormation no longer has it.
+		const console = await runCli(['sandbox', 'console'], {
+			cwd: root,
+			core: { openConsole: async () => {}, deployedStackExists: async () => false },
+		});
 		assert.strictEqual(console.code, 1);
+		assert.match(console.stderr, /^Error: the sandbox stack demo-jdoe-abc123 does not exist/);
 		// A production config.json stays; an outputs.json with only the sandbox goes.
 		seed({ apiUrl: 'https://p', environment: 'production' });
 		write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
