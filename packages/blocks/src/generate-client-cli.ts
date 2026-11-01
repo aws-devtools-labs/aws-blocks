@@ -33,9 +33,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { isAbsolute, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-
-const require = createRequire(import.meta.url);
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const [foundationArg, outputArg] = process.argv.slice(2);
 const foundationPath = resolvePath(foundationArg ?? './aws-blocks/index.ts');
@@ -62,9 +60,9 @@ if (!existsSync(foundationPath)) {
 	process.exit(2);
 }
 
-// The worker lives in @aws-blocks/core; resolve it through this package's own
-// dependency so consuming apps don't need a direct core dependency.
-const workerPath = require.resolve('@aws-blocks/core/scripts/generate-client-worker');
+// The worker lives in @aws-blocks/core; `generate-client-worker.js` runs it through
+// this package's own dependency, so consuming apps don't need a direct core dependency.
+const workerPath = fileURLToPath(new URL('./generate-client-worker.js', import.meta.url));
 
 const nodeArgs = ['--conditions=aws-runtime'];
 

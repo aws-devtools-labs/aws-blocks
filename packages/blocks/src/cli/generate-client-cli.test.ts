@@ -40,3 +40,44 @@ describe('blocks-generate-client', () => {
 		}
 	});
 });
+
+/** A temporary app whose TypeScript backend is `backend`; removed after `body`. */
+async function withApp(backend: string, body: (root: string) => void | Promise<void>): Promise<void> {
+	const root = mkdtempSync(join(tmpdir(), 'blocks-generate-client-'));
+	try {
+		writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'app', type: 'module' }));
+		mkdirSync(join(root, 'aws-blocks'));
+		writeFileSync(join(root, 'aws-blocks', 'index.ts'), backend);
+		await body(root);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+/** The environment of a `blocks-generate-client` run: no inherited log level or Node options. */
+function generateEnv(env: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+	return { ...process.env, NODE_OPTIONS: '', BLOCKS_LOG_LEVEL: '', ...env };
+}
+
+function generate(root: string, env: NodeJS.ProcessEnv = {}) {
+	return spawnSync(process.execPath, [generateClientCli], { cwd: root, encoding: 'utf-8', env: generateEnv(env) });
+}
+
+describe('blocks-generate-client output', () => {
+	it('hides the warnings that importing the backend prints at BLOCKS_LOG_LEVEL=quiet', async () => {
+		const backend = [
+			"console.warn('[Realtime] BLOCKS_RT_WS_URL not set');",
+			"export const api = { hello: async (): Promise<string> => 'hi' };",
+			'',
+		].join('\n');
+		await withApp(backend, (root) => {
+			const quiet = generate(root, { BLOCKS_LOG_LEVEL: 'quiet' });
+			assert.strictEqual(quiet.status, 0, quiet.stderr);
+			assert.doesNotMatch(quiet.stderr, /BLOCKS_RT_WS_URL/);
+			assert.match(quiet.stdout, /wrote .*client\.js/);
+			const normal = generate(root);
+			assert.strictEqual(normal.status, 0, normal.stderr);
+			assert.match(normal.stderr, /\[Realtime\] BLOCKS_RT_WS_URL not set/);
+		});
+	});
+});
