@@ -169,14 +169,30 @@ async function changeSort(sortBy: string) {
   await refreshTodos();
 }
 
-async function toggleTodo(todoId: string, completed: boolean) {
-  await api.updateTodo(todoId, { completed });
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+// Reload either way: on failure the row still shows the unsaved checkbox/select/title.
+// The error is shown after the reload, because refreshTodos() resets todo-error to idle.
+async function mutateTodo(action: () => Promise<unknown>) {
+  try {
+    await action();
+  } catch (error) {
+    await refreshTodos();
+    const errorDiv = document.getElementById('todo-error');
+    if (errorDiv) showError(errorDiv, errorMessage(error));
+    return;
+  }
   await refreshTodos();
 }
 
+async function toggleTodo(todoId: string, completed: boolean) {
+  await mutateTodo(() => api.updateTodo(todoId, { completed }));
+}
+
 async function changePriority(todoId: string, priority: number) {
-  await api.updateTodo(todoId, { priority });
-  await refreshTodos();
+  await mutateTodo(() => api.updateTodo(todoId, { priority }));
 }
 
 async function updateTitle(todoId: string, title: string) {
@@ -185,13 +201,11 @@ async function updateTitle(todoId: string, title: string) {
     await refreshTodos();
     return;
   }
-  await api.updateTodo(todoId, { title: trimmedTitle });
-  await refreshTodos();
+  await mutateTodo(() => api.updateTodo(todoId, { title: trimmedTitle }));
 }
 
 async function deleteTodo(todoId: string) {
-  await api.deleteTodo(todoId);
-  await refreshTodos();
+  await mutateTodo(() => api.deleteTodo(todoId));
 }
 
 // ── Auth UI ─────────────────────────────────────────────────────────────
@@ -263,7 +277,13 @@ function bindUi() {
 
 async function refreshLastCode() {
   const out = document.getElementById('last-code-result')!;
-  const last = await api.getLastCode();
+  let last: Awaited<ReturnType<typeof api.getLastCode>>;
+  try {
+    last = await api.getLastCode();
+  } catch (error) {
+    showError(out, errorMessage(error));
+    return;
+  }
   if (!last) {
     out.textContent = '(none)';
     return;
