@@ -526,8 +526,12 @@ describe('blocks migrate', () => {
 	});
 
 	it('migrates the same app to what create-blocks-app now scaffolds', async () => {
-		for (const template of ['default', 'api-only']) {
-			const root = writeApp(`${template}@0ab6b047`);
+		// The newest released version of each template: create-blocks-app 0.4.0 added sandbox:preview to default.
+		for (const [template, fixture] of [
+			['default', 'default@d79a0bda'],
+			['api-only', 'api-only@0ab6b047'],
+		] as const) {
+			const root = writeApp(fixture);
 			const run = await runCli(['migrate'], { cwd: root });
 			assert.strictEqual(run.code, 0, run.stderr);
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
