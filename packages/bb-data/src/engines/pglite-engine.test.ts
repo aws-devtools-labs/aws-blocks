@@ -5,7 +5,8 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { ApiError } from '@aws-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
-import { PGliteEngine } from './pglite-engine.js';
+import { PGliteEngine, withUnrefTimers } from './pglite-engine.js';
+import { pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { DatabaseErrors } from '../errors.js';
 import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -497,4 +498,12 @@ test('destroy waits for PGlite init to settle before closing', async () => {
   engine = new PGliteEngine(join(TEST_DIR, 'destroy-waits-for-init'), factory);
   await settlesWithin(engine.destroy(), 5_000, 'destroy()');
   assert.strictEqual(closed, true, 'destroy() should close the instance once init settles');
+});
+
+test('withUnrefTimers keeps the unref-timers extension alongside user extensions', async () => {
+  const user = { vector: { name: 'vector', setup: async () => ({}) } };
+  const merged = withUnrefTimers(user);
+  assert.strictEqual(merged.awsBlocksUnrefTimers, pgliteUnrefTimersExtension);
+  assert.strictEqual(merged.vector, user.vector);
+  assert.deepStrictEqual(Object.keys(withUnrefTimers({})), ['awsBlocksUnrefTimers']);
 });

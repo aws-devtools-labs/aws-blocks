@@ -77,3 +77,18 @@ test('resolveExtensions throws an actionable error for an unknown name', async (
     },
   );
 });
+
+test('unknown-extension error lists only the documented names, not the vector alias', async () => {
+  await assert.rejects(
+    () => resolveExtensions(['nosuchext']),
+    (err: Error) => {
+      assert.match(err.message, /Supported extensions: pgvector, postgis\./);
+      return true;
+    },
+  );
+});
+
+test('the vector alias is still accepted', async () => {
+  const resolved = await resolveExtensions(['vector']);
+  assert.ok('vector' in resolved);
+});

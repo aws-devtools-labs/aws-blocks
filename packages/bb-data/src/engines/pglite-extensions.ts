@@ -57,17 +57,26 @@ export function installCommandFor(name: string): string | null {
   return spec ? `npm install ${spec.pkg}@${spec.version}` : null;
 }
 
-/** The user-facing names we accept, for error messages. */
+/** The documented user-facing names we accept, for error messages (aliases are still accepted but not listed). */
 function supportedNames(): string[] {
-  return Object.keys(SUPPORTED_EXTENSIONS).sort();
+  return Object.keys(SUPPORTED_EXTENSIONS)
+    .filter((name) => name !== 'vector')
+    .sort();
 }
+
+const UNRESOLVABLE_MODULE_CODES = new Set([
+  'ERR_MODULE_NOT_FOUND',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  'ERR_PACKAGE_IMPORT_NOT_DEFINED',
+]);
 
 function isModuleNotFound(error: unknown): boolean {
   return (
     typeof error === 'object' &&
     error !== null &&
     'code' in error &&
-    (error as { code?: string }).code === 'ERR_MODULE_NOT_FOUND'
+    typeof (error as { code?: unknown }).code === 'string' &&
+    UNRESOLVABLE_MODULE_CODES.has((error as { code: string }).code)
   );
 }
 

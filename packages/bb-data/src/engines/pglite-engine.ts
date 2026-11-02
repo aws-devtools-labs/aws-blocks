@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { PGlite } from '@electric-sql/pglite';
+import { PGlite, type Extensions } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -191,7 +191,7 @@ export class PGliteEngine implements DatabaseEngine {
     if (Object.keys(resolved).length === 0) {
       return new PGliteEngine(dataDir);
     }
-    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: resolved }));
+    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }));
   }
 
   /**
@@ -357,5 +357,15 @@ export class PGliteEngine implements DatabaseEngine {
  * the process alive by itself (see {@link pgliteUnrefTimersExtension}).
  */
 function createLocalPglite(dataDir: string): PGlite {
-  return new PGlite(dataDir, { extensions: { awsBlocksUnrefTimers: pgliteUnrefTimersExtension } });
+  return new PGlite(dataDir, { extensions: withUnrefTimers({}) });
+}
+
+/**
+ * Add the unref-timers extension to a resolved user extension set, so a
+ * short-lived script that declares `extensions` still exits on its own. The
+ * `awsBlocksUnrefTimers` key cannot collide with the `postgis` / `vector`
+ * namespaces.
+ */
+export function withUnrefTimers(extensions: Extensions): Extensions {
+  return { awsBlocksUnrefTimers: pgliteUnrefTimersExtension, ...extensions };
 }
