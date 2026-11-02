@@ -10,9 +10,8 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 
 /**
- * The spec is inline rather than a file because no shared fixture carries an `oidc/client`
- * transferable, and `native/codegen-fixtures/` is consumed by the Swift and Dart generators
- * too — adding a fixture there would churn their golden files.
+ * The spec is inline rather than a file because the shared fixtures are generated with a relay
+ * target configured, so none of them covers the gate this exercises.
  */
 private val OIDC_SPEC = """
     {

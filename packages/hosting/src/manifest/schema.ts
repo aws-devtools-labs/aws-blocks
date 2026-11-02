@@ -51,6 +51,7 @@ export const routeBehaviorSchema = z.object({
   pattern: z.string().min(1, 'Route pattern must not be empty'),
   target: z.string().min(1, 'Route target must not be empty'),
   fallback: z.string().optional(),
+  exact: z.boolean().optional(),
 });
 
 /**
@@ -162,6 +163,12 @@ export const deployManifestSchema = z
       .min(1, 'At least one route is required'),
     cache: cacheConfigSchema.optional(),
     imageOptimization: imageConfigSchema.optional(),
+    imageRemoteSources: z
+      .object({
+        domains: z.array(z.string()).optional(),
+        remotePatterns: z.array(remotePatternSchema).optional(),
+      })
+      .optional(),
     middleware: middlewareConfigSchema.optional(),
     redirects: z.array(redirectSchema).optional(),
     rewrites: z.array(rewriteSchema).optional(),

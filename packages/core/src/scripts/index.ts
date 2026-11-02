@@ -30,7 +30,7 @@ export {
 	type NativeDeclarationSource,
 } from './native-catalogs.js';
 export { readNativeDeclarations } from './read-native-declarations.js';
-export { destroySandbox, type SandboxOptions, startSandbox } from './sandbox.js';
+export { destroySandbox, PREVIEW_MODE_CONTEXT, type SandboxOptions, startSandbox } from './sandbox.js';
 export { listSecrets, removeSecret, runSecretCli, setSecret } from './secret.js';
 export { getSandboxId, getStackId, getStackName } from './stack-id.js';
 export { type TelemetryOptions, telemetry } from './telemetry.js';

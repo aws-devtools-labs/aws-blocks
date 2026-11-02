@@ -48,6 +48,12 @@ jobs:
     name: Delete Stale Stacks (${{ matrix.name }})
     needs: legs
     runs-on: ubuntu-latest
+    # The steps' own time budgets (stack sweep 40 min, Amplify sandbox sweep
+    # 40, REST API and CloudWatch role sweeps 15 each, log group sweep 5) add
+    # up to more than this. They only bind on a backlog run: then the timeout
+    # can land during the Amplify sandbox sweep or earlier, and the steps
+    # after it, the log group sweep included, may not run until the next
+    # scheduled run. Don't add a budgeted step without checking the total.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -941,3 +947,143 @@ jobs:
             fi
           done <<< "$POLICIES"
           echo "✅ Cleanup complete. Deleted $DELETED orphaned policies, skipped $SKIPPED in-use policies."
+
+      - name: Cleanup orphaned Lambda and RDS log groups
+        if: always() && matrix.environment == 'e2e'
+        run: |
+          # Lambda creates a function's log group itself, on first invoke and
+          # outside CloudFormation, so the group outlives the stack. Every test
+          # stack runs CDK helper functions that get no CloudFormation log group
+          # (BucketDeployment, S3 auto-delete, AwsCustomResource, LogRetention,
+          # custom-resource provider frameworks), which left up to about 1,700
+          # such groups per account per day (measured over about one day of
+          # data), none of them expiring. RDS engine log groups outlive their
+          # cluster the same way. Tests: scripts/ci/sweep-log-groups.test.mjs.
+          #
+          # A group is deleted only if ALL of these hold:
+          #   (a) its name has a test prefix (checked here and by the CI role's
+          #       delete grant). `my-app-` is left out: it may be a developer's
+          #       ad-hoc deploy, which the stack sweep also only deletes by tag;
+          #   (b) it is older than 24 hours, so the custom-resource logs of a
+          #       failed deploy stay readable for a day (the groups hold almost
+          #       no data and the account quota is 1,000,000 groups);
+          #   (c) its Lambda function / DB cluster no longer exists.
+          # FAILS CLOSED: if any listing fails, nothing is deleted and the step
+          # fails, so a missing grant or a throttle never reads as "owner gone".
+          set -euo pipefail
+          # CloudFormation cuts the stack-name part of a generated function name
+          # (here to 25 characters), so the interop prefix is cut too.
+          LAMBDA_PREFIXES=(amplify-amplifygen2- amplify-amplifyinteroptes bb-compute-smoke- bb-telemetry- bb-test- bb-vpc-smoke- blocks-hosting- blocks-test-)
+          RDS_PREFIXES=(bb-test-)
+          CUTOFF_MS=$((($(date +%s) - 24 * 3600) * 1000))
+          SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/null}
+          # More attempts than the CLI default, so one throttled page doesn't fail the listing.
+          export AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8
+          ERR=$(mktemp)
+          trap 'rm -f "$ERR"' EXIT
+
+          # First line of the CLI's error (it starts with a blank line). Account
+          # ids are masked because the log of a public repository is public.
+          cli_error() {
+            local reason
+            reason=$(grep -m 1 -v '^[[:space:]]*$' "$ERR" | sed -E 's/[0-9]{12}/<account>/g' | head -c 500 || true)
+            reason=${reason:-no error output}
+            echo "${reason//%/%25}"
+          }
+          fail_closed() {
+            echo "::error::$1, so no log group was deleted: $(cli_error)"
+            echo "- Log group sweep skipped: $1" >> "$SUMMARY"
+            exit 1
+          }
+          has_test_prefix() {
+            local p
+            for p in "${@:2}"; do [[ $1 == "$p"* ]] && return 0; done
+            return 1
+          }
+
+          # Groups first, owners second. Test functions and clusters get
+          # CloudFormation-generated names (random suffix) that are never reused,
+          # so an owner created after its listing can't own a group older than
+          # the gate: a live owner always shows up in the owner listing.
+          LOG_GROUPS=""
+          for P in "${LAMBDA_PREFIXES[@]/#//aws/lambda/}" "${RDS_PREFIXES[@]/#//aws/rds/cluster/}"; do
+            OUT=$(aws logs describe-log-groups --log-group-name-prefix "$P" \
+              --query 'logGroups[].[logGroupName,creationTime]' --output text 2>"$ERR") ||
+              fail_closed "describe-log-groups failed for $P"
+            LOG_GROUPS+="$OUT"$'\n'
+          done
+          FUNCTIONS=$(aws lambda list-functions --query 'Functions[].[FunctionName]' --output text 2>"$ERR") ||
+            fail_closed "lambda list-functions failed"
+          CLUSTERS=$(aws rds describe-db-clusters --query 'DBClusters[].[DBClusterIdentifier]' --output text 2>"$ERR" |
+            tr '[:upper:]' '[:lower:]') || fail_closed "rds describe-db-clusters failed"
+          # Delete budget, counted from here so slow or retried listings don't
+          # eat into it. 5 minutes at about 1 s per delete is a few hundred
+          # deletes a run, every 2 hours: more than the daily inflow.
+          DEADLINE=$((SECONDS + ${LOG_GROUP_SWEEP_BUDGET_SECONDS:-300}))
+
+          DELETED=0
+          SKIPPED_YOUNG=0
+          SKIPPED_OWNED=0
+          FAILED=0
+          DEFERRED=0
+          DENIED=""
+          LAST_ERROR=""
+          while IFS=$'\t' read -r NAME CREATED; do
+            { [ -z "$NAME" ] || [ "$NAME" = None ]; } && continue
+            case "$NAME" in
+              /aws/lambda/*)
+                OWNER=${NAME#/aws/lambda/}
+                has_test_prefix "$OWNER" "${LAMBDA_PREFIXES[@]}" || continue
+                OWNERS=$FUNCTIONS
+                ;;
+              /aws/rds/cluster/*)
+                OWNER=${NAME#/aws/rds/cluster/}
+                OWNER=$(tr '[:upper:]' '[:lower:]' <<<"${OWNER%%/*}")
+                has_test_prefix "$OWNER" "${RDS_PREFIXES[@]}" || continue
+                OWNERS=$CLUSTERS
+                ;;
+              *) continue ;;
+            esac
+            # (b) A creation time that doesn't parse counts as young: kept.
+            if ! [ "$CREATED" -lt "$CUTOFF_MS" ] 2>/dev/null; then
+              SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
+              continue
+            fi
+            # (c) HARD SAFETY: the owning function / cluster still exists.
+            if grep -qxF -- "$OWNER" <<<"$OWNERS"; then
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            if [ "$SECONDS" -ge "$DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+            if aws logs delete-log-group --log-group-name "$NAME" 2>"$ERR"; then
+              DELETED=$((DELETED + 1))
+            elif grep -q AccessDenied "$ERR"; then
+              # A wrong or missing delete grant never clears on its own: say so.
+              DENIED=$(cli_error)
+              FAILED=$((FAILED + 1))
+            elif ! grep -q ResourceNotFoundException "$ERR"; then
+              LAST_ERROR=$(cli_error)
+              FAILED=$((FAILED + 1))
+            fi
+          done < <(sort -u <<<"$LOG_GROUPS")
+
+          echo ""
+          echo "## Log Group Cleanup Summary" | tee -a "$SUMMARY"
+          echo "- Orphaned log groups deleted: $DELETED" | tee -a "$SUMMARY"
+          echo "- Skipped (< 24h old): $SKIPPED_YOUNG" | tee -a "$SUMMARY"
+          echo "- Skipped (owner still exists): $SKIPPED_OWNED" | tee -a "$SUMMARY"
+          echo "- Failed (retried next run): $FAILED" | tee -a "$SUMMARY"
+          echo "- Deferred to next run (time budget): $DEFERRED" | tee -a "$SUMMARY"
+          if [ -n "$DENIED" ]; then
+            echo "::error::the CI role may not delete these log groups (redeploy test-infra BlocksGithubE2eOidc?): $DENIED"
+            exit 1
+          fi
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::warning::$FAILED log group delete(s) failed; retried on the next scheduled run: $LAST_ERROR"
+          fi
+          if [ "$DEFERRED" -gt 0 ]; then
+            echo "::warning::log group sweep hit its time budget with $DEFERRED candidate(s) left; the next scheduled run takes the rest"
+          fi

@@ -37,7 +37,7 @@ function sysBin(name) {
 	return `/usr/bin/${name}`;
 }
 const BIN = Object.fromEntries(
-	['sudo', 'runuser', 'env', 'bash', 'pkill', 'pgrep', 'crontab', 'setfacl', 'chmod', 'find', 'getent', 'id'].map((n) => [n, sysBin(n)]),
+	['sudo', 'runuser', 'env', 'bash', 'kill', 'pkill', 'pgrep', 'crontab', 'setfacl', 'chmod', 'find', 'getent', 'id'].map((n) => [n, sysBin(n)]),
 );
 
 /** True on a CI runner, where a same-uid fallback is never allowed. */
@@ -74,7 +74,7 @@ function asAgent(envPairs, argv) {
 /**
  * Whether commands can run as the agent user via passwordless sudo+runuser (probed once, with the
  * exact transition used for every command). The harness user holds `NOPASSWD:ALL` on the hosted
- * runner, so a passing `runuser` probe implies `sudo -n kill/pkill/crontab/chmod` work too; the agent
+ * runner, so a passing `runuser` probe implies `sudo -n kill/pkill/crontab/chmod/setfacl` work too; the agent
  * user holds no sudo rights (agent-bench.yml fails the job otherwise).
  * @returns {boolean}
  */
@@ -97,6 +97,14 @@ export function isolationAvailable() {
  * Grant the agent user + the harness user rwx on `root` (recursive + default ACL, so files either
  * creates stay mutually accessible) and the agent user search (x) on every ancestor: absolute-path
  * opens (npm/node/tsc) need x on each parent. x only traverses; it lists or reads nothing.
+ *
+ * From the second agent phase on (step 3 after step 2), the workspace holds files the agent user
+ * created, and only a file's owner (or root) may set its ACL. So each entry is granted by its owner:
+ * one walk as the harness user over its entries, one as the agent user over the agent's, never as
+ * root. Both walks go by path (find/setfacl), so a process that swaps a workspace dir for a symlink
+ * mid-walk could redirect one, but only onto files that walk's user could already change. The
+ * caller still reaps every agent-user process first (enterAgentPhase does), so the harness walk
+ * can't be raced either. An entry owned by anyone else fails the grant closed.
  * @param {string} root
  * @returns {boolean} true only if the workspace grants succeeded
  */
@@ -104,15 +112,55 @@ export function prepareWorkspaceIsolation(root) {
 	if (!isolationAvailable()) return false;
 	let me = process.env.USER ?? '';
 	if (!me) me = spawnSync(BIN.id, ['-un'], { encoding: 'utf8', timeout: 5000 }).stdout?.trim() ?? '';
-	const abs = resolve(root);
+	const uid = String(process.getuid?.() ?? '');
+	let abs;
+	try {
+		abs = realpathSync(resolve(root));
+	} catch {
+		return false;
+	}
+	if (!uid) return false;
 	const spec = `u:${BENCH_AGENT_USER}:rwx${me ? `,u:${me}:rwx` : ''}`;
-	const access = spawnSync(BIN.setfacl, ['-R', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	const dflt = spawnSync(BIN.setfacl, ['-R', '-d', '-m', spec, abs], { stdio: 'ignore', timeout: 120_000 });
-	if (!(access.status === 0 && !access.error && dflt.status === 0 && !dflt.error)) return false;
+	// The agent walk has to reach the workspace, so the ancestors get x first.
 	for (let dir = dirname(abs), prev = ''; dir && dir !== prev && dir !== '/'; prev = dir, dir = dirname(dir)) {
 		spawnSync(BIN.setfacl, ['-m', `u:${BENCH_AGENT_USER}:x`, dir], { stdio: 'ignore', timeout: 10_000 });
 	}
-	return true;
+	// cwd '/': runuser keeps the harness cwd, and find fails if its user can't return to it.
+	const opts = { stdio: 'ignore', timeout: 120_000, cwd: '/' };
+	const ok = (r) => r.status === 0 && !r.error;
+	const agentWalk = asAgent([], [BIN.find, ...ownedGrantArgs(abs, BENCH_AGENT_USER, spec)]);
+	// Each walk also restores the other user's access to the dirs it owns, so a walk that one of
+	// those dirs blocked (e.g. the agent made it 0700) gets through on the next round.
+	let granted = false;
+	for (let round = 0; round < 3 && !granted; round++) {
+		const mine = ok(spawnSync(BIN.find, ownedGrantArgs(abs, uid, spec), opts));
+		const agents = ok(spawnSync(agentWalk.file, agentWalk.args, opts));
+		granted = mine && agents;
+	}
+	if (!granted) return false;
+	const foreign = spawnSync(BIN.find, ['-P', abs, '!', '-user', uid, '!', '-user', BENCH_AGENT_USER, '-print', '-quit'], {
+		encoding: 'utf8',
+		timeout: 120_000,
+		cwd: '/',
+	});
+	return ok(foreign) && foreign.stdout === '';
+}
+
+// find args that grant `spec` on every entry under `abs` owned by `owner`: access + default ACL on
+// dirs, access ACL on everything else but symlinks. find -P never follows a symlink and setfacl -P
+// skips one passed as an argument.
+function ownedGrantArgs(abs, owner, spec) {
+	const dflt = spec
+		.split(',')
+		.map((e) => `d:${e}`)
+		.join(',');
+	return [
+		'-P', abs, '-user', owner, '(',
+		'(', '-type', 'd', '-exec', BIN.setfacl, '-P', '-m', `${spec},${dflt}`, '{}', '+', ')',
+		'-o',
+		'(', '!', '-type', 'd', '!', '-type', 'l', '-exec', BIN.setfacl, '-P', '-m', spec, '{}', '+', ')',
+		')',
+	];
 }
 
 /** Single-quote a string for safe interpolation into a shell command. */
@@ -419,17 +467,41 @@ function sleepMs(ms) {
 }
 
 /**
+ * The `kill` argv that signals process group `pgid`. The `--` is load-bearing: procps-ng 4.0.4
+ * (Ubuntu 24.04) reads a negative pid that follows the signal as its "signal digit" special case
+ * and keeps only the first digit, so `kill -9 -123456` is kill(-1, SIGKILL). Run as root, that
+ * signals every process on the machine, the runner included. After `--` the pid is parsed whole.
+ * @param {number} pgid
+ * @param {string} [signal]
+ * @returns {string[]}
+ */
+export function groupKillArgv(pgid, signal = '-9') {
+	return [BIN.kill, signal, '--', `-${pgid}`];
+}
+
+/** SIGKILL an agent-user process group, via sudo (the harness uid can't signal it directly). */
+export function killAgentGroup(pgid) {
+	spawnSync(BIN.sudo, ['-n', ...groupKillArgv(pgid)], { stdio: 'ignore', timeout: 5000 });
+}
+
+/**
  * Kill every process of the agent user (incl. setsid/nohup escapees) and drop its crontab, then
  * verify none remain. No-op (true) when isolation is unavailable: then no agent-user process exists.
  * @returns {boolean} true when no agent-user process remains
  */
 export function reapAgentProcesses() {
 	if (!isolationAvailable()) return true;
+	// kill(-1) from an agent-user shell signals every process that user may signal in one kernel pass
+	// a concurrent fork can't slip past, while pkill reads /proc first, so a fork-and-exit chain can
+	// outrun it. It also reaches setuid children (real uid = agent), which pkill -u (effective uid) misses.
+	const killAll = asAgent([], [BIN.bash, '-c', 'kill -KILL -1']);
 	for (let i = 0; i < 20; i++) {
+		spawnSync(killAll.file, killAll.args, { stdio: 'ignore', timeout: 5000 });
 		spawnSync(BIN.sudo, ['-n', BIN.pkill, '-KILL', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
 		// After the kill, so no surviving process can re-add a crontab that cron would run later.
 		spawnSync(BIN.sudo, ['-n', BIN.crontab, '-r', '-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 });
-		if (spawnSync(BIN.pgrep, ['-u', BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 }).status === 1) return true;
+		const none = (flag) => spawnSync(BIN.pgrep, [flag, BENCH_AGENT_USER], { stdio: 'ignore', timeout: 5000 }).status === 1;
+		if (none('-u') && none('-U')) return true;
 		sleepMs(250);
 	}
 	return false;
@@ -444,6 +516,9 @@ export function reapAgentProcesses() {
  * @returns {{isolated: boolean, error?: undefined} | {isolated: false, error: string}}
  */
 export function enterAgentPhase(root, options = {}) {
+	// Reap before the grant: its walks go by path, so a live agent-user process could swap a
+	// workspace dir for a symlink mid-walk and redirect the harness-user walk outside the workspace.
+	if (!reapAgentProcesses()) return { isolated: false, error: `could not reap leftover ${BENCH_AGENT_USER} processes` };
 	if (!isolationAvailable() || !prepareWorkspaceIsolation(root)) {
 		if (bareShellAllowed()) return { isolated: false };
 		return {
@@ -451,7 +526,6 @@ export function enterAgentPhase(root, options = {}) {
 			error: `isolation unavailable: no passwordless sudo+runuser for ${BENCH_AGENT_USER} or the workspace ACL grant failed`,
 		};
 	}
-	if (!reapAgentProcesses()) return { isolated: false, error: `could not reap leftover ${BENCH_AGENT_USER} processes` };
 	const execProblems = lockDownExecPaths(trustedExecPaths(process.env, [root, ...(options.agentDirs ?? [])]));
 	if (execProblems.length) {
 		return { isolated: false, error: `trusted executable paths are writable by ${BENCH_AGENT_USER}: ${execProblems.slice(0, 5).join('; ')}` };

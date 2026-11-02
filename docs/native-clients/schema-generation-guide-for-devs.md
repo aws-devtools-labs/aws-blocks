@@ -399,7 +399,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
-| `oidc/client` | `OidcClient` (`OIDCClient` on Swift) | `bb-auth-oidc` |
+| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, else Kotlin's `AnyProvider` or Swift's `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | `bb-auth-oidc` |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -418,7 +418,24 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 }
 ```
 
-Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload`, `oidc/client` today), this field is omitted.
+Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. The emitter writes the field when a method's return type spells out the arguments, on a namespace the entry file exports directly (`export const api = new ApiNamespace(...)`). It's omitted for non-generic transferables (`file-bucket/download`, `file-bucket/upload`), for a `RealtimeChannel` whose message type isn't written in the return type, and for every method of a namespace built elsewhere, such as a block's `createApi()` or a factory function.
+
+The one exception is an `oidc/client`, which carries the provider names the type checker infers, as a string enum, on either path. `AuthOIDC.createApi()` types `getClient()` as `OIDCClient<ProviderName<P>>`, which the checker resolves from the configured providers. Provider names that resolve to plain `string` (or `any`) emit no type args:
+
+```json
+{
+	"x-blocks-transferable": "oidc/client",
+	"x-blocks-type-args": [
+		{ "type": "string", "enum": ["google", "github"] }
+	]
+}
+```
+
+Swift turns it into a `Provider` enum in the method's namespace (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `swift:` warning when the method's own types already use that name) and returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, whose `signIn(provider:relayTo:launcher:)` takes only those providers. Without the field, the client is `OIDCClient<String>`.
+
+Kotlin does the same: a `Provider` enum in the method's object (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `kotlin:` warning when the object already uses that name), whose constants carry the names the backend knows the providers by, and `getClient()` returns `OidcClient<OidcAuthApi.GetClient.Provider>`, whose `signIn` takes only those providers. Without the field, the client is `OidcClient<AnyProvider>`, where `AnyProvider` is the Kotlin runtime's own carrier for a provider the spec didn't name, and `signIn` takes that name. Dart ignores it for now.
+
+Because both meanings share one field, each generator classifies the argument itself: `realtime/channel`'s is a payload to generate and decode, `oidc/client`'s is the set of values its client accepts. Kotlin declares it per argument position (`TransferableTypeArg` in `codegen/.../model/Transferables.kt`): an `Out` or `InOut` argument has to represent anything the backend may send, so it is generated from the spec's schema, while an `In` one has to express just what a caller may send, so it becomes an enum of the values the spec permits. A tag's arguments can mix. The fact is still restated per platform — a new transferable with a narrowed argument has to be added to each. A dedicated spec field would be the way to stop that.
 
 ### `x-blocks-native-packages` (document root)
 

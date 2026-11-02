@@ -141,6 +141,15 @@ export async function listValues(
 }
 
 /**
+ * The warning printed before a forced (immediate, unrecoverable) secret delete.
+ * @internal
+ */
+export function forceDeleteWarning(kind: ValueKind, key: string, stage: string | undefined): string {
+	const where = stage ? `stage '${stage}'` : 'shared by every stage, including production';
+	return `⚠️  Force-deleting ${kind} '${key}' (${where}): it is deleted immediately and has no recovery window.`;
+}
+
+/**
  * Remove a value of `kind`. Returns true if it existed, false if already absent.
  *
  * For **secrets** (Secrets Manager) the default is a *recoverable* delete — the
@@ -162,6 +171,7 @@ export async function removeValue(
 	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
+		if (opts.force) console.warn(forceDeleteWarning(kind, key, opts.stage));
 		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
 		const client = new SecretsManagerClient(clientConfig);
 		try {
@@ -174,7 +184,7 @@ export async function removeValue(
 			console.log(
 				opts.force
 					? `🗑️  ${kind} '${key}' permanently removed (no recovery).`
-					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`aws secretsmanager restore-secret\`, or use --force to delete immediately).`,
+					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`aws secretsmanager restore-secret\`, or use --force --yes to delete immediately).`,
 			);
 			return true;
 		} catch (error: unknown) {
@@ -208,7 +218,7 @@ export async function removeValue(
  * @internal
  */
 export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): Promise<void> {
-	const { stage, valueStdin, prefix, region, force, positional } = extractFlags(argv);
+	const { stage, valueStdin, prefix, region, force, yes, positional } = extractFlags(argv);
 
 	let kind = opts.kind;
 	let rest = positional;
@@ -272,7 +282,18 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		case 'remove':
 		case 'rm': {
 			const [key] = args;
-			if (!key) throw new Error(`Usage: ${label} remove <KEY> [--force] [--stage <name>] [--region <name>]`);
+			if (!key)
+				throw new Error(`Usage: ${label} remove <KEY> [--force --yes] [--stage <name>] [--region <name>]`);
+			// Every forced secret delete needs --yes: a stage name can't tell production
+			// apart reliably (`prod-us-east-1`, `prd`, `live`, …), and there is no undo.
+			if (force && kind === 'secret' && !yes) {
+				const where = effStage
+					? `stage '${effStage}'`
+					: 'the shared namespace (every stage, including production)';
+				throw new Error(
+					`Refusing to force-delete ${label} '${key}' in ${where} without confirmation: the delete is immediate and cannot be recovered. Re-run with --yes to confirm, or drop --force for a recoverable delete.`,
+				);
+			}
 			await removeValue(kind, key, { prefix: effPrefix, stage: effStage, region: effRegion, force });
 			break;
 		}
@@ -287,6 +308,7 @@ function extractFlags(argv: string[]): {
 	prefix?: string;
 	region?: string;
 	force: boolean;
+	yes: boolean;
 	positional: string[];
 } {
 	const positional: string[] = [];
@@ -295,10 +317,13 @@ function extractFlags(argv: string[]): {
 	let prefix: string | undefined;
 	let region: string | undefined;
 	let force = false;
+	let yes = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === '--force') {
 			force = true;
+		} else if (arg === '--yes' || arg === '-y') {
+			yes = true;
 		} else if (arg === '--stage') {
 			stage = argv[++i];
 			if (stage === undefined) throw new Error('`--stage` requires a value, e.g. --stage prod');
@@ -320,7 +345,7 @@ function extractFlags(argv: string[]): {
 			positional.push(arg);
 		}
 	}
-	return { stage, valueStdin, prefix, region, force, positional };
+	return { stage, valueStdin, prefix, region, force, yes, positional };
 }
 
 async function readStdin(): Promise<string> {

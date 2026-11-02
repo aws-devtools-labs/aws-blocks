@@ -16,6 +16,7 @@ import { generateAlbAssetProxyCode } from './alb_asset_proxy.js';
 import { generateApiGwAssetProxyCode } from './apigw_asset_proxy.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML } from './default_not_found.js';
 import { NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { imagePathPrefixes, trimTrailingSlashes } from './asset_proxy_core.js';
 
 type StoredObject = {
   body: string;
@@ -433,3 +434,194 @@ for (const [label, generate, event] of variants) {
   });
 }
 
+
+// ── No image function: the framework image endpoints serve the source ──────
+// The API Gateway door routes `/_next/image`, `/_ipx/*` and `/_image` to the
+// asset proxy when the deploy builds no image function (preview mode). A local
+// source is served as stored; a remote one is redirected to itself only when
+// its host is allowlisted, and never fetched.
+
+describe('API Gateway asset proxy — image endpoints without an image function', () => {
+  const IMAGE_OBJECTS: Record<string, StoredObject> = {
+    ...OBJECTS,
+    [`${PREFIX}/img/cat.png`]: { body: 'png-bytes', contentType: 'image/png' },
+  };
+  const handler = (stripPrefix = '') =>
+    loadHandler(
+      generateApiGwAssetProxyCode({
+        spaFallback: false,
+        stripPrefix,
+        imageFallback: { hosts: ['images.example.com', '*.cdn.example.com'] },
+      }),
+      IMAGE_OBJECTS,
+    );
+  const get = (path: string, query?: Record<string, string>) => ({
+    rawPath: path,
+    queryStringParameters: query,
+    requestContext: { http: { method: 'GET', path } },
+  });
+
+  it('Next.js `/_next/image?url=` serves the local source unoptimized', async () => {
+    const res = await handler()(get('/_next/image', { url: '/img/cat.png', w: '640', q: '75' }));
+    assert.equal(res.statusCode, 200);
+    assert.equal(decode(res), 'png-bytes');
+    assert.equal(res.headers['content-type'], 'image/png');
+  });
+
+  it('Astro `/_image?href=` and Nuxt `/_ipx/<modifiers>/<src>` serve the local source', async () => {
+    const astro = await handler()(get('/_image', { href: '/img/cat.png', w: '100' }));
+    assert.equal(decode(astro), 'png-bytes');
+    const ipx = await handler()(get('/_ipx/w_640&f_webp/img/cat.png'));
+    assert.equal(decode(ipx), 'png-bytes');
+  });
+
+  it('strips the basePath from the endpoint and from the source', async () => {
+    const res = await handler('/app')(get('/app/_next/image', { url: '/app/img/cat.png', w: '640' }));
+    assert.equal(decode(res), 'png-bytes');
+    const ipx = await handler('/app')(get('/app/_ipx/w_640/img/cat.png'));
+    assert.equal(decode(ipx), 'png-bytes');
+  });
+
+  it('a local query source passes the path checks: no raw control bytes reach a redirect', async () => {
+    const proxy = loadHandler(
+      generateApiGwAssetProxyCode({
+        spaFallback: false,
+        imageFallback: { hosts: [] },
+        redirects: [
+          { source: '/go/*', destination: '*', statusCode: 302 },
+          { source: '/old/*', destination: '/new/*', statusCode: 301 },
+        ],
+      }),
+      IMAGE_OBJECTS,
+    );
+    for (const [endpoint, src] of [
+      ['/_image', '/go/\u0001//evil.com'],
+      ['/_next/image', '/old/a\r\nSet-Cookie: x=y'],
+      ['/_image', '/img/..\\cat.png'],
+    ]) {
+      const res = await proxy(get(endpoint, { url: src, href: src }));
+      const location = res.headers?.location ?? '';
+      assert.ok(
+        ![...location].some((c) => c.charCodeAt(0) < 0x20 || c === '\\'),
+        `no control character or backslash in Location: ${endpoint} ${JSON.stringify(src)}`,
+      );
+      assert.strictEqual(new URL(location, 'https://site.example/a/b').origin, 'https://site.example', `stays on the site: ${location}`);
+    }
+  });
+
+  it('redirects an allowlisted remote source to itself (302), exact or wildcard host', async () => {
+    const exact = await handler()(get('/_next/image', { url: 'https://images.example.com/a.jpg', w: '640' }));
+    assert.equal(exact.statusCode, 302);
+    assert.equal(exact.headers.location, 'https://images.example.com/a.jpg');
+    // API Gateway may collapse the `//` of an inlined ipx source.
+    const wildcard = await handler()(get('/_ipx/w_640/https:/eu.cdn.example.com/b.jpg'));
+    assert.equal(wildcard.statusCode, 302);
+    assert.equal(wildcard.headers.location, 'https://eu.cdn.example.com/b.jpg');
+  });
+
+  it("an any-host allowlist entry ('**', an Astro pattern with no hostname) redirects any http(s) host", async () => {
+    const anyHost = loadHandler(
+      generateApiGwAssetProxyCode({ spaFallback: false, imageFallback: { hosts: ['**'] } }),
+      IMAGE_OBJECTS,
+    );
+    const res = await anyHost(get('/_image', { href: 'https://anything.example.org/x.png' }));
+    assert.equal(res.statusCode, 302);
+    assert.equal(res.headers.location, 'https://anything.example.org/x.png');
+    const userinfo = await anyHost(get('/_image', { href: 'https://user@anything.example.org/x.png' }));
+    assert.equal(userinfo.statusCode, 404);
+  });
+
+  it('answers 404 for a remote source whose host is not allowlisted (no open redirect)', async () => {
+    for (const url of [
+      'https://evil.example.net/x.png',
+      'https://images.example.com.evil.net/x.png',
+      'https://cdn.example.com/x.png',
+      'http://169.254.169.254/latest/meta-data/',
+    ]) {
+      const res = await handler()(get('/_next/image', { url, w: '640' }));
+      assert.equal(res.statusCode, 404, url);
+      assert.equal(res.headers.location, undefined, url);
+    }
+  });
+
+  it('answers 404 when the browser would land on another host (userinfo, backslash)', async () => {
+    // A redirect target is read by the browser with WHATWG URL rules, so the
+    // host is checked on the parsed URL, not on the raw text.
+    for (const url of [
+      'https://images.example.com:@evil.com/',
+      'https://images.example.com@evil.com/x.png',
+      'https://user:pass@images.example.com/x.png',
+      'https://evil.com\\.cdn.example.com/x.png',
+      'https://evil.com%5C.cdn.example.com/x.png',
+    ]) {
+      const res = await handler()(get('/_next/image', { url, w: '640' }));
+      assert.equal(res.statusCode, 404, url);
+      assert.equal(res.headers.location, undefined, url);
+    }
+    const ipx = await handler()(get('/_ipx/w_640/https:/evil.com%5C.cdn.example.com/b.jpg'));
+    assert.equal(ipx.statusCode, 404);
+  });
+
+  it('redirects to the parsed URL of an allowlisted source', async () => {
+    const res = await handler()(get('/_next/image', { url: 'https://IMAGES.example.com/a b.jpg', w: '640' }));
+    assert.equal(res.statusCode, 302);
+    assert.equal(res.headers.location, 'https://images.example.com/a%20b.jpg');
+  });
+
+  it('answers 404 for a missing or protocol-relative source', async () => {
+    assert.equal((await handler()(get('/_next/image', { w: '640' }))).statusCode, 404);
+    assert.equal((await handler()(get('/_next/image', { url: '//evil.example.net/x.png' }))).statusCode, 404);
+    assert.equal((await handler()(get('/_next/image', { url: '/img/missing.png' }))).statusCode, 404);
+  });
+
+  it('a custom IPX base URL (`pathPrefixes`) is answered like `/_ipx`, under the basePath too', async () => {
+    const custom = (stripPrefix = '') =>
+      loadHandler(
+        generateApiGwAssetProxyCode({
+          spaFallback: false,
+          stripPrefix,
+          imageFallback: { hosts: ['images.example.com'], pathPrefixes: ['/img/'] },
+        }),
+        IMAGE_OBJECTS,
+      );
+    assert.equal(decode(await custom()(get('/img/w_640/img/cat.png'))), 'png-bytes');
+    assert.equal(decode(await custom('/app')(get('/app/img/w_640/img/cat.png'))), 'png-bytes');
+    const remote = await custom()(get('/img/w_640/https:/images.example.com/a.jpg'));
+    assert.equal(remote.statusCode, 302);
+    assert.equal(remote.headers.location, 'https://images.example.com/a.jpg');
+    // The default endpoint still works next to the custom one.
+    assert.equal(decode(await custom()(get('/_ipx/w_640/img/cat.png'))), 'png-bytes');
+  });
+
+  it('without `imageFallback` the endpoints are plain paths (no source lookup)', async () => {
+    const plain = loadHandler(generateApiGwAssetProxyCode({ spaFallback: false }), IMAGE_OBJECTS);
+    const res = await plain(get('/_next/image', { url: '/img/cat.png' }));
+    assert.equal(res.statusCode, 404);
+  });
+});
+
+// ── Slash trimming stays linear on a long run of slashes ───────────────────
+// A `/\/+$/` regex backtracks quadratically on a long run of `/` that is not at
+// the end of the string; the image prefixes and the API Gateway door's basePath
+// trim trailing slashes with a linear scan instead.
+
+describe('trailing-slash trimming is linear', () => {
+  // A slash run inside the value (after a leading character, so a leading
+  // strip doesn't remove it): a backtracking `/\/+$/` takes ~0.7 s on this.
+  const longRun = `a${'/'.repeat(40_000)}x`;
+
+  it('imagePathPrefixes normalizes prefixes and handles a long slash run quickly', () => {
+    assert.deepEqual(imagePathPrefixes(['img/', '//img//', '/_ipx']), ['/_ipx', '/img']);
+    const started = performance.now();
+    assert.deepEqual(imagePathPrefixes([longRun]), ['/_ipx', `/${longRun}`]);
+    assert.ok(performance.now() - started < 200, 'trimming must not backtrack');
+  });
+
+  it('trimTrailingSlashes keeps the value up to its last non-slash character', () => {
+    assert.equal(trimTrailingSlashes('/app///'), '/app');
+    assert.equal(trimTrailingSlashes('///'), '');
+    const started = performance.now();
+    assert.equal(trimTrailingSlashes(longRun), longRun);
+    assert.ok(performance.now() - started < 200, 'trimming must not backtrack');
+  });
+});

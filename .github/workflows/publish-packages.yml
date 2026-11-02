@@ -46,6 +46,25 @@ jobs:
       # the same install + build on every PR; keep the two in sync.
       - run: npm ci --ignore-scripts
 
+      # Dependabot can't write changesets, so its bumps merge without one
+      # (verify-coverage skips them). Write it here instead: one patch entry for
+      # each published package whose package.json changed since the last release
+      # and that no pending changeset covers yet. This has to run before
+      # changesets/action, not inside `npm run version`: the action only
+      # versions when it finds a changeset on disk, and otherwise publishes. The
+      # file stays uncommitted; the action reads it, `changeset version` consumes
+      # it, and the result lands in the Version Packages PR. On the push that
+      # merges that PR the diff is empty, so nothing is written and the action
+      # publishes.
+      - name: Changeset for dependency bumps since the last release
+        run: |
+          LAST_RELEASE="$(git log -1 --format=%H --grep='^chore: version packages' HEAD)"
+          if [ -z "$LAST_RELEASE" ]; then
+            echo "::warning::No 'chore: version packages' commit found; skipping the dependency changeset."
+            exit 0
+          fi
+          node --experimental-strip-types scripts/generate-dependency-changeset.ts "$LAST_RELEASE" automated
+
       - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         id: changesets
         with:

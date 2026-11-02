@@ -12,21 +12,27 @@
  * Must run under `--conditions=cdk` so the BB packages resolve their CDK entries
  * (real infra) rather than the default mock stubs.
  */
-import { test, describe, before, after } from 'node:test';
+
 import assert from 'node:assert';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { after, before, describe, test } from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
+import { ApiNamespace, Compute, CronJob, Scope } from '@aws-blocks/blocks';
+import { BlocksBackend, BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
 let backendPath: string;
 let earlyReadBackendPath: string;
 let throwingBackendPath: string;
+let computeBackendPath: string;
+let scopeComputeBackendPath: string;
+let containerScopeApiBackendPath: string;
+let containerScopeCronBackendPath: string;
 let tmpDir: string;
 
 before(() => {
@@ -50,6 +56,60 @@ before(() => {
 	);
 	throwingBackendPath = join(tmpDir, 'backend-throwing.mjs');
 	writeFileSync(throwingBackendPath, "throw new Error('backend module was imported');\n");
+	// A customer-shaped backend: `api` on the default compute, and a `reports`
+	// namespace (constructed as 'reportsApi') plus an AsyncJob on one `Compute`.
+	computeBackendPath = join(tmpDir, 'backend-compute.mjs');
+	writeFileSync(
+		computeBackendPath,
+		"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memory: 512 });\n" +
+			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
+			"export const reports = new ApiNamespace(scope, 'reportsApi', () => ({ async build() { return 'ok'; } }), { compute: reportsCompute });\n" +
+			"export const reportsJob = new AsyncJob(scope, 'reports-job', { compute: reportsCompute, handler: async () => {} });\n",
+	);
+	// Scope-level compute: everything under `reports` runs on `scoped`, except
+	// what sets its own compute, and the blocks that always run on the default.
+	const schema = "{ '~standard': { version: 1, vendor: 'test', validate: (value) => ({ value }) } }";
+	scopeComputeBackendPath = join(tmpDir, 'backend-scope-compute.mjs');
+	writeFileSync(
+		scopeComputeBackendPath,
+		"import { ApiNamespace, AsyncJob, Compute, CronJob, RawRoute, Realtime, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const scoped = new Compute(scope, 'scoped', { type: 'serverless', memory: 640 });\n" +
+			"const own = new Compute(scope, 'own', { type: 'serverless', memory: 768 });\n" +
+			"const cronOnly = new Compute(scope, 'cron-only', { type: 'serverless', memory: 896 });\n" +
+			"const reports = new Scope('reports', { parent: scope, compute: scoped });\n" +
+			"const nested = new Scope('nested', { parent: reports });\n" +
+			"export const pingApi = new ApiNamespace(scope, 'ping', () => ({ async ping() { return 'pong'; } }));\n" +
+			"export const reportsApi = new ApiNamespace(reports, 'reports', () => ({ async build() { return 'ok'; } }));\n" +
+			"export const nestedApi = new ApiNamespace(nested, 'nested', () => ({ async go() { return 'ok'; } }));\n" +
+			"export const ownApi = new ApiNamespace(reports, 'own', () => ({ async go() { return 'ok'; } }), { compute: own });\n" +
+			"export const reportsJob = new AsyncJob(reports, 'reports-job', { handler: async () => {} });\n" +
+			"new CronJob(reports, 'nightly', { schedule: 'rate(1 hour)', handler: async () => {} });\n" +
+			"new CronJob(scope, 'hourly', { schedule: 'rate(1 hour)', compute: cronOnly, handler: async () => {} });\n" +
+			`new Realtime(reports, 'rt', { namespaces: { chat: Realtime.namespace(${schema}) } });\n` +
+			"new RawRoute(reports, 'hook', { method: 'GET', path: '/hooks/scoped', handler: async () => {} });\n",
+	);
+	// A container compute set on a scope: blocks that can't run on it yet fail synth.
+	containerScopeApiBackendPath = join(tmpDir, 'backend-container-scope-api.mjs');
+	writeFileSync(
+		containerScopeApiBackendPath,
+		"import { ApiNamespace, Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const worker = new Compute(scope, 'worker', { type: 'container' });\n" +
+			"const jobs = new Scope('jobs', { parent: scope, compute: worker });\n" +
+			"export const jobsApi = new ApiNamespace(jobs, 'jobs', () => ({ async go() { return 'ok'; } }));\n",
+	);
+	containerScopeCronBackendPath = join(tmpDir, 'backend-container-scope-cron.mjs');
+	writeFileSync(
+		containerScopeCronBackendPath,
+		"import { Compute, CronJob, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const worker = new Compute(scope, 'worker', { type: 'container' });\n" +
+			"const jobs = new Scope('jobs', { parent: scope, compute: worker });\n" +
+			"new CronJob(jobs, 'nightly', { schedule: 'rate(1 hour)', handler: async () => {} });\n",
+	);
 });
 
 after(() => {
@@ -373,3 +433,303 @@ describe('apiFrontDoor: cloudfront', () => {
 		);
 	});
 });
+
+// A namespace given its own `Compute` through the public `compute` option, end
+// to end through the real Compute block and LambdaCompute.
+describe('ApiNamespace compute option', () => {
+	type Resources = Record<string, { Type: string; Properties: Record<string, unknown> }>;
+
+	// The Compute block's backing function, found by its construct path.
+	const reportsFunctionId = (resources: Resources) => {
+		const ids = Object.keys(resources).filter(
+			(id) => resources[id].Type === 'AWS::Lambda::Function' && /reportsbacking/i.test(id),
+		);
+		assert.strictEqual(ids.length, 1, `one reports-compute function, got ${ids.join(', ')}`);
+		return ids[0];
+	};
+
+	const assertRoutedToReportsCompute = (template: Template) => {
+		const resources = template.toJSON().Resources as Resources;
+		const fnId = reportsFunctionId(resources);
+
+		// Routed by the export name, to the reports compute's function only.
+		const parts = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::ApiGateway::Resource');
+		const reportsResource = parts.find(([, r]) => r.Properties.PathPart === 'reports');
+		assert.ok(reportsResource, 'a /aws-blocks/api/reports resource');
+		assert.ok(!parts.some(([, r]) => r.Properties.PathPart === 'reportsApi'), 'not the constructor name');
+		const method = Object.values(resources).find(
+			(r) =>
+				r.Type === 'AWS::ApiGateway::Method' &&
+				(r.Properties.ResourceId as { Ref?: string }).Ref === reportsResource[0],
+		);
+		assert.ok(JSON.stringify(method?.Properties.Integration).includes(fnId), 'integrates the reports function');
+
+		// Nothing else reaches the reports function: every other method (the default
+		// namespace's catch-alls included) integrates a different function.
+		const otherMethods = Object.values(resources).filter(
+			(r) =>
+				r.Type === 'AWS::ApiGateway::Method' &&
+				(r.Properties.ResourceId as { Ref?: string }).Ref !== reportsResource[0] &&
+				r.Properties.Integration !== undefined,
+		);
+		assert.ok(otherMethods.length > 0, 'the catch-all methods exist');
+		assert.ok(
+			otherMethods.every((m) => !JSON.stringify(m.Properties.Integration).includes(fnId)),
+			'only /aws-blocks/api/reports integrates the reports function',
+		);
+
+		// The compute's options apply, and the same function also runs the AsyncJob.
+		assert.strictEqual(resources[fnId].Properties.MemorySize, 512);
+		const mappings = Object.values(resources).filter((r) => r.Type === 'AWS::Lambda::EventSourceMapping');
+		assert.ok(
+			mappings.some((m) => JSON.stringify(m.Properties.FunctionName).includes(fnId)),
+			'the AsyncJob on the same compute is delivered to the same function',
+		);
+
+		// One API-scoped invoke permission, not one per method.
+		const permissions = Object.values(resources).filter(
+			(r) =>
+				r.Type === 'AWS::Lambda::Permission' &&
+				r.Properties.Principal === 'apigateway.amazonaws.com' &&
+				JSON.stringify(r.Properties.FunctionName).includes(fnId),
+		);
+		assert.strictEqual(permissions.length, 1);
+	};
+
+	test('BlocksStack', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ComputeOptionStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		assertRoutedToReportsCompute(Template.fromStack(stack));
+	});
+
+	test('BlocksBackend', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'ComputeOptionParent');
+		await BlocksBackend.create(parent, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		assertRoutedToReportsCompute(Template.fromStack(parent));
+	});
+
+	// The front door has a single origin (the gateway) under `cloudfront`, so
+	// fan-out stays inside the gateway: still exactly one distribution.
+	test('cloudfront tier: same routing, one distribution', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ComputeOptionCloudFront', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: computeBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		const template = Template.fromStack(stack);
+		assertRoutedToReportsCompute(template);
+		template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+	});
+});
+
+describe('Scope-level compute', () => {
+	type Resources = Record<string, { Type: string; Properties: Record<string, unknown>; DependsOn?: unknown }>;
+
+	/** The function a `Compute` block backs, found by its construct path. */
+	const functionOf = (resources: Resources, computeId: string) => {
+		const pattern = new RegExp(`app${computeId.replace('-', '')}backing`, 'i');
+		const ids = Object.keys(resources).filter((id) => resources[id].Type === 'AWS::Lambda::Function' && pattern.test(id));
+		assert.strictEqual(ids.length, 1, `one ${computeId} function, got ${ids.join(', ')}`);
+		return ids[0];
+	};
+	const defaultFunctionOf = (resources: Resources) => {
+		const ids = Object.keys(resources).filter(
+			(id) => resources[id].Type === 'AWS::Lambda::Function' && /^DefaultComputeHandler/.test(id),
+		);
+		assert.strictEqual(ids.length, 1, `one default function, got ${ids.join(', ')}`);
+		return ids[0];
+	};
+	/** The function each literal `/aws-blocks/api/{name}` resource integrates. */
+	const routedFunction = (resources: Resources, pathPart: string) => {
+		const resource = Object.entries(resources).find(
+			([, r]) => r.Type === 'AWS::ApiGateway::Resource' && r.Properties.PathPart === pathPart,
+		);
+		if (!resource) return undefined;
+		const method = Object.values(resources).find(
+			(r) => r.Type === 'AWS::ApiGateway::Method' && (r.Properties.ResourceId as { Ref?: string }).Ref === resource[0],
+		);
+		return JSON.stringify(method?.Properties.Integration);
+	};
+
+	let resources: Resources;
+	before(async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ScopeComputeStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: scopeComputeBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		resources = Template.fromStack(stack).toJSON().Resources as Resources;
+	});
+
+	test("API namespaces in the scope, and in its child scopes, run on the scope's compute", () => {
+		const scopedFn = functionOf(resources, 'scoped');
+		assert.ok(routedFunction(resources, 'reportsApi')?.includes(scopedFn), 'reportsApi → the scoped compute');
+		assert.ok(routedFunction(resources, 'nestedApi')?.includes(scopedFn), 'nestedApi inherits through its parent');
+		assert.strictEqual(resources[scopedFn].Properties.MemorySize, 640);
+	});
+
+	test("a block's own compute wins over its scope's", () => {
+		assert.ok(routedFunction(resources, 'ownApi')?.includes(functionOf(resources, 'own')));
+	});
+
+	test('a namespace outside the scope stays on the default compute', () => {
+		assert.strictEqual(routedFunction(resources, 'pingApi'), undefined, 'no literal resource: the catch-all carries it');
+	});
+
+	test("an AsyncJob in the scope is delivered to the scope's compute", () => {
+		const scopedFn = functionOf(resources, 'scoped');
+		const mappings = Object.values(resources).filter((r) => r.Type === 'AWS::Lambda::EventSourceMapping');
+		assert.ok(mappings.some((m) => JSON.stringify(m.Properties.FunctionName).includes(scopedFn)));
+	});
+
+	test("CronJobs target their compute, and the scheduler role may invoke each one's function", () => {
+		const schedules = Object.values(resources).filter((r) => r.Type === 'AWS::Scheduler::Schedule');
+		const targetOf = (name: string) =>
+			JSON.stringify(schedules.find((r) => String(r.Properties.Name).includes(name))?.Properties.Target);
+		const scopedFn = functionOf(resources, 'scoped');
+		const cronFn = functionOf(resources, 'cron-only');
+		assert.ok(targetOf('nightly').includes(scopedFn), "the scope's CronJob targets the scoped compute");
+		assert.ok(targetOf('hourly').includes(cronFn), "the CronJob's own compute");
+
+		const policies = Object.values(resources).filter(
+			(r) => r.Type === 'AWS::IAM::Policy' && JSON.stringify(r.Properties.Roles).includes('BlocksSchedulerRole'),
+		);
+		const invokable = JSON.stringify(policies.map((p) => p.Properties.PolicyDocument));
+		assert.ok(invokable.includes(scopedFn) && invokable.includes(cronFn), 'the role may invoke both functions');
+	});
+
+	test('Realtime stays on the default compute inside the scope', () => {
+		const defaultFn = defaultFunctionOf(resources);
+		const integrations = Object.values(resources).filter((r) => r.Type === 'AWS::ApiGatewayV2::Integration');
+		assert.ok(integrations.length > 0, 'the WebSocket API has integrations');
+		assert.ok(
+			integrations.every((r) => JSON.stringify(r.Properties).includes(defaultFn)),
+			'every WebSocket route integrates the default function',
+		);
+	});
+
+	test("a container scope fails synth for an ApiNamespace, naming the compute and the fix", async () => {
+		await assert.rejects(
+			BlocksStack.create(new cdk.App(), 'ContainerScopeApiStack', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: containerScopeApiBackendPath,
+				defaults: BlocksPresets.production,
+			}),
+			/Compute 'ContainerScopeApiStack\/app\/worker\/backing' hosts API namespaces \(jobsApi\) but accepts no API traffic\. API namespaces run only on a serverless compute today/,
+		);
+	});
+
+	test('a container scope fails synth for a CronJob, naming the compute', async () => {
+		await assert.rejects(
+			BlocksStack.create(new cdk.App(), 'ContainerScopeCronStack', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: containerScopeCronBackendPath,
+				defaults: BlocksPresets.production,
+			}),
+			/CronJob "ContainerScopeCronStack-app-jobs-nightly" runs only on a serverless compute, but resolves to container compute 'ContainerScopeCronStack\/app\/worker\/backing'/,
+		);
+	});
+});
+
+describe('a compute bound to another backend fails synth (multi-backend)', () => {
+	// create() re-runs only the top-level backend module per backend, so a Compute
+	// from a cached sub-module stays bound to the first backend. A job in another
+	// backend must not be wired to that backend's function: a schedule's runs would
+	// all fail (that function never registered the job), and a queue would create a
+	// cross-stack dependency cycle. Each case writes its own sub-module, since the
+	// module cache outlives a test.
+	const writeBackend = (name: string, body: string) => {
+		writeFileSync(
+			join(tmpDir, `computes-${name}.mjs`),
+			"import { Compute, Scope } from '@aws-blocks/blocks';\n" +
+				"export const heavy = new Compute(new Scope('shared'), 'heavy', { type: 'serverless', memory: 1024 });\n",
+		);
+		const backend = join(tmpDir, `backend-foreign-${name}.mjs`);
+		writeFileSync(
+			backend,
+			"import { AsyncJob, CronJob, Scope } from '@aws-blocks/blocks';\n" +
+				`import { heavy } from './computes-${name}.mjs';\n` +
+				"const scope = new Scope('app');\n" +
+				body,
+		);
+		return backend;
+	};
+	/** Build two BlocksStacks from one backend module; the first owns `heavy`. */
+	const secondStack = async (id: string, backendCDKPath: string) => {
+		const app = new cdk.App();
+		const make = (stackId: string) =>
+			BlocksStack.create(app, stackId, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production });
+		await make(`${id}One`);
+		return make(`${id}Two`);
+	};
+
+	test("a CronJob's own compute", async () => {
+		const backend = writeBackend('cron', "new CronJob(scope, 'tick', { schedule: 'rate(1 hour)', compute: heavy, handler: async () => {} });\n");
+		await assert.rejects(
+			secondStack('ForeignCron', backend),
+			/CronJob "ForeignCronTwo-app-tick" resolves to compute 'ForeignCronOne\/shared\/heavy\/backing', which belongs to another backend \('ForeignCronOne'\)/,
+		);
+	});
+
+	test("an AsyncJob's own compute", async () => {
+		const backend = writeBackend('job', "export const job = new AsyncJob(scope, 'job', { compute: heavy, handler: async () => {} });\n");
+		await assert.rejects(
+			secondStack('ForeignJob', backend),
+			/AsyncJob "ForeignJobTwo-app-job" resolves to compute 'ForeignJobOne\/shared\/heavy\/backing', which belongs to another backend/,
+		);
+	});
+
+	test('a compute inherited from a scope', async () => {
+		const backend = writeBackend(
+			'scope',
+			"const placed = new Scope('placed', { parent: scope, compute: heavy });\n" +
+				"new CronJob(placed, 'tick', { schedule: 'rate(1 hour)', handler: async () => {} });\n",
+		);
+		await assert.rejects(
+			secondStack('ForeignScope', backend),
+			/CronJob "ForeignScopeTwo-app-placed-tick" resolves to compute 'ForeignScopeOne\/shared\/heavy\/backing'/,
+		);
+	});
+
+	test('two BlocksBackends in one stack', async () => {
+		const backendCDKPath = writeBackend('backends', "new CronJob(scope, 'tick', { schedule: 'rate(1 hour)', compute: heavy, handler: async () => {} });\n");
+		const parent = new cdk.Stack(new cdk.App(), 'ForeignParent');
+		const make = (id: string) =>
+			BlocksBackend.create(parent, id, { backendHandlerPath: handlerPath, backendCDKPath, defaults: BlocksPresets.production });
+		await make('BackendOne');
+		await assert.rejects(make('BackendTwo'), /which belongs to another backend \('ForeignParent\/BackendOne'\)/);
+	});
+});
+
+// Compile-time only (never called): a scope takes either kind of compute; a
+// CronJob's own `compute` takes only a serverless one.
+function _scopeAndCronComputeTypeChecks(scope: InstanceType<typeof Scope>) {
+	const serverless = new Compute(scope, 'serverless', { type: 'serverless' });
+	const container = new Compute(scope, 'container', { type: 'container' });
+	new Scope('a', { parent: scope, compute: serverless });
+	new Scope('b', { parent: scope, compute: container });
+	new CronJob(scope, 'ok', { schedule: 'rate(1 hour)', compute: serverless, handler: async () => {} });
+	// @ts-expect-error — only a serverless compute can run a CronJob
+	new CronJob(scope, 'notYet', { schedule: 'rate(1 hour)', compute: container, handler: async () => {} });
+}
+void _scopeAndCronComputeTypeChecks;
+
+// Compile-time only (never called): `ApiNamespaceOptions.compute` takes a
+// serverless `Compute` and rejects other compute types.
+function _apiNamespaceComputeTypeChecks(scope: InstanceType<typeof Scope>) {
+	const serverless = new Compute(scope, 'serverless', { type: 'serverless' });
+	new ApiNamespace(scope, 'ok', () => ({}), { compute: serverless });
+
+	const container = new Compute(scope, 'container', { type: 'container' });
+	// @ts-expect-error — only a serverless compute can serve an API namespace
+	new ApiNamespace(scope, 'notYet', () => ({}), { compute: container });
+}
+void _apiNamespaceComputeTypeChecks;

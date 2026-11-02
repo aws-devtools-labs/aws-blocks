@@ -175,7 +175,7 @@ let reservedNamespaceClassNames: Set<String> = [
     "Blocks", "Servers", "BlocksRuntime", "Foundation",
     "BlocksClient", "BlocksServer", "BlocksRequest", "RPCError", "CodegenError", "JSONValue",
     "RealtimeChannel", "FileDownloadHandle", "FileUploadHandle", "OIDCClient",
-    "Sendable", "URLSession",
+    "Sendable", "CaseIterable", "URLSession",
     "String", "Int", "Double", "Bool", "Date", "UUID", "URL", "Void", "Set", "Error",
     "Codable", "Encodable", "Decoder", "Encoder", "CodingKey", "DecodingError", "JSONDecoder", "JSONSerialization",
     "Self", "Any"

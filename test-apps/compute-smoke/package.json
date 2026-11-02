@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
-  "description": "Smoke test verifying container-backed Compute + AsyncJob work in a VPC",
+  "description": "Compute E2E suite: container AsyncJobs and API namespaces on their own compute, in a VPC, per API front door",
   "scripts": {
     "test": "echo 'Compute smoke tests run during e2e:sandbox:compute and e2e:production:compute'",
     "test:e2e:local": "BLOCKS_TEST_ENV=local tsx -C browser test/compute-smoke.test.ts",

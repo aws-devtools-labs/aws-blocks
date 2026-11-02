@@ -1,10 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
@@ -12,7 +10,8 @@ import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
-import { waitForLiveBuild, type InvalidationProbe, type WaitForLiveResult } from './wait-live.js';
+import { generateDeployClient } from './deploy-client-codegen.js';
+import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 
 export interface DeployOptions {
@@ -243,21 +242,15 @@ export async function deploy(options: DeployOptions) {
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     await applyExternalMigrations({ stage: 'production' });
     
-    // Import backend to populate BB registry for telemetry
+    // Generate client code FIRST (before cdk deploy triggers the Vite build).
+    // This also populates the BB registry for telemetry — from a child process,
+    // never by importing the backend here: an in-process import loads the local
+    // mock layer, whose runtimes (PGlite, CronJob schedulers, …) kept this
+    // process alive forever after the deploy finished.
     const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');
-    try {
-      await import(pathToFileURL(foundationPath).href);
-    } catch { /* ignore import errors */ }
-
-    // Generate client code FIRST (before cdk deploy triggers the Vite build)
     const clientPath = join(dirname(foundationPath), 'client.js');
     console.log('📝 Generating client code...');
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const workerPath = join(__dirname, 'generate-client-worker.js');
-    execFileSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, foundationPath, clientPath], {
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    await generateDeployClient(foundationPath, clientPath);
 
     console.log('🚀 Deploying to AWS...');
     console.log('   (This may take a few minutes on first deploy)');
@@ -321,7 +314,13 @@ export async function deploy(options: DeployOptions) {
     registerFrameworkFromSink(frameworkSink);
 
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
+    // `--all` can write more than one stack's outputs (e.g. the us-east-1
+    // CloudFront-alarm monitoring stack). Pick the group that carries `ApiUrl`
+    // — the main Blocks stack, which also holds the Hosting outputs — rather
+    // than relying on the write order of the outputs file. Falls back to the
+    // first group so a single-stack app is unchanged.
+    const stackGroups = Object.values(outputs) as Record<string, string>[];
+    const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME

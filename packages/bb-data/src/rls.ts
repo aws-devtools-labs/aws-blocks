@@ -14,11 +14,23 @@ export interface RLSContext {
   userId: string;
   /** Postgres role to SET LOCAL. Must be 'authenticated' or 'anon'. @default 'authenticated' */
   role?: string;
-  /** Additional claims merged into request.jwt.claims. Overrides sub and role if specified. */
+  /**
+   * Additional claims merged into request.jwt.claims. They can't override the
+   * reserved claims: `sub` always comes from `userId` and `role` from `role`, so
+   * an RLS policy that reads either claim sees the server-derived value. A `sub`
+   * or `role` key here is ignored.
+   */
   claims?: Record<string, unknown>;
 }
 
 const ALLOWED_ROLES = new Set(['authenticated', 'anon']);
+
+/**
+ * Claims the server derives itself. A caller-supplied value for any of these
+ * (for example an identity provider's own `sub`) is dropped, so it can't change
+ * who an RLS policy thinks the user is or which role it sees.
+ */
+const RESERVED_CLAIMS = new Set(['sub', 'role']);
 
 /**
  * Sets Supabase-compatible RLS session variables on a transaction handle.
@@ -30,10 +42,15 @@ export async function setRLSContext(engine: DatabaseEngine, handle: TransactionH
     throw new Error(`Invalid RLS role: '${role}'. Allowed: ${[...ALLOWED_ROLES].join(', ')}`);
   }
 
+  const extraClaims = Object.fromEntries(
+    Object.entries(ctx.claims ?? {}).filter(([name]) => !RESERVED_CLAIMS.has(name)),
+  );
+  // Server-derived values go last, so they win even if a reserved name slips
+  // past the filter above.
   const claims = JSON.stringify({
+    ...extraClaims,
     sub: ctx.userId,
     role,
-    ...ctx.claims,
   });
 
   // Safe: role is validated against ALLOWED_ROLES allowlist above.

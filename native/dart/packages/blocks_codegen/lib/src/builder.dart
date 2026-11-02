@@ -534,9 +534,13 @@ class CodegenModelBuilder {
       TransferableRef(blocksType: final kt, typeArgs: final args) =>
         TransferableType(
           blocksType: kt,
-          typeArgs: args
-              .map((a) => _resolveTypeArgWithDedup(a, hint, path))
-              .toList(),
+          // An oidc/client's type argument names its providers, which the
+          // generated client doesn't use yet.
+          typeArgs: kt == 'oidc/client'
+              ? const []
+              : args
+                    .map((a) => _resolveTypeArgWithDedup(a, hint, path))
+                    .toList(),
           binding: _bindings[kt],
         ),
       MapRef(valueType: final vt) => MapType(

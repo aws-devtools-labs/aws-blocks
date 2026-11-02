@@ -318,23 +318,37 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     }
   });
 
-  it('fires both file and HTTP sinks when telemetry is enabled', async () => {
+  it('fires both file and HTTP sinks when telemetry is enabled', { timeout: 10_000 }, async (t) => {
     const tmp = join(tmpdir(), `cba-telemetry-both-${Date.now()}`);
     const filePath = join(tmp, 'events.json');
     process.argv = ['node', 'script.js', `--telemetry-file=${filePath}`];
 
     const received: string[] = [];
-    const server: Server = await new Promise((resolve) => {
-      const s = createServer((req, res) => {
+    const server = createServer();
+    t.after(async () => {
+      try {
+        server.closeAllConnections();
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+        }
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+    const requestReceived = new Promise<void>((resolve) => {
+      server.on('request', (req, res) => {
         let body = '';
         req.on('data', (chunk: string) => { body += chunk; });
         req.on('end', () => {
           received.push(body);
           res.writeHead(200);
-          res.end();
+          res.end(() => resolve());
         });
       });
-      s.listen(0, '127.0.0.1', () => resolve(s));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
     });
 
     const addr = server.address() as { port: number };
@@ -356,7 +370,7 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
 
     await trackCommand('create', async () => {});
 
-    await new Promise((r) => setTimeout(r, 200));
+    await requestReceived;
 
     // File sink fired
     assert.ok(existsSync(filePath), 'telemetry file should exist');
@@ -367,9 +381,6 @@ describe('create-blocks-app telemetry/file sink via trackCommand', () => {
     assert.strictEqual(received.length, 1);
     const httpEvent = JSON.parse(received[0]);
     assert.strictEqual(httpEvent.event.command, 'create');
-
-    server.close();
-    rmSync(tmp, { recursive: true, force: true });
   });
 
   it('AWS_BLOCKS_DISABLE_TELEMETRY=true writes no file and fires no HTTP sink', async () => {

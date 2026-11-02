@@ -34,7 +34,7 @@ public final class BlocksClient: Sendable {
     private static let baseHostLock = OSAllocatedUnfairLock(initialState: "localhost")
 
     /// Base URL the client was constructed with — exposed for transferable
-    /// hydration (e.g. `OIDCClient.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).
+    /// hydration (e.g. `OIDCClient<Provider>.fromJSON(descriptor, baseUrl: client.baseUrl, ...)`).
     public var baseUrl: String { url }
 
     /// Token store used to hydrate `OIDCClient` transferables returned by this client.

@@ -179,8 +179,14 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Bounded: an apt mirror can stall silently (once for 57 min, until the job
+      # timeout). The wrapper retries an attempt that prints nothing for 8 min and
+      # gives up after 17 min in all, leaving this 30-min job time to deploy, test
+      # and clean up; timeout-minutes is the backstop.
+      # See scripts/ci/install-playwright.mjs.
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 19
+        run: node scripts/ci/install-playwright.mjs --deadline-minutes 17 chromium
 
       - name: Deploy sandbox
         run: |
@@ -200,15 +206,22 @@ jobs:
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. It always runs (even when the e2e jobs are skipped for
-  # unrelated PRs or forks) and only fails if a job that actually ran failed.
+  # unrelated PRs or forks) and only fails if a job that actually ran failed,
+  # or if detect-changes didn't succeed: that skips both e2e jobs, and a
+  # skipped job would read as passing here.
   e2e-amplify-interop-required:
     name: E2E Amplify Interop (Required)
     if: always()
-    needs: [e2e-amplify-interop-smoke, e2e-amplify-interop]
+    needs: [detect-changes, e2e-amplify-interop-smoke, e2e-amplify-interop]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
+          detect='${{ needs.detect-changes.result }}'
+          if [ "$detect" != "success" ]; then
+            echo "::error::Detect Changes ended $detect, so this run can't tell whether the Amplify interop jobs should run. Re-run the failed jobs."
+            exit 1
+          fi
           smoke='${{ needs.e2e-amplify-interop-smoke.result }}'
           browser='${{ needs.e2e-amplify-interop.result }}'
           echo "smoke=$smoke browser=$browser"

@@ -50,7 +50,11 @@ extension SwiftCodeGenerator {
     ) -> String {
         guard let binding = knownTransferableBindings[blocksType] else { return "\(runtimePrefix)JSONValue" }
         // Only a direct result hydrates an OIDCClient; below the top level it decodes as its descriptor.
-        if blocksType == "oidc/client", !direct { return "\(runtimePrefix)JSONValue" }
+        // A direct one is typed by its provider enum, or `String` for an untyped spec.
+        if blocksType == "oidc/client" {
+            guard direct else { return "\(runtimePrefix)JSONValue" }
+            return "\(runtimePrefix)\(binding.base)<\(typeArgs.first.map(renderArg) ?? "String")>"
+        }
         guard binding.isGeneric else { return "\(runtimePrefix)\(binding.base)" }
         let argType = typeArgs.first.map(renderArg) ?? "\(runtimePrefix)JSONValue"
         return "\(runtimePrefix)\(binding.base)<\(argType)>"

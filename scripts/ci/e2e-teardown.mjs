@@ -14,8 +14,12 @@
 // of the same PR (same BLOCKS_STACK_SUFFIX) has another id, so this deletes
 // only what this job deployed. When BLOCKS_STACK_SUFFIX is set, a stack must
 // carry it as a token too, so a bad id file can't reach another PR's or another
-// attempt's stacks. When the suite cleaned up, it makes one ListStacks call and
-// exits.
+// attempt's stacks. With the suffix set, a stack may carry only the random half
+// of the id (`<user>-<random>`) right after the suffix: test-apps/comprehensive
+// names its production stack bb-test-prod-<suffix>-<random> to stay under S3's
+// bucket-name limit. The random half is never matched on its own, so another
+// run's stack matches only if the random halves collide, as with the whole id.
+// When the suite cleaned up, it makes one ListStacks call and exits.
 //
 // It waits until each delete has started, not until it finishes: GitHub
 // force-stops a cancelled job 5 minutes after the cancel, and a production
@@ -147,7 +151,11 @@ async function main() {
 	}
 	const token = (t) => new RegExp(`(^|-)${t}(-|$)`);
 	const [idToken, suffixToken] = [token(id), suffix && token(suffix)];
-	const ours = (name) => idToken.test(name) && (!suffixToken || suffixToken.test(name));
+	// The random half of the id, matched only right after the suffix.
+	const salt = id.slice(id.lastIndexOf('-') + 1);
+	const saltToken = suffixToken && /^[A-Za-z0-9]{6,}$/.test(salt) && token(`${suffix}-${salt}`);
+	const ours = (name) =>
+		(idToken.test(name) || (saltToken && saltToken.test(name))) && (!suffixToken || suffixToken.test(name));
 	// Nested stacks go with their root stack.
 	const mine = JSON.parse(list.out || '[]').filter((s) => !s.ParentId && ours(s.StackName));
 	if (mine.length === 0) {

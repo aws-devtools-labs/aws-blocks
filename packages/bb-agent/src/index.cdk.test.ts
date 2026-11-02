@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/core/cdk';
+import { BlocksStack, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { Agent } from './index.cdk.js';
@@ -166,6 +166,51 @@ test('CDK: multiple agents add the identical shared-role grants ONCE, not per-ag
 	assert.strictEqual(invokeGrants, 1, `InvokeAgentRuntime should be granted once, found ${invokeGrants}`);
 });
 
+test('CDK: an over-long session bucket name is shortened, and the shared role is granted on that bucket', async () => {
+	// FX58: the SB3 production stack's `preset-balanced` agent. Its session bucket's `fullId`
+	// (`<stack>-test-app-preset-balanced-sn`) is 64 characters, so FileBucket provisions the shortened
+	// `deriveBucketName` form. The grant must reference that bucket, and nothing may name the raw
+	// `fullId` as a bucket. `session-bucket.aws.test.ts` pins that the deployed loop addresses the
+	// same literal.
+	const stackId = 'bb-test-prod-sb3prod-devuser1-b1e1a6';
+	const fullId = `${stackId}-test-app-preset-balanced-sn`;
+	const shortened = 'bb-test-prod-sb3prod-devuser1-b1e1a6-test-app-preset-b-0c16bd0c';
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, stackId, {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	const testApp = new Scope('test-app', { parent: stack });
+	new Agent(testApp, 'preset-balanced', { systemPrompt: 'You are a test agent.', agentcoreAssetPath: ASSET_DIR });
+	const template = Template.fromStack(stack);
+
+	const buckets = template.findResources('AWS::S3::Bucket', { Properties: { BucketName: shortened } });
+	const bucketIds = Object.keys(buckets);
+	assert.strictEqual(bucketIds.length, 1, `expected one bucket named ${shortened}`);
+	const [bucketId] = bucketIds;
+
+	// The grant on the shared role names the provisioned bucket (by its logical id), object-level too.
+	const policies = Object.values(template.findResources('AWS::IAM::Policy')) as Array<{
+		Properties: { PolicyDocument: { Statement: Array<{ Action: string | string[]; Resource: unknown }> } };
+	}>;
+	const statements = policies.flatMap((p) => p.Properties.PolicyDocument.Statement);
+	const onBucket = statements.filter((s) => JSON.stringify(s.Resource).includes(`"${bucketId}"`));
+	const actions = onBucket.flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]));
+	assert.ok(actions.includes('s3:PutObject'), `s3:PutObject on ${bucketId}, found ${JSON.stringify(actions)}`);
+	assert.ok(actions.includes('s3:GetObject*'), `s3:GetObject* on ${bucketId}, found ${JSON.stringify(actions)}`);
+	assert.ok(
+		onBucket.some((s) => JSON.stringify(s.Resource).includes('/*')),
+		'the grant covers the bucket objects',
+	);
+
+	// Nothing addresses the raw, over-long fullId as a bucket.
+	const json = JSON.stringify(template.toJSON());
+	assert.ok(!json.includes(`"${fullId}"`), `the raw fullId ${fullId} appears in the template`);
+	assert.ok(!json.includes(`:s3:::${fullId}`), 'an S3 ARN names the raw fullId');
+});
+
 test('CDK: a deployed model guardrail grants bedrock:ApplyGuardrail on that guardrail only', async () => {
 	const app = new cdk.App();
 	const stack = await BlocksStack.create(app, 'teststack', {
@@ -197,4 +242,70 @@ test('CDK: a deployed model guardrail grants bedrock:ApplyGuardrail on that guar
 test('CDK: no guardrail configured means no ApplyGuardrail grant', async () => {
 	const json = JSON.stringify((await synth()).toJSON());
 	assert.ok(!json.includes('bedrock:ApplyGuardrail'));
+});
+
+/** Synthesizes an Agent with the given deployed models and returns its IAM policy statements (inline and managed). */
+async function deployedModelStatements(deployed: unknown): Promise<Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>> {
+	const app = new cdk.App();
+	const stack = await BlocksStack.create(app, 'teststack', {
+		backendHandlerPath: handlerPath,
+		backendCDKPath: backendPath,
+		defaults: BlocksPresets.production,
+		defaultComputeFactory: lambdaFactory,
+	});
+	new Agent(stack, 'mantle', {
+		systemPrompt: 'You are a test agent.',
+		agentcoreAssetPath: ASSET_DIR,
+		model: { deployed: deployed as never },
+	});
+	const template = Template.fromStack(stack);
+	return [...Object.values(template.findResources('AWS::IAM::Policy')), ...Object.values(template.findResources('AWS::IAM::ManagedPolicy'))]
+		.flatMap((p) => p.Properties.PolicyDocument.Statement as Array<{ Action: string | string[]; Resource: unknown; Condition?: unknown }>);
+}
+
+const actionsOf = (s: { Action: string | string[] }) => (Array.isArray(s.Action) ? s.Action : [s.Action]);
+
+test('CDK: a deployed openai-api model on a Mantle endpoint without apiKey grants region-scoped bedrock-mantle access', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-20b', endpoint: 'https://bedrock-mantle.eu-west-1.api.aws/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-20b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/openai/v1' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(inference)}`);
+	assert.deepStrictEqual(actionsOf(inference[0]).sort(), ['bedrock-mantle:CreateInference', 'bedrock-mantle:GetModel', 'bedrock-mantle:ListModels']);
+	const resources = JSON.stringify(inference[0].Resource);
+	assert.ok(Array.isArray(inference[0].Resource) && inference[0].Resource.length === 2, `one resource per distinct region: ${resources}`);
+	assert.ok(resources.includes(':bedrock-mantle:us-east-1:'), `us-east-1 project ARN: ${resources}`);
+	assert.ok(resources.includes(':bedrock-mantle:eu-west-1:'), `eu-west-1 project ARN: ${resources}`);
+	assert.ok(resources.includes(':project/*'), `project-scoped ARN: ${resources}`);
+	assert.ok(!resources.includes('"*"'), 'inference actions are never granted on "*"');
+
+	const bearer = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken'));
+	assert.strictEqual(bearer.length, 1);
+	assert.deepStrictEqual(actionsOf(bearer[0]), ['bedrock-mantle:CallWithBearerToken']);
+	assert.strictEqual(bearer[0].Resource, '*');
+	assert.deepStrictEqual(bearer[0].Condition, { StringEquals: { 'bedrock-mantle:BearerTokenType': 'SHORT_TERM' } });
+});
+
+test('CDK: an empty apiKey on a Mantle endpoint counts as omitted and gets the bedrock-mantle grant', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: '' },
+	]);
+	const inference = statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CreateInference'));
+	assert.strictEqual(inference.length, 1, `expected one Mantle inference statement, got ${JSON.stringify(statements)}`);
+	assert.ok(JSON.stringify(inference[0].Resource).includes(':bedrock-mantle:us-east-1:'));
+	assert.strictEqual(statements.filter((s) => actionsOf(s).includes('bedrock-mantle:CallWithBearerToken')).length, 1);
+});
+
+test('CDK: no bedrock-mantle grant for non-Mantle openai-api, explicit apiKey, or bedrock-only models', async () => {
+	const statements = await deployedModelStatements([
+		{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'https://api.openai.com/v1' },
+		{ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'https://bedrock-mantle.us-east-1.api.aws.example.com/v1' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: 'explicit-key' },
+		{ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1', apiKey: () => Promise.resolve('k') },
+		{ provider: 'bedrock', modelId: 'm1' },
+	]);
+	assert.ok(!JSON.stringify(statements).includes('bedrock-mantle:'), `unexpected bedrock-mantle grant: ${JSON.stringify(statements)}`);
+	assert.ok(!JSON.stringify((await synth()).toJSON()).includes('bedrock-mantle:'), 'the default Agent has no bedrock-mantle grant');
 });

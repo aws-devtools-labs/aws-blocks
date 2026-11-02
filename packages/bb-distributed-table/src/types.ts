@@ -174,7 +174,7 @@ export interface DistributedTableOptions<
 	readValidation?: ReadValidationMode;
 	/** Wrap an existing table instead of creating one. */
 	table?: ExternalTableRef;
-	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
+	/** Optional logger for internal operations. When omitted, a default Logger at warn level is created so `readValidation: 'coerce'` fallback warnings surface. */
 	logger?: ChildLogger;
 }
 

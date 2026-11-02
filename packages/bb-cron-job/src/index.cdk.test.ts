@@ -184,3 +184,31 @@ describe('CronJob scheduler role trust', () => {
 		assert.ok(sourceArn.includes('AWS::Partition'), `SourceArn uses the stack partition: ${sourceArn}`);
 	});
 });
+
+describe('CronJob one handler per event key, at synth', () => {
+	// Two jobs end up with one `fullId` (`<stack>-x-y-z`) because `fullId` joins
+	// ids with '-': `x-y`/`z` and `x`/`y-z`. CDK accepts both construct paths, and
+	// the Lambda runtime would register both under `blocks.cronjob:<fullId>` —
+	// the second throws on cold start, failing every request. Synth must refuse it.
+	test('two CronJobs that share a fullId fail synth, naming the key', async () => {
+		const stack = await makeStack('CronCollide');
+		new CronJob(new Scope('x-y', { parent: stack }), 'z', { schedule: 'rate(1 day)', handler: async () => {} });
+		const other = new Scope('x', { parent: stack });
+		assert.throws(
+			() => new CronJob(other, 'y-z', { schedule: 'rate(1 day)', handler: async () => {} }),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /"blocks\.cronjob:CronCollide-x-y-z"/);
+				assert.match(e.message, /already registered by Building Block 'CronCollide-x-y-z'/);
+				return true;
+			},
+		);
+	});
+
+	test('distinct CronJobs in one stack synthesize', async () => {
+		const stack = await makeStack('CronDistinct');
+		new CronJob(stack, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+		new CronJob(stack, 'hourly', { schedule: 'rate(1 hour)', handler: async () => {} });
+		Template.fromStack(stack).resourceCountIs('AWS::Scheduler::Schedule', 2);
+	});
+});

@@ -52,7 +52,8 @@ provider's issuer the same way the AWS runtime does (`resolveProviderIssuerUrl`,
 shared via `utils.ts`): real providers (`google`, `customOidc`, …) resolve to
 their configured `issuerUrl` and hit the real IdP locally, while only
 `kind === 'stub'` resolves to the in-process stub IdP. Each provider logs its
-resolved issuer at startup so the path is never silent.
+resolved issuer at startup so the path is never silent. Stub providers are
+limited to local and sandbox deployments (D13).
 
 A `cognitoFederated` provider builds `CognitoFederationEngine` in the mock too
 (matching the AWS runtime), but Cognito federation needs a **deployed** Cognito
@@ -175,6 +176,47 @@ parameter is never empty. Two consequences:
    that changes every synth, so each `cdk deploy` re-reads SSM and re-registers
    the IdP with the current value. Trade-off: the resource shows as updated on
    every deploy; the `UpdateIdentityProvider` call is idempotent.
+
+### App client callback & logout URLs
+
+The shared Cognito app client's `callbackUrls` / `logoutUrls` are resolved at
+synth through `cdk.Lazy` producers (`cognitoClientUrls()` in `index.cdk.ts`):
+
+- the published app origin (`BLOCKS_PUBLIC_ORIGIN`) + the callback path
+  (`/aws-blocks/auth/callback`; its root for logout) — only when it is `https://`;
+- the API Gateway URL + the callback path (base URL for logout) — always;
+- `http://localhost:3000` + the callback path (`/` for logout) — sandbox mode only;
+- the caller-supplied `additionalCallbackUrls` / `additionalLogoutUrls` of every
+  `cognitoFederated()` provider, validated at synth, merged and de-duplicated.
+
+**Why `Lazy`.** `AuthOIDC` is constructed before Hosting / the managed
+CloudFront aspect register `BLOCKS_PUBLIC_ORIGIN`, so the origin is read inside
+the producer rather than in the constructor.
+
+**Why https only.** Cognito rejects `http://` callback URLs other than
+`localhost`. A non-https app origin is left off the client and emits the
+`@aws-blocks/bb-auth-oidc:PlainHttpPublicOrigin` synth warning; federated
+sign-in through that origin fails until the app is served over https. A
+whole-token origin that only resolves at deploy (a CloudFormation intrinsic)
+can't be scheme-checked at synth, so it is deliberately registered as-is and
+Cognito validates it at deploy.
+
+**When to add URLs.** Redirect targets that can't be derived at synth: browser
+PKCE SPA pages, native custom schemes used as the `redirect_uri` of a direct,
+client-initiated PKCE sign-in (`signIn(provider, { redirectPath })`),
+custom-domain names other than the primary one, and a sandbox dev server on a
+port other than `3000`. The relay flow needs no extra entry: its `redirect_uri`
+is the backend's https callback (derived above) and the native custom scheme is
+only the `relayTo` target.
+
+**Logout URLs are not exercised yet.** `CognitoFederationEngine.signOut()` clears
+the session and best-effort revokes the refresh token (`/oauth2/revoke`); it
+does not redirect to Cognito's hosted `/logout` endpoint. `logoutUrls` are
+registered for completeness and forward compatibility.
+
+These URLs are a CDK-layer concern only: the mock runtime has no Cognito app
+client (`cognitoFederated` isn't available in `npm run dev`, see above), so
+there is nothing to mirror locally.
 
 ## Decisions
 
@@ -377,3 +419,40 @@ removal in `_exchangeCallback`: the pending PKCE entry is consumed *before* the
 network round-trip, so a late duplicate in a fresh page load (after the in-flight
 guard is gone) finds no pending entry and resolves `null` rather than replaying the
 code.
+
+### D13 — Stub IdP is local/sandbox only, with a per-deployment code-signing key
+
+**Status:** Accepted.
+
+**Rationale.** `stubIdp()` auto-approves sign-ins with deterministic users. That
+is what local dev, sandbox, and E2E need, and it has no place in any other
+deployment. The restriction is applied at both ends so it holds even when synth
+output and deployed code drift apart:
+
+- **Synth.** `index.cdk.ts` rejects any `stubIdp()` provider unless
+  `isSandboxContext()` (CDK context `sandboxMode`) is true, before provisioning
+  anything. The error points at `getDeploymentType()` for selecting providers.
+- **Runtime.** `BlocksStack` / `BlocksBackend` propagate the synth-time
+  deployment type to compute as `BLOCKS_DEPLOYMENT_TYPE`. `index.aws.ts` mounts
+  the stub IdP routes only when `getDeploymentType()` is `'sandbox'`; for
+  `'production'` it logs a warning and skips them. It never throws, because the
+  AWS entry is also imported during client code generation outside compute,
+  where the type is `'local'`. The mock runtime (`npm run dev`) always mounts
+  them.
+
+`getDeploymentType()` reports the same value at synth and runtime, so an app
+that branches on it (`'production'` → real providers, otherwise `stubIdp()`)
+gets one provider set per deployment on both sides. That contract holds inside
+the backend module (once `BlocksStack` / `BlocksBackend` `create()` has begun
+importing it) and at runtime on deployed compute. Wherever Blocks config and
+context are not present (before `create()`, plain scripts, non-Blocks compute)
+it returns `'local'`.
+
+**Code signing.** Stub authorization codes are self-contained HMAC-SHA256
+payloads, so any container can verify a code minted by another. The HMAC key is
+derived per provider from the instance's cookie-signing secret
+(`HMAC(cookieSecret, 'aws-blocks/stub-idp/code/v1/' + providerName)`, see
+`deriveStubCodeKey`), replacing the former fixed constant. The label keeps the
+key separate from cookie signing, the provider name binds a code to the provider
+that issued it, and determinism per deployment keeps multi-container
+verification working. Verification uses a constant-time comparison.

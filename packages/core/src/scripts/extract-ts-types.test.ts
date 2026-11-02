@@ -306,7 +306,7 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 					error?: string;
 				}
 
-				export class AuthBasic {
+				export class DemoAuth {
 					createApi() {
 						return new ApiNamespace(null, 'auth', (context) => ({
 							async getAuthState(): Promise<AuthState> {
@@ -320,11 +320,11 @@ describe('extractMethodTypes — indirect ApiNamespace calls (e.g., auth.createA
 				}
 			`,
 			'index.ts': `
-				import { AuthBasic } from './auth.js';
+				import { DemoAuth } from './auth.js';
 
 				${API_NS_MOCK}
 
-				const auth = new AuthBasic();
+				const auth = new DemoAuth();
 
 				export const api = new ApiNamespace(null, 'api', (context) => ({
 					async greet(name: string) {
@@ -512,6 +512,81 @@ describe('extractMethodTypes — transferable detection', () => {
 		}
 	});
 
+	it('keeps an inferred channel message type out of the spec', () => {
+		// Native generators can't decode every inferred message type (an `any`, a primitive), so a channel needs written args.
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'index.ts': `
+				${TRANSFERABLE_PRELUDE}
+				interface CursorPosition { userId: string; x: number; y: number; }
+				declare function channelOf<T = unknown>(name: string): RealtimeChannel<T>;
+				export const api = new ApiNamespace(null, 'api', () => ({
+					async inferred() { return channelOf<CursorPosition>('cursors'); },
+					async inferredAny() { return channelOf<any>('cursors'); },
+					async inferredNames() { return channelOf<'online' | 'away'>('status'); },
+				}));
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.strictEqual(types.get('api.inferred')?.transferable?.blocksTag, 'realtime/channel');
+			assert.deepStrictEqual(types.get('api.inferred')?.transferable?.typeArgs, []);
+			assert.deepStrictEqual(types.get('api.inferredAny')?.transferable?.typeArgs, []);
+			// String literals reach the spec only for an oidc/client's provider names.
+			assert.deepStrictEqual(types.get('api.inferredNames')?.transferable?.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves a helper-built client generic to a string-literal enum, as AuthOIDC.createApi() does', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'oidc.ts': `
+				${API_NS_MOCK}
+				interface ProviderConfig { readonly name: string; }
+				type ProviderName<P extends readonly ProviderConfig[]> = P[number]['name'];
+				interface OIDCClientDescriptor { __blocks: 'oidc/client'; providers: string[]; }
+				export interface OIDCClient<Provider extends string = string> {
+					signIn(provider: Provider): Promise<void>;
+					toJSON(): OIDCClientDescriptor;
+				}
+				export function provider<N extends string>(name: N): { readonly name: N } { return { name }; }
+				export class AuthOIDC<P extends readonly ProviderConfig[]> {
+					constructor(readonly options: { providers: P }) {}
+					createApi() {
+						return new ApiNamespace(null, 'auth', () => ({
+							getClient: async (): Promise<OIDCClient<ProviderName<P>>> => null as any,
+						}));
+					}
+				}
+			`,
+			'index.ts': `
+				import { AuthOIDC, provider } from './oidc.js';
+				const typed = new AuthOIDC({ providers: [provider('google'), provider('github')] });
+				const loose = new AuthOIDC({ providers: [] as { readonly name: string }[] });
+				const parsed = new AuthOIDC({ providers: JSON.parse('[]') });
+				export const oidcAuthApi = typed.createApi();
+				export const looseAuthApi = loose.createApi();
+				export const parsedAuthApi = parsed.createApi();
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const typed = types.get('oidcAuthApi.getClient')?.transferable;
+			assert.strictEqual(typed?.blocksTag, 'oidc/client');
+			assert.deepStrictEqual(typed.typeArgs, [{ type: 'string', enum: ['google', 'github'] }]);
+			// Provider names that resolve to plain `string` or `any` name no providers, so the client stays untyped.
+			for (const name of ['looseAuthApi.getClient', 'parsedAuthApi.getClient']) {
+				const untyped = types.get(name)?.transferable;
+				assert.strictEqual(untyped?.blocksTag, 'oidc/client', name);
+				assert.deepStrictEqual(untyped.typeArgs, [], name);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it('returns no transferable info when toJSON is missing or __blocks is not a literal', () => {
 		const dir = createTempProject({
 			'tsconfig.json': TRANSFERABLE_TSCONFIG,
@@ -562,6 +637,387 @@ describe('extractMethodTypes — transferable detection', () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	const IOT_MODULE_PRELUDE = `
+		export interface Reading { celsius: number; }
+		export interface DeviceLinkDescriptor { __blocks: 'example-iot/device-link'; linkId: string; }
+		export interface DeviceLink<T> { toJSON(): DeviceLinkDescriptor; reading: T; }
+	`;
+
+	it('resolves the written type arg when the namespace comes from a declared interface', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export interface IotApi { getLink(id: string): Promise<DeviceLink<Reading>>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.blocksTag, 'example-iot/device-link');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'arity-1 tag needs its written type arg');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves the written type arg when the declared interface returns the transferable synchronously', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export interface IotApi { getLink(id: string): DeviceLink<Reading>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'an unwrapped return passes straight through');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('reads the return node through a method-shaped property on a declared interface', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export interface IotApi { getLink: (id: string) => Promise<DeviceLink<Reading>>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'the return node sits inside the function type');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves the written type arg through a handler literal typed by the AsyncAPI mapped type', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				type AsyncAPI<T extends Record<string, (...a: never[]) => unknown>> = {
+					[K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
+				};
+				export declare function mk<T extends Record<string, (...a: never[]) => unknown>>(h: T): AsyncAPI<T>;
+			`,
+			'index.ts': `
+				import { mk } from './iot.js';
+				import type { DeviceLink, Reading } from './iot.js';
+				export const iotApi = mk({
+					getLink: (): Promise<DeviceLink<Reading>> => null as unknown as Promise<DeviceLink<Reading>>,
+				});
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'the handler annotation carries the type arg');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves the written type arg when the namespace comes from a class method', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export declare class IotApi { getLink(id: string): Promise<DeviceLink<Reading>>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'a class method annotates itself');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves the written type arg through a parenthesized function-type annotation', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export interface IotApi {
+					getLink: ((id: string) => (Promise<DeviceLink<Reading>>));
+					sync(): (Promise<DeviceLink<Reading>>);
+					inner(): Promise<(DeviceLink<Reading>)>;
+				}
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'parentheses do not hide the function type');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			const sync = types.get('iotApi.sync')?.transferable?.typeArgs.length;
+			assert.strictEqual(sync, 1, 'nor a parenthesized return');
+			const inner = types.get('iotApi.inner')?.transferable?.typeArgs.length;
+			assert.strictEqual(inner, 1, 'nor a parenthesized argument');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves the written type arg when a class declares the method as a function-typed property', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export declare class IotApi { getLink: (id: string) => Promise<DeviceLink<Reading>>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'a class property annotates the function type');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('resolves the written type arg through a function-expression handler property', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				type AsyncAPI<T extends Record<string, (...a: never[]) => unknown>> = {
+					[K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
+				};
+				export declare function mk<T extends Record<string, (...a: never[]) => unknown>>(h: T): AsyncAPI<T>;
+			`,
+			'index.ts': `
+				import { mk } from './iot.js';
+				import type { DeviceLink, Reading } from './iot.js';
+				export const iotApi = mk({
+					getLink: function (): Promise<DeviceLink<Reading>> {
+						return null as unknown as Promise<DeviceLink<Reading>>;
+					},
+				});
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'should be detected as transferable');
+			assert.strictEqual(info.transferable.typeArgs.length, 1, 'a function expression annotates itself');
+			assert.strictEqual(info.transferable.typeArgs[0]?.title, 'Reading');
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Consumers read these positionally and need one per declared parameter, so a list the
+	// customer only partly wrote is emitted as none rather than shifting the rest left.
+	it('emits nothing when a trailing type parameter is filled from its default', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				export interface Reading { celsius: number; }
+				export interface PairDescriptor { __blocks: 'example-iot/pair'; }
+				export interface Pair<A, B = string> { toJSON(): PairDescriptor; a: A; b: B; }
+				export interface IotApi { pair(): Promise<Pair<Reading>>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.pair');
+			assert.strictEqual(info?.transferable?.blocksTag, 'example-iot/pair');
+			assert.deepStrictEqual(info?.transferable?.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('emits nothing when a utility wrapper stands between the annotation and the transferable', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				export interface Reading { celsius: number; }
+				export interface StreamDescriptor { __blocks: 'example-iot/stream'; }
+				export interface Stream<T = unknown> { toJSON(): StreamDescriptor; item: T; }
+				export interface IotApi {
+					defaulted(): Awaited<Promise<Stream>>;
+					explicit(): Awaited<Promise<Stream<Reading>>>;
+				}
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.strictEqual(types.get('iotApi.defaulted')?.transferable?.blocksTag, 'example-iot/stream');
+			assert.deepStrictEqual(types.get('iotApi.defaulted')?.transferable?.typeArgs, []);
+			// `Awaited<…>`'s own argument is not the transferable's, so neither form emits one.
+			assert.deepStrictEqual(types.get('iotApi.explicit')?.transferable?.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('emits no type args when the handler leaves its return type inferred', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				type AsyncAPI<T extends Record<string, (...a: never[]) => unknown>> = {
+					[K in keyof T]: T[K] extends (...a: infer A) => infer R ? (...a: A) => Promise<Awaited<R>> : never;
+				};
+				export declare function mk<T extends Record<string, (...a: never[]) => unknown>>(h: T): AsyncAPI<T>;
+			`,
+			'index.ts': `
+				import { mk } from './iot.js';
+				import type { DeviceLink, Reading } from './iot.js';
+				export const iotApi = mk({
+					getLink: async () => null as unknown as DeviceLink<Reading>,
+				});
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'the tag is still detected');
+			assert.deepStrictEqual(info.transferable.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('leaves the transferable undetected for a union or an optional method', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export interface IotApi {
+					maybe(): Promise<DeviceLink<Reading> | undefined>;
+					optional?(): Promise<DeviceLink<Reading>>;
+				}
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.strictEqual(types.get('iotApi.maybe')?.transferable, undefined);
+			assert.strictEqual(types.get('iotApi.optional')?.transferable, undefined);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	// Documented limitation, not desired behaviour: the written node names the alias,
+	// which carries no type arguments of its own. Pinned so a fix cannot land silently.
+	it('drops the type arg when the written return is a type alias for the generic', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				${IOT_MODULE_PRELUDE}
+				export type DeviceLinkAlias = DeviceLink<Reading>;
+				export interface IotApi { getLink(id: string): Promise<DeviceLinkAlias>; }
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const info = extractMethodTypes(join(dir, 'index.ts')).get('iotApi.getLink');
+			assert.ok(info?.transferable, 'the tag is still detected through the alias');
+			assert.deepStrictEqual(info.transferable.typeArgs, []);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('distinguishes a defaulted type param from an explicit one on the declared-interface path', () => {
+		const dir = createTempProject({
+			'tsconfig.json': TRANSFERABLE_TSCONFIG,
+			'iot.ts': `
+				export interface StreamDescriptor { __blocks: 'example-iot/stream'; }
+				export interface Stream<T = unknown> { toJSON(): StreamDescriptor; item: T; }
+				export interface IotApi {
+					defaulted(): Promise<Stream>;
+					explicit(): Promise<Stream<unknown>>;
+				}
+				export declare class Iot { createApi(): IotApi; }
+			`,
+			'index.ts': `
+				import type { Iot } from './iot.js';
+				declare const iot: Iot;
+				export const iotApi = iot.createApi();
+			`,
+		});
+		try {
+			const types = extractMethodTypes(join(dir, 'index.ts'));
+			assert.deepStrictEqual(types.get('iotApi.defaulted')?.transferable?.typeArgs, []);
+			assert.deepStrictEqual(types.get('iotApi.explicit')?.transferable?.typeArgs, [{}]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe('extractMethodTypes — open-shape intersections', () => {
@@ -578,7 +1034,7 @@ describe('extractMethodTypes — open-shape intersections', () => {
 			'index.ts': `
 				${API_NS_MOCK}
 
-				// Mirrors AuthCognito's signUp payload: fixed fields plus an open
+				// Mirrors Auth's signUp payload: fixed fields plus an open
 				// string-keyed bag for custom attributes.
 				type SignUpInput = { username: string; password: string } & Record<string, string>;
 

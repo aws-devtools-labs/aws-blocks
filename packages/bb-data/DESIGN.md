@@ -186,6 +186,7 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |
 | `application_name` on the pg connection | Not reported by the mock/local engine; the AWS `PgClientEngine` path reports the BB user-agent chain (see above) | Intentional. Attribution-only. Unset on the RDS Data API path. |
+| `tsvector` in the select list | PGlite returns it; the RDS Data API cannot represent it and the whole query fails | Keep `tsvector` out of the select list — it is used in `WHERE` / `ORDER BY`, not read back as a value (see the "Local vs. AWS: column types" note in `README.md`) |
 
 ## Relationship to data-common
 

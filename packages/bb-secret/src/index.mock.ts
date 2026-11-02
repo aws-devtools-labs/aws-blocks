@@ -138,6 +138,7 @@ class SecretImpl<T = string> extends Scope {
 	 *
 	 * @example
 	 * ```typescript
+	 * const stripeKey = new Secret(scope, 'stripe-api-key', { allowRuntimeWrite: true });
 	 * await stripeKey.put('sk_live_new_value');
 	 * ```
 	 */

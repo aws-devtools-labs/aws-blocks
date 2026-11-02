@@ -5,7 +5,7 @@
 
 import type { AuthStateApi } from '@aws-blocks/auth-common';
 
-export type { BlocksAuth, AuthUser, AuthState, AuthAction, AuthField } from '@aws-blocks/auth-common';
+export type { BlocksAuth, AuthUser, AuthState, AuthActionInput, AuthAction, AuthField } from '@aws-blocks/auth-common';
 export type { AuthBasicUser, PasswordPolicy, AuthBasicOptions } from './index.js';
 export { AuthBasicErrors } from './errors.js';
 

@@ -16,8 +16,11 @@ import com.aws.blocks.kotlin.model.PrimitiveKind
 import com.aws.blocks.kotlin.model.ResolvedField
 import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.ServerDefinition
+import com.aws.blocks.kotlin.model.TransferableTypeArg
 import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.UnionVariant
+import com.aws.blocks.kotlin.model.narrowsTypeArg
+import com.aws.blocks.kotlin.model.transferableTypeArg
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
 import com.squareup.kotlinpoet.CodeBlock
@@ -41,18 +44,69 @@ data class GeneratorResult(
     val warnings: List<String>,
 )
 
-private data class TransferableBinding(val type: ClassName, val isGeneric: Boolean)
+/**
+ * One type argument of a runtime type, in the order it takes them. Whether an argument can be
+ * narrowed is declared alongside the tag in [com.aws.blocks.kotlin.model.transferableTypeArg];
+ * this carries what Kotlin needs to write it.
+ */
+private sealed interface TypeArgBinding {
+    /** The type this argument falls back to when the spec didn't resolve it. */
+    val default: TypeName
+
+    /** An argument generated from the spec's schema. */
+    data class Decoded(override val default: TypeName) : TypeArgBinding
+
+    /**
+     * An argument narrowed to a generated enum, which implements [constraint] so the runtime can
+     * read [valueName] off one of its constants.
+     */
+    data class Narrowed(
+        override val default: TypeName,
+        val constraint: ClassName,
+        val valueName: String,
+    ) : TypeArgBinding
+}
+
+private data class TransferableBinding(
+    val type: ClassName,
+    /** Empty for a runtime type that takes no type arguments. */
+    val typeArgs: List<TypeArgBinding> = emptyList(),
+)
 
 /**
- * The concrete runtime type each known tag maps to; isGeneric wraps the first type argument
- * (RealtimeChannel<T>). The tag set and type resolution derive from this.
+ * The concrete runtime type each known tag maps to, with one entry per type argument the type
+ * takes. The tag set and type resolution derive from this.
  */
 private val knownTransferableBindings = mapOf(
-    "realtime/channel" to TransferableBinding(ClassNames.realtimeChannel, isGeneric = true),
-    "file-bucket/download" to TransferableBinding(ClassNames.fileDownloadHandle, isGeneric = false),
-    "file-bucket/upload" to TransferableBinding(ClassNames.fileUploadHandle, isGeneric = false),
-    "oidc/client" to TransferableBinding(ClassNames.oidcClient, isGeneric = false),
+    "realtime/channel" to TransferableBinding(
+        ClassNames.realtimeChannel,
+        typeArgs = listOf(TypeArgBinding.Decoded(default = JsonElement::class.asTypeName())),
+    ),
+    "file-bucket/download" to TransferableBinding(ClassNames.fileDownloadHandle),
+    "file-bucket/upload" to TransferableBinding(ClassNames.fileUploadHandle),
+    "oidc/client" to TransferableBinding(
+        ClassNames.oidcClient,
+        typeArgs = listOf(
+            TypeArgBinding.Narrowed(
+                // A spec that didn't resolve its provider names signs in by name.
+                default = ClassNames.anyProvider,
+                constraint = ClassNames.oidcProvider,
+                valueName = "providerName",
+            ),
+        ),
+    ),
 )
+
+/**
+ * Whether the Kotlin binding for [transferableName]'s argument at [position] writes a narrowed
+ * enum. It has to agree with [com.aws.blocks.kotlin.model.narrowsTypeArg]: the model decides that
+ * an argument is narrowed, and this carries what Kotlin writes for one.
+ */
+internal fun narrowsTypeArgBinding(transferableName: String, position: Int): Boolean =
+    knownTransferableBindings[transferableName]?.typeArgs?.getOrNull(position) is TypeArgBinding.Narrowed
+
+/** The transferable tag of an OIDC client, which the relayTo gate and its hydration name. */
+private const val OIDC_CLIENT_TAG = "oidc/client"
 
 private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
 
@@ -201,6 +255,7 @@ class KotlinCodeGenerator(
                         )
                     )
                 }
+                warnings.addAll(narrowedTypeArgWarnings(operation, namespace.name, apiClassName(namespace)))
             }
         }
 
@@ -225,9 +280,117 @@ class KotlinCodeGenerator(
         apiNamespaces.any { ns -> ns.operations.any { containsOidcTransferable(it.result.type) } }
 
     private fun containsOidcTransferable(type: ResolvedType): Boolean = when (type) {
-        is ResolvedType.Transferable -> type.transferableName == "oidc/client"
+        is ResolvedType.Transferable -> type.transferableName == OIDC_CLIENT_TAG
         is ResolvedType.Nullable -> containsOidcTransferable(type.inner)
         else -> false
+    }
+
+    /** Whether an operation's method is replaced by the stub an unconfigured OIDC build gets. */
+    private fun isStubbed(operation: Operation): Boolean =
+        stubOidc && containsOidcTransferable(operation.result.type)
+
+    /** A narrowed type argument that something named, which is an enum to emit. */
+    private fun namedTypeArg(arg: ResolvedType): ResolvedType.Enum? =
+        (arg as? ResolvedType.Enum)?.takeIf { it.name.isNotEmpty() }
+
+    /** An enum an operation's own result narrows a type argument to, and how to write it. */
+    private data class NarrowedTypeArg(
+        val values: ResolvedType.Enum,
+        val binding: TypeArgBinding.Narrowed,
+        /** The tag's own name for the argument, which the enum takes unless something held it. */
+        val preferredName: String,
+    )
+
+    /**
+     * The enums of values an operation's own result narrows its type arguments to, in position
+     * order. An argument the spec didn't resolve to string literals, a transferable in any other
+     * position, and a method replaced by the unconfigured-OIDC stub have none.
+     */
+    private fun narrowedTypeArgs(operation: Operation): List<NarrowedTypeArg> {
+        if (isStubbed(operation)) return emptyList()
+        val transferable = unwrapNullableTransferable(operation.result.type) ?: return emptyList()
+        val binding = knownTransferableBindings[transferable.transferableName] ?: return emptyList()
+        return transferable.typeArgs.mapIndexedNotNull { position, arg ->
+            val declared = transferableTypeArg(transferable.transferableName, position)
+            if (declared !is TransferableTypeArg.In) return@mapIndexedNotNull null
+            val argBinding = binding.typeArgs.getOrNull(position) as? TypeArgBinding.Narrowed
+                ?: return@mapIndexedNotNull null
+            val values = namedTypeArg(arg) ?: return@mapIndexedNotNull null
+            NarrowedTypeArg(values, argBinding, declared.name)
+        }
+    }
+
+    /** Names an enum that couldn't take the tag's own name, since the operation already uses it. */
+    private fun narrowedTypeArgWarnings(
+        operation: Operation,
+        namespace: String,
+        className: String,
+    ): List<String> = narrowedTypeArgs(operation)
+        .filter { it.values.name != it.preferredName }
+        .map {
+            "kotlin: ${fullMethodName(operation, namespace)} generates " +
+                "$className.${toPascalCase(operation.name)}.${it.values.name} rather than " +
+                "${it.preferredName}, since the operation already names a " +
+                "${it.preferredName} of its own."
+        }
+
+    private fun fullMethodName(operation: Operation, namespace: String): String =
+        if (namespace == "_default") operation.name else "$namespace.${operation.name}"
+
+    /**
+     * The enum of values an operation's client accepts for its parameter. Each constant carries
+     * the value it stands for in a property, rather than a serial name, so the runtime can read it
+     * through the binding's interface and a caller can read it directly.
+     */
+    private fun generateNarrowedTypeArgEnum(
+        values: ResolvedType.Enum,
+        binding: TypeArgBinding.Narrowed,
+    ): TypeSpec {
+        val builder = TypeSpec
+            .enumBuilder(values.name)
+            .primaryConstructor(
+                FunSpec.constructorBuilder()
+                    .addParameter(binding.valueName, String::class)
+                    .build(),
+            )
+        builder.addSuperinterface(binding.constraint)
+        builder.addProperty(
+            PropertySpec.builder(binding.valueName, String::class)
+                .addModifiers(KModifier.OVERRIDE)
+                .initializer(binding.valueName)
+                .build(),
+        )
+        // Named like any other generated enum's constants.
+        for ((constant, value) in enumConstantNames(values.values)) {
+            builder.addEnumConstant(
+                constant,
+                TypeSpec.anonymousClassBuilder()
+                    .addSuperclassConstructorParameter("%L", kotlinStringLiteral(value))
+                    .build(),
+            )
+        }
+        // A constant's name is rebuilt from the value, so valueOf can't find one by the name the
+        // backend uses. A caller restoring a saved provider, or reading one off a callback, needs
+        // this rather than a scan of entries.
+        builder.addType(
+            TypeSpec.companionObjectBuilder()
+                .addFunction(
+                    FunSpec.builder("fromProviderName")
+                        .addKdoc(
+                            "The provider the backend knows as %L, or null if this spec named none.",
+                            "[name]",
+                        )
+                        .addParameter("name", String::class)
+                        .returns(ClassName("", values.name).copy(nullable = true))
+                        .addStatement(
+                            "return entries.firstOrNull { it.%L == name }",
+                            binding.valueName,
+                        )
+                        .build(),
+                )
+                .build(),
+        )
+        return builder.build()
     }
 
     // ── Type index ───────────────────────────────────────────────────
@@ -632,8 +795,7 @@ class KotlinCodeGenerator(
             .enumBuilder(name)
             .addAnnotation(ClassNames.serializable)
 
-        for (literal in values) {
-            val entryName = toPascalCase(literal)
+        for ((entryName, literal) in enumConstantNames(values)) {
             val entryBuilder = TypeSpec.anonymousClassBuilder()
             if (entryName != literal) {
                 entryBuilder.addAnnotation(
@@ -646,6 +808,52 @@ class KotlinCodeGenerator(
         }
 
         return enumBuilder.build()
+    }
+
+    /**
+     * Constant names for a string enum's values, each paired with the literal it serializes as.
+     *
+     * A value whose PascalCase form can name a constant keeps it, backticked by KotlinPoet where
+     * it has to be, so a value like `cost$` still reads as the spec wrote it. The rest are values
+     * no identifier can hold even in backticks, which the generator would otherwise fail on: every
+     * character an identifier can't hold separates segments, so `v1.0` is `V10` and `okta:corp` is
+     * `OktaCorp`, and a value that leaves no segments at all is `Unnamed`. The serial name carries
+     * the literal either way.
+     *
+     * A repeated value is emitted once, and a name another value already took is numbered, since
+     * two constants of one name don't compile.
+     */
+    private fun enumConstantNames(values: List<String>): List<Pair<String, String>> {
+        val taken = mutableSetOf<String>()
+        val constants = mutableListOf<Pair<String, String>>()
+        for (literal in values.distinct()) {
+            val pascal = toPascalCase(literal)
+            val base = if (canNameConstant(pascal)) pascal else synthesizeConstantName(literal)
+            var name = base
+            var attempt = 2
+            while (!taken.add(name)) {
+                name = "$base$attempt"
+                attempt++
+            }
+            constants.add(name to literal)
+        }
+        return constants
+    }
+
+    /** Whether [name] can name a constant, as itself or backticked. */
+    private fun canNameConstant(name: String): Boolean =
+        name.isNotEmpty() && name.all { isConstantNameChar(it) }
+
+    private fun synthesizeConstantName(literal: String): String {
+        val segments = literal.split(NON_IDENTIFIER_RUN)
+            .filter { it.isNotEmpty() }
+            .joinToString("") { toPascalCase(it) }
+        return when {
+            segments.isEmpty() -> "Unnamed"
+            // A synthesized name is never backticked, so it can't open with a digit.
+            segments.first().isDigit() -> "_$segments"
+            else -> segments
+        }
     }
 
     // ── Sealed class generation ───────────────────────────────────────
@@ -1076,7 +1284,7 @@ class KotlinCodeGenerator(
         }
 
         for (operation in namespace.operations) {
-            if (stubOidc && containsOidcTransferable(operation.result.type)) {
+            if (isStubbed(operation)) {
                 classBuilder.addFunction(generateOidcStubMethod(operation))
             } else {
                 val opContext = operationContexts[operation]
@@ -1088,7 +1296,7 @@ class KotlinCodeGenerator(
 
         // Add nested operation objects for operations that have nested types
         for (operation in namespace.operations) {
-            if (operation.nestedTypes.isNotEmpty()) {
+            if (operation.nestedTypes.isNotEmpty() || narrowedTypeArgs(operation).isNotEmpty()) {
                 classBuilder.addType(
                     generateOperationObject(
                         operation,
@@ -1109,9 +1317,20 @@ class KotlinCodeGenerator(
      * serializers emitted in a separate top-level file.
      */
     private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
-        if (operation.nestedTypes.isEmpty()) return null
+        val narrowed = narrowedTypeArgs(operation).map { it.values }
+        if (operation.nestedTypes.isEmpty() && narrowed.isEmpty()) return null
         val opObjectName = toPascalCase(operation.name)
         val context = OperationTypeContext(opObjectName)
+
+        // A narrowed enum isn't a nested type of the result, so register it directly; the result's
+        // type argument then resolves to it like any other type in the object.
+        for (values in narrowed) {
+            context.register(
+                values,
+                ClassName("", opObjectName, values.name),
+                ClassName(packageName, apiClassName, opObjectName, values.name),
+            )
+        }
 
         fun walkNodes(
             nodes: List<NestedTypeNode>,
@@ -1157,6 +1376,10 @@ class KotlinCodeGenerator(
     ): TypeSpec {
         val objectName = toPascalCase(operation.name)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
+
+        for (narrowed in narrowedTypeArgs(operation)) {
+            objectBuilder.addType(generateNarrowedTypeArgEnum(narrowed.values, narrowed.binding))
+        }
 
         for (node in operation.nestedTypes) {
             objectBuilder.addType(
@@ -1561,13 +1784,32 @@ class KotlinCodeGenerator(
     ): TypeName {
         val binding = knownTransferableBindings[type.transferableName]
             ?: return JsonElement::class.asTypeName()
-        if (!binding.isGeneric) return binding.type
-        val typeArgs = if (type.typeArgs.isNotEmpty()) {
-            type.typeArgs.map { resolveResolvedType(it, index, opContext, qualified) }
-        } else {
-            listOf(JsonElement::class.asTypeName())
+        if (binding.typeArgs.isEmpty()) return binding.type
+        val typeArgs = binding.typeArgs.mapIndexed { position, argBinding ->
+            resolveTypeArg(type, position, argBinding, index, opContext, qualified)
         }
         return binding.type.parameterizedBy(typeArgs)
+    }
+
+    /**
+     * The Kotlin type of [type]'s argument at [position].
+     *
+     * A narrowed argument is a type only once something named it; otherwise the runtime type's own
+     * default stands in, as it does for an argument the spec left out.
+     */
+    private fun resolveTypeArg(
+        type: ResolvedType.Transferable,
+        position: Int,
+        argBinding: TypeArgBinding,
+        index: TypeIndex,
+        opContext: OperationTypeContext?,
+        qualified: Boolean,
+    ): TypeName {
+        val arg = type.typeArgs.getOrNull(position) ?: return argBinding.default
+        if (narrowsTypeArg(type.transferableName, position) && namedTypeArg(arg) == null) {
+            return argBinding.default
+        }
+        return resolveResolvedType(arg, index, opContext, qualified)
     }
 
     private fun isTransferableType(type: ResolvedType): Boolean = when (type) {
@@ -1746,12 +1988,15 @@ class KotlinCodeGenerator(
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ) {
-        if (stubOidc && transferable.transferableName == "oidc/client") return
+        if (stubOidc && transferable.transferableName == OIDC_CLIENT_TAG) return
 
         val returnType = resolveTransferable(transferable, index, serializerContext, qualified = true)
-        val typeArgument = transferable.typeArgs.firstOrNull()?.let {
-            resolveResolvedType(it, index, serializerContext, qualified = true)
-        }
+        // The serializer is keyed by the one type argument it decodes through, so it reads the
+        // first position by the same rule the return type does.
+        val typeArgument = knownTransferableBindings[transferable.transferableName]
+            ?.typeArgs
+            ?.firstOrNull()
+            ?.let { resolveTypeArg(transferable, 0, it, index, serializerContext, qualified = true) }
         val serializerName = serializerRegistry.register(transferable.transferableName, returnType, typeArgument)
         property.addAnnotation(
             AnnotationSpec.builder(ClassNames.serializable)
@@ -1978,7 +2223,9 @@ class KotlinCodeGenerator(
                 CodeBlock.of("%T.fromJson(%L)", ClassNames.fileUploadHandle, expr)
             }
 
-            "oidc/client" -> {
+            // The declared return type carries the provider enum, so the call is the same whether
+            // or not the spec named them.
+            OIDC_CLIENT_TAG -> {
                 CodeBlock.of("%T.fromJson(%L, client, %S)", ClassNames.oidcClient, expr, relayTo ?: "")
             }
 
@@ -2012,6 +2259,36 @@ class KotlinCodeGenerator(
     companion object {
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)
         fun toCamelCase(name: String): String = NamingUtils.toCamelCase(name)
+
+        /** A run of characters a Kotlin identifier can't hold, which separates name segments. */
+        private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
+
+        /**
+         * Whether [name] can hold [char] — an allowlist, because each platform the generated code
+         * reaches forbids more than the last.
+         *
+         * Kotlin itself admits any character inside backticks except the grammar's nine, but a
+         * generated constant also has to survive DEX, whose SimpleName before version 040 is
+         * letters, digits, `$` and `_` plus a handful of Unicode ranges. `d8` rejects the rest
+         * outright: a provider named `c#` compiles and then fails the Android build with
+         * "Field name 'C#' cannot be represented in dex format".
+         *
+         * Non-ASCII is admitted, since the DEX ranges cover letters broadly, except the spaces
+         * DEX names explicitly — see
+         * [SimpleName](https://source.android.com/docs/core/runtime/dex-format#simplename).
+         */
+        private fun isConstantNameChar(char: Char): Boolean = when {
+            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' -> true
+            char == '$' || char == '_' -> true
+            char.code < 0x80 -> false
+            else -> char !in DEX_REJECTED_SPACES
+        }
+
+        /** The spaces DEX rejects before version 040, which its SimpleName grammar excludes. */
+        private val DEX_REJECTED_SPACES = charArrayOf(
+            '\u00a0', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006',
+            '\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000',
+        )
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

@@ -22,6 +22,8 @@
  * @module
  */
 
+import { getCachedConfigValue } from './config.js';
+
 /**
  * Whether this process is running on deployed compute.
  *
@@ -49,6 +51,54 @@
  */
 function isDeployedEnv(): boolean {
 	return Boolean(process.env.BLOCKS_CONFIG_BUCKET) && Boolean(process.env.BLOCKS_CONFIG_KEY);
+}
+
+/** Where the current process is running. See {@link getDeploymentType}. */
+export type DeploymentType = 'local' | 'sandbox' | 'production';
+
+/**
+ * The deployment type of the current process.
+ *
+ * - `'local'` — local dev or tests (no Blocks deployed configuration).
+ * - `'sandbox'` — deployed by the sandbox dev loop (`sandboxMode` CDK context).
+ * - `'production'` — any other deployment.
+ *
+ * The value is decided at synth: `BlocksStack.create` / `BlocksBackend.create`
+ * derive it from `isSandboxContext()` and set `BLOCKS_DEPLOYMENT_TYPE` both in
+ * the synth process and in the BB config delivered to deployed compute.
+ *
+ * Where it is read from depends on where the process runs:
+ *
+ * - On deployed compute (see `isDeployedEnv()`), ONLY the loaded BB config is
+ *   consulted. `process.env.BLOCKS_DEPLOYMENT_TYPE` is ignored there, so an
+ *   environment variable set on the compute cannot change the synth-time value
+ *   (`loadConfigToProcessEnv()` keeps a pre-set env var rather than
+ *   overwriting it, so `process.env` is not reliable for this key).
+ * - Elsewhere (synth, local dev, tests) `process.env.BLOCKS_DEPLOYMENT_TYPE` is
+ *   read, which is how the synth process sees the value `BlocksStack.create`
+ *   just set.
+ *
+ * An absent or unrecognized value is treated as unset, and the result falls
+ * back to the same local-vs-deployed signal as `assertNotMockInDeployedEnv()`:
+ * `'production'` when deployed, else `'local'`. Deployed compute therefore
+ * reports `'sandbox'` only when the loaded config says so; that includes the
+ * case where the config has not been loaded yet, which reports `'production'`.
+ *
+ * So the same value is reported at synth and at runtime only inside the backend
+ * module (once `BlocksStack.create` / `BlocksBackend.create` has begun importing
+ * it) and on deployed compute. Wherever Blocks config and context are not
+ * present (before `create()`, plain scripts, compute Blocks does not configure)
+ * this returns `'local'`.
+ *
+ * Note: on deployed compute call this after the config has been loaded
+ * (`loadConfigToProcessEnv()` / `preloadConfig()`), as the Blocks Lambda,
+ * container, and AgentCore entry points do before importing the backend.
+ */
+export function getDeploymentType(): DeploymentType {
+	const deployed = isDeployedEnv();
+	const value = deployed ? getCachedConfigValue('BLOCKS_DEPLOYMENT_TYPE') : process.env.BLOCKS_DEPLOYMENT_TYPE;
+	if (value === 'sandbox' || value === 'production') return value;
+	return deployed ? 'production' : 'local';
 }
 
 /**
