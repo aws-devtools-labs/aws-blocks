@@ -142,20 +142,32 @@ export const coalesceRoutes = (
     }
     groups.get(parent)!.push(r);
   }
+  // The kind each explicit row routes its pattern to — a coalesced wildcard
+  // must not collide with an existing `parent/*` row of another kind.
+  const explicitKind = new Map<string, TerseRouteKind>(rows.map(([p, k]) => [p, k]));
   const out: [string, TerseRouteKind][] = [];
   for (const parent of order) {
     const members = groups.get(parent)!;
     const uniformKind = members.every((m) => m[1] === members[0][1]);
+    // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
+    // note above) so non-prebuilt children render on-demand instead of
+    // 404ing from S3. Compute/image groups keep their kind.
+    const kind: TerseRouteKind = isrActive && members[0][1] === 's' ? 'c' : members[0][1];
+    // The table may already route `parent/*` itself, to another kind (Next.js
+    // `/_next/*` → static, with `/_next/data/*` and `/_next/image*` → server
+    // when no image origin exists). Its children are narrower exceptions to
+    // it; coalescing them would emit a second `parent/*` row that captures
+    // the whole subtree (`/_next/static/*` → server → 404), so keep them.
+    // The members' own kind is compared, not the ISR-flipped one: prerendered
+    // pages under a static `parent/*` row (Nitro's `/blog/*`) are no exception
+    // to it, and still coalesce.
+    const wildcardKind = explicitKind.get(`${parent}/*`);
+    const collides = wildcardKind !== undefined && wildcardKind !== members[0][1];
     // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
     // A non-empty parent guarantees the wildcard is scoped to a subtree and
     // never becomes a bare `/*` that would swallow the whole site.
-    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0;
+    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0 && !collides;
     if (coalesceThis) {
-      // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
-      // note above) so non-prebuilt children render on-demand instead of
-      // 404ing from S3. Compute/image groups keep their kind.
-      const kind: TerseRouteKind =
-        isrActive && members[0][1] === 's' ? 'c' : members[0][1];
       out.push([`${parent}/*`, kind]);
     } else {
       out.push(...members);

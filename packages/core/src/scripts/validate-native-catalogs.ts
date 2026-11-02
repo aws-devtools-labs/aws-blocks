@@ -58,20 +58,56 @@ export type NativeValidation =
 	| { ok: true; sources: readonly NativeDeclarationSource[] }
 	| { ok: false; errors: SpecValidationError[] };
 
+/** `matches`, not a pattern: a Swift module reads by grapheme, not code point. */
+interface FieldGrammar {
+	matches: (value: string) => boolean;
+	shape: string;
+}
+
+/** Maven admits a group or artifact id by character class alone. */
+const MAVEN_ID = /^[A-Za-z0-9._-]+$/;
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * One grapheme at a time, as `isValidSwiftIdentifier` reads a Swift `Character`:
+ * a code-point class would reject the decomposed spelling of `CaféNative` and
+ * accept `_\u0301Native`, which Swift treats as one non-letter character. Not
+ * parity — `\p{L}` and `\p{N}` approximate Swift's `isLetter` and `isNumber`,
+ * which are defined over a `Character` rather than its leading scalar.
+ */
+function isSwiftModuleName(value: string): boolean {
+	const graphemes = [...GRAPHEMES.segment(value)].map((s) => s.segment);
+	return (
+		graphemes.length > 0 && graphemes.every((g, i) => g === '_' || (i === 0 ? /^\p{L}/u : /^[\p{L}\p{N}]/u).test(g))
+	);
+}
+
 /**
  * Platform package fields a generator interpolates into generated source, so a
  * value outside the grammar is a compile failure in the customer's app rather
  * than a problem the generator can report against the block that declared it.
- * A platform absent from this map constrains its fields to non-blank only.
+ * A field absent from this map is constrained to non-blank only, as
+ * `swift.identity` and `swift.product` are: SwiftPM derives an identity from
+ * the dependency's location and imposes no grammar on either.
  */
-const PLATFORM_FIELD_GRAMMARS: Partial<
-	Record<NativePlatform, Readonly<Record<string, { pattern: RegExp; shape: string }>>>
-> = {
+const PLATFORM_FIELD_GRAMMARS: Record<NativePlatform, Readonly<Record<string, FieldGrammar>>> = {
 	dart: {
-		name: { pattern: /^[a-z_][a-z0-9_]*$/, shape: 'a pub package name' },
+		name: { matches: (v) => /^[a-z_][a-z0-9_]*$/.test(v), shape: 'a pub package name' },
 		library: {
-			pattern: /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/,
+			matches: (v) => /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/.test(v),
 			shape: 'a .dart file path inside lib/, without the leading "lib/"',
+		},
+	},
+	swift: {
+		module: { matches: isSwiftModuleName, shape: 'a Swift module name' },
+	},
+	android: {
+		group: { matches: (v) => MAVEN_ID.test(v), shape: 'a Maven group id' },
+		artifact: { matches: (v) => MAVEN_ID.test(v), shape: 'a Maven artifact id' },
+		kotlinPackage: {
+			matches: (v) => /^[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*$/u.test(v),
+			shape: 'a Kotlin package name',
 		},
 	},
 };
@@ -314,8 +350,8 @@ function validatePlatformEntry(
 			});
 			continue;
 		}
-		const grammar = grammars?.[field];
-		if (grammar && !grammar.pattern.test(value)) {
+		const grammar = grammars[field];
+		if (grammar && !grammar.matches(value)) {
 			errors.push({
 				path: `${pkgPath}.${field}`,
 				message: `${platform} "package" requires "${field}" to be ${grammar.shape}, got "${value}" (${declaredBy})`,

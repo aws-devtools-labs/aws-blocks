@@ -91,7 +91,7 @@ const auth = new AuthBasic(scope, id, options?)
 | `signIn(username, password, context)` | `Promise<AuthBasicUser>` | Authenticate and set session cookie. Rejects unconfirmed users. When `lockout` is enabled, throws `AccountLockedException` (429) while the account is locked after too many failed attempts. |
 | `signOut(context)` | `Promise<void>` | Revoke the presented session server-side (a replayed cookie is rejected) and clear the session cookie. The local cookie is always cleared; if the server-side revocation write fails it throws `SignOutIncompleteException` (503) so the caller can retry. |
 | `resetPassword(username)` | `Promise<void>` | Send a password reset code. Only when `codeDelivery` is set. |
-| `confirmResetPassword(username, code, newPassword)` | `Promise<void>` | Complete password reset with verification code. |
+| `confirmResetPassword(username, code, newPassword)` | `Promise<void>` | Complete password reset with verification code. Also invalidates every session issued before the reset, so a token stolen beforehand stops authenticating (reported as `SessionRevokedException`). Throws `SignOutIncompleteException` (503) if outstanding sessions could not be invalidated; the password is not changed in that case and the code is spent, so request a new code with `resetPassword` and try again. |
 | `createApi()` | `ApiNamespace` | Create the state machine API for the Authenticator component. |
 
 **Action input shape:** `createApi()` returns the state-machine API. `setAuthState` takes a single FLAT discriminated input — `{ action, ...fields }`, never a nested `{ action, data: {...} }`. Examples: `{ action: 'signIn', username, password }`, `{ action: 'signUp', username, password }`, `{ action: 'confirmSignUp', username, code, password }`, `{ action: 'resetPassword', username }`, `{ action: 'confirmResetPassword', username, code, newPassword }`. See the `AuthActionInput` type in `@aws-blocks/auth-common`.
@@ -162,9 +162,9 @@ try {
 | `AuthBasicErrors.UserAlreadyExists` | `UserAlreadyExistsException` | Duplicate username on sign-up |
 | `AuthBasicErrors.InvalidPassword` | `InvalidPasswordException` | Password doesn't meet policy |
 | `AuthBasicErrors.SessionExpired` | `SessionExpiredException` | `requireAuth` with no/expired session |
-| `AuthBasicErrors.SessionRevoked` | `SessionRevokedException` | `requireAuth` with a token that was revoked at sign-out (still unexpired, but invalidated) |
+| `AuthBasicErrors.SessionRevoked` | `SessionRevokedException` | `requireAuth` with a token invalidated while still unexpired — either revoked at sign-out, or issued before a password reset (which invalidates all prior sessions) |
 | `AuthBasicErrors.InvalidCode` | `InvalidCodeException` | Wrong or expired verification code (signup or reset) |
-| `AuthBasicErrors.SignOutIncomplete` | `SignOutIncompleteException` | `signOut` cleared the local cookie but the server-side revocation write failed (e.g. a DynamoDB throttle); status 503 — retry to revoke the token |
+| `AuthBasicErrors.SignOutIncomplete` | `SignOutIncompleteException` | A session-invalidation write failed server-side (e.g. a DynamoDB throttle); status 503. From `signOut`: the local cookie was cleared but the token could not be revoked, so retry the sign-out. From `confirmResetPassword`: the password was not changed, so request a new reset code and try again. Both actions share this name, so branch on the action you called as well as the name when choosing what to tell the user |
 | `AuthBasicErrors.AccountLocked` | `AccountLockedException` | `signIn` rejected because the account is locked after too many failed attempts (only when `lockout` is enabled); status 429 — try again after the lockout window |
 
 ### Branching on the `setAuthState` client path

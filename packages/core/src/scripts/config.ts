@@ -29,7 +29,10 @@ export function removeConfig(key: string, opts: { stage?: string } = {}): Promis
 	return removeValue('config', key, { prefix: blocksConfigPrefix(), ...opts });
 }
 
-/** CLI dispatcher for `blocks config <set|list|remove> …`. */
-export function runConfigCli(argv: string[]): Promise<void> {
-	return runValueCli(argv, { kind: 'config', prefix: blocksConfigPrefix(), label: 'blocks config' });
+/**
+ * CLI dispatcher for `blocks config <set|list|remove> …`. `interactive: false`
+ * refuses prompts; a usage problem throws hosting's `ValueCliUsageError`.
+ */
+export function runConfigCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
+	return runValueCli(argv, { kind: 'config', prefix: blocksConfigPrefix(), label: 'blocks config', ...options });
 }
