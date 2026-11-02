@@ -24,6 +24,7 @@ import type {
   DoorInput,
   DoorOrigin,
   DoorRoute,
+  EntryOrigin,
   ImageOrigin,
   ServerOrigin,
 } from './front_door.js';
@@ -52,6 +53,12 @@ export type BuildDoorInputParams = {
   image?: { fn: IFunction; url: IFunctionUrl };
   /** The backend API, when `Hosting` was given one. */
   api?: { url: string; paths?: readonly string[] };
+  /**
+   * The app's entry function, when the door routes at the app
+   * (`routing: 'app'`): the server function (wrapped by the router), or the
+   * router function of an app without one.
+   */
+  entry?: { fn: IFunction };
   errorPages?: { notFound?: string; serverError?: string };
   /**
    * The error pages the framework build shipped (`manifest.errorPages`), as
@@ -139,6 +146,30 @@ export function buildDoorInput(params: BuildDoorInputParams): DoorInput {
       }
     : undefined;
 
+  let entry: EntryOrigin | undefined;
+  if (params.entry) {
+    const { fn } = params.entry;
+    const serverOrigin = server && server.fn === fn ? server : undefined;
+    let url: IFunctionUrl | undefined;
+    entry = {
+      kind: 'entry',
+      fn,
+      streaming: false,
+      // Created on first read only (the server's own URL when the entry is the
+      // server function: a function carries one Function URL).
+      get url(): IFunctionUrl {
+        if (serverOrigin) return serverOrigin.url;
+        if (!url) {
+          if (!canAddFunctionUrl(fn)) {
+            throw new Error('origins.entry.url: the entry function cannot carry a Function URL.');
+          }
+          url = fn.addFunctionUrl({ authType: FunctionUrlAuthType.AWS_IAM, invokeMode: InvokeMode.BUFFERED });
+        }
+        return url;
+      },
+    };
+  }
+
   const api: ApiOrigin | undefined = params.api
     ? {
         kind: 'api',
@@ -183,6 +214,7 @@ export function buildDoorInput(params: BuildDoorInputParams): DoorInput {
       ...(server ? { server } : {}),
       ...(image ? { image } : {}),
       ...(api ? { api } : {}),
+      ...(entry ? { entry } : {}),
     },
     features,
   };
