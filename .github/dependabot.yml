@@ -98,7 +98,8 @@ updates:
       default-days: 3
     versioning-strategy: increase
     ignore:
-      # Published from this repo; the templates track them with "*".
+      # Published from this repo; `npm run version` sets the templates' ranges
+      # (scripts/sync-template-versions.ts).
       - dependency-name: "@aws-blocks/*"
       # Minor and patch only: template majors move by hand.
       - dependency-name: "*"

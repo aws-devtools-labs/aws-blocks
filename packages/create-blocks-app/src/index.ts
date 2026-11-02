@@ -129,6 +129,18 @@ async function copySharedResources(targetDir: string): Promise<void> {
  * - Monorepo detection and file: path rewriting
  * - Running npm install
  */
+/**
+ * The `@aws-blocks/blocks` range a template declares. The release tooling keeps it on
+ * the version this create-blocks-app ships with (scripts/sync-template-versions.ts), so
+ * adding Blocks to an existing project pins the same release as scaffolding a new app.
+ */
+async function templateBlocksRange(templatePkgPath: string): Promise<string> {
+  const pkg = JSON.parse(await readFile(templatePkgPath, 'utf-8'));
+  const range = pkg.dependencies?.['@aws-blocks/blocks'];
+  if (typeof range !== 'string') throw new Error(`${templatePkgPath} declares no @aws-blocks/blocks dependency`);
+  return range;
+}
+
 async function addBlocksWorkspace(targetDir: string, options: {
   devDeps: Record<string, string>;
   deps: Record<string, string>;
@@ -485,7 +497,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
 
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
-    deps: { '@aws-blocks/blocks': '*' },
+    deps: { '@aws-blocks/blocks': await templateBlocksRange(join(awsBlocksSrc, 'package.json')) },
     devDeps: {
       'tsx': '^4.7.0',
       'esbuild': '^0.27.1',
@@ -649,7 +661,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
   const tplDevDeps = templatePkg.devDependencies || {};
   await addBlocksWorkspace(targetDir, {
-    deps: { '@aws-blocks/blocks': '*' },
+    deps: { '@aws-blocks/blocks': await templateBlocksRange(join(templateDir, 'package.json')) },
     devDeps: {
       'aws-cdk-lib': tplDevDeps['aws-cdk-lib'] || '2.257.0',
       'constructs': tplDevDeps['constructs'] || '^10.6.0',

@@ -33,8 +33,8 @@
     "vendorize": "blocks-vendorize"
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/hosting": "*",
+    "@aws-blocks/blocks": "^0.9.0",
+    "@aws-blocks/hosting": "^0.5.0",
     "next": "^16.4.2",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

@@ -242,6 +242,11 @@ jobs:
       - name: Check aws-blocks exports consistency
         run: npm run check:exports-consistency
 
+      # Scaffolded apps copy these ranges; `npm run version` keeps them on the
+      # workspace versions (scripts/sync-template-versions.ts).
+      - name: Check create-blocks-app template versions
+        run: npm run check:template-versions
+
       # Keeps every Playwright browser install bounded (an apt hang once held a
       # Hosting job for 57 min).
       - name: Test the Playwright install wrapper

@@ -33,6 +33,8 @@ jobs:
         run: node --test scripts/keywords-guard.test.mjs
       - name: Test the dependency changeset generator
         run: node --test scripts/generate-dependency-changeset.test.mjs
+      - name: Test the template version sync
+        run: node --test scripts/sync-template-versions.test.mjs
       # Catches malformed changesets (broken frontmatter, unknown package,
       # invalid bump type) that the regex parser silently ignores and would
       # otherwise fail post-merge at `changeset version`. Validates only the

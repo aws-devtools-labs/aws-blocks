@@ -13,8 +13,8 @@
     }
   },
   "dependencies": {
-    "@aws-blocks/blocks": "*",
-    "@aws-blocks/bb-kv-store": "*",
+    "@aws-blocks/blocks": "^0.9.0",
+    "@aws-blocks/bb-kv-store": "^0.4.0",
     "aws-jwt-verify": "^5.0.0"
   }
 }
