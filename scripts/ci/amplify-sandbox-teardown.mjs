@@ -26,7 +26,8 @@
 //
 // Env: AMPLIFY_TEARDOWN_BUDGET_SECONDS (default 600),
 // AMPLIFY_TEARDOWN_BACKOFF_MS (first backoff, default 30000; doubles up to 4x),
-// AMPLIFY_TEARDOWN_JITTER_MS (random extra wait, default 30000).
+// AMPLIFY_TEARDOWN_JITTER_MS (random extra wait, default 30000),
+// AMPLIFY_TEARDOWN_KILL_GRACE_MS (SIGTERM to SIGKILL at the deadline, default 5000).
 
 import { spawn } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -48,8 +49,38 @@ const warnLeft = (detail) => {
 	process.exit(0);
 };
 
+const killGraceMs = Number(process.env.AMPLIFY_TEARDOWN_KILL_GRACE_MS ?? 5_000);
+
+// Whether any process of the group is left. npm can exit on SIGTERM while a
+// process it started ignores the signal, so npm's exit alone doesn't say.
+function groupAlive(pgid) {
+	try {
+		process.kill(-pgid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// SIGTERM the group, then SIGKILL whatever is still running after the grace
+// period, and wait until the group is gone.
+async function stopGroup(pgid) {
+	const signal = (s) => {
+		try {
+			process.kill(-pgid, s);
+		} catch {
+			// The group has already exited.
+		}
+	};
+	signal('SIGTERM');
+	for (const end = Date.now() + killGraceMs; groupAlive(pgid) && Date.now() < end; ) await sleep(100);
+	if (groupAlive(pgid)) signal('SIGKILL');
+	for (const end = Date.now() + 2_000; groupAlive(pgid) && Date.now() < end; ) await sleep(100);
+}
+
 // Runs one delete in its own process group, so stopping it at the deadline
-// reaches the processes npm starts too, not only npm.
+// reaches the processes npm starts too, not only npm. Resolves once npm has
+// exited and, after a timeout, once the whole group is stopped.
 function attemptDelete(msLeft) {
 	return new Promise((resolve) => {
 		const child = spawn('npm', ['run', 'sandbox:delete', '--', '--identifier', identifier], {
@@ -57,26 +88,18 @@ function attemptDelete(msLeft) {
 			stdio: 'inherit',
 			detached: true,
 		});
-		let timedOut = false;
-		const stop = (signal) => {
-			try {
-				process.kill(-child.pid, signal);
-			} catch {
-				// The group has already exited.
-			}
-		};
+		let stopping = null;
 		const timer = setTimeout(() => {
-			timedOut = true;
-			stop('SIGTERM');
-			setTimeout(() => stop('SIGKILL'), 5_000).unref();
+			stopping = stopGroup(child.pid);
 		}, msLeft);
 		child.on('error', (err) => {
 			clearTimeout(timer);
 			resolve({ status: null, detail: err.message, timedOut: false });
 		});
-		child.on('exit', (status, signal) => {
+		child.on('exit', async (status, signal) => {
 			clearTimeout(timer);
-			resolve({ status, detail: `exit ${status ?? signal}`, timedOut });
+			if (stopping) await stopping;
+			resolve({ status, detail: `exit ${status ?? signal}`, timedOut: stopping !== null });
 		});
 	});
 }

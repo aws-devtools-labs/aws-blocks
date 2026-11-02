@@ -18,13 +18,18 @@ const SCRIPT = fileURLToPath(new URL('./amplify-sandbox-teardown.mjs', import.me
 
 // Stands in for npm: logs its cwd and arguments, and exits 1 while the
 // scripted failure count lasts. With `hang`, it starts a long-running child
-// (as npm starts npx and ampx), records the child's pid, and never exits.
+// (as npm starts npx and ampx), records the child's pid, and never exits; with
+// `hang: 'ignore-term'` that child ignores SIGTERM while npm itself still exits
+// on it.
 const FAKE_NPM = `#!/usr/bin/env node
 const fs = require('node:fs');
 const state = JSON.parse(fs.readFileSync(process.env.FAKE_NPM_STATE, 'utf8'));
 fs.appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }) + '\\n');
 if (state.hang) {
-	const child = require('node:child_process').spawn('sleep', ['60'], { stdio: 'ignore' });
+	const cmd = state.hang === 'ignore-term'
+		? [process.execPath, ['-e', "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"]]
+		: ['sleep', ['60']];
+	const child = require('node:child_process').spawn(cmd[0], cmd[1], { stdio: 'ignore' });
 	fs.writeFileSync(process.env.FAKE_NPM_STATE + '.child', String(child.pid));
 	setInterval(() => {}, 1000);
 } else if (state.failures > 0) {
@@ -65,6 +70,7 @@ function run({ failures = 0, hang = false, budgetSeconds = 30, args }) {
 			AMPLIFY_TEARDOWN_BUDGET_SECONDS: String(budgetSeconds),
 			AMPLIFY_TEARDOWN_BACKOFF_MS: '10',
 			AMPLIFY_TEARDOWN_JITTER_MS: '10',
+			AMPLIFY_TEARDOWN_KILL_GRACE_MS: '300',
 		},
 	});
 	const calls = readFileSync(log, 'utf8')
@@ -112,6 +118,17 @@ describe('amplify-sandbox-teardown', () => {
 		// A killed process can take a moment to be reaped.
 		for (let i = 0; i < 20 && alive(r.childPid); i++) await new Promise((res) => setTimeout(res, 100));
 		assert.equal(alive(r.childPid), false, 'the process npm started is stopped too');
+	});
+
+	it('kills a process that ignores SIGTERM after npm itself has exited', async () => {
+		const r = run({ hang: 'ignore-term', budgetSeconds: 1 });
+		assert.ok(r.childPid, 'the fake npm started its child');
+		for (let i = 0; i < 20 && alive(r.childPid); i++) await new Promise((res) => setTimeout(res, 100));
+		const survived = alive(r.childPid);
+		if (survived) process.kill(r.childPid, 'SIGKILL');
+		assert.equal(r.status, 0, r.stdout + r.stderr);
+		assert.match(r.stdout, /not deleted \(attempt 1 stopped/);
+		assert.equal(survived, false, 'the SIGTERM-ignoring child is killed before the script exits');
 	});
 
 	it('rejects a call without an app directory and identifier', () => {
