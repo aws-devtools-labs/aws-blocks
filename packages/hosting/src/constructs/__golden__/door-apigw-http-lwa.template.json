@@ -1,0 +1,1145 @@
+{
+  "Resources": {
+    "HostingStorageHostingBucket8A6503F0": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "ExpirationInDays": 30,
+              "Id": "DeleteOldBuilds",
+              "Prefix": "builds/",
+              "Status": "Enabled",
+              "TagFilters": [
+                {
+                  "Key": "aws-blocks:build-state",
+                  "Value": "superseded"
+                }
+              ]
+            },
+            {
+              "Id": "ExpireNoncurrentVersions",
+              "NoncurrentVersionExpiration": {
+                "NoncurrentDays": 30
+              },
+              "Status": "Enabled"
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true"
+          },
+          {
+            "Key": "aws-cdk:cr-owned:builds/golden-door-lwa/:b50e6740",
+            "Value": "true"
+          },
+          {
+            "Key": "aws-cdk:cr-owned:builds/golden-door-lwa/:bfd48373",
+            "Value": "true"
+          }
+        ],
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingStorageHostingBucketPolicy38862C88": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:PutBucketPolicy",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      }
+    },
+    "HostingStorageHostingBucketAutoDeleteObjectsCustomResourceD60AA129": {
+      "Type": "Custom::S3AutoDeleteObjects",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn"
+          ]
+        },
+        "BucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        }
+      },
+      "DependsOn": [
+        "HostingStorageHostingBucketPolicy38862C88"
+      ],
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingStorageAccessLogBucketC56D2077": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "ExpirationInDays": 90,
+              "Id": "ExpireAccessLogs",
+              "Status": "Enabled"
+            }
+          ]
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerPreferred"
+            }
+          ]
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "Tags": [
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true"
+          }
+        ]
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingStorageAccessLogBucketPolicy76E5AE12": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "HostingStorageAccessLogBucketC56D2077"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageAccessLogBucketC56D2077",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageAccessLogBucketC56D2077",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:PutBucketPolicy",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*"
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn"
+                  ]
+                }
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageAccessLogBucketC56D2077",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageAccessLogBucketC56D2077",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        }
+      }
+    },
+    "HostingStorageAccessLogBucketAutoDeleteObjectsCustomResource6C2D41E9": {
+      "Type": "Custom::S3AutoDeleteObjects",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn"
+          ]
+        },
+        "BucketName": {
+          "Ref": "HostingStorageAccessLogBucketC56D2077"
+        }
+      },
+      "DependsOn": [
+        "HostingStorageAccessLogBucketPolicy76E5AE12"
+      ],
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingComputedefaultFunctionRole851C77D3": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "HostingComputedefaultFunctionLogGroup17DE1884": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "RetentionInDays": 30
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
+    "HostingComputedefaultFunction8544222D": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": [
+          "x86_64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-west-2",
+          "S3Key": "<hash>.zip"
+        },
+        "Environment": {
+          "Variables": {
+            "AWS_LAMBDA_EXEC_WRAPPER": "/opt/bootstrap",
+            "AWS_LWA_INVOKE_MODE": "buffered",
+            "PORT": "3000"
+          }
+        },
+        "Handler": "run.sh",
+        "Layers": [
+          "arn:aws:lambda:us-west-2:753240598075:layer:LambdaAdapterLayerX86:22"
+        ],
+        "LoggingConfig": {
+          "LogGroup": {
+            "Ref": "HostingComputedefaultFunctionLogGroup17DE1884"
+          }
+        },
+        "MemorySize": 1024,
+        "Role": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunctionRole851C77D3",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 30
+      },
+      "DependsOn": [
+        "HostingComputedefaultFunctionRole851C77D3"
+      ]
+    },
+    "HostingApiGatewayAssetProxyServiceRole15E2EB22": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      },
+      "DependsOn": [
+        "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9",
+        "HostingAssetDeploymentHtmlCustomResource1024MiB1024MiB1C34BEF3",
+        "HostingAssetDeploymentOtherAwsCliLayer4E6B92F6",
+        "HostingAssetDeploymentOtherCustomResource1024MiB1024MiB277D233C"
+      ]
+    },
+    "HostingApiGatewayAssetProxyServiceRoleDefaultPolicy5651DE74": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "HostingApiGatewayAssetProxyServiceRoleDefaultPolicy5651DE74",
+        "Roles": [
+          {
+            "Ref": "HostingApiGatewayAssetProxyServiceRole15E2EB22"
+          }
+        ]
+      },
+      "DependsOn": [
+        "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9",
+        "HostingAssetDeploymentHtmlCustomResource1024MiB1024MiB1C34BEF3",
+        "HostingAssetDeploymentOtherAwsCliLayer4E6B92F6",
+        "HostingAssetDeploymentOtherCustomResource1024MiB1024MiB277D233C"
+      ]
+    },
+    "HostingApiGatewayAssetProxy86B05219": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "ZipFile": "const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');\nconst zlib = require('node:zlib');\nconst s3 = new S3Client({});\nconst BUCKET = process.env.ASSET_BUCKET;\nconst KEY_PREFIX = process.env.ASSET_KEY_PREFIX || '';\nconst STRIP_PREFIX = \"\";\nconst SPA_FALLBACK = false;\nconst NOT_FOUND_PAGE = \"\";\nconst IMAGE_FALLBACK = false;\nconst IMAGE_REMOTE_HOSTS = [];\nconst IMAGE_PATH_PREFIXES = [\"/_ipx\"];\nconst SERVER_ERROR_PAGE = \"\";\n\nfunction matchPattern(uri, pattern) {\n  // Fast path: no wildcard → exact match.\n  if (pattern.indexOf('*') === -1) {\n    return uri === pattern ? { tail: '' } : null;\n  }\n  // Fast path: single trailing '*' → prefix match, capturing the tail (used to\n  // splice into wildcard redirect destinations).\n  if (pattern.indexOf('*') === pattern.length - 1 && pattern.lastIndexOf('*') === pattern.length - 1) {\n    var prefix = pattern.substring(0, pattern.length - 1);\n    if (uri.indexOf(prefix) === 0) return { tail: uri.substring(prefix.length) };\n    return null;\n  }\n  // Glob with '*' anywhere: a non-trailing '*' matches one segment (no '/'),\n  // a trailing '*' matches the rest. Literal scan (no dynamic RegExp).\n  return globMatch(uri, pattern);\n}\nfunction globMatch(uri, pattern) {\n  var ui = 0, pi = 0;\n  while (pi < pattern.length) {\n    var pc = pattern.charAt(pi);\n    if (pc === '*') {\n      var isTrailing = pi === pattern.length - 1;\n      pi++;\n      if (isTrailing) { return { tail: uri.substring(ui) }; }\n      var nextLit = pattern.charAt(pi);\n      while (ui < uri.length && uri.charAt(ui) !== nextLit && uri.charAt(ui) !== '/') { ui++; }\n      if (ui >= uri.length || uri.charAt(ui) !== nextLit) { return null; }\n    } else {\n      if (ui >= uri.length || uri.charAt(ui) !== pc) { return null; }\n      ui++; pi++;\n    }\n  }\n  return ui === uri.length ? { tail: '' } : null;\n}\nfunction stripBasePath(uri, bp) {\n  // Consistent boundary guard: strip ONLY an exact basePath or a 'bp/' prefix,\n  // so '/myapp-extra' is NOT treated as under '/myapp'. Empty result → '/'.\n  if (!bp) { return uri; }\n  if (uri === bp) { return '/'; }\n  if (uri.indexOf(bp + '/') === 0) {\n    var stripped = uri.substring(bp.length);\n    return stripped.length === 0 ? '/' : stripped;\n  }\n  return uri;\n}\nfunction resolveIndex(uri, spa) {\n  var seg = uri.substring(uri.lastIndexOf('/') + 1);\n  if (spa) {\n    return seg.indexOf('.') === -1 && uri.indexOf('/.well-known/') !== 0 ? '/index.html' : uri;\n  }\n  if (uri.charAt(uri.length - 1) === '/') return uri + 'index.html';\n  if (seg.indexOf('.') !== -1) return uri;\n  return uri + '/index.html';\n}\nvar BLOCKS_REDIRECTS = [[\"/old/*\",\"/new/*\",308]];\nvar BLOCKS_HEADER_RULES = [[\"/assets/*\",{\"x-golden\":\"1\"}]];\nfunction blocksRedirectResponse(uri) {\n  for (var j = 0; j < BLOCKS_REDIRECTS.length; j++) {\n    var m = matchPattern(uri, BLOCKS_REDIRECTS[j][0]);\n    if (m) {\n      var dest = BLOCKS_REDIRECTS[j][1];\n      if (dest.charAt(dest.length - 1) === '*') {\n        var abs = /^[a-z][a-z0-9+.-]*:/i.test(dest);\n        dest = dest.substring(0, dest.length - 1) + (m.tail || '');\n        if (!abs) { var t = dest.replace(/^[\\/\\\\\\s]+/, ''); if (t !== dest || /^[a-z][a-z0-9+.-]*:/i.test(t)) dest = '/' + t; }\n      }\n      return { statusCode: BLOCKS_REDIRECTS[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };\n    }\n  }\n  return null;\n}\nfunction blocksRedirect(uri) {\n  var r = blocksRedirectResponse(uri);\n  return r ? { statusCode: r.statusCode, location: r.headers.location.value } : null;\n}\nfunction blocksHeaders(uri) {\n  var response = { headers: {} };\n  for (var j = 0; j < BLOCKS_HEADER_RULES.length; j++) {\n    if (matchPattern(uri, BLOCKS_HEADER_RULES[j][0])) {\n      var hdrs = BLOCKS_HEADER_RULES[j][1];\n      for (var name in hdrs) { response.headers[name.toLowerCase()] = { value: hdrs[name] }; }\n    }\n  }\n  var out = {};\n  for (var name in response.headers) { out[name] = response.headers[name].value; }\n  return out;\n}\n\nconst CONTENT_TYPES = {\n  html: 'text/html; charset=utf-8', js: 'text/javascript', mjs: 'text/javascript',\n  css: 'text/css', json: 'application/json', svg: 'image/svg+xml', png: 'image/png',\n  jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',\n  ico: 'image/x-icon', txt: 'text/plain; charset=utf-8', xml: 'application/xml',\n  woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',\n  map: 'application/json', webmanifest: 'application/manifest+json',\n};\n// Gzipped when the client accepts it (as CloudFront compresses them).\nconst COMPRESSIBLE = /^(text\\/|image\\/svg\\+xml|application\\/(json|javascript|xml|manifest\\+json|[\\w.+-]*\\+(json|xml))\\b)/i;\nconst MIN_COMPRESS_BYTES = 1024;\n\nfunction contentTypeFor(key) {\n  const dot = key.lastIndexOf('.');\n  const ext = dot === -1 ? '' : key.substring(dot + 1).toLowerCase();\n  return CONTENT_TYPES[ext] || 'application/octet-stream';\n}\n\n// The object's own Cache-Control (set per file at upload); a default only when\n// it has none: HTML always revalidates, anything else revalidates too (an\n// unhashed file must not be pinned for a year).\nfunction cacheControlFor(stored, isHtml) {\n  if (stored) return stored;\n  return isHtml ? 'no-cache, no-store, must-revalidate' : 'public, max-age=0, must-revalidate';\n}\n\nasync function readStream(body) {\n  const chunks = [];\n  for await (const chunk of body) chunks.push(chunk);\n  return Buffer.concat(chunks);\n}\n\nfunction keyFor(uri) {\n  return (KEY_PREFIX ? KEY_PREFIX.replace(/\\/+$/, '') + '/' : '') + uri.replace(/^\\/+/, '');\n}\n\n// Request header names in any case (a REST API keeps the client's).\nfunction lowerHeaders(h) {\n  const out = {};\n  for (const k in h || {}) { const v = h[k]; out[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v); }\n  return out;\n}\n\n// The S3 key path for a request path: percent-decoded (S3 decodes the path\n// behind the CloudFront door too), or null for a path that must not reach S3 —\n// an encoded slash or backslash, a malformed escape, a control character or a\n// backslash, or a '.' / '..' segment.\nfunction decodePath(uri) {\n  if (/%2f|%5c/i.test(uri)) return null;\n  let decoded;\n  try { decoded = decodeURIComponent(uri); } catch (e) { return null; }\n  if (/[\\u0000-\\u001f\\u007f\\\\]/.test(decoded)) return null;\n  const segs = decoded.split('/');\n  for (let i = 0; i < segs.length; i++) { if (segs[i] === '.' || segs[i] === '..') return null; }\n  return decoded;\n}\n\nasync function fetchKey(key, conditions) {\n  const input = { Bucket: BUCKET, Key: key };\n  if (conditions && conditions.ifNoneMatch) input.IfNoneMatch = conditions.ifNoneMatch;\n  if (conditions && conditions.ifModifiedSince) input.IfModifiedSince = conditions.ifModifiedSince;\n  const res = await s3.send(new GetObjectCommand(input));\n  return {\n    buf: await readStream(res.Body),\n    contentType: res.ContentType || contentTypeFor(key),\n    cacheControl: res.CacheControl,\n    etag: res.ETag,\n    lastModified: res.LastModified ? new Date(res.LastModified).toUTCString() : undefined,\n  };\n}\n\n// A missing key: NoSuchKey with list access, AccessDenied without (S3 hides\n// absence) — the CloudFront door maps the latter to a 404 too.\nfunction isMiss(err) {\n  const name = err && err.name;\n  const status = err && err.$metadata && err.$metadata.httpStatusCode;\n  return name === 'NoSuchKey' || name === 'NotFound' || name === 'AccessDenied' || status === 404 || status === 403;\n}\n\nfunction isNotModified(err) {\n  return Boolean(err && ((err.$metadata && err.$metadata.httpStatusCode === 304) || err.name === 'NotModified'));\n}\n\nfunction plainResponse(statusCode, text) {\n  return { statusCode, headers: { 'content-type': 'text/plain; charset=utf-8' }, body: text, isBase64Encoded: false };\n}\n\n// Baseline security headers on every response (an app header rule wins).\nconst SECURITY_HEADERS = {\n  'strict-transport-security': 'max-age=31536000',\n  'x-content-type-options': 'nosniff',\n  'x-frame-options': 'SAMEORIGIN',\n  'referrer-policy': 'strict-origin-when-cross-origin',\n};\nfunction secure(res) {\n  const headers = {};\n  for (const name in SECURITY_HEADERS) headers[name] = SECURITY_HEADERS[name];\n  for (const name in res.headers) headers[name] = res.headers[name];\n  res.headers = headers;\n  return res;\n}\n\n// The error pages, read once per Lambda instance (the prefix is fixed per build).\nconst ERROR_PAGES = {};\nasync function errorResponse(statusCode) {\n  const page = statusCode === 404 ? NOT_FOUND_PAGE : SERVER_ERROR_PAGE;\n  if (page) {\n    try {\n      if (!ERROR_PAGES[page]) ERROR_PAGES[page] = (await fetchKey(keyFor(page))).buf;\n      return {\n        statusCode,\n        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache, no-store, must-revalidate' },\n        body: ERROR_PAGES[page].toString('base64'),\n        isBase64Encoded: true,\n      };\n    } catch (e) {\n      // The page itself is unreadable: fall back to the plain answer.\n    }\n  }\n  return plainResponse(statusCode, statusCode === 404 ? 'Not Found' : 'Internal Server Error');\n}\n\n// Whether Accept-Encoding allows gzip: a `gzip` (or `*`) entry whose q is above 0\n// (`gzip;q=0` refuses it).\nfunction acceptsGzip(value) {\n  let star = false;\n  const parts = String(value || '').split(',');\n  for (let i = 0; i < parts.length; i++) {\n    const params = parts[i].split(';');\n    const name = params[0].trim().toLowerCase();\n    let q = 1;\n    for (let k = 1; k < params.length; k++) {\n      const kv = params[k].split('=');\n      if (kv[0].trim().toLowerCase() === 'q') q = Number(kv[1]);\n    }\n    if (name === 'gzip' || name === 'x-gzip') return q > 0;\n    if (name === '*') star = q > 0;\n  }\n  return star;\n}\n\n// Gzipped bodies, per object version, for this Lambda instance (bounded).\nconst GZIP_CACHE = new Map();\nconst GZIP_CACHE_MAX = 64;\nfunction gzipOnce(key, version, buf) {\n  const id = key + '|' + version;\n  let gz = GZIP_CACHE.get(id);\n  if (!gz) {\n    gz = zlib.gzipSync(buf);\n    if (GZIP_CACHE.size >= GZIP_CACHE_MAX) GZIP_CACHE.delete(GZIP_CACHE.keys().next().value);\n    GZIP_CACHE.set(id, gz);\n  }\n  return gz;\n}\n\n// A remote image host is allowed when it equals an allowlisted host, or\n// matches a '*.' / '**.' wildcard entry (Next.js remotePatterns hostnames), or\n// the allowlist has '**' (an Astro remotePattern with no hostname: any host).\nfunction imageHostAllowed(host) {\n  host = host.toLowerCase();\n  for (var i = 0; i < IMAGE_REMOTE_HOSTS.length; i++) {\n    var entry = IMAGE_REMOTE_HOSTS[i].toLowerCase();\n    if (entry === host || entry === '**') return true;\n    var star = entry.indexOf('**.') === 0 ? 3 : entry.indexOf('*.') === 0 ? 2 : 0;\n    if (star && host.length > entry.length - star && host.slice(-(entry.length - star + 1)) === '.' + entry.slice(star)) return true;\n  }\n  return false;\n}\n\n// The source behind a framework image endpoint when the deploy has no image\n// function: { uri } for a local file (served as stored), { redirect } for an\n// allowed remote source, { status: 404 } otherwise; null when the request is\n// not an image endpoint.\nfunction blocksImageSource(requestUri, query) {\n  if (!IMAGE_FALLBACK) return null;\n  var rel = stripBasePath(requestUri, STRIP_PREFIX);\n  var src;\n  var prefix = null;\n  for (var p = 0; p < IMAGE_PATH_PREFIXES.length; p++) {\n    if (rel.indexOf(IMAGE_PATH_PREFIXES[p] + '/') === 0) { prefix = IMAGE_PATH_PREFIXES[p]; break; }\n  }\n  if (prefix !== null) {\n    // '<prefix>/<modifiers>/<src>'; a remote source is inlined ('https://host/…'),\n    // and API Gateway may collapse its '//'.\n    var rest = rel.substring(prefix.length + 1);\n    var slash = rest.indexOf('/');\n    src = slash === -1 ? '' : rest.substring(slash + 1).replace(/^(https?):\\/+/i, '$1://');\n  } else if (rel === '/_next/image' || rel === '/_image') {\n    src = (query && (query.url || query.href)) || '';\n    // API Gateway hands the query value over percent-decoded. A local source\n    // is re-encoded into path form, so the app's redirects and the path\n    // checks (control characters, backslashes, '..') see it as they see a\n    // request path; a raw CR/LF or C0 byte never reaches a Location header.\n    if (!/^https?:/i.test(src)) src = src.split('/').map(encodeURIComponent).join('/');\n  } else {\n    return null;\n  }\n  if (/^https?:/i.test(src)) {\n    // The browser follows the redirect with WHATWG URL rules, so the host is\n    // checked on the parsed URL (userinfo and '\\' would otherwise point it at\n    // another host), and the redirect goes to that same parsed URL.\n    var url;\n    try { url = new URL(src); } catch (e) { return { status: 404 }; }\n    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return { status: 404 };\n    return imageHostAllowed(url.hostname) ? { redirect: url.href } : { status: 404 };\n  }\n  if (!src || src.indexOf('//') === 0) return { status: 404 };\n  return { uri: src.charAt(0) === '/' ? src : '/' + src };\n}\n\nasync function blocksServe(requestUri, requestHeaders) {\n  return secure(await serveUri(requestUri, requestHeaders));\n}\n\nasync function serveUri(requestUri, requestHeaders) {\n  const redirect = blocksRedirect(requestUri);\n  if (redirect) {\n    return { statusCode: redirect.statusCode, headers: { location: redirect.location }, body: '', isBase64Encoded: false };\n  }\n  const path = decodePath(requestUri);\n  if (path === null) return plainResponse(400, 'Bad Request');\n  const req = lowerHeaders(requestHeaders);\n  const key = keyFor(resolveIndex(stripBasePath(path, STRIP_PREFIX), SPA_FALLBACK));\n  const gzip = acceptsGzip(req['accept-encoding']);\n  // A weak validator names the same object (a gzipped representation's).\n  const ifNoneMatch = req['if-none-match'] ? req['if-none-match'].replace(/^W\\//, '') : undefined;\n  const ifModifiedSince = req['if-modified-since'] ? new Date(req['if-modified-since']) : undefined;\n  let found;\n  try {\n    found = await fetchKey(key, {\n      ifNoneMatch,\n      ifModifiedSince: ifModifiedSince && !isNaN(ifModifiedSince.getTime()) ? ifModifiedSince : undefined,\n    });\n  } catch (err) {\n    if (isNotModified(err)) {\n      // The validator of the matched representation: the client's tag when it\n      // sent one (a list names several, and S3 doesn't say which matched).\n      const headers = {};\n      const sent = req['if-none-match'];\n      if (sent && sent.indexOf(',') === -1 && sent.trim() !== '*') headers.etag = sent.trim();\n      return { statusCode: 304, headers, body: '', isBase64Encoded: false };\n    }\n    // A miss is a 404. Extensionless SPA paths already resolved to index.html\n    // above, so a missing file here (/missing.js, /.env) is really missing.\n    return errorResponse(isMiss(err) ? 404 : 500);\n  }\n  const headers = {\n    'content-type': found.contentType,\n    'cache-control': cacheControlFor(found.cacheControl, found.contentType.indexOf('text/html') === 0),\n  };\n  if (found.lastModified) headers['last-modified'] = found.lastModified;\n  let body = found.buf;\n  const compressible = COMPRESSIBLE.test(found.contentType);\n  if (compressible) headers.vary = 'accept-encoding';\n  if (compressible && gzip && body.length >= MIN_COMPRESS_BYTES) {\n    body = found.etag || found.lastModified ? gzipOnce(key, found.etag || found.lastModified, body) : zlib.gzipSync(body);\n    headers['content-encoding'] = 'gzip';\n    if (found.etag) headers.etag = 'W/' + found.etag.replace(/^W\\//, '');\n  } else if (found.etag) {\n    headers.etag = found.etag;\n  }\n  const rule = blocksHeaders(requestUri);\n  for (const name in rule) headers[name] = rule[name];\n  return { statusCode: 200, headers, body: body.toString('base64'), isBase64Encoded: true };\n}\n\nexports.handler = async (event) => {\n  // Payload 2.0 (HTTP API / Function URL): rawPath. Payload 1.0 (REST API): path.\n  // The REST API front door invokes this Lambda with the v1 envelope, so read\n  // both — the response shape below ({statusCode, headers, isBase64Encoded, body})\n  // is valid for a v1 and a v2 proxy integration alike.\n  const uri = event.rawPath || (event.requestContext && event.requestContext.http && event.requestContext.http.path) || event.path || '/';\n  const image = blocksImageSource(uri, event.queryStringParameters);\n  if (image && image.redirect) {\n    return secure({ statusCode: 302, headers: { location: image.redirect, 'cache-control': 'no-cache' }, body: '', isBase64Encoded: false });\n  }\n  if (image && image.status) return secure(await errorResponse(image.status));\n  return blocksServe(image ? image.uri : uri, event.headers);\n};\n"
+        },
+        "Environment": {
+          "Variables": {
+            "ASSET_BUCKET": {
+              "Ref": "HostingStorageHostingBucket8A6503F0"
+            },
+            "ASSET_KEY_PREFIX": "builds/golden-door-lwa"
+          }
+        },
+        "Handler": "index.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "HostingApiGatewayAssetProxyServiceRole15E2EB22",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 15
+      },
+      "DependsOn": [
+        "HostingApiGatewayAssetProxyServiceRoleDefaultPolicy5651DE74",
+        "HostingApiGatewayAssetProxyServiceRole15E2EB22",
+        "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9",
+        "HostingAssetDeploymentHtmlCustomResource1024MiB1024MiB1C34BEF3",
+        "HostingAssetDeploymentOtherAwsCliLayer4E6B92F6",
+        "HostingAssetDeploymentOtherCustomResource1024MiB1024MiB277D233C"
+      ]
+    },
+    "HostingApiGatewayHttpApi6C0769CF": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": "blocks-golden-door-lwa",
+        "ProtocolType": "HTTP"
+      }
+    },
+    "HostingApiGatewayHttpApiDefaultRouteSsrInt6DA01CED": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunction8544222D",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0"
+      }
+    },
+    "HostingApiGatewayHttpApiDefaultRouteInvokeFromApiGoldenDoorsHostingApiGatewayHttpApi95BABBCE3131C440": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HostingComputedefaultFunction8544222D",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:us-west-2:111111111111:",
+              {
+                "Ref": "HostingApiGatewayHttpApi6C0769CF"
+              },
+              "/*"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiDefaultRoute0F520F54": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "$default",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiDefaultRouteSsrInt6DA01CED"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiDefaultStage80854961": {
+      "Type": "AWS::ApiGatewayV2::Stage",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AutoDeploy": true,
+        "StageName": "$default"
+      }
+    },
+    "HostingApiGatewayHttpApiANYawsblocksBackendRoute176EE1B5C": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationMethod": "ANY",
+        "IntegrationType": "HTTP_PROXY",
+        "IntegrationUri": "https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks",
+        "PayloadFormatVersion": "1.0"
+      }
+    },
+    "HostingApiGatewayHttpApiANYawsblocksE34971CF": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /aws-blocks",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYawsblocksBackendRoute176EE1B5C"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYawsblocksproxyBackendRpcBE198426": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationMethod": "ANY",
+        "IntegrationType": "HTTP_PROXY",
+        "IntegrationUri": "https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/{proxy}",
+        "PayloadFormatVersion": "1.0"
+      }
+    },
+    "HostingApiGatewayHttpApiANYawsblocksproxyFC3EE1B3": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /aws-blocks/{proxy+}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYawsblocksproxyBackendRpcBE198426"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYhooksgoldenBackendRoute20DCA4210": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationMethod": "ANY",
+        "IntegrationType": "HTTP_PROXY",
+        "IntegrationUri": "https://abc123.execute-api.us-west-2.amazonaws.com/prod/hooks/golden",
+        "PayloadFormatVersion": "1.0"
+      }
+    },
+    "HostingApiGatewayHttpApiANYhooksgoldenC9525BB2": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /hooks/golden",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYhooksgoldenBackendRoute20DCA4210"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYoldproxyAssetInt1FA78A26": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": {
+          "Fn::GetAtt": [
+            "HostingApiGatewayAssetProxy86B05219",
+            "Arn"
+          ]
+        },
+        "PayloadFormatVersion": "2.0"
+      }
+    },
+    "HostingApiGatewayHttpApiANYoldproxyInvokeFromApiGoldenDoorsHostingApiGatewayHttpApi95BABBCEF11C9DE1": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HostingApiGatewayAssetProxy86B05219",
+            "Arn"
+          ]
+        },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:us-west-2:111111111111:",
+              {
+                "Ref": "HostingApiGatewayHttpApi6C0769CF"
+              },
+              "/*"
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYoldproxyB1A2ED8C": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /old/{proxy+}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYoldproxyAssetInt1FA78A26"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingApiGatewayHttpApiANYassetsproxyBF9892D9": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": {
+          "Ref": "HostingApiGatewayHttpApi6C0769CF"
+        },
+        "AuthorizationType": "NONE",
+        "RouteKey": "ANY /assets/{proxy+}",
+        "Target": {
+          "Fn::Join": [
+            "",
+            [
+              "integrations/",
+              {
+                "Ref": "HostingApiGatewayHttpApiANYoldproxyAssetInt1FA78A26"
+              }
+            ]
+          ]
+        }
+      }
+    },
+    "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Properties": {
+        "Content": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-west-2",
+          "S3Key": "<hash>.zip"
+        },
+        "Description": "/opt/awscli/aws"
+      }
+    },
+    "HostingAssetDeploymentHtmlCustomResource1024MiB1024MiB1C34BEF3": {
+      "Type": "Custom::CDKBucketDeployment",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiB6D9F8D19",
+            "Arn"
+          ]
+        },
+        "SourceBucketNames": [
+          "cdk-hnb659fds-assets-111111111111-us-west-2"
+        ],
+        "SourceObjectKeys": [
+          "<hash>.zip"
+        ],
+        "DestinationBucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "DestinationBucketKeyPrefix": "builds/golden-door-lwa/",
+        "WaitForDistributionInvalidation": true,
+        "Prune": false,
+        "Exclude": [
+          "*"
+        ],
+        "Include": [
+          "*.html",
+          "**/*.html"
+        ],
+        "SystemMetadata": {
+          "cache-control": "no-cache, no-store, must-revalidate"
+        },
+        "OutputObjectKeys": true
+      },
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Retain"
+    },
+    "HostingAssetDeploymentOtherAwsCliLayer4E6B92F6": {
+      "Type": "AWS::Lambda::LayerVersion",
+      "Properties": {
+        "Content": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-west-2",
+          "S3Key": "<hash>.zip"
+        },
+        "Description": "/opt/awscli/aws"
+      }
+    },
+    "HostingAssetDeploymentOtherCustomResource1024MiB1024MiB277D233C": {
+      "Type": "Custom::CDKBucketDeployment",
+      "Properties": {
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiB6D9F8D19",
+            "Arn"
+          ]
+        },
+        "SourceBucketNames": [
+          "cdk-hnb659fds-assets-111111111111-us-west-2"
+        ],
+        "SourceObjectKeys": [
+          "<hash>.zip"
+        ],
+        "DestinationBucketName": {
+          "Ref": "HostingStorageHostingBucket8A6503F0"
+        },
+        "DestinationBucketKeyPrefix": "builds/golden-door-lwa/",
+        "WaitForDistributionInvalidation": true,
+        "Prune": false,
+        "Exclude": [
+          "*.html",
+          "**/*.html"
+        ],
+        "SystemMetadata": {
+          "cache-control": "public, s-maxage=31536000, max-age=0, must-revalidate"
+        },
+        "OutputObjectKeys": true
+      },
+      "UpdateReplacePolicy": "Retain",
+      "DeletionPolicy": "Retain"
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+          }
+        ]
+      }
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-west-2",
+          "S3Key": "<hash>.zip"
+        },
+        "Timeout": 900,
+        "MemorySize": 128,
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs24.x",
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Lambda function for auto-deleting objects in ",
+              {
+                "Ref": "HostingStorageHostingBucket8A6503F0"
+              },
+              " S3 bucket."
+            ]
+          ]
+        }
+      },
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092"
+      ]
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              }
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleDefaultPolicy2360480C": {
+      "Type": "AWS::IAM::Policy",
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::cdk-hnb659fds-assets-111111111111-us-west-2"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::cdk-hnb659fds-assets-111111111111-us-west-2/*"
+                    ]
+                  ]
+                }
+              ]
+            },
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging",
+                "s3:Abort*"
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "HostingStorageHostingBucket8A6503F0",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "HostingStorageHostingBucket8A6503F0",
+                          "Arn"
+                        ]
+                      },
+                      "/*"
+                    ]
+                  ]
+                }
+              ]
+            }
+          ],
+          "Version": "2012-10-17"
+        },
+        "PolicyName": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleDefaultPolicy2360480C",
+        "Roles": [
+          {
+            "Ref": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947"
+          }
+        ]
+      }
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiB6D9F8D19": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Architectures": [
+          "arm64"
+        ],
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-west-2",
+          "S3Key": "<hash>.zip"
+        },
+        "Environment": {
+          "Variables": {
+            "AWS_CA_BUNDLE": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem"
+          }
+        },
+        "EphemeralStorage": {
+          "Size": 1024
+        },
+        "Handler": "index.handler",
+        "Layers": [
+          {
+            "Ref": "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9"
+          }
+        ],
+        "MemorySize": 1024,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947",
+            "Arn"
+          ]
+        },
+        "Runtime": "python3.13",
+        "Timeout": 900
+      },
+      "DependsOn": [
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleDefaultPolicy2360480C",
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C1024MiB1024MiBServiceRoleBE855947"
+      ]
+    }
+  },
+  "Outputs": {
+    "HostingApiGatewayApiGatewayUrl970B08E6": {
+      "Description": "API Gateway HTTP API front-door URL",
+      "Value": {
+        "Fn::GetAtt": [
+          "HostingApiGatewayHttpApi6C0769CF",
+          "ApiEndpoint"
+        ]
+      }
+    }
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Type": "AWS::SSM::Parameter::Value<String>",
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]"
+    }
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5"
+                  ],
+                  {
+                    "Ref": "BootstrapVersion"
+                  }
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI."
+        }
+      ]
+    }
+  }
+}
