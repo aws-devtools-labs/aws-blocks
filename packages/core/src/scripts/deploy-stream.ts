@@ -325,8 +325,8 @@ export function extractHostingUrlFromLine(line: string): string | null {
  * CloudFormation output or polling the stack. Pure + exported so it is unit
  * tested and shared by both `deploy()` and `sandbox()`; each prints exactly this
  * string on its success path. `api=` is always present; `url=` (the public
- * frontend) only when the app deployed hosting — a sandbox deploy serves the
- * frontend locally, so it omits `url=`.
+ * frontend) only when the app deployed hosting — a plain sandbox deploy serves
+ * the frontend locally, so it omits `url=`; a preview sandbox includes it.
  */
 export function formatDeploySignal(apiUrl: string, hostingUrl?: string): string {
   return hostingUrl
