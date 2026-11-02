@@ -191,10 +191,19 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
  * Build the `npx cdk watch …` argv the sandbox runs after its first deploy.
  * Only a plain sandbox watches: a preview sandbox is deploy-only (see
  * {@link sandboxIsDeployOnly}).
+ *
+ * `--hotswap-fallback`: `cdk watch` defaults to `--hotswap`, which applies
+ * code-only changes directly but silently IGNORES any change it can't hotswap.
+ * Adding a Building Block that needs new infrastructure (a `Database`, a
+ * `Realtime`) while the sandbox watches would then update the Lambda code that
+ * uses it and never create it, leaving the app broken with no message. With the
+ * fallback, a code-only change still hotswaps in seconds, and any other change
+ * runs a full CloudFormation deploy of the stack.
  */
 export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
   return [
     "cdk", "watch",
+    "--hotswap-fallback",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
