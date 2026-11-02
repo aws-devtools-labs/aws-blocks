@@ -501,7 +501,12 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	return results.some((r) => !r.alreadyStopped && !r.portFree) ? ExitCode.Failure : ExitCode.Ok;
 }
 
-async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> {
+/** How `blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
+type SandboxMode = 'watch' | 'deploy' | 'preview';
+
+async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
+	const deployOnly = mode !== 'watch';
+	const operation = deployOnly ? `blocks sandbox ${mode}` : 'blocks sandbox';
 	const root = ctx.requireRoot();
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const config = resolveDevConfig(root);
@@ -521,14 +526,16 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 	forgetLastDeploy(root, 'sandbox');
 	const code = await runRunner(ctx, {
 		runner: 'sandbox',
-		operation: deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox',
+		operation,
 		options: {
 			backendPath,
 			deployOnly,
+			preview: mode === 'preview',
 			devCommand,
 			clientPort: config.port ?? 3000,
-			invocation: deployOnly ? invocation(ctx, 'sandbox', 'deploy') : invocation(ctx, 'sandbox'),
+			invocation: deployOnly ? invocation(ctx, 'sandbox', mode) : invocation(ctx, 'sandbox'),
 			destroyInvocation: invocation(ctx, 'sandbox', 'destroy'),
+			previewInvocation: invocation(ctx, 'sandbox', 'preview'),
 		},
 		env: devServerEnv(ctx.env, { backendPath: join(root, 'aws-blocks', 'index.ts'), ...devConfig }),
 		// Watch mode runs until stopped. A deploy-only run is not long-running: the CLI does not stop it on a
@@ -536,16 +543,20 @@ async function startSandbox(ctx: Context, deployOnly: boolean): Promise<number> 
 		longRunning: !deployOnly,
 	});
 	// After an interruption or a failure there is no result to report.
-	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root, 'sandbox', 'blocks sandbox deploy');
+	if (deployOnly && code === ExitCode.Ok) emitDeployResult(ctx, root, 'sandbox', operation);
 	return code;
 }
 
 export function sandbox(ctx: Context): Promise<number> {
-	return startSandbox(ctx, false);
+	return startSandbox(ctx, 'watch');
 }
 
 export function sandboxDeploy(ctx: Context): Promise<number> {
-	return startSandbox(ctx, true);
+	return startSandbox(ctx, 'deploy');
+}
+
+export function sandboxPreview(ctx: Context): Promise<number> {
+	return startSandbox(ctx, 'preview');
 }
 
 export async function sandboxDestroy(ctx: Context): Promise<number> {

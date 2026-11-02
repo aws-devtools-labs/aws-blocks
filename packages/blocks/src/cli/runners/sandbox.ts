@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Runs with the `tsx` loader, started by `blocks sandbox` and `blocks sandbox deploy`.
- * After the first deploy, in both modes, it records the outputs and the target it
+ * Runs with the `tsx` loader, started by `blocks sandbox`, `blocks sandbox deploy`
+ * and `blocks sandbox preview`. After the first deploy, in every mode, it records
+ * the outputs and the target it
  * deployed with (see `last-deploy.ts`): watch mode then keeps running, and a
  * production deploy can rewrite `outputs.json` meanwhile, so `blocks sandbox
  * console` reads the record.
@@ -15,7 +16,11 @@ import { recordLastDeploy } from './last-deploy.js';
 
 const options = JSON.parse(process.argv[2]) as core.SandboxOptions;
 const projectRoot = process.cwd();
-const invocation = options.deployOnly ? 'blocks sandbox deploy' : 'blocks sandbox';
+const invocation = options.preview
+	? 'blocks sandbox preview'
+	: options.deployOnly
+		? 'blocks sandbox deploy'
+		: 'blocks sandbox';
 
 try {
 	await core.startSandbox({

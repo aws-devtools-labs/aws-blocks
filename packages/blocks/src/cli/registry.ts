@@ -257,6 +257,25 @@ export const COMMANDS: readonly CommandSpec[] = [
 		handler: commands.sandboxDeploy,
 	},
 	{
+		path: ['sandbox', 'preview'],
+		group: 'Develop',
+		summary: 'Deploy the sandbox with a hosted preview of the frontend once and exit',
+		description:
+			'Deploy your sandbox with the app hosted in preview shape (API Gateway, no CloudFront), print\n' +
+			'the preview URL, and exit. It is the same stack as "blocks sandbox": a plain sandbox deploy\n' +
+			'removes the preview, and re-adding it gives a new URL. A re-deploy hotswaps a code-only change.',
+		json: DEPLOY_RESULT,
+		examples: [
+			{ command: 'blocks sandbox preview', description: 'Deploy a hosted preview and print its URL' },
+			{
+				command: 'URL=$(blocks sandbox preview --query url)',
+				description: 'Deploy, then keep the preview URL in a shell variable',
+			},
+		],
+		aws: true,
+		handler: commands.sandboxPreview,
+	},
+	{
 		path: ['sandbox', 'destroy'],
 		group: 'Develop',
 		summary: 'Delete your sandbox stack (never production)',
@@ -519,6 +538,7 @@ export const ALIASES: readonly AliasSpec[] = [
 	{ name: ['cleanup'], target: ['dev', 'stop'], args: ['--all'] },
 	{ name: ['sandbox', 'up'], target: ['sandbox'] },
 	{ name: ['sandbox:deploy'], target: ['sandbox', 'deploy'] },
+	{ name: ['sandbox:preview'], target: ['sandbox', 'preview'] },
 	{ name: ['sandbox:destroy'], target: ['sandbox', 'destroy'] },
 	{ name: ['sandbox:console'], target: ['sandbox', 'console'] },
 	{ name: ['console'], target: ['sandbox', 'console'] },
@@ -530,6 +550,7 @@ export const ALIASES: readonly AliasSpec[] = [
 /** Hidden flag aliases, for the flags of the scripts that the npm scripts ran before the CLI. */
 export const FLAG_ALIASES: readonly FlagAliasSpec[] = [
 	{ command: ['sandbox'], flag: 'deploy-only', target: ['sandbox', 'deploy'] },
+	{ command: ['sandbox'], flag: 'preview', target: ['sandbox', 'preview'] },
 ];
 
 /** The canonical command for a path, if any. */

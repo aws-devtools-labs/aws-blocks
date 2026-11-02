@@ -59,6 +59,8 @@ export interface SandboxOptions {
   invocation?: string;
   /** How the user destroys the sandbox, in the guidance (for example `blocks sandbox destroy`). Default: `npm run sandbox:destroy`. */
   destroyInvocation?: string;
+  /** How the user deploys a hosted preview, in the guidance (for example `blocks sandbox preview`). Default: `npm run sandbox:preview`. */
+  previewInvocation?: string;
   /**
    * Called with the deployed sandbox stack's outputs after the first deploy, in
    * both modes: in watch mode before `cdk watch` starts, since `startSandbox`
@@ -114,10 +116,15 @@ export function findHostingUrl(stackOutputs: Record<string, string>): string | u
  *
  * @param outputsFile the previous deploy's `outputs.json`.
  * @param preview whether this deploy is a preview.
+ * @param previewInvocation the command that deploys a preview, named in the warning.
  * @returns the warning, or `undefined` for a preview deploy, a stack with no
  *   hosting, or no (or an unreadable) outputs file.
  */
-export function previewRemovalWarning(outputsFile: string, preview: boolean): string | undefined {
+export function previewRemovalWarning(
+  outputsFile: string,
+  preview: boolean,
+  previewInvocation = "npm run sandbox:preview",
+): string | undefined {
   if (preview || !existsSync(outputsFile)) return undefined;
   let groups: Record<string, string>[];
   try {
@@ -129,7 +136,7 @@ export function previewRemovalWarning(outputsFile: string, preview: boolean): st
   if (!hostingUrl) return undefined;
   return (
     `⚠️  This stack has a hosted preview at ${hostingUrl}. A plain sandbox deploy is backend-only and removes it.\n` +
-    "   Run npm run sandbox:preview to keep it (re-adding it later gives a new URL)."
+    `   Run ${previewInvocation} to keep it (re-adding it later gives a new URL).`
   );
 }
 
@@ -331,6 +338,7 @@ export async function startSandbox(options: SandboxOptions) {
     preview = false,
     invocation = "npm run sandbox",
     destroyInvocation = "npm run sandbox:destroy",
+    previewInvocation = "npm run sandbox:preview",
     onDeployed,
   } = options;
   const deployOnly = sandboxIsDeployOnly(options);
@@ -409,7 +417,7 @@ export async function startSandbox(options: SandboxOptions) {
   const previousOutputs = join(process.cwd(), outDir, "outputs.json");
   const hotswap = preview && existsSync(previousOutputs);
 
-  const removalWarning = previewRemovalWarning(previousOutputs, preview);
+  const removalWarning = previewRemovalWarning(previousOutputs, preview, previewInvocation);
   if (removalWarning) console.warn(removalWarning);
 
   log.progress("🚀 Deploying to AWS...");
@@ -509,8 +517,7 @@ export async function startSandbox(options: SandboxOptions) {
   console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
 
   // Before watch mode starts, which never returns: a launcher records the deploy here.
-  const hostingKey = Object.keys(stackOutputs).find((key) => key.includes('HostingUrl'));
-  await onDeployed?.({ stack, apiUrl, hostingUrl: hostingKey ? stackOutputs[hostingKey] : undefined });
+  await onDeployed?.({ stack, apiUrl, hostingUrl });
 
   if (deployOnly) {
     return apiUrl;

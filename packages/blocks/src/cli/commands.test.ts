@@ -410,10 +410,12 @@ describe('lifecycle commands', () => {
 			{
 				backendPath: join(root, 'aws-blocks', 'index.cdk.ts'),
 				deployOnly: false,
+				preview: false,
 				devCommand: undefined,
 				clientPort: 3005,
 				invocation: 'npx --no -- blocks sandbox',
 				destroyInvocation: 'npx --no -- blocks sandbox destroy',
+				previewInvocation: 'npx --no -- blocks sandbox preview',
 			},
 		);
 		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
@@ -492,6 +494,15 @@ describe('lifecycle commands', () => {
 				['sandbox', 'deploy'],
 				'sandbox',
 				{ invocation: `npx --no -- blocks sandbox deploy ${suffix}`, destroyInvocation: `npx --no -- blocks sandbox destroy ${suffix}` },
+			],
+			[
+				['sandbox', 'preview'],
+				'sandbox',
+				{
+					invocation: `npx --no -- blocks sandbox preview ${suffix}`,
+					destroyInvocation: `npx --no -- blocks sandbox destroy ${suffix}`,
+					previewInvocation: `npx --no -- blocks sandbox preview ${suffix}`,
+				},
 			],
 		] as const) {
 			const run = await runCli([...globals, ...argv], { cwd: shell });
@@ -762,6 +773,29 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(run.spawned[0].longRunning, false);
 	});
 
+	it('runs "sandbox preview", and the old "sandbox --preview" script flag, as one deploy with a hosted preview', async () => {
+		const root = fixtureApp();
+		for (const argv of [
+			['sandbox', 'preview'],
+			['sandbox', '--preview'],
+		]) {
+			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
+			// The fake runner records no deploy result, so the deploy-only path exits 1 after it ran.
+			const options = runnerOptions(run.spawned[0], 'sandbox') as { deployOnly: boolean; preview: boolean; invocation: string };
+			assert.deepStrictEqual(
+				{ deployOnly: options.deployOnly, preview: options.preview, invocation: options.invocation },
+				{ deployOnly: true, preview: true, invocation: 'npx --no -- blocks sandbox preview' },
+				argv.join(' '),
+			);
+			assert.strictEqual(run.spawned[0].longRunning, false, argv.join(' '));
+		}
+		// A deploy-only run is no preview.
+		const deploy = await runCli(['sandbox', 'deploy'], { cwd: root, env: AWS_ENV });
+		const deployOptions = runnerOptions(deploy.spawned[0], 'sandbox');
+		assert.ok(deployOptions && typeof deployOptions === 'object' && 'preview' in deployOptions);
+		assert.strictEqual(deployOptions.preview, false);
+	});
+
 	it('exports a configured dev host as BLOCKS_DEV_HOST, which opts /realtime into it', async () => {
 		const root = fixtureApp({ blocks: { dev: { host: 'mybox.example.com' } } });
 		const run = await runCli(['dev', '--no-frontend'], { cwd: root });
@@ -917,6 +951,7 @@ describe('lifecycle commands', () => {
 			[['dev'], true],
 			[['sandbox'], true],
 			[['sandbox', 'deploy'], false],
+			[['sandbox', 'preview'], false],
 			[['sandbox', 'destroy'], false],
 			[['deploy'], false],
 			[['destroy', '--yes'], false],
@@ -1706,6 +1741,7 @@ describe('JSON output', () => {
 		for (const [argv, operation] of [
 			[['deploy', '--query', 'apiUrl'], 'blocks deploy'],
 			[['sandbox', 'deploy', '--output', 'json'], 'blocks sandbox deploy'],
+			[['sandbox', 'preview', '--output', 'json'], 'blocks sandbox preview'],
 		] as const) {
 			// The other stage's entry is there; this stage's runner exited 0 and recorded nothing.
 			const run = await runCli([...argv], {

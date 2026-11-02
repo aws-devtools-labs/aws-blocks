@@ -349,6 +349,12 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
     assert.match(warning ?? '', /npm run sandbox:preview/);
   });
 
+  it('names the command that deploys a preview, when the launcher passes it', () => {
+    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- blocks sandbox preview');
+    assert.match(warning ?? '', /Run npx --no -- blocks sandbox preview to keep it/);
+    assert.doesNotMatch(warning ?? '', /npm run/);
+  });
+
   it('is silent for a preview deploy, a backend-only stack, and no or an unreadable outputs file', () => {
     assert.strictEqual(previewRemovalWarning(outputsWith(withPreview), true), undefined);
     assert.strictEqual(

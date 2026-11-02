@@ -35,7 +35,7 @@ describe('root help', () => {
 		const runnable = COMMANDS.filter((command) => command.handler).map((command) => command.path.join(' '));
 		assert.deepStrictEqual(listed.sort(), [...runnable].sort());
 		for (const alias of ALIASES) assert.ok(!listed.includes(alias.name.join(' ')), alias.name.join(' '));
-		assert.doesNotMatch(help, /dev:stop|sandbox:deploy|sandbox:destroy|sandbox:console|generate-client|cleanup/);
+		assert.doesNotMatch(help, /dev:stop|sandbox:deploy|sandbox:preview|sandbox:destroy|sandbox:console|generate-client|cleanup/);
 	});
 
 	it('shows the version, global options and the exit codes', () => {

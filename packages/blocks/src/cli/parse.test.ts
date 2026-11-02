@@ -127,6 +127,14 @@ describe('parseArgv', () => {
 		usageError(['sandbox', 'destroy', '--deploy-only'], /unknown option "--deploy-only"/);
 	});
 
+	it('resolves "sandbox --preview" to "sandbox preview"', () => {
+		const parsed = parseArgv(['sandbox', '--preview', '--query', 'url']);
+		assert.deepStrictEqual(parsed.command?.path, ['sandbox', 'preview']);
+		assert.strictEqual(parsed.alias, 'sandbox --preview');
+		assert.deepStrictEqual(parseArgv(['sandbox:preview']).command?.path, ['sandbox', 'preview']);
+		usageError(['sandbox', 'deploy', '--preview'], /unknown option "--preview"/);
+	});
+
 	it('reads --telemetry-file as a global option, before or after the command', () => {
 		assert.strictEqual(parseArgv(['dev', '--telemetry-file=a.json']).globals.telemetryFile, 'a.json');
 		assert.strictEqual(parseArgv(['dev', '--telemetry-file', 'a.json']).globals.telemetryFile, 'a.json');
