@@ -495,6 +495,22 @@ describe('blocks migrate', () => {
 		assert.ok(!existsSync(join(root, 'aws-blocks', 'scripts')), 'the emptied scripts directory is removed');
 	});
 
+	it('migrates a create-blocks-app 0.4.0 app, whose sandbox:preview becomes blocks sandbox preview', async () => {
+		const root = writeApp('default@d79a0bda');
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const result = JSON.parse(run.stdout);
+		assert.deepStrictEqual(result.kept, []);
+		assert.deepStrictEqual(result.scriptsRewritten['sandbox:preview'], {
+			from: 'tsx aws-blocks/scripts/sandbox.ts --preview',
+			to: 'blocks sandbox preview',
+		});
+		const { scripts } = readPkg(root);
+		assert.strictEqual(scripts['sandbox:preview'], 'blocks sandbox preview');
+		assert.strictEqual(scripts['sandbox:deploy'], 'blocks sandbox deploy');
+		assert.ok(!existsSync(join(root, 'aws-blocks', 'scripts')), 'the preview-aware sandbox.ts is generated, so it goes');
+	});
+
 	it('keeps a frontendCommand that differs from what blocks dev detects', async () => {
 		// Without the vite dependency, blocks dev would detect no frontend: the command must be written.
 		const root = writeApp('default@0ab6b047', (app) => {

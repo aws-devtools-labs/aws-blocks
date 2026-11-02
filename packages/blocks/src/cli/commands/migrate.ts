@@ -80,6 +80,8 @@ export const GENERATED_WRAPPERS: Readonly<Record<WrapperFile, readonly string[]>
 		'7bd6e8de71492519ab097519184958fa757814584992319bf03acd283e4324ab',
 		'20a5edd57df5b084efb3e94356b2ff2f03d6a02651509e09c85a9eadb448bc3d',
 		'26152ff314923cca4a2017db560b3595d3f95ccb8735a5503ef1588fa3bcb5c6',
+		'7000753eaf3891c3b6d2837b3be808634050985ed37f30d25ba6db0d331ec992',
+		'1dfcd1b6084d5c13cf8506284cd625f9bd44ba521b4100b1dc6eced3c2585fb7',
 	],
 	'sandbox-destroy.ts': ['b4951480ea7b8c83ec9ef77cfda8c0baa9c2ef3aedfa44875231b714ab781451'],
 	'console.ts': ['a654b02820cd0385a4db22050085ab3e17311fee2088231ea7a7807f55773e29'],
@@ -129,6 +131,7 @@ export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: 
 	'tsx aws-blocks/scripts/stop.ts': { alias: 'blocks dev stop', wrapper: 'stop.ts' },
 	'tsx aws-blocks/scripts/sandbox.ts': { alias: 'blocks sandbox', wrapper: 'sandbox.ts' },
 	'tsx aws-blocks/scripts/sandbox.ts --deploy-only': { alias: 'blocks sandbox deploy', wrapper: 'sandbox.ts' },
+	'tsx aws-blocks/scripts/sandbox.ts --preview': { alias: 'blocks sandbox preview', wrapper: 'sandbox.ts' },
 	'tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts': {
 		alias: 'blocks sandbox destroy',
 		wrapper: 'sandbox-destroy.ts',

@@ -9,6 +9,8 @@ feat(blocks): add `blocks migrate`
 
 Run `npx --no -- blocks migrate --dry-run` first to see the plan. Unless you pass `--force`, it refuses a git working tree with uncommitted changes, an app that git does not track (so git could not undo the changes), and a repository that git fails to read, such as one with "dubious ownership", quoting git's error. `--output json` prints `{changed, removed, kept, scriptsRewritten, devConfig}`, where `devConfig` is the `blocks.dev` config that migrate adds to `package.json` (or, with `--dry-run`, would add), or `null`. It exits 0 when the app is fully migrated and 1 when kept items remain for you to finish by hand; exit 1 is a report, not a crash, and running it again is safe.
 
+It recognises the wrappers of every public create-blocks-app release up to 0.4.0, including the `sandbox.ts` that runs `npm run sandbox:preview`, whose `"sandbox:preview": "tsx aws-blocks/scripts/sandbox.ts --preview"` becomes `"sandbox:preview": "blocks sandbox preview"`.
+
 Fixes from CLI testing:
 
 - Two `blocks migrate` runs at the same time no longer crash with `ENOENT` when one deletes a wrapper that the other is reading or planned to delete.
