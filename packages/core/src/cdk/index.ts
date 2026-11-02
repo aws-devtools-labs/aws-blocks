@@ -15,6 +15,7 @@ import {
 } from '../common/index.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import {
+	assertBlocksDefaults,
 	assertCdkConditionActive,
 	BlocksBackend,
 	buildSharedGateway,
@@ -240,6 +241,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksStack');
 
 		// Detect ambient pipeline stage scope set by Pipeline appFile imports
 		const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
