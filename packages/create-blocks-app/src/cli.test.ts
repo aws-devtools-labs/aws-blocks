@@ -127,6 +127,21 @@ describe('create-blocks-app CLI argument parsing', () => {
     }
   });
 
+  it('--template amplify in an existing non-Amplify project exits 1 before writing anything', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-amplify-existing-'));
+    try {
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'existing-app' }));
+      const result = run([tmpDir, '--template', 'amplify', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 1);
+      assert.match(result.stderr, /amplify.*auto-selected/i);
+      assert.doesNotMatch(result.stderr, /ENOENT/);
+      assert.strictEqual(existsSync(join(tmpDir, 'aws-blocks')), false);
+      assert.strictEqual(existsSync(join(tmpDir, '.blocks')), false);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('multiple positional args exits 1 with error message', () => {
     const result = run(['my-app', 'extra-arg']);
     assert.strictEqual(result.exitCode, 1);
