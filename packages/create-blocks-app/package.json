@@ -32,7 +32,13 @@
     "ci-info": "^4.4.0"
   },
   "devDependencies": {
+    "@aws-blocks/blocks": "^0.8.0",
     "@types/node": "^20.19.43",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "happy-dom": "^21.0.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "typescript": "^5.9.3"
   },
   "files": [
