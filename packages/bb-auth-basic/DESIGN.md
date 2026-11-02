@@ -71,7 +71,7 @@ The `setAuthState` method never throws. If any action fails, the error is caught
 
 1. The current session cookie is checked to determine whether the user is signed in or out.
 2. The appropriate base state (`signedIn` or `signedOut`) is constructed.
-3. The error message is merged: `{ ...baseState, error: e.message }`.
+3. The error message is merged: `{ ...baseState, error: e.message }` (plus `errorName` for a named `ApiError`) — but only when `e` is an `ApiError` or a branded Building Block error. Any other error (an AWS SDK, KVStore, AppSetting or `codeDelivery` failure, whose text can name accounts and ARNs) is logged server-side and merged as `{ ...baseState, error: 'Internal error' }`, matching the RPC serializer's rule for unbranded errors.
 
 This allows the Authenticator UI component to display errors without losing track of the current state machine position. Unknown actions return `{ ...signedOutState, error: "Unknown action: ..." }` without throwing.
 

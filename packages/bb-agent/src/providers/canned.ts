@@ -15,9 +15,10 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { basename, resolve } from 'node:path';
 import { Model } from '@strands-agents/sdk';
 import type { Message, ModelStreamEvent, StreamOptions } from '@strands-agents/sdk';
+import { AgentErrors, blocksAgentError } from '../errors.js';
 import { ToolResultBlock } from '@strands-agents/sdk';
 import type { CannedToolHints } from '../types.js';
 
@@ -61,19 +62,42 @@ function matchResponse(prompt: string, customResponses?: Record<string, string>,
 	return { response: DEFAULT_RESPONSE, verbatim: false };
 }
 
-/** Validate the parsed dictionary before using it to select a response. */
+/** Keep `cause` server-side: non-enumerable, so `JSON.stringify` cannot carry it to a client. */
+function withCause(err: Error, cause: unknown): Error {
+	Object.defineProperty(err, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	return err;
+}
+
+/**
+ * Validate the parsed dictionary before using it to select a response. Failures are branded
+ * `InvalidModelConfig` errors, so a failed turn reports them on the `error` chunk instead of a
+ * generic message. Because that message reaches the client, it never quotes the dictionary's
+ * contents: the offending phrase rides on the non-enumerable `cause` (logged by the agent).
+ */
 function validateResponses(value: unknown, source: string): Record<string, string> {
 	if (!value || Array.isArray(value) || typeof value !== 'object') {
-		throw new Error(`${source} must be an object mapping phrases to response strings.`);
+		throw blocksAgentError(AgentErrors.InvalidModelConfig, `${source} must be an object mapping phrases to response strings.`);
 	}
 	for (const [phrase, response] of Object.entries(value)) {
-		if (!phrase.trim()) throw new Error(`${source} contains a blank response phrase.`);
-		if (typeof response !== 'string') throw new Error(`${source} response for phrase '${phrase}' must be a string.`);
+		if (!phrase.trim()) throw blocksAgentError(AgentErrors.InvalidModelConfig, `${source} contains a blank response phrase.`);
+		if (typeof response !== 'string') {
+			throw withCause(
+				blocksAgentError(AgentErrors.InvalidModelConfig, `${source} has a non-string response; every response must be a string.`),
+				new Error(`Offending phrase: '${phrase}'`),
+			);
+		}
 	}
 	return value as Record<string, string>;
 }
 
-/** Read and parse one snapshot of a configured response file for a text selection. */
+/**
+ * Read and parse one snapshot of a configured response file for a text selection.
+ *
+ * Client-visible messages name the file by basename only — never the absolute server path —
+ * and never echo its contents (a V8 `SyntaxError` message quotes the malformed text, so it is
+ * kept on the non-enumerable `cause`). A read failure stays unbranded: its OS error text is
+ * reported to the client as a generic message and logged by the agent.
+ */
 async function readResponsesFile(filePath: string): Promise<Record<string, string>> {
 	let contents: string;
 	try {
@@ -82,11 +106,12 @@ async function readResponsesFile(filePath: string): Promise<Record<string, strin
 		const detail = error instanceof Error ? error.message : String(error);
 		throw new Error(`Unable to read canned responses file '${filePath}': ${detail}`);
 	}
+	const name = basename(filePath);
 	try {
-		return validateResponses(JSON.parse(contents), `Canned responses file '${filePath}'`);
+		return validateResponses(JSON.parse(contents), `Canned responses file '${name}'`);
 	} catch (error) {
 		if (error instanceof SyntaxError) {
-			throw new Error(`Malformed canned responses JSON in '${filePath}': ${error.message}`);
+			throw withCause(blocksAgentError(AgentErrors.InvalidModelConfig, `Malformed canned responses JSON in '${name}'.`), error);
 		}
 		throw error;
 	}

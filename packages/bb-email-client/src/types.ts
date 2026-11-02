@@ -75,7 +75,11 @@ export interface SendBatchResult {
 		status: 'success' | 'failed';
 		/** The SES message ID, present when status is 'success'. */
 		messageId?: string;
-		/** Error description, present when status is 'failed'. */
+		/**
+		 * Error description, present when status is 'failed'. A stable message naming the
+		 * `EmailErrors` code or SES entry status — never the raw SES error text, which is
+		 * logged server-side.
+		 */
 		error?: string;
 	}>;
 }

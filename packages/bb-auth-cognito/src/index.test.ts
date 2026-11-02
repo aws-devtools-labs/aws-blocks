@@ -4,9 +4,11 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
+import { inspect } from 'node:util';
 import { isBlocksError, hasAuthError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import type { AuthStateApi, AuthField } from '@aws-blocks/auth-common';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthCognito, AuthCognitoErrors } from './index.js';
 
 // `createApi()` returns a context-bound `ApiNamespace` callable; narrow it to
@@ -790,6 +792,51 @@ describe('createApi state-machine namespace', () => {
 		});
 		const api = auth.createApi() as any;
 		assert.strictEqual(typeof api, 'function');
+	});
+
+	test('setAuthState returns a generic message for an unbranded error and logs the original', async () => {
+		const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: ses:SendEmail';
+		const logged: unknown[] = [];
+		const logger: ChildLogger = {
+			debug() {},
+			info() {},
+			warn() {},
+			error(message, context) {
+				// inspect() renders an Error's message, as the real logger does; JSON.stringify drops it.
+				logged.push(inspect({ message, context }));
+			},
+			child: () => logger,
+		};
+		const auth = new AuthCognito(ROOT, unique('sm-raw'), {
+			passwordPolicy: { minLength: 8 },
+			selfSignUp: true,
+			logger,
+			codeDelivery: async () => {
+				throw new Error(RAW_DETAIL);
+			},
+		});
+		const { ctx } = freshContext();
+		const api = apiFor(auth, ctx);
+
+		const next = await api.setAuthState({ action: 'signUp', username: uniqueId(), password: 'Password!1' });
+
+		assert.strictEqual(next.state, 'signedOut');
+		assert.strictEqual(next.error, 'Internal error');
+		assert.strictEqual(next.errorName, undefined);
+		assert.ok(!JSON.stringify(next).includes('123456789012'), 'no account id in the returned AuthState');
+		assert.ok(JSON.stringify(logged).includes(RAW_DETAIL), 'the original error is logged server-side');
+	});
+
+	test('setAuthState keeps an ApiError message and name unchanged', async () => {
+		const auth = new AuthCognito(ROOT, unique('sm-api'), { passwordPolicy: { minLength: 8 }, selfSignUp: true });
+		const { ctx } = freshContext();
+		const api = apiFor(auth, ctx);
+
+		const next = await api.setAuthState({ action: 'signUp', username: uniqueId(), password: 'short' });
+
+		assert.strictEqual(next.state, 'signedOut');
+		assert.strictEqual(next.errorName, AuthCognitoErrors.InvalidPassword);
+		assert.ok(next.error && next.error !== 'Internal error', `expected the BB-authored message, got ${next.error}`);
 	});
 });
 

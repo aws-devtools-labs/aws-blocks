@@ -17,6 +17,7 @@ import {
 	ApiNamespace,
 	DEFAULT_API_ERROR_NAME,
 	Scope,
+	isWireSafeError,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
 import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
@@ -1890,7 +1891,11 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 							return { ...baseSignedOut(), error: `Unknown action: ${(input as any).action}` };
 					}
 				} catch (e: unknown) {
-					const message = e instanceof Error ? e.message : 'An error occurred';
+					// Match the AWS runtime: only an ApiError's or a branded BB error's message is
+					// client-safe; anything else is logged and reported generically.
+					const clientSafe = isWireSafeError(e);
+					if (!clientSafe) this.log.error('AuthCognito setAuthState failed', { action: input.action, error: e });
+					const message = clientSafe ? e.message : 'Internal error';
 					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
 					// Match the AWS runtime: retriable failures (wrong MFA
 					// code, rejected shape) emit a thin signedOut shape with

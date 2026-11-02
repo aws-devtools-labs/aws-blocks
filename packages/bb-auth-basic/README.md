@@ -184,6 +184,8 @@ if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
+`AuthState.error` carries the message of an `ApiError` or a branded Building Block error unchanged (e.g. `Invalid username or password`). Any other failure — an AWS SDK error, a storage error, or a plain `Error` thrown by your `codeDelivery` callback — is logged server-side and returned as `error: 'Internal error'` with no `errorName`, so backend detail such as account ids and ARNs never reaches the client. To show your own message from `codeDelivery`, throw an `ApiError`.
+
 ## UI Components
 
 This package does not include UI components. Use the provider-agnostic Authenticator from `@aws-blocks/auth-common/ui`:

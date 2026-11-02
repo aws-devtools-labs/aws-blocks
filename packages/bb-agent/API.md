@@ -73,7 +73,6 @@ export interface AgentResult {
 
 // @public (undocumented)
 export interface AgentStreamChunk {
-    // (undocumented)
     error?: string;
     errorName?: string;
     // (undocumented)

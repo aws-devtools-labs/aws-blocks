@@ -202,7 +202,7 @@ export class AuthOIDC<
 
 		this.logResolvedProviders(options.providers);
 
-		mountAuthRoutes(this);
+		mountAuthRoutes(this, this.log);
 	}
 
 	private logResolvedProviders(providers: readonly ProviderConfig[]): void {

@@ -6,7 +6,8 @@
  * points mount identical route handlers.
  */
 
-import { RawRoute, type BlocksContext, ApiError } from '@aws-blocks/core';
+import { RawRoute, type BlocksContext, ApiError, isWireSafeError } from '@aws-blocks/core';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { AuthOIDC } from './auth-oidc.js';
 import type { ProviderConfig, StubProvider } from './types.js';
 import type { AuthorizeParamsRequest } from './engine.js';
@@ -62,8 +63,37 @@ function validateAuthorizeParamsBody(raw: unknown): BodyResult {
 	return { ok: true, body: out };
 }
 
-/** Mount the core auth routes on the given `AuthOIDC` instance. */
-export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void {
+/**
+ * Answer a route handler's caught error without leaking raw backend text.
+ *
+ * These routes catch their own errors, so core's RawRoute sanitizer never sees
+ * them; this applies the same rule. An `ApiError` keeps its status, and an
+ * `ApiError` or branded Building Block error (an expected auth failure such as
+ * `InvalidStateException`, status 400) keeps its `name` and `message`. Anything
+ * else — an `onSignIn` hook's driver error, an SSM/SDK failure — is logged and
+ * answered with a nameless generic 500, so its message and class name never
+ * reach the caller.
+ *
+ * A branded error that carries a `cause` (an IdP failure, a Cognito token-endpoint
+ * response body) keeps that raw detail off the wire, so it is logged here instead.
+ * The cause is passed as its own field: the logger drops non-enumerable properties,
+ * so logging the error alone would lose it.
+ */
+function sendRouteError(ctx: BlocksContext, err: unknown, log: ChildLogger, route: string): void {
+	ctx.response.headers.set('Content-Type', 'application/json');
+	if (isWireSafeError(err)) {
+		if (err.cause !== undefined) log.error('AuthOIDC route rejected request', { route, error: err, cause: err.cause });
+		ctx.response.status = err instanceof ApiError ? err.status : 400;
+		ctx.response.send({ error: err.message, name: err.name });
+		return;
+	}
+	log.error('AuthOIDC route failed', { route, error: err });
+	ctx.response.status = 500;
+	ctx.response.send({ error: 'Internal error' });
+}
+
+/** Mount the core auth routes on the given `AuthOIDC` instance; `log` receives unexpected route errors. */
+export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>, log: ChildLogger): void {
 	new RawRoute(auth, 'oidc-callback', {
 		method: 'GET',
 		path: auth.callbackPath,
@@ -109,23 +139,17 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 						break;
 					}
 				}
-			} catch (err: any) {
-				// Dispatch itself threw (unexpected) — surface as 400.
-				const status = err instanceof ApiError ? err.status : 400;
-				ctx.response.status = status;
-				ctx.response.headers.set('Content-Type', 'application/json');
-				ctx.response.send({ error: err.message, name: err.name });
+			} catch (err) {
+				// Dispatch itself threw (unexpected).
+				sendRouteError(ctx, err, log, 'callback');
 				return;
 			}
 
 			// Server-initiated flow: exchange code, set session cookie, 302 to postSignInPath.
 			try {
 				await auth.handleCallback(ctx);
-			} catch (err: any) {
-				const status = err instanceof ApiError ? err.status : 400;
-				ctx.response.status = status;
-				ctx.response.headers.set('Content-Type', 'application/json');
-				ctx.response.send({ error: err.message, name: err.name });
+			} catch (err) {
+				sendRouteError(ctx, err, log, 'callback');
 				return;
 			}
 			ctx.response.status = 302;
@@ -155,11 +179,8 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 					ctx.response.status = 302;
 					ctx.response.headers.set('Location', url);
 					ctx.response.send('');
-				} catch (err: any) {
-					const status = err instanceof ApiError ? err.status : 400;
-					ctx.response.status = status;
-					ctx.response.headers.set('Content-Type', 'application/json');
-					ctx.response.send({ error: err.message, name: err.name });
+				} catch (err) {
+					sendRouteError(ctx, err, log, 'signin');
 				}
 			},
 		});
@@ -172,7 +193,8 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 		path: `${basePath}/exchange`,
 		handler: async (ctx: BlocksContext) => {
 			try {
-				const body = await ctx.request.json() as {
+				// A malformed body reads as `null` and is answered by the missing-fields 400 below.
+				const body = await ctx.request.json().catch(() => null) as {
 					code?: string;
 					verifier?: string;
 					state?: string;
@@ -198,11 +220,8 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 				ctx.response.status = 200;
 				ctx.response.headers.set('Content-Type', 'application/json');
 				ctx.response.send(result);
-			} catch (err: any) {
-				const status = err instanceof ApiError ? err.status : 400;
-				ctx.response.status = status;
-				ctx.response.headers.set('Content-Type', 'application/json');
-				ctx.response.send({ error: err.message, name: err.name });
+			} catch (err) {
+				sendRouteError(ctx, err, log, 'exchange');
 			}
 		},
 	});
@@ -220,11 +239,8 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 					ctx.response.status = 200;
 					ctx.response.headers.set('Content-Type', 'application/json');
 					ctx.response.send(params);
-				} catch (err: any) {
-					const status = err instanceof ApiError ? err.status : 400;
-					ctx.response.status = status;
-					ctx.response.headers.set('Content-Type', 'application/json');
-					ctx.response.send({ error: err.message, name: err.name });
+				} catch (err) {
+					sendRouteError(ctx, err, log, 'authorize-params');
 				}
 			},
 		});
@@ -250,7 +266,7 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 					ctx.response.status = 200;
 					ctx.response.headers.set('Content-Type', 'application/json');
 					ctx.response.send(params);
-				} catch (err: any) {
+				} catch (err) {
 					if (err instanceof InvalidRelayError) {
 						// Surface the structured rejection so customers
 						// debugging integration get an actionable error.
@@ -263,10 +279,7 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 						});
 						return;
 					}
-					const status = err instanceof ApiError ? err.status : 400;
-					ctx.response.status = status;
-					ctx.response.headers.set('Content-Type', 'application/json');
-					ctx.response.send({ error: err.message, name: err.name });
+					sendRouteError(ctx, err, log, 'authorize-params');
 				}
 			},
 		});
@@ -282,7 +295,8 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 			path: `${basePath}/refresh`,
 			handler: async (ctx: BlocksContext) => {
 				try {
-					const body = await ctx.request.json() as {
+					// A malformed body reads as `null` and is answered by the missing-fields 400 below.
+					const body = await ctx.request.json().catch(() => null) as {
 						refreshToken?: string;
 						provider?: string;
 					};
@@ -305,11 +319,8 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>): void
 					ctx.response.status = 200;
 					ctx.response.headers.set('Content-Type', 'application/json');
 					ctx.response.send(result);
-				} catch (err: any) {
-					const status = err instanceof ApiError ? err.status : 400;
-					ctx.response.status = status;
-					ctx.response.headers.set('Content-Type', 'application/json');
-					ctx.response.send({ error: err.message, name: err.name });
+				} catch (err) {
+					sendRouteError(ctx, err, log, 'refresh');
 				}
 			},
 		});

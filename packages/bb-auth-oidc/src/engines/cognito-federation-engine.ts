@@ -38,6 +38,7 @@ import type {
 	ExchangeInput,
 	ExchangeResult,
 } from '../engine.js';
+import { withCause } from './oidc-client-engine.js';
 import {
 	PENDING_AUTH_TTL_SECONDS,
 	type PendingAuthPayload,
@@ -452,8 +453,9 @@ export class CognitoFederationEngine implements AuthEngine {
 
 		const resp = await fetch(`${baseUrl}/oauth2/token`, { method: 'POST', headers, body });
 		if (!resp.ok) {
+			// The body stays on the non-enumerable cause: a branded message crosses the wire.
 			const text = await resp.text().catch(() => '');
-			throw engineError(`Cognito token exchange failed: ${resp.status} ${text}`);
+			throw withCause(engineError(`Cognito token exchange failed (HTTP ${resp.status})`), new Error(text));
 		}
 		const json = await resp.json() as Record<string, unknown>;
 		return {
@@ -496,8 +498,9 @@ export class CognitoFederationEngine implements AuthEngine {
 
 		const resp = await fetch(`${baseUrl}/oauth2/token`, { method: 'POST', headers, body });
 		if (!resp.ok) {
+			// The body stays on the non-enumerable cause: a branded message crosses the wire.
 			const text = await resp.text().catch(() => '');
-			throw engineError(`Cognito token exchange failed: ${resp.status} ${text}`);
+			throw withCause(engineError(`Cognito token exchange failed (HTTP ${resp.status})`), new Error(text));
 		}
 		const json = await resp.json() as Record<string, unknown>;
 		return {
