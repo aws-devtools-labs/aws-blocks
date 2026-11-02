@@ -112,7 +112,7 @@ export function attach(httpServer: Server) {
 				}
 				if (msg.action === 'subscribe') {
 					// Local dev skips connect-time auth, so the channel token is the only gate — require it.
-					if (!msg.token) {
+					if (typeof msg.token !== 'string' || !msg.token) {
 						ws.send(JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }));
 						return;
 					}

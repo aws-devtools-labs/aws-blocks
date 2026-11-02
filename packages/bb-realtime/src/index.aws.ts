@@ -101,7 +101,7 @@ interface WebSocketEvent {
 interface WebSocketMessage {
 	action: 'subscribe' | 'unsubscribe' | 'ping';
 	channel?: unknown;
-	token?: string;
+	token?: unknown;
 }
 
 /** Lambda response shape for WebSocket events. */
@@ -112,7 +112,6 @@ interface WebSocketResponse {
 function isWebSocketMessage(value: unknown): value is WebSocketMessage {
 	if (typeof value !== 'object' || value === null) return false;
 	const v = value as Record<string, unknown>;
-	if (v.token !== undefined && typeof v.token !== 'string') return false;
 	return v.action === 'subscribe' || v.action === 'unsubscribe' || v.action === 'ping';
 }
 
@@ -226,7 +225,15 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 		return { statusCode: 200 };
 	}
 
-	if (msg.action === 'subscribe' && isClientChannelPath(msg.channel) && msg.token) {
+	if (msg.action === 'subscribe' && isClientChannelPath(msg.channel)) {
+		if (typeof msg.token !== 'string' || !msg.token) {
+			// Same reply as the local WebSocket server (ws-server.ts).
+			await getApigw(callbackUrl).send(new PostToConnectionCommand({
+				ConnectionId: connectionId,
+				Data: JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }),
+			}));
+			return { statusCode: 200 };
+		}
 		const secret = await getTokenSecret();
 		const valid = validateChannelToken(msg.token, secret, msg.channel);
 		if (!valid) {

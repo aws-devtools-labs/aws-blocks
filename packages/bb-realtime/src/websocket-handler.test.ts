@@ -157,13 +157,15 @@ describe('WebSocket handler: subscribe', () => {
 		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
 	});
 
-	it('ignores a message whose token is not a string', async () => {
-		const { connectionId, descriptor } = await connected();
-		const res = await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: { a: 1 } }));
-		assert.strictEqual(res.statusCode, 200);
-		assert.deepStrictEqual(repliesTo(connectionId), []);
-		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
-	});
+	for (const [label, token] of [['a missing token', undefined], ['an empty token', ''], ['a token that is not a string', { a: 1 }]] as const) {
+		it(`answers a subscribe with ${label} with Unauthorized, as the local server does`, async () => {
+			const { connectionId, descriptor } = await connected();
+			const res = await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token }));
+			assert.strictEqual(res.statusCode, 200);
+			assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'error', channel: descriptor.channel, message: 'Unauthorized: missing token' }]);
+			assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+		});
+	}
 });
 
 describe('WebSocket handler: unsubscribe', () => {
@@ -182,10 +184,23 @@ describe('WebSocket handler: unsubscribe', () => {
 		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
 	});
 
-	it('ignores a non-string channel', async () => {
+	it('ignores a non-string channel without touching the connections table', async () => {
 		const { connectionId } = await connected();
-		const res = await wsHandler()(messageEvent(connectionId, { action: 'unsubscribe', channel: { S: 'x' } }));
-		assert.strictEqual(res.statusCode, 200);
+		// The mock table accepts any sort key and would just delete nothing, so check
+		// that the handler never calls delete() for this connection.
+		const deletedFor: string[] = [];
+		const originalDelete = DistributedTable.prototype.delete;
+		DistributedTable.prototype.delete = function (this: InstanceType<typeof DistributedTable>, key: Record<string, unknown>, ...rest: unknown[]) {
+			if (key.connectionId === connectionId) deletedFor.push(String(key.connectionId));
+			return (originalDelete as (...args: unknown[]) => Promise<void>).call(this, key, ...rest);
+		} as typeof originalDelete;
+		try {
+			const res = await wsHandler()(messageEvent(connectionId, { action: 'unsubscribe', channel: { S: 'x' } }));
+			assert.strictEqual(res.statusCode, 200);
+		} finally {
+			DistributedTable.prototype.delete = originalDelete;
+		}
+		assert.deepStrictEqual(deletedFor, []);
 		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
 	});
 });
