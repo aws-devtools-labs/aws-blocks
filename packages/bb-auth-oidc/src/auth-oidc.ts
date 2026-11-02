@@ -7,6 +7,7 @@
  */
 
 import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX, brandBlocksError } from '@aws-blocks/core';
+import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
 import type { AuthActionInput, AuthState, AuthAction, BlocksAuth } from '@aws-blocks/auth-common';
 import type { AuthEngine, ExchangeInput, ExchangeResult, AuthorizeParams, AuthorizeParamsRequest, BearerRefreshResult } from './engine.js';
 import type {
@@ -129,8 +130,11 @@ export class AuthOIDC<
 	 * no API Gateway stage prefix, since CloudFront proxies the stage via its
 	 * origin path.
 	 *
-	 * When unset (sandbox / local dev) we fall back to the request URL, stripping
-	 * any API Gateway stage prefix (e.g. `/prod`) that sits before the route.
+	 * When unset (sandbox / local dev, or a deploy reached at the API Gateway URL
+	 * itself) we fall back to the request's base URL, which keeps any API Gateway
+	 * stage prefix (e.g. `/prod`) that sits before the route: the callback must be
+	 * reachable at the gateway. `ctx.request.url` is the route path and never has
+	 * the stage, so the base comes from `getRequestBaseUrl()`.
 	 */
 	protected computeCallbackUrl(ctx: BlocksContext): string {
 		// `BLOCKS_PUBLIC_ORIGIN` is injected at synth by core Hosting (the public
@@ -140,11 +144,7 @@ export class AuthOIDC<
 		if (publicOrigin) {
 			return `${publicOrigin}${this.callbackPath}`;
 		}
-		const { url } = ctx.request;
-		// All auth routes live under the reserved `/aws-blocks` namespace.
-		const routeStart = url.pathname.search(/\/aws-blocks\b/);
-		const stagePrefix = routeStart > 0 ? url.pathname.slice(0, routeStart) : '';
-		return `${url.protocol}//${url.host}${stagePrefix}${this.callbackPath}`;
+		return `${getRequestBaseUrl(ctx)}${this.callbackPath}`;
 	}
 
 	/**
