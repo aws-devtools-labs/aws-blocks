@@ -13,7 +13,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { EventEmitter } from 'events';
 import { setBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
-import { validateChannelToken } from './utils.js';
+import { isClientChannelPath, validateChannelToken } from './utils.js';
 import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-blocks/core/bb-utils';
 
 export const localRealtimeBus = new EventEmitter();
@@ -105,7 +105,12 @@ export function attach(httpServer: Server) {
 		ws.on('message', (data) => {
 			try {
 				const msg = JSON.parse(data.toString());
-				if (msg.action === 'subscribe' && msg.channel) {
+				// Same channel check as the deployed handler (index.aws.ts).
+				if ((msg.action === 'subscribe' || msg.action === 'unsubscribe') && !isClientChannelPath(msg.channel)) {
+					if (msg.action === 'subscribe') ws.send(JSON.stringify({ type: 'error', message: 'Invalid channel' }));
+					return;
+				}
+				if (msg.action === 'subscribe') {
 					// Local dev skips connect-time auth, so the channel token is the only gate — require it.
 					if (!msg.token) {
 						ws.send(JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }));
@@ -118,7 +123,7 @@ export function attach(httpServer: Server) {
 					}
 					subscription.channels.add(msg.channel);
 					ws.send(JSON.stringify({ type: 'subscribe_success', channel: msg.channel }));
-				} else if (msg.action === 'unsubscribe' && msg.channel) {
+				} else if (msg.action === 'unsubscribe') {
 					subscription.channels.delete(msg.channel);
 				} else if (msg.action === 'publish') {
 					// Parity with the deployed handler (index.aws.ts), which has no client
