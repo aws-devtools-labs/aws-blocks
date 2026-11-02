@@ -363,8 +363,8 @@ export class Scope extends Construct {
 	/**
 	 * Compute assigned at this node. Applies to this block and is inherited by
 	 * descendants (a nearer assignment wins). Covers both a handler assigned to a
-	 * specific compute and a scope-level default for its subtree. Internal until
-	 * the customer-facing surface exists.
+	 * specific compute (a block's own `compute` option) and a scope-level default
+	 * for its subtree ({@link ScopeOptions.compute}).
 	 * @internal
 	 */
 	_compute?: ComputeBase;
@@ -380,6 +380,10 @@ export class Scope extends Construct {
 			this.bbVersion = options.bbVersion;
 			recordBuildingBlock(this, options.bbName);
 		}
+		// A scope-level compute (`new Scope(id, { parent, compute })`). Its
+		// `resolve()` yields the concrete compute, a `ComputeBase`: the option is
+		// typed structurally only so the default entry carries no CDK types.
+		if (options?.compute) this._compute = options.compute.resolve() as ComputeBase;
 	}
 
 	/**
@@ -409,10 +413,10 @@ export class Scope extends Construct {
 	 * The compute this block runs on: the nearest `_compute` assigned on this
 	 * block or an ancestor scope, else the owning stack/backend's default compute.
 	 *
-	 * For any app that doesn't assign a compute, this always resolves to the
-	 * default — so reads are a no-op refactor. `_compute` is internal
-	 * (test/framework) until the customer-facing surface exists; there is no
-	 * public option to set it yet.
+	 * A block's own `compute` option assigns it on the block; `new Scope(id, {
+	 * compute })` assigns it on a scope, for everything under it
+	 * ({@link ScopeOptions.compute}). For an app that assigns none, this always
+	 * resolves to the default.
 	 */
 	get compute(): ComputeBase {
 		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {

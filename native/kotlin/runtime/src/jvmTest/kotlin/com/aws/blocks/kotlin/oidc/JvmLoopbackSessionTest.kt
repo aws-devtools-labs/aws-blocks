@@ -11,14 +11,21 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.URI
 import java.net.URLEncoder
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 class JvmLoopbackSessionTest {
 
@@ -455,6 +462,58 @@ class JvmLoopbackSessionTest {
             sent.await()
             connection.disconnect()
         } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `a caller that never reports an outcome gets the failure page`() = runBlocking<Unit> {
+        val session = JvmLoopbackSession(
+            BrowserOpener { },
+            1.minutes,
+            OidcSignInPlatformOptions(),
+            outcomeTimeout = 100.milliseconds,
+        )
+        try {
+            val connection = pending(session, "code=abc&state=xyz")
+            val redirect = async { session.awaitRedirect("https://idp.example.com/authorize") }
+            val sent = async(Dispatchers.IO) { connection.responseCode }
+            redirect.await()
+            // No reportOutcome, as if the caller stopped running: the session gives up waiting
+            // rather than holding the browser's connection open.
+            sent.await() shouldBe 200
+            val body = withContext(Dispatchers.IO) {
+                connection.inputStream.readBytes().decodeToString()
+            }
+            body shouldContain "Sign-in failed"
+            connection.disconnect()
+        } finally {
+            session.close()
+        }
+    }
+
+    @Test
+    fun `reporting an outcome leaves the calling thread free while it waits`() = runBlocking<Unit> {
+        val session = session()
+        val callerThread = Executors.newSingleThreadExecutor()
+        val caller = callerThread.asCoroutineDispatcher()
+        try {
+            val entered = CompletableDeferred<Unit>()
+            // No callback has arrived, so nothing will ever answer the browser and the report
+            // waits out its timeout.
+            val reporting = launch(caller) {
+                entered.complete(Unit)
+                session.reportOutcome(OidcSignInOutcome.Succeeded)
+            }
+            entered.await()
+
+            // A blocking wait would hold the one thread for the whole timeout, and work
+            // queued behind it would never run.
+            withTimeout(5.seconds) { withContext(caller) { reporting.isActive } } shouldBe true
+
+            reporting.cancelAndJoin()
+        } finally {
+            callerThread.shutdownNow()
             session.close()
         }
     }

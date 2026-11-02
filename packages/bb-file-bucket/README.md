@@ -56,6 +56,10 @@ The S3 bucket name is derived from the scope chain: the FileBucket id joined to 
 | `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
 | `cacheControl` | `string` | Cache-Control header value. |
 
+### Presigned URL options
+
+`getUrl`, `putUrl`, `getFileHandle`, and `createUploadHandle` accept `expiresIn` in seconds. It must be an integer from `1` to `604800` (seven days); the default is `3600`.
+
 ### CorsRule
 
 CORS configuration for browser-based access. Supplied via the `corsRules` option.
@@ -331,6 +335,5 @@ Object Lock can only be turned on when the bucket is first deployed, and can't b
 ## Local Development
 
 Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
-
 
 

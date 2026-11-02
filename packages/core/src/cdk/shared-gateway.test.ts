@@ -343,7 +343,10 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 
 	test('rejects a namespace on a compute that accepts no API traffic', () => {
 		const { stack, defaultCompute } = fanOut('FanOutWorker');
-		const workerCompute = new StubCompute(stack, 'WorkerCompute', makeFn(stack, 'WorkerFn'), false);
+		// Nested like the `Compute` block's backing, so the message must name the
+		// customer's `WorkerCompute`, not the internal `backing` child.
+		const workerScope = new Scope('WorkerCompute', { parent: stack as never });
+		const workerCompute = new StubCompute(workerScope, 'backing', makeFn(stack, 'WorkerFn'), false);
 		const backendModule = { jobs: namespaceOn(stack, workerCompute, 'jobs') };
 
 		assert.throws(
@@ -353,13 +356,15 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 					defaultCompute,
 					defaults: BlocksPresets.production,
 				}),
-			/Compute 'WorkerCompute' hosts API namespaces \(jobs\) but accepts no API traffic/,
+			/Compute 'FanOutWorker\/WorkerCompute\/backing' hosts API namespaces \(jobs\) but accepts no API traffic/,
 		);
 	});
 
 	test('rejects an export name API Gateway cannot use as a path segment', () => {
-		const { stack, defaultCompute, ordersCompute } = fanOut('FanOutBadName');
-		const backendModule = { café: namespaceOn(stack, ordersCompute, 'cafe') };
+		const { stack, defaultCompute } = fanOut('FanOutBadName');
+		const cafeScope = new Scope('CafeCompute', { parent: stack as never });
+		const cafeCompute = new StubCompute(cafeScope, 'backing', makeFn(stack, 'BadNameFn'));
+		const backendModule = { café: namespaceOn(stack, cafeCompute, 'cafe') };
 
 		assert.throws(
 			() =>
@@ -368,7 +373,7 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 					defaultCompute,
 					defaults: BlocksPresets.production,
 				}),
-			/API namespace export 'café' can't be routed to compute 'OrdersCompute'/,
+			/API namespace export 'café' can't be routed to compute 'FanOutBadName\/CafeCompute\/backing'/,
 		);
 	});
 });
