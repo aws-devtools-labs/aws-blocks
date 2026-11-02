@@ -112,10 +112,11 @@ function renderTodo(todo: Todo): HTMLElement {
   return row;
 }
 
-async function refreshTodos() {
+// Returns whether the list was reloaded. On failure it has already shown why.
+async function refreshTodos(): Promise<boolean> {
   const todoList = document.getElementById('todo-list');
   const errorDiv = document.getElementById('todo-error');
-  if (!todoList) return;
+  if (!todoList) return false;
   // todo-error is status-only: reset it to an empty idle region rather than
   // clear(), so the persistent `role="status"` live region stays mounted and a
   // subsequent showError() mutates it in place (reliably announced).
@@ -131,17 +132,19 @@ async function refreshTodos() {
       const p = document.createElement('p');
       p.textContent = 'No todos yet. Add one above!';
       todoList.replaceChildren(p);
-      return;
+      return true;
     }
     todoList.replaceChildren(...todos.map(renderTodo));
+    return true;
   } catch (error: any) {
     if (error?.name === 'NotAuthenticatedException') {
       const p = document.createElement('p');
       p.textContent = 'Please sign in to view todos';
       todoList.replaceChildren(p);
-      return;
+      return false;
     }
     if (errorDiv) showError(errorDiv, error.message);
+    return false;
   }
 }
 
@@ -175,13 +178,15 @@ function errorMessage(error: unknown): string {
 
 // Reload either way: on failure the row still shows the unsaved checkbox/select/title.
 // The error is shown after the reload, because refreshTodos() resets todo-error to idle.
+// If the reload failed too, keep its message (sign-in prompt or load error) instead.
 async function mutateTodo(action: () => Promise<unknown>) {
   try {
     await action();
   } catch (error) {
-    await refreshTodos();
+    const reloaded = await refreshTodos();
+    const signedOut = error instanceof Error && error.name === 'NotAuthenticatedException';
     const errorDiv = document.getElementById('todo-error');
-    if (errorDiv) showError(errorDiv, errorMessage(error));
+    if (reloaded && !signedOut && errorDiv) showError(errorDiv, errorMessage(error));
     return;
   }
   await refreshTodos();
