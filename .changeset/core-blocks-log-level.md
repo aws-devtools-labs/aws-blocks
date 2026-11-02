@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/core": minor
+"@aws-blocks/blocks": patch
 ---
 
 feat(core): honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM` in the lifecycle scripts
