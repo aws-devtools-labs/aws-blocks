@@ -926,6 +926,8 @@ export const myAlbDoor = defineFrontDoor({
   - `image`: `{ fn, url }`. Its routes are in `app.routes`.
   - `api`: `{ url, host, stagePath, paths }`. `paths` is `/aws-blocks/*` (RPC
     and sign-in) plus every raw route.
+  - `entry`: `{ fn, url, streaming }`, only for a door with `routing: 'app'`
+    (see "Routing in the app" below).
 - `features`: the door's `frontDoor.features`, under the same names and shapes,
   each present only when asked for: `domain` (with `wwwRedirect`), `waf` (when
   `enabled` or a web ACL is given), `logging` (when `enabled`), `monitoring`
@@ -1054,6 +1056,105 @@ built-in door looks the list up at deploy time instead. For an internal ALB,
 use `VpcOrigin.withApplicationLoadBalancer(alb)` and admit the VPC origin's
 `CloudFront-VPCOrigins-Service-SG` security group (see the CDK
 `aws-cloudfront-origins` documentation).
+
+### Routing in the app (`routing: 'app'`)
+
+By default a door routes at the door: it renders the app's route table onto
+its own primitives (behaviors, listener rules, API routes). A door that sets
+`routing: 'app'` routes at the app instead: it maps a hostname to one entry
+function, `origins.entry`, and that function runs the whole route table. This
+fits a door shared by many apps, such as one ALB with one listener rule per app.
+
+```ts
+// aws-blocks/shared-alb-door.ts
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import { LambdaTarget } from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
+import { defineFrontDoor } from '@aws-blocks/hosting/constructs';
+
+/** One app on a shared ALB: one listener rule (its hostname) and one Lambda target group. */
+export const sharedAlbDoor = (listener: elbv2.IApplicationListener, host: string, priority: number) =>
+  defineFrontDoor({
+    service: 'shared-alb',
+    routing: 'app',
+    build(scope, { origins }) {
+      const target = new elbv2.ApplicationTargetGroup(scope, 'Target', {
+        targetType: elbv2.TargetType.LAMBDA,
+        targets: [new LambdaTarget(origins.entry.fn)],
+        multiValueHeadersEnabled: true, // keeps every Set-Cookie
+      });
+      new elbv2.ApplicationListenerRule(scope, 'Rule', {
+        listener,
+        priority,
+        conditions: [elbv2.ListenerCondition.hostHeaders([host])],
+        action: elbv2.ListenerAction.forward([target]),
+      });
+      return { url: `https://${host}` };
+    },
+  });
+```
+
+```ts
+// aws-blocks/index.cdk.ts: `listener` is the shared ALB's HTTPS listener.
+new Hosting(stack, 'Hosting', {
+  root: '..',
+  api: stack,
+  frontDoor: { kind: 'custom', door: sharedAlbDoor(listener, 'app.example.com', 10) },
+});
+```
+
+The app code doesn't change. The entry function:
+
+- is the app's server function when it has one: its handler is wrapped by the
+  router, and no function is added. Otherwise (a static site or SPA) AWS
+  Blocks creates one router function, the only new resource;
+- applies the app's redirects, forwards `/aws-blocks/*` and the raw routes to
+  the backend (same origin), serves static routes from the assets bucket (SPA
+  fallback, directory index, gzip, `304`s, error pages, security headers),
+  calls the image function (or, without one, serves the source image), and
+  hands server routes to the framework;
+- accepts the events of an ALB Lambda target, an API Gateway REST or HTTP API,
+  and a Lambda Function URL, and answers in the matching shape (with
+  `multiValueHeaders` when the target group enables them, as above);
+- answers buffered: `origins.entry.streaming` is `false`, `serverResponse`
+  is `'buffered'`, and a door that sets `serverResponse: 'streaming'` fails
+  synth. `origins.entry.url` is created on first read (IAM auth, `BUFFERED`);
+- is the build cutover: it switches to a new build only once the build's files
+  are uploaded, so the door needs no `cutover` of its own for it.
+
+Per framework, behind `Hosting` from `@aws-blocks/core`:
+
+| Framework | Server | How the router reaches it |
+|---|---|---|
+| Next.js (OpenNext) | built with OpenNext's buffered `aws-apigw-v2` handler | called in-process with an HTTP API (payload 2.0) event |
+| Nuxt / Nitro | built as Nitro's native `aws-lambda` handler (unless the app picks a preset) | called in-process the same way |
+| Astro, SvelteKit, Nitro `node-server` | a Node.js HTTP server, normally run by the Lambda Web Adapter | the function runs Node.js with no Web Adapter layer; the router starts the server's start script on its port and forwards server routes to it over HTTP |
+
+`input.app` is still present for reference, and the routes and API wiring
+check doesn't apply. Synth fails, with the fix in the message, for:
+
+- a streaming server handler (`AppRoutingNeedsBufferedServerError`), for
+  example Nitro with `awsLambda.streaming: true`, or Next.js built for the
+  streaming REST door when you use `HostingConstruct` directly;
+- a route to a compute other than the server and the image function
+  (`AppRoutingUnsupportedRouteError`), for example a Next.js
+  `runtime: 'edge'` route built as a regional function;
+- Lambda@Edge routes and Next.js middleware, as for every door other than
+  CloudFront.
+
+**Trade-offs.**
+
+- Every request runs in Lambda, static files included, and is billed as
+  Lambda time.
+- Every response passes the door's Lambda response limit: 1 MB behind an ALB
+  (text is sent as UTF-8 and compressible files gzipped, but a larger file
+  fails), 6 MB otherwise. Synth warns about the files over 6 MB
+  (`@aws-blocks/hosting:AssetExceedsProxyLimit`).
+- An ALB has no edge cache: every request reaches the function. Put a
+  CloudFront distribution in front of the door to cache at the edge.
+- Skew protection doesn't apply: a tab opened before a deploy that lazily
+  loads a chunk of the previous build gets a 404.
+- The server sees `Host` as `x-forwarded-host` (a client-sent
+  `x-forwarded-host` is replaced), as behind the ALB door.
 
 ## Build retention & rollback
 

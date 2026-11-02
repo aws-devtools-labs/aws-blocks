@@ -42,7 +42,7 @@ import { Queue, QueueEncryption } from 'aws-cdk-lib/aws-sqs';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
-import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
+import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY, SSR_DEFAULT_PORT } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
 import type { DeployManifest } from '../manifest/types.js';
 import {
@@ -73,8 +73,16 @@ import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import { cloudFrontDoor } from './cloudfront_door.js';
-import { buildFrontDoor } from './custom_door.js';
-import { buildDoorInput } from './door_input.js';
+import { buildFrontDoor, doorRoutingOf } from './custom_door.js';
+import { BLOCKS_API_SUBTREE, buildDoorInput } from './door_input.js';
+import {
+  APP_ROUTER_FILE,
+  APP_ROUTER_HANDLER,
+  APP_ROUTER_IMAGE_FUNCTION_ENV,
+  type AppRouterOptions,
+  generateAppRouterCode,
+} from './app_router.js';
+import { assetProxyEnvironment } from './asset_proxy_core.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
 import type { DoorInput, FrontDoorResult } from './front_door.js';
 import {
@@ -812,6 +820,10 @@ export class HostingConstruct extends Construct {
       stackedRouter ? 'stacked' : resolved.kind,
       typeof props.frontDoor === 'object' && props.frontDoor?.kind === 'apiGateway' && (props.frontDoor.api ?? 'http') === 'http',
     );
+    // A door that routes at the app (`routing: 'app'`): the app's entry
+    // function runs the route table (see `app_router.ts`).
+    const appRouting = isAppRoutingDoor(props.frontDoor);
+    if (appRouting) assertAppRoutable(manifest, props.frontDoor);
     this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
     assertServerReachableByDoor(
       manifest,
@@ -882,6 +894,10 @@ export class HostingConstruct extends Construct {
     });
     this.bucket = storage.bucket;
 
+    // The app router's settings (routing: 'app'), known before the compute is
+    // built: a server bundle gets the router next to its handler.
+    const appRouter = appRouting ? this.appRouterOptions(manifest, props, buildId, f.domain?.wwwRedirect) : undefined;
+
     // ---- 2. Compute resources ----
     const computeEntries = Object.entries(manifest.compute);
     const hasCompute = computeEntries.length > 0;
@@ -929,7 +945,11 @@ export class HostingConstruct extends Construct {
 
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
-        computeResource: isSsrCompute ? withDoorEventShim(resource, props.frontDoor) : resource,
+        computeResource: isSsrCompute
+          ? appRouter
+            ? withAppRouter(resource, appRouter)
+            : withDoorEventShim(resource, props.frontDoor)
+          : resource,
         memorySize: props.compute?.memorySize,
         timeout: computeTimeout,
         reservedConcurrency: props.compute?.reservedConcurrency,
@@ -1904,6 +1924,8 @@ export class HostingConstruct extends Construct {
         : undefined;
       let built: FrontDoorResult & { originHandle: OriginHandle };
       let service: string;
+      // The app's entry function, when the door routes at the app.
+      let appEntry: LambdaFunction | undefined;
       if (isNone) {
         // No front door — serve the origin directly via S3 website hosting. The
         // door refuses an app with a server (a website bucket can't run one).
@@ -2015,9 +2037,32 @@ export class HostingConstruct extends Construct {
         // once. Its `url` is required; its routing (assets reachable, API paths
         // wired) is checked from what the `cf.*` helpers recorded, unless the
         // app turned that off. Features are the door's to apply — not checked.
-        this.doorInput = this.assembleDoorInput(plan, manifest, props, resolved, serverName, backendApiUrl, backendApiPaths);
+        // A door that routes at the app gets the app's entry function as
+        // `origins.entry`; the entry is the build cutover (section 12c).
+        if (appRouter) appEntry = this.appEntryFunction(appRouter, serverName, backendApiUrl, buildId);
+        this.doorInput = this.assembleDoorInput(
+          plan,
+          manifest,
+          props,
+          resolved,
+          serverName,
+          backendApiUrl,
+          backendApiPaths,
+          appEntry,
+        );
         built = buildFrontDoor(this, fd.door, this.doorInput, { wiringCheck: fd.wiringCheck }).result;
         service = fd.door.service;
+        // Every file is served by the entry function, through the door's
+        // Lambda response limit.
+        if (appEntry) {
+          warnOversizedProxyAssets(this, {
+            door: `'${service}' (routing: 'app')`,
+            limitBytes: LAMBDA_SYNC_RESPONSE_LIMIT,
+            limitLabel: "6 MB (Lambda's response limit; 1 MB behind an ALB)",
+            staticDir: manifest.staticAssets.directory,
+            urlPrefix: plan.policies.basePath ?? '',
+          });
+        }
       } else {
         throw new HostingError('UnsupportedFrontDoorError', {
           message: `Unknown front door '${JSON.stringify(props.frontDoor)}'.`,
@@ -2061,7 +2106,7 @@ export class HostingConstruct extends Construct {
       this.distributionUrl = built.url;
       this.frontDoor = { service, url: built.url, originHandle: built.originHandle };
       onUpload = built.onUpload;
-      cutover = built.cutover ?? [];
+      cutover = appEntry ? [...(built.cutover ?? []), appEntry] : (built.cutover ?? []);
       // The S3-website door serves from its own public bucket; expose it so the
       // Blocks wrapper can publish config.json to the same (cross-origin) origin.
       if (built.publicBucket) this.websiteBucket = built.publicBucket;
@@ -2581,6 +2626,90 @@ export class HostingConstruct extends Construct {
   }
 
   /**
+   * The app router's settings for a door that routes at the app (see
+   * `app_router.ts`): the route table, rules and error pages exactly as the
+   * `DoorInput` carries them, the API paths, and the image endpoints. Built
+   * before the compute (from the same plan inputs the door's plan is built
+   * from), so the server bundle can carry the router.
+   */
+  private appRouterOptions(
+    manifest: DeployManifest,
+    props: HostingConstructProps,
+    buildId: string,
+    wwwRedirect: 'toApex' | 'toWww' | 'none' | undefined,
+  ): AppRouterOptions {
+    const server = manifest.compute.default ?? manifest.compute.server;
+    const image = manifest.compute['image-optimization'];
+    const hasImage = image !== undefined && image.type !== 'edge';
+    const plan = buildHostingPlan({
+      manifest,
+      buildId,
+      hasServer: server !== undefined,
+      hasImage,
+      skewEnabled: false,
+      wwwRedirect,
+    });
+    const framework = frameworkErrorPagesOf(manifest, this.servesDefaultNotFoundPage(manifest, props));
+    const notFound = props.errorPages?.notFound ? '404.html' : framework?.notFound;
+    const serverError = props.errorPages?.serverError ? '500.html' : framework?.serverError;
+    return {
+      routes: plan.routes.entries,
+      ...(plan.policies.basePath ? { basePath: plan.policies.basePath } : {}),
+      ...(plan.policies.assetPrefix ? { assetPrefix: plan.policies.assetPrefix } : {}),
+      // Unmatched paths go to the server when there is one (as on the ALB door).
+      spaFallback: plan.policies.spaFallback && server === undefined,
+      redirects: plan.routes.redirects,
+      headers: plan.routes.headers,
+      errorPages: { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) },
+      ...(props.backendApi?.url
+        ? { apiPaths: [...new Set([BLOCKS_API_SUBTREE, ...(props.backendApi.paths ?? [])])] }
+        : {}),
+      image: hasImage,
+      ...(hasImage ? {} : { imageFallback: { hosts: imageRemoteHosts(manifest), pathPrefixes: imagePathEndpoints(manifest) } }),
+    };
+  }
+
+  /**
+   * The app's entry function for a door that routes at the app: the server
+   * function (its bundle already carries the router, see `withAppRouter`), or
+   * for an app without one a router function created here. Either way it
+   * reads the build's assets (`assetProxyEnvironment` + read on the bucket),
+   * forwards the API (`API_GW_BASE`) and invokes the image function.
+   */
+  private appEntryFunction(
+    router: AppRouterOptions,
+    serverName: string | undefined,
+    backendApiUrl: string | undefined,
+    buildId: string,
+  ): LambdaFunction {
+    const server = serverName ? this.computeFunctions.get(serverName) : undefined;
+    const fn =
+      server instanceof LambdaFunction
+        ? server
+        : new LambdaFunction(this, 'AppRouter', {
+            runtime: DEFAULT_NODE_RUNTIME,
+            handler: 'index.handler',
+            code: Code.fromInline(generateAppRouterCode(router)),
+            timeout: Duration.seconds(30),
+            memorySize: 512,
+          });
+    for (const [name, value] of Object.entries(assetProxyEnvironment({ bucket: this.bucket, prefix: `builds/${buildId}` }))) {
+      fn.addEnvironment(name, value);
+    }
+    this.bucket.grantRead(fn);
+    if (backendApiUrl && router.apiPaths) {
+      // The backend base WITHOUT the `/aws-blocks/api` suffix, as the ALB door's forwarder reads it.
+      fn.addEnvironment('API_GW_BASE', Fn.select(0, Fn.split('/aws-blocks/api', backendApiUrl)));
+    }
+    const image = this.computeFunctions.get('image-optimization');
+    if (router.image && image instanceof LambdaFunction) {
+      fn.addEnvironment(APP_ROUTER_IMAGE_FUNCTION_ENV, image.functionName);
+      image.grantInvoke(fn);
+    }
+    return fn;
+  }
+
+  /**
    * Assemble the {@link DoorInput} from the plan, the resources this construct
    * provisioned, and the feature props. Has no effect on the template unless a
    * door reads `origins.server.url` (created on first read).
@@ -2604,6 +2733,7 @@ export class HostingConstruct extends Construct {
     serverName: string | undefined,
     backendApiUrl?: string,
     backendApiPaths?: readonly string[],
+    entryFn?: LambdaFunction,
   ): DoorInput {
     const serverFn = serverName ? this.computeFunctions.get(serverName) : undefined;
     const imageFn = this.computeFunctions.get('image-optimization');
@@ -2630,6 +2760,7 @@ export class HostingConstruct extends Construct {
           : undefined,
       image: imageFn instanceof LambdaFunction && imageUrl ? { fn: imageFn, url: imageUrl } : undefined,
       api: backendApiUrl ? { url: backendApiUrl, paths: backendApiPaths } : undefined,
+      ...(entryFn ? { entry: { fn: entryFn } } : {}),
       domain: resolved.features.domain,
       waf: resolved.features.waf,
       cdnWebAclArn: resolved.cdnWebAclArn,
@@ -2747,6 +2878,8 @@ export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor'
       return { streaming: (frontDoor.api ?? 'http') === 'rest', wildcardRoutes: false, appliesRules: false, forwardedHost: false };
     case 'custom':
       // `door` is validated (with a clear error) by the time the door is built.
+      // A door that routes at the app invokes its entry buffered.
+      if (frontDoor.door?.routing === 'app') return { streaming: false };
       return { streaming: (frontDoor.door?.serverResponse ?? 'streaming') === 'streaming' };
     default:
       return { streaming: true, wildcardRoutes: true, appliesRules: true, forwardedHost: true };
@@ -2870,6 +3003,144 @@ const frameworkErrorPagesOf = (
   const serverError = key(manifest.errorPages?.[500]);
   if (!notFound && !serverError) return undefined;
   return { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) };
+};
+
+/**
+ * Whether the door routes at the app (`routing: 'app'`, a bring-your-own door only).
+ *
+ * @throws HostingError('InvalidPropsError') for a `routing` other than `'door'` or `'app'`.
+ */
+const isAppRoutingDoor = (frontDoor: HostingConstructProps['frontDoor']): boolean =>
+  typeof frontDoor === 'object' &&
+  frontDoor !== null &&
+  frontDoor.kind === 'custom' &&
+  typeof frontDoor.door === 'object' &&
+  frontDoor.door !== null &&
+  doorRoutingOf(frontDoor.door) === 'app';
+
+/**
+ * Fail synth for an app the app router can't serve behind a door that routes
+ * at the app (see `app_router.ts`), naming the fix:
+ *
+ * - a door that declares `serverResponse: 'streaming'`: the entry answers buffered;
+ * - a streaming server handler (Next.js built for the API Gateway REST door's
+ *   streaming integration, Nitro with `awsLambda.streaming: true`): the router
+ *   calls the handler and needs a complete response. `@aws-blocks/core`
+ *   `Hosting` builds Next.js buffered for such a door;
+ * - a route the manifest sends to a compute other than the server and the
+ *   image function (a regional edge route): the router has no path to it.
+ *
+ * @throws HostingError('InvalidPropsError') for a streaming door.
+ * @throws HostingError('AppRoutingNeedsBufferedServerError') for a streaming server handler.
+ * @throws HostingError('AppRoutingUnsupportedRouteError') for a route to another compute.
+ */
+const assertAppRoutable = (manifest: DeployManifest, frontDoor: HostingConstructProps['frontDoor']): void => {
+  const door = typeof frontDoor === 'object' && frontDoor !== null && frontDoor.kind === 'custom' ? frontDoor.door : undefined;
+  if (door?.serverResponse === 'streaming') {
+    throw new HostingError('InvalidPropsError', {
+      message: `Front door '${door.service}' routes at the app (routing: 'app') and declares serverResponse: 'streaming', but the app's entry function answers buffered.`,
+      resolution: "Remove `serverResponse` from the door (or set 'buffered'), and invoke `origins.entry` without streaming.",
+    });
+  }
+  const serverName = manifest.compute.default ? 'default' : manifest.compute.server ? 'server' : undefined;
+  const server = serverName ? manifest.compute[serverName] : undefined;
+  if (server?.type === 'handler' && server.streaming === true) {
+    throw new HostingError('AppRoutingNeedsBufferedServerError', {
+      message:
+        "The app's server is a streaming Lambda handler, and a door that routes at the app (routing: 'app') calls it " +
+        'through the app router, which needs a complete (buffered) response.',
+      resolution:
+        "Deploy through `@aws-blocks/core` `Hosting`, which builds Next.js buffered (OpenNext's `aws-apigw-v2` converter " +
+        "and `aws-lambda` wrapper) for such a door; turn the framework's response streaming off (Nitro: " +
+        '`awsLambda.streaming: false`); or use a door that routes at the door.',
+    });
+  }
+  const other = [
+    ...new Set(
+      manifest.routes
+        .map((r) => r.target)
+        .filter(
+          (t) =>
+            t !== 'static' &&
+            t !== serverName &&
+            t !== 'image-optimization' &&
+            manifest.compute[t] !== undefined &&
+            manifest.compute[t].type !== 'edge',
+        ),
+    ),
+  ];
+  if (other.length > 0) {
+    throw new HostingError('AppRoutingUnsupportedRouteError', {
+      message:
+        `The app routes paths to the computes ${other.join(', ')} (e.g. Next.js \`runtime: 'edge'\` routes built regional), ` +
+        "which a door that routes at the app (routing: 'app') can't reach: its entry function serves only the server, " +
+        'the image function and the static files.',
+      resolution:
+        "Move those routes to the Node.js runtime (remove `runtime = 'edge'`), or use a door that routes at the door.",
+    });
+  }
+};
+
+/**
+ * Put the app router in front of the server (routing: 'app', see
+ * `app_router.ts`): the router is written next to the handler as
+ * `blocks_app_router.cjs` and becomes the function's handler.
+ *
+ * - A native Lambda handler (Next.js through OpenNext, Nitro `aws-lambda`)
+ *   stays in the bundle and is called in-process for `server` routes.
+ * - A Lambda Web Adapter server (Astro, SvelteKit, Nitro `node-server`)
+ *   becomes a plain Node.js handler function, with no Web Adapter layer: the
+ *   router starts the server's start script (`entrypoint`, e.g. `run.sh`) as
+ *   a child process on its port, as the Web Adapter would, and forwards
+ *   `server` routes to it over HTTP.
+ *
+ * @param resource the server compute resource.
+ * @param router the router's settings.
+ * @returns the resource to build, with the router as its handler.
+ * @throws HostingError('AppRoutingServerModuleNotFoundError') when the handler's module isn't in the bundle.
+ */
+const withAppRouter = (
+  resource: DeployManifest['compute'][string],
+  router: AppRouterOptions,
+): DeployManifest['compute'][string] => {
+  let code: string;
+  if (resource.type === 'http-server') {
+    code = generateAppRouterCode({
+      ...router,
+      server: { kind: 'http', port: resource.port ?? SSR_DEFAULT_PORT, start: resource.entrypoint ?? 'run.sh' },
+    });
+  } else if (resource.type === 'handler') {
+    const handler = resource.handler ?? 'index.handler';
+    const dot = handler.lastIndexOf('.');
+    const moduleBase = dot > 0 ? handler.substring(0, dot) : handler;
+    const exportName = dot > 0 ? handler.substring(dot + 1) : 'handler';
+    const moduleFile = ['.mjs', '.js', '.cjs']
+      .map((ext) => `${moduleBase}${ext}`)
+      .find((file) => fs.existsSync(path.join(resource.bundle, file)));
+    if (!moduleFile) {
+      throw new HostingError('AppRoutingServerModuleNotFoundError', {
+        message: `The server handler '${handler}' has no module in its bundle (${resource.bundle}), so the app router can't call it.`,
+        resolution: "Point the server's `handler` at a `.mjs`, `.js` or `.cjs` module in the bundle (e.g. 'index.handler' for index.mjs).",
+      });
+    }
+    code = generateAppRouterCode({ ...router, server: { kind: 'handler', module: `./${moduleFile}`, export: exportName } });
+  } else {
+    return resource;
+  }
+  const file = path.join(resource.bundle, APP_ROUTER_FILE);
+  if (!fs.existsSync(file) || fs.readFileSync(file, 'utf-8') !== code) fs.writeFileSync(file, code);
+  return {
+    type: 'handler',
+    bundle: resource.bundle,
+    handler: APP_ROUTER_HANDLER,
+    placement: resource.placement,
+    streaming: false,
+    ...(resource.runtime ? { runtime: resource.runtime } : {}),
+    ...(resource.memorySize !== undefined ? { memorySize: resource.memorySize } : {}),
+    ...(resource.timeout !== undefined ? { timeout: resource.timeout } : {}),
+    ...(resource.environment ? { environment: resource.environment } : {}),
+    ...(resource.provisionedConcurrency !== undefined ? { provisionedConcurrency: resource.provisionedConcurrency } : {}),
+  };
 };
 
 /**

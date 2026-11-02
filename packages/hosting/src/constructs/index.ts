@@ -67,20 +67,26 @@ export { FrameworkType, HostingProps, HostingResources } from '../types.js';
 // build(scope, input) })`. AWS Blocks calls `build` once at synth with the
 // DoorInput and uses the `url` it returns as the app's address. CloudFront is
 // the default door; ALB, API Gateway, S3-website (`'none'`) and the stacked
-// CloudFront edge are the other built-ins, written the same way.
+// CloudFront edge are the other built-ins, written the same way. A door with
+// `routing: 'app'` attaches only the app's entry function (`origins.entry`),
+// which runs the route table itself.
 export {
 	type ApiOrigin,
+	type AppRoutingDoorInput,
 	type AssetsOrigin,
 	type DoorApp,
 	type DoorFeatures,
 	type DoorHeaderRule,
 	type DoorInput,
+	type DoorInputFor,
 	type DoorOrigin,
 	type DoorOrigins,
 	type DoorRedirect,
 	type DoorRoute,
+	type DoorRouting,
 	type DoorUpstream,
 	defineFrontDoor,
+	type EntryOrigin,
 	type FrontDoor,
 	type FrontDoorResult,
 	type ImageOrigin,
