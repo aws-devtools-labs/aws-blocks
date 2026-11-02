@@ -89,6 +89,33 @@ describe('BlocksGithubE2eOidc', () => {
     template.resourceCountIs('AWS::IAM::OIDCProvider', 1);
   });
 
+  // The log-group sweep may delete only log groups of test functions and DB
+  // clusters, never any other group in the account.
+  test('log-group deletes are scoped to test-prefixed Lambda and RDS groups', () => {
+    const { template } = synth();
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement,
+    );
+    const deletes = statements.filter((s) => [s.Action].flat().includes('logs:DeleteLogGroup'));
+    assert.equal(deletes.length, 1);
+    const resources = [deletes[0].Resource].flat().map((r) => JSON.stringify(r));
+    assert.ok(resources.length > 0);
+    for (const r of resources) {
+      assert.match(r, /^"arn:aws:logs:us-east-1:111111111111:log-group:\/aws\/(lambda|rds\/cluster)\/(amplify-amplify|bb-|blocks-)[a-z0-9-]+\*"$/);
+    }
+    assert.equal([deletes[0].Action].flat().length, 1, 'no other action rides on the scoped resources');
+  });
+
+  test('the log-group sweep may only list, not change, anything else', () => {
+    const { template } = synth();
+    const statements = Object.values(template.findResources('AWS::IAM::Policy')).flatMap(
+      (p) => p.Properties.PolicyDocument.Statement,
+    );
+    const list = statements.filter((s) => s.Sid === 'CleanupLogGroupsList');
+    assert.equal(list.length, 1);
+    assert.deepEqual([list[0].Action].flat().sort(), ['lambda:ListFunctions', 'logs:DescribeLogGroups', 'rds:DescribeDBClusters']);
+  });
+
   test('reuses an existing OIDC provider when given its ARN', () => {
     const arn = `arn:aws:iam::${ACCOUNT}:oidc-provider/token.actions.githubusercontent.com`;
     const { template, role, benchRole } = synth({ oidcProviderArn: arn, agentBench: true });

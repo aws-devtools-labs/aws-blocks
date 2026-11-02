@@ -130,6 +130,23 @@ export function getConfigSync(key: string): string {
 }
 
 /**
+ * Read a value from the loaded config file only, ignoring `process.env`.
+ *
+ * Unlike {@link getConfig} / {@link getConfigSync}, an environment variable of
+ * the same name does NOT take precedence here. Use this for values whose
+ * synth-time config entry must be the source of truth on deployed compute
+ * (e.g. `BLOCKS_DEPLOYMENT_TYPE`, read by `getDeploymentType()`).
+ *
+ * @param key - The config key
+ * @returns The config value, or `undefined` if the config has not been loaded
+ *   yet or has no entry for `key`
+ */
+export function getCachedConfigValue(key: string): string | undefined {
+	if (!configCache || !Object.hasOwn(configCache, key)) return undefined;
+	return String(configCache[key]);
+}
+
+/**
  * Preload the S3 config. Call this early in Lambda cold start to ensure
  * the config is cached before any BB constructors need it.
  *

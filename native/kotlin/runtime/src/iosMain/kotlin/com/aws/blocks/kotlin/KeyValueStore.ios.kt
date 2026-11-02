@@ -34,7 +34,7 @@ import platform.Security.SecItemUpdate
 import platform.Security.errSecItemNotFound
 import platform.Security.errSecSuccess
 import platform.Security.kSecAttrAccessible
-import platform.Security.kSecAttrAccessibleAfterFirstUnlock
+import platform.Security.kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 import platform.Security.kSecAttrAccount
 import platform.Security.kSecAttrService
 import platform.Security.kSecClass
@@ -113,7 +113,12 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
             bridged(kSecAttrService, service as NSString)
             bridged(kSecAttrAccount, key as NSString)
         }) { query ->
-            withQuery({ bridged(kSecValueData, data) }) { attributes ->
+            withQuery({
+                bridged(kSecValueData, data)
+                // Carried on update too, so an item an earlier version stored under a different
+                // class is moved to this one in place, keeping its value.
+                constant(kSecAttrAccessible, kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
+            }) { attributes ->
                 SecItemUpdate(query, attributes)
             }
         }
@@ -127,10 +132,11 @@ private class KeychainKeyValueStore(private val service: String) : KeyValueStore
             bridged(kSecAttrService, service as NSString)
             bridged(kSecAttrAccount, key as NSString)
             bridged(kSecValueData, data)
-            // Readable once the device has been unlocked after boot, rather than only while it is
-            // unlocked, so a request that completes with the screen locked can still store what it
-            // received. Set only when the item is created; an existing item keeps its own.
-            constant(kSecAttrAccessible, kSecAttrAccessibleAfterFirstUnlock)
+            // Readable only while the device is unlocked, and bound to this device so it is not
+            // restored onto another one. A request that completes with the screen locked cannot
+            // store what it received; the failed write is retried on the next call. Set when the
+            // item is created and on every update, so an existing item adopts this class too.
+            constant(kSecAttrAccessible, kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
         }) { query ->
             SecItemAdd(query, null)
         }

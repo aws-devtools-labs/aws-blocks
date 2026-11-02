@@ -107,13 +107,27 @@ export interface ContainerScaling {
  * unique to this type.
  */
 export interface ServerlessComputeOptions {
-	/** Memory (MB). CPU scales with memory on a serverless compute. */
+	/**
+	 * Memory (MB). CPU scales with memory on a serverless compute. The default is
+	 * sized for the shared handler, which serves both the synchronous API path
+	 * and async (SQS/AsyncJob) work; an API-only compute that never drains a
+	 * queue can usually run on far less. Lower it when the compute handles only
+	 * request/response traffic.
+	 */
 	memory?: number;
 	/**
 	 * The compute's inherent max runtime ceiling, in seconds (the Lambda function
 	 * timeout, up to {@link LAMBDA_MAX_TIMEOUT_SECONDS}). A ceiling, not a job's
 	 * deadline: a job's `timeoutSeconds` must be ≤ it. Defaults to the platform
 	 * maximum.
+	 *
+	 * This is the ASYNC ceiling: the synchronous API path is bounded separately
+	 * by API Gateway's 29s integration timeout no matter how high this is, so
+	 * raising it only affects async/queue work. An API-only compute does not need
+	 * a large value here, but keep it at or above 30s: the handler caps each HTTP
+	 * request at the smaller of its 28s guard and this timeout, so a smaller value
+	 * cuts the sync request deadline short. Leave it at the default unless async
+	 * jobs need a specific ceiling.
 	 */
 	maxTimeoutSeconds?: number;
 }

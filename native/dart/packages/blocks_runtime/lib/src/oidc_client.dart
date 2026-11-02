@@ -10,6 +10,7 @@ import 'browser_launcher.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_exception.dart';
 import 'oidc_types.dart';
+import 'response_url.dart';
 import 'session_store.dart';
 import 'token_store.dart';
 
@@ -255,14 +256,19 @@ class OidcClient implements AuthProvider {
     String csrf,
     String relayTo,
   ) async {
-    final url =
-        '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}';
-    final response = await _httpClient.post(
-      Uri.parse(url),
-      headers: _jsonHeaders(),
+    final url = Uri.parse(
+      '$_authBaseUrl$authorizeParamsBasePath/${Uri.encodeComponent(provider)}',
+    );
+    final (:response, url: responseUrl) = await postWithResponseUrl(
+      _httpClient,
+      url,
+      headers: _jsonHeaders(url),
       body: jsonEncode({'csrf': csrf, 'relayTo': relayTo}),
     );
-    sessionStore.setCookies(response.headers['set-cookie']);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: responseUrl,
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw OidcCallbackException(
@@ -316,9 +322,11 @@ class OidcClient implements AuthProvider {
     required String nonce,
     String? iss,
   }) async {
-    final response = await _httpClient.post(
-      Uri.parse('$_authBaseUrl$exchangePath'),
-      headers: _jsonHeaders(),
+    final url = Uri.parse('$_authBaseUrl$exchangePath');
+    final (:response, url: responseUrl) = await postWithResponseUrl(
+      _httpClient,
+      url,
+      headers: _jsonHeaders(url),
       body: jsonEncode({
         'code': code,
         'verifier': verifier,
@@ -334,7 +342,10 @@ class OidcClient implements AuthProvider {
 
     // Capture the session cookie set by the backend so the owning
     // BlocksClient replays it on subsequent JSON-RPC calls (cookie flow).
-    sessionStore.setCookies(response.headers['set-cookie']);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: responseUrl,
+    );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw OidcExchangeException(
@@ -420,9 +431,10 @@ class OidcClient implements AuthProvider {
       // invalidate the server-side session (cookie flow). Bearer flow sends
       // the refresh token. Status/errors are ignored — local sign-out always
       // proceeds (matches Kotlin).
+      final url = Uri.parse('$_authBaseUrl$signOutPath');
       await _httpClient.post(
-        Uri.parse('$_authBaseUrl$signOutPath'),
-        headers: _jsonHeaders(),
+        url,
+        headers: _jsonHeaders(url),
         body: jsonEncode(
           refreshToken != null ? {'refreshToken': refreshToken} : {},
         ),
@@ -436,9 +448,10 @@ class OidcClient implements AuthProvider {
   }
 
   /// JSON content-type headers, plus the current session cookie when present so
-  /// OIDC requests participate in the shared cookie session.
-  Map<String, String> _jsonHeaders() {
-    final cookie = sessionStore.cookieHeader;
+  /// OIDC requests participate in the shared cookie session. Only cookies whose
+  /// host, `Path` and `Secure` attributes match [url] are sent.
+  Map<String, String> _jsonHeaders(Uri url) {
+    final cookie = sessionStore.cookieHeaderFor(url);
     return {'Content-Type': 'application/json', 'cookie': ?cookie};
   }
 

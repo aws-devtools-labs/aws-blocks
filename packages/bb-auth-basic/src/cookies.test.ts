@@ -76,6 +76,44 @@ describe('AuthBasic session cookie', () => {
 		assert.ok(!header.includes('Partitioned'), header);
 	});
 
+	test('behind a plain-HTTP front door (BLOCKS_PUBLIC_ORIGIN http://…): sign-in and sign-out drop Secure', async () => {
+		const previous = process.env.BLOCKS_PUBLIC_ORIGIN;
+		process.env.BLOCKS_PUBLIC_ORIGIN = 'http://blocks-hosti-abc.us-west-2.elb.amazonaws.com';
+		try {
+			const auth = makeAuth();
+			await auth.signUp(USER, PASS);
+			const c = ctx('http://blocks-hosti-abc.us-west-2.elb.amazonaws.com');
+			await auth.signIn(USER, PASS, c);
+			const header = (c as any).response.headers.get('set-cookie') as string;
+			assert.ok(header.includes('SameSite=Lax'), header);
+			assert.ok(!header.includes('Secure'), header);
+			const out = ctx('http://blocks-hosti-abc.us-west-2.elb.amazonaws.com');
+			await auth.signOut(out);
+			const cleared = (out as any).response.headers.get('set-cookie') as string;
+			assert.ok(cleared.includes('Max-Age=0'), cleared);
+			assert.ok(!cleared.includes('Secure'), cleared);
+		} finally {
+			if (previous === undefined) delete process.env.BLOCKS_PUBLIC_ORIGIN;
+			else process.env.BLOCKS_PUBLIC_ORIGIN = previous;
+		}
+	});
+
+	test('behind an HTTPS front door (BLOCKS_PUBLIC_ORIGIN https://…): Secure stays', async () => {
+		const previous = process.env.BLOCKS_PUBLIC_ORIGIN;
+		process.env.BLOCKS_PUBLIC_ORIGIN = 'https://d123.cloudfront.net';
+		try {
+			const auth = makeAuth();
+			await auth.signUp(USER, PASS);
+			const c = ctx('https://d123.cloudfront.net');
+			await auth.signIn(USER, PASS, c);
+			const header = (c as any).response.headers.get('set-cookie') as string;
+			assert.ok(header.includes('Secure'), header);
+		} finally {
+			if (previous === undefined) delete process.env.BLOCKS_PUBLIC_ORIGIN;
+			else process.env.BLOCKS_PUBLIC_ORIGIN = previous;
+		}
+	});
+
 	test('signOut clears the cookie with matching attributes', async () => {
 		const auth = makeAuth();
 		const c = ctx('https://app.example.com');

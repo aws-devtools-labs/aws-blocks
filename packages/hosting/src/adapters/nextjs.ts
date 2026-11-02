@@ -17,8 +17,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
-import { getPackageInfoSync } from 'local-pkg';
+import { getProjectPackageInfo } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
+import { type BuildProfile, buildProfile } from './shared/build_profile.js';
 import { targetCompute } from './shared/compute_target.js';
 import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import {
@@ -117,43 +118,62 @@ export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
   const { projectDir, configPath, skipBuild } = options;
+  // How the deploy around this build is shaped: the door's server invoke, and
+  // the preview trims (see `build_profile.ts`).
+  const profile = buildProfile();
+  const httpApi = profile.serverInvoke === 'http-api';
 
   const openNextDir = path.join(projectDir, '.open-next');
   const outputPath = path.join(openNextDir, 'open-next.output.json');
 
+  // A preview build that was interrupted can leave next.config wrapped; put it
+  // back before any build reads it.
+  restorePinnedNextConfig(projectDir);
+
   if (!skipBuild) {
-    // L3 routes the SSR Lambda through API Gateway REST + STREAM. REST sends
-    // payload v1, OpenNext defaults to v2 — force the v1 converter + streaming
-    // wrapper for `default`. OpenNext's `--config-path` flag silently fails
-    // to load configs from non-default locations, so the file must live at
-    // <projectDir>/open-next.config.ts.
-    //
-    // Edge route detection requires Next.js's compiled middleware-manifest.
-    // Skip the pre-build when:
-    //   (a) the manifest already exists (user/CI ran `next build`, or a
-    //       previous deploy cached it), OR
-    //   (b) the project's source declares no `runtime: 'edge'` routes —
-    //       in that case detectEdgeRoutes returns empty and the generated
-    //       open-next.config.ts has no functions{} block, so OpenNext's
-    //       own build pass produces all the manifests we'd need.
-    // Both branches eliminate one full Next.js build (~10-60s) without
-    // changing correctness: when we DO need edge detection AND the manifest
-    // is missing, runNextBuild fires.
-    let cleanupConfig: (() => void) | undefined;
-    if (!configPath) {
-      if (
-        !hasExistingMiddlewareManifest(projectDir) &&
-        projectHasEdgeRuntimeRoutes(projectDir)
-      ) {
-        runNextBuild(projectDir);
-      }
-      const edgeRoutes = detectEdgeRoutes(projectDir);
-      cleanupConfig = installGeneratedOpenNextConfig(projectDir, edgeRoutes);
-    }
+    // Pin Next's build id for the build, so a code-only re-deploy produces
+    // byte-identical static assets and CDK skips their re-upload. Restored in
+    // the `finally` below. A no-op without `deterministicBuildId`, or when the
+    // app defines `generateBuildId` itself.
+    const restoreBuildId = profile.deterministicBuildId
+      ? pinNextBuildId(projectDir, profile.deterministicBuildId)
+      : undefined;
     try {
-      runOpenNextBuild(projectDir, configPath);
+      // L3 routes the SSR Lambda through API Gateway REST + STREAM. REST sends
+      // payload v1, OpenNext defaults to v2 — force the v1 converter + streaming
+      // wrapper for `default`. OpenNext's `--config-path` flag silently fails
+      // to load configs from non-default locations, so the file must live at
+      // <projectDir>/open-next.config.ts.
+      //
+      // Edge route detection requires Next.js's compiled middleware-manifest.
+      // Skip the pre-build when:
+      //   (a) the manifest already exists (user/CI ran `next build`, or a
+      //       previous deploy cached it), OR
+      //   (b) the project's source declares no `runtime: 'edge'` routes —
+      //       in that case detectEdgeRoutes returns empty and the generated
+      //       open-next.config.ts has no functions{} block, so OpenNext's
+      //       own build pass produces all the manifests we'd need.
+      // Both branches eliminate one full Next.js build (~10-60s) without
+      // changing correctness: when we DO need edge detection AND the manifest
+      // is missing, runNextBuild fires.
+      let cleanupConfig: (() => void) | undefined;
+      if (!configPath) {
+        if (
+          !hasExistingMiddlewareManifest(projectDir) &&
+          projectHasEdgeRuntimeRoutes(projectDir)
+        ) {
+          runNextBuild(projectDir);
+        }
+        const edgeRoutes = detectEdgeRoutes(projectDir);
+        cleanupConfig = installGeneratedOpenNextConfig(projectDir, edgeRoutes);
+      }
+      try {
+        runOpenNextBuild(projectDir, configPath);
+      } finally {
+        cleanupConfig?.();
+      }
     } finally {
-      cleanupConfig?.();
+      restoreBuildId?.();
     }
 
     // Warn when the installed @opennextjs/aws is outside the version
@@ -167,8 +187,9 @@ export const nextjsAdapter = (
     // Patch OpenNext's bundled aws-lambda-streaming wrapper for API Gateway
     // STREAM framing. See patchStreamingWrapperForApiGateway for what changes.
     // Web Functions use OpenNext's `node` wrapper (a plain HTTP server, no
-    // API Gateway framing), so there is nothing to patch.
-    if (targetCompute() !== 'web-function') patchStreamingWrapperForApiGateway(openNextDir);
+    // API Gateway framing), and a server behind an HTTP API uses the buffered
+    // `aws-lambda` wrapper, so in both cases there is nothing to patch.
+    if (targetCompute() !== 'web-function' && !httpApi) patchStreamingWrapperForApiGateway(openNextDir);
 
     // Patch each edge bundle's process import banner for Lambda@Edge
     // compatibility. See patchEdgeBundleForLambdaEdge for the mechanics, and
@@ -177,18 +198,24 @@ export const nextjsAdapter = (
     // are non-writable per spec — it is not a Node-version quirk).
     patchEdgeBundlesForLambdaEdge(openNextDir);
 
-    // Patch the image-optimization bundle for the Next.js 16 image-optimizer
-    // signature change. See patchImageOptimizerForNext16.
-    patchImageOptimizerForNext16(openNextDir, projectDir);
+    // Image-optimization patches and the (slow) linux-x64 `sharp` install.
+    // Skipped under `skipImageOptimization`: the L3 builds no image function
+    // then (`manifest.imageOptimization` stays, for its remote-source
+    // allowlist).
+    if (!profile.skipImageOptimization) {
+      // Patch the image-optimization bundle for the Next.js 16 image-optimizer
+      // signature change. See patchImageOptimizerForNext16.
+      patchImageOptimizerForNext16(openNextDir, projectDir);
 
-    // Patch the image-optimization bundle so a disallowed image type (e.g. an
-    // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
-    // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
-    patchImageOptimizerSvgStatus(openNextDir);
+      // Patch the image-optimization bundle so a disallowed image type (e.g. an
+      // untrusted SVG with dangerouslyAllowSVG disabled) fails closed with its
+      // real 4xx status instead of a blanket 500. See patchImageOptimizerSvgStatus.
+      patchImageOptimizerSvgStatus(openNextDir);
 
-    // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
-    // See installLinuxSharpForImageOptimizer.
-    installLinuxSharpForImageOptimizer(openNextDir);
+      // Ensure the image-optimization Lambda has a linux-x64 sharp binary.
+      // See installLinuxSharpForImageOptimizer.
+      installLinuxSharpForImageOptimizer(openNextDir);
+    }
   }
 
   // Note: Injecting config files into server bundles is an integration-layer
@@ -219,7 +246,7 @@ export const nextjsAdapter = (
     );
   }
 
-  const manifest = translateOpenNextOutput(output, openNextDir);
+  const manifest = translateOpenNextOutput(output, openNextDir, profile);
 
   // Lift simple Next.js redirects() / headers() rules out of the OpenNext
   // Lambda and into CloudFront. This eliminates a Lambda invocation for
@@ -423,6 +450,7 @@ const applyNextImageConfig = (
   let parsed: {
     config?: {
       images?: {
+        domains?: unknown;
         remotePatterns?: unknown;
         dangerouslyAllowSVG?: boolean;
         minimumCacheTTL?: number;
@@ -459,6 +487,13 @@ const applyNextImageConfig = (
     if (patterns.length > 0) {
       manifest.imageOptimization.remotePatterns = patterns;
     }
+  }
+  // `images.domains` (deprecated in Next.js, still honored): exact hosts. The
+  // L3 reads it only for the remote-source allowlist of a build with no image
+  // function; the image function itself reads Next's own config.
+  if (Array.isArray(images.domains)) {
+    const domains = images.domains.filter((d): d is string => typeof d === 'string' && d.length > 0);
+    if (domains.length > 0) manifest.imageOptimization.domains = domains;
   }
   if (typeof images.dangerouslyAllowSVG === 'boolean') {
     manifest.imageOptimization.dangerouslyAllowSVG = images.dangerouslyAllowSVG;
@@ -1068,6 +1103,14 @@ const validateUserOpenNextConfig = (
       if (!findOverride(source, key, value)) missing.push(`${key}: '${value}'`);
     }
     if (!/\bgenerateDockerfile\s*:\s*true\b/.test(source)) missing.push('generateDockerfile: true');
+  } else if (buildProfile().serverInvoke === 'http-api') {
+    // Behind an API Gateway HTTP API: payload 2.0, buffered.
+    for (const [key, value] of [
+      ['converter', 'aws-apigw-v2'],
+      ['wrapper', 'aws-lambda'],
+    ] as const) {
+      if (!findOverride(source, key, value)) missing.push(`${key}: '${value}'`);
+    }
   } else {
     if (!findOverride(source, 'converter', 'aws-apigw-v1')) {
       missing.push("converter: 'aws-apigw-v1'");
@@ -1088,12 +1131,32 @@ const validateUserOpenNextConfig = (
   // requirement. Detect by checking for any `runtime: 'edge'` token in
   // the user's config when edgeRoutes were detected from the user's
   // source tree.
+  const profile = buildProfile();
   const needsEdgeBlock = edgeRoutes.length > 0;
   const hasEdgeBlock = /\bruntime\s*:\s*['"`]edge['"`]/.test(source);
   if (needsEdgeBlock && !hasEdgeBlock) {
     missing.push(
-      "functions: { edge: { runtime: 'edge', placement: 'global', routes: [...] } }",
+      profile.edgeToRegional
+        ? "functions: { edge: { runtime: 'edge', placement: 'regional', override: { converter: 'aws-apigw-v2', wrapper: 'aws-lambda' }, routes: [...] } }"
+        : "functions: { edge: { runtime: 'edge', placement: 'global', routes: [...] } }",
     );
+  }
+  // `edgeRoutes: 'regional'`: each edge function becomes a regional handler
+  // invoked by the HTTP API (payload 2.0), so a Lambda@Edge shape (global
+  // placement, the CloudFront converter) would fail on every request.
+  if (profile.edgeToRegional && hasEdgeBlock) {
+    if (!findOverride(source, 'placement', 'regional') || findOverride(source, 'placement', 'global')) {
+      missing.push("placement: 'regional' on every edge function");
+    }
+    if (findOverride(source, 'converter', 'aws-cloudfront')) {
+      missing.push("converter: 'aws-apigw-v2' on every edge function (not 'aws-cloudfront')");
+    }
+  }
+  // `incrementalRegeneration: false`: no tag table and no revalidation queue
+  // are deployed, so the server must not use them.
+  if (profile.skipIsr) {
+    if (!/\bdisableTagCache\s*:\s*true\b/.test(source)) missing.push('dangerous: { disableTagCache: true }');
+    if (!findOverride(source, 'queue', 'dummy')) missing.push("queue: 'dummy' on the default function");
   }
   if (missing.length === 0) return;
   throw new HostingError('IncompatibleOpenNextConfigError', {
@@ -1101,6 +1164,158 @@ const validateUserOpenNextConfig = (
     resolution:
       'Either delete open-next.config.ts to let the adapter generate one, or add the missing override(s) to your config. Without them: payload v1/v2 mismatch renders every URL as "/", or POST/PUT bodies are silently dropped (response_stream wrapper).',
   });
+};
+
+/** Is this project ESM (`package.json` `"type": "module"`)? Governs the CJS/ESM shape of the injected wrapper. */
+const isEsmProject = (projectDir: string): boolean => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf8')) as { type?: string };
+    return pkg.type === 'module';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Pin Next.js's build ID to `buildId` for the duration of the build by
+ * temporarily wrapping the app's `next.config` with a `generateBuildId`.
+ *
+ * Next generates a random build ID per build, which renames the
+ * `_next/static/<buildId>/` asset folder every time. That rename changes the
+ * CDK asset hash even when every file is byte-identical, forcing a full S3
+ * re-upload of the static bundle on every re-deploy. A stable build ID makes
+ * an unchanged (or server-only) build produce identical assets, so CDK skips
+ * the upload.
+ *
+ * Mechanism: rename `next.config.<ext>` → `next.config.blocks-base.<ext>` and
+ * write a thin wrapper that re-exports it with `generateBuildId` merged in.
+ * Returns a restore function — ALWAYS call it in a `finally`. Returns
+ * `undefined` (no-op) when there's no config to wrap, the app already defines
+ * `generateBuildId`, or a stale base file is present.
+ *
+ * @param projectDir the Next.js project root.
+ * @param buildId the build ID to pin.
+ * @returns a function that restores the original config, or `undefined` when nothing was wrapped.
+ */
+/** The first-line marker of the wrapper {@link pinNextBuildId} writes. */
+const PINNED_CONFIG_MARKER = '// AWS Blocks: deterministic build ID (restored after the build).';
+
+/** The wrapper's owner line: the pid of the build that wrote it. */
+const pinnedOwnerLine = (pid: number) => `// AWS Blocks: pinned by pid ${pid}.`;
+
+/** The pid that wrote a wrapper, or `undefined` for a wrapper without one. */
+const pinnedOwnerOf = (config: string): number | undefined => {
+  const match = /^\/\/ AWS Blocks: pinned by pid (\d+)\.$/m.exec(config);
+  return match ? Number(match[1]) : undefined;
+};
+
+/** Whether `pid` is a running process other than this one. */
+const isOtherLiveProcess = (pid: number): boolean => {
+  if (pid === process.pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM: the process exists but belongs to another user.
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+};
+
+/**
+ * Put back a `next.config.*` left wrapped by {@link pinNextBuildId} when a
+ * build was interrupted before its restore ran (e.g. Ctrl-C while the build
+ * was blocked in a child process). A config counts as wrapped only when it
+ * carries the wrapper's marker and its `next.config.blocks-base.<ext>` is
+ * still there; anything else is left alone. A wrapper whose build is still
+ * running (its owner pid is alive) is left alone too, so an overlapping build
+ * of the same checkout never pulls the config out from under it. Every
+ * Next.js build calls this first, so a later build never runs on a leftover
+ * wrapper.
+ *
+ * @param projectDir the Next.js project root.
+ * @returns whether a config was restored.
+ */
+export const restorePinnedNextConfig = (projectDir: string): boolean => {
+  let restored = false;
+  for (const ext of ['ts', 'mjs', 'cjs', 'js']) {
+    const configFile = path.join(projectDir, `next.config.${ext}`);
+    const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
+    if (!fs.existsSync(baseFile) || !fs.existsSync(configFile)) continue;
+    const config = fs.readFileSync(configFile, 'utf8');
+    if (!config.includes(PINNED_CONFIG_MARKER)) continue;
+    const owner = pinnedOwnerOf(config);
+    if (owner !== undefined && isOtherLiveProcess(owner)) continue;
+    fs.rmSync(configFile, { force: true });
+    fs.renameSync(baseFile, configFile);
+    process.stderr.write(`ℹ️  Restored ${path.basename(configFile)}, left wrapped by an interrupted build.\n`);
+    restored = true;
+  }
+  return restored;
+};
+
+export const pinNextBuildId = (projectDir: string, buildId: string): (() => void) | undefined => {
+  const configFile = ['ts', 'mjs', 'cjs', 'js']
+    .map((ext) => path.join(projectDir, `next.config.${ext}`))
+    .find((p) => fs.existsSync(p));
+  // No config → Next uses defaults; nothing to wrap.
+  if (!configFile) return undefined;
+
+  const original = fs.readFileSync(configFile, 'utf8');
+  // Respect an app-defined build ID.
+  if (/generateBuildId/.test(original)) return undefined;
+
+  const ext = path.extname(configFile).slice(1);
+  const baseFile = path.join(projectDir, `next.config.blocks-base.${ext}`);
+  // A stale base file (e.g. from a crashed build) — don't clobber it.
+  if (fs.existsSync(baseFile)) return undefined;
+
+  const isCjs = ext === 'cjs' || (ext === 'js' && !isEsmProject(projectDir));
+  const id = JSON.stringify(buildId);
+  // Next transpiles `next.config.ts`, which resolves an extensionless
+  // specifier; it loads `.mjs` (and `.js` in an ESM project) with a native
+  // `import()`, and `require()` doesn't add `.cjs`, so those name the file.
+  const spec = JSON.stringify(ext === 'ts' ? './next.config.blocks-base' : `./next.config.blocks-base.${ext}`);
+  // `// @ts-nocheck`: a `.ts` config in a project whose `next build`
+  // type-checks would otherwise fail on the untyped `phase`/`ctx` params.
+  const wrapper = isCjs
+    ? `// @ts-nocheck
+${PINNED_CONFIG_MARKER}
+${pinnedOwnerLine(process.pid)}
+const blocksBase = require(${spec});
+const blocksResolved = blocksBase && blocksBase.default ? blocksBase.default : blocksBase;
+module.exports = async (phase, ctx) => {
+  const cfg = typeof blocksResolved === 'function' ? await blocksResolved(phase, ctx) : await blocksResolved;
+  return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
+};
+`
+    : `// @ts-nocheck
+${PINNED_CONFIG_MARKER}
+${pinnedOwnerLine(process.pid)}
+import blocksBase from ${spec};
+export default async function blocksPinnedBuildIdConfig(phase, ctx) {
+  const cfg = typeof blocksBase === 'function' ? await blocksBase(phase, ctx) : await blocksBase;
+  return { ...cfg, generateBuildId: cfg.generateBuildId ?? (async () => ${id}) };
+}
+`;
+
+  fs.renameSync(configFile, baseFile);
+  fs.writeFileSync(configFile, wrapper, 'utf8');
+
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    // Best-effort: a failure here must not mask the build's own error. Only
+    // this build's own wrapper is replaced: if another build already put the
+    // app's config back, deleting `configFile` would delete the app's config.
+    try {
+      if (fs.readFileSync(configFile, 'utf8') !== wrapper || !fs.existsSync(baseFile)) return;
+      fs.rmSync(configFile, { force: true });
+      fs.renameSync(baseFile, configFile);
+    } catch {
+      // ignore
+    }
+  };
 };
 
 /**
@@ -1114,13 +1329,34 @@ const validateUserOpenNextConfig = (
  * declares `runtime = 'edge'` — it errors with "OpenNext requires edge
  * runtime function to be defined in a separate function" mid-bundle, so
  * the auto-config has to declare the split function up front.
+ *
+ * Under the build profile's `skipImageOptimization`, also emits
+ * `imageOptimization: { install: false }` so OpenNext installs no `sharp` for
+ * an image function that is never deployed.
  */
 const installGeneratedOpenNextConfig = (
   projectDir: string,
   edgeRoutes: EdgeRoute[] = [],
 ): (() => void) => {
   const configFile = path.join(projectDir, 'open-next.config.ts');
-  const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes);
+  const profile = buildProfile();
+  const httpApi = profile.serverInvoke === 'http-api';
+  const edgeBlock = renderEdgeFunctionsBlock(edgeRoutes, { regional: profile.edgeToRegional === true, httpApi });
+  // `skipIsr`: no tag cache (no DynamoDB tag table) and OpenNext's no-op
+  // `dummy` queue (no SQS queue or revalidation function). The S3 incremental
+  // cache stays, so prerendered pages (SSG and ISR) are served from the
+  // build's snapshot instead of re-rendered on every request.
+  const dangerousBlock = profile.skipIsr ? `\n  dangerous: {\n    disableTagCache: true,\n  },` : '';
+  const queueOverride = profile.skipIsr ? `\n      queue: 'dummy',` : '';
+  // `skipImageOptimization`: no image function is deployed, so stop OpenNext
+  // installing `sharp` into the image bundle it still builds (seconds warm,
+  // about a minute on a cold npm cache). OpenNext has no typed switch for this:
+  // it installs `imageOptimization.install ?? <sharp>` and its installer
+  // returns early on a falsy value, so `false` skips the install. If a later
+  // OpenNext dropped that early return, the build would only install sharp
+  // again. (`install: { packages: [] }` is typed but runs a failing bare
+  // `npm install`.)
+  const imageBlock = profile.skipImageOptimization ? `\n  imageOptimization: {\n    install: false,\n  },` : '';
   // `minify: true` shrinks the SSR Lambda bundle ~30-50% (esbuild flags
   // unminified bundles >5MB with a scary "⚠️" — the AWS Blocks bug-bash
   // saw 34-35 MB and 19/20 testers thought the build was failing). The
@@ -1136,16 +1372,20 @@ const installGeneratedOpenNextConfig = (
       ? `converter: 'node',
       wrapper: 'node',
       generateDockerfile: true,`
-      : `converter: 'aws-apigw-v1',
+      : httpApi
+        ? // An API Gateway HTTP API sends payload 2.0 and can't stream.
+          `converter: 'aws-apigw-v2',
+      wrapper: 'aws-lambda',`
+        : `converter: 'aws-apigw-v1',
       wrapper: 'aws-lambda-streaming',`;
   const configBody = `// AUTO-GENERATED by @aws-blocks/hosting — do not edit.
 const config = {
   default: {
     minify: true,
     override: {
-      ${defaultOverride}
+      ${defaultOverride}${queueOverride}
     },
-  },${edgeBlock}
+  },${edgeBlock}${imageBlock}${dangerousBlock}
 };
 export default config;
 `;
@@ -1202,7 +1442,10 @@ export default config;
  * no API Gateway in front, so the body-hash 403 issue doesn't apply
  * here (Lambda@Edge invocation isn't OAC-signed by CloudFront).
  */
-const renderEdgeFunctionsBlock = (edgeRoutes: EdgeRoute[]): string => {
+const renderEdgeFunctionsBlock = (
+  edgeRoutes: EdgeRoute[],
+  opts: { regional?: boolean; httpApi?: boolean } = {},
+): string => {
   if (edgeRoutes.length === 0) return '';
   // Escape backslashes first (so the slash inserted by quote-escape isn't
   // itself doubled), then escape single quotes. Without this CodeQL flags
@@ -1210,14 +1453,23 @@ const renderEdgeFunctionsBlock = (edgeRoutes: EdgeRoute[]): string => {
   // emit invalid JS into the generated open-next.config.ts.
   const quote = (s: string) =>
     `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+  // `regional` keeps the edge RUNTIME (the route's source demands it) but runs
+  // the function as a regional Lambda instead of a Lambda@Edge replica, so no
+  // us-east-1 edge stack is deployed. A regional function is invoked over HTTP:
+  // the payload 2.0 converter, buffered behind an HTTP API, else streamed.
+  const placement = opts.regional ? 'regional' : 'global';
+  const override = opts.regional
+    ? `converter: 'aws-apigw-v2',
+        wrapper: '${opts.httpApi ? 'aws-lambda' : 'aws-lambda-streaming'}',`
+    : `converter: 'aws-cloudfront',
+        wrapper: 'aws-lambda',`;
   const entries = edgeRoutes
     .map(
       (route, i) => `    edge${i + 1}: {
       runtime: 'edge',
-      placement: 'global',
+      placement: '${placement}',
       override: {
-        converter: 'aws-cloudfront',
-        wrapper: 'aws-lambda',
+        ${override}
       },
       routes: [${quote(route.module)}],
       patterns: [${quote(route.pattern)}],
@@ -1267,13 +1519,72 @@ export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
  * `.open-next/`) or when the version can't be parsed.
  */
 const warnIfOpenNextOutOfRange = (projectDir: string): void => {
-  const info = getPackageInfoSync('@opennextjs/aws', { paths: [projectDir] });
+  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
   const version = info?.version;
   if (!version || !semver.valid(version)) return;
   if (semver.satisfies(version, VERIFIED_OPENNEXT_RANGE)) return;
   process.stderr.write(
     `⚠️  @opennextjs/aws@${version} is outside the version range this adapter was verified against (${VERIFIED_OPENNEXT_RANGE}). ` +
       `If the streaming-wrapper or edge-bundle patcher errors with UpstreamPatchPatternChangedError, that's the most likely cause — pin to a verified version or file an issue with the OpenNext release notes.\n`,
+  );
+};
+
+/**
+ * The `@opennextjs/aws` version the adapter builds with when the project
+ * doesn't declare one. It sits inside {@link VERIFIED_OPENNEXT_RANGE}, so an
+ * undeclared OpenNext never resolves to whatever `npx` would fetch as the
+ * newest (unverified) release. It is the newest verified release.
+ *
+ * Bump together with {@link OPENNEXT_FALLBACK_NEXT_PEER_RANGE} and the
+ * `@opennextjs/aws` pin in the `create-blocks-app` `nextjs` template
+ * (`version_pins.test.ts` checks the template pin).
+ * @internal
+ */
+export const OPENNEXT_FALLBACK_VERSION = '4.0.3';
+
+/**
+ * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares in its
+ * `package.json`. Used to check the app's Next.js version when OpenNext isn't
+ * installed (so there's no installed `package.json` to read it from). Must be
+ * copied from the fallback version's published `peerDependencies.next`.
+ * @internal
+ */
+export const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.18 <16 || >=16.2.6';
+
+/** The `@opennextjs/aws` the project resolves, or `undefined` when absent. */
+type InstalledOpenNext = { version: string; nextPeerRange?: string };
+
+const findInstalledOpenNext = (
+  projectDir: string,
+): InstalledOpenNext | undefined => {
+  const info = getProjectPackageInfo('@opennextjs/aws', projectDir);
+  if (!info?.version) return undefined;
+  const peers = (info.packageJson as { peerDependencies?: Record<string, string> })
+    .peerDependencies;
+  return { version: info.version, nextPeerRange: peers?.next };
+};
+
+/**
+ * Warn when the app's Next.js version is outside the `next` peer range of the
+ * OpenNext that will build it. Package managers that skip peer checks (pnpm,
+ * `--legacy-peer-deps`) let such a pair install, and OpenNext then builds a
+ * combination it was never released against. Warn rather than fail: the pair
+ * may still work, and the fix (upgrade `next` within its major, or pick a
+ * different OpenNext) is the user's call.
+ */
+const warnIfNextOutsideOpenNextPeerRange = (
+  projectDir: string,
+  openNextVersion: string,
+  nextPeerRange: string | undefined,
+): void => {
+  const nextVersion = detectNextVersion(projectDir);
+  if (!nextVersion || !nextPeerRange || !semver.validRange(nextPeerRange)) return;
+  // `includePrerelease`: a `next` canary/rc inside the range (e.g.
+  // `16.3.0-canary.5`) is not a mismatch.
+  if (semver.satisfies(nextVersion, nextPeerRange, { includePrerelease: true })) return;
+  process.stderr.write(
+    `⚠️  next@${nextVersion} is outside the Next.js range @opennextjs/aws@${openNextVersion} supports (next ${nextPeerRange}). ` +
+      'Upgrade `next` within its major version to one that range accepts, or declare an @opennextjs/aws version whose `next` peer range includes your version.\n',
   );
 };
 
@@ -1451,9 +1762,55 @@ export const patchEdgeBundlesForLambdaEdge = (openNextDir: string): void => {
  * @internal
  */
 export const detectNextVersion = (projectDir: string): string | undefined => {
-  const info = getPackageInfoSync('next', { paths: [projectDir] });
+  const info = getProjectPackageInfo('next', projectDir);
   const version = info?.version;
   return version && semver.valid(version) ? version : undefined;
+};
+
+/**
+ * The `next` versions whose `fetchInternalImage` takes the 5-arg
+ * `(href, _req, _res, maximumResponseBody, handleRequest)` signature, from the
+ * published packages' `dist/server/image-optimizer.js`: 15.5.16 and later on
+ * the 15.x line, 16.2.5 and later on 16.x (16.0.x, 16.1.x and 16.2.0–16.2.4
+ * are still 4-arg). Used when the installed source can't be read.
+ * @internal
+ */
+export const NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE = '>=15.5.16 <16 || >=16.2.5';
+
+/**
+ * How many parameters the installed Next.js's `fetchInternalImage` takes:
+ * read from `next/dist/server/image-optimizer.js` (the code OpenNext bundles),
+ * else derived from `nextVersion` and
+ * {@link NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE}. `undefined` when neither is
+ * known.
+ * @internal
+ */
+export const detectFetchInternalImageArity = (
+  projectDir: string,
+  nextVersion: string | undefined,
+): 4 | 5 | undefined => {
+  const rootPath = getProjectPackageInfo('next', projectDir)?.rootPath;
+  if (rootPath) {
+    try {
+      const src = fs.readFileSync(
+        path.join(rootPath, 'dist', 'server', 'image-optimizer.js'),
+        'utf-8',
+      );
+      const params = /function fetchInternalImage\(([^)]*)\)/.exec(src)?.[1];
+      if (params !== undefined) {
+        const count = params.split(',').filter((p) => p.trim()).length;
+        if (count === 4 || count === 5) return count;
+      }
+    } catch {
+      // Unreadable or a different layout — fall back to the version.
+    }
+  }
+  if (!nextVersion) return undefined;
+  return semver.satisfies(nextVersion, NEXT_FETCH_INTERNAL_IMAGE_5ARG_RANGE, {
+    includePrerelease: true,
+  })
+    ? 5
+    : 4;
 };
 
 /**
@@ -1466,6 +1823,11 @@ export const detectNextVersion = (projectDir: string): string | undefined => {
  *   |--------|-------------------------------------------------------------------|
  *   | 15.5.x | `(href, _req, _res, handleRequest)` — 4 args                       |
  *   | 16.x   | `(href, _req, _res, maximumResponseBody, handleRequest)` — 5 args  |
+ *
+ *   Correction: the change landed in PATCH releases on both lines — 4 args up
+ *   to 15.5.15 and on 16.0.x, 16.1.x and 16.2.0–16.2.4; 5 args from 15.5.16
+ *   and from 16.2.5. The gate therefore reads the installed `next`'s
+ *   signature ({@link detectFetchInternalImageArity}) instead of its major.
  *
  * `@opennextjs/aws` (≤3.10.x) calls it with FOUR positional args
  * (`fetchInternalImage(n, {headers:e}, {}, handleRequest)`). That call is:
@@ -1496,20 +1858,22 @@ export const patchImageOptimizerForNext16 = (
   const root = path.join(openNextDir, 'image-optimization-function');
   if (!fs.existsSync(root)) return; // image optimization disabled for this app
 
-  // Version gate: the `void 0` insertion is ONLY correct for Next ≥ 16 (the
-  // 5-arg `fetchInternalImage`). On Next 15.x the OpenNext 4-arg call is
-  // already correct, so patching would corrupt it. When the version is
-  // knowable and < 16, skip entirely.
+  // Arity gate: the `void 0` insertion is ONLY correct for a Next.js whose
+  // `fetchInternalImage` takes 5 args. On a 4-arg Next the OpenNext call is
+  // already correct, so patching would corrupt it. The 5-arg signature
+  // arrived in patch releases (15.5.16, 16.2.5), not at a major, so read it
+  // from the installed `next` and fall back to the published boundaries.
   const nextVersion = projectDir ? detectNextVersion(projectDir) : undefined;
-  if (nextVersion && semver.major(nextVersion) < 16) {
+  const arity = projectDir ? detectFetchInternalImageArity(projectDir, nextVersion) : undefined;
+  if (arity === 4) {
     process.stderr.write(
-      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion} uses the ` +
+      `ℹ️  Skipping image-optimizer arity patch: Next.js ${nextVersion ?? '(unknown version)'} uses the ` +
         `4-arg fetchInternalImage signature that OpenNext already calls correctly ` +
-        `(the maximumResponseBody parameter was added in Next 16).\n`,
+        `(the maximumResponseBody parameter arrived in Next 15.5.16 and 16.2.5).\n`,
     );
     return;
   }
-  if (!nextVersion) {
+  if (arity === undefined) {
     // Version unknown (e.g. a pre-built `.open-next/` with no resolvable
     // `next` in scope). Default to patching, since Next 16 (5-arg) is the
     // common case — log it so the build output explains the choice.
@@ -1843,14 +2207,41 @@ const runNextBuild = (projectDir: string): void => {
  * Execute the OpenNext build command.
  *
  * Runs `npx @opennextjs/aws build` from the project directory. The consumer
- * project must have @opennextjs/aws installed as a devDependency — this avoids
- * bloating the hosting package for SPA/static users who don't need OpenNext.
+ * project should have @opennextjs/aws installed as a devDependency — Hosting
+ * declares it only as an optional peer, which avoids bloating the hosting
+ * package for SPA/static users who don't need OpenNext.
  *
- * If @opennextjs/aws is not installed, npx will fail with a clear error.
- * We catch it and provide an actionable resolution message.
+ * If @opennextjs/aws is not installed, the build warns and runs
+ * `npx --yes @opennextjs/aws@<OPENNEXT_FALLBACK_VERSION> build` instead of
+ * letting npx fetch the newest (unverified) release. A failed build throws
+ * `OpenNextNotFoundError` when OpenNext wasn't installed (resolution: declare
+ * the pinned version) and `OpenNextBuildError` when it was. Before building,
+ * it also warns when the app's `next` version is outside the building
+ * OpenNext's `next` peer range.
  */
 const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
-  const args = ['@opennextjs/aws', 'build'];
+  // Hosting declares `@opennextjs/aws` as an optional peer, so nothing
+  // installs it for the app. Without a local install, a bare
+  // `npx @opennextjs/aws` fetches the newest release — outside the verified
+  // range more often than not. Build with the verified fallback version
+  // instead, and say so.
+  const installed = findInstalledOpenNext(projectDir);
+  const openNextVersion = installed?.version ?? OPENNEXT_FALLBACK_VERSION;
+  if (!installed) {
+    process.stderr.write(
+      `⚠️  @opennextjs/aws is not installed in this project; building with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}, the version this adapter falls back to. ` +
+        `Declare it to control the version and build without downloading it: npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n`,
+    );
+  }
+  warnIfNextOutsideOpenNextPeerRange(
+    projectDir,
+    openNextVersion,
+    installed ? installed.nextPeerRange : OPENNEXT_FALLBACK_NEXT_PEER_RANGE,
+  );
+
+  const args = installed
+    ? ['@opennextjs/aws', 'build']
+    : ['--yes', `@opennextjs/aws@${OPENNEXT_FALLBACK_VERSION}`, 'build'];
   if (configPath) args.push('--config-path', configPath);
 
   // `@opennextjs/aws` refuses to build a Next.js major that has aged out of
@@ -1911,22 +2302,22 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
       env: { ...process.env, NODE_OPTIONS: '' },
     });
   } catch (error) {
-    // Check if the error is because @opennextjs/aws is not installed
-    const errMsg = (error as Error).message || '';
-    if (
-      errMsg.includes('not found') ||
-      errMsg.includes('ERR_MODULE_NOT_FOUND') ||
-      errMsg.includes('Cannot find package')
-    ) {
+    // The child's output went straight to the terminal (`stdio: 'inherit'`),
+    // so the thrown error only carries the exit code — whether OpenNext was
+    // installed is the one thing we know for sure about the failure.
+    if (!installed) {
       throw new HostingError(
         'OpenNextNotFoundError',
         {
-          message:
-            '@opennextjs/aws is not installed. Next.js hosting requires OpenNext to build and deploy your app.',
+          message: `@opennextjs/aws is not installed, and the build with @opennextjs/aws@${OPENNEXT_FALLBACK_VERSION} failed. Next.js hosting requires OpenNext to build and deploy your app.`,
           resolution:
-            "Add @opennextjs/aws to your project's devDependencies:\n\n" +
-            '  npm install --save-dev @opennextjs/aws\n\n' +
-            'Then re-run your deployment.',
+            "Add @opennextjs/aws to your project's devDependencies (this also avoids downloading it during the build):\n\n" +
+            `  npm install --save-dev @opennextjs/aws@~${OPENNEXT_FALLBACK_VERSION}\n\n` +
+            'Then re-run your deployment. If it still fails, check the build output above. Common issues:\n' +
+            '  - Missing Next.js dependencies (run: npm install)\n' +
+            '  - Invalid next.config.js\n' +
+            '  - TypeScript compilation errors in your app\n' +
+            '  - No network access to the npm registry during the build (declaring the dependency avoids the download)',
         },
         error as Error,
       );
@@ -1949,12 +2340,42 @@ const runOpenNextBuild = (projectDir: string, configPath?: string): void => {
 };
 
 /**
+ * The `_next/static` paths that are safe to cache as immutable.
+ *
+ * Next.js content-hashes every file under `_next/static` except the build-id
+ * directory (`_next/static/<buildId>/_buildManifest.js`, `_ssgManifest.js`),
+ * whose URL is unique only while the build id is. With a pinned build id
+ * (`deterministicBuildId`) that URL stays the same across deploys, so a
+ * browser would keep the previous manifest and load the previous pages'
+ * chunks; the build-id directory is left out and gets the revalidating
+ * Cache-Control instead.
+ *
+ * @param assetsDir OpenNext's `assets` directory.
+ * @param profile the build profile; only `deterministicBuildId` matters.
+ */
+export const nextStaticImmutablePaths = (assetsDir: string, profile: BuildProfile): string[] => {
+  const staticDir = path.join(assetsDir, '_next', 'static');
+  if (!profile.deterministicBuildId || !fs.existsSync(staticDir)) return ['_next/static/*'];
+  const hashed = fs
+    .readdirSync(staticDir, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        !(entry.isDirectory() && fs.existsSync(path.join(staticDir, entry.name, '_buildManifest.js'))),
+    )
+    .map((entry) => (entry.isDirectory() ? `_next/static/${entry.name}/*` : `_next/static/${entry.name}`))
+    .sort();
+  return hashed;
+};
+
+/**
  * Translate OpenNext output structure into our framework-agnostic DeployManifest.
  */
 const translateOpenNextOutput = (
   output: OpenNextOutput,
   openNextDir: string,
+  profile: BuildProfile = {},
 ): DeployManifest => {
+  const httpApi = profile.serverInvoke === 'http-api';
   const manifest: DeployManifest = {
     version: 1,
     compute: {},
@@ -1963,7 +2384,7 @@ const translateOpenNextOutput = (
       // Next.js content-hashes everything under `_next/static`; HTML and
       // public/ live elsewhere in the assets dir and must NOT be marked
       // immutable (would brick clients on redeploy — see L3 PWA note).
-      immutablePaths: ['_next/static/*'],
+      immutablePaths: nextStaticImmutablePaths(path.join(openNextDir, 'assets'), profile),
     },
     routes: [],
   };
@@ -1976,7 +2397,11 @@ const translateOpenNextOutput = (
 
       const computeResource = mapOriginToCompute(name, origin, openNextDir);
       if (computeResource) {
-        manifest.compute[name] = computeResource;
+        // Behind an HTTP API every function is invoked buffered (it was built
+        // with the buffered `aws-lambda` wrapper).
+        manifest.compute[name] = httpApi && computeResource.type === 'handler'
+          ? { ...computeResource, streaming: false }
+          : computeResource;
       }
     }
   }
@@ -2003,14 +2428,26 @@ const translateOpenNextOutput = (
       ];
       const bundle = candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
 
-      manifest.compute[name] = {
-        type: 'edge',
-        bundle,
-        handler: fn.handler ?? 'index.handler',
-        placement: 'global',
-        streaming: false,
-        runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
-      };
+      // An edge route built regional (`edgeToRegional`) is a plain regional
+      // Lambda handler; OpenNext usually lists it under `origins` (above), but
+      // the placement decides wherever it is listed.
+      manifest.compute[name] = profile.edgeToRegional
+        ? {
+            type: 'handler',
+            bundle,
+            handler: fn.handler ?? 'index.handler',
+            placement: 'regional',
+            streaming: !httpApi,
+            runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+          }
+        : {
+            type: 'edge',
+            bundle,
+            handler: fn.handler ?? 'index.handler',
+            placement: 'global',
+            streaming: false,
+            runtime: FRAMEWORK_EDGE_COMPUTE_RUNTIME,
+          };
     }
   }
 
@@ -2067,10 +2504,14 @@ const translateOpenNextOutput = (
         manifest.cache = {
           computeResource: primaryComputeName,
           tagRevalidation: tagCacheEnabled,
-          revalidationQueue: true,
-          revalidationFunction: hasRevalidationFn
-            ? { bundle: revalidationFnDir, handler: 'index.handler' }
-            : undefined,
+          // `skipIsr`: the cache and its seed stay (prerendered pages are
+          // served from the build's snapshot); no queue, no revalidation
+          // function (the server uses OpenNext's `dummy` queue).
+          revalidationQueue: !profile.skipIsr,
+          revalidationFunction:
+            !profile.skipIsr && hasRevalidationFn
+              ? { bundle: revalidationFnDir, handler: 'index.handler' }
+              : undefined,
           ...(seedDirectory ? { seedDirectory } : {}),
           ...(initFunction ? { initFunction } : {}),
         };

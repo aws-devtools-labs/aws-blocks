@@ -11,3 +11,5 @@ export class Logger {
 	error(_message: string, _context?: Record<string, unknown>): void {}
 	child(_context: Record<string, unknown>): Logger { return new Logger(); }
 }
+
+export { LoggingErrors } from './errors.js';

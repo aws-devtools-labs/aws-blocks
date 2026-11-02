@@ -4,8 +4,10 @@
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
-import { runCapture, runSync } from './run-command.js';
-import { emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import { createCdkOutput } from './cdk-output.js';
+import { log } from './log.js';
+import { runCapture } from './run-command.js';
+import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
@@ -34,14 +36,14 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
       .filter(Boolean);
   } catch (e) {
     const detail = (e as { stderr?: string; message?: string }).stderr || (e as Error).message;
-    console.warn(`  ⚠️  could not list production stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
+    log.warn(`  ⚠️  could not list production stacks via 'cdk ls'; skipping bucket-emptying: ${detail}`);
     return [];
   }
 }
 
 export async function destroy(options: DestroyOptions) {
   return trackCommand('destroy', async () => {
-    console.log('🗑️  Destroying production stack...');
+    log.progress('🗑️  Destroying production stack...');
 
     // Fail fast on a missing/expired credential BEFORE entering the retry loop:
     // a credential error is deterministic, so retrying it only burns the full
@@ -55,25 +57,39 @@ export async function destroy(options: DestroyOptions) {
       NODE_OPTIONS: '--conditions=cdk',
       ...getCdkTelemetryEnv('production'),
     };
-    const cdkArgs = [
-      'cdk', 'destroy',
-      '--force',
-      '--context', `projectRoot=${options.projectRoot}`,
-    ];
-
     // Reuse the sandbox path's shipped teardown-retry machinery: on a failed
     // destroy, empty the stacks' versioned S3 buckets (the autoDeleteObjects
     // Lambda never provisions on a failed CREATE, so the bucket blocks the
     // delete and the stack + its IAM roles leak) and back off before retrying.
     // The backoff also rides out a transient API Gateway control-plane throttle
     // (DeleteRestApi 429), which single-shot `cdk destroy` surfaced as a hard
-    // teardown failure with no recovery.
-    await runDestroyWithRetries({
-      runDestroy: () => runSync('npx', cdkArgs, { stdio: 'inherit', cwd: options.projectRoot, env: cdkEnv }),
-      listStackNames: () => listProductionStackNames(options, cdkEnv),
-      emptyBuckets: emptySandboxBuckets,
-      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-      successLabel: 'Production stack',
-    });
+    // teardown failure with no recovery. A failure whose stack events show such
+    // a throttle gets a longer, jittered backoff (see runDestroyWithRetries).
+    await runDestroyWithRetries(productionDestroyDeps(options, cdkEnv));
   });
+}
+
+/**
+ * The {@link runDestroyWithRetries} dependencies the production `destroy`
+ * runs with. A separate function so a test can pin the wiring (throttle
+ * detection, bucket emptying) without spawning cdk.
+ */
+export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.ProcessEnv): DestroyRetryDeps {
+  const cdkArgs = [
+    'cdk', 'destroy',
+    '--force',
+    '--context', `projectRoot=${options.projectRoot}`,
+  ];
+  // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
+  // the retry loop prints it once the destroy finally fails.
+  const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
+  return {
+    runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv }),
+    printRetainedOutput: () => cdkOutput.printRetained(),
+    listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
+    emptyBuckets: emptySandboxBuckets,
+    isThrottled: destroyWasThrottled,
+    sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    successLabel: 'Production stack',
+  };
 }

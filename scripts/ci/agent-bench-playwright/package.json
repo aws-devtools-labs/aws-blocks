@@ -1,0 +1,9 @@
+{
+	"name": "agent-bench-playwright",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Playwright for the agent-bench browser pre-provision step, installed with npm ci from this lockfile. Keep the version equal to PW_VERSION in scripts/agent-bench/steps/3-build-and-test.sh.",
+	"dependencies": {
+		"playwright": "1.60.0"
+	}
+}

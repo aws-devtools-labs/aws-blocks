@@ -206,7 +206,7 @@ Sessions outlive the IdP's ID token — users won't get kicked out every hour. T
 - `github({ clientId, clientSecret, scopes? })` — OAuth 2.0 (no ID token; userinfo fetched + mapped automatically).
 - `customOidc({ name, issuerUrl, clientId, clientSecret, scopes?, attributeMapping? })` — any OIDC issuer (Okta, Auth0, Cognito User Pools, Entra).
 - `customOauth2({ name, authUrl, tokenUrl, userInfoUrl, clientId, clientSecret, scopes, mapClaims })` — bare OAuth 2.0 with a customer-supplied claim mapper.
-- `stubIdp({ name })` — a real, in-process OIDC provider for zero-config local sign-in. Auto-approves with deterministic users, needs no real credentials, and works offline. Explicit opt-in: it only handles sign-in for providers you declare with `stubIdp()`, never as a silent substitute for a real provider. Also what you use for E2E. See [Local development](#local-development).
+- `stubIdp({ name })` — a real, in-process OIDC provider for zero-config local sign-in. Auto-approves with deterministic users, needs no real credentials, and works offline. Explicit opt-in: it only handles sign-in for providers you declare with `stubIdp()`, never as a silent substitute for a real provider. Also what you use for E2E. Local and sandbox deployments only. See [Local development](#local-development).
 
 ### Pointing at an existing Cognito User Pool
 
@@ -247,12 +247,16 @@ In sandbox the frontend is served locally while the backend runs as a deployed A
 When you want none of that setup — offline, deterministic, no credentials — use `stubIdp()`:
 
 ```typescript
-import { AuthOIDC, stubIdp } from '@aws-blocks/bb-auth-oidc';
+import { AuthOIDC, google, stubIdp, getDeploymentType } from '@aws-blocks/blocks';
 
-const auth = new AuthOIDC(app, 'auth', {
-	providers: [stubIdp({ name: 'google' })],
-});
+const providers = getDeploymentType() === 'production'
+	? [google({ clientId, clientSecret })]
+	: [stubIdp({ name: 'google' })];
+
+const auth = new AuthOIDC(app, 'auth', { providers });
 ```
+
+`stubIdp()` is restricted to local development (`npm run dev`) and sandbox (`npm run sandbox`) deployments: synth fails when any other deployment configures a `stubIdp()` provider, and deployed compute serves the stub IdP routes only in a sandbox. `getDeploymentType()` returns `'local'`, `'sandbox'`, or `'production'` and reports the same value at synth and at runtime, so selecting providers with it keeps both sides consistent. At synth it reports the deployment type inside your backend module (once `BlocksStack` / `BlocksBackend` `create()` has begun importing it); at runtime it reports it on deployed compute. Wherever Blocks config and context are not present (before `create()`, in plain scripts, or on non-Blocks compute) it returns `'local'`, so call it from the backend module, as in the examples above. Authorization codes issued by the stub are signed with a key derived per deployment from the instance's cookie-signing secret.
 
 `stubIdp()` is a real, spec-conformant OIDC provider that runs in-process: RS256 signing with a real keypair, a JWKS endpoint, OIDC discovery, the authorization-code grant with PKCE, refresh-token rotation, and RFC 7009 revocation. The engine runs the identical discovery + verify code path it uses against a real IdP. It just signs deterministic local users instead of authenticating a human. It is an explicit choice that sits next to your real providers in the `providers` array — it never silently replaces one. It is also what you use for E2E.
 
@@ -261,7 +265,10 @@ You can mix the two freely; the code is the source of truth in every environment
 ```typescript
 providers: [
 	google({ clientId, clientSecret }),  // real Google everywhere, incl. local
-	stubIdp({ name: 'corporate' }),       // AWS Blocks stub everywhere
+	// AWS Blocks stub for local and sandbox; a real provider in production
+	getDeploymentType() === 'production'
+		? customOidc({ name: 'corporate', issuerUrl, clientId: corpClientId, clientSecret: corpClientSecret })
+		: stubIdp({ name: 'corporate' }),
 ]
 ```
 
@@ -366,6 +373,36 @@ const auth = new AuthOIDC(app, 'auth', {
 User IDs are stable across engine switches — `userId = ${iss}:${sub}` is derived from the original IdP identity (extracted from Cognito's `identities` claim), not from Cognito's internal UUID.
 
 The CDK layer auto-provisions the Cognito User Pool, App Client, domain, and identity provider registrations. No Cognito CDK code needed.
+
+### Callback and logout URLs
+
+The app client's callback / logout URLs are registered for you: the app's public origin (when it is `https://`) and the API Gateway URL, each with `/aws-blocks/auth/callback`, plus `http://localhost:3000` in sandbox mode. Cognito rejects non-localhost `http://` callback URLs, so a plain-http app origin is skipped with a `PlainHttpPublicOrigin` synth warning.
+
+Use `additionalCallbackUrls` / `additionalLogoutUrls` for redirect targets that can't be derived at synth:
+
+- browser PKCE SPA redirect pages (the SPA page URL is app-specific);
+- native app custom URI schemes (e.g. `myapp://auth/callback`) used as the `redirect_uri` of a direct, client-initiated PKCE sign-in (`signIn(provider, { redirectPath })`) — the [relay flow](#relay-flow-for-native-sign-in) needs none, since its `redirect_uri` is the backend's HTTPS callback and the custom scheme is only the `relayTo` target;
+- custom-domain names beyond the primary one (only the primary app origin is registered automatically);
+- a sandbox dev server on a port other than `3000`.
+
+```typescript
+cognitoFederated({
+	name: 'google',
+	identityProvider: 'Google',
+	cognitoDomain: 'myapp',
+	region: 'us-east-1',
+	clientId:     googleClientId,
+	clientSecret: googleSecret,
+	additionalCallbackUrls: ['https://www.example.com/aws-blocks/auth/callback', 'myapp://auth/callback'],
+	additionalLogoutUrls:   ['https://www.example.com/'],
+}),
+```
+
+Entries from every `cognitoFederated()` provider are merged into the one shared app client and de-duplicated; each URL is validated at synth.
+
+Sign-out clears the session and revokes the refresh token; it doesn't redirect through Cognito's hosted `/logout` endpoint, so the logout URLs are registered for completeness but aren't used by the current sign-out path.
+
+**Upgrading.** The app client's callback and logout URLs are now managed by the Building Block. URLs added to the Cognito app client outside of CDK (for example, in the console as a workaround) are replaced on the next deploy — re-add any you still need through `additionalCallbackUrls` / `additionalLogoutUrls`.
 
 In local dev (`npm run dev`), `cognitoFederated` is **not available** — Cognito federation needs the deployed User Pool + app-client credentials, which only exist after `npm run sandbox` / `npm run deploy`. Declaring the provider doesn't block local dev, but a cognito-federated sign-in fails fast with a clear message. For local sign-in, add an explicit `stubIdp({ name })` provider (see [Local development](#local-development)); exercise the real Cognito flow in sandbox/deploy.
 

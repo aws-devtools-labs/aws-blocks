@@ -61,43 +61,51 @@ async function withJsBackend<T>(label: string, body: (foundationPath: string, di
 
 /**
  * Type extraction reads the `.ts` from disk, so the loader only has to
- * return the marker.
+ * return the marker. `source` decides which extraction path the spec
+ * generator takes for the same transferable.
  */
-async function withTransferableBackend<T>(label: string, body: (foundationPath: string) => Promise<T>): Promise<T> {
+async function withBackend<T>(label: string, source: string, body: (foundationPath: string) => Promise<T>): Promise<T> {
 	const dir = join(tmpdir(), `blocks-native-catalogs-${Date.now()}-${label}`);
 	try {
 		mkdirSync(dir, { recursive: true });
 		writeTsconfig(dir);
-		writeFileSync(
-			join(dir, 'index.ts'),
-			`
-		declare const ApiNamespace: new (
-			scope: unknown,
-			name: string,
-			handler: (context: unknown) => Record<string, (...args: never[]) => unknown>,
-		) => never;
-
-		interface Telemetry {
-			celsius: number;
-		}
-
-		interface DeviceLink<T> {
-			read(): Promise<T>;
-			toJSON(): { __blocks: '${TAG}' };
-		}
-
-		export const api = new ApiNamespace(null, 'api', (context: unknown) => ({
-			async connectDevice(deviceId: string): Promise<DeviceLink<Telemetry>> {
-				return null as unknown as DeviceLink<Telemetry>;
-			},
-		}));
-		`,
-		);
+		writeFileSync(join(dir, 'index.ts'), source);
 		return await body(join(dir, 'index.ts'));
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
 }
+
+const AST_BACKEND = `
+	declare const ApiNamespace: new (
+		scope: unknown,
+		name: string,
+		handler: (context: unknown) => Record<string, (...args: never[]) => unknown>,
+	) => never;
+
+	interface Telemetry { celsius: number; }
+
+	interface DeviceLink<T> { read(): Promise<T>; toJSON(): { __blocks: '${TAG}' }; }
+
+	export const api = new ApiNamespace(null, 'api', (context: unknown) => ({
+		async connectDevice(deviceId: string): Promise<DeviceLink<Telemetry>> {
+			return null as unknown as DeviceLink<Telemetry>;
+		},
+	}));
+`;
+
+const DECLARED_INTERFACE_BACKEND = `
+	interface Telemetry { celsius: number; }
+
+	interface DeviceLink<T> { read(): Promise<T>; toJSON(): { __blocks: '${TAG}' }; }
+
+	interface IotApi { connectDevice(deviceId: string): Promise<DeviceLink<Telemetry>>; }
+
+	declare class Iot { createApi(): IotApi; }
+	declare const iot: Iot;
+
+	export const api = iot.createApi();
+`;
 
 function stubTransferableLoader() {
 	const api = new (
@@ -202,7 +210,7 @@ describe('generateSpec — native catalogs', () => {
 	});
 
 	it('leaves method results untouched — they join a binding only by tag', async () => {
-		await withTransferableBackend('join', async (foundationPath) => {
+		await withBackend('join', AST_BACKEND, async (foundationPath) => {
 			const loader = stubTransferableLoader();
 			const bare = await generateSpec(foundationPath, loader);
 			const bound = await generateSpec(foundationPath, loader, { nativeDeclarations: iotDeclarations(1) });
@@ -215,7 +223,7 @@ describe('generateSpec — native catalogs', () => {
 	});
 
 	it('accepts arity 1 against a real generic transferable result', async () => {
-		await withTransferableBackend('arity-ok', async (foundationPath) => {
+		await withBackend('arity-ok', AST_BACKEND, async (foundationPath) => {
 			const doc = await generateSpec(foundationPath, stubTransferableLoader(), {
 				nativeDeclarations: iotDeclarations(1),
 			});
@@ -226,8 +234,18 @@ describe('generateSpec — native catalogs', () => {
 		});
 	});
 
+	it('accepts arity 1 when the namespace is typed from a declared interface', async () => {
+		await withBackend('arity-resolved', DECLARED_INTERFACE_BACKEND, async (foundationPath) => {
+			const doc = await generateSpec(foundationPath, stubTransferableLoader(), {
+				nativeDeclarations: iotDeclarations(1),
+			});
+			const schema = doc.methods[0].result.schema as Record<string, unknown>;
+			assert.strictEqual((schema['x-blocks-type-args'] as unknown[]).length, 1);
+		});
+	});
+
 	it('rejects arity 0 against a real generic transferable result', async () => {
-		await withTransferableBackend('arity-bad', async (foundationPath) => {
+		await withBackend('arity-bad', AST_BACKEND, async (foundationPath) => {
 			await assert.rejects(
 				() =>
 					generateSpec(foundationPath, stubTransferableLoader(), { nativeDeclarations: iotDeclarations(0) }),

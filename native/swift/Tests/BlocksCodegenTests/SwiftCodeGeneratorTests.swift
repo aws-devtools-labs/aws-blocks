@@ -265,7 +265,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         """)
 
         XCTAssertTrue(output.api.contains("-> OIDCClient"))
-        XCTAssertTrue(output.api.contains("OIDCClient.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"))
+        XCTAssertTrue(output.api.contains("OIDCClient<String>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"))
     }
 
     // MARK: - Multiple Namespaces
@@ -611,7 +611,7 @@ final class SwiftCodeGeneratorTests: XCTestCase {
             "realtime/channel": "RealtimeChannel<",
             "file-bucket/download": "FileDownloadHandle.fromJSON(descriptor)",
             "file-bucket/upload": "FileUploadHandle.fromJSON(descriptor)",
-            "oidc/client": "OIDCClient.fromJSON(descriptor"
+            "oidc/client": "OIDCClient<String>.fromJSON(descriptor"
         ]
         for tag in knownTransferableTags {
             guard let concreteReturn = expectedReturn[tag], let concreteBody = expectedBody[tag] else {
@@ -774,10 +774,248 @@ final class SwiftCodeGeneratorTests: XCTestCase {
         }
         """)
         XCTAssertTrue(output.api.contains("public let client: JSONValue"), "a nested oidc/client decodes as its descriptor, got:\n\(output.api)")
-        XCTAssertTrue(output.api.contains("-> OIDCClient {"), "a direct oidc/client still hydrates, got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("-> OIDCClient<String> {"), "a direct oidc/client still hydrates, got:\n\(output.api)")
         XCTAssertEqual(output.warnings.filter { $0.contains("oidc/client") }, [
             "swift: auth.getSetup returns an oidc/client below the top level, which decodes as JSONValue; return it directly to get an OIDCClient."
         ])
+    }
+
+    // MARK: - OIDC Provider Enums
+
+    private func oidcSpec(_ methods: String) -> String {
+        """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [\(methods)]
+        }
+        """
+    }
+
+    func testTypedOIDCClientIsTypedByItsProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google", "github", "my-sso"] }]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("public func getClient() async throws -> OIDCClient<GetClient.Provider> {"), "got:\n\(output.api)")
+        XCTAssertTrue(
+            output.api.contains("return try OIDCClient<GetClient.Provider>.fromJSON(descriptor, baseUrl: self.client.baseUrl, client: self.client)"),
+            "got:\n\(output.api)"
+        )
+        XCTAssertTrue(output.api.contains("""
+            public enum GetClient {
+
+                /// The providers `auth.getClient` signs in with.
+                public enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+                    case google
+                    case github
+                    case mySso = "my-sso"
+                }
+            }
+        """), "got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("extension"), "the runtime's signIn takes the enum, got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("ResultMessage"), "the type argument is not a channel message, got:\n\(output.api)")
+        XCTAssertEqual(output.warnings, [])
+    }
+
+    func testOIDCClientWithoutAStringEnumTypeArgStaysUntyped() throws {
+        let untypedArgs = [
+            "",
+            #", "x-blocks-type-args": [{ "type": "string" }]"#,
+            #", "x-blocks-type-args": [{ "type": "object", "properties": { "x": { "type": "number" } } }]"#
+        ]
+        for typeArgs in untypedArgs {
+            let output = try generate(from: oidcSpec("""
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client"\(typeArgs) } } }
+            """))
+            XCTAssertTrue(output.api.contains("-> OIDCClient<String> {"), "got:\n\(output.api)")
+            XCTAssertTrue(output.api.contains("OIDCClient<String>.fromJSON(descriptor"), "got:\n\(output.api)")
+            XCTAssertFalse(output.api.contains("public enum GetClient"), "no nested types for \(typeArgs), got:\n\(output.api)")
+        }
+    }
+
+    func testOptionalTypedOIDCClientKeepsItsProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.findClient", "params": [], "result": { "name": "R", "schema": { "oneOf": [
+                { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }] },
+                { "type": "null" }
+            ]}}}
+        """))
+        XCTAssertTrue(output.api.contains("-> OIDCClient<FindClient.Provider>? {"), "got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("OIDCClient<FindClient.Provider>.fromJSON(descriptor"), "got:\n\(output.api)")
+    }
+
+    func testNestedTypedOIDCClientHasNoProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": {
+                "type": "object", "properties": { "client": {
+                    "x-blocks-transferable": "oidc/client",
+                    "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+                }}, "required": ["client"]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("public let client: JSONValue"), "got:\n\(output.api)")
+        XCTAssertFalse(output.api.contains("Provider"), "a client that decodes as JSONValue gets no provider enum, got:\n\(output.api)")
+    }
+
+    func testProviderCaseNamesAreLegalSwift() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["default", "1password", "Google", "google", "my-sso", "my-sso", "+"] }]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("""
+                public enum Provider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {
+                    case `default`
+                    case _1password = "1password"
+                    case google = "Google"
+                    case google2 = "google"
+                    case mySso = "my-sso"
+                    case _unnamed = "+"
+                }
+        """), "got:\n\(output.api)")
+    }
+
+    func testProviderEnumNameAvoidsAParameterType() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [
+                { "name": "provider", "required": true, "schema": { "type": "string", "enum": ["a", "b"] } }
+            ], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+            }}}
+        """))
+        XCTAssertTrue(
+            output.api.contains("public func getClient(provider: GetClient.Provider) async throws -> OIDCClient<GetClient.ResultProvider> {"),
+            "got:\n\(output.api)"
+        )
+        XCTAssertTrue(output.api.contains("public enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"), "got:\n\(output.api)")
+        XCTAssertEqual(output.warnings, [
+            "swift: auth.getClient names its providers Auth.GetClient.ResultProvider, since its operation already declares or uses a type named Provider."
+        ])
+    }
+
+    func testProviderEnumNameAvoidsVariantStructsAndModels() throws {
+        let typedClient = #"{ "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }] }"#
+        // A root union's variant structs share the operation enum with the provider enum.
+        let variants = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [
+                { "name": "via", "required": true, "schema": { "oneOf": [
+                    { "type": "object", "required": ["kind", "name"],
+                      "properties": { "kind": { "type": "string", "enum": ["provider"] }, "name": { "type": "string" } } },
+                    { "type": "object", "required": ["kind", "pw"],
+                      "properties": { "kind": { "type": "string", "enum": ["password"] }, "pw": { "type": "string" } } }
+                ]}}
+            ], "result": { "name": "R", "schema": \(typedClient) } }
+        """))
+        XCTAssertTrue(variants.api.contains("public struct Provider: Codable {"), "got:\n\(variants.api)")
+        XCTAssertTrue(
+            variants.api.contains("public enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"),
+            "got:\n\(variants.api)"
+        )
+        // A nested type naming the `Provider` model must not resolve to the provider enum.
+        let model = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{ "name": "auth.getClient", "params": [
+                { "name": "options", "required": true, "schema": {
+                    "type": "object", "properties": { "via": { "$ref": "#/components/schemas/Provider" } }, "required": ["via"]
+                }}
+            ], "result": { "name": "R", "schema": \(typedClient) } }],
+            "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
+        }
+        """)
+        XCTAssertTrue(model.api.contains("public enum ResultProvider: String, CaseIterable, Codable, BlocksRuntime.OIDCProviderName {"), "got:\n\(model.api)")
+        XCTAssertFalse(model.api.contains("public enum Provider: String"), "got:\n\(model.api)")
+        // With no other types in the operation enum, nothing there can name the model, so the enum keeps its name.
+        let unshadowed = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": \(typedClient) } },
+                { "name": "api.listProviders", "params": [], "result": { "name": "R", "schema": {
+                    "type": "array", "items": { "$ref": "#/components/schemas/Provider" }
+                }}}
+            ],
+            "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
+        }
+        """)
+        XCTAssertTrue(unshadowed.api.contains("-> OIDCClient<GetClient.Provider> {"), "got:\n\(unshadowed.api)")
+        XCTAssertTrue(unshadowed.models.contains("public nonisolated struct Provider: Codable {"), "got:\n\(unshadowed.models)")
+        XCTAssertEqual(unshadowed.warnings, [])
+    }
+
+    func testUnrelatedProviderModelDoesNotRenameTheEnum() throws {
+        // The operation has an inline type, but only another method names the `Provider` model.
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [
+                { "name": "auth.getClient", "params": [
+                    { "name": "opts", "required": true, "schema": {
+                        "type": "object", "properties": { "force": { "type": "boolean" } }, "required": ["force"]
+                    }}
+                ], "result": { "name": "R", "schema": {
+                    "x-blocks-transferable": "oidc/client",
+                    "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+                }}},
+                { "name": "catalog.listProviders", "params": [], "result": { "name": "R", "schema": {
+                    "type": "array", "items": { "$ref": "#/components/schemas/Provider" }
+                }}}
+            ],
+            "components": { "schemas": { "Provider": { "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] } } }
+        }
+        """)
+        XCTAssertTrue(output.api.contains("-> OIDCClient<GetClient.Provider> {"), "got:\n\(output.api)")
+        XCTAssertEqual(output.warnings, [])
+    }
+
+    func testProviderRenameEndsForAParameterWithNoNamePart() throws {
+        // A param named only by separators PascalCases to "", which can't prefix a clashing name.
+        let output = try generate(from: oidcSpec("""
+            { "name": "auth.getClient", "params": [
+                { "name": "provider", "required": true, "schema": { "type": "string", "enum": ["a", "b"] } },
+                { "name": ".", "required": true, "schema": {
+                    "x-blocks-transferable": "oidc/client",
+                    "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+                }}
+            ], "result": { "name": "R", "schema": { "type": "string" } } }
+        """))
+        XCTAssertTrue(output.api.contains("public func getClient("), "got:\n\(output.api)")
+    }
+
+    func testTypedOIDCClientInAModelHasNoProviderEnum() throws {
+        let output = try generate(from: """
+        {
+            "openrpc": "1.3.2",
+            "info": { "title": "test", "version": "1.0.0" },
+            "methods": [{ "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": { "$ref": "#/components/schemas/Setup" } } }],
+            "components": { "schemas": { "Setup": { "type": "object", "properties": { "client": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+            }}, "required": ["client"] } } }
+        }
+        """)
+        XCTAssertTrue(output.models.contains("public let client: JSONValue"), "got:\n\(output.models)")
+        XCTAssertFalse(output.models.contains("enum"), "a client in a model gets no provider enum, got:\n\(output.models)")
+        XCTAssertFalse(output.api.contains("Provider"), "got:\n\(output.api)")
+    }
+
+    func testDefaultNamespaceClientIsTypedByItsProviderEnum() throws {
+        let output = try generate(from: oidcSpec("""
+            { "name": "getClient", "params": [], "result": { "name": "R", "schema": {
+                "x-blocks-transferable": "oidc/client",
+                "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }]
+            }}}
+        """))
+        XCTAssertTrue(output.api.contains("/// The providers `getClient` signs in with."), "got:\n\(output.api)")
+        XCTAssertTrue(output.api.contains("public func getClient() async throws -> OIDCClient<GetClient.Provider> {"), "got:\n\(output.api)")
     }
 
     func testUnboundTransferableDiagnosticQualifiesDefaultNamespace() throws {

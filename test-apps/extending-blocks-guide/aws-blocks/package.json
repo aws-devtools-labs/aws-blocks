@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
-    "@aws-sdk/client-sqs": "^3.1152.0"
+    "@aws-sdk/client-cloudformation": "^3.1156.0",
+    "@aws-sdk/client-sqs": "^3.1156.0"
   }
 }

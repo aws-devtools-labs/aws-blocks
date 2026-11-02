@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { generateClientCode } from './generate-client.js';
 
 /**
@@ -100,5 +101,53 @@ describe('generateClientCode — middleware collection', () => {
 			code.includes("export const realApi = __BLOCKS_ApiNamespaceClient__('realApi')"),
 			'a real (non-marker) export still becomes a namespace',
 		);
+	});
+});
+
+describe('generateClientCode — generateClient options', () => {
+	let tmpDir: string;
+
+	beforeEach(() => {
+		tmpDir = join(tmpdir(), `blocks-gen-client-opts-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(tmpDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it('passes the options object unchanged to every namespace client (url, retryStaleConnection)', async () => {
+		const backendPath = join(tmpDir, 'backend.mjs');
+		writeFileSync(backendPath, 'export function api() {}\nexport function other() {}\n');
+		const code = await generateClientCode(backendPath);
+
+		// Run the generated module against a stub ApiNamespaceClient that records its arguments.
+		const stubPath = join(tmpDir, 'stub-client.mjs');
+		writeFileSync(
+			stubPath,
+			'export const calls = [];\nexport function ApiNamespaceClient(name, options) { calls.push({ name, options }); return { name }; }\n',
+		);
+		const stubUrl = pathToFileURL(stubPath).href;
+		const clientPath = join(tmpDir, 'client.mjs');
+		const specifier = "'@aws-blocks/blocks/client'";
+		assert.ok(
+			code.includes(specifier),
+			'generated client imports ApiNamespaceClient from @aws-blocks/blocks/client',
+		);
+		writeFileSync(clientPath, code.replace(specifier, `'${stubUrl}'`));
+
+		const client = (await import(pathToFileURL(clientPath).href)) as {
+			generateClient: (config: unknown) => Record<string, unknown>;
+		};
+		const stub = (await import(stubUrl)) as { calls: { name: string; options: unknown }[] };
+		stub.calls.length = 0; // drop the module-level default exports' calls
+
+		const config = { url: 'http://127.0.0.1:1/aws-blocks/api', retryStaleConnection: false };
+		const generated = client.generateClient(config);
+		assert.deepStrictEqual(Object.keys(generated).sort(), ['api', 'other']);
+		assert.deepStrictEqual(stub.calls.map((c) => c.name).sort(), ['api', 'other']);
+		for (const call of stub.calls) {
+			assert.strictEqual(call.options, config, `${call.name} must receive the generateClient options as is`);
+		}
 	});
 });

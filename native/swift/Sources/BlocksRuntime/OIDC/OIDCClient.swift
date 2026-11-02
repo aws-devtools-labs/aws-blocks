@@ -8,13 +8,31 @@
 import Foundation
 import CryptoKit
 
+/// A provider an `OIDCClient` signs in with: the enum generated from the spec's provider names, or
+/// `String` when the spec doesn't name them.
+public protocol OIDCProviderName: Sendable {
+    /// The name the server knows the provider by.
+    var providerName: String { get }
+}
+
+public extension OIDCProviderName where Self: RawRepresentable, RawValue == String {
+    var providerName: String { rawValue }
+}
+
+extension String: OIDCProviderName {
+    public var providerName: String { self }
+}
+
 /// Server-relay OIDC client. Delegates networking to `BlocksClient` so
 /// cookies are shared automatically. Implements the relay sign-in flow:
 /// fetches signed authorize params from the server, opens the IdP in a
 /// browser, and exchanges the authorization code for tokens.
 ///
+/// `Provider` is the type `signIn` takes: the generated provider enum, so a
+/// client only accepts its own providers, or `String` for an untyped spec.
+///
 /// All mutable state is protected by actor isolation.
-public actor OIDCClient: AuthProvider {
+public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     public nonisolated let exchangePath: String
     public nonisolated let refreshPath: String
@@ -81,7 +99,12 @@ public actor OIDCClient: AuthProvider {
 
     public static func generateVerifier() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        // Fail closed: never return the zero-filled buffer when the system RNG call fails.
+        // Traps like the standard library's SystemRandomNumberGenerator, keeping this API non-throwing.
+        guard status == errSecSuccess else {
+            fatalError("SecRandomCopyBytes failed with OSStatus \(status)")
+        }
         return base64URLEncode(Data(bytes))
     }
 
@@ -107,10 +130,11 @@ public actor OIDCClient: AuthProvider {
     /// The server signs the state envelope and the IdP redirects to the
     /// server's callback, which then 302s to the app's `relayTo` scheme.
     public func signIn(
-        provider: String,
+        provider: Provider,
         relayTo: String,
         launcher: BrowserLauncher
     ) async throws -> OIDCUser {
+        let provider = provider.providerName
         guard providers.contains(provider) else {
             throw OIDCError.unknownProvider(provider)
         }
@@ -439,7 +463,8 @@ public actor OIDCClient: AuthProvider {
         }
     }
 
-    private static let tokenNames = ["access_token", "refresh_token", "expires_at"]
+    // Computed: a generic type can't store a static property.
+    private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at"] }
 
     /// Scoped by exchange path, so OIDC blocks sharing one `TokenStore` keep separate sessions.
     private func tokenKey(_ name: String) -> String {

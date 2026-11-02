@@ -24,12 +24,24 @@ export function listSecrets(opts: { stage?: string } = {}): Promise<string[]> {
 	return listValues('secret', { prefix: blocksSecretPrefix(), ...opts });
 }
 
-/** Remove a Blocks secret. */
-export function removeSecret(key: string, opts: { stage?: string } = {}): Promise<boolean> {
+/**
+ * Remove a Blocks secret. By default Secrets Manager schedules the deletion, so the
+ * name stays reserved for the recovery window (and can be restored); pass
+ * `force: true` to delete it immediately, as `blocks secret remove --force --yes` does.
+ * A forced delete has no recovery window: it logs a warning naming the stage (or
+ * saying the value is shared by every stage, production included) and proceeds —
+ * this API is non-interactive. The CLI additionally requires `--yes` for every
+ * `--force` delete.
+ */
+export function removeSecret(key: string, opts: { stage?: string; force?: boolean } = {}): Promise<boolean> {
 	return removeValue('secret', key, { prefix: blocksSecretPrefix(), ...opts });
 }
 
-/** CLI dispatcher for `blocks secret <set|list|remove> …`. */
-export function runSecretCli(argv: string[]): Promise<void> {
-	return runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'blocks secret' });
+/**
+ * CLI dispatcher for `blocks secret <set|list|remove> …`. `interactive: false`
+ * refuses the hidden prompt, and `yes` confirms `remove --force` as `--yes` does;
+ * a usage problem throws hosting's `ValueCliUsageError`.
+ */
+export function runSecretCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
+	return runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'blocks secret', ...options });
 }

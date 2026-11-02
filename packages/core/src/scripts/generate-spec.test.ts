@@ -198,3 +198,55 @@ describe('generateSpec — namespace returned by a factory, then destructured (r
 		}
 	});
 });
+
+describe('generateSpec — inferred transferable type args', () => {
+	it('emits a client generic resolved to a string-literal union as an inline enum type arg', async () => {
+		const dir = join(tmpdir(), `blocks-spec-test-${Date.now()}-type-args`);
+		mkdirSync(dir, { recursive: true });
+		writeTsconfig(dir);
+
+		// The client generic is inferred through a helper in another module, the
+		// way AuthOIDC.createApi() types getClient() as OIDCClient<ProviderName<P>>.
+		writeFileSync(join(dir, 'oidc.ts'), `
+			interface ApiNamespaceConstructor { new <T>(scope: any, name: string, handler: (ctx: any) => T): T; }
+			const ApiNamespace: ApiNamespaceConstructor = class {} as any;
+			interface OIDCClientDescriptor { __blocks: 'oidc/client'; providers: string[]; }
+			export interface OIDCClient<Provider extends string = string> {
+				signIn(provider: Provider): Promise<void>;
+				toJSON(): OIDCClientDescriptor;
+			}
+			export function createOidcApi<N extends string>(providers: readonly N[]) {
+				return new ApiNamespace(null, 'oidc', () => ({
+					getClient: async (): Promise<OIDCClient<N>> => null as any,
+				}));
+			}
+		`);
+		writeFileSync(join(dir, 'index.ts'), `
+			import { createOidcApi } from './oidc.js';
+			export const oidcAuthApi = createOidcApi(['google', 'github']);
+			export const looseAuthApi = createOidcApi([] as string[]);
+		`);
+
+		const client = { toJSON: () => ({ __blocks: 'oidc/client', providers: [] }) };
+		const oidcAuthApi = new ApiNamespace(null as any, 'oidc', () => ({ async getClient() { return client; } }));
+		const looseAuthApi = new ApiNamespace(null as any, 'oidc', () => ({ async getClient() { return client; } }));
+		const loader = async () => ({ oidcAuthApi, looseAuthApi }) as Record<string, unknown>;
+
+		try {
+			const doc = await generateSpec(join(dir, 'index.ts'), loader);
+			const byName = new Map(doc.methods.map((m) => [m.name, m]));
+			assert.deepStrictEqual(byName.get('oidcAuthApi.getClient')?.result?.schema, {
+				'x-blocks-transferable': 'oidc/client',
+				'x-blocks-type-args': [{ type: 'string', enum: ['google', 'github'] }],
+			});
+			// No component schema is hoisted for an inline enum.
+			assert.deepStrictEqual(Object.keys(doc.components?.schemas ?? {}), []);
+			// A plain `string` provider is the default, so no type args are emitted.
+			assert.deepStrictEqual(byName.get('looseAuthApi.getClient')?.result?.schema, {
+				'x-blocks-transferable': 'oidc/client',
+			});
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});

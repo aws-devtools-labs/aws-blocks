@@ -12,6 +12,10 @@
  * - Valid AWS credentials (for sandbox/deploy/destroy SUCCESS paths)
  * - Network access to the telemetry endpoint
  * - `npm run build` must have been run first
+ *
+ * The suite runs three groups concurrently (see the README's "Concurrent groups"):
+ * the local commands, the sandbox lifecycle and the production lifecycle.
+ * Inside each group the cases run one after another, as before.
  */
 
 import { describe, test, before, after, afterEach } from 'node:test';
@@ -23,7 +27,11 @@ import {
   readFileSync,
   existsSync,
   rmSync,
+  cpSync,
+  symlinkSync,
+  readdirSync,
 } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -284,20 +292,176 @@ function assertNotDelivered(stderr: string): void {
   assert.doesNotMatch(stderr, SENT_REGEX, 'Telemetry should NOT be delivered when disabled');
 }
 
+// --- AWS lifecycle groups ---------------------------------------------------
+
+/**
+ * Where an AWS lifecycle group runs its commands, so it can run while the
+ * other groups do.
+ *
+ * - `root` is a copy of the app. The CLI keeps its state under the project
+ *   root (`cdk.out`, `.blocks-sandbox/` with the cdk assembly, outputs.json
+ *   and the sandbox id, the generated `aws-blocks/client.js`, the project
+ *   config), and two cdk processes in one `cdk.out` fail on its lock.
+ * - `home` is its own HOME, seeded with the pinned installation-id. The local
+ *   group writes `telemetry.enabled=false` to the real HOME's global config
+ *   in some tests; a cloud command reading it then would send no telemetry.
+ *   AWS credentials must come from the environment or `~/.aws` (linked in);
+ *   a credential helper that keeps its state elsewhere in HOME won't find it.
+ */
+interface CloudGroup {
+  root: string;
+  home: string;
+}
+
+const CLOUD_GROUPS_DIR = join(APP_ROOT, '.e2e-groups');
+
+/** App entries a group copy needs. The generated client is left out. */
+const APP_ENTRIES = ['package.json', 'cdk.json', 'tsconfig.json', '.blocks', 'aws-blocks'];
+
+/**
+ * App entries a group copy leaves out: the tests and docs, state the CLI, the
+ * dev server or a group writes, and OS or editor files. Every other top-level
+ * entry fails the suite's before() until it is added to one of the two lists,
+ * so the AWS groups never deploy a different app than the local group runs.
+ * (`node_modules` is listed so the specific check in prepareCloudGroup reports
+ * it.)
+ */
+const APP_EXCLUDED = [
+  'test', 'README.md', '.gitignore', 'node_modules', 'dist',
+  'cdk.out', 'cdk.context.json', '.blocks-sandbox', '.bb-data', '.e2e-groups',
+  '.DS_Store', '.idea', '.vscode',
+];
+
+/** Fails when the app directory has a top-level entry in neither APP_ENTRIES nor APP_EXCLUDED. */
+function assertAppEntriesListed(): void {
+  const unlisted = readdirSync(APP_ROOT).filter((entry) => !APP_ENTRIES.includes(entry) && !APP_EXCLUDED.includes(entry));
+  assert.deepStrictEqual(
+    unlisted,
+    [],
+    'test-apps/telemetry has top-level entries in neither APP_ENTRIES (copied into the AWS groups) nor APP_EXCLUDED',
+  );
+}
+
+/**
+ * Real-HOME entries a group HOME links to: AWS config and SSO cache, npm cache
+ * and config, and the CDK user settings (`profile`/`region` there pick the
+ * deployment target, see packages/core/src/scripts/deployment-target.ts).
+ */
+const HOME_LINKS = ['.aws', '.npm', '.npmrc', '.cdk.json'];
+
+/**
+ * API Gateway allows one edge-optimized CreateRestApi, and one DeleteRestApi,
+ * every 30 s per account; the app's stack has one REST API. Each deploy and
+ * destroy that reaches AWS first waits for a slot ({@link spaceRestApiCall}),
+ * so commands of one kind start at least this far apart across the two
+ * lifecycle groups. This spaces command starts, not the API calls a command's
+ * own retries make. The margin over 30 s covers the different time a sandbox
+ * and a production command take to reach the API call.
+ */
+const REST_API_SPACING_MS = 60_000;
+
+/** When the last create and the last delete command were let start (epoch ms). */
+const lastRestApiCall = { create: 0, delete: 0 };
+
+/**
+ * Wait until a command of this kind may start. The slot is claimed before the
+ * wait (the test runner is single-threaded), so two callers never share one.
+ */
+async function spaceRestApiCall(kind: 'create' | 'delete'): Promise<void> {
+  const now = Date.now();
+  const startAt = Math.max(now, lastRestApiCall[kind] + REST_API_SPACING_MS);
+  lastRestApiCall[kind] = startAt;
+  await sleep(startAt - now);
+}
+
+/**
+ * The sandbox group is the longer one, so its first deploy takes the first
+ * create slot: the production group's first deploy waits for this, which
+ * resolves once that slot is claimed, or when `command: sandbox` ends without
+ * claiming it (the wait is capped at 2 min for a run that filters that out).
+ */
+let releaseSandboxFirstCreate: () => void = () => {};
+const sandboxFirstCreate = new Promise<void>((resolve) => { releaseSandboxFirstCreate = resolve; });
+
+function cloudGroup(name: string): CloudGroup {
+  const dir = join(CLOUD_GROUPS_DIR, name);
+  return { root: join(dir, 'app'), home: join(dir, 'home') };
+}
+
+const sandboxGroup = cloudGroup('sandbox');
+const productionGroup = cloudGroup('production');
+
+function writeSandboxId(projectRoot: string, sandboxId: string): void {
+  const dir = join(projectRoot, '.blocks-sandbox');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'sandbox-id.txt'), sandboxId);
+}
+
+function prepareCloudGroup(group: CloudGroup, sandboxId: string): void {
+  const generatedClient = join(APP_ROOT, 'aws-blocks', 'client.js');
+  for (const entry of APP_ENTRIES) {
+    cpSync(join(APP_ROOT, entry), join(group.root, entry), {
+      recursive: true,
+      filter: (src) => src !== generatedClient,
+    });
+  }
+  // APP_ROOT has no node_modules of its own, so this resolves packages and
+  // bins (`npx tsx`, `npm exec cdk`) from the same root node_modules.
+  assert.ok(
+    !existsSync(join(APP_ROOT, 'node_modules')),
+    'test-apps/telemetry/node_modules exists: the group copies link the root node_modules and would skip it',
+  );
+  symlinkSync(join(REPO_ROOT, 'node_modules'), join(group.root, 'node_modules'), 'dir');
+  writeSandboxId(group.root, sandboxId);
+
+  seedPinnedInstallationId(group.home);
+  for (const entry of HOME_LINKS) {
+    const target = join(homedir(), entry);
+    if (existsSync(target)) symlinkSync(target, join(group.home, entry));
+  }
+}
+
 // ─── Test Suites ─────────────────────────────────────────────────────────────
 
-describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
+describe('Telemetry E2E', { timeout: 2_400_000, concurrency: true }, () => {
 
   // Seed pinned installation-id in real HOME (no HOME override needed).
   // CI workflow also seeds this, but doing it here ensures local runs work too.
   before(() => {
     seedPinnedInstallationId();
+
+    // One fresh sandbox id for the run, in APP_ROOT and in both group copies.
+    // Sandbox and production stack names differ (`bb-telemetry-e2e-<id>-...`
+    // vs `bb-telemetry-e2e-prod-...-<id>`), so the groups never share a stack,
+    // and the destroy scripts run from APP_ROOT (the CI "Cleanup stacks"
+    // step) still reach the stack either group may have left behind.
+    rmSync(CLOUD_GROUPS_DIR, { recursive: true, force: true });
+    assertAppEntriesListed();
+    const sandboxId = randomUUID().slice(0, 8);
+    writeSandboxId(APP_ROOT, sandboxId);
+    prepareCloudGroup(sandboxGroup, sandboxId);
+    prepareCloudGroup(productionGroup, sandboxId);
   });
 
-  // Clean up: remove the seeded .blocks directory
+  // Clean up: remove the seeded .blocks directory and the group copies
+  // (rmSync removes the links in them, not what they point to).
   after(() => {
     rmSync(join(homedir(), '.blocks', 'telemetry'), { recursive: true, force: true });
+    rmSync(CLOUD_GROUPS_DIR, { recursive: true, force: true });
   });
+
+  // The three groups run concurrently; the cases inside a group run in order.
+  describe('local commands', { concurrency: false }, localCommandSuites);
+  describe('AWS sandbox lifecycle', { concurrency: false }, sandboxLifecycleSuites);
+  describe('AWS production lifecycle', { concurrency: false }, productionLifecycleSuites);
+});
+
+/**
+ * Commands that need no AWS account, run from APP_ROOT. Unless a case sets its
+ * own HOME they use the real one. They run one after another: several write
+ * the project config or the real HOME's global config.
+ */
+function localCommandSuites(): void {
 
   // ── 1. Payload structure & Building Block filtering ─────────────────────────
 
@@ -570,223 +734,6 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
       assert.ok(result.exitCode !== 0, 'vendorize should exit with non-zero on bad package');
       const fileWritten = await waitForFile(telemetryFile, 3_000);
       assert.ok(!fileWritten, 'vendorize with process.exit does NOT emit telemetry');
-    });
-  });
-
-  // ── 4. AWS commands (require valid credentials) ─────────────────────────────
-
-  describe('command: sandbox', () => {
-    let tmpHome: string;
-    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
-
-    test('FAIL: no creds emits sandbox/FAIL', async () => {
-      tmpHome = createTmpDir('sandbox-fail');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        telemetryFile, timeoutMs: 90_000,
-        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox FAIL should emit telemetry');
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox');
-      assert.strictEqual(body.event.state, 'FAIL');
-      assert.ok(body.event.error, 'FAIL should carry error info');
-      assertDelivered(result.stderr, 'sandbox FAIL');
-    });
-
-    test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
-      tmpHome = createTmpDir('sandbox-success');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      // Delete sandbox-id to get a unique stack name for this test
-      rmSync(join(APP_ROOT, '.blocks-sandbox', 'sandbox-id.txt'), { force: true });
-
-      // Verify AWS credentials are valid before deploying
-      try {
-        execSync('aws sts get-caller-identity', { encoding: 'utf-8', timeout: 10_000 });
-      } catch (e: any) {
-        assert.fail(`AWS credentials invalid before sandbox deploy: ${e.message}`);
-      }
-
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        telemetryFile, timeoutMs: 300_000,
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox');
-      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 2000): ${result.stdout.slice(-2000)}\nstderr(last 2000): ${result.stderr.slice(-2000)}`);
-      assert.strictEqual(body.event.error, undefined);
-      assertDelivered(result.stderr, 'sandbox SUCCESS');
-
-      // Cleanup: destroy the sandbox stack
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
-      });
-    });
-  });
-
-  describe('command: sandbox:destroy', () => {
-    let tmpHome: string;
-    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
-
-    test('FAIL: no creds emits sandbox:destroy/FAIL', async () => {
-      tmpHome = createTmpDir('sandbox-destroy-fail');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile, timeoutMs: 450_000,
-        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox:destroy FAIL should emit telemetry');
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox:destroy');
-      assert.strictEqual(body.event.state, 'FAIL');
-      assertDelivered(result.stderr, 'sandbox:destroy FAIL');
-    });
-
-    test('SUCCESS: sandbox:destroy after deploy emits sandbox:destroy/SUCCESS', async () => {
-      tmpHome = createTmpDir('sandbox-destroy-success');
-
-      // First deploy a sandbox
-      const deployFile = uniqueTelemetryFile(tmpHome);
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        telemetryFile: deployFile, timeoutMs: 300_000,
-      });
-
-      // Then destroy it
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile, timeoutMs: 450_000,
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'sandbox:destroy');
-      assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'sandbox:destroy SUCCESS');
-    });
-  });
-
-  describe('command: deploy', () => {
-    let tmpHome: string;
-    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
-
-    test('FAIL: no creds emits deploy/FAIL', async () => {
-      tmpHome = createTmpDir('deploy-fail');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
-        telemetryFile, timeoutMs: 90_000,
-        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'deploy');
-      assert.strictEqual(body.event.state, 'FAIL');
-      assert.ok(body.event.error);
-      assertDelivered(result.stderr, 'deploy FAIL');
-    });
-
-    test('SUCCESS: deploy with creds emits deploy/SUCCESS', async () => {
-      tmpHome = createTmpDir('deploy-success');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      // Delete sandbox-id to get a unique stack name for this test
-      rmSync(join(APP_ROOT, '.blocks-sandbox', 'sandbox-id.txt'), { force: true });
-
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
-        telemetryFile, timeoutMs: 300_000,
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'deploy');
-      assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'deploy SUCCESS');
-
-      // Cleanup: destroy the production stack
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
-      });
-    });
-  });
-
-  describe('command: destroy', () => {
-    let tmpHome: string;
-    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
-
-    test('FAIL: no creds emits destroy/FAIL', async () => {
-      tmpHome = createTmpDir('destroy-fail');
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile, timeoutMs: 90_000,
-        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'destroy');
-      assert.strictEqual(body.event.state, 'FAIL');
-      assertDelivered(result.stderr, 'destroy FAIL');
-    });
-
-    test('SUCCESS: destroy with creds emits destroy/SUCCESS', async () => {
-      tmpHome = createTmpDir('destroy-success');
-
-      // Deploy first, then destroy
-      const deployFile = uniqueTelemetryFile(tmpHome);
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
-        telemetryFile: deployFile, timeoutMs: 300_000,
-      });
-
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        telemetryFile, timeoutMs: 450_000,
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'destroy');
-      assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'destroy SUCCESS');
-    });
-  });
-
-  describe('command: console', () => {
-    let tmpHome: string;
-    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
-
-    test('SUCCESS: console after sandbox deploy emits console/SUCCESS', async () => {
-      tmpHome = createTmpDir('console-success');
-
-      // Deploy sandbox first to create outputs.json
-      const deployFile = uniqueTelemetryFile(tmpHome);
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
-        telemetryFile: deployFile, timeoutMs: 300_000,
-      });
-
-      // Run console
-      const telemetryFile = uniqueTelemetryFile(tmpHome);
-      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/console.ts'], {
-        telemetryFile, timeoutMs: 15_000,
-      });
-
-      assert.ok(await waitForFile(telemetryFile, 3_000), `console should emit telemetry.\nexit=${result.exitCode}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
-      const body = readTelemetryFile(telemetryFile);
-      assert.strictEqual(body.event.command, 'console');
-      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
-      assertDelivered(result.stderr, 'console SUCCESS');
-
-      // Cleanup: destroy the sandbox
-      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
-      });
     });
   });
 
@@ -1357,4 +1304,258 @@ describe('Telemetry E2E', { timeout: 2_400_000 }, () => {
     });
   });
 
-}); // end describe('Telemetry E2E')
+}
+
+// ── 4. AWS commands (require valid credentials) ─────────────────────────────
+
+/**
+ * The sandbox commands, in their own app copy and HOME (see {@link CloudGroup}).
+ * Every case here deploys or destroys `bb-telemetry-e2e-<id>-...`, so they run in order.
+ */
+function sandboxLifecycleSuites(): void {
+  const inGroup = { cwd: sandboxGroup.root, home: sandboxGroup.home };
+
+  describe('command: sandbox', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+    after(() => releaseSandboxFirstCreate());
+
+    test('FAIL: no creds emits sandbox/FAIL', async () => {
+      tmpHome = createTmpDir('sandbox-fail');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox FAIL should emit telemetry');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assert.ok(body.event.error, 'FAIL should carry error info');
+      assertDelivered(result.stderr, 'sandbox FAIL');
+    });
+
+    test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
+      tmpHome = createTmpDir('sandbox-success');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      // The suite's before() gave this run a fresh sandbox id, so the stack name is unique.
+
+      // Verify AWS credentials are valid before deploying
+      try {
+        // With the group's HOME, as the deploy below sees it.
+        execSync('aws sts get-caller-identity', {
+          encoding: 'utf-8', timeout: 10_000, env: { ...process.env, HOME: sandboxGroup.home },
+        });
+      } catch (e: any) {
+        assert.fail(`AWS credentials invalid before sandbox deploy: ${e.message}`);
+      }
+
+      // The call claims its slot synchronously, before its first await, so the
+      // production group's first deploy, released here, queues behind it.
+      const firstCreate = spaceRestApiCall('create');
+      releaseSandboxFirstCreate();
+      await firstCreate;
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 300_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), `sandbox SUCCESS should emit telemetry.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox');
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 2000): ${result.stdout.slice(-2000)}\nstderr(last 2000): ${result.stderr.slice(-2000)}`);
+      assert.strictEqual(body.event.error, undefined);
+      assertDelivered(result.stderr, 'sandbox SUCCESS');
+
+      // Cleanup: destroy the sandbox stack
+      await spaceRestApiCall('delete');
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
+      });
+    });
+  });
+
+  describe('command: sandbox:destroy', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits sandbox:destroy/FAIL', async () => {
+      tmpHome = createTmpDir('sandbox-destroy-fail');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 450_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), 'sandbox:destroy FAIL should emit telemetry');
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox:destroy');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assertDelivered(result.stderr, 'sandbox:destroy FAIL');
+    });
+
+    test('SUCCESS: sandbox:destroy after deploy emits sandbox:destroy/SUCCESS', async () => {
+      tmpHome = createTmpDir('sandbox-destroy-success');
+
+      // First deploy a sandbox
+      const deployFile = uniqueTelemetryFile(tmpHome);
+      await spaceRestApiCall('create');
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
+      });
+
+      // Then destroy it
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      await spaceRestApiCall('delete');
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 450_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'sandbox:destroy');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'sandbox:destroy SUCCESS');
+    });
+  });
+
+
+  describe('command: console', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('SUCCESS: console after sandbox deploy emits console/SUCCESS', async () => {
+      tmpHome = createTmpDir('console-success');
+
+      // Deploy sandbox first to create outputs.json
+      const deployFile = uniqueTelemetryFile(tmpHome);
+      await spaceRestApiCall('create');
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox.ts'], {
+        ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
+      });
+
+      // Run console
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/console.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 15_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 3_000), `console should emit telemetry.\nexit=${result.exitCode}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'console');
+      assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
+      assertDelivered(result.stderr, 'console SUCCESS');
+
+      // Cleanup: destroy the sandbox
+      await spaceRestApiCall('delete');
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
+        ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
+      });
+    });
+  });
+}
+
+/**
+ * The production commands, in their own app copy and HOME (see {@link CloudGroup}).
+ * Every case here deploys or destroys `bb-telemetry-e2e-prod-...-<id>`, so they run in order.
+ */
+function productionLifecycleSuites(): void {
+  const inGroup = { cwd: productionGroup.root, home: productionGroup.home };
+
+  describe('command: deploy', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits deploy/FAIL', async () => {
+      tmpHome = createTmpDir('deploy-fail');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'deploy');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assert.ok(body.event.error);
+      assertDelivered(result.stderr, 'deploy FAIL');
+    });
+
+    test('SUCCESS: deploy with creds emits deploy/SUCCESS', async () => {
+      tmpHome = createTmpDir('deploy-success');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      // The suite's before() gave this run a fresh sandbox id, so the stack name is unique.
+
+      // Capped, for a run that filters out every `command: sandbox` case.
+      const cap = new AbortController();
+      await Promise.race([sandboxFirstCreate, sleep(120_000, undefined, { signal: cap.signal }).catch(() => {})]);
+      cap.abort();
+      await spaceRestApiCall('create');
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 300_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'deploy');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'deploy SUCCESS');
+
+      // Cleanup: destroy the production stack
+      await spaceRestApiCall('delete');
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+        ...inGroup, telemetryFile: uniqueTelemetryFile(tmpHome), timeoutMs: 450_000,
+      });
+    });
+  });
+
+  describe('command: destroy', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('FAIL: no creds emits destroy/FAIL', async () => {
+      tmpHome = createTmpDir('destroy-fail');
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 90_000,
+        env: { AWS_ACCESS_KEY_ID: '', AWS_SECRET_ACCESS_KEY: '', AWS_SESSION_TOKEN: '' },
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'destroy');
+      assert.strictEqual(body.event.state, 'FAIL');
+      assertDelivered(result.stderr, 'destroy FAIL');
+    });
+
+    test('SUCCESS: destroy with creds emits destroy/SUCCESS', async () => {
+      tmpHome = createTmpDir('destroy-success');
+
+      // Deploy first, then destroy
+      const deployFile = uniqueTelemetryFile(tmpHome);
+      await spaceRestApiCall('create');
+      await runCommand('npx', ['tsx', 'aws-blocks/scripts/deploy.ts'], {
+        ...inGroup, telemetryFile: deployFile, timeoutMs: 300_000,
+      });
+
+      const telemetryFile = uniqueTelemetryFile(tmpHome);
+      await spaceRestApiCall('delete');
+      const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
+        ...inGroup, telemetryFile, timeoutMs: 450_000,
+      });
+
+      assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
+      const body = readTelemetryFile(telemetryFile);
+      assert.strictEqual(body.event.command, 'destroy');
+      assert.strictEqual(body.event.state, 'SUCCESS');
+      assertDelivered(result.stderr, 'destroy SUCCESS');
+    });
+  });
+}

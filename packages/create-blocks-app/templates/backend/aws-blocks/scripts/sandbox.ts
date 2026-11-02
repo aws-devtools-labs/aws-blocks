@@ -4,8 +4,11 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// `npm run sandbox:deploy` passes --deploy-only: deploy once, write the config
+// and client, then exit instead of starting CDK watch and the dev server.
 startSandbox({
-  backendPath: join(__dirname, '..', 'index.cdk.ts')
+  deployOnly: process.argv.includes('--deploy-only'),
+  backendPath: join(__dirname, '..', 'index.cdk.ts'),
 }).catch((error) => {
   console.error(error);
   process.exit(1);

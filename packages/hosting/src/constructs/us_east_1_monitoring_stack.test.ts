@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { App } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Match, Template, Annotations } from 'aws-cdk-lib/assertions';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';
 
@@ -73,5 +73,38 @@ void describe('UsEast1MonitoringStack', () => {
     });
     assert.ok(stack.topic, 'topic should be exposed');
     assert.ok(stack.alarm, 'alarm should be exposed');
+  });
+
+  void it('warns when its own topic has the 5xx alarm but no subscriber', () => {
+    // Off-region the 5xx alarm lives HERE, not in the regional construct, so
+    // this stack must flag its own undeliverable topic — the zero-subscriber
+    // scenario an earlier revision let slip through once the regional gate
+    // went quiet.
+    const app = new App();
+    const stack = new UsEast1MonitoringStack(app, 'CfMon', {
+      env: { account: '123456789012', region: 'us-east-1' },
+      distributionId: 'E1234567890ABC',
+    });
+    Annotations.fromStack(stack).hasWarning(
+      '/CfMon',
+      Match.stringLikeRegexp(
+        '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+      ),
+    );
+  });
+
+  void it('does NOT warn when its topic is subscribed', () => {
+    const app = new App();
+    const stack = new UsEast1MonitoringStack(app, 'CfMon', {
+      env: { account: '123456789012', region: 'us-east-1' },
+      distributionId: 'E1234567890ABC',
+      subscriptions: [new subs.EmailSubscription('oncall@example.com')],
+    });
+    Annotations.fromStack(stack).hasNoWarning(
+      '/CfMon',
+      Match.stringLikeRegexp(
+        '\\[ack: @aws-blocks/hosting:MonitoringAlarmTopicHasNoSubscribers\\]$',
+      ),
+    );
   });
 });
