@@ -248,6 +248,23 @@ export function fileBucketTests(getApi: () => typeof apiType) {
     // ── Versioned FileBucket ──────────────────────────────────────────────
 
     describe('Versioned', () => {
+      test('deleting a version of a prefix key does not delete nested objects', async () => {
+        const api = getApi();
+        const prefix = `v/prefix-delete-${crypto.randomUUID()}`;
+        const children = ['readme.txt', 'v999'];
+        try {
+          for (const child of children) {
+            await api.vFilePut(`${prefix}/${child}`, 'nested');
+            await api.vFileDelete(prefix, child);
+            assert.strictEqual((await api.vFileGet(`${prefix}/${child}`))?.body, 'nested');
+            assert.strictEqual((await api.vFileListVersions(`${prefix}/${child}`)).length, 1);
+          }
+          assert.deepStrictEqual(await api.vFileListVersions(prefix), []);
+        } finally {
+          for (const child of children) await api.vFilePurge(`${prefix}/${child}`);
+        }
+      });
+
       test('deleting the current version promotes the previous version through the API', async () => {
         const api = getApi();
         const path = `v/delete-current-${crypto.randomUUID()}.txt`;

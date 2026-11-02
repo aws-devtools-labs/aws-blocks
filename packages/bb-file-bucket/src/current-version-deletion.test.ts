@@ -3,11 +3,11 @@
 
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { Scope } from '@aws-blocks/core';
 import { FileBucket } from './index.mock.js';
-import { contentPath, metaPath, deleteMarkerPath, versionContentPath } from './paths.js';
+import { contentPath, metaPath, deleteMarkerPath, versionContentPath, versionMetaPath } from './paths.js';
 
 const scope = new Scope('version-delete');
 const bucketId = 'files';
@@ -158,4 +158,100 @@ test('non-versioned deletion still removes the object', async () => {
 	await bucket.delete(key);
 	assert.equal(await bucket.get(key), null);
 	assert.deepEqual(await scanFiles(bucket), []);
+});
+
+test('version history ignores directories belonging to nested keys', async () => {
+	const bucket = new FileBucket(scope, bucketId);
+	await bucket.put('docs/readme.txt', 'nested');
+	await bucket.put('docs/v999', 'numeric-looking key');
+	assert.deepEqual(await bucket.listVersions('docs'), []);
+	assert.equal((await bucket.listVersions('docs/readme.txt')).length, 1);
+	assert.equal((await bucket.listVersions('docs/v999')).length, 1);
+});
+
+test('deleting a directory-shaped version ID leaves nested keys untouched', async () => {
+	const bucket = new FileBucket(scope, bucketId);
+	for (const child of ['readme.txt', 'v999']) {
+		await bucket.put(`docs/${child}`, 'nested');
+		await bucket.delete('docs', { versionId: child });
+		assert.equal((await bucket.get(`docs/${child}`))?.body.toString(), 'nested');
+		assert.equal((await bucket.listVersions(`docs/${child}`)).length, 1);
+	}
+});
+
+for (const [name, pathFor] of [['body', contentPath], ['metadata', metaPath]] as const) {
+	test(`failed promotion ${name} write preserves version history for a retry`, async () => {
+		const bucket = new FileBucket(scope, bucketId);
+		const [latest, previous] = await putVersions(bucket);
+		const obstruction = pathFor(dataDir, key);
+		rmSync(obstruction);
+		mkdirSync(obstruction);
+
+		await assert.rejects(bucket.delete(key, { versionId: latest.versionId }));
+		assert.equal(existsSync(versionContentPath(dataDir, key, latest.versionId)), true);
+		assert.equal(existsSync(versionMetaPath(dataDir, key, latest.versionId)), true);
+		assert.deepEqual((await bucket.listVersions(key)).map(version => version.versionId), [
+			latest.versionId, previous.versionId,
+		]);
+
+		rmSync(obstruction, { recursive: true });
+		const reopened = new FileBucket(scope, bucketId);
+		await reopened.delete(key, { versionId: latest.versionId });
+		const file = await reopened.get(key);
+		assert.equal(file?.body.toString(), 'old');
+		assert.equal(file?.contentType, 'text/plain');
+		assert.deepEqual(file?.metadata, { revision: 'old' });
+		assert.equal(JSON.parse(readFileSync(metaPath(dataDir, key), 'utf8')).cacheControl, 'max-age=60');
+		assert.equal(await reopened.get(key, { versionId: latest.versionId }), null);
+		assert.equal((await reopened.listVersions(key))[0].versionId, previous.versionId);
+	});
+
+	test(`failed last-version ${name} cleanup preserves the version for a retry`, async () => {
+		const bucket = new FileBucket(scope, bucketId);
+		await bucket.put(key, 'only');
+		const [latest] = await bucket.listVersions(key);
+		const obstruction = pathFor(dataDir, key);
+		rmSync(obstruction);
+		mkdirSync(obstruction);
+
+		await assert.rejects(bucket.delete(key, { versionId: latest.versionId }));
+		assert.equal(existsSync(versionContentPath(dataDir, key, latest.versionId)), true);
+		assert.equal(existsSync(versionMetaPath(dataDir, key, latest.versionId)), true);
+		rmSync(obstruction, { recursive: true });
+
+		await bucket.delete(key, { versionId: latest.versionId });
+		assert.equal(await bucket.get(key), null);
+		assert.deepEqual(await bucket.listVersions(key), []);
+		assert.deepEqual(await scanFiles(bucket), []);
+		assert.equal(existsSync(contentPath(dataDir, key)), false);
+		assert.equal(existsSync(metaPath(dataDir, key)), false);
+	});
+}
+
+test('failed version metadata cleanup preserves its body for a retry', async () => {
+	const bucket = new FileBucket(scope, bucketId);
+	const [latest, previous] = await putVersions(bucket);
+	const obstruction = versionMetaPath(dataDir, key, latest.versionId);
+	rmSync(obstruction);
+	mkdirSync(obstruction);
+
+	await assert.rejects(bucket.delete(key, { versionId: latest.versionId }));
+	assert.equal(existsSync(versionContentPath(dataDir, key, latest.versionId)), true);
+	rmSync(obstruction, { recursive: true });
+	await bucket.delete(key, { versionId: latest.versionId });
+	assert.equal((await bucket.get(key))?.body.toString(), 'old');
+	assert.equal((await bucket.get(key))?.contentType, 'text/plain');
+	assert.equal((await bucket.listVersions(key))[0].versionId, previous.versionId);
+});
+
+test('deleting the last version tolerates missing current copies and version metadata', async () => {
+	const bucket = new FileBucket(scope, bucketId);
+	await bucket.put(key, 'only');
+	const [latest] = await bucket.listVersions(key);
+	for (const file of [contentPath(dataDir, key), metaPath(dataDir, key), versionMetaPath(dataDir, key, latest.versionId)]) {
+		rmSync(file);
+	}
+	await bucket.delete(key, { versionId: latest.versionId });
+	assert.equal(await bucket.get(key), null);
+	assert.deepEqual(await bucket.listVersions(key), []);
 });

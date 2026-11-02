@@ -5,7 +5,7 @@ import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import {
-	existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, copyFileSync, utimesSync,
+	existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, copyFileSync, utimesSync, rmSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { assertContainedPath } from './mock-utils.js';
@@ -207,6 +207,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * On non-versioned buckets, permanently removes the file.
 	 * On versioned buckets without `versionId`, places a delete marker (file appears deleted
 	 * but previous versions are preserved). With `versionId`, permanently removes that version.
+	 * Deleting the newest stored data version promotes the next stored data version, if any,
+	 * without creating a new version. An active local delete marker continues to hide the key.
 	 *
 	 * No-op if the file does not exist (matches S3 behavior).
 	 *
@@ -224,26 +226,26 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		if (this.versioned && versionId) {
 			const versions = this.readVersions(path);
 			if (!versions.some(version => version.versionId === versionId)) return;
-			unlinkSync(versionContentPath(this.dataDir, path, versionId));
-			try { unlinkSync(versionMetaPath(this.dataDir, path, versionId)); } catch {}
-			if (versions[0].versionId !== versionId) return;
-
-			// The current copy is also read by scan() and the dev file-server.
-			// Promote the next version without put(), which would create a new version
-			// and remove any existing delete marker.
-			const next = versions[1];
-			if (next) {
-				const filePath = contentPath(this.dataDir, path);
-				const source = versionContentPath(this.dataDir, path, next.versionId);
-				const stat = statSync(source);
-				mkdirSync(dirname(filePath), { recursive: true });
-				copyFileSync(source, filePath);
-				utimesSync(filePath, stat.atime, stat.mtime);
-				this.writeMeta(path, this.readVersionMeta(path, next.versionId));
-			} else {
-				try { unlinkSync(contentPath(this.dataDir, path)); } catch {}
-				try { unlinkSync(metaPath(this.dataDir, path)); } catch {}
+			if (versions[0].versionId === versionId) {
+				// The current copy is also read by scan() and the dev file-server.
+				// Promote without put(), which would create a version and clear the marker.
+				// Keep the target version until reconciliation succeeds so failures are retryable.
+				const next = versions[1];
+				if (next) {
+					const filePath = contentPath(this.dataDir, path);
+					const source = versionContentPath(this.dataDir, path, next.versionId);
+					const stat = statSync(source);
+					mkdirSync(dirname(filePath), { recursive: true });
+					copyFileSync(source, filePath);
+					utimesSync(filePath, stat.atime, stat.mtime);
+					this.writeMeta(path, this.readVersionMeta(path, next.versionId));
+				} else {
+					rmSync(contentPath(this.dataDir, path), { force: true });
+					rmSync(metaPath(this.dataDir, path), { force: true });
+				}
 			}
+			rmSync(versionMetaPath(this.dataDir, path, versionId), { force: true });
+			unlinkSync(versionContentPath(this.dataDir, path, versionId));
 			return;
 		}
 		if (this.versioned) {
@@ -514,7 +516,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	private readVersions(path: string): FileVersionInfo[] {
 		const versionsDir = versionsDirFor(this.dataDir, path);
 		if (!existsSync(versionsDir)) return [];
-		const entries = readdirSync(versionsDir).filter(isVersionEntry);
+		const entries = readdirSync(versionsDir, { withFileTypes: true })
+			.filter(entry => entry.isFile() && isVersionEntry(entry.name))
+			.map(entry => entry.name);
 		if (entries.length === 0) return [];
 
 		const hasDeleteMarker = existsSync(deleteMarkerPath(this.dataDir, path));
