@@ -13,6 +13,8 @@ import {
   isServerManagedDefault,
   parseExistingMetaSingulars,
   selectEligibleTables,
+  ineligibleReason,
+  rlsDisabledWarning,
   writeTypesAndMeta,
   type TableInfo,
   type IntrospectionResult,
@@ -745,19 +747,63 @@ describe('selectEligibleTables', () => {
     };
   }
 
-  test('keeps tables with a primary key that do not use Supabase Auth', () => {
-    const result = selectEligibleTables(intro(TABLES));
+  const withRls = (t: TableInfo): TableInfo => ({ ...t, hasRls: true });
+
+  test('keeps tables with a primary key and RLS enabled that do not use Supabase Auth', () => {
+    const result = selectEligibleTables(intro(TABLES.map(withRls)));
     assert.deepStrictEqual(result.map(t => t.name), ['migration_test_todos', 'categories']);
   });
 
   test('excludes tables with no primary key', () => {
-    const result = selectEligibleTables(intro([...TABLES, noPkTable]));
+    const result = selectEligibleTables(intro([...TABLES, noPkTable].map(withRls)));
     assert.ok(!result.some(t => t.name === 'audit_log'));
   });
 
   test('excludes tables that use Supabase Auth (auth.uid())', () => {
-    const result = selectEligibleTables(intro(TABLES, ['migration_test_todos']));
+    const result = selectEligibleTables(intro(TABLES.map(withRls), ['migration_test_todos']));
     assert.deepStrictEqual(result.map(t => t.name), ['categories']);
+  });
+
+  // Generated CRUD relies on RLS policies to scope rows per user, so tables
+  // without RLS are not generated.
+  test('excludes tables with row-level security disabled', () => {
+    // TABLES: migration_test_todos has RLS, categories does not.
+    const result = selectEligibleTables(intro(TABLES));
+    assert.deepStrictEqual(result.map(t => t.name), ['migration_test_todos']);
+  });
+});
+
+describe('ineligibleReason', () => {
+  const [todos, categories] = TABLES;
+  const intro = (supabaseAuth: string[] = []) => ({ tablesUsingSupabaseAuth: new Set(supabaseAuth) });
+
+  test('null for an eligible table', () => {
+    assert.strictEqual(ineligibleReason(todos, intro()), null);
+  });
+
+  test("'rls-disabled' for a table without RLS", () => {
+    assert.strictEqual(ineligibleReason(categories, intro()), 'rls-disabled');
+  });
+
+  test("'no-primary-key' takes precedence over 'rls-disabled'", () => {
+    assert.strictEqual(ineligibleReason({ ...categories, primaryKey: [] }, intro()), 'no-primary-key');
+  });
+
+  test("'supabase-auth' takes precedence over the others", () => {
+    assert.strictEqual(ineligibleReason({ ...categories, primaryKey: [] }, intro(['categories'])), 'supabase-auth');
+  });
+});
+
+describe('rlsDisabledWarning', () => {
+  test('names every table and shows how to enable RLS', () => {
+    const text = rlsDisabledWarning(['notes', 'tags']).join('\n');
+    assert.ok(text.includes('notes, tags'), 'lists the skipped tables');
+    assert.ok(text.includes('ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;'), 'shows the fix for each table');
+    assert.ok(text.includes('ALTER TABLE public.tags ENABLE ROW LEVEL SECURITY;'), 'shows the fix for each table');
+  });
+
+  test('empty when no table was skipped for RLS', () => {
+    assert.deepStrictEqual(rlsDisabledWarning([]), []);
   });
 });
 

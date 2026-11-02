@@ -35,8 +35,10 @@ export {
   generateMigrationGuide,
   parseExistingMetaSingulars,
   selectEligibleTables,
+  ineligibleReason,
+  rlsDisabledWarning,
   writeTypesAndMeta,
   regenerateTypesAndMeta,
 } from './db-pull/generate.js';
-export type { RegenerateTypesResult } from './db-pull/generate.js';
+export type { IneligibleReason, RegenerateTypesResult } from './db-pull/generate.js';
 export { dbPull, dbPullInteractive, runDbPullCli } from './db-pull/pull.js';

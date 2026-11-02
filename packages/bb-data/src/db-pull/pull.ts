@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { parseEnv } from 'node:util';
-import type { DbPullOptions, TableInfo } from './types.js';
+import type { DbPullOptions } from './types.js';
 import { introspect } from './introspect.js';
 import {
   generateIndexFile,
@@ -21,8 +21,11 @@ import {
   generateMigrationGuide,
   readExistingSingulars,
   selectEligibleTables,
+  ineligibleReason,
+  rlsDisabledWarning,
   writeTypesAndMeta,
 } from './generate.js';
+import type { IneligibleReason } from './generate.js';
 import { generateBaseline } from '../migrations/baseline.js';
 import { prepareEnvFileUpsert, upsertEnvFile } from './env-file.js';
 import { SUPABASE, SUPABASE_AUTH, SUPABASE_CONN_GUIDANCE, SUPABASE_MESSAGING, detectSupabase, extractProjectRef } from './supabase.js';
@@ -69,12 +72,17 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   }
 
   // ── Eligibility criteria ──────────────────────────────────────────────
-  // A table is eligible if: (1) has a primary key, (2) does not use Supabase Auth
-  const hasNoPk = (t: TableInfo) => Array.isArray(t.primaryKey) && t.primaryKey.length === 0;
-
-  const eligibleTables = selectEligibleTables({ tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims });
+  // A table is eligible if it (1) does not use Supabase Auth, (2) has a primary
+  // key and (3) has row-level security enabled — see ineligibleReason().
+  const intro = { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims };
+  const eligibleTables = selectEligibleTables(intro);
   const eligibleSet = new Set(eligibleTables);
   const skippedTables = allTables.filter(t => !eligibleSet.has(t));
+  const ineligibleLabels: Record<IneligibleReason, string> = {
+    'supabase-auth': SUPABASE_MESSAGING.authIneligibleReason,
+    'no-primary-key': 'No — no primary key',
+    'rls-disabled': 'No — RLS disabled',
+  };
 
   // ── Table eligibility ────────────────────────────────────────────────
   const nameWidth = Math.max(...allTables.map(t => t.name.length), 5);
@@ -93,17 +101,15 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
     const authCol = tablesUsingSupabaseAuth.has(t.name)
       ? SUPABASE_MESSAGING.authEligibilityLabel
       : t.hasRls ? 'OIDC' : '—';
-    let eligibleCol: string;
-    if (tablesUsingSupabaseAuth.has(t.name)) {
-      eligibleCol = SUPABASE_MESSAGING.authIneligibleReason;
-    } else if (hasNoPk(t)) {
-      eligibleCol = 'No — no primary key';
-    } else {
-      eligibleCol = 'Yes';
-    }
+    const reason = ineligibleReason(t, intro);
+    const eligibleCol = reason ? ineligibleLabels[reason] : 'Yes';
     console.log(`  ${t.name.padEnd(nameWidth)}  ${pkCol.padEnd(pkWidth)}  ${authCol.padEnd(14)}  ${eligibleCol}`);
   }
   console.log(`\n  ${eligibleTables.length} table(s) eligible, ${skippedTables.length} will be skipped.\n`);
+
+  const tablesWithoutRls = skippedTables.filter(t => ineligibleReason(t, intro) === 'rls-disabled').map(t => t.name);
+  for (const line of rlsDisabledWarning(tablesWithoutRls)) console.warn(line);
+  if (tablesWithoutRls.length > 0) console.warn('');
 
   // ── Readiness criteria ───────────────────────────────────────────────
   // Eligible tables may still need actions before they work at runtime:
@@ -114,15 +120,14 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
       const c = nonStandardClaims.get(t.name);
       return c ? c.join(', ').length : 1;
     }), 6);
-    console.log(`  ${'Table'.padEnd(nameWidth)}  RLS   Grants   ${'Claims'.padEnd(claimsWidth)}  Status`);
-    console.log(`  ${'─'.repeat(nameWidth)}  ${'─'.repeat(4)}  ${'─'.repeat(7)}  ${'─'.repeat(claimsWidth)}  ${'─'.repeat(15)}`);
+    console.log(`  ${'Table'.padEnd(nameWidth)}  Grants   ${'Claims'.padEnd(claimsWidth)}  Status`);
+    console.log(`  ${'─'.repeat(nameWidth)}  ${'─'.repeat(7)}  ${'─'.repeat(claimsWidth)}  ${'─'.repeat(15)}`);
     for (const t of eligibleTables) {
-      const rlsCol = t.hasRls ? 'yes' : 'no';
       const grantsCol = t.missingGrants ? 'MISSING' : 'ok';
       const claims = nonStandardClaims.get(t.name);
       const claimsCol = claims ? claims.join(', ') : '—';
       const status = (t.missingGrants || claims) ? 'Action required' : 'Ready';
-      console.log(`  ${t.name.padEnd(nameWidth)}  ${rlsCol.padEnd(4)}  ${grantsCol.padEnd(7)}  ${claimsCol.padEnd(claimsWidth)}  ${status}`);
+      console.log(`  ${t.name.padEnd(nameWidth)}  ${grantsCol.padEnd(7)}  ${claimsCol.padEnd(claimsWidth)}  ${status}`);
     }
     console.log('');
   }
