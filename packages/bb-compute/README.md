@@ -87,12 +87,16 @@ type is a compile error.
 
 - `size?` — a valid `{ vcpu, memory }` combination. Each vCPU permits only a
   fixed set of memory values (an invalid pair won't type-check).
-- `scaling?` — `{ minInstances, maxInstances, strategy? }`. Wires real
+- `scaling?` — `{ minInstances?, maxInstances, strategy? }`. Wires real
   Application Auto Scaling. `strategy` is one or more of `cpu`/`memory`/`queue-depth`
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
-  otherwise). Set `minInstances: 0` to scale to zero tasks between jobs; a
-  waiting job or CronJob tick then starts a task, which takes a few minutes. See
-  [DESIGN.md](../bb-container-compute/DESIGN.md#scaling-to-zero-mininstances-0).
+  otherwise).
+- `minInstances` defaults to `1`, which is the recommended value: one task stays
+  running, so a job or CronJob tick starts within seconds. Set `minInstances: 0`
+  only for long-running jobs that can tolerate high latency before they start.
+  The compute then scales to zero tasks between jobs, and each job has to start a
+  task first. That usually takes a few minutes, and up to about 20 minutes when
+  the job's queue has been idle for more than six hours.
 - **Deploys restart running jobs.** A deploy that changes your code replaces
   the container's tasks. A stopping task stops taking new jobs and gives running
   ones up to about 2 minutes to finish (the AWS Fargate maximum). A job still

@@ -93,8 +93,12 @@ interface ContainerComputeOptions {
 }
 
 type ContainerScaling = {
-  /** Minimum running instances. Default 1. */
-  minInstances: number;
+  /**
+   * Minimum running instances. Default 1, the recommended value. 0 (scale to
+   * zero between jobs) is only for long-running jobs that tolerate minutes of
+   * start-up latency.
+   */
+  minInstances?: number;
   /** Maximum running instances. Default 1 (no scaling). */
   maxInstances: number;
   /**

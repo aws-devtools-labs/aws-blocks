@@ -435,3 +435,35 @@ describe('ContainerCompute — deploys leave running jobs alone where they can',
 		});
 	});
 });
+
+describe('ContainerCompute — minInstances defaults to 1', () => {
+	test('scaling without minInstances keeps one task up', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ContainerMinDefault', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'worker', { scaling: { maxInstances: 3 } });
+		compute.finalize();
+		Template.fromStack(stack as unknown as cdk.Stack).hasResourceProperties(
+			'AWS::ApplicationAutoScaling::ScalableTarget',
+			{ MinCapacity: 1, MaxCapacity: 3 },
+		);
+	});
+
+	test('rejects maxInstances below the default minInstances', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ContainerMinDefaultBad', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		assert.throws(
+			() => new ContainerCompute(stack as never, 'worker', { scaling: { maxInstances: 0 } }),
+			/maxInstances must be an integer of 1 or more/,
+		);
+	});
+});

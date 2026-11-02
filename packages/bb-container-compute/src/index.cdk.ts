@@ -70,6 +70,9 @@ const CPU_UNITS_PER_VCPU = 1024;
 const DEFAULT_VCPU = 0.5;
 const DEFAULT_MEMORY_MB = 1024;
 
+/** `scaling.minInstances` when omitted: one task stays up, so jobs start within seconds. */
+const DEFAULT_MIN_INSTANCES = 1;
+
 /** Container port the runtime's health server listens on (worker mode still exposes it). */
 const CONTAINER_PORT = 8080;
 
@@ -109,7 +112,7 @@ const OWNED_QUEUES: unique symbol = Symbol.for('blocks:ContainerOwnedQueues');
  * into a CloudFormation deploy. `minInstances: 0` is allowed: the service then
  * scales to zero between jobs (see `ContainerCompute.finalize`).
  */
-function validateScaling(id: string, scaling: ContainerScaling): void {
+function validateScaling(id: string, scaling: ContainerScaling & { readonly minInstances: number }): void {
 	const { minInstances, maxInstances } = scaling;
 	if (!Number.isInteger(minInstances) || minInstances < 0) {
 		throw new Error(`Compute "${id}": scaling.minInstances must be an integer of 0 or more, got: ${minInstances}`);
@@ -144,7 +147,7 @@ export class ContainerCompute extends ComputeBase {
 	readonly logGroup: LogGroup;
 
 	/** The scaling config, retained so finalize can wire queue-depth once queues are known. */
-	private readonly scalingConfig?: ContainerScaling;
+	private readonly scalingConfig?: ContainerScaling & { readonly minInstances: number };
 	/** Its own container so setEnv can add env vars after construction. */
 	private readonly container?: ecs.ContainerDefinition;
 
@@ -152,7 +155,11 @@ export class ContainerCompute extends ComputeBase {
 		super(id, { parent: scope });
 		const size = options?.size;
 		this.vcpu = size?.vcpu ?? DEFAULT_VCPU;
-		this.scalingConfig = options?.scaling;
+		// `minInstances` defaults to 1: one task stays up, so a job starts within seconds.
+		const scaling = options?.scaling;
+		this.scalingConfig = scaling
+			? { ...scaling, minInstances: scaling.minInstances ?? DEFAULT_MIN_INSTANCES }
+			: undefined;
 		if (this.scalingConfig) validateScaling(id, this.scalingConfig);
 
 		// A Fargate service needs a VPC. Declare the requirement centrally (so a

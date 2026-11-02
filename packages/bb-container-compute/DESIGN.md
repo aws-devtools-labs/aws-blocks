@@ -48,6 +48,7 @@ self-starts the SQS pollers for the event handlers assigned to it.
 wires Application Auto Scaling from `scaling`:
 
 - `minInstances`/`maxInstances` → `autoScaleTaskCount({ minCapacity, maxCapacity })`.
+  `minInstances` defaults to 1 (recommended; see below for 0).
 - Each `ScalingSignal` → an autoscaling policy: `cpu`/`memory` as a
   **target-tracking** policy on the ECS utilization metrics; `queue-depth` as a
   **step-scaling** policy on a CloudWatch metric-math sum of
@@ -63,8 +64,9 @@ wires Application Auto Scaling from `scaling`:
 
 ### Scaling to zero (`minInstances: 0`)
 
-With `minInstances: 0` the service deploys with `DesiredCount: 0` and can scale
-in to zero tasks, where nothing polls the owned queues. The queue-depth policy
+`minInstances: 0` is for long-running jobs that can tolerate high start-up
+latency; `1` (the default) is recommended otherwise. With `0` the service can
+scale in to zero tasks, where nothing polls the owned queues. The queue-depth policy
 can't wake it: [step adjustments](https://docs.aws.amazon.com/autoscaling/application/userguide/step-scaling-policy-overview.html)
 are relative to the current task count, and a backlog under `backlogPerInstance`
 falls in the `change: 0` step, so 0 tasks stay 0 tasks and the message is never
@@ -82,9 +84,11 @@ policies they did before.
 
 Waking takes minutes, not seconds: SQS publishes queue metrics to CloudWatch
 once a minute, the alarm evaluates a one-minute period, and the new task then
-starts and fetches the app code. A queue idle for more than six hours also
-[stops publishing metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/monitoring-using-cloudwatch.html)
-until it receives a message.
+starts and fetches the app code, so a wake usually takes a few minutes (232s in
+the compute-smoke e2e). A queue idle for more than six hours
+[stops publishing metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/monitoring-using-cloudwatch.html),
+and when a message arrives they take up to 15 minutes to resume, so a job that
+runs less often than that can wait up to about 20 minutes to start.
 
 ## Runtime (worker isolation)
 

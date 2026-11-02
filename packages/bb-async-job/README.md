@@ -77,7 +77,7 @@ import { Compute } from '@aws-blocks/blocks';
 const worker = new Compute(scope, 'worker', {
   type: 'container',
   size: { vcpu: 1, memory: 2048 },
-  scaling: { minInstances: 1, maxInstances: 10 },
+  scaling: { maxInstances: 10 },   // minInstances defaults to 1
 });
 
 new AsyncJob(scope, 'reports', {
