@@ -450,9 +450,44 @@ export function agentTests(getApi: () => typeof apiType) {
         return Promise.race([sub.established, new Promise<void>(r => setTimeout(r, ms))]);
       }
 
-      /** Resolve once `chunks` holds `count` done chunks, or reject after `ms`. */
-      function doneCount(chunks: AgentStreamChunk[], count: number, ms = 60_000) {
-        return waitUntil(() => chunks.filter(c => c.type === 'done').length >= count, ms, `expected ${count} done chunk(s) within ${ms}ms`);
+      /**
+       * Wait for the turn that started at `chunks[from]` to end. Resolves on its `done`
+       * chunk. Rejects on an `error` chunk, with its message, so a failed turn isn't
+       * reported as a timeout, and on a timeout lists the chunk types that did arrive.
+       */
+      async function turnEnds(chunks: AgentStreamChunk[], from: number, label: string, ms = 60_000) {
+        const end = () => chunks.slice(from).find(c => c.type === 'done' || c.type === 'error');
+        try {
+          await waitUntil(() => end() !== undefined, ms, label);
+        } catch {
+          const seen = chunks.slice(from).map(c => c.type);
+          throw new Error(`${label}: no done or error chunk within ${ms}ms (received: ${seen.length > 0 ? seen.join(', ') : 'nothing'})`);
+        }
+        const last = end();
+        if (last?.type === 'error') {
+          throw new Error(`${label}: the turn ended with an error chunk: ${last.errorName ?? 'unclassified'}: ${last.error ?? '(no message)'}`);
+        }
+      }
+
+      /**
+       * Positive control for the tests that assert nothing reached `subA`: a new turn
+       * of user A's must still arrive on `subA`, so an empty result means isolation and
+       * not a subscription that stopped receiving. On failure, the error also lists
+       * what A's history recorded for the turn, which tells a turn that never ran or
+       * failed apart from one that ran but wasn't delivered.
+       */
+      async function assertSubAReceivesOwnTurn(api: typeof apiType) {
+        await signInAs(api, userA);
+        const historyBefore = (await api.agentGetConversation(convA)).messages.length;
+        const from = chunksA.length;
+        await api.agentStream('Say hello again', convA);
+        try {
+          await turnEnds(chunksA, from, "user A's own turn on subA");
+        } catch (err) {
+          const recorded = (await api.agentGetConversation(convA)).messages.slice(historyBefore)
+            .map(m => (m.metadata.error ? `${m.role} (error: ${m.metadata.error})` : m.role));
+          throw new Error(`${(err as Error).message}; user A's history recorded: ${recorded.length > 0 ? recorded.join(', ') : 'nothing'}`);
+        }
       }
 
       before(async () => {
@@ -465,7 +500,7 @@ export function agentTests(getApi: () => typeof apiType) {
         subA = channel.subscribe((chunk) => { chunksA.push(chunk); });
         await subA.established;
         await api.agentStream('Say hello', convA);
-        await doneCount(chunksA, 1);
+        await turnEnds(chunksA, 0, "user A's first turn");
       });
 
       after(async () => {
@@ -501,7 +536,7 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(own.length >= 2, 'user A still reads their own history');
       });
 
-      test("a channelId chosen by user B doesn't reach user A's channel", { timeout: 90_000 }, async () => {
+      test("a channelId chosen by user B doesn't reach user A's channel", { timeout: 150_000 }, async () => {
         const api = getApi();
         await signInAs(api, userB);
         const { conversationId: convB } = await api.agentCreateConversationId();
@@ -512,15 +547,16 @@ export function agentTests(getApi: () => typeof apiType) {
         await establishedOrTimeout(subB);
         const seenBefore = chunksA.length;
         await api.agentStream('Say hello', convB, convA);
-        await doneCount(chunksB, 1);
+        await turnEnds(chunksB, 0, "user B's turn on B's channel");
         await new Promise(r => setTimeout(r, 2_000));
         subB.unsubscribe();
         assert.strictEqual(chunksA.length, seenBefore, "user B's turn must not reach user A's channel");
+        await assertSubAReceivesOwnTurn(api);
       });
 
       // On AWS a turn without a conversationId used to take its channelId as its AgentCore
       // session and conversation, i.e. it ran inside user A's session. Locally it never did.
-      test("user B's turn without a conversation doesn't land in user A's conversation", { timeout: 90_000 }, async () => {
+      test("user B's turn without a conversation doesn't land in user A's conversation", { timeout: 150_000 }, async () => {
         const api = getApi();
         await signInAs(api, userA);
         const historyBefore = (await waitForMessages(api, convA, 2)).length;
@@ -529,12 +565,15 @@ export function agentTests(getApi: () => typeof apiType) {
         const chunksB: AgentStreamChunk[] = [];
         const subB = channel.subscribe((chunk) => { chunksB.push(chunk); });
         await establishedOrTimeout(subB);
+        const seenBefore = chunksA.length;
         await api.agentStream('Say hello', undefined, convA);
-        await doneCount(chunksB, 1);
+        await turnEnds(chunksB, 0, "user B's turn on B's channel");
         subB.unsubscribe();
         await signInAs(api, userA);
         await new Promise(r => setTimeout(r, 3_000));
         assert.strictEqual((await api.agentGetConversation(convA)).messages.length, historyBefore, "user A's history must not change");
+        assert.strictEqual(chunksA.length, seenBefore, "user B's turn must not reach user A's channel");
+        await assertSubAReceivesOwnTurn(api);
       });
 
       test("user B can't listen to user A's turn", { timeout: 90_000 }, async () => {
@@ -544,10 +583,8 @@ export function agentTests(getApi: () => typeof apiType) {
         const leaked: AgentStreamChunk[] = [];
         const subB = channel.subscribe((chunk) => { leaked.push(chunk); });
         await establishedOrTimeout(subB);
-        await signInAs(api, userA);
-        const doneBefore = chunksA.filter(c => c.type === 'done').length;
-        await api.agentStream('Say hello again', convA);
-        await doneCount(chunksA, doneBefore + 1);
+        // A's turn must reach subA (the positive control), and none of it may reach subB.
+        await assertSubAReceivesOwnTurn(api);
         await new Promise(r => setTimeout(r, 2_000));
         subB.unsubscribe();
         assert.deepStrictEqual(leaked, [], "user B must not receive user A's chunks");
