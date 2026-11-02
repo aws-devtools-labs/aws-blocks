@@ -117,6 +117,9 @@ container `AsyncJob`:
 3. The container keeps at least `minInstances` tasks running between ticks. With
    `minInstances: 0` it scales to zero between ticks, and each tick starts a task,
    which delays the tick by a few minutes.
+4. A deploy that changes your code restarts a tick that is still running after
+   about 2 minutes. The tick runs again from the start, and the restart counts as
+   one of its 3 attempts.
 
 A container inherited from the scope works the same way. Locally, every job
 runs in the dev server whatever its compute. See `@aws-blocks/bb-compute`.

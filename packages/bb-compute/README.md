@@ -93,6 +93,11 @@ type is a compile error.
   otherwise). Set `minInstances: 0` to scale to zero tasks between jobs; a
   waiting job or CronJob tick then starts a task, which takes a few minutes. See
   [DESIGN.md](../bb-container-compute/DESIGN.md#scaling-to-zero-mininstances-0).
+- **Deploys restart running jobs.** A deploy that changes your code replaces
+  the container's tasks. A stopping task stops taking new jobs and gives running
+  ones up to about 2 minutes to finish (the AWS Fargate maximum). A job still
+  running after that is stopped and runs again from the start, and the restart
+  counts as one of its attempts.
 - `image?` — the container image to run (public or ECR URI), used **verbatim**
   (pulled by ECS at task start). Blocks builds **no** image and deploying needs
   **no local Docker**: your application code is shipped separately as an S3 asset
