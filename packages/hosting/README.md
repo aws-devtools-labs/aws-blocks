@@ -123,7 +123,11 @@ const flags = await getConfig('FEATURE_FLAGS'); // SSM
 ```
 
 Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
-the value in a `.env` file. On a deployed function it fetches + decrypts from its
+the value in `.env.local`. That is the file the Blocks dev server (`npm run dev`)
+and the sandbox (`npm run sandbox`) load into the backend; they don't load `.env`,
+so a value only in `.env` isn't seen there and the getter throws
+`no config reference found`. (Next.js SSR code under `next dev` also reads `.env`,
+because Next loads it.) On a deployed function it fetches + decrypts from its
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
 
