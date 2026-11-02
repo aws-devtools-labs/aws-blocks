@@ -106,41 +106,45 @@ const PULL_NO_TERMINAL =
 /** The verbs, with the usage that `bb-data <verb> --help` prints. */
 const VERB_HELP: Record<string, string> = {
   migrate: `
-Usage: ${COMMAND} migrate [dir] [--url <conn>] [--stage <name>] [--regenerate-types[=<dir>]]
+Usage: ${COMMAND} migrate [dir] [--url <conn>] [--stage <name>] [--block <id>] [--regenerate-types[=<dir>]]
 
 Apply pending SQL migrations from [dir] (default: ./migrations), in file-name order.
-Without --url it applies them to the local PGlite database in .bb-data/; on an app whose
+Without --url it applies them to the local PGlite database in .bb-data/<id>; on an app whose
 database is external (fromExisting()) it refuses instead, with exit 1.
 
 Options:
   --url <conn>             Apply to this external database (Supabase/Neon connection string).
                            Default: the BLOCKS_MIGRATE_URL environment variable, if set.
   --stage <name>           Stage label for an external run (advisory-lock key and logging).
+  --block <id>             Local database to use: .bb-data/<id>, the one \`npm run dev\` uses for
+                           the Database with that fullId. Default: the only local database.
   --regenerate-types[=<dir>]
                            After an external migrate that applied something, refresh
                            database.types.ts and database.meta.ts in <dir> (default: ./aws-blocks).
   -h, --help               Print this help and exit.
 `,
   status: `
-Usage: ${COMMAND} status [dir] [--url <conn>]
+Usage: ${COMMAND} status [dir] [--url <conn>] [--block <id>]
 
 Show applied and pending migrations from [dir] (default: ./migrations). Reads only.
-Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
+Without --url it reads the local PGlite database in .bb-data/<id>; on an app whose database is
 external (fromExisting()) it refuses instead, with exit 1.
 
 Options:
   --url <conn>             Read this external database. Default: BLOCKS_MIGRATE_URL, if set.
+  --block <id>             Local database to read: .bb-data/<id>. Default: the only local database.
   -h, --help               Print this help and exit.
 `,
   'generate-types': `
-Usage: ${COMMAND} generate-types [output] [--url <conn>]
+Usage: ${COMMAND} generate-types [output] [--url <conn>] [--block <id>]
 
 Introspect the schema and write TypeScript types to [output] (default: ./types/database.ts).
-Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
+Without --url it reads the local PGlite database in .bb-data/<id>; on an app whose database is
 external (fromExisting()) it refuses instead, with exit 1.
 
 Options:
   --url <conn>             Read this external database. Default: BLOCKS_MIGRATE_URL, if set.
+  --block <id>             Local database to read: .bb-data/<id>. Default: the only local database.
   -h, --help               Print this help and exit.
 `,
   pull: `
