@@ -36,6 +36,8 @@ export {
   parseExistingMetaSingulars,
   selectEligibleTables,
   ineligibleReason,
+  tablesWithoutRls,
+  publicTableSql,
   rlsDisabledWarning,
   writeTypesAndMeta,
   regenerateTypesAndMeta,

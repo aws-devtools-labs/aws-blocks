@@ -298,6 +298,24 @@ export function selectEligibleTables(intro: IntrospectionResult): TableInfo[] {
 }
 
 /**
+ * Names of the tables skipped because row-level security is disabled (see
+ * {@link ineligibleReason}). Shared by `db pull` and the dev-loop type refresh so
+ * both warn about the same tables.
+ */
+export function tablesWithoutRls(intro: Pick<IntrospectionResult, 'tables' | 'tablesUsingSupabaseAuth'>): string[] {
+  return intro.tables.filter(t => ineligibleReason(t, intro) === 'rls-disabled').map(t => t.name);
+}
+
+/**
+ * `public.<name>` for SQL a user copies from the CLI output. The name is quoted
+ * unless it is a plain lowercase identifier, so mixed-case names (which the
+ * Supabase table editor creates) resolve to the right table.
+ */
+export function publicTableSql(name: string): string {
+  return `public.${/^[a-z_][a-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`}`;
+}
+
+/**
  * Warning lines for tables skipped because row-level security is disabled, with
  * the SQL to enable it. Empty when `tableNames` is empty. Shared by `db pull` and
  * the dev-loop type refresh so a table that silently drops out of the generated
@@ -310,7 +328,9 @@ export function rlsDisabledWarning(tableNames: string[]): string[] {
     `    Blocks generates CRUD only for tables with RLS enabled: generated CRUD relies`,
     `    on RLS policies to decide which rows each user can access. To include a table,`,
     `    enable RLS and add policies for it in a migration, then re-run:`,
-    ...tableNames.map(name => `      ALTER TABLE public.${name} ENABLE ROW LEVEL SECURITY;`),
+    ...tableNames.map(name => `      ALTER TABLE ${publicTableSql(name)} ENABLE ROW LEVEL SECURITY;`),
+    `    To share a table with every signed-in user on purpose, say so in a policy:`,
+    `      CREATE POLICY "shared" ON ${publicTableSql(tableNames[0])} FOR ALL TO authenticated USING (true) WITH CHECK (true);`,
   ];
 }
 
@@ -384,6 +404,5 @@ export async function regenerateTypesAndMeta(opts: {
   const intro = await introspect(toSessionPortUrl(opts.connectionString));
   const tables = selectEligibleTables(intro);
   writeTypesAndMeta(opts.outputDir, tables, readExistingSingulars(opts.outputDir));
-  const tablesWithoutRls = intro.tables.filter(t => ineligibleReason(t, intro) === 'rls-disabled').map(t => t.name);
-  return { tablesGenerated: tables.length, tablesWithoutRls, outputDir: opts.outputDir };
+  return { tablesGenerated: tables.length, tablesWithoutRls: tablesWithoutRls(intro), outputDir: opts.outputDir };
 }
