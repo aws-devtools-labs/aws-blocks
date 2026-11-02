@@ -331,7 +331,7 @@ catch (e) {
 
 `NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
 
-`requireAuth()` reports every missing or expired cookie session as `NotAuthenticated` (HTTP 401), including a session whose refresh failed. `TokenExpired` is returned only by `POST /aws-blocks/auth/refresh` (the bearer-token flow) when the refresh fails.
+`requireAuth()` reports every missing or expired session (cookie or bearer token) as `NotAuthenticated` (HTTP 401), including a session whose refresh failed. `TokenExpired` is returned only by the bearer-token refresh route (`POST /aws-blocks/auth/refresh` by default; it follows a custom `callbackPath`) when the refresh fails.
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
