@@ -7,8 +7,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { type BuildProfile, buildProfile } from '@aws-blocks/hosting/adapters';
-import type { DeployManifest } from '@aws-blocks/hosting/constructs';
-import { App, Stack } from 'aws-cdk-lib';
+import { type DeployManifest, defineFrontDoor } from '@aws-blocks/hosting/constructs';
+import { App, CfnOutput, Stack } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { type BlocksStackApi, Hosting, type HostingProps, HostingPresets } from './hosting.js';
 import { clearRouteRegistry } from './raw-route.js';
@@ -289,6 +289,44 @@ describe('Hosting with HostingPresets.preview', () => {
     });
 
     assert.deepStrictEqual(seen.profile, { serverInvoke: 'http-api', edgeToRegional: true });
+  });
+
+  it('a door that routes at the app builds the server buffered, as a native handler', () => {
+    const seen: { profile?: BuildProfile } = {};
+    const door = defineFrontDoor({
+      service: 'app-routed',
+      routing: 'app',
+      build: (scope, { origins }) => {
+        new CfnOutput(scope, 'Entry', { value: origins.entry.fn.functionName });
+        return { url: 'https://app.example.com' };
+      },
+    });
+    // The fixture's server only (the router serves no other compute).
+    const fixture = ssrFixture(tmpDir, seen);
+    const stack = newStack('AppRoutingProfile');
+    new Hosting(stack, 'Hosting', {
+      root: tmpDir,
+      buildOutputDir: 'dist',
+      api: MOCK_API,
+      customAdapter: (dir) => {
+        const manifest = fixture(dir);
+        const { default: server } = manifest.compute;
+        return {
+          ...manifest,
+          compute: { default: server },
+          routes: manifest.routes.filter((r) => r.target !== 'edge1'),
+          imageOptimization: undefined,
+        };
+      },
+      frontDoor: { kind: 'custom', door },
+    });
+
+    assert.deepStrictEqual(seen.profile, { serverInvoke: 'http-api', lambdaWebAdapter: false });
+    // The server is the entry: the router is its handler, and no other function was added for it.
+    const handlers = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')).map(
+      (r) => r.Properties.Handler,
+    );
+    assert.ok(handlers.includes('blocks_app_router.handler'));
   });
 
   it('the CloudFront door keeps the default build', () => {

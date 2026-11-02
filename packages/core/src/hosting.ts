@@ -732,6 +732,20 @@ export const HostingPresets: { readonly production: HostingPreset; readonly prev
   },
 };
 
+/**
+ * Whether `frontDoor` is a bring-your-own door that routes at the app
+ * (`routing: 'app'`): its entry function calls the server buffered.
+ */
+function isAppRoutingDoor(frontDoor: HostingProps['frontDoor']): boolean {
+  return (
+    typeof frontDoor === 'object' &&
+    frontDoor !== null &&
+    'kind' in frontDoor &&
+    frontDoor.kind === 'custom' &&
+    frontDoor.door?.routing === 'app'
+  );
+}
+
 /** Whether `frontDoor` is the API Gateway HTTP API door. */
 function isHttpApiDoor(frontDoor: HostingProps['frontDoor']): boolean {
   return (
@@ -1141,11 +1155,16 @@ export class Hosting extends Construct {
     // `env`, as in the templates) may be one of them, so it counts as one too.
     const region = cdk.Stack.of(this).region;
     const noWebAdapter = cdk.Token.isUnresolved(region) || !lambdaWebAdapterAvailableIn(region);
+    // A door that routes at the app calls the server through the app router
+    // with a buffered payload 2.0 event: Next.js is built with OpenNext's
+    // buffered `aws-apigw-v2` handler, and Nitro as its native `aws-lambda`
+    // handler (the router calls it in-process) rather than a Web Adapter server.
+    const appRouting = isAppRoutingDoor(props.frontDoor);
     const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () =>
       withBuildProfile(
         {
-          serverInvoke: isHttpApiDoor(props.frontDoor) ? 'http-api' : 'default',
-          ...(noWebAdapter ? { lambdaWebAdapter: false } : {}),
+          serverInvoke: isHttpApiDoor(props.frontDoor) || appRouting ? 'http-api' : 'default',
+          ...(noWebAdapter || appRouting ? { lambdaWebAdapter: false } : {}),
           ...((props.edgeRoutes ?? (isHttpApiDoor(props.frontDoor) ? 'regional' : 'edge')) === 'regional'
             ? { edgeToRegional: true }
             : {}),
