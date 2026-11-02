@@ -77,6 +77,14 @@ Both are HMAC-SHA256 signed with the same shared secret. The connect token's cha
 
 Server-side `subscribe()` opens a real WebSocket connection to the API Gateway endpoint, using the same connect token and channel token mechanism as client subscriptions. This means server-side subscribers receive messages published by any Lambda invocation, not just the current one. `publish()` also emits to a local EventEmitter for zero-latency delivery to same-invocation subscribers.
 
+Each server-side subscriber therefore has two delivery paths, and `publish()` drives both: it posts to every subscribed connection, including the publishing process's own WebSocket, and emits locally. Without coordination, a subscriber in the publishing process would run its handler twice per message. `server-subscribe.ts` makes the subscription decide which path delivers:
+
+- **Until API Gateway acknowledges the subscription** (`subscribe_success`), the socket isn't live. The local emitter delivers, and message frames on the socket are dropped.
+- **Once live**, the socket delivers every message and the local emitter skips that handler.
+- **After the socket closes or errors**, it isn't live again, and the local emitter takes over.
+
+So each published message runs a server-side handler exactly once, matching the local mock. `test-apps/comprehensive` asserts one call per publish for both `getChannel().subscribe()` and `realtime.subscribe()`.
+
 ## Infrastructure (CDK)
 
 ### Shared Per Stack
