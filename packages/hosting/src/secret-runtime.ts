@@ -235,9 +235,11 @@ export type ConfigValueOf<K extends ConfigKey> = keyof HostingConfigRegistry ext
 /**
  * Resolve a **secret** (AWS Secrets Manager) at runtime.
  *
- * **Local development.** Reads `process.env.KEY` first, so a `.env` file supplies
- * the value with no AWS call. On a deployed function it falls through to fetching
- * the wired secret from Secrets Manager.
+ * **Local development.** Reads `process.env.KEY` first, so a local env file supplies
+ * the value with no AWS call: `.env.local` for the Blocks backend, which is the file
+ * `npm run dev` and `npm run sandbox` load (`.env` is not loaded there). Next.js SSR
+ * code under `next dev` also sees `.env`, because Next loads it. On a deployed
+ * function it falls through to fetching the wired secret from Secrets Manager.
  *
  * **Type safety.** `key` is typed as {@link SecretKey}: by default any `string`, but
  * once you run `npm run typegen` (which generates a `.d.ts` augmenting
