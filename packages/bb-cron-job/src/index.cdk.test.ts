@@ -330,3 +330,24 @@ describe('CronJob scheduler role grants', () => {
 		assert.strictEqual(invokes.length, 1, JSON.stringify(invokes));
 	});
 });
+
+describe('CronJob runner marker', () => {
+	test('a container CronJob registers the runner marker; a serverless one does not', async () => {
+		const stack = await makeStack('CronRunnerMarker');
+		const worker = new ContainerCompute(stack, 'worker', { size: { vcpu: 0.5, memory: 1024 } });
+		const onContainer = new CronJob(stack, 'onContainer', {
+			schedule: 'rate(1 day)',
+			compute: worker,
+			handler: async () => {},
+		});
+		const onLambda = new CronJob(stack, 'onLambda', { schedule: 'rate(1 day)', handler: async () => {} });
+		assert.strictEqual(
+			getRegisteredConfigValue(stack, `BLOCKS_CRON_RUNNER_${sanitizeConfigKey(onContainer.fullId)}`),
+			'1',
+		);
+		assert.strictEqual(
+			getRegisteredConfigValue(stack, `BLOCKS_CRON_RUNNER_${sanitizeConfigKey(onLambda.fullId)}`),
+			undefined,
+		);
+	});
+});

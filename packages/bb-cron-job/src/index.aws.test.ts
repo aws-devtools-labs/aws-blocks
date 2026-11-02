@@ -15,10 +15,12 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
+import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { getAsyncJob } from '@aws-blocks/bb-async-job/job-registry';
 import { Scope } from '@aws-blocks/core';
 import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import { CronJob } from './index.aws.js';
+import { cronRunnerConfigKey } from './runner.js';
 import type { CronJobEvent } from './types.js';
 
 describe('CronJob (aws runtime): container delivery via the runner AsyncJob', () => {
@@ -29,6 +31,9 @@ describe('CronJob (aws runtime): container delivery via the runner AsyncJob', ()
 		// URL reaches the runtime as config. Seed it so the runner registers.
 		const envKey = `BLOCKS_QUEUE_URL_${sanitizeConfigKey(runnerFullId)}`;
 		process.env[envKey] = 'https://sqs.us-east-1.amazonaws.com/000000000000/runner';
+		// ...and synth marks the CronJob as having a runner.
+		const markerKey = cronRunnerConfigKey(`${scope.fullId}-nightly`);
+		process.env[markerKey] = '1';
 
 		const received: CronJobEvent<{ region: string }>[] = [];
 		try {
@@ -53,6 +58,7 @@ describe('CronJob (aws runtime): container delivery via the runner AsyncJob', ()
 			});
 		} finally {
 			delete process.env[envKey];
+			delete process.env[markerKey];
 		}
 
 		assert.deepStrictEqual(received, [
@@ -60,9 +66,36 @@ describe('CronJob (aws runtime): container delivery via the runner AsyncJob', ()
 		]);
 	});
 
-	test('without a provisioned runner queue the runner stays inert', () => {
+	test('a serverless CronJob (no runner marker) builds no runner', () => {
 		const scope = new Scope(`cj-${Math.random().toString(36).slice(2)}`);
 		new CronJob(scope, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
 		assert.strictEqual(getAsyncJob(`${scope.fullId}-nightly-runner`), undefined);
 	});
+
+	// A serverless CronJob `nightly` and a user AsyncJob `nightly-runner` in one
+	// scope: the AsyncJob's fullId is what the runner's would be. With the
+	// AsyncJob's queue URL in config, building a runner too registered that queue
+	// twice and failed every cold start. Both construction orders.
+	for (const cronFirst of [true, false]) {
+		test(`a user AsyncJob named <cronId>-runner loads (CronJob ${cronFirst ? 'first' : 'second'})`, () => {
+			const scope = new Scope(`cj-${Math.random().toString(36).slice(2)}`);
+			const envKey = `BLOCKS_QUEUE_URL_${sanitizeConfigKey(`${scope.fullId}-nightly-runner`)}`;
+			process.env[envKey] = `https://sqs.us-east-1.amazonaws.com/000000000000/${scope.fullId}-nightly-runner`;
+			try {
+				const cron = () => new CronJob(scope, 'nightly', { schedule: 'rate(1 day)', handler: async () => {} });
+				const job = () => new AsyncJob(scope, 'nightly-runner', { handler: async () => {} });
+				assert.doesNotThrow(() => {
+					if (cronFirst) {
+						cron();
+						job();
+					} else {
+						job();
+						cron();
+					}
+				});
+			} finally {
+				delete process.env[envKey];
+			}
+		});
+	}
 });

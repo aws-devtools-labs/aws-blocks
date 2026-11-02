@@ -92,11 +92,15 @@ type is a compile error.
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
   otherwise).
 - Use `minInstances: 1` or more for most workloads: a running task starts a job
-  or CronJob tick within seconds. Set `minInstances: 0` only for long-running
-  jobs that can tolerate high latency before they start. The compute then scales
+  or CronJob tick within seconds. Those tasks are billed around the clock, even
+  when no job is running. Set `minInstances: 0` only for long-running jobs that
+  can tolerate high latency before they start. The compute then scales
   to zero tasks between jobs, and each job has to start a task first. That
   usually takes a few minutes, and up to about 20 minutes when the job's queue
-  has been idle for more than six hours.
+  has been idle for more than six hours. `minInstances: 0` needs at least one
+  `AsyncJob` or `CronJob` on the compute and the default (or `queue-depth`)
+  scaling strategy; anything else fails synth, because nothing would start a task
+  or scale-in could stop one under a running job.
 - **Deploys restart running jobs.** A deploy that changes your code replaces
   the container's tasks. A stopping task stops taking new jobs and gives running
   ones up to about 2 minutes to finish (the AWS Fargate maximum). A job still
@@ -108,8 +112,9 @@ type is a compile error.
   and fetched at boot. So a custom image only supplies the runtime environment —
   it must provide a **Node 24** runtime on `PATH`, plus any system libraries your
   handlers need (e.g. media tooling). Defaults to
-  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). See
-  [DESIGN.md](../bb-container-compute/DESIGN.md) for the boot mechanism.
+  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). At boot, a
+  small bootstrap script uses the task's role to download your code from S3 and
+  starts it.
 
 ## API namespaces
 

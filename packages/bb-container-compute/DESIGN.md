@@ -64,7 +64,10 @@ wires Application Auto Scaling from `scaling`:
 ### Scaling to zero (`minInstances: 0`)
 
 `minInstances: 0` is for long-running jobs that can tolerate high start-up
-latency; `1` or more is recommended otherwise. With `0` the service can scale in
+latency; `1` or more is recommended otherwise. `finalize()` rejects it on a
+compute that drains no queue (nothing would start a task) or whose strategy
+includes `cpu`/`memory` (those policies can't see in-flight jobs, so they could
+scale in to zero under one). With `0` the service can scale in
 to zero tasks, where nothing polls the owned queues. The queue-depth policy
 can't wake it: [step adjustments](https://docs.aws.amazon.com/autoscaling/application/userguide/step-scaling-policy-overview.html)
 are relative to the current task count, and a backlog under `backlogPerInstance`
@@ -74,7 +77,8 @@ read.
 So a min-0 compute that drains queues gets one more step policy,
 `WakeOnWaitingMessages`: an alarm on the sum of `ApproximateNumberOfMessagesVisible`
 (waiting, not in flight) across its queues adds one task when the sum is 1 or
-more. While a task with free capacity is running it receives messages within
+more, with a 5-minute cooldown (longer than a task's start-up, so one waiting
+message starts one task rather than one per minute). While a task with free capacity is running it receives messages within
 seconds, so Visible stays at 0 and the policy is idle; when every task is busy
 it also adds capacity up to `maxInstances`. Scale-in is left to the queue-depth
 policy, which counts in-flight messages and so never removes the last task from

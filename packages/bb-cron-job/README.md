@@ -115,7 +115,8 @@ container `AsyncJob`:
 2. A tick that throws or times out is retried, up to 3 attempts in total, then
    moved to a dead-letter queue. That matches the serverless path's 3 attempts.
 3. The container keeps at least `minInstances` tasks running between ticks. Use
-   `1` or more for most jobs, so a tick starts within seconds. Use
+   `1` or more for most jobs, so a tick starts within seconds. Those tasks run,
+   and are billed, around the clock, even for a job that runs once a night. Use
    `minInstances: 0` only for a long-running job that can tolerate a late start:
    the container then scales to zero between ticks, and each tick has to start a
    task first. That usually takes a few minutes, and for a job that runs less than
@@ -262,7 +263,7 @@ new CronJob<{ mode: string }>(scope, 'sync-daily', {
 - **Idempotency:** EventBridge provides at-least-once delivery. Design handlers to tolerate duplicate invocations.
 - **Rate expressions** for simple intervals; **cron expressions** for precise timing.
 - **Concurrent executions:** If a handler runs longer than the schedule interval, the next invocation starts while the previous is still running. Design for overlap or implement application-level locking with `KVStore`. This holds on a container compute too: a container runs up to its concurrency limit of ticks at once.
-- **Failure handling:** Handler exceptions are retried by Lambda's built-in async invoke retry policy (2 retries with exponential backoff). After retries exhaust, the error is logged to CloudWatch. On a container compute, a failed tick is retried by its queue (3 attempts in total), then moved to a dead-letter queue.
+- **Failure handling:** On a serverless compute, handler exceptions are retried by Lambda's built-in async invoke retry policy (2 retries with exponential backoff). After retries exhaust, the error is logged to CloudWatch. On a container compute, a failed tick is retried by its queue (3 attempts in total), then moved to a dead-letter queue.
 
 ## Local Development
 

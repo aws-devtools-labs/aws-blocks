@@ -70,6 +70,9 @@ const CPU_UNITS_PER_VCPU = 1024;
 const DEFAULT_VCPU = 0.5;
 const DEFAULT_MEMORY_MB = 1024;
 
+/** Wake policy cooldown: longer than a task's start-up, so one waiting job starts one task. */
+const WAKE_COOLDOWN_MINUTES = 5;
+
 /** Container port the runtime's health server listens on (worker mode still exposes it). */
 const CONTAINER_PORT = 8080;
 
@@ -104,22 +107,52 @@ const BOOTSTRAP_PATH = '/app/bootstrap.mjs';
 const OWNED_QUEUES: unique symbol = Symbol.for('blocks:ContainerOwnedQueues');
 
 /**
+ * `minInstances: 0` is safe only when something wakes the service and scale-in
+ * can see running jobs. Only the wake policy can start the first task, and it
+ * watches the compute's queues, so a compute with no queues would never start.
+ * Only queue-depth scaling counts in-flight messages, so a CPU or memory policy
+ * could scale in to zero under a job that is waiting on I/O. Checked at
+ * finalize, once every job has registered its queue.
+ */
+function assertSafeScaleToZero(path: string, cfg: ContainerScaling, queueCount: number): void {
+	if (queueCount === 0) {
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances is 0, but no AsyncJob or CronJob runs on this ` +
+				'compute, so nothing would ever start a task. Set minInstances to 1 or more, or assign a job to it.',
+		);
+	}
+	const signals = cfg.strategy === undefined ? [] : Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
+	const other = signals.find((s) => s.on !== 'queue-depth');
+	if (other) {
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances is 0 with a '${other.on}' scaling strategy, which can ` +
+				'scale in to zero while a job is still running. Use the default strategy (omit it) or queue-depth, or ' +
+				'set minInstances to 1 or more.',
+		);
+	}
+}
+
+/**
  * Reject instance bounds Application Auto Scaling or ECS would refuse at deploy
  * time, so the failure names the compute at synth instead of surfacing minutes
  * into a CloudFormation deploy. `minInstances: 0` is allowed: the service then
  * scales to zero between jobs (see `ContainerCompute.finalize`).
  */
-function validateScaling(id: string, scaling: ContainerScaling): void {
+function validateScaling(path: string, scaling: ContainerScaling): void {
 	const { minInstances, maxInstances } = scaling;
 	if (!Number.isInteger(minInstances) || minInstances < 0) {
-		throw new Error(`Compute "${id}": scaling.minInstances must be an integer of 0 or more, got: ${minInstances}`);
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances must be an integer of 0 or more, got: ${minInstances}`,
+		);
 	}
 	if (!Number.isInteger(maxInstances) || maxInstances < 1) {
-		throw new Error(`Compute "${id}": scaling.maxInstances must be an integer of 1 or more, got: ${maxInstances}`);
+		throw new Error(
+			`Container compute '${path}': scaling.maxInstances must be an integer of 1 or more, got: ${maxInstances}`,
+		);
 	}
 	if (minInstances > maxInstances) {
 		throw new Error(
-			`Compute "${id}": scaling.minInstances (${minInstances}) must not exceed maxInstances (${maxInstances})`,
+			`Container compute '${path}': scaling.minInstances (${minInstances}) must not exceed maxInstances (${maxInstances})`,
 		);
 	}
 }
@@ -153,7 +186,7 @@ export class ContainerCompute extends ComputeBase {
 		const size = options?.size;
 		this.vcpu = size?.vcpu ?? DEFAULT_VCPU;
 		this.scalingConfig = options?.scaling;
-		if (this.scalingConfig) validateScaling(id, this.scalingConfig);
+		if (this.scalingConfig) validateScaling(this.node.path, this.scalingConfig);
 
 		// A Fargate service needs a VPC. Declare the requirement centrally (so a
 		// census of the app still shows a VPC is needed), then resolve one now —
@@ -344,6 +377,7 @@ export class ContainerCompute extends ComputeBase {
 		// that drains queues defaults to queue-depth; otherwise CPU.
 		const ownedQueues = (this as unknown as { [OWNED_QUEUES]?: sqs.IQueue[] })[OWNED_QUEUES] ?? [];
 		let signals: ScalingSignal[];
+		if (scalesToZero) assertSafeScaleToZero(this.node.path, cfg, ownedQueues.length);
 		if (cfg.strategy) {
 			signals = Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
 		} else if (ownedQueues.length > 0) {
@@ -419,8 +453,8 @@ export class ContainerCompute extends ComputeBase {
 	 * zero. This policy watches only Visible messages (waiting, not in flight):
 	 * while a task is running and has capacity it receives a message within
 	 * seconds, so Visible stays at 0 and the policy is idle. At zero tasks, or
-	 * when every task is busy, messages wait and it adds a task per cooldown up
-	 * to `maxInstances`. Scale-in stays with the queue-depth policy, which counts
+	 * when every task is busy, messages wait and it adds a task per cooldown (5
+	 * minutes) up to `maxInstances`. Scale-in stays with the queue-depth policy, which counts
 	 * in-flight messages and so never removes the last task from a running job.
 	 *
 	 * Wiring only applies with `minInstances: 0`, so services that keep at least
@@ -446,7 +480,11 @@ export class ContainerCompute extends ComputeBase {
 				{ lower: 1, change: +1 },
 			],
 			adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
-			cooldown: cdk.Duration.minutes(1),
+			// Longer than a task takes to start and begin polling (about 3 minutes in
+			// the compute-smoke e2e). The alarm stays in ALARM until the new task
+			// picks the message up; a shorter cooldown would add a task each minute
+			// meanwhile, so one waiting message could start up to `maxInstances`.
+			cooldown: cdk.Duration.minutes(WAKE_COOLDOWN_MINUTES),
 		});
 	}
 

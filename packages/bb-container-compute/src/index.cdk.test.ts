@@ -435,3 +435,67 @@ describe('ContainerCompute — deploys leave running jobs alone where they can',
 		});
 	});
 });
+
+describe('ContainerCompute — review: scale-to-zero guards, wake cooldown, error naming', () => {
+	async function stackFor(id: string) {
+		const app = new cdk.App();
+		return BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+	}
+
+	test('minInstances 0 with no queue fails at finalize, naming the compute', async () => {
+		const stack = await stackFor('ContainerZeroNoQueue');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2 },
+		});
+		assert.throws(
+			() => compute.finalize(),
+			/Container compute 'ContainerZeroNoQueue\/worker': scaling\.minInstances is 0, but no AsyncJob or CronJob runs on this compute/,
+		);
+	});
+
+	test('minInstances 0 with a cpu strategy fails at finalize', async () => {
+		const stack = await stackFor('ContainerZeroCpu');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2, strategy: { on: 'cpu', targetPercent: 60 } },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		assert.throws(() => compute.finalize(), /minInstances is 0 with a 'cpu' scaling strategy/);
+	});
+
+	test('minInstances 0 with an explicit queue-depth strategy is allowed', async () => {
+		const stack = await stackFor('ContainerZeroQueueDepth');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2, strategy: { on: 'queue-depth', backlogPerInstance: 50 } },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		assert.doesNotThrow(() => compute.finalize());
+	});
+
+	test('the wake policy waits 5 minutes between adding tasks', async () => {
+		const stack = await stackFor('ContainerWakeCooldown');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 3 },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		compute.finalize();
+		const policies = Object.values(
+			Template.fromStack(stack as unknown as cdk.Stack).findResources(
+				'AWS::ApplicationAutoScaling::ScalingPolicy',
+			),
+		).map(
+			(p) =>
+				(p as { Properties: { PolicyName: string; StepScalingPolicyConfiguration?: { Cooldown?: number } } })
+					.Properties,
+		);
+		const wake = policies.find((p) => p.PolicyName.includes('WakeOnWaitingMessages'));
+		assert.strictEqual(wake?.StepScalingPolicyConfiguration?.Cooldown, 300);
+	});
+});

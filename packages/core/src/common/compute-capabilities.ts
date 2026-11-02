@@ -106,6 +106,11 @@ export interface ContainerScaling {
 	 * usually takes a few minutes, and up to about 20 minutes when the job's queue
 	 * has been idle for more than six hours (SQS stops publishing queue metrics
 	 * for an idle queue, and they take up to 15 minutes to resume).
+	 *
+	 * `0` requires at least one AsyncJob or CronJob on the compute and the default
+	 * (or `queue-depth`) scaling strategy, and fails synth otherwise: with no job
+	 * nothing would start an instance, and a `cpu` or `memory` strategy could
+	 * scale in to zero while a job is still running.
 	 */
 	minInstances: number;
 	/** Most running instances. At least 1. */

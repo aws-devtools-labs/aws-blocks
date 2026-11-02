@@ -5,7 +5,7 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import { blocksError, getOrCreateOnRoot, Scope } from '@aws-blocks/core/cdk';
+import { blocksError, getOrCreateOnRoot, registerConfig, Scope } from '@aws-blocks/core/cdk';
 import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -13,7 +13,7 @@ import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
 import { CronJobErrors } from './errors.js';
-import { CRON_RUNNER_ID, toCronJobEvent } from './runner.js';
+import { CRON_RUNNER_ID, cronRunnerConfigKey, toCronJobEvent } from './runner.js';
 import { validateSchedule, validateTimezone } from './schedule.js';
 import type { CronJobEvent, CronJobOptions } from './types.js';
 import { BB_NAME } from './version.js';
@@ -83,8 +83,10 @@ export class CronJob<T = void> extends Scope {
 			// The runner is a plain AsyncJob on this job's compute (inherited from
 			// `_compute` above, or from the scope). It owns the queue, DLQ,
 			// owner-matched container poller, enforced timeout, and queue-depth
-			// autoscaling registration. The runtime entry constructs the same child,
-			// so its handler resolves.
+			// autoscaling registration. The marker tells the runtime entry to
+			// construct the same child, so its handler resolves; a serverless CronJob
+			// registers no marker, and the runtime builds no runner for it.
+			registerConfig(this, cronRunnerConfigKey(this.fullId), '1');
 			new AsyncJob<CronJobEvent<T>>(this, CRON_RUNNER_ID, {
 				handler: async (event) => options.handler(toCronJobEvent(event)),
 				timeoutSeconds: options.timeoutSeconds,

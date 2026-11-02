@@ -24,6 +24,11 @@ start), and up to about 20 minutes when the job's queue has been idle for more
 than six hours. Computes with `minInstances` of 1 or more deploy the same
 autoscaling as before.
 
+`minInstances: 0` also requires at least one `AsyncJob` or `CronJob` on the
+compute and the default (or `queue-depth`) scaling strategy. Anything else fails
+synth: with no job nothing would ever start a task, and a `cpu` or `memory`
+strategy could scale in to zero while a job is still running.
+
 Instance bounds are now checked at synth: `minInstances` must be an integer of
 0 or more, `maxInstances` an integer of 1 or more, and `minInstances` must not
 exceed `maxInstances`.

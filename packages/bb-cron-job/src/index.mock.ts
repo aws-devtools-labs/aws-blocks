@@ -35,9 +35,11 @@ import { parseScheduleForMock, validateTimezone, type CronFields, type RateSched
  * - Use cron expressions for precise timing (`cron(0 9 * * ? *)`)
  * - Set `enabled: false` for jobs you only want to trigger manually during development
  *
- * **Failure handling (preview):** Handler exceptions are retried by Lambda's
- * built-in async invoke retry policy (2 retries with exponential backoff).
- * Dead-letter queues and configurable retry policies are planned for GA.
+ * **Failure handling (preview):** On a serverless compute, handler exceptions
+ * are retried by Lambda's built-in async invoke retry policy (2 retries with
+ * exponential backoff), with no dead-letter queue yet. On a container compute,
+ * a failed tick is retried by its queue (3 attempts in total), then moved to a
+ * dead-letter queue. Configurable retry policies are planned for GA.
  *
  * **Concurrent executions (preview):** If a handler runs longer than the
  * schedule interval, the next invocation starts while the previous is still
@@ -150,7 +152,9 @@ export class CronJob<T = void> extends Scope {
 		console.log(`[CronJob:${this.id}] triggered at ${event.scheduledTime}`);
 		this._handler(event).catch((err: any) => {
 			console.error(`[CronJob:${this.id}] handler error: ${err?.message ?? err}`);
-			console.warn(`[CronJob:${this.id}] In AWS, this invocation would be retried by Lambda's async invoke retry policy.`);
+			console.warn(
+				`[CronJob:${this.id}] In AWS, this invocation would be retried: by Lambda's async invoke retry policy on a serverless compute, or by its queue (then a dead-letter queue) on a container compute.`,
+			);
 		});
 	}
 }

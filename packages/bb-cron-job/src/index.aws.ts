@@ -5,8 +5,8 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
-import { CRON_RUNNER_ID, toCronJobEvent } from './runner.js';
+import { getConfigSync, registerSdkIdentifiers, Scope } from '@aws-blocks/core';
+import { CRON_RUNNER_ID, cronRunnerConfigKey, toCronJobEvent } from './runner.js';
 import type { CronJobEvent, CronJobOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -35,13 +35,17 @@ export class CronJob<T = void> extends Scope {
 		});
 
 		// Container compute: the scheduler sends each tick to the internal runner
-		// AsyncJob's queue, which the container drains. Constructed on every
-		// compute so its `fullId` matches the one synthesized; it stays inert
-		// unless synth provisioned its queue (only on a container compute).
-		new AsyncJob<CronJobEvent<T>>(this, CRON_RUNNER_ID, {
-			handler: async (event) => options.handler(toCronJobEvent(event)),
-			timeoutSeconds: options.timeoutSeconds,
-			logger: options.logger,
-		});
+		// AsyncJob's queue, which the container drains. Built only when synth created
+		// a runner for this CronJob (it registers the marker key), so its `fullId`
+		// matches the one synthesized. A serverless CronJob builds none: its
+		// `<fullId>-runner` could otherwise match a user's own AsyncJob and register
+		// that job's queue twice.
+		if (getConfigSync(cronRunnerConfigKey(this.fullId)) === '1') {
+			new AsyncJob<CronJobEvent<T>>(this, CRON_RUNNER_ID, {
+				handler: async (event) => options.handler(toCronJobEvent(event)),
+				timeoutSeconds: options.timeoutSeconds,
+				logger: options.logger,
+			});
+		}
 	}
 }
