@@ -26,19 +26,10 @@ import { redactToJson } from '../redact.js';
 import { errorResponseSetCookies } from '../set-cookie.js';
 import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
+import { binaryResponseBody, requestBodyAccessors, textResponseBody } from '../http-body.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
-
-function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
-  if (!text) return null;
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-      controller.close();
-    },
-  });
-}
 
 export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
@@ -1447,9 +1438,13 @@ function handleApiRequest(
   apis: Map<string, any>,
 ): void {
   if (method === 'POST' && isRpcPath(url.pathname)) {
-    let body = '';
-    req.on('data', chunk => body += chunk);
+    // Collect raw bytes and decode once, so a multi-byte character split
+    // across chunks is reassembled rather than turned into U+FFFD.
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', async () => {
+      const bytes = Buffer.concat(chunks);
+      const body = bytes.toString('utf-8');
       const rpcHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       // Verbose request/response logging — useful when debugging cross-stack
       // wire format mismatches (e.g. native client codegen vs server). Set
@@ -1500,9 +1495,7 @@ function handleApiRequest(
         const context = {
           request: {
             headers,
-            body: toBodyStream(body),
-            json: async () => JSON.parse(body),
-            text: async () => body,
+            ...requestBodyAccessors(bytes, body),
             url: new URL(req.url || BLOCKS_RPC_PREFIX, `http://${req.headers.host}`),
             params: {},
           },
@@ -1581,9 +1574,12 @@ function handleApiRequest(
   // RawRoute dispatch
   const matched = matchRoute(method, url.pathname);
   if (matched) {
-    let body = '';
-    req.on('data', (chunk: string) => body += chunk);
+    // Keep the body as bytes: a RawRoute may receive binary (uploads, signed
+    // webhooks, protobuf), and `ctx.request.body` must yield them unchanged.
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', async () => {
+      const requestBody = requestBodyAccessors(Buffer.concat(chunks));
       // Hoisted above the try so the error catch below can reuse any headers
       // the handler set on `ctx.response` before throwing (CORS, Set-Cookie,
       // custom) — matching the production lambda-handler error path, which also
@@ -1604,9 +1600,7 @@ function handleApiRequest(
         const context = {
           request: {
             headers,
-            body: toBodyStream(body),
-            json: async () => JSON.parse(body),
-            text: async () => body,
+            ...requestBody,
             url,
             params: matched.params,
           },
@@ -1629,7 +1623,7 @@ function handleApiRequest(
         if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
 
         res.writeHead(responseStatus, headerObj);
-        res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
+        res.end(binaryResponseBody(responseBody) ?? textResponseBody(responseBody));
       } catch (error: any) {
         if (!process.env.BLOCKS_DEV_QUIET) {
           console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);

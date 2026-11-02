@@ -19,6 +19,7 @@ import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
 import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
+import { binaryResponseBody, requestBodyAccessors, textResponseBody, type RequestBodyAccessors } from './http-body.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -59,28 +60,18 @@ export const EventSourceMapping = {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Decode the Lambda event body and return both the raw string and a ReadableStream.
+ * Build the request body accessors from the Lambda event body.
  *
- * Handles base64-encoded bodies (binary payloads forwarded by API Gateway)
- * and plain-text bodies.
+ * A base64-encoded body (API Gateway sends every body that way, since the
+ * shared REST API declares `binaryMediaTypes: ['*\/*']`) is decoded to its
+ * original bytes, which `ctx.request.body` yields unchanged; a plain-text body
+ * is UTF-8.
  */
-function decodeEventBody(event: any): { bodyText: string; bodyStream: ReadableStream<Uint8Array> | null } {
-  if (!event.body) {
-    return { bodyText: '', bodyStream: null };
-  }
-
-  const bodyText = event.isBase64Encoded
-    ? Buffer.from(event.body, 'base64').toString('utf-8')
-    : event.body;
-
-  const bodyStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(bodyText));
-      controller.close();
-    },
-  });
-
-  return { bodyText, bodyStream };
+function decodeEventBody(event: any): RequestBodyAccessors {
+  if (!event.body) return requestBodyAccessors(Buffer.alloc(0), '');
+  return event.isBase64Encoded
+    ? requestBodyAccessors(Buffer.from(event.body, 'base64'))
+    : requestBodyAccessors(Buffer.from(event.body, 'utf-8'), event.body);
 }
 
 /**
@@ -630,7 +621,8 @@ function createHandler(backend: any) {
       'Expires': '0',
     };
 
-    const { bodyText, bodyStream } = decodeEventBody(event);
+    const requestBody = decodeEventBody(event);
+    const bodyText = await requestBody.text();
     // The path is validated against the body's namespace (see parseRpcRequest);
     // dispatch always uses the body's `namespace.method`.
     const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
@@ -655,9 +647,7 @@ function createHandler(backend: any) {
       const context = {
         request: {
           headers,
-          body: bodyStream,
-          json: async () => JSON.parse(bodyText),
-          text: async () => bodyText,
+          ...requestBody,
           url: buildEventUrl(event),
           params: {},
           signal,
@@ -723,7 +713,7 @@ async function handleRawRoute(
   signal?: AbortSignal,
 ) {
   const headers = new Headers(event.headers || {});
-  const { bodyText, bodyStream } = decodeEventBody(event);
+  const requestBody = decodeEventBody(event);
 
   let responseStatus = 200;
   const responseHeaders = new Headers({
@@ -738,9 +728,7 @@ async function handleRawRoute(
   const context = {
     request: {
       headers,
-      body: bodyStream,
-      json: async () => JSON.parse(bodyText),
-      text: async () => bodyText,
+      ...requestBody,
       url: buildEventUrl(event),
       params,
       signal,
@@ -756,10 +744,15 @@ async function handleRawRoute(
   try {
     await route.handler(context);
 
+    const binary = binaryResponseBody(responseBody);
     return {
       statusCode: responseStatus,
       ...toProxyResponseHeaders(event, responseHeaders),
-      body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
+      // API Gateway decodes a base64 body flagged isBase64Encoded back to raw
+      // bytes, which the shared REST API's `binaryMediaTypes: ['*/*']` allows.
+      ...(binary
+        ? { body: binary.toString('base64'), isBase64Encoded: true }
+        : { body: textResponseBody(responseBody) }),
     };
   } catch (error: unknown) {
     console.error('RawRoute Error:', error);

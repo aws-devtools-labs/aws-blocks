@@ -168,6 +168,12 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		// have only one effective account setting. When access logging is on we
 		// point the stage at the shared account; when off, none is needed.
 		cloudWatchRole: false,
+		// Pass every payload through as binary: API Gateway base64-encodes request
+		// bodies for the Lambda (which decodes them back to the original bytes),
+		// and decodes a base64 `isBase64Encoded` response back to raw bytes. Without
+		// it, a non-text RawRoute body is mangled before the Lambda sees it and a
+		// binary RawRoute response can't be returned.
+		binaryMediaTypes: ['*/*'],
 		deployOptions: {
 			cachingEnabled: false,
 			// Cap request rate on the stage from the stack-wide default so a runaway
