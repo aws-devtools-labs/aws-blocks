@@ -13,7 +13,7 @@ async function main() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const status = StatusMessage({ kind: 'error', text: `Could not greet: ${message}`, testId: 'greet-status' });
-    document.getElementById('app')!.replaceChildren(status.element);
+    document.getElementById('app')?.replaceChildren(status.element);
     return;
   }
 
