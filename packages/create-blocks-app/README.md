@@ -126,6 +126,7 @@ Every lifecycle script is a thin alias of the `blocks` CLI that ships with `@aws
     "dev:stop": "blocks dev stop",
     "sandbox": "blocks sandbox",
     "sandbox:deploy": "blocks sandbox deploy",
+    "sandbox:preview": "blocks sandbox preview",
     "sandbox:destroy": "blocks sandbox destroy",
     "sandbox:console": "blocks sandbox console",
     "cleanup": "blocks dev stop --all",

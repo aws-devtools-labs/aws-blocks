@@ -188,13 +188,15 @@ describe('create-blocks-app template metadata', () => {
   it('every deployable template runs its lifecycle scripts through the blocks CLI', () => {
     // The npm script names stay the same; each one is a thin alias of a `blocks`
     // command, so no template ships aws-blocks/scripts/*.ts wrappers any more.
-    // `sandbox:deploy` is the one-shot variant of `sandbox` that CI uses.
+    // `sandbox:deploy` is the one-shot variant of `sandbox` that CI uses, and
+    // `sandbox:preview` the one-shot deploy with a hosted preview.
     const expected: Record<string, string> = {
       dev: 'blocks dev',
       'dev:server': 'blocks dev',
       'dev:stop': 'blocks dev stop',
       sandbox: 'blocks sandbox',
       'sandbox:deploy': 'blocks sandbox deploy',
+      'sandbox:preview': 'blocks sandbox preview',
       'sandbox:destroy': 'blocks sandbox destroy',
       'sandbox:console': 'blocks sandbox console',
       cleanup: 'blocks dev stop --all',
