@@ -95,7 +95,7 @@ import { Compute } from '@aws-blocks/blocks';
 const worker = new Compute(scope, 'worker', {
   type: 'container',
   size: { vcpu: 1, memory: 2048 },
-  scaling: { maxInstances: 2 },   // minInstances defaults to 1
+  scaling: { minInstances: 1, maxInstances: 2 },
 });
 
 new CronJob(scope, 'nightly-rebuild', {
@@ -114,8 +114,8 @@ container `AsyncJob`:
    (the worker is terminated at the deadline).
 2. A tick that throws or times out is retried, up to 3 attempts in total, then
    moved to a dead-letter queue. That matches the serverless path's 3 attempts.
-3. The container keeps at least `minInstances` tasks running between ticks. The
-   default and recommended value is `1`, so a tick starts within seconds. Use
+3. The container keeps at least `minInstances` tasks running between ticks. Use
+   `1` or more for most jobs, so a tick starts within seconds. Use
    `minInstances: 0` only for a long-running job that can tolerate a late start:
    the container then scales to zero between ticks, and each tick has to start a
    task first. That usually takes a few minutes, and for a job that runs less than

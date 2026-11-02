@@ -48,7 +48,6 @@ self-starts the SQS pollers for the event handlers assigned to it.
 wires Application Auto Scaling from `scaling`:
 
 - `minInstances`/`maxInstances` → `autoScaleTaskCount({ minCapacity, maxCapacity })`.
-  `minInstances` defaults to 1 (recommended; see below for 0).
 - Each `ScalingSignal` → an autoscaling policy: `cpu`/`memory` as a
   **target-tracking** policy on the ECS utilization metrics; `queue-depth` as a
   **step-scaling** policy on a CloudWatch metric-math sum of
@@ -65,8 +64,8 @@ wires Application Auto Scaling from `scaling`:
 ### Scaling to zero (`minInstances: 0`)
 
 `minInstances: 0` is for long-running jobs that can tolerate high start-up
-latency; `1` (the default) is recommended otherwise. With `0` the service can
-scale in to zero tasks, where nothing polls the owned queues. The queue-depth policy
+latency; `1` or more is recommended otherwise. With `0` the service can scale in
+to zero tasks, where nothing polls the owned queues. The queue-depth policy
 can't wake it: [step adjustments](https://docs.aws.amazon.com/autoscaling/application/userguide/step-scaling-policy-overview.html)
 are relative to the current task count, and a backlog under `backlogPerInstance`
 falls in the `change: 0` step, so 0 tasks stay 0 tasks and the message is never

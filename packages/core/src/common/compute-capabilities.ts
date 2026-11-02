@@ -97,8 +97,8 @@ export type ScalingSignal =
  */
 export interface ContainerScaling {
 	/**
-	 * Fewest running instances. Defaults to `1`, which is the recommended value:
-	 * a running instance picks up a job within seconds.
+	 * Fewest running instances. Use `1` or more for most workloads: a running
+	 * instance picks up a job within seconds.
 	 *
 	 * Set `0` only for long-running jobs that can tolerate high latency before
 	 * they start. The compute then scales to zero between jobs, and a waiting
@@ -106,10 +106,8 @@ export interface ContainerScaling {
 	 * usually takes a few minutes, and up to about 20 minutes when the job's queue
 	 * has been idle for more than six hours (SQS stops publishing queue metrics
 	 * for an idle queue, and they take up to 15 minutes to resume).
-	 *
-	 * @default 1
 	 */
-	minInstances?: number;
+	minInstances: number;
 	/** Most running instances. At least 1. */
 	maxInstances: number;
 	strategy?: ScalingSignal | ScalingSignal[];
