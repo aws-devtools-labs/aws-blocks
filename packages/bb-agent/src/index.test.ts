@@ -1379,7 +1379,7 @@ describe('CannedProvider', () => {
 			composed = err.message.slice(`${AgentErrors.ModelUnavailable}: `.length);
 			return true;
 		});
-		const history = await agent.getConversation(convId);
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
 		const errorRow = history.find((m) => m.role === 'assistant' && m.metadata.error !== undefined);
 		assert.ok(errorRow, 'the error is persisted to the conversation');
 		assert.deepStrictEqual(errorRow.metadata, { error: composed, errorName: AgentErrors.ModelUnavailable });
