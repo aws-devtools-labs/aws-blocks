@@ -324,6 +324,304 @@ describe('AuthBasic session revocation on sign-out', () => {
 });
 
 /**
+ * Session invalidation on credential change. A password reset is the primary
+ * remediation for a compromised account, so every session issued BEFORE the
+ * reset must stop authenticating — not just the one token that happens to sign
+ * out. AuthBasic stamps the user's session epoch into each token (`ep` claim)
+ * and bumps the stored epoch on `confirmResetPassword`; a token whose `ep`
+ * predates the stored epoch is rejected as revoked. Unlike the per-`jti`
+ * sign-out revocation, this invalidates ALL outstanding sessions at once.
+ */
+describe('AuthBasic session invalidation on password reset', () => {
+	/** makeAuth that captures the delivered verification code so a test can present it. */
+	function captureAuth(): { auth: AuthBasic; lastCode: () => string } {
+		let code = '';
+		const auth = makeAuth({
+			codeDelivery: async (_username, c) => {
+				code = c;
+			},
+		});
+		return { auth, lastCode: () => code };
+	}
+
+	test('a pre-reset token stops authenticating after confirmResetPassword', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('alice', 'password123');
+		await auth.confirmSignUp('alice', lastCode());
+
+		// Sign in BEFORE the reset and capture the token (a "stolen" session).
+		const signInCtx = ctx();
+		await auth.signIn('alice', 'password123', signInCtx);
+		const preResetToken = tokenFromResponse(signInCtx)!;
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, preResetToken)), true, 'valid before reset');
+
+		// Complete a password reset.
+		await auth.resetPassword('alice');
+		await auth.confirmResetPassword('alice', lastCode(), 'newpassword456');
+
+		// The pre-reset token — still unexpired and signature-valid — no longer
+		// authenticates: the epoch bump invalidated every session minted before
+		// the reset. This is the #912 gap: pre-fix the stolen token kept working.
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, preResetToken)), false, 'invalid after reset');
+		await assert.rejects(
+			() => auth.requireAuth(ctxWithToken(auth, preResetToken)),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.SessionRevoked,
+			'a pre-reset token is reported as revoked',
+		);
+	});
+
+	test('a token issued AFTER the reset authenticates normally', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('bob', 'password123');
+		await auth.confirmSignUp('bob', lastCode());
+		await auth.resetPassword('bob');
+		await auth.confirmResetPassword('bob', lastCode(), 'newpassword456');
+
+		// Signing in after the reset carries the bumped epoch, so it is valid.
+		const postResetCtx = ctx();
+		await auth.signIn('bob', 'newpassword456', postResetCtx);
+		const postResetToken = tokenFromResponse(postResetCtx)!;
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, postResetToken)), true, 'post-reset token valid');
+	});
+
+	test('resetting one user does not invalidate another user’s sessions', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('carol', 'password123');
+		await auth.confirmSignUp('carol', lastCode());
+		await auth.signUp('dave', 'password123');
+		await auth.confirmSignUp('dave', lastCode());
+
+		const daveCtx = ctx();
+		await auth.signIn('dave', 'password123', daveCtx);
+		const daveToken = tokenFromResponse(daveCtx)!;
+
+		// Reset carol — the epoch is per-user, so dave's session is untouched.
+		await auth.resetPassword('carol');
+		await auth.confirmResetPassword('carol', lastCode(), 'newpassword456');
+
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, daveToken)), true, 'dave unaffected by carol reset');
+	});
+
+	test('every outstanding session for the user is invalidated, not just one', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('erin', 'password123');
+		await auth.confirmSignUp('erin', lastCode());
+
+		// Two independent sessions (e.g. two devices).
+		const laptopCtx = ctx();
+		await auth.signIn('erin', 'password123', laptopCtx);
+		const laptopToken = tokenFromResponse(laptopCtx)!;
+		const phoneCtx = ctx();
+		await auth.signIn('erin', 'password123', phoneCtx);
+		const phoneToken = tokenFromResponse(phoneCtx)!;
+		assert.notStrictEqual(laptopToken, phoneToken, 'two distinct sessions');
+
+		await auth.resetPassword('erin');
+		await auth.confirmResetPassword('erin', lastCode(), 'newpassword456');
+
+		// Both pre-reset sessions are gone — the epoch bump is session-wide, not
+		// per-jti like sign-out.
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, laptopToken)), false, 'laptop session invalidated');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, phoneToken)), false, 'phone session invalidated');
+	});
+
+	test('a token with no `ep` claim (issued before the feature) is invalidated by the first reset', async () => {
+		const { auth, lastCode } = captureAuth();
+		await auth.signUp('frank', 'password123');
+		await auth.confirmSignUp('frank', lastCode());
+
+		// Forge a legacy token: real secret + issuer + jti + exp, but NO `ep`
+		// claim — the shape of a session issued before this feature shipped.
+		const secret = await (auth as unknown as { getSecret(): Promise<string> }).getSecret();
+		const legacyToken = jwt.sign({ username: 'frank', jti: 'legacy' }, secret, {
+			algorithm: 'HS256',
+			issuer: `bb-auth-basic:${auth.fullId}`,
+			expiresIn: '1h',
+		});
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, legacyToken)), true, 'legacy token valid pre-reset');
+
+		// The first reset bumps the epoch to 1; the legacy token reads as epoch 0
+		// and is rejected.
+		await auth.resetPassword('frank');
+		await auth.confirmResetPassword('frank', lastCode(), 'newpassword456');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, legacyToken)), false, 'legacy token invalidated');
+	});
+
+	/** Sign up, confirm, and sign in `username`; returns the session token. */
+	async function signedInToken(auth: AuthBasic, lastCode: () => string, username: string): Promise<string> {
+		await auth.signUp(username, 'password123');
+		await auth.confirmSignUp(username, lastCode());
+		const signInCtx = ctx();
+		await auth.signIn(username, 'password123', signInCtx);
+		return tokenFromResponse(signInCtx)!;
+	}
+
+	/** Make every `epoch:` put fail like a DynamoDB error carrying SDK metadata. Returns a restore function. */
+	function failEpochPuts(auth: AuthBasic, message: string, times = Number.POSITIVE_INFINITY): () => void {
+		const store = codesStore(auth);
+		const realPut = store.put.bind(store);
+		let failures = 0;
+		store.put = async (key, value, opts) => {
+			if (key.startsWith('epoch:') && failures < times) {
+				failures++;
+				throw new Error(message);
+			}
+			return realPut(key, value, opts);
+		};
+		return () => {
+			store.put = realPut;
+		};
+	}
+
+	const rawSdkMessage = 'User: arn:aws:sts::123456789012:assumed-role/x is not authorized to perform: dynamodb:PutItem';
+
+	test('a failed epoch bump changes nothing, and a fresh reset then invalidates the pre-reset token', async () => {
+		const { auth, lastCode } = captureAuth();
+		const preResetToken = await signedInToken(auth, lastCode, 'grace');
+		await auth.resetPassword('grace');
+
+		const restore = failEpochPuts(auth, rawSdkMessage);
+		let caught: Error | undefined;
+		try {
+			await auth.confirmResetPassword('grace', lastCode(), 'newpassword456');
+		} catch (e) {
+			if (e instanceof Error) caught = e;
+		} finally {
+			restore();
+		}
+		assert.ok(caught, 'confirmResetPassword rejected when the epoch bump failed');
+		assert.strictEqual(caught.name, AuthBasicErrors.SignOutIncomplete, 'branded as SignOutIncomplete');
+		assert.doesNotMatch(caught.message, /arn:aws|123456789012|dynamodb:PutItem/, 'no SDK metadata leaked');
+
+		// Nothing changed: the old password still works and the new one does not.
+		await auth.signIn('grace', 'password123', ctx());
+		await assert.rejects(() => auth.signIn('grace', 'newpassword456', ctx()));
+
+		// The documented recovery: request a new code and reset again.
+		await auth.resetPassword('grace');
+		await auth.confirmResetPassword('grace', lastCode(), 'newpassword456');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, preResetToken)), false, 'pre-reset token rejected');
+		await auth.signIn('grace', 'newpassword456', ctx());
+	});
+
+	test('a transient epoch write failure is retried inline and the reset succeeds', async () => {
+		const { auth, lastCode } = captureAuth();
+		const preResetToken = await signedInToken(auth, lastCode, 'heidi');
+		await auth.resetPassword('heidi');
+
+		const restore = failEpochPuts(auth, 'ThrottlingException', 1);
+		try {
+			await auth.confirmResetPassword('heidi', lastCode(), 'newpassword456');
+		} finally {
+			restore();
+		}
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, preResetToken)), false, 'pre-reset token rejected');
+	});
+
+	test('a failure of the post-write bump still completes the reset and invalidates pre-reset tokens', async () => {
+		const { auth, lastCode } = captureAuth();
+		const preResetToken = await signedInToken(auth, lastCode, 'ivan');
+		await auth.resetPassword('ivan');
+
+		// Let the first bump through, then fail every later epoch write.
+		const store = codesStore(auth);
+		const realPut = store.put.bind(store);
+		let epochWrites = 0;
+		store.put = async (key, value, opts) => {
+			if (key.startsWith('epoch:') && epochWrites++ > 0) throw new Error(rawSdkMessage);
+			return realPut(key, value, opts);
+		};
+		try {
+			await auth.confirmResetPassword('ivan', lastCode(), 'newpassword456');
+		} finally {
+			store.put = realPut;
+		}
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, preResetToken)), false, 'pre-reset token rejected');
+		await auth.signIn('ivan', 'newpassword456', ctx());
+	});
+
+	test('a second reset invalidates a token issued after the first', async () => {
+		const { auth, lastCode } = captureAuth();
+		await signedInToken(auth, lastCode, 'judy');
+		await auth.resetPassword('judy');
+		await auth.confirmResetPassword('judy', lastCode(), 'newpassword456');
+
+		const betweenCtx = ctx();
+		await auth.signIn('judy', 'newpassword456', betweenCtx);
+		const betweenToken = tokenFromResponse(betweenCtx)!;
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, betweenToken)), true, 'valid before the second reset');
+
+		await auth.resetPassword('judy');
+		await auth.confirmResetPassword('judy', lastCode(), 'newerpassword789');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, betweenToken)), false, 'invalid after the second reset');
+	});
+
+	test('a stale epoch read during the bump does not let a token survive the reset', async () => {
+		const { auth, lastCode } = captureAuth();
+		await signedInToken(auth, lastCode, 'kim');
+		await auth.resetPassword('kim');
+		await auth.confirmResetPassword('kim', lastCode(), 'newpassword456');
+		const signInCtx = ctx();
+		await auth.signIn('kim', 'newpassword456', signInCtx);
+		const token = tokenFromResponse(signInCtx)!;
+
+		// The first epoch read of EACH bump returns the value from before the
+		// first reset, as an eventually consistent replica could. Two stale reads mean the
+		// post-write bump cannot mask a plain read-modify-write: only the
+		// compare-and-swap moves the epoch past the token's `ep`.
+		const store = codesStore(auth);
+		const realGet = store.get.bind(store);
+		let staleReads = 2;
+		store.get = async (key) => {
+			if (key === 'epoch:kim' && staleReads > 0) {
+				staleReads--;
+				return null;
+			}
+			return realGet(key);
+		};
+		await auth.resetPassword('kim');
+		try {
+			await auth.confirmResetPassword('kim', lastCode(), 'newerpassword789');
+		} finally {
+			store.get = realGet;
+		}
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, token)), false, 'token rejected after the second reset');
+	});
+
+	test('a failed epoch read fails closed for sign-in and for authenticated requests', async () => {
+		const { auth, lastCode } = captureAuth();
+		const token = await signedInToken(auth, lastCode, 'lena');
+
+		const store = codesStore(auth);
+		const realGet = store.get.bind(store);
+		store.get = async (key) => {
+			if (key.startsWith('epoch:')) throw new Error('ProvisionedThroughputExceededException');
+			return realGet(key);
+		};
+		try {
+			await assert.rejects(() => auth.checkAuth(ctxWithToken(auth, token)), 'checkAuth does not succeed');
+			await assert.rejects(() => auth.requireAuth(ctxWithToken(auth, token)), 'requireAuth does not succeed');
+			const signInCtx = ctx();
+			await assert.rejects(() => auth.signIn('lena', 'password123', signInCtx), 'signIn does not succeed');
+			assert.strictEqual(tokenFromResponse(signInCtx), null, 'no session cookie issued');
+		} finally {
+			store.get = realGet;
+		}
+	});
+
+	test('a corrupt epoch marker reads as 0 and the next reset re-establishes it', async () => {
+		const { auth, lastCode } = captureAuth();
+		const token = await signedInToken(auth, lastCode, 'mia');
+		await codesStore(auth).put('epoch:mia', 'not-a-number');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, token)), true, 'corrupt marker reads as 0');
+
+		await auth.resetPassword('mia');
+		await auth.confirmResetPassword('mia', lastCode(), 'newpassword456');
+		assert.strictEqual(await auth.checkAuth(ctxWithToken(auth, token)), false, 'token rejected after reset');
+	});
+});
+
+/**
  * Sign-in throttling / account lockout (issue #766). AuthBasic can lock an
  * account after too many consecutive failed sign-ins, matching the Cognito-
  * managed lockout the equivalent CDK stack provides. Throttling is opt-in: with
@@ -333,7 +631,11 @@ describe('AuthBasic session revocation on sign-out', () => {
 /** Reach the private `codes` KVStore a lockout counter is stored in (test plumbing). */
 function codesStore(auth: AuthBasic): {
 	get: (k: string) => Promise<string | null>;
-	put: (k: string, v: string, o?: { ttlSeconds?: number }) => Promise<void>;
+	put: (
+		k: string,
+		v: string,
+		o?: { ttlSeconds?: number; expiresAt?: number; ifValueEquals?: string; ifNotExists?: boolean },
+	) => Promise<void>;
 	delete: (k: string, o?: { ifValueEquals?: string }) => Promise<void>;
 } {
 	return (auth as unknown as { codes: ReturnType<typeof codesStore> }).codes;

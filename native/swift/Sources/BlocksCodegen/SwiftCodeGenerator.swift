@@ -1249,7 +1249,6 @@ public struct SwiftCodeGenerator {
             : declaredResultTypeName(
                 operation.result.type,
                 declared: declaredBindings,
-                fallbackMessageType: "\(runtimePrefix)JSONValue",
                 renderArg: {
                     qualifiedSwiftTypeName($0, qualifiedNames: qualifiedNames)
                 }

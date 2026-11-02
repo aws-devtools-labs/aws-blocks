@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
   detectFramework,
   type FrameworkAdapterFn,
   getAdapter,
+  lambdaWebAdapterAvailableIn,
   normalizeBasePath,
+  withBuildProfile,
   withComputeTarget,
 } from '@aws-blocks/hosting/adapters';
 import {
@@ -29,6 +32,7 @@ import {
   type HostingFrontDoor,
   pickKnownSettingKeys,
   resolveFrontDoorFeatures,
+  removeUnusedAwsCliLayers,
   type StackedDoorFeatures,
   type HostingWafConfig,
   type SkewProtectionConfig,
@@ -600,7 +604,198 @@ export interface HostingProps {
    * ```
    */
   frontDoor?: HostingFrontDoor<HostingDomain> | CloudFrontOverRouterFrontDoor;
+
+  /**
+   * On-the-fly image optimization: an image function behind the door for the
+   * framework image endpoints (`/_next/image`, Nuxt `/_ipx/*`, Astro `/_image`).
+   *
+   * `false` builds no image function (and skips the Next.js `sharp` install at
+   * synth). The endpoints then serve the source image, unoptimized: a remote
+   * source is redirected (302) to itself when its host is in the app's image
+   * allowlist (`images.remotePatterns` / `domains`), else 404; the proxy never
+   * fetches a remote URL. Needs the API Gateway HTTP API door
+   * (`frontDoor: { kind: 'apiGateway' }`), whose asset proxy answers the
+   * endpoints; another door fails synth (`UnsupportedHostingSettingError`).
+   *
+   * Set by {@link HostingPresets}`.preview`.
+   * @default true
+   */
+  imageOptimization?: boolean;
+
+  /**
+   * Incremental regeneration (Next.js ISR, incremental static regeneration):
+   * the DynamoDB tag table, the SQS revalidation queue and the revalidation
+   * function.
+   *
+   * `false` builds Next.js without the tag cache and with OpenNext's no-op
+   * queue, so none of that infrastructure is deployed. The incremental cache
+   * and its seed stay, so prerendered pages (SSG and ISR) are served from the
+   * build's snapshot and never regenerate. Works behind every door; other
+   * frameworks ignore it.
+   *
+   * Set by {@link HostingPresets}`.preview`.
+   * @default true
+   */
+  incrementalRegeneration?: boolean;
+
+  /**
+   * Where Next.js `runtime: 'edge'` routes run: `'edge'` as Lambda@Edge
+   * functions (a us-east-1 edge stack, replicated to CloudFront), or
+   * `'regional'` as regional Lambda functions in the stack's region, each
+   * routed straight to its function. `'regional'` needs the API Gateway HTTP
+   * API door; another door fails synth (`UnsupportedHostingSettingError`).
+   * Other frameworks ignore it.
+   *
+   * Behind the API Gateway HTTP API door it defaults to `'regional'`, because
+   * that door can't invoke Lambda@Edge. `'edge'` set there explicitly fails
+   * synth when the app has edge routes (`EdgeRouteNeedsCloudFrontDoorError`).
+   *
+   * Set to `'regional'` by {@link HostingPresets}`.preview`.
+   * @default `'regional'` behind the API Gateway HTTP API door, `'edge'` otherwise
+   */
+  edgeRoutes?: 'edge' | 'regional';
+
+  /**
+   * How each deploy names its build. `'per-deploy'` gives every deploy a new
+   * random build id: assets go to a new `builds/<id>/` prefix and the site
+   * switches over atomically, so open pages keep loading their own build.
+   *
+   * `'fixed'` keeps the build id stable while the build output is unchanged:
+   * the id is a hash of the uploaded content (the static assets and the ISR
+   * cache seed), and Next.js builds with a pinned `generateBuildId`. An
+   * unchanged build produces byte-identical assets and template, so a
+   * re-deploy skips the asset upload and a server-only change can be
+   * hotswapped (`startSandbox({ preview: true })`). A changed build gets a new
+   * `builds/<id>/` prefix, so deleted files stop being served and the ISR tag
+   * seed re-runs; Next.js's `_buildManifest.js` and `_ssgManifest.js`, whose
+   * URL no longer changes, are served with a revalidating Cache-Control.
+   *
+   * The door's asset proxy is not held back until the uploads finish:
+   * CloudFormation creates it alongside them, which shortens a first deploy.
+   * During a deploy that changes the build, the proxy can briefly point at
+   * the new prefix before its files are uploaded (or still at the old one),
+   * so there is no atomic switch-over; use it only for throwaway
+   * environments.
+   *
+   * Not available behind a door with an edge cache (CloudFront, the stacked
+   * door), which would keep serving the overwritten files; those fail synth
+   * (`UnsupportedHostingSettingError`).
+   *
+   * Set to `'fixed'` by {@link HostingPresets}`.preview`.
+   * @default 'per-deploy'
+   */
+  buildId?: 'per-deploy' | 'fixed';
 }
+
+/** The settings a {@link HostingPresets} entry may set. */
+export type HostingPreset = Pick<
+  HostingProps,
+  'frontDoor' | 'imageOptimization' | 'incrementalRegeneration' | 'edgeRoutes' | 'buildId'
+>;
+
+/**
+ * Prepared hosting shapes, the hosting counterpart of `BlocksPresets`. Spread
+ * one into the `Hosting` props, **first**, and override individual settings
+ * after it:
+ *
+ * ```ts
+ * new Hosting(stack, 'Web', {
+ *   ...(previewMode ? HostingPresets.preview : HostingPresets.production),
+ *   root, api: blocksStack,
+ * });
+ *
+ * // a preview that keeps image optimization
+ * new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, root, api: blocksStack });
+ * ```
+ *
+ * A preset is plain data: every field is an ordinary `Hosting` prop, so
+ * hovering it shows exactly what it sets, and copying it pins it.
+ */
+export const HostingPresets: { readonly production: HostingPreset; readonly preview: HostingPreset } = {
+  /** The full shape: today's defaults (CloudFront, image optimization, ISR, Lambda@Edge, per-deploy builds). */
+  production: {},
+  /**
+   * A fast, cheap, disposable deploy for ephemeral environments (pull-request
+   * previews, per-branch sandboxes, demos): served by the API Gateway HTTP API
+   * door (no CloudFront; buffered server responses, about 6 MB each), no image
+   * optimization, no incremental regeneration, Next.js edge routes as regional
+   * functions, and a fixed build id so re-deploys can hotswap. Routing, server
+   * rendering, prerendered pages, same-origin cookie sign-in and the API keep
+   * working.
+   */
+  preview: {
+    frontDoor: { kind: 'apiGateway' },
+    imageOptimization: false,
+    incrementalRegeneration: false,
+    edgeRoutes: 'regional',
+    buildId: 'fixed',
+  },
+};
+
+/** Whether `frontDoor` is the API Gateway HTTP API door. */
+function isHttpApiDoor(frontDoor: HostingProps['frontDoor']): boolean {
+  return (
+    typeof frontDoor === 'object' &&
+    frontDoor !== null &&
+    'kind' in frontDoor &&
+    frontDoor.kind === 'apiGateway' &&
+    (frontDoor.api ?? 'http') === 'http'
+  );
+}
+
+/**
+ * Fail synth for the settings the chosen door can't serve, naming all of them
+ * at once (a preset spread can bring several).
+ *
+ * @param props the app's props.
+ * @throws HostingError('UnsupportedHostingSettingError') naming each setting and the door.
+ */
+function assertDoorSupportsSettings(props: HostingProps): void {
+  // `frontDoor: null` is the default door, as when it is omitted.
+  const door = props.frontDoor ?? undefined;
+  const doorName =
+    door === undefined
+      ? "'cloudfront' (the default)"
+      : typeof door === 'string'
+        ? `'${door}'`
+        : `{ kind: '${('kind' in door && door.kind) || 'cloudfront'}'${'api' in door && door.api ? `, api: '${door.api}'` : ''} }`;
+  const unsupported: Array<{ setting: string; needs: string; override: string }> = [];
+  const fail = (setting: string, needs: string, override: string) => unsupported.push({ setting, needs, override });
+  const httpApi = isHttpApiDoor(door);
+  if (props.imageOptimization === false && !httpApi) {
+    fail(
+      'imageOptimization: false',
+      "only the API Gateway HTTP API door's asset proxy answers the image endpoints without an image function",
+      'imageOptimization: true',
+    );
+  }
+  if (props.edgeRoutes === 'regional' && !httpApi) {
+    fail(
+      "edgeRoutes: 'regional'",
+      'only the API Gateway HTTP API door routes a regional edge function straight to it',
+      "edgeRoutes: 'edge'",
+    );
+  }
+  const edgeCached =
+    door === undefined ||
+    door === 'cloudfront' ||
+    (typeof door === 'object' && (!('kind' in door) || door.kind === undefined || door.kind === 'cloudfront' || door.kind === 'stacked'));
+  if (props.buildId === 'fixed' && edgeCached) {
+    fail("buildId: 'fixed'", 'an edge cache would keep serving the files each deploy overwrites', "buildId: 'per-deploy'");
+  }
+  if (unsupported.length === 0) return;
+  const settings = unsupported.map((u) => `\`${u.setting}\``).join(', ');
+  throw new HostingError('UnsupportedHostingSettingError', {
+    message:
+      `Hosting ${settings} ${unsupported.length === 1 ? 'is' : 'are'} not available behind frontDoor ${doorName}: ` +
+      `${unsupported.map((u) => `${u.setting}: ${u.needs}`).join('; ')}.`,
+    resolution:
+      "Use the API Gateway HTTP API door (`frontDoor: { kind: 'apiGateway' }`, as `HostingPresets.preview` does), " +
+      `or remove ${unsupported.length === 1 ? 'the setting' : 'the settings'} — or, when ${unsupported.length === 1 ? 'it comes' : 'they come'} from a preset, ` +
+      `override after the preset spread (${unsupported.map((u) => `\`${u.override}\``).join(', ')}).`,
+  });
+}
+
 
 /**
  * A COMPOSED front door: a CloudFront edge stacked over a regional router layer
@@ -652,6 +847,63 @@ export interface CloudFrontOverRouterFrontDoor {
    * web ACL, access logs, alarms). See `StackedDoorFeatures`.
    */
   features?: StackedDoorFeatures;
+}
+
+/**
+ * The framework build id pinned with `buildId: 'fixed'` (Next.js
+ * `generateBuildId`), so an unchanged build produces byte-identical assets.
+ */
+const FIXED_BUILD_ID = 'fixed';
+
+/**
+ * Static files a framework rewrites on every build, with a fresh id or
+ * timestamp, even when nothing else changed: Nuxt's app manifest
+ * (`<buildAssetsDir>/builds/latest.json`, `builds/meta/<id>.json`) and
+ * SvelteKit's `_app/version.json`. They are left out of the content build id,
+ * so a server-only change keeps the id and can hotswap; they are still
+ * uploaded, overwriting the previous ones in place.
+ */
+const VOLATILE_STATIC_FILE = /(^|\/)(builds\/latest\.json|builds\/meta\/[^/]+\.json|_app\/version\.json)$/;
+
+/**
+ * The deploy build id for `buildId: 'fixed'`: a hash of what the build
+ * uploads (the static assets, the ISR cache seed and the custom error pages).
+ * An unchanged build keeps its id, so a re-deploy skips the upload and can
+ * hotswap; a changed build gets a new `builds/<id>/` prefix, so a deleted file
+ * stops being served, the ISR tag seed re-runs and the asset proxy's cached
+ * error pages are dropped. Files every build rewrites are left out (see
+ * {@link VOLATILE_STATIC_FILE}).
+ *
+ * @param manifest the adapter's manifest.
+ * @param errorPageFiles the app's custom error page files (`errorPages`).
+ * @returns `fixed-` and 16 hex characters.
+ */
+function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly string[] = []): string {
+  const hash = createHash('sha256');
+  const addFile = (name: string, file: string) => hash.update(name).update('\0').update(readFileSync(file)).update('\0');
+  // Each section is labelled with a constant and each file named relative to
+  // its section, so the same build in another checkout keeps the id.
+  const add = (label: string, root: string | undefined, skip?: RegExp) => {
+    if (!root || !existsSync(root)) return;
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+        const file = join(dir, entry.name);
+        const name = relative(root, file).split('\\').join('/');
+        if (entry.isDirectory()) walk(file);
+        else if (entry.isFile() && !skip?.test(name)) addFile(name, file);
+      }
+    };
+    hash.update(`${label}\0`);
+    walk(root);
+  };
+  add('static', manifest.staticAssets.directory, VOLATILE_STATIC_FILE);
+  add('cache', manifest.cache?.seedDirectory);
+  add('init', manifest.cache?.initFunction?.bundle);
+  for (const file of errorPageFiles) {
+    hash.update('errorPage\0');
+    if (existsSync(file)) addFile(basename(file), file);
+  }
+  return `${FIXED_BUILD_ID}-${hash.digest('hex').slice(0, 16)}`;
 }
 
 // ─── Default build output directories per framework ──────────────
@@ -798,6 +1050,10 @@ export class Hosting extends Construct {
     // adds (step 12).
     const childrenBefore = snapshotForHosting(this);
 
+    // A setting the chosen door can't serve fails before anything is built.
+    assertDoorSupportsSettings(props);
+    const fixedBuildId = props.buildId === 'fixed';
+
     const root = resolve(props.root);
 
     // The composed CF → ALB door: a CloudFront edge that forwards the API subtree
@@ -877,11 +1133,42 @@ export class Hosting extends Construct {
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
     // Adapters build for the selected compute: Web Functions need a plain
     // Node.js HTTP server (OpenNext `node` wrapper, Nitro `node-server`) and
-    // Arm64 native modules (Astro's sharp).
-    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () => adapter(root));
+    // Arm64 native modules (Astro's sharp). They also build for the door that
+    // invokes the server (an API Gateway HTTP API: payload 2.0, buffered) and
+    // for the settings that trim the build.
+    // A region with no Lambda Web Adapter layer can't run a Nitro
+    // `node-server` behind the HTTP API. An unresolved region (a stack with no
+    // `env`, as in the templates) may be one of them, so it counts as one too.
+    const region = cdk.Stack.of(this).region;
+    const noWebAdapter = cdk.Token.isUnresolved(region) || !lambdaWebAdapterAvailableIn(region);
+    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () =>
+      withBuildProfile(
+        {
+          serverInvoke: isHttpApiDoor(props.frontDoor) ? 'http-api' : 'default',
+          ...(noWebAdapter ? { lambdaWebAdapter: false } : {}),
+          ...((props.edgeRoutes ?? (isHttpApiDoor(props.frontDoor) ? 'regional' : 'edge')) === 'regional'
+            ? { edgeToRegional: true }
+            : {}),
+          ...(props.incrementalRegeneration === false ? { skipIsr: true } : {}),
+          ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
+          ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),
+        },
+        () => adapter(root),
+      ),
+    );
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
-    if (!manifest.buildId) {
+    // `buildId: 'fixed'`: the per-deploy random id drives the atomic
+    // `builds/<id>/` cutover a long-lived site needs, but it changes the asset
+    // prefix, the function code and the API name on every deploy, so no
+    // re-deploy could skip the upload or hotswap. A throwaway environment
+    // keys the build on its content instead (see `contentBuildId`).
+    if (fixedBuildId) {
+      manifest.buildId = contentBuildId(
+        manifest,
+        [props.errorPages?.notFound, props.errorPages?.serverError].filter((f): f is string => !!f),
+      );
+    } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }
 
@@ -996,6 +1283,10 @@ export class Hosting extends Construct {
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
+      ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
+      // `buildId: 'fixed'`: the build is overwritten in place, so there is no
+      // switch-over for the door's asset proxy to wait for.
+      ...(fixedBuildId ? { inPlaceBuild: true } : {}),
       // Plain env + deploy-time literals go straight to the L3 (which stays
       // secret-agnostic: it only ever sees plain strings). Runtime secrets are
       // wired separately below so we can attach IAM grants per function.
@@ -1194,6 +1485,11 @@ export class Hosting extends Construct {
 
       // Delay route cutover until resolved config replaces the static placeholder.
       hosting.addBuildAssetDependency(configDeployment);
+
+      // `buildId: 'fixed'` (an in-place build): drop the AWS CLI layers no
+      // upload handler uses, the runtime config upload's included. Every other
+      // build keeps them.
+      if (fixedBuildId) removeUnusedAwsCliLayers(this);
 
       if (stackedEdge) {
         stackedInvalidationId = this.gateStackedEdge(hosting, manifest, stackedEdge, configDeployment, buildId);

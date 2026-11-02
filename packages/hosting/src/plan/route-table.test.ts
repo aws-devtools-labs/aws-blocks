@@ -124,6 +124,48 @@ describe('buildRouteTable — coalescing, basePath, ordering', () => {
     assert.equal(entries[0]?.pattern, '/blog/x/admin');
   });
 
+  it('does not coalesce children into a parent/* wildcard the table already routes to another kind', () => {
+    // The Next.js route set with no image origin: `/_next/image*` and
+    // `/_next/data/*` both classify as server. Coalescing them would emit a
+    // `/_next/*` SERVER wildcard that collides with the explicit `/_next/*`
+    // STATIC row, sending every `/_next/static/*` asset to the server (404).
+    const routes: RouteBehavior[] = [
+      { pattern: '/_next/image*', target: 'image-optimization' },
+      { pattern: '/_next/data/*', target: 'default' },
+      { pattern: '/*', target: 'default' },
+      { pattern: '/BUILD_ID', target: 's3' },
+      { pattern: '/_next/*', target: 's3' },
+    ];
+    const entries = buildRouteTable({ manifest: manifestWith(routes), hasServer: true, hasImage: false });
+    assert.deepEqual(
+      entries.filter((e) => e.pattern === '/_next/*'),
+      [{ pattern: '/_next/*', kind: 'static' }],
+    );
+    const byPattern = Object.fromEntries(entries.map((e) => [e.pattern, e.kind]));
+    assert.equal(byPattern['/_next/data/*'], 'server');
+    assert.equal(byPattern['/_next/image*'], 'server');
+  });
+
+  it('still coalesces prerendered pages under ISR when the table already routes their parent/* statically (Nitro)', () => {
+    // Nitro emits a static `/blog/*` row for `public/blog/` plus a bare and a
+    // subtree row per prerendered page. Under ISR the `/blog` group flips to a
+    // server wildcard, but its members were static like the `/blog/*` row, so
+    // they don't collide with it and still coalesce: the table stays bounded.
+    const pages = Array.from({ length: 50 }, (_, i) => `/blog/post-${i}`);
+    const routes: RouteBehavior[] = [
+      { pattern: '/_nuxt/*', target: 'static' },
+      { pattern: '/blog/*', target: 'static' },
+      ...pages.flatMap((p): RouteBehavior[] => [
+        { pattern: p, target: 'static' },
+        { pattern: `${p}/*`, target: 'static' },
+      ]),
+      { pattern: '/*', target: 'default' },
+    ];
+    const entries = buildRouteTable({ manifest: manifestWith(routes), hasServer: true, hasImage: false, isrActive: true });
+    assert.ok(entries.length <= 4, `expected a bounded table, got ${entries.length} rows`);
+    assert.ok(entries.some((e) => e.pattern === '/blog/*'));
+  });
+
   it('keeps exact routes out of coalescing and the ISR flip', () => {
     // A frozen page and a file inside an ISR subtree (the Nitro adapter marks
     // them `exact`), next to crawl-prerendered siblings that may coalesce.

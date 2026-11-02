@@ -37,7 +37,11 @@ export function removeSecret(key: string, opts: { stage?: string; force?: boolea
 	return removeValue('secret', key, { prefix: blocksSecretPrefix(), ...opts });
 }
 
-/** CLI dispatcher for `blocks secret <set|list|remove> …`. */
-export function runSecretCli(argv: string[]): Promise<void> {
-	return runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'blocks secret' });
+/**
+ * CLI dispatcher for `blocks secret <set|list|remove> …`. `interactive: false`
+ * refuses the hidden prompt, and `yes` confirms `remove --force` as `--yes` does;
+ * a usage problem throws hosting's `ValueCliUsageError`.
+ */
+export function runSecretCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
+	return runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'blocks secret', ...options });
 }
