@@ -14,12 +14,16 @@ import { brandBlocksError } from '@aws-blocks/core';
  * try {
  *   await auth.requireAuth(ctx);
  * } catch (e: unknown) {
- *   if (isBlocksError(e, AuthOIDCErrors.TokenExpired)) {
- *     // session expired
+ *   if (isBlocksError(e, AuthOIDCErrors.NotAuthenticated)) {
+ *     // no session, or the session expired and could not be refreshed
  *   }
  *   throw e;
  * }
  * ```
+ *
+ * `requireAuth()` reports every missing or expired session as `NotAuthenticated`
+ * (HTTP 401). `TokenExpired` is returned by the bearer-token refresh route
+ * (`POST /aws-blocks/auth/refresh`) when the refresh fails.
  */
 export const AuthOIDCErrors = {
 	NotAuthenticated: 'NotAuthenticatedException',

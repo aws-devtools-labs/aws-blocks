@@ -331,6 +331,8 @@ catch (e) {
 
 `NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
 
+`requireAuth()` reports every missing or expired cookie session as `NotAuthenticated` (HTTP 401), including a session whose refresh failed. `TokenExpired` is returned only by `POST /aws-blocks/auth/refresh` (the bearer-token flow) when the refresh fails.
+
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
 Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
