@@ -324,7 +324,8 @@ describe('ContainerCompute — scale from zero (minInstances: 0)', () => {
 	test('deploys at zero tasks and adds a task when a message is waiting', async () => {
 		const template = await synthWithQueue('ContainerScaleFromZero', { minInstances: 0, maxInstances: 2 });
 
-		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 0 });
+		// Autoscaling owns the count, so the template declares none (see below).
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: Match.absent() });
 		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
 			MinCapacity: 0,
 			MaxCapacity: 2,
@@ -380,6 +381,57 @@ describe('ContainerCompute — scale from zero (minInstances: 0)', () => {
 		];
 		cases.forEach(([scaling, message], i) => {
 			assert.throws(() => new ContainerCompute(stack as never, `bad${i}`, { scaling }), message);
+		});
+	});
+});
+
+describe('ContainerCompute — deploys leave running jobs alone where they can', () => {
+	async function synth(id: string, scaling?: { minInstances: number; maxInstances: number }) {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.25, memory: 512 }, scaling });
+		compute.finalize();
+		return Template.fromStack(stack as unknown as cdk.Stack);
+	}
+
+	// CloudFormation re-sends a declared DesiredCount on every update of the
+	// service, and new code means a new task definition, so a declared count would
+	// reset the autoscaled count on nearly every deploy.
+	test('an autoscaled service declares no DesiredCount', async () => {
+		const template = await synth('ContainerAutoscaledCount', { minInstances: 1, maxInstances: 4 });
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: Match.absent() });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 1,
+			MaxCapacity: 4,
+		});
+	});
+
+	test('a fixed-size service keeps its declared DesiredCount', async () => {
+		// maxInstances 1 with minInstances 1 is a single fixed task: nothing scales it.
+		const template = await synth('ContainerFixedCount', { minInstances: 1, maxInstances: 1 });
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 0);
+	});
+
+	test('a service with no scaling declares one task', async () => {
+		const template = await synth('ContainerDefaultCount');
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
+	});
+
+	test('the container gets the Fargate maximum stopTimeout, and the runtime drains just under it', async () => {
+		const template = await synth('ContainerStopTimeout');
+		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+			ContainerDefinitions: Match.arrayWith([
+				Match.objectLike({
+					StopTimeout: 120,
+					Environment: Match.arrayWith([{ Name: 'BLOCKS_DRAIN_GRACE_SECONDS', Value: '110' }]),
+				}),
+			]),
 		});
 	});
 });

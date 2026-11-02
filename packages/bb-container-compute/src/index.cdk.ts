@@ -74,6 +74,19 @@ const DEFAULT_MEMORY_MB = 1024;
 const CONTAINER_PORT = 8080;
 
 /**
+ * How long ECS waits after SIGTERM before force-killing the container: the Fargate
+ * maximum. The runtime exits as soon as its in-flight jobs finish (and a job can't
+ * outlive its own `timeoutSeconds`), so the full window is only used while a job
+ * is still running.
+ */
+const STOP_TIMEOUT_SECONDS = 120;
+/**
+ * How long the runtime waits for in-flight jobs on SIGTERM. A margin under
+ * {@link STOP_TIMEOUT_SECONDS} so it exits cleanly before ECS force-kills it.
+ */
+const DRAIN_GRACE_SECONDS = STOP_TIMEOUT_SECONDS - 10;
+
+/**
  * Default container image when the workload didn't set `image`. A stock, public,
  * AWS-hosted Node image on the SAME Node major as the Lambda runtime
  * ({@link DEFAULT_NODE_RUNTIME}, Node 24), so container and function behavior
@@ -255,12 +268,25 @@ export class ContainerCompute extends ComputeBase {
 				BLOCKS_CODE_PKG_KEY: pkgAsset.s3ObjectKey,
 			},
 			portMappings: [{ containerPort: CONTAINER_PORT }],
+			stopTimeout: cdk.Duration.seconds(STOP_TIMEOUT_SECONDS),
 		});
+		this.container.addEnvironment('BLOCKS_DRAIN_GRACE_SECONDS', String(DRAIN_GRACE_SECONDS));
+
+		// Leave DesiredCount out of the template when autoscaling owns the task
+		// count. CloudFormation sends a declared DesiredCount on every update of the
+		// service, and nearly every deploy updates it (new code means a new task
+		// definition), so a declared count would reset the autoscaled count on each
+		// deploy and stop tasks that are running jobs. Without it, a new service
+		// starts one task and autoscaling takes over; an update leaves the count
+		// alone. A fixed-size service keeps its declared count. Same condition as
+		// finalize() uses to wire autoscaling.
+		const cfg = this.scalingConfig;
+		const autoscaled = cfg !== undefined && (cfg.maxInstances > 1 || cfg.minInstances === 0);
 
 		this.service = new ecs.FargateService(this, 'Service', {
 			cluster: this.getOrCreateCluster(vpcContext.vpc),
 			taskDefinition: this.taskDefinition,
-			desiredCount: this.scalingConfig?.minInstances ?? 1,
+			desiredCount: autoscaled ? undefined : (cfg?.minInstances ?? 1),
 			vpcSubnets: vpcContext.computeSubnets,
 			securityGroups: [vpcContext.computeSecurityGroup],
 			minHealthyPercent: 100,
