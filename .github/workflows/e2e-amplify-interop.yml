@@ -44,7 +44,8 @@ jobs:
 
   e2e-amplify-interop-smoke:
     name: E2E Amplify Interop (Smoke)
-    timeout-minutes: 30
+    # 30 minutes to deploy and test, plus up to 10 for the sandbox teardown's retries.
+    timeout-minutes: 40
     needs: [detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -139,15 +140,17 @@ jobs:
           cd /tmp/amplify-interop-test
           node $GITHUB_WORKSPACE/scripts/smoke-test-amplify-interop.mjs
 
+      # Retries a delete that fails because CloudFormation gave up on a throttled
+      # REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
       - name: Cleanup sandbox
         if: always()
-        run: |
-          cd /tmp/amplify-interop-test
-          npm run sandbox:delete -- --identifier int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT} || true
+        timeout-minutes: 12
+        run: node scripts/ci/amplify-sandbox-teardown.mjs /tmp/amplify-interop-test int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   e2e-amplify-interop:
     name: E2E Amplify Interop (Browser)
-    timeout-minutes: 30
+    # 30 minutes to deploy and test, plus up to 10 for the sandbox teardown's retries.
+    timeout-minutes: 40
     needs: [detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -200,9 +203,8 @@ jobs:
 
       - name: Cleanup sandbox
         if: always()
-        run: |
-          cd test-apps/amplify-gen2
-          npm run sandbox:delete -- --identifier amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT} || true
+        timeout-minutes: 12
+        run: node scripts/ci/amplify-sandbox-teardown.mjs test-apps/amplify-gen2 amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. It always runs (even when the e2e jobs are skipped for
