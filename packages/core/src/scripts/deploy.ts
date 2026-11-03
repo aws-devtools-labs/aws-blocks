@@ -35,7 +35,7 @@ export interface DeployOptions {
    * rewrites that file with only its own stack, and can do so during the wait.
    */
   onDeployed?: (deployed: DeployedStack) => void;
-  /** How the user runs the deploy, in the guidance (for example `blocks deploy`). Default: `npm run deploy`. */
+  /** How the user runs the deploy, in the guidance (for example `cdk-blocks deploy`). Default: `npm run deploy`. */
   invocation?: string;
 }
 

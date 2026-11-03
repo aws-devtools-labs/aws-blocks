@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Exit codes and the error format of the `blocks` CLI.
+ * Exit codes and the error format of the `cdk-blocks` CLI.
  *
  * Every failure prints on stderr in one shape:
  *
@@ -17,14 +17,13 @@
  */
 
 /**
- * How a printed `blocks` command runs in an app's shell, where the app's CLI is
- * not on PATH, as the app's AGENTS.md says: `--no` never downloads a package
- * (`blocks` on npm is an unrelated one), and `--` keeps npm from reading the
- * command's options as its own.
+ * How a printed `cdk-blocks` command runs in an app's shell, where the app's CLI is
+ * not on PATH, as the app's AGENTS.md says: `--no` never downloads a package,
+ * and `--` keeps npm from reading the command's options as its own.
  */
-export const BLOCKS_COMMAND = 'npx --no -- blocks';
+export const BLOCKS_COMMAND = 'npx --no -- cdk-blocks';
 
-/** `blocks <words>` as a command to copy into the app's shell; see {@link BLOCKS_COMMAND}. */
+/** `cdk-blocks <words>` as a command to copy into the app's shell; see {@link BLOCKS_COMMAND}. */
 export function blocksCommand(...words: string[]): string {
 	return [BLOCKS_COMMAND, ...words].join(' ');
 }
@@ -39,7 +38,7 @@ export const ExitCode = {
 	Usage: 2,
 	/** Interrupted with SIGINT. */
 	Interrupted: 130,
-	/** Stopped by a SIGTERM to the CLI, which the operation it ran ended on (`blocks sandbox deploy`, `blocks deploy`). */
+	/** Stopped by a SIGTERM to the CLI, which the operation it ran ended on (`cdk-blocks sandbox deploy`, `cdk-blocks deploy`). */
 	Terminated: 143,
 } as const;
 
@@ -48,7 +47,7 @@ export type ExitCodeValue = (typeof ExitCode)[keyof typeof ExitCode];
 export interface CliErrorDetails {
 	/** Where it failed: the command, the stack, the account and Region. */
 	where?: string[];
-	/** The next step, for example `npx --no -- blocks destroy --yes` (see {@link blocksCommand}). */
+	/** The next step, for example `npx --no -- cdk-blocks destroy --yes` (see {@link blocksCommand}). */
 	hint?: string;
 	/** The exit code. Default: 1. */
 	exitCode?: ExitCodeValue;

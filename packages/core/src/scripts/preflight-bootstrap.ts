@@ -70,7 +70,7 @@ export const sdkBootstrapVersionReader: BootstrapVersionReader = async ({ region
 
 /** Input for {@link cdkBootstrapFailure}. */
 export interface CdkBootstrapCheckOptions extends BootstrapTarget {
-	/** How the user runs the deploy, used in the message (for example `npm run deploy` or `blocks deploy`). */
+	/** How the user runs the deploy, used in the message (for example `npm run deploy` or `cdk-blocks deploy`). */
 	invocation: string;
 	/** The account ID from STS GetCallerIdentity. */
 	account: string;

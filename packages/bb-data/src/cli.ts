@@ -111,16 +111,16 @@ function takeFlagOrBool(args: string[], flag: string): { present: boolean; value
 
 /**
  * The command that runs this CLI, for the verb usage: `bb-data`, or the
- * `BB_DATA_COMMAND` that a wrapper sets (`blocks db` for the `blocks` CLI).
+ * `BB_DATA_COMMAND` that a wrapper sets (`cdk-blocks db` for the `cdk-blocks` CLI).
  */
 const COMMAND = process.env.BB_DATA_COMMAND || 'bb-data';
 
 /**
- * What `pull` does without a terminal. `blocks db pull` refuses before it runs bb-data, as
+ * What `pull` does without a terminal. `cdk-blocks db pull` refuses before it runs bb-data, as
  * a usage error (exit 2), also under --no-input or CI; bb-data itself exits 1.
  */
 const PULL_NO_TERMINAL =
-  COMMAND === 'blocks db' ? 'exits 2 without one (or with --no-input or CI)' : 'exits 1 without one';
+  COMMAND === 'cdk-blocks db' ? 'exits 2 without one (or with --no-input or CI)' : 'exits 1 without one';
 
 /** The verbs, with the usage that `bb-data <verb> --help` prints. */
 const VERB_HELP: Record<string, string> = {

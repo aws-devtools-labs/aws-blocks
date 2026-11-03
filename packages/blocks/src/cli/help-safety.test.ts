@@ -114,7 +114,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		['secret', 'remove', 'API_KEY', '--force', '--yes', '--help'],
 		['secret', 'set', 'API_KEY', '--value-stdin', '--help'],
 	]) {
-		it(`blocks ${argv.join(' ')}: exit 0, usage, no store request`, async () => {
+		it(`cdk-blocks ${argv.join(' ')}: exit 0, usage, no store request`, async () => {
 			const stdout: string[] = [];
 			const log = console.log;
 			console.log = (...args: unknown[]) => stdout.push(args.join(' '));
@@ -125,12 +125,12 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 				console.log = log;
 			}
 			assert.strictEqual(run.code, 0, run.stderr);
-			assert.match(stdout.join('\n'), /^Usage: blocks (secret|config) (remove|set) /);
+			assert.match(stdout.join('\n'), /^Usage: cdk-blocks (secret|config) (remove|set) /);
 			assert.deepStrictEqual(requests, []);
 		});
 	}
 
-	it('blocks help db pull and blocks db pull ./out --help: the real bb-data prints pull usage, writes nothing', async () => {
+	it('cdk-blocks help db pull and cdk-blocks db pull ./out --help: the real bb-data prints pull usage, writes nothing', async () => {
 		for (const argv of [
 			['help', 'db', 'pull'],
 			['db', 'pull', './out', '--help'],
@@ -140,21 +140,21 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn(outputs) });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}${outputs.join('')}`);
 			assert.deepStrictEqual(run.spawned[0].args.slice(1), ['pull', '--help']);
-			assert.match(outputs.join(''), /Usage: blocks db pull \[output-dir\]/);
+			assert.match(outputs.join(''), /Usage: cdk-blocks db pull \[output-dir\]/);
 			assert.deepStrictEqual(readdirSync(root).sort(), ['.blocks', 'aws-blocks', 'package.json']);
 		}
 	});
 
-	it('blocks help db migrate runs the real bb-data, which prints the migrate options', async () => {
+	it('cdk-blocks help db migrate runs the real bb-data, which prints the migrate options', async () => {
 		const root = fixtureApp();
 		const outputs: string[] = [];
 		const run = await runCli(['help', 'db', 'migrate'], { cwd: root, onSpawn: realSpawn(outputs) });
 		assert.strictEqual(run.code, 0, run.stderr + outputs.join(''));
-		assert.match(outputs.join(''), /Usage: blocks db migrate \[dir\][\s\S]*--url <conn>/);
+		assert.match(outputs.join(''), /Usage: cdk-blocks db migrate \[dir\][\s\S]*--url <conn>/);
 		assert.ok(!existsSync(join(root, '.bb-data')));
 	});
 
-	it('blocks help vendorize x and blocks vendorize x --help: CLI help, vendorize never starts', async () => {
+	it('cdk-blocks help vendorize x and cdk-blocks vendorize x --help: CLI help, vendorize never starts', async () => {
 		for (const argv of [
 			['help', 'vendorize', '@aws-blocks/bb-kv-store'],
 			['vendorize', '@aws-blocks/bb-kv-store', '--help'],
@@ -162,7 +162,7 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 			const root = fixtureApp({ workspaces: ['aws-blocks'] });
 			const run = await runCli(argv, { cwd: root, onSpawn: realSpawn([]) });
 			assert.strictEqual(run.code, 0, run.stderr);
-			assert.match(run.stdout, /Usage: blocks vendorize/);
+			assert.match(run.stdout, /Usage: cdk-blocks vendorize/);
 			assert.deepStrictEqual(run.spawned, []);
 			assert.ok(!existsSync(join(root, 'vendor')));
 		}
@@ -198,9 +198,9 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 
 	it('maps the secret and config usage errors to exit 2', async () => {
 		for (const [argv, message] of [
-			[['secret', 'remove'], /Usage: blocks secret remove <KEY>/],
+			[['secret', 'remove'], /Usage: cdk-blocks secret remove <KEY>/],
 			[['secret', 'frob'], /Unknown subcommand "frob"/],
-			[['config', 'set'], /Usage: blocks config set <KEY>/],
+			[['config', 'set'], /Usage: cdk-blocks config set <KEY>/],
 			[['secret', 'list', '--stage'], /--stage` requires a value/],
 			[['secret', 'remove', 'API_KEY', '--force'], /Refusing to force-delete .*--yes/],
 		] as const) {
@@ -244,13 +244,13 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 		}
 	});
 
-	it('the help of "blocks db pull" states the exit code that it has without a terminal', async () => {
+	it('the help of "cdk-blocks db pull" states the exit code that it has without a terminal', async () => {
 		const root = fixtureApp();
 		const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
 		assert.ok(cli);
 		const help = spawnSync(process.execPath, [cli, 'pull', '--help'], {
 			encoding: 'utf-8',
-			env: { ...process.env, BB_DATA_COMMAND: 'blocks db' },
+			env: { ...process.env, BB_DATA_COMMAND: 'cdk-blocks db' },
 		}).stdout;
 		const stated = Number(/exits (\d) without one/.exec(help)?.[1]);
 		const run = await runCli(['db', 'pull'], { cwd: root });

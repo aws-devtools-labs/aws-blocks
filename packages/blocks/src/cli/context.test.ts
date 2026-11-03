@@ -348,7 +348,7 @@ setInterval(() => {}, 1000);
 	});
 
 	/**
-	 * Start `blocks dev` in a process group of its own, with a frontend like `npx next dev`, send it
+	 * Start `cdk-blocks dev` in a process group of its own, with a frontend like `npx next dev`, send it
 	 * `signal` (to the group, or to the CLI's pid alone), and check that it and its frontend stop
 	 * within `withinMs`, leaving nothing running. Returns the CLI's exit code.
 	 */
@@ -418,8 +418,8 @@ setInterval(() => {}, 1000);
 			// reaping a member that the dev server's fallback SIGKILL ended; it is shorter than the server's stop.
 			for (const deadline = Date.now() + 250; isGroupRunning(frontendGroup) && Date.now() < deadline; )
 				await sleep(25);
-			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived blocks dev\n${output}`);
-			assert.strictEqual(isGroupRunning(cli.pid ?? 0), false, `a process of blocks dev outlived it\n${output}`);
+			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived cdk-blocks dev\n${output}`);
+			assert.strictEqual(isGroupRunning(cli.pid ?? 0), false, `a process of cdk-blocks dev outlived it\n${output}`);
 			assert.doesNotMatch(output, /Force killing|Killing process/);
 			assert.ok(took <= withinMs, `stopped after ${took} ms, not within ${withinMs} ms\n${output}`);
 			return code as number | null;
@@ -430,14 +430,14 @@ setInterval(() => {}, 1000);
 		}
 	}
 
-	it('stops `blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
+	it('stops `cdk-blocks dev` and its frontend on a SIGTERM to its process group, leaving nothing running', {
 		timeout: 60_000,
 	}, async () => {
 		// As `timeout`, a supervisor or CI sends it: the CLI, `tsx watch` and the dev server all get it.
 		assert.strictEqual(await stopDev('group', 'SIGTERM', 3000), 0);
 	});
 
-	it('stops `blocks dev` and its frontend within 1.5 s on a SIGTERM or SIGHUP to its pid alone', {
+	it('stops `cdk-blocks dev` and its frontend within 1.5 s on a SIGTERM or SIGHUP to its pid alone', {
 		timeout: 60_000,
 	}, async () => {
 		// As `kill <pid>`, an IDE's stop button or a harness that kills a background job sends it.
@@ -522,7 +522,7 @@ setInterval(() => {}, 1000);
 		}
 	});
 
-	/** A backend-only app on a free port, for a real `blocks dev`; returns its root and port. */
+	/** A backend-only app on a free port, for a real `cdk-blocks dev`; returns its root and port. */
 	async function devApp(): Promise<{ root: string; port: number }> {
 		const [port] = await freePorts(1);
 		const root = fixtureApp({ name: 'dev-app', blocks: { dev: { port, frontend: false } } });
@@ -554,7 +554,7 @@ setInterval(() => {}, 1000);
 			.map(([child]) => child);
 	}
 
-	/** Start `blocks dev` in `root` in a process group of its own. */
+	/** Start `cdk-blocks dev` in `root` in a process group of its own. */
 	function startCli(root: string) {
 		const bin = fileURLToPath(new URL('./bin.js', import.meta.url));
 		const cli = spawn(process.execPath, [bin, 'dev'], { cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -613,7 +613,7 @@ setInterval(() => {}, 1000);
 		}
 	});
 
-	it('records how its dev server runner ended, for blocks dev', { timeout: 60_000 }, async () => {
+	it('records how its dev server runner ended, for cdk-blocks dev', { timeout: 60_000 }, async () => {
 		const { root, port } = await devApp();
 		const file = join(mkdtempSync(join(tmpdir(), 'blocks-dev-state-')), 'failure');
 		const run = () => {
@@ -633,7 +633,7 @@ setInterval(() => {}, 1000);
 		try {
 			await listening(port, () => '');
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
-			// `blocks dev stop`: a SIGTERM to tsx watch, which relays it.
+			// `cdk-blocks dev stop`: a SIGTERM to tsx watch, which relays it.
 			process.kill(first.watcher.pid ?? 0, 'SIGTERM');
 			await within(first.exited, 10_000, () => 'tsx watch');
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.stopped);
@@ -646,7 +646,7 @@ setInterval(() => {}, 1000);
 			const [runner] = childrenOf(second.watcher.pid ?? 0);
 			process.kill(runner, 'SIGKILL');
 			while (childrenOf(second.watcher.pid ?? 0).includes(runner)) await sleep(25);
-			// Nothing ran in the runner: `blocks dev` reads `running` as a runner that a signal killed.
+			// Nothing ran in the runner: `cdk-blocks dev` reads `running` as a runner that a signal killed.
 			assert.strictEqual(readFileSync(file, 'utf-8'), DEV_STATE.running);
 		} finally {
 			if (isGroupRunning(second.watcher.pid ?? 0)) process.kill(-(second.watcher.pid ?? 0), 'SIGKILL');

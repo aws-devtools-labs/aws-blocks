@@ -50,8 +50,8 @@ describe('command help', () => {
 	it('has usage, options and examples for every runnable command', () => {
 		for (const command of COMMANDS.filter((c) => c.handler)) {
 			const help = commandHelp(command);
-			assert.match(help, new RegExp(`Usage: blocks ${command.path.join(' ')}`), command.path.join(' '));
-			assert.match(help, /\nExamples\n {2}blocks /, command.path.join(' '));
+			assert.match(help, new RegExp(`Usage: cdk-blocks ${command.path.join(' ')}`), command.path.join(' '));
+			assert.match(help, /\nExamples\n {2}cdk-blocks /, command.path.join(' '));
 		}
 	});
 
@@ -65,7 +65,7 @@ describe('command help', () => {
 			help,
 			/--frontend-port <N> +Internal port of the frontend dev server, proxied behind --port \[3100\]/,
 		);
-		assert.match(help, /\n {2}blocks dev --port 4000 +# open http:\/\/localhost:4000\n/);
+		assert.match(help, /\n {2}cdk-blocks dev --port 4000 +# open http:\/\/localhost:4000\n/);
 	});
 
 	it('documents --stage for secret and config without a fixed list of stages', () => {
@@ -91,13 +91,13 @@ describe('command help', () => {
 		]) {
 			const run = await runCli(argv, { cwd });
 			assert.strictEqual(run.code, 0, argv.join(' '));
-			assert.match(run.stdout, /Usage: blocks destroy/);
+			assert.match(run.stdout, /Usage: cdk-blocks destroy/);
 			assert.strictEqual(run.spawned.length, 0);
 		}
 		const alias = await runCli(['help', 'typegen'], { cwd });
-		assert.match(alias.stdout, /Usage: blocks generate types/);
+		assert.match(alias.stdout, /Usage: cdk-blocks generate types/);
 		const db = await runCli(['db', '--help'], { cwd });
-		assert.match(db.stdout, /Usage: blocks db <verb> \[args\.\.\.\]/);
+		assert.match(db.stdout, /Usage: cdk-blocks db <verb> \[args\.\.\.\]/);
 		const unknown = await runCli(['help', 'deplyo'], { cwd });
 		assert.strictEqual(unknown.code, 2);
 		assert.match(unknown.stderr, /Did you mean "deploy"\?/);

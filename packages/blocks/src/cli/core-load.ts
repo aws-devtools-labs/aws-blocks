@@ -75,7 +75,7 @@ export function coreMismatchError(error: unknown): CliError | undefined {
 /** Load `@aws-blocks/core/scripts`; a core that does not match fails with {@link coreMismatchError}. */
 export async function loadCoreScripts(): Promise<typeof CoreScriptsModule> {
 	try {
-		// Loaded on demand, not imported: `blocks --help` and usage errors never load core (about 0.6 s).
+		// Loaded on demand, not imported: `cdk-blocks --help` and usage errors never load core (about 0.6 s).
 		return await import('@aws-blocks/core/scripts');
 	} catch (error) {
 		throw coreMismatchError(error) ?? error;

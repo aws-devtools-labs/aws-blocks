@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The declarative command tree of the `blocks` CLI: groups, canonical names,
+ * The declarative command tree of the `cdk-blocks` CLI: groups, canonical names,
  * hidden aliases, descriptions, flags, examples and handlers.
  *
  * Command names are data. Renaming a command, or making an alias canonical,
@@ -107,7 +107,7 @@ export interface AliasSpec {
 	args?: readonly string[];
 }
 
-/** A hidden flag spelling of another command: `blocks sandbox --deploy-only` runs `blocks sandbox deploy`. */
+/** A hidden flag spelling of another command: `cdk-blocks sandbox --deploy-only` runs `cdk-blocks sandbox deploy`. */
 export interface FlagAliasSpec {
 	/** The command the flag is given to. */
 	command: readonly string[];
@@ -198,9 +198,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'no-frontend', type: 'boolean', description: 'Run the backend only' },
 		],
 		examples: [
-			{ command: 'blocks dev', description: 'open http://localhost:3000' },
-			{ command: 'blocks dev --port 4000', description: 'open http://localhost:4000' },
-			{ command: 'blocks dev --no-frontend', description: 'backend only' },
+			{ command: 'cdk-blocks dev', description: 'open http://localhost:3000' },
+			{ command: 'cdk-blocks dev --port 4000', description: 'open http://localhost:4000' },
+			{ command: 'cdk-blocks dev --no-frontend', description: 'backend only' },
 		],
 		handler: commands.dev,
 	},
@@ -212,20 +212,20 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Stop the local dev server that this app started on the port. It acts only on the process\n' +
 			'that the dev server recorded for itself, never on another process that holds the port.\n' +
 			'Without --port, when nothing is recorded on the configured port but exactly one dev server\n' +
-			'is recorded on another (blocks dev --port N), it stops that one.',
+			'is recorded on another (cdk-blocks dev --port N), it stops that one.',
 		flags: [
 			{
 				name: 'port',
 				type: 'string',
 				value: 'N',
-				description: 'Port of the dev server to stop [the "blocks dev" port]',
+				description: 'Port of the dev server to stop [the "cdk-blocks dev" port]',
 			},
 			{ name: 'all', type: 'boolean', description: 'Stop every dev server this app recorded, on any port' },
 		],
 		json: { stopped: [{ port: null, stopped: null, alreadyStopped: null, portFree: null, via: null }] },
 		examples: [
-			{ command: 'blocks dev stop', description: 'Stop the dev server on the configured port' },
-			{ command: 'blocks dev stop --all', description: 'Stop every dev server this app started' },
+			{ command: 'cdk-blocks dev stop', description: 'Stop the dev server on the configured port' },
+			{ command: 'cdk-blocks dev stop --all', description: 'Stop every dev server this app started' },
 		],
 		handler: commands.devStop,
 	},
@@ -236,8 +236,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		description:
 			'Deploy your personal sandbox stack, then watch for changes and run the local server\n' +
 			'against it. Ctrl-C stops the local processes; the stack keeps running until you\n' +
-			'run "blocks sandbox destroy".',
-		examples: [{ command: 'blocks sandbox', description: 'Deploy and watch your sandbox' }],
+			'run "cdk-blocks sandbox destroy".',
+		examples: [{ command: 'cdk-blocks sandbox', description: 'Deploy and watch your sandbox' }],
 		aws: true,
 		handler: commands.sandbox,
 	},
@@ -247,9 +247,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Deploy the sandbox once and exit (CI)',
 		json: DEPLOY_RESULT,
 		examples: [
-			{ command: 'blocks sandbox deploy', description: 'Deploy once and exit' },
+			{ command: 'cdk-blocks sandbox deploy', description: 'Deploy once and exit' },
 			{
-				command: 'API_URL=$(blocks sandbox deploy --query apiUrl)',
+				command: 'API_URL=$(cdk-blocks sandbox deploy --query apiUrl)',
 				description: 'Deploy, then keep the API URL in a shell variable',
 			},
 		],
@@ -262,13 +262,13 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Deploy the sandbox with a hosted preview of the frontend once and exit',
 		description:
 			'Deploy your sandbox with the app hosted in preview shape (API Gateway, no CloudFront), print\n' +
-			'the preview URL, and exit. It is the same stack as "blocks sandbox": a plain sandbox deploy\n' +
+			'the preview URL, and exit. It is the same stack as "cdk-blocks sandbox": a plain sandbox deploy\n' +
 			'removes the preview, and re-adding it gives a new URL. A re-deploy hotswaps a code-only change.',
 		json: DEPLOY_RESULT,
 		examples: [
-			{ command: 'blocks sandbox preview', description: 'Deploy a hosted preview and print its URL' },
+			{ command: 'cdk-blocks sandbox preview', description: 'Deploy a hosted preview and print its URL' },
 			{
-				command: 'URL=$(blocks sandbox preview --query url)',
+				command: 'URL=$(cdk-blocks sandbox preview --query url)',
 				description: 'Deploy, then keep the preview URL in a shell variable',
 			},
 		],
@@ -282,7 +282,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		description:
 			'Delete your personal sandbox stack. This never touches the production stack.\n' +
 			'In an interactive terminal it asks first; --yes skips the question.',
-		examples: [{ command: 'blocks sandbox destroy --yes', description: 'Delete the sandbox without asking' }],
+		examples: [{ command: 'cdk-blocks sandbox destroy --yes', description: 'Delete the sandbox without asking' }],
 		aws: true,
 		handler: commands.sandboxDestroy,
 	},
@@ -290,7 +290,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		path: ['sandbox', 'console'],
 		group: 'Develop',
 		summary: 'Open the AWS console for the sandbox stack',
-		examples: [{ command: 'blocks sandbox console', description: 'Open the CloudFormation console' }],
+		examples: [{ command: 'cdk-blocks sandbox console', description: 'Open the CloudFormation console' }],
 		aws: true,
 		handler: commands.sandboxConsole,
 	},
@@ -318,10 +318,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 		],
 		json: { ...DEPLOY_RESULT, live: null },
 		examples: [
-			{ command: 'blocks deploy', description: 'Deploy to production' },
-			{ command: 'blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
-			{ command: 'blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
-			{ command: 'API_URL=$(blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
+			{ command: 'cdk-blocks deploy', description: 'Deploy to production' },
+			{ command: 'cdk-blocks deploy --wait-live=300', description: 'Deploy, then wait up to 300s for the new build' },
+			{ command: 'cdk-blocks deploy --output json', description: 'Print {apiUrl, url, stack, account, region}' },
+			{ command: 'API_URL=$(cdk-blocks deploy --query apiUrl)', description: 'Print only the API URL, raw' },
 		],
 		aws: true,
 		handler: commands.deploy,
@@ -334,8 +334,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Delete the production stack. The target is printed first. In an interactive terminal it\n' +
 			'asks for confirmation; without a terminal it requires --yes and exits 2 otherwise.',
 		examples: [
-			{ command: 'blocks destroy', description: 'Delete production, after a confirmation' },
-			{ command: 'blocks destroy --yes', description: 'Delete production without asking (CI)' },
+			{ command: 'cdk-blocks destroy', description: 'Delete production, after a confirmation' },
+			{ command: 'cdk-blocks destroy --yes', description: 'Delete production without asking (CI)' },
 		],
 		aws: true,
 		handler: commands.destroy,
@@ -346,8 +346,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 		summary: 'Show the AWS identity, Region and the stacks that commands would affect',
 		description:
 			'Show the AWS identity, the Region, and the sandbox and production stacks that\n' +
-			'"blocks sandbox" and "blocks deploy" would affect. Nothing is deployed.\n' +
-			'The identity and Region are the ones "blocks deploy" uses, with .env.production\n' +
+			'"cdk-blocks sandbox" and "cdk-blocks deploy" would affect. Nothing is deployed.\n' +
+			'The identity and Region are the ones "cdk-blocks deploy" uses, with .env.production\n' +
 			'applied. A warning names the AWS settings that .env.local sets differently\n' +
 			'for the sandbox.',
 		json: {
@@ -359,9 +359,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 			stacks: { sandbox: null, production: null },
 		},
 		examples: [
-			{ command: 'blocks whoami', description: 'Show the deployment target' },
-			{ command: 'blocks whoami --profile prod --output json', description: 'The same, as JSON' },
-			{ command: 'blocks whoami --query stacks.production', description: 'Print the production stack name' },
+			{ command: 'cdk-blocks whoami', description: 'Show the deployment target' },
+			{ command: 'cdk-blocks whoami --profile prod --output json', description: 'The same, as JSON' },
+			{ command: 'cdk-blocks whoami --query stacks.production', description: 'Print the production stack name' },
 		],
 		aws: true,
 		handler: commands.whoami,
@@ -376,16 +376,16 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'(--profile, --output, …) before a "--". A secret value is never\n' +
 			'accepted on the command line: pipe it with --value-stdin, or omit it to be prompted.\n' +
 			'Flags: --stage <name>, --value-stdin, --region <name>, --prefix <path>, --force, --yes.\n' +
-			'"blocks secret <set|list|remove> --help" shows the flags of one subcommand.\n' +
+			'"cdk-blocks secret <set|list|remove> --help" shows the flags of one subcommand.\n' +
 			STAGE_HELP.replace('%STORE%', 'secretStore'),
 		args: [{ name: 'subcommand', description: 'set KEY | list | remove KEY', variadic: true }],
 		passthrough: true,
 		verbs: ['set', 'list', 'remove', 'rm'],
 		examples: [
-			{ command: 'blocks secret set API_KEY', description: 'Set API_KEY (prompts for the value)' },
-			{ command: 'cat key.txt | blocks secret set API_KEY --value-stdin', description: 'Set it from stdin' },
+			{ command: 'cdk-blocks secret set API_KEY', description: 'Set API_KEY (prompts for the value)' },
+			{ command: 'cat key.txt | cdk-blocks secret set API_KEY --value-stdin', description: 'Set it from stdin' },
 			{
-				command: 'blocks secret set API_KEY --stage prod',
+				command: 'cdk-blocks secret set API_KEY --stage prod',
 				description: "only for an app whose Hosting secretStore sets stage: 'prod'",
 			},
 		],
@@ -400,14 +400,14 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'Manage non-secret config values. The tokens after "config" are forwarded unchanged, except\n' +
 			'the global options (--profile, --output, …) before a "--"; put a value that starts with "-" after "--".\n' +
 			'Flags: --stage <name>, --value-stdin, --region <name>, --prefix <path>.\n' +
-			'"blocks config <set|list|remove> --help" shows the flags of one subcommand.\n' +
+			'"cdk-blocks config <set|list|remove> --help" shows the flags of one subcommand.\n' +
 			STAGE_HELP.replace('%STORE%', 'configStore'),
 		args: [{ name: 'subcommand', description: 'set KEY VALUE | list | remove KEY', variadic: true }],
 		passthrough: true,
 		verbs: ['set', 'list', 'remove', 'rm'],
 		examples: [
-			{ command: 'blocks config set FEATURE_FLAG on', description: 'Set FEATURE_FLAG' },
-			{ command: 'blocks config list', description: 'List config values' },
+			{ command: 'cdk-blocks config set FEATURE_FLAG on', description: 'Set FEATURE_FLAG' },
+			{ command: 'cdk-blocks config list', description: 'List config values' },
 		],
 		aws: true,
 		handler: commands.config,
@@ -427,8 +427,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'disable', type: 'boolean', description: 'Same as "disable"' },
 		],
 		examples: [
-			{ command: 'blocks telemetry', description: 'Show the telemetry status' },
-			{ command: 'blocks telemetry disable --global', description: 'Disable telemetry everywhere' },
+			{ command: 'cdk-blocks telemetry', description: 'Show the telemetry status' },
+			{ command: 'cdk-blocks telemetry disable --global', description: 'Disable telemetry everywhere' },
 		],
 		handler: commands.telemetry,
 	},
@@ -453,7 +453,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 				description: 'Write aws-blocks/client.js even when package.json sets "blocks.dev.generateClient": false',
 			},
 		],
-		examples: [{ command: 'blocks generate client', description: 'Write aws-blocks/client.js' }],
+		examples: [{ command: 'cdk-blocks generate client', description: 'Write aws-blocks/client.js' }],
 		handler: commands.generateClient,
 	},
 	{
@@ -464,7 +464,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'backend', description: 'Backend entry (default: aws-blocks/index.ts)' },
 			{ name: 'output', description: 'Output file (default: blocks.spec.json next to the backend)' },
 		],
-		examples: [{ command: 'blocks generate spec', description: 'Write aws-blocks/blocks.spec.json' }],
+		examples: [{ command: 'cdk-blocks generate spec', description: 'Write aws-blocks/blocks.spec.json' }],
 		handler: commands.generateSpec,
 	},
 	{
@@ -479,8 +479,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'module', type: 'string', value: 'spec', multiple: true, description: 'Module to augment' },
 		],
 		examples: [
-			{ command: 'blocks generate types', description: 'Regenerate the key types' },
-			{ command: 'blocks generate types --check', description: 'Fail when they are stale' },
+			{ command: 'cdk-blocks generate types', description: 'Regenerate the key types' },
+			{ command: 'cdk-blocks generate types --check', description: 'Fail when they are stale' },
 		],
 		handler: commands.generateTypes,
 	},
@@ -492,7 +492,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		description:
 			'Run a data block operation. The verb and the tokens after it are forwarded unchanged to the\n' +
 			'bb-data CLI of @aws-blocks/bb-data, except the global options (--profile, --output, …) before\n' +
-			'a "--". "blocks db <verb> --help" shows its options.',
+			'a "--". "cdk-blocks db <verb> --help" shows its options.',
 		args: [
 			{ name: 'verb', description: 'migrate | status | generate-types | pull', required: true },
 			{ name: 'args', description: 'Forwarded; a relative path is resolved from your directory', variadic: true },
@@ -501,11 +501,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 		verbs: ['migrate', 'status', 'generate-types', 'pull'],
 		examples: [
 			{
-				command: 'blocks db migrate aws-blocks/migrations',
+				command: 'cdk-blocks db migrate aws-blocks/migrations',
 				description: 'Apply pending migrations to the local database',
 			},
-			{ command: 'blocks db status aws-blocks/migrations', description: 'Show applied and pending migrations' },
-			{ command: 'blocks db pull', description: 'Introspect the database and write its files' },
+			{ command: 'cdk-blocks db status aws-blocks/migrations', description: 'Show applied and pending migrations' },
+			{ command: 'cdk-blocks db pull', description: 'Introspect the database and write its files' },
 		],
 		handler: commands.db,
 	},
@@ -519,7 +519,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{ name: 'options', description: '--force overwrites an existing copy', variadic: true },
 		],
 		passthrough: true,
-		examples: [{ command: 'blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' }],
+		examples: [{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' }],
 		handler: commands.vendorize,
 	},
 	{
@@ -527,7 +527,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Project',
 		summary: 'Show help for a command',
 		args: [{ name: 'command', description: 'For example "sandbox destroy"', variadic: true }],
-		examples: [{ command: 'blocks help sandbox destroy', description: 'Help for "blocks sandbox destroy"' }],
+		examples: [{ command: 'cdk-blocks help sandbox destroy', description: 'Help for "cdk-blocks sandbox destroy"' }],
 		handler: commands.help,
 	},
 ];

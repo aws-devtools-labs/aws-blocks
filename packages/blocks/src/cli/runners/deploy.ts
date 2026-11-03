@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Runs with the `tsx` loader, started by `blocks deploy`. Core reads `--wait-live`
+ * Runs with the `tsx` loader, started by `cdk-blocks deploy`. Core reads `--wait-live`
  * and `--wait-live-timeout=N` from `process.argv` after the options. After a
  * successful deploy it records the outputs core read and the target it deployed
  * with; see `last-deploy.ts`. A deploy whose `--wait-live` wait failed is
@@ -38,7 +38,7 @@ if (deployed) {
 		projectRoot,
 		'production',
 		{ ...deployed, ...(live === undefined ? {} : { live }) },
-		'blocks deploy',
+		'cdk-blocks deploy',
 		core,
 	).catch((error: unknown) => {
 		console.error(`Could not record the deploy result: ${error instanceof Error ? error.message : error}`);

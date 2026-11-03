@@ -109,10 +109,10 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
   });
 
   it('names the commands the user runs, when the caller passes them, aligned', () => {
-    const named = sandboxFailureRecoveryHint('blocks sandbox deploy', 'blocks sandbox destroy');
-    assert.match(named, /If the next `blocks sandbox deploy` reports/);
-    assert.match(named, /^ {5}blocks sandbox destroy {3}# tears/m);
-    assert.match(named, /^ {5}blocks sandbox deploy {4}# redeploy/m);
+    const named = sandboxFailureRecoveryHint('cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy');
+    assert.match(named, /If the next `cdk-blocks sandbox deploy` reports/);
+    assert.match(named, /^ {5}cdk-blocks sandbox destroy {3}# tears/m);
+    assert.match(named, /^ {5}cdk-blocks sandbox deploy {4}# redeploy/m);
     assert.doesNotMatch(named, /npm run/);
   });
 });
@@ -350,8 +350,8 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
   });
 
   it('names the command that deploys a preview, when the launcher passes it', () => {
-    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- blocks sandbox preview');
-    assert.match(warning ?? '', /Run npx --no -- blocks sandbox preview to keep it/);
+    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- cdk-blocks sandbox preview');
+    assert.match(warning ?? '', /Run npx --no -- cdk-blocks sandbox preview to keep it/);
     assert.doesNotMatch(warning ?? '', /npm run/);
   });
 

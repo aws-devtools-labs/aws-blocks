@@ -26,7 +26,7 @@ function usageLine(command: CommandSpec): string {
 		const name = arg.variadic ? `${arg.name}...` : arg.name;
 		return arg.required ? `<${name}>` : `[${name}]`;
 	});
-	const parts = ['blocks', ...command.path];
+	const parts = ['cdk-blocks', ...command.path];
 	if (!command.handler) parts.push('<command>');
 	parts.push(...args);
 	if (command.flags?.length) parts.push('[options]');
@@ -38,7 +38,7 @@ export function rootHelp(version: string): string {
 	const lines = [
 		`AWS Blocks CLI ${version}`,
 		'',
-		'Usage: blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]',
+		'Usage: cdk-blocks [global options] <command> [<subcommand>] [arguments] [-- passthrough]',
 	];
 	for (const group of GROUPS) {
 		const commands = COMMANDS.filter((command) => command.group === group && command.handler);
@@ -51,7 +51,7 @@ export function rootHelp(version: string): string {
 		...table(GLOBAL_FLAGS.map((flag) => [flagLabel(flag), flag.description])),
 		'',
 		'Exit codes: 0 success, 1 failed, 2 usage error, 130 interrupted, 143 stopped by SIGTERM.',
-		'Run "blocks help <command>" or "blocks <command> --help" for details.',
+		'Run "cdk-blocks help <command>" or "cdk-blocks <command> --help" for details.',
 	);
 	return `${lines.join('\n')}\n`;
 }
@@ -85,7 +85,7 @@ export function commandHelp(command: CommandSpec): string {
 			`Global options apply anywhere before a "--"; the other tokens after "${command.path[0]}" are forwarded unchanged.`,
 		);
 	} else {
-		lines.push('', 'Global options: see "blocks --help".');
+		lines.push('', 'Global options: see "cdk-blocks --help".');
 	}
 	return `${lines.join('\n')}\n`;
 }

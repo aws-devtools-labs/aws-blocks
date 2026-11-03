@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The run context of one `blocks` invocation: project-root detection, the
+ * The run context of one `cdk-blocks` invocation: project-root detection, the
  * environment for child processes (`--profile`, `--region`, `BLOCKS_LOG_LEVEL`),
  * the interactive/CI decision and the injectable process seams.
  */
@@ -30,7 +30,7 @@ export interface SpawnSpec {
 	/** Send the child's stdout to stderr, so that stdout carries only the CLI's JSON document. */
 	stdoutToStderr?: boolean;
 	/**
-	 * The child runs until it is stopped: `blocks dev` and `blocks sandbox` in
+	 * The child runs until it is stopped: `cdk-blocks dev` and `cdk-blocks sandbox` in
 	 * watch mode. The CLI stops it at once on a SIGTERM or SIGHUP (a supervisor,
 	 * `timeout`, a closed terminal, `kill <pid>`), whether or not the signal also
 	 * reached the child's process group: it sends one SIGTERM, which the
@@ -45,7 +45,7 @@ export interface SpawnSpec {
 	 */
 	longRunning?: boolean;
 	/**
-	 * The child is `tsx watch` (`blocks dev`). A second SIGTERM makes it SIGKILL
+	 * The child is `tsx watch` (`cdk-blocks dev`). A second SIGTERM makes it SIGKILL
 	 * its runner, which then leaves the frontend running, so the CLI never sends
 	 * it one while the runner lives: it SIGTERMs the runner, which the group
 	 * signal may have reached already (the dev server's cleanup is idempotent
@@ -80,7 +80,7 @@ export interface CliDeps {
 	stdinIsTTY: boolean;
 	/**
 	 * The environment. The CLI sets AWS_PROFILE, AWS_REGION and BLOCKS_LOG_LEVEL on it
-	 * for the run, and `blocks whoami` loads `.env.production` into it, as core's deploy does.
+	 * for the run, and `cdk-blocks whoami` loads `.env.production` into it, as core's deploy does.
 	 */
 	env: NodeJS.ProcessEnv;
 	cwd: string;
@@ -96,7 +96,7 @@ export interface CliDeps {
 	argv: string[];
 	/**
 	 * Load `@aws-blocks/core/scripts`. A seam rather than a static import, so that
-	 * `blocks --help` and usage errors do not load core, and tests can replace it.
+	 * `cdk-blocks --help` and usage errors do not load core, and tests can replace it.
 	 */
 	core(): Promise<CoreScripts>;
 }
@@ -235,7 +235,7 @@ export class Context {
 		}
 		// The Region reaches child command lines, store names and console URLs: accept only a Region code.
 		// An explicit --region is always checked; an inherited AWS_REGION only for a command that uses AWS,
-		// so a stray one does not stop local commands. Help (`--help`, `blocks help`) and --version never use it.
+		// so a stray one does not stop local commands. Help (`--help`, `cdk-blocks help`) and --version never use it.
 		if (parsed.command && parsed.command.path[0] !== 'help' && !this.globals.help && !this.globals.version) {
 			if (this.globals.region !== undefined && !REGION_PATTERN.test(this.globals.region)) {
 				throw new UsageError(

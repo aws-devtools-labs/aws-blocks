@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Command handlers of the `blocks` CLI. Each lifecycle command runs the same
+ * Command handlers of the `cdk-blocks` CLI. Each lifecycle command runs the same
  * core function, under the same runtime, as the generated npm-script wrapper
  * it replaces; see `runners/launch.ts`.
  */
@@ -86,7 +86,7 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 	 * (`BLOCKS_DEV_FAILURE_FILE`, see `DEV_STATE`). A failure reason there fails
 	 * the command (exit 1) with no `Error:` line: the runner printed that reason
 	 * itself. Otherwise a stop that the CLI made, or an exit 143 of `tsx watch`
-	 * (`blocks dev stop` while the backend is not running), succeeds, and a
+	 * (`cdk-blocks dev stop` while the backend is not running), succeeds, and a
 	 * `tsx watch` that exits 0 by itself, with no runner that stopped cleanly
 	 * under it, fails: it does when its runner dies and it watches no file.
 	 */
@@ -94,7 +94,7 @@ interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
 }
 
 /**
- * The exit code of `blocks dev`, from what its runner recorded in `failureFile`
+ * The exit code of `cdk-blocks dev`, from what its runner recorded in `failureFile`
  * (see {@link ChildRun.failureFile}); `undefined` to map `result` as for any child.
  */
 function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): number | undefined {
@@ -112,8 +112,8 @@ function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): n
 	if (result.code !== 0 || state === DEV_STATE.stopped) return undefined;
 	throw new CliError(
 		state === DEV_STATE.running
-			? 'blocks dev ended: its dev server was killed (by a signal, or out of memory); its output is above.'
-			: 'blocks dev ended: its dev server did not start; its output is above.',
+			? 'cdk-blocks dev ended: its dev server was killed (by a signal, or out of memory); its output is above.'
+			: 'cdk-blocks dev ended: its dev server did not start; its output is above.',
 		{ where: run.where ?? [`project: ${run.cwd}`], runner: true },
 	);
 }
@@ -121,7 +121,7 @@ function devExitCode(run: ChildRun, failureFile: string, result: ChildResult): n
 /**
  * A child command line, safe to echo with --verbose: the password in a URL's
  * userinfo (`postgres://user:***@host`) and the value of `--url` are masked,
- * because `blocks db … --url <connection-string>` forwards credentials.
+ * because `cdk-blocks db … --url <connection-string>` forwards credentials.
  */
 export function redactArgs(args: readonly string[]): string[] {
 	return args.map((arg, i) => {
@@ -143,7 +143,7 @@ function awsOptions(ctx: Context): string[] {
 }
 
 /**
- * The command line that re-runs `blocks <words>` against the same target, for
+ * The command line that re-runs `cdk-blocks <words>` against the same target, for
  * core's guidance ("Then re-run …"): with the -C, --profile and --region of this run.
  */
 function invocation(ctx: Context, ...words: string[]): string {
@@ -185,8 +185,8 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 		if (code !== undefined) return code;
 	}
 	// A child that is not long-running and exited 0 finished its work before the
-	// Ctrl-C reached it (`blocks db migrate` applied every migration): report that.
-	// A long-running child (`blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
+	// Ctrl-C reached it (`cdk-blocks db migrate` applied every migration): report that.
+	// A long-running child (`cdk-blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
 	const completed = result.code === 0 && !run.longRunning;
 	const code = result.interrupted && !completed ? ExitCode.Interrupted : exitCodeForChild(result.code, result.signal);
 	if (code === ExitCode.Interrupted) {
@@ -436,7 +436,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 	try {
 		return await runRunner(ctx, {
 			runner: 'dev-server',
-			operation: 'blocks dev',
+			operation: 'cdk-blocks dev',
 			watch: true,
 			env: { ...devServerEnv(ctx.env, { backendPath, ...devConfig }), [DEV_FAILURE_FILE_ENV]: failureFile },
 			longRunning: true,
@@ -469,7 +469,7 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 		const port = resolveDevPort(root, input.flags);
 		for (const warning of unknownDevConfigWarnings(root)) ctx.out.warn(warning);
 		ports = [port];
-		// Without --port, a server started with `blocks dev --port N` is still the one to stop when it is
+		// Without --port, a server started with `cdk-blocks dev --port N` is still the one to stop when it is
 		// the only one recorded. With several, the user picks.
 		if (input.flags.port === undefined && !recorded.includes(port)) {
 			if (recorded.length === 1) {
@@ -504,12 +504,12 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	return results.some((r) => !r.alreadyStopped && !r.portFree) ? ExitCode.Failure : ExitCode.Ok;
 }
 
-/** How `blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
+/** How `cdk-blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
 type SandboxMode = 'watch' | 'deploy' | 'preview';
 
 async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 	const deployOnly = mode !== 'watch';
-	const operation = deployOnly ? `blocks sandbox ${mode}` : 'blocks sandbox';
+	const operation = deployOnly ? `cdk-blocks sandbox ${mode}` : 'cdk-blocks sandbox';
 	const root = ctx.requireRoot();
 	const backendPath = requireFile(join(root, 'aws-blocks', 'index.cdk.ts'), 'the CDK entry');
 	const config = resolveDevConfig(root);
@@ -519,7 +519,7 @@ async function startSandbox(ctx: Context, mode: SandboxMode): Promise<number> {
 	const { source: _source, ...devConfig } = config;
 	const tsx = resolveTsxCli(root);
 	// startSandbox runs its dev server from one shell string. It is the dev server
-	// runner under `tsx watch`, with the same options as `blocks dev`.
+	// runner under `tsx watch`, with the same options as `cdk-blocks dev`.
 	const devCommand = [process.execPath, tsx, 'watch', runnerPath('dev-server')]
 		.map((word) => shellQuote(word))
 		.join(' ');
@@ -591,7 +591,7 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 	if (declined !== undefined) return declined;
 	const code = await runRunner(ctx, {
 		runner: 'sandbox-destroy',
-		operation: 'blocks sandbox destroy',
+		operation: 'cdk-blocks sandbox destroy',
 		conditions: 'cdk',
 		options: { backendPath, invocation: invocation(ctx, 'sandbox', 'destroy') },
 		where,
@@ -718,7 +718,7 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	try {
 		code = await runRunner(ctx, {
 			runner: 'deploy',
-			operation: 'blocks deploy',
+			operation: 'cdk-blocks deploy',
 			options: { cdkAppPath, projectRoot: root, invocation: invocation(ctx, 'deploy') },
 			args,
 			where: [`stack: ${stack}`, label, `project: ${root}`],
@@ -726,9 +726,9 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	} catch (error) {
 		// The deploy succeeded, and only --wait-live failed: report the result, then fail.
 		if (!(error instanceof CliError) || readLastDeploy(root, 'production')?.live !== false) throw error;
-		emitDeployResult(ctx, root, 'production', 'blocks deploy');
+		emitDeployResult(ctx, root, 'production', 'cdk-blocks deploy');
 		throw new CliError(
-			'blocks deploy deployed the stack, but --wait-live could not confirm that the new build is live; the output above says why.',
+			'cdk-blocks deploy deployed the stack, but --wait-live could not confirm that the new build is live; the output above says why.',
 			{ where: [`stack: ${stack}`, label, `project: ${root}`], hint: 'check the frontend, or re-run with a longer --wait-live' },
 		);
 	}
@@ -738,10 +738,10 @@ export async function deploy(ctx: Context, input: CommandInput): Promise<number>
 	if (deployed && deployed !== stack) {
 		ctx.out.error(
 			`Warning: CDK deployed the stack ${deployed}, not ${stack}, which .blocks/config.json names.\n` +
-				`  blocks destroy and blocks whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
+				`  cdk-blocks destroy and cdk-blocks whoami use ${stack}; set "stackId" in .blocks/config.json so that <stackId>-prod is ${deployed}.\n`,
 		);
 	}
-	emitDeployResult(ctx, root, 'production', 'blocks deploy');
+	emitDeployResult(ctx, root, 'production', 'cdk-blocks deploy');
 	return code;
 }
 
@@ -757,7 +757,7 @@ export async function destroy(ctx: Context): Promise<number> {
 	if (declined !== undefined) return declined;
 	const code = await runRunner(ctx, {
 		runner: 'destroy',
-		operation: 'blocks destroy',
+		operation: 'cdk-blocks destroy',
 		options: { cdkAppPath, projectRoot: root, stackName: stack, invocation: invocation(ctx, 'destroy') },
 		where,
 	});
@@ -766,12 +766,12 @@ export async function destroy(ctx: Context): Promise<number> {
 }
 
 /**
- * The identity and Region that `blocks deploy` uses. Like core's deploy, it
+ * The identity and Region that `cdk-blocks deploy` uses. Like core's deploy, it
  * loads `.env.production` into the environment of this process (an exported
  * variable wins): the credential chain of the AWS SDK reads `process.env`, so
  * a copy would not reach AWS_PROFILE, AWS_CONFIG_FILE, AWS_SHARED_CREDENTIALS_FILE
  * or the web-identity variables. When `.env.local` (the sandbox's env file)
- * sets an AWS variable to another value, it warns that `blocks sandbox` can
+ * sets an AWS variable to another value, it warns that `cdk-blocks sandbox` can
  * use another identity or Region.
  */
 export async function whoami(ctx: Context): Promise<number> {
@@ -786,7 +786,7 @@ export async function whoami(ctx: Context): Promise<number> {
 			.sort();
 		if (differ.length > 0) {
 			ctx.out.warn(
-				`${STAGE_ENV_FILES.sandbox} sets ${differ.join(', ')} unlike ${STAGE_ENV_FILES.production}, so "blocks sandbox" can use another identity or Region than this one, which "blocks deploy" uses.`,
+				`${STAGE_ENV_FILES.sandbox} sets ${differ.join(', ')} unlike ${STAGE_ENV_FILES.production}, so "cdk-blocks sandbox" can use another identity or Region than this one, which "cdk-blocks deploy" uses.`,
 			);
 		}
 	}
@@ -837,7 +837,7 @@ export async function whoami(ctx: Context): Promise<number> {
 		`Identity:    ${result.arn ?? 'unknown'}`,
 		`Credentials: ${result.credentials}`,
 		`Region:      ${region}`,
-		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "blocks sandbox")' : '(not in an AWS Blocks app)')}`,
+		`Sandbox:     ${sandboxName ?? (root ? '(created by the first "cdk-blocks sandbox")' : '(not in an AWS Blocks app)')}`,
 		`Production:  ${production ?? noProduction}`,
 	].join('\n');
 	ctx.out.result(result, text);
@@ -875,10 +875,10 @@ function valueCliOptions(ctx: Context): { interactive: boolean; yes: boolean } {
 	return { interactive: !ctx.globals.noInput && !isCi(ctx.env), yes: ctx.globals.yes };
 }
 
-/** A bare `blocks secret` or `blocks config` is a usage error that points to its help, as a bare `blocks db` is. */
+/** A bare `cdk-blocks secret` or `cdk-blocks config` is a usage error that points to its help, as a bare `cdk-blocks db` is. */
 function requireValueVerb(name: 'secret' | 'config', input: CommandInput): void {
 	if (input.flags.help !== true && input.passthrough.length === 0) {
-		throw new UsageError(`"blocks ${name}" needs a verb: set, list or remove.`, { hint: blocksCommand(name, '--help') });
+		throw new UsageError(`"cdk-blocks ${name}" needs a verb: set, list or remove.`, { hint: blocksCommand(name, '--help') });
 	}
 }
 
@@ -923,7 +923,7 @@ export async function telemetry(ctx: Context, input: CommandInput): Promise<numb
 	// Core reads the project setting from the working directory: the app, or the -C directory outside one.
 	ctx.deps.chdir(root ?? ctx.startDir);
 	const core = await ctx.core();
-	const argv = ['node', 'blocks', `--${action}`, ...(global ? ['--global'] : [])];
+	const argv = ['node', 'cdk-blocks', `--${action}`, ...(global ? ['--global'] : [])];
 	return inProcess(ctx, () => core.telemetry({ argv }));
 }
 
@@ -941,12 +941,12 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	const output = outputArg ? resolve(ctx.startDir, outputArg) : join(root, 'aws-blocks', 'client.js');
 	if (app && output === join(app, 'aws-blocks', 'client.js') && input.flags.force !== true && keepsOwnClient(app)) {
 		throw new UsageError(
-			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "blocks generate client" would replace it with the generic client.',
+			'this app generates its own aws-blocks/client.js (package.json "blocks.dev.generateClient" is false), and "cdk-blocks generate client" would replace it with the generic client.',
 			{ where: [`project: ${app}`], hint: `npm run blocks:generate-client, or ${BLOCKS_COMMAND} generate client --force` },
 		);
 	}
 	return runChild(ctx, {
-		operation: 'blocks generate client',
+		operation: 'cdk-blocks generate client',
 		tool: 'blocks-generate-client',
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
@@ -963,7 +963,7 @@ export function generateSpec(ctx: Context, input: CommandInput): Promise<number>
 	requireFile(backendPath, 'the backend entry');
 	return runRunner(ctx, {
 		runner: 'generate-spec',
-		operation: 'blocks generate spec',
+		operation: 'cdk-blocks generate spec',
 		// Its own `❌` line says why it failed, as blocks-generate-client's does.
 		tool: 'blocks-generate-spec',
 		options: { backendPath, outputPath },
@@ -1050,7 +1050,7 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const passthrough = input.passthrough.filter((_, i) => i !== dashes);
 	const [verb] = passthrough;
 	if (verb === undefined) {
-		throw new UsageError('"blocks db" needs a verb: migrate, status, generate-types or pull.', {
+		throw new UsageError('"cdk-blocks db" needs a verb: migrate, status, generate-types or pull.', {
 			hint: blocksCommand('db', '--help'),
 		});
 	}
@@ -1064,7 +1064,7 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const help = input.flags.help === true;
 	if (verb === 'pull' && !help && !ctx.interactive) {
 		throw new UsageError(
-			'"blocks db pull" asks for the database and its connection string, and this run cannot prompt (no TTY, --no-input or CI).',
+			'"cdk-blocks db pull" asks for the database and its connection string, and this run cannot prompt (no TTY, --no-input or CI).',
 			{ hint: `run "${BLOCKS_COMMAND} db pull" in a terminal` },
 		);
 	}
@@ -1073,13 +1073,13 @@ export async function db(ctx: Context, input: CommandInput): Promise<number> {
 	const cli = resolvePackageBin(root, '@aws-blocks/bb-data', 'bb-data');
 	if (!cli) throw new CliError('cannot find the bb-data CLI of @aws-blocks/bb-data.', { hint: 'npm install' });
 	return runChild(ctx, {
-		operation: `blocks db ${verb}`,
+		operation: `cdk-blocks db ${verb}`,
 		tool: 'bb-data',
 		command: process.execPath,
 		args: [cli, ...(ctx.startDir === root ? passthrough : dbArgsFrom(ctx.startDir, passthrough))],
 		cwd: root,
 		// bb-data's verb help names the command that runs it.
-		env: { BB_DATA_COMMAND: 'blocks db' },
+		env: { BB_DATA_COMMAND: 'cdk-blocks db' },
 	});
 }
 
@@ -1114,22 +1114,22 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 	const tokens = input.passthrough.filter((token) => token !== '--');
 	const option = tokens.find((token) => token.startsWith('-') && token !== '--force');
 	if (option !== undefined) {
-		throw new UsageError(`unknown option "${option}" for "blocks vendorize"; it takes only --force.`, {
+		throw new UsageError(`unknown option "${option}" for "cdk-blocks vendorize"; it takes only --force.`, {
 			hint: blocksCommand('vendorize', '--help'),
 		});
 	}
 	const packages = tokens.filter((token) => !token.startsWith('-'));
 	if (packages.length === 0) {
-		throw new UsageError('"blocks vendorize" needs the <package> argument.', { hint: blocksCommand('vendorize', '--help') });
+		throw new UsageError('"cdk-blocks vendorize" needs the <package> argument.', { hint: blocksCommand('vendorize', '--help') });
 	}
 	if (packages.length > 1) {
-		throw new UsageError(`unexpected argument "${packages[1]}" for "blocks vendorize".`, {
+		throw new UsageError(`unexpected argument "${packages[1]}" for "cdk-blocks vendorize".`, {
 			hint: blocksCommand('vendorize', '--help'),
 		});
 	}
 	const root = ctx.requireRoot();
 	return runChild(ctx, {
-		operation: 'blocks vendorize',
+		operation: 'cdk-blocks vendorize',
 		tool: 'blocks-vendorize',
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'vendorize.js'), ...input.passthrough],
@@ -1139,12 +1139,12 @@ export function vendorize(ctx: Context, input: CommandInput): Promise<number> {
 
 export interface HelpTarget {
 	command: CommandSpec;
-	/** The tokens after the command, for a passthrough command: `migrate` in `blocks help db migrate`. */
+	/** The tokens after the command, for a passthrough command: `migrate` in `cdk-blocks help db migrate`. */
 	rest: string[];
 }
 
 /**
- * Resolve `blocks help <tokens>` to a command, through aliases. Tokens after a
+ * Resolve `cdk-blocks help <tokens>` to a command, through aliases. Tokens after a
  * passthrough command are its own subcommands; after any other command they
  * are an unknown command.
  */
@@ -1173,14 +1173,14 @@ export function helpTarget(tokens: readonly string[]): HelpTarget {
  */
 export function verbHelp(ctx: Context, command: CommandSpec, verb: string): Promise<number> {
 	if (!command.handler || !command.verbs?.includes(verb)) {
-		throw new Error(`"blocks ${command.path.join(' ')}" has no verb "${verb}".`);
+		throw new Error(`"cdk-blocks ${command.path.join(' ')}" has no verb "${verb}".`);
 	}
 	return command.handler(ctx, { flags: { help: true }, positionals: [], passthrough: [verb, '--help'] });
 }
 
 /**
- * `blocks help [command...]`. For a verb of a passthrough command
- * (`blocks help db migrate`) it shows the tool's own help for that verb; any
+ * `cdk-blocks help [command...]`. For a verb of a passthrough command
+ * (`cdk-blocks help db migrate`) it shows the tool's own help for that verb; any
  * further tokens are ignored and never reach the tool.
  */
 export async function help(ctx: Context, input: CommandInput): Promise<number> {

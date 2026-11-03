@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Output of the `blocks` CLI: results on stdout; progress, warnings and errors
+ * Output of the `cdk-blocks` CLI: results on stdout; progress, warnings and errors
  * on stderr. With `--output json`, stdout carries exactly one JSON document.
  * Colour is used only on a TTY, never when `NO_COLOR` is set or `TERM=dumb`.
  */

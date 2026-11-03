@@ -55,11 +55,11 @@ export interface SandboxOptions {
    * it falls back to a full deploy.
    */
   preview?: boolean;
-  /** How the user runs this command, in the guidance (for example `blocks sandbox`). Default: `npm run sandbox`. */
+  /** How the user runs this command, in the guidance (for example `cdk-blocks sandbox`). Default: `npm run sandbox`. */
   invocation?: string;
-  /** How the user destroys the sandbox, in the guidance (for example `blocks sandbox destroy`). Default: `npm run sandbox:destroy`. */
+  /** How the user destroys the sandbox, in the guidance (for example `cdk-blocks sandbox destroy`). Default: `npm run sandbox:destroy`. */
   destroyInvocation?: string;
-  /** How the user deploys a hosted preview, in the guidance (for example `blocks sandbox preview`). Default: `npm run sandbox:preview`. */
+  /** How the user deploys a hosted preview, in the guidance (for example `cdk-blocks sandbox preview`). Default: `npm run sandbox:preview`. */
   previewInvocation?: string;
   /**
    * Called with the deployed sandbox stack's outputs after the first deploy, in

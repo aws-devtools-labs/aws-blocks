@@ -28,8 +28,8 @@ function stopAtForceWarning(): void {
 void describe('runValueCli() — kind fixed by wrapper', () => {
 	void it('requires a key for set (usage shows the label)', async () => {
 		await assert.rejects(
-			runValueCli(['set'], { kind: 'secret', label: 'blocks secret' }),
-			/Usage: blocks secret set/,
+			runValueCli(['set'], { kind: 'secret', label: 'cdk-blocks secret' }),
+			/Usage: cdk-blocks secret set/,
 		);
 	});
 
@@ -111,7 +111,7 @@ void describe('runValueCli() — kind fixed by wrapper', () => {
 			['remove', 'K', '-q'],
 		]) {
 			await assert.rejects(
-				runValueCli(argv, { kind: 'config', label: 'blocks config' }),
+				runValueCli(argv, { kind: 'config', label: 'cdk-blocks config' }),
 				(e: unknown) => e instanceof ValueCliUsageError && /^Unknown option "-/.test(e.message),
 				argv.join(' '),
 			);
@@ -120,14 +120,14 @@ void describe('runValueCli() — kind fixed by wrapper', () => {
 
 	void it('refuses an extra argument to list or remove before any store call', async () => {
 		await assert.rejects(
-			runValueCli(['list', 'extra'], { kind: 'secret', label: 'blocks secret' }),
+			runValueCli(['list', 'extra'], { kind: 'secret', label: 'cdk-blocks secret' }),
 			(e: unknown) =>
-				e instanceof ValueCliUsageError && /"extra": blocks secret list takes no arguments/.test(e.message),
+				e instanceof ValueCliUsageError && /"extra": cdk-blocks secret list takes no arguments/.test(e.message),
 		);
 		await assert.rejects(
-			runValueCli(['remove', 'K', 'extra'], { kind: 'config', label: 'blocks config' }),
+			runValueCli(['remove', 'K', 'extra'], { kind: 'config', label: 'cdk-blocks config' }),
 			(e: unknown) =>
-				e instanceof ValueCliUsageError && /"extra": blocks config remove takes one KEY/.test(e.message),
+				e instanceof ValueCliUsageError && /"extra": cdk-blocks config remove takes one KEY/.test(e.message),
 		);
 	});
 
@@ -349,10 +349,10 @@ void describe('runValueCli() — list', () => {
 	void it('suggests an add command that the kind accepts when nothing is set', async () => {
 		fakeSecretsManager(() => ({ SecretList: [] }));
 		const log = mock.method(console, 'log', () => {});
-		await runValueCli(['list'], { kind: 'secret', label: 'blocks secret', prefix: 'blocks/secrets' });
+		await runValueCli(['list'], { kind: 'secret', label: 'cdk-blocks secret', prefix: 'blocks/secrets' });
 		assert.strictEqual(
 			log.mock.calls.at(-1)?.arguments[0],
-			'No secret values set. Add one: blocks secret set <KEY>',
+			'No secret values set. Add one: cdk-blocks secret set <KEY>',
 		);
 	});
 });
@@ -383,10 +383,10 @@ void describe('runValueCli() — usage errors', () => {
 			);
 		}
 		await assert.rejects(
-			runValueCli([], { kind: 'secret', label: 'blocks secret' }),
+			runValueCli([], { kind: 'secret', label: 'cdk-blocks secret' }),
 			(e: unknown) =>
 				e instanceof ValueCliUsageError &&
-				e.message === 'blocks secret needs a subcommand: set, list or remove.',
+				e.message === 'cdk-blocks secret needs a subcommand: set, list or remove.',
 		);
 	});
 });

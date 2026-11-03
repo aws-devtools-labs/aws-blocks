@@ -86,7 +86,7 @@ const worker = spawn(process.execPath, [...nodeArgs, workerPath, foundationPath,
 	cwd: process.cwd(),
 });
 
-// A signal sent to this process alone (`kill <pid>`, a supervisor, the `blocks` CLI
+// A signal sent to this process alone (`kill <pid>`, a supervisor, the `cdk-blocks` CLI
 // forwarding one) goes on to the worker, and this process ends after it, so the
 // worker never outlives it and writes the client after a reported failure.
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;

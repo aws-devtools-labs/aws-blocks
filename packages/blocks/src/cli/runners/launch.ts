@@ -30,7 +30,7 @@ import { CliError } from '../errors.js';
 export const DEV_OPTIONS_ENV = 'BLOCKS_DEV_OPTIONS';
 
 /**
- * The environment variable naming the file in which `blocks dev` learns how its dev server ended.
+ * The environment variable naming the file in which `cdk-blocks dev` learns how its dev server ended.
  * The dev server runner writes {@link DEV_STATE}`.running` when it starts and
  * {@link DEV_STATE}`.stopped` when it exits after a start or a reload; a fatal startup
  * failure writes its reason instead (the runner's `exitWithError`, core's dev server).
@@ -46,7 +46,7 @@ export const DEV_STATE = { running: '[blocks dev: running]', stopped: '[blocks d
 
 /**
  * The environment variable, `1`, that tells the dev server it runs under `tsx watch`
- * (in `blocks dev`, and in the sandbox's dev command), so a failed first start ends
+ * (in `cdk-blocks dev`, and in the sandbox's dev command), so a failed first start ends
  * that `tsx watch` too. Core reads it as `BLOCKS_DEV_UNDER_WATCH`: on Windows the
  * dev server cannot read its parent's command line to tell.
  */

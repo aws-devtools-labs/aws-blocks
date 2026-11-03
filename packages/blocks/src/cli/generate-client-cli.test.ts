@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `blocks generate client` runs `blocks-generate-client`. In an app that does not
+ * `cdk-blocks generate client` runs `blocks-generate-client`. In an app that does not
  * install `tsx` itself (pnpm, or npm without hoisting), it loads the worker with
  * the `tsx` that `@aws-blocks/blocks` depends on.
  */

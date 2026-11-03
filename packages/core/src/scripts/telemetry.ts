@@ -14,7 +14,7 @@ interface ParsedFlags {
 }
 
 function printUsage(): void {
-  console.log(`Usage: npx blocks telemetry [status|enable|disable] [--global]
+  console.log(`Usage: npx --no -- cdk-blocks telemetry [status|enable|disable] [--global]
        npx blocks-telemetry [options]   (the older form; same options as flags)
 
 Options:

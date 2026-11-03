@@ -111,10 +111,10 @@ test('pull --help states the exit code that pull without a terminal really has',
     const run = runCli(['pull'], dir, env);
     assert.strictEqual(run.status, 1);
     assert.match(runCli(['pull', '--help'], dir, env).stdout, new RegExp(`exits ${run.status} without one\\.`));
-    // `blocks db pull` refuses before bb-data runs, with exit 2: blocks' own test checks that code.
+    // `cdk-blocks db pull` refuses before bb-data runs, with exit 2: blocks' own test checks that code.
     assert.match(
-      runCli(['pull', '--help'], dir, { BB_DATA_COMMAND: 'blocks db' }).stdout,
-      /Usage: blocks db pull[\s\S]*exits 2 without one \(or with --no-input or CI\)\./,
+      runCli(['pull', '--help'], dir, { BB_DATA_COMMAND: 'cdk-blocks db' }).stdout,
+      /Usage: cdk-blocks db pull[\s\S]*exits 2 without one \(or with --no-input or CI\)\./,
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -155,9 +155,9 @@ test('the verb usage names the command in BB_DATA_COMMAND, which runs this CLI',
   const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
   try {
     for (const verb of ['migrate', 'status', 'generate-types', 'pull']) {
-      const r = runCli([verb, '--help'], dir, { BB_DATA_COMMAND: 'blocks db' });
+      const r = runCli([verb, '--help'], dir, { BB_DATA_COMMAND: 'cdk-blocks db' });
       assert.strictEqual(r.status, 0, r.stderr);
-      assert.match(r.stdout, new RegExp(`Usage: blocks db ${verb} `), verb);
+      assert.match(r.stdout, new RegExp(`Usage: cdk-blocks db ${verb} `), verb);
       assert.doesNotMatch(r.stdout, /(?<!\.)bb-data /, verb);
     }
     assert.match(runCli(['status', '--help'], dir, { BB_DATA_COMMAND: '' }).stdout, /Usage: bb-data status /);

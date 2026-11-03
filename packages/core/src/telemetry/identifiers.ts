@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 const FIRST_RUN_NOTICE = `
 AWS Blocks collects anonymous usage data to improve the product.
 No customer content or PII is collected.
-To disable: npx blocks telemetry disable (or export AWS_BLOCKS_DISABLE_TELEMETRY=1)
+To disable: npx --no -- cdk-blocks telemetry disable (or export AWS_BLOCKS_DISABLE_TELEMETRY=1)
 The env var accepts 1, true, or yes (case-insensitive).
 `;
 

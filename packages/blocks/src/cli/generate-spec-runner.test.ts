@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The bytes each stream carries when `blocks generate spec` runs its runner:
+ * The bytes each stream carries when `cdk-blocks generate spec` runs its runner:
  * progress and detail follow `BLOCKS_LOG_STREAM`, and the `✅` result line stays
  * on stdout. The runner runs with the `tsx` loader against a JavaScript backend,
  * as the CLI starts it.
@@ -59,7 +59,7 @@ function runSpec(env: NodeJS.ProcessEnv) {
 	}
 }
 
-describe('blocks generate spec output streams', () => {
+describe('cdk-blocks generate spec output streams', () => {
 	it('unset: the legacy output is unchanged (everything on stdout)', () => {
 		const { stdout, stderr, header, details, result } = runSpec({});
 		assert.strictEqual(stdout, header + details + result);
@@ -82,7 +82,7 @@ describe('blocks generate spec output streams', () => {
 	});
 });
 
-describe('blocks generate spec failure', () => {
+describe('cdk-blocks generate spec failure', () => {
 	it('reports a backend that does not load in one line and exits 1, with the stack only at debug', () => {
 		const dir = mkdtempSync(join(tmpdir(), 'blocks-spec-runner-'));
 		try {

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-/** The `blocks` CLI entry: parse, build the context, run the handler, map errors to exit codes. */
+/** The `cdk-blocks` CLI entry: parse, build the context, run the handler, map errors to exit codes. */
 
 import { verbHelp } from './commands.js';
 import { blocksVersion, type CliDeps, Context, processDeps } from './context.js';

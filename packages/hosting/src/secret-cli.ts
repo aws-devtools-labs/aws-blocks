@@ -39,7 +39,7 @@ export interface ValueCliOptions {
 	stage?: string;
 	/** AWS region to write/read in. Defaults to the SDK's resolved region (`AWS_REGION`, profile, …). */
 	region?: string;
-	/** Command label shown in usage text (e.g. `'blocks secret'`, `'hosting-config'`). */
+	/** Command label shown in usage text (e.g. `'cdk-blocks secret'`, `'hosting-config'`). */
 	label?: string;
 	/**
 	 * Whether the CLI may prompt. `false` (for example `--no-input` or `CI` in the
@@ -54,7 +54,7 @@ export interface ValueCliOptions {
 /**
  * A usage error of the secret/config CLI: a missing argument, an unknown
  * subcommand, a missing flag value, or input or a confirmation the run cannot
- * give. Callers map it to their usage exit code (the `blocks` CLI exits 2).
+ * give. Callers map it to their usage exit code (the `cdk-blocks` CLI exits 2).
  */
 export class ValueCliUsageError extends Error {
 	constructor(message: string) {

@@ -105,9 +105,9 @@ describe('CDK bootstrap check', () => {
 	}
 
 	it('names the command the user ran, when the caller passes it', async () => {
-		const message = await failure(reader(NOT_FOUND).read, { invocation: 'blocks deploy --profile starter' });
-		assert.match(message, /so `blocks deploy --profile starter` cannot deploy there/);
-		assert.match(message, /Then re-run `blocks deploy --profile starter`\.$/);
+		const message = await failure(reader(NOT_FOUND).read, { invocation: 'cdk-blocks deploy --profile starter' });
+		assert.match(message, /so `cdk-blocks deploy --profile starter` cannot deploy there/);
+		assert.match(message, /Then re-run `cdk-blocks deploy --profile starter`\.$/);
 		assert.doesNotMatch(message, /npm run/);
 	});
 
@@ -179,7 +179,7 @@ describe('CDK bootstrap check', () => {
 describe('cdkBootstrapFailure', () => {
 	it('passes the profile the deploy used to the printed bootstrap command', async () => {
 		const message = await cdkBootstrapFailure({
-			invocation: 'blocks deploy --profile starter',
+			invocation: 'cdk-blocks deploy --profile starter',
 			account: '123456789012',
 			region: 'eu-south-2',
 			profile: 'starter',

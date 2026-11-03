@@ -86,7 +86,7 @@ describe('parseArgv', () => {
 	});
 
 	it('rejects an unknown flag with a suggestion', () => {
-		usageError(['destroy', '--yse'], /unknown option "--yse" for "blocks destroy"\. Did you mean "--yes"\?/);
+		usageError(['destroy', '--yse'], /unknown option "--yse" for "cdk-blocks destroy"\. Did you mean "--yes"\?/);
 		usageError(['--prfile', 'x', 'deploy'], /unknown option "--prfile"\. Did you mean "--profile"\?/);
 		usageError(['dev', '-z'], /unknown option "-z"/);
 	});
@@ -98,7 +98,7 @@ describe('parseArgv', () => {
 		usageError(['--output', 'yaml', 'whoami'], /--output must be "text" or "json"/);
 		usageError(
 			['dev', '--output', 'json'],
-			/^--output json is not supported for "blocks dev": it prints text only\.$/,
+			/^--output json is not supported for "cdk-blocks dev": it prints text only\.$/,
 		);
 	});
 
@@ -194,10 +194,10 @@ describe('parseArgv', () => {
 		const db = parseArgv(['db', 'migrate', 'dir', '--stage', 'prod', '--debug', '--url=postgres://x', '-x']);
 		assert.deepStrictEqual(db.passthrough, ['migrate', 'dir', '--stage', 'prod', '--url=postgres://x', '-x']);
 		assert.strictEqual(db.globals.debug, true);
-		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "blocks secret"/);
-		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "blocks config"/);
-		usageError(['telemetry', '--output', 'json'], /^--output json is not supported for "blocks telemetry"/);
-		usageError(['--output', 'json', 'telemetry'], /^--output json is not supported for "blocks telemetry"/);
+		usageError(['secret', 'list', '--output', 'json'], /^--output json is not supported for "cdk-blocks secret"/);
+		usageError(['config', 'list', '--query', 'keys'], /^--query is not supported for "cdk-blocks config"/);
+		usageError(['telemetry', '--output', 'json'], /^--output json is not supported for "cdk-blocks telemetry"/);
+		usageError(['--output', 'json', 'telemetry'], /^--output json is not supported for "cdk-blocks telemetry"/);
 		usageError(['db', 'status', '--profile'], /option --profile needs a value/);
 	});
 
@@ -227,7 +227,7 @@ describe('parseArgv', () => {
 		// A command option in the middle: name the subcommand, never suggest what was just rejected.
 		usageError(
 			['dev', '--port', '41401', 'stop'],
-			/^"stop" must follow "blocks dev" directly: put the options of "blocks dev stop" after the whole command\.$/,
+			/^"stop" must follow "cdk-blocks dev" directly: put the options of "cdk-blocks dev stop" after the whole command\.$/,
 		);
 		// Its help names the same subcommand as the run.
 		const stopHelp = parseArgv(['dev', '--port', '41401', 'stop', '-h']);
@@ -296,7 +296,7 @@ describe('usage errors through main', () => {
 		const run = await runCli(['deplyo'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 2);
 		assert.strictEqual(run.stdout, '');
-		assert.match(run.stderr, /^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npx --no -- blocks --help\n$/);
+		assert.match(run.stderr, /^Error: unknown command "deplyo"\. Did you mean "deploy"\?\nTry: npx --no -- cdk-blocks --help\n$/);
 	});
 
 	it('exits 2 for a command group without a subcommand', async () => {

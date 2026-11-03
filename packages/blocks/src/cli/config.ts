@@ -91,7 +91,7 @@ function parseText(value: unknown, where: string): string | undefined {
 	return value;
 }
 
-/** The `blocks.dev` keys that `blocks dev` reads, named in the unknown-key warning. */
+/** The `blocks.dev` keys that `cdk-blocks dev` reads, named in the unknown-key warning. */
 const DEV_CONFIG_KEYS = ['port', 'host', 'frontendCommand', 'frontendPort', 'frontend'];
 /** `blocks.dev` keys that core reads (the Amplify overlay's client-generation opt-out): accepted silently. */
 const CORE_DEV_CONFIG_KEYS = ['generateClient'];
@@ -129,7 +129,7 @@ export function unknownDevConfigWarnings(root: string): string[] {
 
 /**
  * The port of the app's dev server: `--port`, then `package.json#blocks.dev.port`, then 3000. Only the
- * port is read, so `blocks dev stop` works while another `blocks.dev` setting is invalid.
+ * port is read, so `cdk-blocks dev stop` works while another `blocks.dev` setting is invalid.
  */
 export function resolveDevPort(root: string, flags: FlagValues = {}): number {
 	return (
@@ -229,6 +229,6 @@ export function frontendPortWarning(config: ResolvedDevConfig): string | undefin
 	return (
 		`the frontend command ${JSON.stringify(config.frontendCommand)} does not contain the frontend port ${port}, ` +
 		'which the dev server proxies to; if the frontend listens on another port, the app answers 502. ' +
-		'Put the port in the command, or drop "frontendCommand" so blocks dev detects next or vite and starts it on that port.'
+		'Put the port in the command, or drop "frontendCommand" so cdk-blocks dev detects next or vite and starts it on that port.'
 	);
 }
