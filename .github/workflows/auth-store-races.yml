@@ -44,8 +44,10 @@ jobs:
 
       - run: npm ci --ignore-scripts
 
-      - name: Build auth-common and core
-        run: npm run build --workspace=@aws-blocks/core --workspace=@aws-blocks/auth-common
+      # core imports @aws-blocks/hosting and @aws-blocks/pipeline, so build them first
+      # (npm runs the workspaces in the root package.json order).
+      - name: Build auth-common, core and core's dependencies
+        run: npm run build --workspace=@aws-blocks/hosting --workspace=@aws-blocks/pipeline --workspace=@aws-blocks/core --workspace=@aws-blocks/auth-common
 
       - name: Run every interleaving
         working-directory: packages/auth-common
