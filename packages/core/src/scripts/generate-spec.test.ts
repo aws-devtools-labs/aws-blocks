@@ -97,6 +97,45 @@ describe('generateSpec — @blocksSkipCodegen', () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	it('drops tagged methods inside an auth.protect() namespace, in `public` and `methods` alike', async () => {
+		const dir = join(tmpdir(), `blocks-spec-test-${Date.now()}-protect`);
+		mkdirSync(dir, { recursive: true });
+		writeTsconfig(dir);
+
+		// A stand-in for bb-auth's protect(): one ApiNamespace over both handler sets.
+		writeFileSync(join(dir, 'index.js'), `
+			import { ApiNamespace } from ${JSON.stringify(builtApiUrl)};
+
+			const auth = {
+				protect: (scope, name, h) =>
+					new ApiNamespace(scope, name, (context) => ({ ...h.public(context), ...h.methods(context, {}) })),
+			};
+
+			export const api = auth.protect(null, 'api', {
+				public: () => ({
+					async ping() { return { ok: true }; },
+					/** @blocksSkipCodegen */
+					async getLastCode() { return null; },
+				}),
+				methods(context, user) {
+					return {
+						async whoAmI() { return user; },
+						/** @blocksSkipCodegen */
+						async debugDump() { return null; },
+					};
+				},
+			});
+		`);
+
+		try {
+			const doc = await generateSpec(join(dir, 'index.js'));
+			const methodNames = doc.methods.map((m) => m.name).sort();
+			assert.deepStrictEqual(methodNames, ['api.ping', 'api.whoAmI']);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
 
 describe('generateSpec — namespaces sharing a method name (regression: #445)', () => {

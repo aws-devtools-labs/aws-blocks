@@ -239,6 +239,8 @@ function hasBlocksSkipCodegenTag(node: ts.Node): boolean {
  * Pure-AST scan for method names tagged with `@blocksSkipCodegen` inside the
  * `ApiNamespace(...)` calls of a TS source file. Returns a Set of method
  * names (the OpenRPC emitter qualifies them by namespace later).
+ * The `public` and `methods` handlers of an `auth.protect(scope, name, { … })`
+ * call are scanned the same way, under the namespace's binding name.
  *
  * Distinct from {@link extractMethodTypes} because that function builds a
  * full `ts.Program` + type checker, and any failure inside type
@@ -276,32 +278,51 @@ export function extractSkipCodegenMethods(sourcePath: string): Set<string> {
 		}
 	}
 
+	/** The object literal a namespace handler `(context) => ({ … })` returns. */
+	function visitHandler(handler: ts.Node, nsName: string | undefined) {
+		if (!(ts.isArrowFunction(handler) || ts.isFunctionExpression(handler) || ts.isMethodDeclaration(handler))) return;
+		const body = handler.body;
+		if (!body) return;
+		if (ts.isParenthesizedExpression(body) && ts.isObjectLiteralExpression(body.expression)) {
+			visitObjectLiteral(body.expression, nsName);
+		} else if (ts.isObjectLiteralExpression(body)) {
+			visitObjectLiteral(body, nsName);
+		} else if (ts.isBlock(body)) {
+			for (const stmt of body.statements) {
+				if (ts.isReturnStatement(stmt) && stmt.expression) {
+					if (ts.isObjectLiteralExpression(stmt.expression)) {
+						visitObjectLiteral(stmt.expression, nsName);
+					} else if (
+						ts.isParenthesizedExpression(stmt.expression) &&
+						ts.isObjectLiteralExpression(stmt.expression.expression)
+					) {
+						visitObjectLiteral(stmt.expression.expression, nsName);
+					}
+				}
+			}
+		}
+	}
+
 	function visit(node: ts.Node) {
 		if (ts.isNewExpression(node)) {
 			const callee = node.expression;
 			if (ts.isIdentifier(callee) && callee.text === 'ApiNamespace' && node.arguments && node.arguments.length >= 2) {
 				const handler = apiNamespaceHandlerArg(node);
+				if (handler) visitHandler(handler, enclosingBindingName(node));
+			}
+		}
+		// `auth.protect(scope, name, { public: (context) => ({ … }), methods: (context, user) => ({ … }) })`
+		// builds its ApiNamespace inside bb-auth, so its handlers are found here, under the binding's name.
+		if (
+			ts.isCallExpression(node) &&
+			ts.isPropertyAccessExpression(node.expression) &&
+			node.expression.name.text === 'protect'
+		) {
+			const handlers = node.arguments[2];
+			if (handlers && ts.isObjectLiteralExpression(handlers)) {
 				const nsName = enclosingBindingName(node);
-				if (handler && (ts.isArrowFunction(handler) || ts.isFunctionExpression(handler))) {
-					const body = handler.body;
-					if (ts.isParenthesizedExpression(body) && ts.isObjectLiteralExpression(body.expression)) {
-						visitObjectLiteral(body.expression, nsName);
-					} else if (ts.isObjectLiteralExpression(body)) {
-						visitObjectLiteral(body, nsName);
-					} else if (ts.isBlock(body)) {
-						for (const stmt of body.statements) {
-							if (ts.isReturnStatement(stmt) && stmt.expression) {
-								if (ts.isObjectLiteralExpression(stmt.expression)) {
-									visitObjectLiteral(stmt.expression, nsName);
-								} else if (
-									ts.isParenthesizedExpression(stmt.expression) &&
-									ts.isObjectLiteralExpression(stmt.expression.expression)
-								) {
-									visitObjectLiteral(stmt.expression.expression, nsName);
-								}
-							}
-						}
-					}
+				for (const prop of handlers.properties) {
+					visitHandler(ts.isPropertyAssignment(prop) ? prop.initializer : prop, nsName);
 				}
 			}
 		}
