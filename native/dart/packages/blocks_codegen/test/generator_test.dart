@@ -100,6 +100,15 @@ void main() {
     );
   });
 
+  test('_atLeast compares the semver core', () {
+    expect(_atLeast('0.1.5', '0.1.5'), isTrue);
+    expect(_atLeast('0.1.10', '0.1.5'), isTrue);
+    expect(_atLeast('0.1.4', '0.1.5'), isFalse);
+    expect(_atLeast('0.1.5-dev', '0.1.5'), isTrue);
+    expect(_atLeast('0.1.4-dev.1+build.7', '0.1.5'), isFalse);
+    expect(_atLeast('0.2.0+1', '0.1.5-dev'), isTrue);
+  });
+
   test('minimumRuntimeVersion and the blocks_runtime constraint agree with '
       'the runtime package', () {
     String field(String path, String pattern) => RegExp(
@@ -111,19 +120,7 @@ void main() {
       r'^version: (\S+)$',
     );
     final constraint = field('pubspec.yaml', r'^  blocks_runtime: (\S+)$');
-    // Whether dotted version [x] is at least [y].
-    bool atLeast(String x, String y) {
-      final [a, b] = [
-        x,
-        y,
-      ].map((v) => v.split('.').map(int.parse).toList()).toList();
-      for (var i = 0; i < a.length; i++) {
-        if (a[i] != b[i]) return a[i] > b[i];
-      }
-      return true;
-    }
-
-    if (atLeast(runtime, minimumRuntimeVersion)) {
+    if (_atLeast(runtime, minimumRuntimeVersion)) {
       // Released: depend on the minimum.
       expect(constraint, '^$minimumRuntimeVersion');
     } else {
@@ -1862,3 +1859,17 @@ String _generateModel(CodegenModel model) =>
     const DartCodeGenerator().generate(model);
 
 String _generate(String spec) => _generateModel(_build(spec));
+
+/// Whether version [x] is at least [y], by their semver cores
+/// (`0.1.5-dev+1` is `0.1.5`).
+bool _atLeast(String x, String y) {
+  final [a, b] = [x, y]
+      .map(
+        (v) => v.split(RegExp('[-+]')).first.split('.').map(int.parse).toList(),
+      )
+      .toList();
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return a[i] > b[i];
+  }
+  return true;
+}
