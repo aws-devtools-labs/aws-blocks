@@ -1758,6 +1758,32 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
   },
   
+  // A publish from the same invocation as a server-side subscriber must reach
+  // its handler once. On AWS the handler is reachable both in-process and over
+  // the subscriber's own WebSocket, so this counts the calls for one publish.
+  async realtimeChannelSubscribeOnePublishCount(subChannel: string) {
+    const ch = await realtime.getChannel('cursors', subChannel);
+    let calls = 0;
+    const sub = ch.subscribe(() => { calls++; });
+    await sub.established;
+    await realtime.publish('cursors', subChannel, { userId: 'once', x: 1, y: 1, color: 'blue' });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    sub.unsubscribe();
+    return { calls };
+  },
+
+  // Same check through rt.subscribe(), which returns only an unsubscribe
+  // function, so give its socket time to subscribe before publishing.
+  async realtimeSubscribeOnePublishCount(subChannel: string) {
+    let calls = 0;
+    const unsubscribe = realtime.subscribe('cursors', subChannel, () => { calls++; });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await realtime.publish('cursors', subChannel, { userId: 'once', x: 1, y: 1, color: 'blue' });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    unsubscribe();
+    return { calls };
+  },
+
   async realtimeGetCursorChannel() {
     return realtime.getChannel('cursors', 'default');
   },
