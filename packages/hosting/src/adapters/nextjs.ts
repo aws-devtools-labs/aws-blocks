@@ -1498,18 +1498,20 @@ ${entries}
 // without dynamic imports / scraping. Bump together with the actual
 // verification work.
 //
-// Verified against 3.10.x AND 4.0.x: an OpenNext 4.0.3 integration deploy
+// Verified against 3.10.x, 4.0.x AND 4.1.x: an OpenNext 4.0.3 integration deploy
 // (next-app-router) confirmed all four bundle patches still apply cleanly —
 // the streaming-wrapper (`setContentType` + br/gzip/deflate identity
 // branch), the edge-bundle process banner, the `fetchInternalImage` arity
 // insertion, and the SVG-status catch rewrite all matched the 4.0.x
 // minified shape, and the live app served optimized rasters (200 image/webp),
 // a fail-closed SVG (400), edge routes, and redirects with no regressions.
+// 4.1.14 passed the E2E Hosting (nextjs, nextjs-web-function) deploys of
+// test-apps/hosting-ssr.
 // The two windows are called out explicitly (rather than a single
-// `>=3.10.0 <4.1.0`) because the intervening 3.11–3.x minors were never
+// `>=3.10.0 <4.2.0`) because the intervening 3.11–3.x minors were never
 // exercised; each upper bound stays exclusive of the next unverified minor so
 // a future release re-triggers the out-of-range warning until it's verified too.
-export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0';
+export const VERIFIED_OPENNEXT_RANGE = '>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0';
 
 /**
  * Read the installed `@opennextjs/aws` version from the project's
@@ -1540,7 +1542,7 @@ const warnIfOpenNextOutOfRange = (projectDir: string): void => {
  * (`version_pins.test.ts` checks the template pin).
  * @internal
  */
-export const OPENNEXT_FALLBACK_VERSION = '4.0.3';
+export const OPENNEXT_FALLBACK_VERSION = '4.1.14';
 
 /**
  * The `next` peer range {@link OPENNEXT_FALLBACK_VERSION} declares in its
@@ -1549,7 +1551,7 @@ export const OPENNEXT_FALLBACK_VERSION = '4.0.3';
  * copied from the fallback version's published `peerDependencies.next`.
  * @internal
  */
-export const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.18 <16 || >=16.2.6';
+export const OPENNEXT_FALLBACK_NEXT_PEER_RANGE = '>=15.5.28 <16 || >=16.4.1';
 
 /** The `@opennextjs/aws` the project resolves, or `undefined` when absent. */
 type InstalledOpenNext = { version: string; nextPeerRange?: string };
