@@ -108,8 +108,9 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { completed });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) showError(errorDiv, error.message);
+    // Reload first: refreshTodos() resets todo-error to idle, which would clear the error.
     await refreshTodos();
+    if (errorDiv) showError(errorDiv, error.message);
   }
 };
 
@@ -122,8 +123,9 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { priority });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) showError(errorDiv, error.message);
+    // Reload first: refreshTodos() resets todo-error to idle, which would clear the error.
     await refreshTodos();
+    if (errorDiv) showError(errorDiv, error.message);
   }
 };
 
@@ -142,8 +144,9 @@ async function refreshTodos() {
     await api.updateTodo(todoId, { title: trimmedTitle });
     await refreshTodos();
   } catch (error: any) {
-    if (errorDiv) showError(errorDiv, error.message);
+    // Reload first: refreshTodos() resets todo-error to idle, which would clear the error.
     await refreshTodos();
+    if (errorDiv) showError(errorDiv, error.message);
   }
 };
 
