@@ -1,5 +1,6 @@
 ---
 "@aws-blocks/hosting": patch
+"@aws-blocks/blocks": patch
 "@aws-blocks/create-blocks-app": patch
 ---
 
