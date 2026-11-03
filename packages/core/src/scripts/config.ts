@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `blocks config` — manage a Blocks app's non-sensitive **config** values (SSM
+ * `cdk-blocks config` — manage a Blocks app's non-sensitive **config** values (SSM
  * Parameter Store), pinned to the Blocks `/blocks/<stackId>/config` namespace
  * (scoped to the app's stable `stackId` from `.blocks/config.json`). Thin wrapper
  * over the shared `@aws-blocks/hosting` CLI with the kind fixed to `config`. The
@@ -30,9 +30,9 @@ export function removeConfig(key: string, opts: { stage?: string } = {}): Promis
 }
 
 /**
- * CLI dispatcher for `blocks config <set|list|remove> …`. `interactive: false`
+ * CLI dispatcher for `cdk-blocks config <set|list|remove> …`. `interactive: false`
  * refuses prompts; a usage problem throws hosting's `ValueCliUsageError`.
  */
 export function runConfigCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
-	return runValueCli(argv, { kind: 'config', prefix: blocksConfigPrefix(), label: 'blocks config', ...options });
+	return runValueCli(argv, { kind: 'config', prefix: blocksConfigPrefix(), label: 'cdk-blocks config', ...options });
 }

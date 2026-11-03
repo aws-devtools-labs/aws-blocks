@@ -13,6 +13,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
+import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
@@ -54,6 +55,18 @@ export interface SandboxOptions {
    * it falls back to a full deploy.
    */
   preview?: boolean;
+  /** How the user runs this command, in the guidance (for example `cdk-blocks sandbox`). Default: `npm run sandbox`. */
+  invocation?: string;
+  /** How the user destroys the sandbox, in the guidance (for example `cdk-blocks sandbox destroy`). Default: `npm run sandbox:destroy`. */
+  destroyInvocation?: string;
+  /** How the user deploys a hosted preview, in the guidance (for example `cdk-blocks sandbox preview`). Default: `npm run sandbox:preview`. */
+  previewInvocation?: string;
+  /**
+   * Called with the deployed sandbox stack's outputs after the first deploy, in
+   * both modes: in watch mode before `cdk watch` starts, since `startSandbox`
+   * then never returns. Awaited.
+   */
+  onDeployed?: (deployed: DeployedStack) => void | Promise<void>;
 }
 
 /**
@@ -103,10 +116,15 @@ export function findHostingUrl(stackOutputs: Record<string, string>): string | u
  *
  * @param outputsFile the previous deploy's `outputs.json`.
  * @param preview whether this deploy is a preview.
+ * @param previewInvocation the command that deploys a preview, named in the warning.
  * @returns the warning, or `undefined` for a preview deploy, a stack with no
  *   hosting, or no (or an unreadable) outputs file.
  */
-export function previewRemovalWarning(outputsFile: string, preview: boolean): string | undefined {
+export function previewRemovalWarning(
+  outputsFile: string,
+  preview: boolean,
+  previewInvocation = "npm run sandbox:preview",
+): string | undefined {
   if (preview || !existsSync(outputsFile)) return undefined;
   let groups: Record<string, string>[];
   try {
@@ -118,7 +136,7 @@ export function previewRemovalWarning(outputsFile: string, preview: boolean): st
   if (!hostingUrl) return undefined;
   return (
     `⚠️  This stack has a hosted preview at ${hostingUrl}. A plain sandbox deploy is backend-only and removes it.\n` +
-    "   Run npm run sandbox:preview to keep it (re-adding it later gives a new URL)."
+    `   Run ${previewInvocation} to keep it (re-adding it later gives a new URL).`
   );
 }
 
@@ -293,14 +311,18 @@ export function buildSandboxDeployArgs({
  *
  * Kept pure so it can be asserted in a unit test.
  */
-export function sandboxFailureRecoveryHint(): string {
+export function sandboxFailureRecoveryHint(
+  invocation = "npm run sandbox",
+  destroyInvocation = "npm run sandbox:destroy",
+): string {
+  const width = Math.max(invocation.length, destroyInvocation.length);
   return [
     "",
     "ℹ️  Express Mode leaves failed sandbox stacks in place (automatic rollback is off).",
-    "   If the next `npm run sandbox` reports the stack cannot be updated, recover with:",
+    `   If the next \`${invocation}\` reports the stack cannot be updated, recover with:`,
     "",
-    "     npm run sandbox:destroy   # tears the failed stack down (handles ROLLBACK_COMPLETE)",
-    "     npm run sandbox           # redeploy from a clean slate",
+    `     ${destroyInvocation.padEnd(width)}   # tears the failed stack down (handles ROLLBACK_COMPLETE)`,
+    `     ${invocation.padEnd(width)}   # redeploy from a clean slate`,
     "",
     "   If destroy reports UPDATE_ROLLBACK_FAILED, first run:",
     "     aws cloudformation continue-update-rollback --stack-name <your-sandbox-stack>",
@@ -308,7 +330,17 @@ export function sandboxFailureRecoveryHint(): string {
 }
 
 export async function startSandbox(options: SandboxOptions) {
-  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, devCommand, preview = false } = options;
+  const {
+    backendPath,
+    outDir = ".blocks-sandbox",
+    clientPort = 3000,
+    devCommand,
+    preview = false,
+    invocation = "npm run sandbox",
+    destroyInvocation = "npm run sandbox:destroy",
+    previewInvocation = "npm run sandbox:preview",
+    onDeployed,
+  } = options;
   const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
 
@@ -325,7 +357,7 @@ export async function startSandbox(options: SandboxOptions) {
   // FAIL event manually (mirroring the CDK-deploy failure path below) before
   // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd(), checkBootstrap: true });
+    await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
@@ -385,7 +417,7 @@ export async function startSandbox(options: SandboxOptions) {
   const previousOutputs = join(process.cwd(), outDir, "outputs.json");
   const hotswap = preview && existsSync(previousOutputs);
 
-  const removalWarning = previewRemovalWarning(previousOutputs, preview);
+  const removalWarning = previewRemovalWarning(previousOutputs, preview, previewInvocation);
   if (removalWarning) console.warn(removalWarning);
 
   log.progress("🚀 Deploying to AWS...");
@@ -438,7 +470,7 @@ export async function startSandbox(options: SandboxOptions) {
     });
     cdkOutput.printRetained();
     console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint());
+    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
     throw error;
   }
 
@@ -449,8 +481,8 @@ export async function startSandbox(options: SandboxOptions) {
   // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
   // on the outputs file's write order; fall back to the first group so a
   // single-stack app is unchanged.
-  const stackGroups = Object.values(outputs) as Record<string, string>[];
-  const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+  const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
+  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
@@ -483,6 +515,9 @@ export async function startSandbox(options: SandboxOptions) {
   // implies the on-disk artifacts a consumer reads next are already present;
   // printed before the deploy-only return below so both paths emit it.
   console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
+
+  // Before watch mode starts, which never returns: a launcher records the deploy here.
+  await onDeployed?.({ stack, apiUrl, hostingUrl });
 
   if (deployOnly) {
     return apiUrl;
@@ -531,7 +566,7 @@ export async function startSandbox(options: SandboxOptions) {
     cleaningUp = true;
     log.progress("\n\n🛑 Stopping local processes...");
     log.progress("   (AWS resources are still running)");
-    log.progress("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
+    log.progress(`\n   To destroy AWS resources, run: ${destroyInvocation}\n`);
     // Reap BOTH child trees the way the dev server reaps Vite — a process-group
     // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
     // kill() that signals only the npx/shell parent and orphans the real
@@ -1215,7 +1250,8 @@ async function edgeStacksBlocked(deps: DestroyRetryDeps, stacks: AssemblyStack[]
  */
 const SANDBOX_DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/sandbox-destroy.out';
 
-export async function destroySandbox(backendPath: string) {
+export async function destroySandbox(backendPath: string, options: { invocation?: string } = {}) {
+  const invocation = options.invocation ?? 'npm run sandbox:destroy';
   return trackCommand('sandbox:destroy', async () => {
     log.progress("🗑️  Destroying sandbox...");
 
@@ -1223,7 +1259,7 @@ export async function destroySandbox(backendPath: string) {
     // credential error is deterministic and retrying only burns the backoff.
     // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
     // teardown blockers, not auth.
-    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd(), accountDetails: false });
+    await assertAwsCredentials({ command: 'sandbox:destroy', invocation, projectRoot: process.cwd(), accountDetails: false });
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {
@@ -1236,7 +1272,7 @@ export async function destroySandbox(backendPath: string) {
     rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
     const clients = await destroyRetryClients(process.cwd());
-    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv, clients));
+    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv, clients, invocation));
     rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
   });
 }
@@ -1251,6 +1287,7 @@ export function sandboxDestroyDeps(
   backendPath: string,
   cdkEnv: NodeJS.ProcessEnv,
   clients: Required<EmptyBucketsClients>,
+  rerunCommand?: string,
 ): DestroyRetryDeps {
   const cdkArgs = [
     "exec", "cdk", "--", "destroy",
@@ -1282,6 +1319,7 @@ export function sandboxDestroyDeps(
     emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
     isThrottled: (stacks, since, previous) => destroyWasThrottled(stacks, since, previous, clients.cfnFor),
     edgeReplicaBlocked: (stacks, since) => edgeStacksBlockedByReplicas(stacks, since, clients.cfnFor),
+    rerunCommand,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }
