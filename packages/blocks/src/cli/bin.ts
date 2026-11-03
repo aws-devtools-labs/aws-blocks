@@ -21,7 +21,7 @@ try {
 	process.exit(1);
 }
 
-// A closed terminal or pipe (`blocks sandbox | tee log` after a Ctrl-C, `blocks … | head`)
+// A closed terminal or pipe (`cdk-blocks sandbox | tee log` after a Ctrl-C, `blocks … | head`)
 // must not kill this parent while its runner still works: drop the write error, as core's
 // ignoreClosedOutput() does for the runners. Not imported from `@aws-blocks/core/scripts`:
 // loading that entry takes about 0.6 s, on every command.

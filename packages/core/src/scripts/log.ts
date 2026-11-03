@@ -18,7 +18,7 @@
  *   report as warnings.
  *
  * The level is read from the environment on every call, so a caller (the
- * `blocks` CLI) can set it at any point before invoking a script, and spawned
+ * `cdk-blocks` CLI) can set it at any point before invoking a script, and spawned
  * children inherit it.
  */
 export type BlocksLogLevel = 'legacy' | 'quiet' | 'normal' | 'verbose' | 'debug';
@@ -51,7 +51,7 @@ export function isCuratedLevel(level: BlocksLogLevel): boolean {
 export const BLOCKS_LOG_STREAM_ENV = 'BLOCKS_LOG_STREAM';
 
 /**
- * True when progress goes to stderr. The `blocks` CLI sets `BLOCKS_LOG_STREAM=stderr`
+ * True when progress goes to stderr. The `cdk-blocks` CLI sets `BLOCKS_LOG_STREAM=stderr`
  * so that stdout carries only results; without it the legacy streams are unchanged.
  * Results (`BLOCKS_DEPLOYED`, final URLs, the deployment target) stay on stdout either way.
  */

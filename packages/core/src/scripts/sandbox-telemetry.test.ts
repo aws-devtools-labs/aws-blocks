@@ -211,7 +211,7 @@ try {
 	});
 
 	it('a watch-mode sandbox ends, and stops its cdk watch, when its dev server ends (U2)', () => {
-		// `blocks dev stop` stops the sandbox's dev server; the sandbox used to stay up, headless, its
+		// `cdk-blocks dev stop` stops the sandbox's dev server; the sandbox used to stay up, headless, its
 		// `cdk watch` hotswapping every save into AWS, with no command left that could find or stop it.
 		const watchPid = join(tmp, 'watch.pid');
 		writeFileSync(

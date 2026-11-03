@@ -1,5 +1,5 @@
 {
-	"_comment": "Generated apps from create-blocks-app templates in git history, for the blocks migrate tests. <template>@<commit>: aws-blocks/scripts/, index.cdk.ts, cdk.json and package.json of that template at that commit (amplify: the scripts create-blocks-app added). <template>@<version>: the same files of a public create-blocks-app release older than the git history, from its npm tarball.",
+	"_comment": "Generated apps from create-blocks-app templates in git history, for the cdk-blocks migrate tests. <template>@<commit>: aws-blocks/scripts/, index.cdk.ts, cdk.json and package.json of that template at that commit (amplify: the scripts create-blocks-app added). <template>@<version>: the same files of a public create-blocks-app release older than the git history, from its npm tarball.",
 	"default@0ab6b047": {
 		"template": "default",
 		"commit": "0ab6b047",

@@ -535,7 +535,7 @@ export async function runStreaming(
     env,
     label = 'deploy',
     heartbeatMs = DEFAULT_HEARTBEAT_MS,
-    // BLOCKS_LOG_STREAM=stderr (the blocks CLI): the relayed CloudFormation events are progress.
+    // BLOCKS_LOG_STREAM=stderr (the cdk-blocks CLI): the relayed CloudFormation events are progress.
     stdout = progressToStderr() ? process.stderr : process.stdout,
     stderr = process.stderr,
     now = Date.now,
