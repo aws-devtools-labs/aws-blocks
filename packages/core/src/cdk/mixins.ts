@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Mixin } from 'aws-cdk-lib';
+import { Mixin } from 'aws-cdk-lib/core';
 import type { IConstruct } from 'constructs';
 import type { IMixin } from 'constructs';
 
@@ -39,7 +39,7 @@ const DELETION_PROTECTION_PROPERTIES = ['deletionProtection', 'deletionProtectio
  *
  * @example
  * ```ts
- * import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
+ * import { RemovalPolicies, Mixins } from 'aws-cdk-lib/core';
  * import { SandboxDisableDeletionProtection } from '@aws-blocks/blocks/cdk';
  *
  * if (sandboxMode) {

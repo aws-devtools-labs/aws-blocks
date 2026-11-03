@@ -1,7 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type * as cdk from 'aws-cdk-lib';
+import type * as cdk from 'aws-cdk-lib/core';
+import type * as aws_logs from 'aws-cdk-lib/aws-logs';
 import type { ComputeBase } from './compute.js';
 import type { BlocksStack } from '../index.js';
 import type { BlocksBackend } from '../blocks-backend.js';
@@ -20,7 +21,7 @@ import type { BlocksBackend } from '../blocks-backend.js';
  * @internal
  */
 export interface LambdaShapedCompute extends ComputeBase {
-	readonly logGroup: cdk.aws_logs.ILogGroup;
+	readonly logGroup: aws_logs.ILogGroup;
 }
 
 /**

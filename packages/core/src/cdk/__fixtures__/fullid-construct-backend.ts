@@ -22,7 +22,7 @@
  * side-effect import throws at synth time — which is what the test asserts must
  * NOT happen.
  */
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import { Construct } from 'constructs';
 import { Scope } from '../index.js';
 import type { ScopeParent } from '../../common/index.js';

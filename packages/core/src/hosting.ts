@@ -39,7 +39,14 @@ import {
   type WebFunctionConstruct,
   type WebFunctionOptions,
 } from '@aws-blocks/hosting/constructs';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as aws_cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as aws_lambda from 'aws-cdk-lib/aws-lambda';
+import * as aws_logs from 'aws-cdk-lib/aws-logs';
+import * as aws_s3 from 'aws-cdk-lib/aws-s3';
+import * as aws_sns from 'aws-cdk-lib/aws-sns';
+import * as aws_sns_subscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
@@ -145,7 +152,7 @@ export type ComputeConfig = {
     reservedConcurrency?: number;
   };
   /** CloudWatch log retention for the SSR Lambda. Default: TWO_WEEKS. */
-  logRetention?: cdk.aws_logs.RetentionDays;
+  logRetention?: aws_logs.RetentionDays;
 };
 
 export type { FrameworkType, HostingDomainConfig, HostingWafConfig, SkewProtectionConfig };
@@ -368,7 +375,7 @@ export interface HostingProps {
    * CloudFront price class. Default: PRICE_CLASS_100.
    * @deprecated Use `frontDoor.features.priceClass`.
    */
-  priceClass?: cdk.aws_cloudfront.PriceClass;
+  priceClass?: aws_cloudfront.PriceClass;
 
   /**
    * Geo-restriction configuration for the CloudFront distribution.
@@ -468,7 +475,7 @@ export interface HostingProps {
   buildCache?: {
     enabled: boolean;
     /** BYO S3 bucket for build cache storage. Creates one if not provided. */
-    bucket?: cdk.aws_s3.IBucket;
+    bucket?: aws_s3.IBucket;
   };
 
   /**
@@ -521,8 +528,8 @@ export interface HostingProps {
      * subscriptions (Lambda/SQS) are not yet supported.
      */
     subscriptions?: Array<
-      | cdk.aws_sns_subscriptions.EmailSubscription
-      | cdk.aws_sns_subscriptions.UrlSubscription
+      | aws_sns_subscriptions.EmailSubscription
+      | aws_sns_subscriptions.UrlSubscription
     >;
   };
 
@@ -955,9 +962,9 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
  */
 export class Hosting extends Construct {
   /** The S3 bucket storing static assets. */
-  public readonly bucket: cdk.aws_s3.Bucket;
+  public readonly bucket: aws_s3.Bucket;
   /** Backs {@link distribution}; set for the CloudFront default door and the stacked door's edge. */
-  private readonly _distribution?: cdk.aws_cloudfront.Distribution;
+  private readonly _distribution?: aws_cloudfront.Distribution;
   /**
    * The CloudFront distribution.
    *
@@ -968,7 +975,7 @@ export class Hosting extends Construct {
    *
    * @throws HostingError('FrontDoorNotCloudFrontError') when the front door has no CloudFront distribution.
    */
-  public get distribution(): cdk.aws_cloudfront.Distribution {
+  public get distribution(): aws_cloudfront.Distribution {
     if (!this._distribution) {
       throw new HostingError('FrontDoorNotCloudFrontError', {
         message: 'Hosting.distribution is only available for a CloudFront front door (the default, or the stacked edge).',
@@ -980,7 +987,7 @@ export class Hosting extends Construct {
   /** The public URL of the deployed site (https://...). */
   public readonly url: string;
   /** The primary SSR/compute Lambda function (first compute resource, if any). */
-  public readonly ssrFunction?: cdk.aws_lambda.Function;
+  public readonly ssrFunction?: aws_lambda.Function;
   /**
    * The SSR server on AWS Lambda Web Functions — set instead of
    * {@link ssrFunction} when `compute.type` is `'web-function'`. Use its
@@ -989,7 +996,7 @@ export class Hosting extends Construct {
    */
   public readonly ssrWebFunction?: WebFunctionConstruct;
   /** S3 bucket for framework build caches (present when `buildCache.enabled` is true). */
-  public readonly buildCacheBucket?: cdk.aws_s3.Bucket;
+  public readonly buildCacheBucket?: aws_s3.Bucket;
   /**
    * Hosting monitoring surface (present when `monitoring.enabled` is true):
    * `alarms` (every CloudWatch alarm, both regions) and `alarmTopics`
@@ -998,8 +1005,8 @@ export class Hosting extends Construct {
    * already attached.
    */
   public readonly monitoring?: {
-    alarms: cdk.aws_cloudwatch.Alarm[];
-    alarmTopics: cdk.aws_sns.ITopic[];
+    alarms: aws_cloudwatch.Alarm[];
+    alarmTopics: aws_sns.ITopic[];
   };
 
   /**
@@ -1339,7 +1346,7 @@ export class Hosting extends Construct {
     // The door's resolved kind (a bring-your-own door's `service` is free-form).
     const isCloudFrontDoor = hosting.frontDoorKind === 'cloudfront' && !cfOverRouter;
     let publicDistribution = isCloudFrontDoor ? hosting.distribution : undefined;
-    let stackedEdge: { distribution: Distribution; staticFunction?: cdk.aws_cloudfront.Function } | undefined;
+    let stackedEdge: { distribution: Distribution; staticFunction?: aws_cloudfront.Function } | undefined;
     // The stacked edge's post-deploy invalidation (`<distributionId>/<invalidationId>`).
     let stackedInvalidationId: string | undefined;
 
@@ -1394,7 +1401,7 @@ export class Hosting extends Construct {
     // variables — they surface in computeFunctions as EdgeFunction/IVersion
     // without an `addEnvironment` method. Skip any function that can't take
     // env vars instead of crashing (`fn.addEnvironment is not a function`).
-    const canAddEnv = (fn: unknown): fn is cdk.aws_lambda.Function =>
+    const canAddEnv = (fn: unknown): fn is aws_lambda.Function =>
       typeof (fn as { addEnvironment?: unknown })?.addEnvironment === 'function';
 
     const primaryFunction = [...hosting.computeFunctions.values()].find(canAddEnv);
@@ -1652,7 +1659,7 @@ export class Hosting extends Construct {
   private addCloudFrontOverAlb(
     hosting: HostingConstruct,
     props: HostingProps,
-  ): { distribution: Distribution; url: string; staticFunction?: cdk.aws_cloudfront.Function } {
+  ): { distribution: Distribution; url: string; staticFunction?: aws_cloudfront.Function } {
     // The L3 built the full ALB router as its front door. The edge is a
     // free-form door (`cloudFrontEdgeDoor`) built from the same DoorInput, with
     // the ALB as its `upstream`: the router behaviors' origin is that ALB, over
@@ -1711,7 +1718,7 @@ export class Hosting extends Construct {
   private gateStackedEdge(
     hosting: HostingConstruct,
     manifest: DeployManifest,
-    edge: { distribution: Distribution; staticFunction?: cdk.aws_cloudfront.Function },
+    edge: { distribution: Distribution; staticFunction?: aws_cloudfront.Function },
     configDeployment: s3deploy.BucketDeployment,
     buildId: string,
   ): string | undefined {

@@ -13,7 +13,8 @@
  */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import { registerConfig, registerSharedConfig } from './config-registry.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
@@ -83,8 +84,8 @@ describe('registerConfig: one value per key per backend', () => {
 
 	test('two different CDK tokens are different values', () => {
 		const stack = root();
-		const qa = new cdk.aws_sqs.Queue(stack, 'QA');
-		const qb = new cdk.aws_sqs.Queue(stack, 'QB');
+		const qa = new aws_sqs.Queue(stack, 'QA');
+		const qb = new aws_sqs.Queue(stack, 'QB');
 		registerConfig(qa, 'BLOCKS_QUEUE_URL_X', qa.queueUrl);
 		assert.throws(() => registerConfig(qb, 'BLOCKS_QUEUE_URL_X', qb.queueUrl), /already registered/);
 	});

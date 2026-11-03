@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Annotations } from 'aws-cdk-lib';
+import { Annotations } from 'aws-cdk-lib/core';
 import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
 import type { Construct } from 'constructs';
 

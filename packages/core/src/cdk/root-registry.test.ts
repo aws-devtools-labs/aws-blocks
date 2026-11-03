@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert';
 import { afterEach, describe, test } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Construct } from 'constructs';
 import {
 	BLOCKS_BACKEND_ROOT,

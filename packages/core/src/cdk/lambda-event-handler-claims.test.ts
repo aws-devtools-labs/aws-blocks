@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert';
 import { afterEach, describe, test } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
 import { Scope } from './index.js';
 import { BLOCKS_BACKEND_ROOT } from './root-registry.js';

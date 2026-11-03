@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { before, describe, test } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';

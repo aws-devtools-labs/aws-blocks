@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, describe } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { Table, AttributeType, BillingMode } from 'aws-cdk-lib/aws-dynamodb';
 import * as rds from 'aws-cdk-lib/aws-rds';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { RemovalPolicies, Mixins } from 'aws-cdk-lib';
+import { RemovalPolicies, Mixins } from 'aws-cdk-lib/core';
 import { SandboxDisableDeletionProtection } from './mixins.js';
 
 describe('sandbox removal policy', () => {

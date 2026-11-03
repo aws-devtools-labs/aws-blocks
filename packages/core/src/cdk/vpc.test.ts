@@ -3,7 +3,7 @@
 
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import { Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';

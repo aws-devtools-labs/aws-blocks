@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { StackProps } from 'aws-cdk-lib';
+import type { StackProps } from 'aws-cdk-lib/core';
 import type { Construct } from 'constructs';
 import type { BlocksDefaults } from '../cdk/blocks-defaults.js';
 import { CORE_VERSION } from '../version.js';

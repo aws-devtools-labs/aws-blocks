@@ -5,7 +5,10 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_ec2 from 'aws-cdk-lib/aws-ec2';
+import * as aws_lambda from 'aws-cdk-lib/aws-lambda';
+import * as aws_logs from 'aws-cdk-lib/aws-logs';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
@@ -33,11 +36,11 @@ import { getVpcContext } from './vpc.js';
 // @aws-blocks/blocks injects LambdaCompute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
-	readonly logGroup: cdk.aws_logs.LogGroup;
+	readonly logGroup: aws_logs.LogGroup;
 
 	constructor(scope: ScopeParent, id: string) {
 		super(id, { parent: scope });
-		this.logGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
+		this.logGroup = new aws_logs.LogGroup(this, 'HandlerLogGroup', {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 		// Discover the shared VPC context from the owning stack/backend, mirroring
@@ -47,7 +50,7 @@ class StubLambdaCompute extends ComputeBase {
 		const vpcContext = getVpcContext(this);
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
-			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
+			runtime: aws_lambda.Runtime.NODEJS_22_X,
 			handler: 'handler',
 			role: this.executionRole,
 			logGroup: this.logGroup,
@@ -118,7 +121,7 @@ describe('ESM cache-busting (multi-stage)', () => {
 
 		const backend2 = await makeBackend(stack, 'Stage2', sideEffectBackendPath);
 
-		const findMarker = (scope: cdk.aws_lambda_nodejs.NodejsFunction | any) =>
+		const findMarker = (scope: lambda.NodejsFunction | any) =>
 			scope.node.tryFindChild('SideEffectMarker');
 
 		assert.ok(
@@ -475,7 +478,7 @@ describe('VPC placement', () => {
 		const parent = new cdk.Stack(app, 'VpcParent', {
 			env: { account: '123456789012', region: 'us-east-1' },
 		});
-		const vpc = new cdk.aws_ec2.Vpc(parent, 'AppVpc', { maxAzs: 2, natGateways: 1 });
+		const vpc = new aws_ec2.Vpc(parent, 'AppVpc', { maxAzs: 2, natGateways: 1 });
 
 		await BlocksBackend.create(parent, 'Blocks', {
 			backendHandlerPath: handlerPath,

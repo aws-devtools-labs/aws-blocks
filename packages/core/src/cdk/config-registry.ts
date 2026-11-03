@@ -1,7 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_iam from 'aws-cdk-lib/aws-iam';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
@@ -343,7 +344,7 @@ function ensureConfigBucket(scope: Construct): s3.Bucket {
  */
 export function finalizeConfigRegistry(
 	root: Construct,
-	executionRole: cdk.aws_iam.IRole,
+	executionRole: aws_iam.IRole,
 	computes: readonly ComputeBase[],
 ): void {
 	const registry = getRegistry(getBlocksRoot(root));
