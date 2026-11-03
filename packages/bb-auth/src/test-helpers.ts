@@ -296,6 +296,11 @@ export class FakeNativeEngine implements NativeEngine {
 			throw sdkError('UserNotFoundException', 'Username/client id combination not found.');
 	}
 
+	async signOutEverywhere(login: string): Promise<string> {
+		this.calls.push(`signOutEverywhere:${login}`);
+		return login;
+	}
+
 	async updatePassword(input: { accessToken: string }): Promise<void> {
 		this.calls.push(`updatePassword:${input.accessToken.length > 0}`);
 	}

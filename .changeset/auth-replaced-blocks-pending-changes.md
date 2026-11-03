@@ -47,7 +47,7 @@ Fixes made to `AuthCognito`, `AuthOIDC` and `AuthBasic` since their last release
 
 **From `main` after those releases (#1085)**
 
-- `AuthBasic` invalidates every outstanding session when a user resets their password (#1085). This does not ship in `Auth`, which replaces `AuthBasic`: `Auth`'s `confirmResetPassword` sets the new password and leaves the user's other sessions signed in until they sign out or expire.
+- `AuthBasic` invalidates every outstanding session when a user resets their password (#1085). So does `Auth`, which replaces `AuthBasic`: a completed `confirmResetPassword` signs the user out everywhere, locally and on AWS (see the `bb-auth` changeset on password resets).
 
 **Docs (from `AuthOIDC`)**
 

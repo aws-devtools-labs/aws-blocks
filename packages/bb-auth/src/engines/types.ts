@@ -221,6 +221,15 @@ export interface NativeEngine extends NativeAccountEngine {
 	/** Finish a password reset. `AuthBase` maps an unknown user like a wrong code. */
 	confirmResetPassword(input: { username: string; code: string; newPassword: string }): Promise<void>;
 
+	/**
+	 * After a completed password reset (#912): revoke every refresh token the
+	 * user holds (Cognito `AdminUserGlobalSignOut`) and return their pool
+	 * username — the `cognito:username` their sessions carry, which `login` (an
+	 * email / phone alias, possibly) may not be — so `AuthBase` can end the
+	 * sessions it stores.
+	 */
+	signOutEverywhere(login: string): Promise<string>;
+
 	/** Change the signed-in user's password. */
 	updatePassword(input: { accessToken: string; oldPassword: string; newPassword: string }): Promise<void>;
 

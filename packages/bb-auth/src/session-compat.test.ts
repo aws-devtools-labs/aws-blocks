@@ -140,14 +140,21 @@ describe('AuthCognito → Auth: signed-in users stay signed in', () => {
 		});
 	});
 
-	test('rows Auth writes for pool sessions keep AuthCognito’s exact shape and TTL (rollback-safe)', async () => {
+	test('rows Auth writes for pool sessions keep AuthCognito’s shape and TTL (rollback-safe)', async () => {
 		const h = makeAuth(undefined, { rootId: 'shape-app' });
 		h.native.addUser('carol');
 		const browser = new Browser();
 		await browser.request((ctx) => h.auth.signIn('carol', 'Passw0rd!', ctx));
 		const raw = JSON.parse(readFileSync('.bb-data/shape-app-auth-sessions/store.json', 'utf8'));
 		const [entry] = Object.values(raw) as { value: string; ttl: number }[];
-		assert.deepStrictEqual(Object.keys(JSON.parse(entry.value)).sort(), ['accessToken', 'idToken', 'refreshToken']);
+		// AuthCognito's three tokens, plus `Auth`'s optional sign-in time (#912), which
+		// AuthCognito never read (as it never read `provider`).
+		assert.deepStrictEqual(Object.keys(JSON.parse(entry.value)).sort(), [
+			'accessToken',
+			'idToken',
+			'issuedAt',
+			'refreshToken',
+		]);
 		const expected = Math.floor(Date.now() / 1000) + 400 * 86400;
 		assert.ok(Math.abs(entry.ttl - expected) <= 5, 'TTL = now + 400 days, as AuthCognito');
 

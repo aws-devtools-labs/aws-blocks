@@ -2936,7 +2936,14 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
 	): Promise<ResetPasswordResult>;
 
-	/** Finish a password reset with the emailed code. *Email + password.* */
+	/**
+	 * Finish a password reset with the emailed code. *Email + password.*
+	 *
+	 * A completed reset signs the user out everywhere: every session they had
+	 * is rejected from the next request on (401 `NotAuthenticatedException`),
+	 * and on AWS their Cognito refresh tokens are revoked. They sign in again
+	 * with the new password.
+	 */
 	confirmResetPassword(
 		username: string,
 		code: string,

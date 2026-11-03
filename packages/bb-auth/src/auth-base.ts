@@ -1030,6 +1030,14 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * Unless `emailPassword.revealExistingUsers` is set, an expired code, a reset
 	 * that was never requested and a disabled user are answered exactly like a
 	 * wrong code too.
+	 *
+	 * A completed reset signs the user out everywhere: every session they had
+	 * is rejected from the next request on (401 `NotAuthenticatedException`,
+	 * cookie cleared), and on AWS their Cognito refresh tokens are revoked
+	 * (`AdminUserGlobalSignOut`). They sign in again with the new password.
+	 *
+	 * @throws {ApiError} 5xx when the password changed but ending the other
+	 *   sessions failed (logged at error). Reset again to end them.
 	 */
 	async confirmResetPassword(
 		username: string,
@@ -1043,6 +1051,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			await native.confirmResetPassword({ username, code, newPassword });
 		} catch (e) {
 			throw this.mapError(e, 'confirmCode', username);
+		}
+		// The password changed: end every session issued before it (#912).
+		try {
+			await this.sessions.revokeSessionsOf(await native.signOutEverywhere(username));
+		} catch (e) {
+			this.log.error('[bb-auth] password reset: the password changed but ending the other sessions failed', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			throw this.mapError(e);
 		}
 	}
 
@@ -1785,6 +1802,9 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 *   JWT, malformed) → `null` and the cookie is cleared (reject-and-clear);
 	 * - a verified cookie whose row is missing or unreadable (an `AuthOIDC` row)
 	 *   → `null` and the cookie is cleared; a foreign row is never deleted;
+	 * - a password session issued before the user's last completed password
+	 *   reset (`SessionStore.isRevoked`, one extra read) → `null`, the row is
+	 *   deleted and the cookie cleared;
 	 * - an expiring session (or `forceRefresh`) → refreshed through the engine
 	 *   that issued it; rejected → the row is deleted and the cookie cleared;
 	 *   refreshed → the row is replaced and the cookie re-issued (sliding expiry).
@@ -1805,6 +1825,11 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
 		}
+		if (await this.sessions.isRevoked(record)) {
+			await this.sessions.delete(sessionId);
+			clearSessionCookie(context, this.fullId, this.crossDomain);
+			return null;
+		}
 		const identity = identityOf(record);
 		if (!forceRefresh && identity.expiresAt > Date.now()) return { sessionId, record, identity };
 
@@ -1822,6 +1847,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			await this.sessions.delete(sessionId);
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
+		}
+		// Keep the sign-in time across the refresh, so a later reset still ends the session.
+		if (!('kind' in refreshed) && !('kind' in record) && record.issuedAt !== undefined) {
+			refreshed = { ...refreshed, issuedAt: record.issuedAt };
 		}
 		await this.sessions.replace(sessionId, refreshed);
 		setSessionCookie(

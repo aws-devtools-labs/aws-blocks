@@ -166,6 +166,18 @@ export const CLIENT_IAM_ACTIONS: readonly string[] = [
 ];
 
 /**
+ * What a completed `confirmResetPassword` needs to sign the user out
+ * everywhere (#912): resolve the login to the pool username their sessions
+ * carry, and revoke their refresh tokens. Granted, on the pool only, when
+ * email + password sign-in is on (no other path can reset a password); `admin`
+ * is not required.
+ */
+export const PASSWORD_RESET_IAM_ACTIONS: readonly string[] = [
+	'cognito-idp:AdminGetUser',
+	'cognito-idp:AdminUserGlobalSignOut',
+];
+
+/**
  * Map `AdminOptions.actions` to the Cognito `Admin*` / `List*` IAM actions.
  * Omitted `actions` grants both slices. Identical to `AuthCognito`'s
  * `adminIamActions`; keep in lockstep with the runtime admin method sets.

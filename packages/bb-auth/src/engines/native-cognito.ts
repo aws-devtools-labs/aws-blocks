@@ -55,7 +55,9 @@
 
 import { ApiError, getSdkIdentifiers, installClientUserAgent, registerSdkIdentifiers } from '@aws-blocks/core';
 import {
+	AdminGetUserCommand,
 	AdminListGroupsForUserCommand,
+	AdminUserGlobalSignOutCommand,
 	AssociateSoftwareTokenCommand,
 	type AuthenticationResultType,
 	type ChallengeNameType,
@@ -682,6 +684,14 @@ export class NativeCognitoEngine implements NativeEngine {
 				Password: input.newPassword,
 			}),
 		);
+	}
+
+	async signOutEverywhere(login: string): Promise<string> {
+		const { userPoolId } = this.ids();
+		const user = await this.client.send(new AdminGetUserCommand({ UserPoolId: userPoolId, Username: login }));
+		const username = user.Username ?? login;
+		await this.client.send(new AdminUserGlobalSignOutCommand({ UserPoolId: userPoolId, Username: username }));
+		return username;
 	}
 
 	async updatePassword(input: { accessToken: string; oldPassword: string; newPassword: string }): Promise<void> {

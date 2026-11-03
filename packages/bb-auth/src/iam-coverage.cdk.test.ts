@@ -17,6 +17,7 @@
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { after, before, describe, test } from 'node:test';
+import { PASSWORD_RESET_IAM_ACTIONS } from './cdk/mappers.js';
 import { Browser, makeAwsAuth, signInAs } from './test-support/aws-harness.js';
 import type { CfnTemplateJson } from './test-support/cdk-synth.js';
 import { synthIdentity } from './test-support/identity.js';
@@ -55,6 +56,7 @@ const REPLIES: Record<string, () => unknown> = {
 	AdminSetUserPasswordCommand: () => ({}),
 	AdminGetUserCommand: () => ({ Username: 'bob', UserAttributes: [] }),
 	ListUsersCommand: () => ({ Users: [] }),
+	ConfirmForgotPasswordCommand: () => ({}),
 	AdminUserGlobalSignOutCommand: () => ({}),
 };
 
@@ -154,7 +156,14 @@ describe("IAM coverage — admin: { actions: ['groups'] }", () => {
 
 	test('no lifecycle-only action is granted', () => {
 		const grants = granted(GROUPS);
-		for (const a of ['AdminCreateUser', 'AdminDeleteUser', 'AdminGetUser', 'ListUsers', 'AdminUserGlobalSignOut']) {
+		// `AdminGetUser` / `AdminUserGlobalSignOut` come with email + password (the reset grant), not with `admin`.
+		for (const a of [
+			'AdminCreateUser',
+			'AdminDeleteUser',
+			'AdminDisableUser',
+			'AdminSetUserPassword',
+			'ListUsers',
+		]) {
 			assert.ok(!grants.has(`cognito-idp:${a}`), `${a} must not be granted`);
 		}
 	});
@@ -190,7 +199,30 @@ describe('IAM coverage — no admin option', () => {
 		const grants = granted(BASE);
 		for (const a of grants) {
 			if (a === 'cognito-idp:AdminListGroupsForUser') continue; // requireRole's live group read (#583)
+			if (PASSWORD_RESET_IAM_ACTIONS.includes(a)) continue; // a completed reset signs the user out everywhere (#912)
 			assert.ok(!/^cognito-idp:(Admin|ListUsers)/.test(a), `${a} must not be granted without admin`);
 		}
+	});
+});
+
+describe('IAM coverage — password reset (#912)', () => {
+	test('a completed reset is granted without admin', async () => {
+		const sent = await observedActions(async (h) => {
+			await h.auth.confirmResetPassword('alice@example.com', '123456', 'New!pass1');
+		});
+		assert.deepStrictEqual(sent, [
+			'cognito-idp:AdminGetUser',
+			'cognito-idp:AdminUserGlobalSignOut',
+			'cognito-idp:ConfirmForgotPassword',
+		]);
+		assertCovered(sent, granted(BASE), 'password reset');
+	});
+
+	test('without email + password, neither reset action is granted', () => {
+		const grants = granted(
+			"new Auth(stack, 'auth', { emailPassword: false, samlProviders: { corp: { metadataUrl: 'https://idp.example.com/metadata' } } })",
+		);
+		assert.ok(grants.has('cognito-idp:InitiateAuth'), 'the pool is provisioned and granted');
+		for (const a of PASSWORD_RESET_IAM_ACTIONS) assert.ok(!grants.has(a), `${a} must not be granted`);
 	});
 });

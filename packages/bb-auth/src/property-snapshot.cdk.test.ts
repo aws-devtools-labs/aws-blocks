@@ -33,6 +33,7 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { describe, test } from 'node:test';
+import { PASSWORD_RESET_IAM_ACTIONS } from './cdk/mappers.js';
 import { PAIRS } from './test-support/authcognito-pairs.js';
 import type { CfnResourceJson, CfnTemplateJson } from './test-support/cdk-synth.js';
 import { type SynthesizedAuth, synthIdentity } from './test-support/identity.js';
@@ -41,7 +42,8 @@ import { frozenAuthCognitoSynths } from './test-support/legacy-fixtures.js';
 /**
  * THE ALLOWLIST — the only differences `Auth` may have from `AuthCognito`, and
  * only on the `AWS::Cognito::UserPool` resource. Nothing else is tolerated —
- * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST}).
+ * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST})
+ * and the password-reset grant ({@link withoutResetGrant}).
  *
  * Decision Q4: the pool honours the stack defaults when `removalPolicy` /
  * `deletionProtection` are unset. `AuthCognito` hard-codes `DESTROY` unless
@@ -112,6 +114,22 @@ const GUARD_ALLOWLIST = {
 	poolDependsOn: 'BlocksAuthPoolGuard',
 } as const;
 
+/**
+ * THE RESET GRANT ALLOWLIST (#912) — one added IAM statement on the shared
+ * role: `cognito-idp:AdminGetUser` + `AdminUserGlobalSignOut` on the pool, so a
+ * completed password reset signs the user out everywhere. `AuthCognito`'s reset
+ * did not. Only that exact statement is removed from `Auth`'s side; every
+ * other statement, the admin one included, must still match.
+ */
+function withoutResetGrant(template: CfnTemplateJson): void {
+	const reset = JSON.stringify([...PASSWORD_RESET_IAM_ACTIONS]);
+	for (const resource of Object.values(template.Resources)) {
+		if (resource.Type !== 'AWS::IAM::Policy') continue;
+		const doc = resource.Properties?.PolicyDocument as { Statement: { Action: unknown }[] } | undefined;
+		if (doc) doc.Statement = doc.Statement.filter((s) => JSON.stringify(s.Action) !== reset);
+	}
+}
+
 function isGuardResource(resource: CfnResourceJson): boolean {
 	return String(resource.Metadata?.['aws:cdk:path'] ?? '').startsWith(GUARD_ALLOWLIST.pathPrefix);
 }
@@ -178,6 +196,7 @@ function withoutAllowlisted(
 ): [CfnTemplateJson, CfnTemplateJson] {
 	const cognito = structuredClone(cognitoTemplate);
 	const auth = structuredClone(authTemplate);
+	withoutResetGrant(auth);
 	const cognitoPool = resourceOfType(cognito, 'AWS::Cognito::UserPool');
 	const authPool = resourceOfType(auth, 'AWS::Cognito::UserPool');
 	if (authPool?.[1].Properties) {

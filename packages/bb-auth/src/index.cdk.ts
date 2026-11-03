@@ -68,6 +68,7 @@ import {
 	mapMfaTypes,
 	mapPasswordPolicy,
 	mapSignInWith,
+	PASSWORD_RESET_IAM_ACTIONS,
 	resolveMfa,
 } from './cdk/mappers.js';
 import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
@@ -492,6 +493,12 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	 */
 	private grantCognitoPermissions(poolArn: string, opts: AuthOptions, detached: boolean): void {
 		const statements = [new iam.PolicyStatement({ actions: [...CLIENT_IAM_ACTIONS], resources: [poolArn] })];
+		// A completed password reset signs the user out everywhere (#912).
+		if (emailPasswordEnabled(opts)) {
+			statements.push(
+				new iam.PolicyStatement({ actions: [...PASSWORD_RESET_IAM_ACTIONS], resources: [poolArn] }),
+			);
+		}
 		// Admin surface — opt-in only. Omitting `admin` grants no Admin*/List*
 		// action; `admin.actions` scopes the grant the same way it scopes the
 		// typed `auth.admin` surface.

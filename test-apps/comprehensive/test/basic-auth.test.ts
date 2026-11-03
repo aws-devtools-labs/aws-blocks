@@ -354,6 +354,40 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignOut();
       });
 
+      test('a cookie captured before a password reset is rejected when replayed after (#912)', async () => {
+        const baseUrl = getBaseUrl();
+        const api = getApi();
+        const username = uniqueUser();
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
+        let code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code.code);
+
+        // Sign in over raw RPC and capture the session cookie (jar bypassed).
+        const signIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        assert.ok(!signIn.error, `authSignIn failed: ${JSON.stringify(signIn.error)}`);
+        const cookie = signIn.setCookies.find((c) => /^auth_[^=]+=[^;]+/.test(c))?.split(';')[0];
+        assert.ok(cookie, `a session cookie, got: ${signIn.setCookies.join(' | ')}`);
+        const before = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(before.result, true, 'captured cookie authenticates before the reset');
+
+        await api.authResetPassword(username);
+        code = await pollForCode(api, username, { not: code.code });
+        await api.authConfirmResetPassword(username, code.code, 'newpass123');
+
+        // The reset signed the user out everywhere: the old cookie no longer authenticates.
+        const after = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(after.result, false, 'replayed cookie is rejected after the reset');
+        const gated = await rpcRaw(baseUrl, 'authRequired', [], cookie);
+        assert.strictEqual(gated.error?.code, 401, `requireAuth rejects the replayed cookie: ${JSON.stringify(gated)}`);
+        assert.strictEqual(gated.error?.data?.name, AuthErrors.NotAuthenticated);
+
+        // A sign-in with the new password is a fresh session that works.
+        const user = await api.authSignIn(username, 'newpass123');
+        assert.strictEqual(user.username, username);
+        assert.strictEqual(await api.authCheckAuth(), true);
+        await api.authSignOut();
+      });
+
       test('confirmResetPassword rejects invalid code', async () => {
         const api = getApi();
         const username = uniqueUser();

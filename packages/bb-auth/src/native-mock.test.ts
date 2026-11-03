@@ -284,6 +284,56 @@ describe('mock engine — sign-up, sign-in, codes', () => {
 		await b.request((ctx) => auth.updatePassword(ctx, 'NewPassw0rd!', 'Newer-Passw0rd'));
 		assert.strictEqual((await b.request((ctx) => auth.signIn('hal', 'Newer-Passw0rd', ctx))).status, 'signedIn');
 	});
+
+	test('a completed password reset ends every session the user had; they sign in again with the new password (#912)', async () => {
+		const sink = codeSink();
+		const auth = new Auth(root(), 'auth', { codeDelivery: sink.deliver });
+		await register(auth, sink, 'hal');
+		await register(auth, sink, 'ida');
+		const phone = new Browser();
+		const laptop = new Browser();
+		const other = new Browser();
+		await phone.request((ctx) => auth.signIn('hal', PASSWORD, ctx));
+		await laptop.request((ctx) => auth.signIn('hal@example.com', PASSWORD, ctx));
+		await other.request((ctx) => auth.signIn('ida', PASSWORD, ctx));
+		assert.strictEqual(await phone.request((ctx) => auth.checkAuth(ctx)), true);
+
+		// Reset by the email alias: the sessions still resolve to the same user.
+		await auth.resetPassword('hal@example.com');
+		await auth.confirmResetPassword('hal@example.com', sink.last('resetPassword'), 'NewPassw0rd!');
+
+		assert.strictEqual(await phone.request((ctx) => auth.checkAuth(ctx)), false, 'pre-reset session rejected');
+		assert.strictEqual(await laptop.request((ctx) => auth.getCurrentUser(ctx)), null, 'every pre-reset session');
+		const gated = await observe(laptop.request((ctx) => auth.requireAuth(ctx)));
+		assert.strictEqual(gated.name, AuthErrors.NotAuthenticated);
+		assert.strictEqual(gated.status, 401);
+		assert.strictEqual(await other.request((ctx) => auth.checkAuth(ctx)), true, 'other users are unaffected');
+
+		const again = new Browser();
+		assert.strictEqual((await again.request((ctx) => auth.signIn('hal', 'NewPassw0rd!', ctx))).status, 'signedIn');
+		assert.strictEqual((await again.request((ctx) => auth.requireAuth(ctx))).username, 'hal');
+	});
+
+	test('a reset through createApi() setAuthState ends the pre-reset sessions too', async () => {
+		const sink = codeSink();
+		const auth = new Auth(root(), 'auth', { codeDelivery: sink.deliver });
+		await register(auth, sink, 'jo');
+		const before = new Browser();
+		await before.request((ctx) => auth.signIn('jo', PASSWORD, ctx));
+		const api = auth.createApi();
+		const b = new Browser();
+		await b.request((ctx) => bind(api, ctx).setAuthState({ action: 'resetPassword', username: 'jo' }));
+		const state = await b.request((ctx) =>
+			bind(api, ctx).setAuthState({
+				action: 'confirmResetPassword',
+				username: 'jo',
+				code: sink.last('resetPassword'),
+				newPassword: 'NewPassw0rd!',
+			}),
+		);
+		assert.strictEqual(state.error, undefined);
+		assert.strictEqual(await before.request((ctx) => auth.checkAuth(ctx)), false);
+	});
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

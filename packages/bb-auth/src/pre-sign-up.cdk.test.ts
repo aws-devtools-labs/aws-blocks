@@ -123,7 +123,8 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 		const defaultPolicy =
 			unset.template.Resources[logicalIdOf(unset.template, '/BlocksRole/DefaultPolicy/Resource')];
 		assert.ok(defaultPolicy);
-		assert.strictEqual(cognitoStatements(defaultPolicy).length, 2);
+		// The client statement, the password-reset statement (#912) and the admin statement.
+		assert.strictEqual(cognitoStatements(defaultPolicy).length, 3);
 	});
 
 	test('set: LambdaConfig.PreSignUp is the shared backend Lambda', () => {

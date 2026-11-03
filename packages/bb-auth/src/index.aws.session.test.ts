@@ -130,6 +130,8 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('rewrites the same record with the new tokens (keeping the refresh token when not rotated) and slides the TTL', async () => {
 		const { h, b, sid, tokens } = await signedInWithExpiredAccess();
+		const issuedAt = (await h.lookupSession(sid))?.issuedAt;
+		assert.strictEqual(typeof issuedAt, 'number');
 		const fresh = h.idp.authResult('alice', { refreshToken: null, claims: { email: 'new@example.com' } });
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: fresh }));
 		const user = await b.request((ctx) => h.auth.getCurrentUser(ctx));
@@ -142,7 +144,13 @@ describe('AWS session refresh (expired access token)', () => {
 		assert.strictEqual(h.sessionWrites.length, 1);
 		assert.deepStrictEqual(h.sessionWrites[0], {
 			key: sid,
-			value: { idToken: fresh.IdToken, accessToken: fresh.AccessToken, refreshToken: tokens.RefreshToken },
+			// The sign-in time survives the refresh, so a later password reset still ends the session.
+			value: {
+				idToken: fresh.IdToken,
+				accessToken: fresh.AccessToken,
+				refreshToken: tokens.RefreshToken,
+				issuedAt,
+			},
 			options: { ttlSeconds: DEFAULT_TTL },
 		});
 	});

@@ -815,6 +815,14 @@ export class MockNativeEngine implements NativeEngine {
 		this.store.flush();
 	}
 
+	async signOutEverywhere(login: string): Promise<string> {
+		// As `AdminGetUser` + `AdminUserGlobalSignOut`: the user's tokens stop refreshing.
+		const { username, user } = this.store.requireResolved(login);
+		user.tokenRevision = (user.tokenRevision ?? 0) + 1;
+		this.store.flush();
+		return username;
+	}
+
 	async updatePassword(input: { accessToken: string; oldPassword: string; newPassword: string }): Promise<void> {
 		const { user } = this.store.userForAccessToken(input.accessToken);
 		if (user.password !== input.oldPassword) {

@@ -65,6 +65,14 @@ export interface PoolSessionRecord {
 	 * row `AuthCognito` wrote, which is why absence means `'password'`.
 	 */
 	provider?: string;
+	/**
+	 * When `Auth` signed this session in, ms since the epoch, kept across
+	 * refreshes. A password reset ends every session issued at or before it
+	 * ({@link SessionStore.isRevoked}). Absent on a row written before `Auth`
+	 * stamped it (an `AuthCognito` row included), which reads as `0`: the
+	 * user's next reset ends it.
+	 */
+	issuedAt?: number;
 }
 
 /**
@@ -271,6 +279,7 @@ export function parseSessionRecord(raw: unknown): SessionRecord | null {
 		const accessToken: unknown = Reflect.get(raw, 'accessToken');
 		const refreshToken: unknown = Reflect.get(raw, 'refreshToken');
 		const provider: unknown = Reflect.get(raw, 'provider');
+		const issuedAt: unknown = Reflect.get(raw, 'issuedAt');
 		if (typeof idToken !== 'string' || typeof accessToken !== 'string') return null;
 		const claims = decodeJwtPayload(idToken);
 		if (!claims || !stringClaim(claims, 'sub')) return null;
@@ -281,6 +290,7 @@ export function parseSessionRecord(raw: unknown): SessionRecord | null {
 			accessToken,
 			refreshToken: typeof refreshToken === 'string' ? refreshToken : '',
 			...(typeof provider === 'string' ? { provider } : {}),
+			...(typeof issuedAt === 'number' && Number.isFinite(issuedAt) ? { issuedAt } : {}),
 		};
 	}
 	if (kind === 'direct') {
@@ -441,10 +451,11 @@ export class SessionStore {
 		return this.ttlSeconds === undefined ? undefined : { ttlSeconds: this.ttlSeconds };
 	}
 
-	/** Insert a new session; returns the generated session id. */
+	/** Insert a new session; returns the generated session id. A pool row is stamped with `issuedAt`. */
 	async create(record: SessionRecord): Promise<string> {
 		const sessionId = crypto.randomBytes(24).toString('base64url');
-		await this.kv.put(sessionId, record, this.writeOptions());
+		const row = 'kind' in record ? record : { ...record, issuedAt: Date.now() };
+		await this.kv.put(sessionId, row, this.writeOptions());
 		return sessionId;
 	}
 
@@ -464,6 +475,36 @@ export class SessionStore {
 	/** Delete a session. Silent no-op if it does not exist. */
 	async delete(sessionId: string): Promise<void> {
 		await this.kv.delete(sessionId);
+	}
+
+	/**
+	 * End every password session of the pool user `username` issued until now
+	 * (a completed password reset, #912): one marker row, `reset:<username>` →
+	 * `{ revokedBefore }`, that {@link isRevoked} checks. A session id is
+	 * base64url, so the key never names a session, and the marker parses as no
+	 * session ({@link parseSessionRecord}). No TTL: it must outlive every row it
+	 * ends, and it is one small row per user who ever reset.
+	 */
+	async revokeSessionsOf(username: string): Promise<void> {
+		const revokedBefore = Date.now();
+		await this.kv.put(`reset:${username}`, { revokedBefore });
+		// A session signed in after the reset must be issued after the marker, even
+		// within the same millisecond: wait for the clock to pass it (≤ 1 ms).
+		while (Date.now() <= revokedBefore) await new Promise((resolve) => setTimeout(resolve, 1));
+	}
+
+	/**
+	 * Whether a password reset since `record` was issued ended it. Password
+	 * sessions only (a federated user has no password to reset), at one extra
+	 * read each. A failed read throws (fail closed); an unreadable marker ends
+	 * nothing.
+	 */
+	async isRevoked(record: SessionRecord): Promise<boolean> {
+		if ('kind' in record || record.provider !== undefined) return false;
+		const marker = await this.kv.get(`reset:${identityOf(record).username}`);
+		const revokedBefore: unknown =
+			typeof marker === 'object' && marker !== null ? Reflect.get(marker, 'revokedBefore') : undefined;
+		return typeof revokedBefore === 'number' && (record.issuedAt ?? 0) <= revokedBefore;
 	}
 
 	/**

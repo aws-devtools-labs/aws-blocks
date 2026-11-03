@@ -614,16 +614,72 @@ describe('AWS password reset and change — command shapes', () => {
 		});
 	});
 
-	test('confirmResetPassword → ConfirmForgotPassword with the code and new password', async () => {
+	test('confirmResetPassword → ConfirmForgotPassword with the code and new password, then signs the user out everywhere', async () => {
 		const h = makeAwsAuth();
 		h.on('ConfirmForgotPasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
+		await h.auth.confirmResetPassword('alice@example.com', '424242', 'New!pass1');
+		assert.deepStrictEqual(h.sent, [
+			{
+				name: 'ConfirmForgotPasswordCommand',
+				input: {
+					ClientId: TEST_CLIENT_ID,
+					Username: 'alice@example.com',
+					ConfirmationCode: '424242',
+					Password: 'New!pass1',
+				},
+			},
+			// The login may be an alias: resolve the pool username the sessions carry.
+			{ name: 'AdminGetUserCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'alice@example.com' } },
+			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'alice' } },
+		]);
+	});
+
+	test('a completed reset rejects every pre-reset session at once; other users and new sign-ins are unaffected (#912)', async () => {
+		const h = makeAwsAuth();
+		const phone = new Browser();
+		const laptop = new Browser();
+		const other = new Browser();
+		await signInAs(h, phone, 'alice');
+		const laptopSession = await signInAs(h, laptop, 'alice');
+		await signInAs(h, other, 'bob');
+		h.on('ConfirmForgotPasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await h.auth.confirmResetPassword('alice', '424242', 'New!pass1');
-		assert.deepStrictEqual(h.sent[0].input, {
-			ClientId: TEST_CLIENT_ID,
-			Username: 'alice',
-			ConfirmationCode: '424242',
-			Password: 'New!pass1',
+
+		// The access tokens are still unexpired: only the reset marker rejects them.
+		assert.strictEqual(await phone.request((ctx) => h.auth.checkAuth(ctx)), false);
+		const e = await laptop
+			.request((ctx) => h.auth.requireAuth(ctx))
+			.then(
+				() => assert.fail('expected a 401'),
+				(err: unknown) => err,
+			);
+		assert.strictEqual(wireView(e).code, 401);
+		assert.strictEqual(wireView(e).name, AuthErrors.NotAuthenticated);
+		assert.strictEqual(await h.lookupSession(laptopSession), null, 'the revoked row is deleted');
+		assert.strictEqual(await other.request((ctx) => h.auth.checkAuth(ctx)), true, 'other users are unaffected');
+
+		const again = new Browser();
+		await signInAs(h, again, 'alice');
+		assert.strictEqual((await again.request((ctx) => h.auth.requireAuth(ctx))).username, 'alice');
+	});
+
+	test('a reset whose sign-out step fails reports the failure (the password is already changed)', async () => {
+		const { logger, entries } = captureLogger();
+		const h = makeAwsAuth({ logger });
+		h.on('ConfirmForgotPasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => {
+			throw cognitoError('InternalErrorException', 'boom', 500);
 		});
+		const e = await h.auth.confirmResetPassword('alice', '424242', 'New!pass1').then(
+			() => assert.fail('expected a rejection'),
+			(err: unknown) => err,
+		);
+		assert.notStrictEqual(wireView(e).name, AuthErrors.CodeMismatch, 'never reported as a wrong code');
+		assert.ok(entries.some((l) => l.level === 'error' && /password reset/.test(l.message)));
 	});
 
 	test('updatePassword → ChangePassword with the session access token', async () => {

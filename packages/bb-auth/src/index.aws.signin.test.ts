@@ -77,11 +77,14 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 
 		assert.strictEqual(h.sessionWrites.length, 1);
 		const [w] = h.sessionWrites;
-		assert.deepStrictEqual(w.value, {
+		// Plus `Auth`'s own sign-in time, which a password reset compares against (#912).
+		const { issuedAt, ...cognitoTokens } = w.value;
+		assert.deepStrictEqual(cognitoTokens, {
 			idToken: tokens.IdToken,
 			accessToken: tokens.AccessToken,
 			refreshToken: tokens.RefreshToken,
 		});
+		assert.ok(typeof issuedAt === 'number' && Math.abs(issuedAt - Date.now()) < 5000);
 		assert.deepStrictEqual(w.options, { ttlSeconds: DEFAULT_TTL });
 		// Opaque, server-generated id: 24 random bytes, base64url.
 		assert.match(w.key, /^[A-Za-z0-9_-]{32}$/);
