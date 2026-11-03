@@ -44,6 +44,14 @@ export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
  */
 export const DEV_STATE = { running: '[blocks dev: running]', stopped: '[blocks dev: stopped]' } as const;
 
+/**
+ * The environment variable, `1`, that tells the dev server it runs under `tsx watch`
+ * (in `blocks dev`, and in the sandbox's dev command), so a failed first start ends
+ * that `tsx watch` too. Core reads it as `BLOCKS_DEV_UNDER_WATCH`: on Windows the
+ * dev server cannot read its parent's command line to tell.
+ */
+export const DEV_UNDER_WATCH_ENV = 'BLOCKS_DEV_UNDER_WATCH';
+
 /** The environment variable that names the `tsx` loader for core's client-generation worker. */
 export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
 

@@ -56,6 +56,7 @@ import {
 	DEV_FAILURE_FILE_ENV,
 	DEV_OPTIONS_ENV,
 	DEV_STATE,
+	DEV_UNDER_WATCH_ENV,
 	type RunnerLaunch,
 	type RunnerName,
 	resolveTsxCli,
@@ -241,7 +242,8 @@ function telemetryArgs(ctx: Context): string[] {
 }
 
 /**
- * The environment of the dev server runner. An explicit host also opts the
+ * The environment of the dev server runner, which always runs under `tsx watch`
+ * (see {@link DEV_UNDER_WATCH_ENV}). An explicit host also opts the
  * local realtime WebSocket into that host's origins, which it reads from
  * `BLOCKS_DEV_HOST`, unless `BLOCKS_DEV_HOST` is already set in the environment:
  * an inherited opt-in (for example a hostname behind `--host 0.0.0.0`) wins.
@@ -250,6 +252,7 @@ function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; ho
 	const exportHost = options.host !== undefined && !env.BLOCKS_DEV_HOST;
 	return {
 		[DEV_OPTIONS_ENV]: JSON.stringify(options),
+		[DEV_UNDER_WATCH_ENV]: '1',
 		...(exportHost ? { BLOCKS_DEV_HOST: options.host } : {}),
 	};
 }

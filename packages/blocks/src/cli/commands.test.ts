@@ -14,7 +14,14 @@ import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@
 import { redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
-import { DEV_OPTIONS_ENV, DEV_STATE, type RunnerName, runnerPath, TSX_IMPORT_ENV } from './runners/launch.js';
+import {
+	DEV_OPTIONS_ENV,
+	DEV_STATE,
+	DEV_UNDER_WATCH_ENV,
+	type RunnerName,
+	runnerPath,
+	TSX_IMPORT_ENV,
+} from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
 const IDENTITY: AwsIdentity = {
@@ -397,6 +404,8 @@ describe('lifecycle commands', () => {
 			frontendPort: 3100,
 		});
 		assert.strictEqual(spec.env.BLOCKS_LOG_LEVEL, 'normal');
+		// A failed first start ends this `tsx watch` too, also where its command line can't be read (Windows).
+		assert.strictEqual(spec.env[DEV_UNDER_WATCH_ENV], '1');
 	});
 
 	it('runs sandbox with the dev server runner as its dev command', async () => {
@@ -431,6 +440,7 @@ describe('lifecycle commands', () => {
 			frontendCommand: 'npx next dev --webpack --hostname 127.0.0.1 --port 3100',
 			frontendPort: 3100,
 		});
+		assert.strictEqual(spec.env[DEV_UNDER_WATCH_ENV], '1');
 	});
 
 	it('runs sandbox destroy under --conditions=cdk without a prompt when not interactive', async () => {
