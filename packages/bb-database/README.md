@@ -56,17 +56,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async placeOrder(total: number) {
     const { userId } = await auth.requireAuth(context);
-    return shop.transaction(async (tx) => {
+    await shop.transaction(async (tx) => {
       const customer = await tx.queryOne<{ id: string }>(sql`SELECT id FROM customers WHERE id = ${userId}`);
       if (!customer) throw new ApiError('save your profile first', 404);
       await tx.execute(sql`INSERT INTO orders (customer_id, total) VALUES (${userId}, ${total})`);
-      return tx.queryOne<{ n: number }>(sql`SELECT count(*) AS n FROM orders WHERE customer_id = ${userId}`);
     });
   },
 }));
 ```
 
-The 404 thrown inside the transaction reaches the client as an `ApiError` with `status` 404. `count(*)` comes back as a number (see [Typed results](#typed-results)).
+The 404 thrown inside the transaction reaches the client as an `ApiError` with `status` 404.
 
 `npm run dev` runs this with no AWS account. `npm run deploy` creates the cluster and applies the migration before the new code goes live.
 
@@ -119,7 +118,7 @@ Cluster options:
 | Option | Type | Description |
 |---|---|---|
 | `type` | `'dsql'` | Required. Aurora DSQL; a second kind is planned. |
-| `removalPolicy` | `'retain' \| 'destroy'` | What happens to the cluster when it leaves the stack. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. Most apps never set this. Data stays on the cluster when a block is renamed or moved; see the callout in [Quick start](#quick-start). |
+| `removalPolicy` | `'retain' \| 'destroy'` | What happens to the cluster when it leaves the stack. When omitted, the stack-wide `defaults` apply: `production` retains with deletion protection on, `sandbox` destroys. Data stays on the cluster when a block is renamed or moved; see the callout in [Quick start](#quick-start). |
 
 Block options:
 
@@ -143,13 +142,13 @@ const search = new Database(scope, 'search', { cluster: shared });
 
 The `DatabaseCluster` provisions the cluster. Each `Database` on it gets a schema named after its id, with its own migrations and tables. An unqualified table name resolves to the block's schema: ``audit.query(sql`SELECT * FROM events`)`` reads `audit.events`, and the same text on `search` reads `search.events`. Locally the cluster is one PGlite with the same schemas.
 
-**Isolation is by namespace, not by permission.** Both blocks connect as one role that has DML on every schema on the cluster. A query that qualifies the table name, ``sql`SELECT * FROM search.events` `` from `audit`, works, and so does a join across two schemas. The schema is a naming convention that keeps two blocks' tables apart. It is not a boundary between tenants or trust levels. A block that must not see another block's data belongs on its own cluster.
+**Isolation is by namespace, not by permission.** Both blocks connect as one role that has DML on every schema on the cluster. Qualified table names and joins across schemas work from any block on the cluster. The schema is a naming convention that keeps two blocks' tables apart. It is not a boundary between tenants or trust levels. A block that must not see another block's data belongs on its own cluster.
 
-**Why share.** Share when you want one migration pipeline instead of one per block, when you need to query across the blocks' tables, or to use one slot of the account's [cluster quota](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html) instead of one per block. Keep separate clusters when the blocks have different lifecycles: the removal policy is set on the cluster, blocks on one cluster migrate one at a time, and a block cannot move to another cluster later without you copying its data.
+**Why share.** For one migration pipeline instead of one per block, for queries across the blocks' tables, or to use one [cluster quota](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/CHAP_quotas.html) slot instead of one per block. Keep separate clusters when the blocks have different lifecycles: the removal policy is set on the cluster, blocks on one cluster migrate one at a time, and a block cannot move to another cluster later without you copying its data.
 
 ## Migrations
 
-Your `Database` runs on Aurora DSQL, so write its migrations in DSQL, as the AWS documentation shows them: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). The block never changes the SQL you wrote. What is in the file is what runs on the cluster. Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) before anything runs (see [What is rejected](#what-is-rejected)).
+Your `Database` runs on Aurora DSQL, so write its migrations in DSQL, as the AWS documentation shows them: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). What is in the file is what runs on the cluster. Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) before anything runs (see [What is rejected](#what-is-rejected)).
 
 Each block has one directory of `.sql` files, `./aws-blocks/migrations/{id}` unless `migrationsPath` says otherwise. Block ids are unique per app because they name this directory and, on a shared cluster, the block's schema. Files run in name order, once each:
 
@@ -166,9 +165,9 @@ aws-blocks/migrations/
 
 Most DDL is the same on DSQL. Four spellings differ: `SERIAL`, a plain `CREATE INDEX`, an `ADD CONSTRAINT` without `NOT VALID`, and a sequence without a cache. The first `npm run dev` stops on each and prints the DSQL form (see [What is rejected](#what-is-rejected)).
 
-To convert an existing PostgreSQL or `pg_dump` file once, run `npx dsql-lint --fix old.sql -o 001_init.sql` and review the output. The binary is installed with the block. If `npx` cannot find it, run `node_modules/@aws/dsql-lint/bin/dsql-lint`. Exit code 3 means it fixed everything but changed a meaning, such as an index becoming asynchronous. It writes `CACHE 1`; most tables want `CACHE 65536` (next paragraph). It adds `NOT VALID` to constraints but not the `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` that validates existing rows. Add that statement yourself.
+To convert an existing PostgreSQL or `pg_dump` file once, run `npx dsql-lint --fix old.sql -o 001_init.sql` and review the output. The binary is installed with the block. If `npx` cannot find it, run `node_modules/@aws/dsql-lint/bin/dsql-lint`. Exit code 3 means it fixed everything but changed a meaning, such as an index becoming asynchronous. It writes `CACHE 1` (see below), and it adds `NOT VALID` to constraints without the `ALTER TABLE ASYNC … VALIDATE CONSTRAINT` that validates existing rows; add that statement yourself.
 
-**Identity columns and sequences** need a cache. With `CACHE 65536` each session takes a block of values locally, so an insert needs no coordination round across the cluster. Values are unique but can have gaps and arrive out of order. `CACHE 1` keeps values close to sequential at the cost of one round trip per value. Use it only when order matters more than insert rate.
+**Identity columns and sequences** need a cache. `CACHE 65536` gives each session a local block of values: fast inserts, unique values, but gaps and out-of-order values. `CACHE 1` keeps values close to sequential at one round trip per value. The lint error repeats this trade-off when a cache is missing.
 
 **Changes DSQL cannot express** are adding a column with a `DEFAULT` or `NOT NULL`, and `ALTER COLUMN … SET NOT NULL` or `… TYPE`. To add a constrained column:
 
@@ -178,13 +177,13 @@ To convert an existing PostgreSQL or `pg_dump` file once, run `npx dsql-lint --f
 
 To change a column's type: add a new column, copy the values in batches, switch your queries, then drop the old column.
 
-You do not need to write `sys.wait_for_job(…)` after an `ASYNC` statement; the block waits for the job. A wait copied from the AWS examples runs anyway. Locally it returns at once (see [Local mode](#local-mode)).
+You do not need to write `sys.wait_for_job(…)` after an `ASYNC` statement; the block waits for the job. A wait copied from the AWS examples runs anyway (see [Local mode](#local-mode)).
 
 On DSQL the rows an `ON DELETE CASCADE` foreign key deletes count toward the 3,000-row transaction limit. A delete that fans out past it fails whole. Prefer `NO ACTION` or `RESTRICT` for unbounded parent-child relationships.
 
 ### What is rejected
 
-Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) at `npm run dev` and at `cdk synth`, before any deploy. The check covers what DSQL cannot run (triggers, extensions, policies, `TRUNCATE`, array columns, `ADD COLUMN … DEFAULT`, `SET NOT NULL`) and the PostgreSQL spellings of DSQL forms (`SERIAL`, `CREATE INDEX` without `ASYNC`, constraints without `NOT VALID`, sequences without a cache). Nothing is rewritten for you. The error names the file, the rule, dsql-lint's suggestion and the DSQL documentation page:
+Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) at `npm run dev` and at `cdk synth`, before any deploy, for what DSQL cannot run (triggers, extensions, policies, `TRUNCATE`, array columns) and for the PostgreSQL spellings of DSQL forms. Nothing is rewritten for you. The error names the file, the rule, dsql-lint's suggestion and the DSQL documentation page:
 
 ```
 DsqlMigrationValidationError: Migration validation failed for Aurora DSQL (cluster kind 'dsql'):
@@ -204,12 +203,10 @@ If a deploy fails in a migration, the error names the file and the failed statem
 
 DSQL uses [optimistic concurrency](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-concurrency-control.html): a transaction never waits on a lock. Two transactions that change the same row both run to the end. Then one commit fails with `SerializationFailure` (SQLSTATE `40001`, HTTP 409, flagged retriable). `SELECT … FOR UPDATE` is supported and makes a read conflict with concurrent writes, which is how a read-modify-write stays correct.
 
-- A single `query` or `execute` outside a transaction is retried for you, three times at 50, 100 and 200 ms.
-- A `transaction()` callback is re-run only when you pass `{ retryOnConflict: true }`, because a callback may have side effects. `maxRetries` defaults to 3.
+- Pass `{ retryOnConflict: true }` to re-run the callback on a conflict. It is off by default because a callback may have side effects. `maxRetries` defaults to 3. A single `query` or `execute` outside a transaction is always retried (see [Errors](#errors)).
 - A transaction may change at most 3,000 rows (cascaded deletes included) and 10 MiB of data. Past either it fails with `TransactionRowLimitExceeded` and nothing is kept. Split bulk work into batches.
-- DDL and DML never share a transaction, and only migrations run DDL.
-- A throw inside the callback rolls the transaction back. An `ApiError` (a 404 you throw, or the 401 from `requireAuth`), any branded Blocks error and any `DatabaseErrors` error reach the caller unchanged. Any other error becomes `TransactionFailed` and its text stays on the server.
-- Inside the callback, `shop.query()`, `shop.queryOne()` and `shop.execute()` on the block that opened the transaction run in it, as `tx` does, locally and on DSQL. Prefer `tx`: it makes the transaction visible where the statement is written.
+- A throw inside the callback rolls the transaction back. An `ApiError`, a branded Blocks error or a `DatabaseErrors` error reaches the caller unchanged. Any other error becomes `TransactionFailed` and its text stays on the server.
+- Inside the callback, `shop.query()`, `shop.queryOne()` and `shop.execute()` on the block that opened the transaction run in it, as `tx` does. Prefer `tx`: it shows the transaction where the statement is written.
 
 ```ts
 import { ApiError } from '@aws-blocks/core';
@@ -222,7 +219,7 @@ await shop.transaction(async (tx) => {
 }, { retryOnConflict: true });
 ```
 
-For tests, `simulateConflict(shop)` from `@aws-blocks/bb-database/testing` makes the next commit fail with `SerializationFailure` in local mode, so a test can cover the retry without a deployed cluster. It throws in the Lambda runtime, where a conflict comes from the cluster itself.
+For tests, `simulateConflict(shop)` from `@aws-blocks/bb-database/testing` makes the next commit fail with `SerializationFailure` in local mode. It throws in the Lambda runtime.
 
 ## Errors
 
@@ -254,7 +251,7 @@ try {
 
 `npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
 
-A `dsql` cluster adds DSQL's checks locally. Every statement a handler issues goes through `dsql-lint` first (cached per statement text), so unsupported SQL fails on your machine, not in production. DDL outside a migration is refused, because the deployed app role can only run DML. A transaction that changes more than 3,000 rows (cascades included) or 10 MiB fails and rolls back, as on DSQL.
+A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production.
 
 Your DSQL migration files run unchanged. `ASYNC` index builds and constraint validations complete at once, and a `sys.wait_for_job(…)` copied from the AWS examples returns immediately.
 
