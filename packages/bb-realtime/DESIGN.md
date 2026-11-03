@@ -55,13 +55,15 @@ A failed subscribe rejects only that subscription's `established` promise — ot
 - **Connect token:** Scoped to the Realtime instance (2-hour TTL). Passed as query string parameter on WebSocket connect. Gates who can open a connection.
 - **Channel token:** Scoped to a specific channel (1-hour TTL). Sent in the subscribe message. Gates who can subscribe to a channel.
 
-Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix (e.g., `collab`), so `validateChannelToken`'s `startsWith` check accepts any channel under that prefix.
+Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix with a `$connect` suffix (e.g., `collab$connect`). It authorizes the `$connect` handshake only: a subscribe needs a channel token, whose scope always has a `/` after the instance prefix (`validateChannelToken` with a `requestedChannel` rejects any token whose scope has none).
+
+**Channel paths:** a subscribe or unsubscribe must name a channel path of the form `getChannel()` mints, `<instance>/<namespace>/<channel>`, of at most 1024 UTF-8 bytes (`isClientChannelPath`). The deployed handler and the local WebSocket server check this before the token or the connections table, answer an invalid subscribe with `{ type: 'error', message: 'Invalid channel' }` (no `channel` field), and ignore an invalid unsubscribe.
 
 ### Mock Middleware
 
 - Connection pool keyed by `wsUrl` (e.g., `ws://localhost:3001/realtime`)
 - Subscribe: `{ action: 'subscribe', channel, token }`
-- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
+- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }` (`{ type: 'error', message: 'Invalid channel' }` when `channel` is not a channel path)
 - Data: `{ type: 'message', channel, data }`
 
 ### AWS Middleware
@@ -69,7 +71,7 @@ Both are HMAC-SHA256 signed with the same shared secret. The connect token's cha
 - Connection pool keyed by `wsUrl` (API Gateway WebSocket stage URL)
 - Connect: `wss://{wsUrl}?token={connectToken}`
 - Subscribe: `{ action: 'subscribe', channel, token }`
-- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
+- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }` (`{ type: 'error', message: 'Invalid channel' }` when `channel` is not a channel path)
 - Data: `{ type: 'message', channel, data }`
 - Keep-alive: `{ action: 'ping' }` every ~9 minutes
 

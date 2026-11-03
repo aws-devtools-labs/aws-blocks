@@ -38,7 +38,7 @@ import type {
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validatePublishSize } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validatePublishSize, isClientChannelPath } from './utils.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
@@ -94,11 +94,14 @@ interface WebSocketEvent {
 	body?: string;
 }
 
-/** Parsed message body from a WebSocket $default route. */
+/**
+ * Parsed message body from a WebSocket $default route. `channel` is checked with
+ * {@link isClientChannelPath} before use.
+ */
 interface WebSocketMessage {
 	action: 'subscribe' | 'unsubscribe' | 'ping';
-	channel?: string;
-	token?: string;
+	channel?: unknown;
+	token?: unknown;
 }
 
 /** Lambda response shape for WebSocket events. */
@@ -212,7 +215,25 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 
 	const callbackUrl = `https://${domainName}/${stage}`;
 
-	if (msg.action === 'subscribe' && msg.channel && msg.token) {
+	if ((msg.action === 'subscribe' || msg.action === 'unsubscribe') && !isClientChannelPath(msg.channel)) {
+		if (msg.action === 'subscribe') {
+			await getApigw(callbackUrl).send(new PostToConnectionCommand({
+				ConnectionId: connectionId,
+				Data: JSON.stringify({ type: 'error', message: 'Invalid channel' }),
+			}));
+		}
+		return { statusCode: 200 };
+	}
+
+	if (msg.action === 'subscribe' && isClientChannelPath(msg.channel)) {
+		if (typeof msg.token !== 'string' || !msg.token) {
+			// Same reply as the local WebSocket server (ws-server.ts).
+			await getApigw(callbackUrl).send(new PostToConnectionCommand({
+				ConnectionId: connectionId,
+				Data: JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }),
+			}));
+			return { statusCode: 200 };
+		}
 		const secret = await getTokenSecret();
 		const valid = validateChannelToken(msg.token, secret, msg.channel);
 		if (!valid) {
@@ -227,7 +248,7 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			ConnectionId: connectionId,
 			Data: JSON.stringify({ type: 'subscribe_success', channel: msg.channel }),
 		}));
-	} else if (msg.action === 'unsubscribe' && msg.channel) {
+	} else if (msg.action === 'unsubscribe' && isClientChannelPath(msg.channel)) {
 		await table.delete({ connectionId, channel: msg.channel });
 	} else if (msg.action === 'ping') {
 		// Get sentinel to read lastTtlSweep, then update TTL
