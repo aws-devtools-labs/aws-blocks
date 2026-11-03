@@ -1544,7 +1544,7 @@ export type PasskeyGate<O extends AuthOptions, T extends unknown[] = []> = [Pass
  * their own actions.
  *
  * A building block of the public gate types, exported because they are built
- * from it; not meant to be used on its own, and it may change.
+ * from it, and stable like them.
  */
 export type ConfirmSignInChallengeOf<N extends AnySignInNextStep['name']> =
 	N extends 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED'
@@ -2560,7 +2560,7 @@ export type AdminDisabled = {
  * `Auth` options).
  *
  * A building block of the public gate types, exported because they are built
- * from it; not meant to be used on its own, and it may change.
+ * from it, and stable like them.
  */
 export type AdminOff = [ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: never];
 
@@ -2666,7 +2666,7 @@ export type SignInNextStep<O extends AuthOptions = AuthOptions> = Extract<
  * omitted). A union when not a literal, including for the wide `AuthOptions`.
  *
  * A building block of the public gate types, exported because they are built
- * from it; not meant to be used on its own, and it may change.
+ * from it, and stable like them.
  */
 export type AuthFlowOf<O extends AuthOptions> = O extends { users?: infer U }
 	? U extends { authFlow?: infer F }
@@ -2680,7 +2680,7 @@ export type AuthFlowOf<O extends AuthOptions> = O extends { users?: infer U }
  * The `nextStep.name`s options `O` can produce — see {@link SignInNextStep}.
  *
  * A building block of the public gate types, exported because they are built
- * from it; not meant to be used on its own, and it may change.
+ * from it, and stable like them.
  */
 export type SignInStepNameOf<O extends AuthOptions> = O extends { userPool: ExternalUserPoolRef }
 	? AnySignInNextStep['name']
@@ -2702,7 +2702,7 @@ export type SignInStepNameOf<O extends AuthOptions> = O extends { userPool: Exte
  * The MFA `nextStep.name`s for the second factors `M` (MFA on).
  *
  * A building block of the public gate types, exported because they are built
- * from it; not meant to be used on its own, and it may change.
+ * from it, and stable like them.
  */
 export type MfaStepNameOf<M extends MfaFactor> =
 	| 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION'
