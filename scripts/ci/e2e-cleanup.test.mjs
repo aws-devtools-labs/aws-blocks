@@ -83,7 +83,9 @@ describe('always() cleanup steps', () => {
 	// or a step timeout: always(), cancelled() or failure() in its if, but not a negated !cancelled()
 	// (function names are case-insensitive; a double negation cancels out). `negated` collects the
 	// !cancelled() ones instead.
-	const teardownLine = (l) => /destroy|sandbox:delete/.test(l) && !/^\s*#/.test(l);
+	// `sandbox-teardown` covers a teardown that runs through a dedicated script
+	// (amplify-sandbox-teardown.mjs) rather than naming the delete command.
+	const teardownLine = (l) => /destroy|sandbox:delete|sandbox-teardown/.test(l) && !/^\s*#/.test(l);
 	const teardowns = (workflows, negated) =>
 		workflows.flatMap(({ file, wf }) =>
 			Object.entries(wf.jobs).flatMap(([job, def]) =>
