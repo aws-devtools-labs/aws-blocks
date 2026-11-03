@@ -24,7 +24,7 @@ export const CronJobErrors: {
     readonly UnsupportedCompute: "UnsupportedComputeException";
 };
 
-// @public (undocumented)
+// @public
 export interface CronJobEvent<T = void> {
     input: T;
     jobName: string;
@@ -33,13 +33,14 @@ export interface CronJobEvent<T = void> {
 
 // @public
 export interface CronJobOptions<T = void> {
-    compute?: ComputeProvider<'serverless'>;
+    compute?: ComputeProvider;
     description?: string;
     enabled?: boolean;
     handler: (event: CronJobEvent<T>) => Promise<void>;
     input?: T;
     logger?: ChildLogger;
     schedule: string;
+    timeoutSeconds?: number;
     timezone?: string;
 }
 

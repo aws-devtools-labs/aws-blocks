@@ -289,6 +289,22 @@ export interface ScanOptions {
 	limit?: number;
 }
 
+/** Options for `get()`. */
+export interface GetOptions {
+	/**
+	 * Read with strong consistency, so the result reflects every write that
+	 * succeeded before the read. By default `get()` is eventually consistent on
+	 * AWS (a DynamoDB `GetItem` without `ConsistentRead`), and a read issued right
+	 * after a `put()` may briefly miss it. Set this when the next step depends on
+	 * an item that was just written, e.g. an existence or ownership check. A
+	 * strongly consistent read costs twice the read capacity of an eventually
+	 * consistent one. The local mock is always strongly consistent.
+	 *
+	 * @defaultValue false
+	 */
+	consistentRead?: boolean;
+}
+
 export type PutOptions<T> =
 	| { ifNotExists: true; ifFieldEquals?: never }
 	| { ifNotExists?: never; ifFieldEquals: Partial<T> }

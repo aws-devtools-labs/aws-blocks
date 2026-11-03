@@ -30,6 +30,7 @@ export type {
 	KeyCondition,
 	QueryOptions,
 	ScanOptions,
+	GetOptions,
 	PutOptions,
 	DeleteOptions,
 } from './types.js';
@@ -40,6 +41,7 @@ import type {
 	ExternalTableRef,
 	ExternalKmsKeyRef,
 	ScanOptions,
+	GetOptions,
 	PutOptions,
 	DeleteOptions,
 	PartitionKeyCondition,
@@ -108,10 +110,11 @@ export class DistributedTable<
 		registerSdkIdentifiers(this.fullId, { tableName });
 	}
 
-	async get(key: TableKey<T, K>): Promise<T | null> {
+	async get(key: TableKey<T, K>, options?: GetOptions): Promise<T | null> {
 		const result = await this.docClient.send(new GetCommand({
 			TableName: getSdkIdentifiers(this).tableName,
 			Key: this.buildKey(key),
+			...(options?.consistentRead ? { ConsistentRead: true } : {}),
 		}));
 		return this.reconcileRead((result.Item as T) ?? null);
 	}

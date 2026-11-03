@@ -286,6 +286,15 @@ jobs:
       - name: Test the E2E teardown
         run: node --test scripts/ci/e2e-teardown.test.mjs
 
+      # Retries the Amplify interop sandbox delete when CloudFormation gives up
+      # on a throttled resource delete.
+      - name: Test the Amplify sandbox teardown
+        run: node --test scripts/ci/amplify-sandbox-teardown.test.mjs
+
+      # The stale-stack sweeper deletes Amplify sandboxes one at a time.
+      - name: Test the Amplify sandbox sweep
+        run: node --test scripts/ci/amplify-sweep.test.mjs
+
       # No required check may pass when a job it depends on fails or is
       # cancelled (GitHub counts a skipped required check as passing).
       - name: Test the required checks' failure paths

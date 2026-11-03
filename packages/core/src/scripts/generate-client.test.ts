@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -25,8 +25,7 @@ describe('generateClientCode — middleware collection', () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
-		tmpDir = join(tmpdir(), `blocks-gen-client-test-${Date.now()}`);
-		mkdirSync(tmpDir, { recursive: true });
+		tmpDir = mkdtempSync(join(tmpdir(), 'blocks-gen-client-test-'));
 	});
 
 	afterEach(() => {
@@ -108,8 +107,7 @@ describe('generateClientCode — generateClient options', () => {
 	let tmpDir: string;
 
 	beforeEach(() => {
-		tmpDir = join(tmpdir(), `blocks-gen-client-opts-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-		mkdirSync(tmpDir, { recursive: true });
+		tmpDir = mkdtempSync(join(tmpdir(), 'blocks-gen-client-opts-'));
 	});
 
 	afterEach(() => {

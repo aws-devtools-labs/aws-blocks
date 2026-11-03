@@ -398,7 +398,15 @@ jobs:
           # budget and let the timeout kill the sweep before its summary prints. Cap
           # at 40 min and defer the remainder to the next scheduled run.
           DEADLINE=$((SECONDS + 2400)) # 40 minutes
+          # Of that, at most 15 minutes waiting on deletes (see the delete loop).
+          # The wait settings are overridable for scripts/ci/amplify-sweep.test.mjs.
+          WAIT_DEADLINE=$((SECONDS + ${AMPLIFY_SWEEP_WAIT_BUDGET_SECONDS:-900}))
+          PER_STACK_WAIT=${AMPLIFY_SWEEP_STACK_WAIT_SECONDS:-360}
+          POLL=${AMPLIFY_SWEEP_POLL_SECONDS:-15}
           TRIGGERED=0
+          DELETED=0
+          DEFERRED=0
+          BLOCKED=""
           TRIGGER_FAILED=0
 
           # Empty every S3 bucket in a stack and its nested children. Amplify
@@ -485,10 +493,24 @@ jobs:
               fi
             fi
 
+            # Never start a delete while another may still be running: with the wait
+            # budget spent, or the last delete still in progress when its wait ended,
+            # defer this and every later candidate to the next scheduled run.
+            if [ -n "$BLOCKED" ] || [ "$SECONDS" -ge "$WAIT_DEADLINE" ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+
             # Empty the nested versioned buckets that block the delete BEFORE
-            # triggering, then fire-and-forget (no wait) so the job can't time out
-            # draining a backlog; CloudFormation deletes asynchronously and anything
-            # that doesn't finish is retried on the next scheduled run.
+            # triggering, then wait for this stack's delete to finish before the
+            # next one. Every sandbox holds a REST API, and API Gateway allows about
+            # one REST API delete per 30 seconds per account: triggered together,
+            # the deletes throttle each other until CloudFormation gives up (after
+            # about 4.5 minutes) and leaves the stack DELETE_FAILED. One at a time,
+            # each delete has the quota to itself. The wait is bounded per stack
+            # (PER_STACK_WAIT) and in total (WAIT_DEADLINE) so the steps after this
+            # one keep the shared job budget; whatever is left is deferred, never
+            # triggered alongside a delete still in progress.
             #
             # We intentionally do NOT retry with --retain-resources here: at the
             # root level the only stuck child is the nested data stack, which
@@ -506,6 +528,24 @@ jobs:
             if aws cloudformation delete-stack --stack-name "$STACK"; then
               echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
               TRIGGERED=$((TRIGGERED + 1))
+              WAIT_UNTIL=$((SECONDS + PER_STACK_WAIT))
+              if [ "$WAIT_UNTIL" -gt "$WAIT_DEADLINE" ]; then WAIT_UNTIL=$WAIT_DEADLINE; fi
+              NOW_STATUS="DELETE_IN_PROGRESS"
+              while [ "$NOW_STATUS" = "DELETE_IN_PROGRESS" ] && [ "$SECONDS" -lt "$WAIT_UNTIL" ]; do
+                sleep "$POLL"
+                # Only "does not exist" means gone; a throttled poll keeps waiting.
+                if OUT=$(aws cloudformation describe-stacks --stack-name "$STACK" \
+                  --query "Stacks[0].StackStatus" --output text 2>&1); then
+                  NOW_STATUS="$OUT"
+                elif echo "$OUT" | grep -q 'does not exist'; then
+                  NOW_STATUS="GONE"
+                fi
+              done
+              case "$NOW_STATUS" in
+                GONE|DELETE_COMPLETE) echo "✅ Deleted: $STACK"; DELETED=$((DELETED + 1)) ;;
+                DELETE_IN_PROGRESS) echo "⏳ Still deleting: $STACK; deferring the remaining stacks"; BLOCKED=1 ;;
+                *) echo "⚠️  Delete ended $NOW_STATUS for $STACK (will retry next run)" ;;
+              esac
             else
               echo "⚠️  delete-stack call failed for $STACK (will retry next run)"
               TRIGGER_FAILED=$((TRIGGER_FAILED + 1))
@@ -523,6 +563,8 @@ jobs:
           echo ""
           echo "## Amplify Sandbox Cleanup Summary" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete triggered: $TRIGGERED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deleted (confirmed): $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Deferred to the next run: $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$TRIGGER_FAILED" -gt 0 ]; then
@@ -532,7 +574,7 @@ jobs:
             echo "::warning::$TRIGGER_FAILED delete-stack call(s) failed — see the log for the stacks and errors"
           fi
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "_Deletes run asynchronously; stacks that don't finish (commonly the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "_Each delete is awaited (bounded) before the next; stacks that don't finish (commonly a throttled REST API delete, or the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" -gt 0 ]; then
             echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup; AppSync API quota may be at risk"
           fi

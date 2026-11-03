@@ -30,6 +30,7 @@ import { generateTypes } from './type-generator.js';
 import { runMigrations, loadMigrationsFromDir } from '@aws-blocks/data-common';
 import { runExternalMigrations, toSessionPortUrl } from './migrations/external-migrations.js';
 import { runDbPullCli, regenerateTypesAndMeta } from './db-pull.js';
+import { rlsDisabledWarning } from './db-pull/generate.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Scope } from '@aws-blocks/core';
@@ -224,8 +225,9 @@ async function migrate(args: string[], url: string | undefined, stage: string | 
       } else {
         try {
           console.log('Refreshing generated types from the migrated schema...');
-          const { tablesGenerated } = await regenerateTypesAndMeta({ connectionString: url, outputDir: regenerateTypesDir });
+          const { tablesGenerated, tablesWithoutRls } = await regenerateTypesAndMeta({ connectionString: url, outputDir: regenerateTypesDir });
           console.log(`✓ Refreshed database.types.ts + database.meta.ts (${tablesGenerated} table(s)) in ${regenerateTypesDir}`);
+          for (const line of rlsDisabledWarning(tablesWithoutRls)) console.warn(line);
         } catch (e: any) {
           console.warn(`⚠️  Migrations applied, but type refresh failed: ${e?.message ?? e}`);
           console.warn(`    Run \`npx bb-data pull\` to refresh database.types.ts / database.meta.ts.`);

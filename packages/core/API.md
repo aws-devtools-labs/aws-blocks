@@ -131,9 +131,7 @@ export type ContainerPollerStarter = () => ContainerPollerHandle;
 
 // @public
 export interface ContainerScaling {
-    // (undocumented)
     maxInstances: number;
-    // (undocumented)
     minInstances: number;
     // (undocumented)
     strategy?: ScalingSignal | ScalingSignal[];
