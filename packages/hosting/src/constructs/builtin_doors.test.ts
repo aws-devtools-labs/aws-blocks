@@ -18,7 +18,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import { Bucket } from 'aws-cdk-lib/aws-s3';

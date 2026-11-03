@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { App, Duration, Stack } from 'aws-cdk-lib';
+import { App, Duration, Stack } from 'aws-cdk-lib/core';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Distribution, PriceClass, ResponseHeadersPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';

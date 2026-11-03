@@ -46,7 +46,7 @@ import {
 import { FunctionUrlOrigin, HttpOrigin, S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import type { BucketDeployment } from 'aws-cdk-lib/aws-s3-deployment';
-import { Duration, Stack } from 'aws-cdk-lib';
+import { Duration, Stack } from 'aws-cdk-lib/core';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct } from 'constructs';
 import { HostingError } from '../hosting_error.js';

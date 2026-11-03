@@ -3,7 +3,7 @@
 
 import type { KindStoreOptions } from '@aws-blocks/hosting/constructs';
 import type { ConfigValue, SecretValue } from '@aws-blocks/hosting';
-import type * as cdk from 'aws-cdk-lib';
+import type * as cdk from 'aws-cdk-lib/core';
 import type * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { CodeBuildStep, IFileSetProducer, ShellStep } from 'aws-cdk-lib/pipelines';

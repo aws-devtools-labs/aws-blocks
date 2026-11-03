@@ -1,4 +1,4 @@
-import type { Duration } from 'aws-cdk-lib';
+import type { Duration } from 'aws-cdk-lib/core';
 import type {
   Distribution,
   IResponseHeadersPolicy,

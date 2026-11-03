@@ -38,7 +38,7 @@
  *
  * @module
  */
-import type { Duration } from 'aws-cdk-lib';
+import type { Duration } from 'aws-cdk-lib/core';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import type { IResponseHeadersPolicy, PriceClass } from 'aws-cdk-lib/aws-cloudfront';
 import type { IVpc } from 'aws-cdk-lib/aws-ec2';

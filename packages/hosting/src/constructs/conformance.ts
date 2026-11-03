@@ -20,7 +20,7 @@
  *
  * @throws HostingError (not tied to any test runner) on the first failed check.
  */
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import type { Construct } from 'constructs';
 import { type BuildFrontDoorOptions, buildFrontDoor, type FrontDoorBuild } from './custom_door.js';

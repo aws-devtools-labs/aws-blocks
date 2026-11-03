@@ -31,7 +31,7 @@
  * wires correctly with raw CDK gets a false alarm; it declares its hand-wired
  * origins with `cf.recordWired(...)`, or opts out with `wiringCheck: false`.
  */
-import { Annotations } from 'aws-cdk-lib';
+import { Annotations } from 'aws-cdk-lib/core';
 import type { Construct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 import { startWiringRecord, type WiringRecord } from './cf_helpers.js';

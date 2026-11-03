@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Token } from 'aws-cdk-lib';
+import { Token } from 'aws-cdk-lib/core';
 import {
   DnsValidatedCertificate,
   ICertificate,

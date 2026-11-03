@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Annotations, Duration, RemovalPolicy, Stack, Token } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack, Token } from 'aws-cdk-lib/core';
 import {
   type Alias,
   Architecture,

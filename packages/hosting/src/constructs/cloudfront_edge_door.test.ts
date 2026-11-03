@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Code, Function as LambdaFunction, FunctionUrlAuthType, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';

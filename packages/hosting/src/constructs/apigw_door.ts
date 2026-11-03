@@ -25,7 +25,7 @@
  * server, the image function or the backend bypass it; synth names what is not
  * applied (`@aws-blocks/hosting:DoorRulesNotApplied`).
  */
-import { Fn } from 'aws-cdk-lib';
+import { Fn } from 'aws-cdk-lib/core';
 import { ApiGatewayConstruct, type ApiGatewayConstructProps } from './apigw_construct.js';
 import { ApiGatewayRestConstruct } from './apigw_rest_construct.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';

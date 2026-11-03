@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Duration, RemovalPolicy } from 'aws-cdk-lib/core';
 import {
   BlockPublicAccess,
   Bucket,

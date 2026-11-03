@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { execFileSync } from 'child_process';
-import { App, Duration, Stack } from 'aws-cdk-lib';
+import { App, Duration, Stack } from 'aws-cdk-lib/core';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
 import { WEB_FUNCTION_ENTRY_SHIM, WebFunctionConstruct, renderEntryShim } from './web_function_construct.js';

@@ -28,7 +28,7 @@
  * `RECOMMENDED_TLS` policy) with a port 80 → 443 redirect, Route 53 alias
  * records point the names at the ALB, and the URL is the primary name.
  */
-import { Annotations, CfnOutput, Duration, Fn, RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Fn, RemovalPolicy } from 'aws-cdk-lib/core';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';

@@ -5,7 +5,7 @@
  * `addRoutes` vs the REST resource tree), so the constructs stay separate — but
  * the plan-derived path math is identical and lives here.
  */
-import { Annotations, Fn } from 'aws-cdk-lib';
+import { Annotations, Fn } from 'aws-cdk-lib/core';
 import type { IConstruct } from 'constructs';
 import { HostingError } from '../hosting_error.js';
 

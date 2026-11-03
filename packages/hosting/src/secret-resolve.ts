@@ -21,7 +21,7 @@
  * @module
  */
 
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IConstruct } from 'constructs';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';

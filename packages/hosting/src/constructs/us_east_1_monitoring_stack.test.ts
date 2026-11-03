@@ -7,7 +7,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { App } from 'aws-cdk-lib';
+import { App } from 'aws-cdk-lib/core';
 import { Match, Template, Annotations } from 'aws-cdk-lib/assertions';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { UsEast1MonitoringStack } from './us_east_1_monitoring_stack.js';

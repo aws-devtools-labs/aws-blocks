@@ -12,7 +12,7 @@ import assert from 'node:assert';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as subs from 'aws-cdk-lib/aws-sns-subscriptions';
 import { HostingConstruct } from './hosting_construct.js';

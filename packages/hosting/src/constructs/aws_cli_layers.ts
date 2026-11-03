@@ -19,7 +19,7 @@
  * (`HostingConstructProps.inPlaceBuild`, core `Hosting` `buildId: 'fixed'`);
  * the default and production templates keep every layer.
  */
-import { CfnResource, Stack } from 'aws-cdk-lib';
+import { CfnResource, Stack } from 'aws-cdk-lib/core';
 import { CfnFunction } from 'aws-cdk-lib/aws-lambda';
 import { AwsCliLayer } from 'aws-cdk-lib/lambda-layer-awscli';
 import type { Construct, IConstruct } from 'constructs';

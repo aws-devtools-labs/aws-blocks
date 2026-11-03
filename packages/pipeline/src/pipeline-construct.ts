@@ -4,8 +4,8 @@
 import { pathToFileURL } from 'node:url';
 import { defaultPrefixForKind, isManagedValue, secretStoreLocator } from '@aws-blocks/hosting';
 import { isCdkSecret, resolveSecretsAtSynth } from '@aws-blocks/hosting/constructs';
-import * as cdk from 'aws-cdk-lib';
-import { Annotations } from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import { Annotations } from 'aws-cdk-lib/core';
 import * as codebuild from 'aws-cdk-lib/aws-codebuild';
 import * as codepipeline from 'aws-cdk-lib/aws-codepipeline';
 import {

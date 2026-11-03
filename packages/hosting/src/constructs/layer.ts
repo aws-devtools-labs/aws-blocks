@@ -14,7 +14,7 @@
  * These types are CDK-aware (constructs layer) — unlike the service-neutral
  * `plan/` layer, an attach handle inevitably references the concrete edge/origin.
  */
-import { Fn, Token } from 'aws-cdk-lib';
+import { Fn, Token } from 'aws-cdk-lib/core';
 import type { IApplicationLoadBalancer } from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 
 /**

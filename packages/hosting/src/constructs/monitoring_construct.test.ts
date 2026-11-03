@@ -22,7 +22,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { App, Duration, Stack } from 'aws-cdk-lib';
+import { App, Duration, Stack } from 'aws-cdk-lib/core';
 import { Match, Template, Annotations } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { S3Origin } from 'aws-cdk-lib/aws-cloudfront-origins';
