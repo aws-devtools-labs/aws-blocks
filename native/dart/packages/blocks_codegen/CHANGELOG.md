@@ -23,12 +23,18 @@
   embeds the shared union, so the identical inputs are one class again.
 - Fix two distinct unions with an arm of one name (a `setAuthState` input in
   two namespaces, both with a `signUp` arm) declaring the same Dart class
-  twice, which didn't compile. The union whose name sorts first keeps the arm
-  name (`SignUpInput`); the other's arm takes its namespace's prefix
-  (`AuthCognitoApiSignUpInput`). If that name is taken too (two unions in one
-  namespace, or another type already has it), the arm is named after its
-  union (`AuthCognitoApiSetAuthStateInputSignUp`). The codegen warns with one
-  line per renamed union, or fails with `--fail-on-collision`.
+  twice, which didn't compile. The union with the smallest origin (its
+  `schema:<Name>` or `<method>#param:…` key, over every namespace that
+  declares it) keeps the arm name (`SignUpInput`), whatever the spec order;
+  the other's arm takes its namespace's prefix (`AuthCognitoApiSignUpInput`).
+  If that name is taken too (two unions in one namespace, or another type
+  already has it), or the union is a `$ref` schema, the arm is named after
+  its union (`AuthCognitoApiSetAuthStateInputSignUp`); a `$ref` union never
+  takes the prefix of a namespace that declares it inline. Adding a union
+  whose origin sorts before the current owner's (an `authApi` beside
+  `authCognitoApi`) moves the short name to it and renames the other's arm.
+  The codegen warns with one line per renamed union, or fails with
+  `--fail-on-collision`.
 - A realtime channel without type arguments (`RealtimeChannel<dynamic>`) now
   hydrates with `RealtimeChannel.fromJsonValue`, so a message that isn't a
   JSON object reaches the stream instead of failing a `Map` cast.

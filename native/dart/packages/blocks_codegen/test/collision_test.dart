@@ -671,6 +671,75 @@ void main() {
       expect(classes.first, classes.last);
     });
 
+    test('keep the short name by smallest origin, in any spec order', () {
+      // `bb` and `zz` declare one union, `cc` another. The union with the
+      // smallest origin (`bb.setState`) keeps the short names in every
+      // order, whatever its class is named after.
+      const orders = [
+        ['bb', 'cc', 'zz'],
+        ['bb', 'zz', 'cc'],
+        ['cc', 'bb', 'zz'],
+        ['cc', 'zz', 'bb'],
+        ['zz', 'bb', 'cc'],
+        ['zz', 'cc', 'bb'],
+      ];
+      final classes = [
+        for (final order in orders)
+          _classes(
+            CodegenModelBuilder().build(
+              _sharedArmNames(
+                methods: [for (final ns in order) '$ns.setState'],
+                fields: [for (final ns in order) ns == 'cc' ? 1 : 2],
+              ),
+            ),
+          ),
+      ];
+      expect(classes.first, containsAll(['SignUpInput', 'CcSignUpInput']));
+      for (final c in classes) {
+        expect(c, classes.first);
+      }
+    });
+
+    test('of a \$ref union never take an inline twin\'s prefix', () {
+      // `zz.setState` declares the same union inline as the `ZInput` schema,
+      // so it deduplicates into it; `bb`'s union keeps the short names.
+      final zInput = DiscriminatedUnionRef(
+        discriminant: 'action',
+        variants: [
+          const UnionVariant(
+            discriminantValue: 'signUp',
+            properties: {
+              'f0': PrimitiveRef('String'),
+              'f1': PrimitiveRef('String'),
+            },
+            required: {'f0', 'f1'},
+          ),
+          const UnionVariant(
+            discriminantValue: 'signOut',
+            properties: {},
+            required: {},
+          ),
+        ],
+      );
+      for (final reversed in [false, true]) {
+        final classes = _classes(
+          CodegenModelBuilder().build(
+            _sharedArmNames(
+              reversed: reversed,
+              methods: const ['bb.setState', 'zz.setState'],
+              fields: const [1, 2],
+              schemas: {'ZInput': zInput},
+            ),
+          ),
+        );
+        expect(
+          classes,
+          containsAll(['SignUpInput', 'ZInputSignUp', 'ZInputSignOut']),
+        );
+        expect(classes, isNot(contains('ZzSignUpInput')));
+      }
+    });
+
     test('throws with --fail-on-collision', () {
       expect(
         () =>

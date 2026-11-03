@@ -1217,14 +1217,17 @@ class CodegenModelBuilder {
   /// Kotlin and Swift nest a union's arm classes in the union, but Dart's
   /// are top-level, and an `…Input` union names its arms `<Value>Input`, so
   /// two distinct unions with a `signUp` arm (one method in two namespaces)
-  /// would both declare `SignUpInput`. The union whose name sorts first (so
-  /// spec order doesn't matter) keeps the arm name; another union's arm, or
-  /// an arm named like a model or enum, takes its namespace's prefix
-  /// (`AuthCognitoApiSignUpInput`). When that is taken too (two unions of one
-  /// namespace, or a type or another arm already has it), or the union has no
-  /// namespace (a `$ref` schema), it becomes `<Union><Value>`, as Kotlin's
-  /// `Union.Value` flattened. Throws with [failOnCollision], else warns once
-  /// per renamed union.
+  /// would both declare `SignUpInput`. The union with the smallest origin
+  /// (canonical key: `schema:<Name>` or `<method>#param:…`, over every
+  /// occurrence of a deduplicated union) keeps the arm name, so spec order
+  /// doesn't matter; a union added with a smaller origin takes it over.
+  /// Another union's arm, or an arm named like a model or enum, takes its
+  /// namespace's prefix (`AuthCognitoApiSignUpInput`). When that is taken too
+  /// (two unions of one namespace, or a type or another arm already has it),
+  /// or the union is a `$ref` schema (which never takes the prefix of a
+  /// method that declares it inline), it becomes `<Union><Value>`, as
+  /// Kotlin's `Union.Value` flattened. Throws with [failOnCollision], else
+  /// warns once per renamed union.
   void _resolveVariantNameCollisions() {
     final unions = <SealedClassType>[];
     void addUnion(SealedClassType u) {
@@ -1237,19 +1240,25 @@ class CodegenModelBuilder {
     for (final type in _types.values) {
       if (type is SealedClassType) addUnion(type);
     }
-    unions.sort((a, b) => a.name.compareTo(b.name));
-    // A union's namespace prefix, from the method of its origin with the
-    // smallest canonical key, so spec order doesn't pick it.
+    // Per union, the smallest canonical key of its origins (its rank) and of
+    // its method origins (its namespace prefix), so spec order picks neither.
+    final ranks = Map<SealedClassType, String>.identity();
     final keys = Map<SealedClassType, String>.identity();
+    final schemas = Set<SealedClassType>.identity();
+    bool smaller(String k, String? than) =>
+        than == null || k.compareTo(than) < 0;
     for (final o in _origins) {
-      if (o.type case final SealedClassType u
-          when o.canonicalKey.contains('#')) {
-        final k = keys[u];
-        if (k == null || o.canonicalKey.compareTo(k) < 0) {
-          keys[u] = o.canonicalKey;
-        }
+      if (o.type case final SealedClassType u) {
+        final k = o.canonicalKey;
+        if (smaller(k, ranks[u])) ranks[u] = k;
+        if (k.startsWith('schema:')) schemas.add(u);
+        if (k.contains('#') && smaller(k, keys[u])) keys[u] = k;
       }
     }
+    unions.sort((a, b) {
+      final byRank = (ranks[a] ?? a.name).compareTo(ranks[b] ?? b.name);
+      return byRank != 0 ? byRank : a.name.compareTo(b.name);
+    });
     // Name -> the union whose arm owns it ('' for a model, enum or union).
     final owners = <String, String>{
       for (final type in _types.values)
@@ -1270,7 +1279,7 @@ class CodegenModelBuilder {
           continue;
         }
         final key = keys[union];
-        final prefix = key == null
+        final prefix = key == null || schemas.contains(union)
             ? ''
             : _namespacePrefix(key.substring(0, key.indexOf('#')));
         var name = '$prefix${v.className}';
