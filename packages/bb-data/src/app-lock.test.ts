@@ -29,12 +29,14 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !n
  *   second  — open the Database; prints `REFUSED <message>` and exits 2 if that throws.
  *   twice   — open the Database twice in this process and report on postmaster.pid.
  *   once    — open the Database, run one query, exit.
+ * `APP_EXTENSIONS=<a,b>` opens it with those `extensions`.
  */
 const APP = `import { existsSync } from 'node:fs';
 const { Scope } = await import(${JSON.stringify(import.meta.resolve('@aws-blocks/core'))});
 const { Database, sql } = await import(${JSON.stringify(pathToFileURL(join(distDir, 'index.mock.js')).href)});
 const mode = process.argv[2];
-const open = () => new Database(new Scope('app'), 'main', { migrationsPath: './migrations' });
+const extensions = process.env.APP_EXTENSIONS ? process.env.APP_EXTENSIONS.split(',') : undefined;
+const open = () => new Database(new Scope('app'), 'main', { migrationsPath: './migrations', extensions });
 let db;
 try {
   db = open();
@@ -50,7 +52,9 @@ if (mode === 'second' || mode === 'once') {
 if (mode === 'twice') {
   await db.query(sql\`SELECT 1\`);
   const before = existsSync('.bb-data/app-main/postmaster.pid');
-  open();
+  const second = open();
+  // With extensions the engine is built on first use; query so that it exists.
+  if (extensions) await second.query(sql\`SELECT 1\`);
   const after = existsSync('.bb-data/app-main/postmaster.pid');
   await db.query(sql\`SELECT 1\`);
   console.log('PIDFILE ' + JSON.stringify({ before, after }));
@@ -171,6 +175,18 @@ test('a second Database with the same fullId in one process leaves the live post
   const dir = makeApp();
   try {
     const app = startApp(dir, 'twice');
+    assert.strictEqual(await app.exited, 0, app.out());
+    assert.match(app.out(), /PIDFILE \{"before":true,"after":true\}/);
+    assert.doesNotMatch(app.out(), /Removed stale postmaster\.pid/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a second Database with extensions and the same fullId in one process leaves the live postmaster.pid alone', async () => {
+  const dir = makeApp();
+  try {
+    const app = startApp(dir, 'twice', { APP_EXTENSIONS: 'pgvector' });
     assert.strictEqual(await app.exited, 0, app.out());
     assert.match(app.out(), /PIDFILE \{"before":true,"after":true\}/);
     assert.doesNotMatch(app.out(), /Removed stale postmaster\.pid/);
