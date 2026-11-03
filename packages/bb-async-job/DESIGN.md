@@ -10,7 +10,7 @@ Design document for AsyncJob. For usage, examples, and best practices, see [READ
 
 AsyncJob provides background job processing: submit a payload, get a job ID back, and a handler processes it asynchronously with automatic retries and dead-letter handling. It targets fire-and-forget work offloaded from the request path — sending emails, processing uploads, generating reports, fan-out tasks.
 
-**Key distinction from CronJob:** AsyncJob is the programmable runtime primitive — it exposes `submit()` and `submitBatch()`, and work is triggered when application code enqueues a payload. CronJob is a pure infrastructure declaration with no runtime methods, triggered by an EventBridge schedule. AsyncJob supports Lambda or container compute; CronJob currently requires Lambda compute. Each uses its resolved compute, not necessarily the same function.
+**Key distinction from CronJob:** AsyncJob is the programmable runtime primitive — it exposes `submit()` and `submitBatch()`, and work is triggered when application code enqueues a payload. CronJob is a pure infrastructure declaration with no runtime methods, triggered by an EventBridge schedule. Both support Lambda or container compute and use their own resolved compute, not necessarily the same function. A container CronJob composes an internal AsyncJob to receive scheduled ticks; a Lambda CronJob is invoked directly by Scheduler.
 
 ## Architecture
 

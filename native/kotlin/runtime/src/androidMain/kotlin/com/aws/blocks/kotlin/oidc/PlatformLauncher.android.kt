@@ -47,7 +47,7 @@ private class AndroidRedirectSession(override val relayTo: String) : OidcRedirec
     }
 
     /** Nothing is waiting on the outcome: the Custom Tab closes itself on redirect. */
-    override fun reportOutcome(outcome: OidcSignInOutcome) = Unit
+    override suspend fun reportOutcome(outcome: OidcSignInOutcome) = Unit
 
     override fun close() {
         if (PendingOidcResult.isActive) PendingOidcResult.cancel()

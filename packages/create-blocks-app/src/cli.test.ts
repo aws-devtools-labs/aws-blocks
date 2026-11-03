@@ -255,6 +255,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected existing project/);
       assert.match(result.stdout, /Created aws-blocks/);
+      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -309,6 +310,7 @@ describe('create-blocks-app auto-detection', () => {
       const result = run(['-y', '--skip-install'], tmpDir);
       assert.strictEqual(result.exitCode, 0);
       assert.match(result.stdout, /Detected Amplify Gen 2 project/);
+      assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^\.bb-data\/$/m);
       const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
       const serverPath = join(tmpDir, 'aws-blocks', 'scripts', 'server.ts');
       const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');

@@ -16,6 +16,44 @@ export interface ScopeOptions {
   parent?: ScopeParent;
   bbName?: string;
   bbVersion?: string;
+  /**
+   * The compute the Building Blocks in this scope run on, and in its child
+   * scopes, unless one of them sets its own. Omit to inherit the parent scope's
+   * compute, and ultimately the app's default compute.
+   *
+   * Pass a `Compute` block (from `@aws-blocks/blocks`) to place a whole part of
+   * the backend at once — every `ApiNamespace`, `AsyncJob` and `CronJob`
+   * created under it:
+   *
+   * ```ts
+   * const reportsCompute = new Compute(scope, 'reports-compute', { type: 'serverless', memory: 4096 });
+   * const reports = new Scope('reports', { parent: scope, compute: reportsCompute });
+   *
+   * export const reportsApi = new ApiNamespace(reports, 'reports', (context) => ({
+   *   // …
+   * }));
+   * new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async () => {} });
+   * ```
+   *
+   * Give the `Compute` and the `Scope` different ids when they share a parent:
+   * both are child constructs of it.
+   *
+   * Precedence, nearest first: a block's own `compute` option, then the nearest
+   * scope that sets `compute`, then the app's default compute.
+   *
+   * What follows it:
+   * - `AsyncJob` and `CronJob`: a serverless or container compute.
+   * - `ApiNamespace`: a serverless compute only for now. Under a container
+   *   compute it fails synth with an error naming the compute.
+   * - `Realtime` and `RawRoute` always run on the default compute, inside such
+   *   a scope too.
+   *
+   * Only the CDK build reads it; local dev runs every block in the one dev
+   * server process. Typed structurally — anything whose `resolve()` yields a
+   * compute, which is what a `Compute` block is — so this entry carries no CDK
+   * types.
+   */
+  compute?: { resolve(): { readonly type: 'serverless' | 'container' } };
 }
 
 export type ScopeParent = Scope | { id: string };

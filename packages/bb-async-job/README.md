@@ -96,6 +96,10 @@ work and live on the job; `size`/`scaling` are properties of the machine and liv
 on the `Compute`. In local dev the assignment is transparent — handlers run
 in-process. See `@aws-blocks/bb-compute`.
 
+A deploy that changes your code replaces the container's tasks. A delivery still
+running about 2 minutes later is stopped and redelivered from the start, and the
+redelivery counts toward `maxRetries`.
+
 ### Batching and handler requirements
 
 The queue is a standard SQS queue, so delivery is at-least-once and a handler must
@@ -147,7 +151,7 @@ AsyncJobErrors.ValidationFailed   // schema validation failed
 AsyncJobErrors.BatchSubmitFailed  // one or more messages failed to enqueue
 AsyncJobErrors.Timeout            // waitUntilComplete() gave up before the job settled
 AsyncJobErrors.StatusNotTracked   // status method called without trackStatus: true
-AsyncJobErrors.UnsupportedCompute // resolved compute is neither Lambda nor container (synth time)
+AsyncJobErrors.UnsupportedCompute // unsupported compute or compute from another backend (synth time)
 ```
 
 ## Compute Compatibility
@@ -159,8 +163,9 @@ AsyncJob supports Lambda and container compute:
   each delivery dispatched to a worker thread. No Lambda event source is created.
 
 The `compute` option selects a compute explicitly; otherwise the job uses its
-scope's resolved compute. Other compute types fail at synth time with
-`UnsupportedComputeException`. See [Running on a container compute](#running-on-a-container-compute)
+scope's resolved compute. Other compute types, and computes from another backend,
+fail at synth time with `UnsupportedComputeException`.
+See [Running on a container compute](#running-on-a-container-compute)
 for an example.
 
 ## Local Development

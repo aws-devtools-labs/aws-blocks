@@ -7,7 +7,7 @@
  * @example
  * ```typescript
  * try {
- *   await email.send('user@example.com', { subject: 'Hi', body: 'Hello' });
+ *   await email.send({ to: 'user@example.com', subject: 'Hi', body: 'Hello' });
  * } catch (e: unknown) {
  *   if (isBlocksError(e, EmailErrors.SendFailed)) {
  *     // General send failure — check error message for details

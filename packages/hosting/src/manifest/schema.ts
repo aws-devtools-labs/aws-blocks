@@ -163,6 +163,12 @@ export const deployManifestSchema = z
       .min(1, 'At least one route is required'),
     cache: cacheConfigSchema.optional(),
     imageOptimization: imageConfigSchema.optional(),
+    imageRemoteSources: z
+      .object({
+        domains: z.array(z.string()).optional(),
+        remotePatterns: z.array(remotePatternSchema).optional(),
+      })
+      .optional(),
     middleware: middlewareConfigSchema.optional(),
     redirects: z.array(redirectSchema).optional(),
     rewrites: z.array(rewriteSchema).optional(),

@@ -86,11 +86,8 @@ extension SwiftCodeGenerator {
         case 1: "type argument \(models[0])"
         default: "type arguments \(models.joined(separator: ", "))"
         }
-        // Keep the diagnostic on one log line even if a tag carries a newline.
-        let safeTag = blocksType
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-        return "AWSBLOCKS-NATIVE-001: \(operation) returns unbound transferable "
+        let safeTag = escapedForDiagnostic(blocksType)
+        return "AWSBLOCKS-NATIVE-001: \(escapedForDiagnostic(operation)) returns unbound transferable "
             + "'\(safeTag)' on swift\(cause); generated UnknownTransferable with \(typeArgClause)."
     }
 

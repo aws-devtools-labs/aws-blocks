@@ -3,6 +3,7 @@
 ## Guides
 
 - **[guides/extending-with-existing-aws-resources.md](./guides/extending-with-existing-aws-resources.md)** — Brownfield interop: `BlocksStack`, `BlocksBackend`, `fromExisting`, custom BBs, vendorize
+- **[guides/upgrading-older-apps.md](./guides/upgrading-older-apps.md)** — Edits an app scaffolded from an older `create-blocks-app` template needs to synth on the current release
 
 ## Design
 
@@ -21,6 +22,7 @@
 
 - **[reference/ARCHITECTURE-LAYERS.md](./reference/ARCHITECTURE-LAYERS.md)** — Building Block four-export layer architecture
 - **[reference/building-block-structure.md](./reference/building-block-structure.md)** — Building Block file structure and patterns
+- **[reference/error-model.md](./reference/error-model.md)** — How errors are named, thrown, sent to the client and caught
 
 ## Testing
 

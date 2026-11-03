@@ -24,12 +24,43 @@ Hand a `Compute` to a workload that supports it:
 new AsyncJob(scope, 'reports', { compute: worker, timeoutSeconds: 1800, handler });
 
 export const reports = new ApiNamespace(scope, 'reports', (context) => ({ /* methods */ }), { compute: api });
+
+new CronJob(scope, 'nightly', { compute: api, schedule: 'cron(0 2 * * ? *)', handler: async () => { /* … */ } });
 ```
 
 | Workload | Option | Compute types |
 | --- | --- | --- |
 | `AsyncJob` | `compute` | `serverless`, `container` |
 | `ApiNamespace` | `compute` (4th argument) | `serverless` |
+| `CronJob` | `compute` | `serverless` |
+| `Scope` (everything under it) | `compute` | `serverless`, `container` (see below) |
+
+## Placing a whole scope
+
+Set `compute` on a `Scope` to place everything created under it, including in
+its child scopes, without passing `compute` to each block:
+
+```ts
+const reportsCompute = new Compute(scope, 'reports-compute', { type: 'serverless', memory: 4096 });
+const reports = new Scope('reports', { parent: scope, compute: reportsCompute });
+
+export const reportsApi = new ApiNamespace(reports, 'reports', (context) => ({ /* methods */ }));
+new AsyncJob(reports, 'rebuild', { handler: async () => { /* … */ } });
+new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async () => { /* … */ } });
+```
+
+- **Give the `Compute` and the `Scope` different ids** when they share a parent:
+  both are child constructs of it.
+- **Nearest wins.** A block's own `compute` option, then the nearest scope that
+  sets `compute`, then the app's default compute.
+- **A container scope** places its `AsyncJob`s and `CronJob`s on the container.
+  An `ApiNamespace` under it fails synth with an error naming the compute,
+  because it runs only on a `serverless` compute for now: give it its own
+  serverless `compute`, or create it outside that scope. Setting an
+  `AsyncJob`'s `maxConcurrencyPerCPU` still needs the container passed as the
+  job's own `compute`, so the option is typed for it.
+- **`Realtime` and `RawRoute` stay on the default compute**, inside such a scope
+  too. `Realtime`'s `publish()` works from any compute.
 
 ## Compute types
 
@@ -60,14 +91,30 @@ type is a compile error.
   Application Auto Scaling. `strategy` is one or more of `cpu`/`memory`/`queue-depth`
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
   otherwise).
+- Use `minInstances: 1` or more for most workloads: a running task starts a job
+  or CronJob tick within seconds. Those tasks are billed around the clock, even
+  when no job is running. Set `minInstances: 0` only for long-running jobs that
+  can tolerate high latency before they start. The compute then scales
+  to zero tasks between jobs, and each job has to start a task first. That
+  usually takes a few minutes, and up to about 20 minutes when the job's queue
+  has been idle for more than six hours. `minInstances: 0` needs at least one
+  `AsyncJob` or `CronJob` on the compute and the default (or `queue-depth`)
+  scaling strategy; anything else fails synth, because nothing would start a task
+  or scale-in could stop one under a running job.
+- **Deploys restart running jobs.** A deploy that changes your code replaces
+  the container's tasks. A stopping task stops taking new jobs and gives running
+  ones up to about 2 minutes to finish (the AWS Fargate maximum). A job still
+  running after that is stopped and runs again from the start, and the restart
+  counts as one of its attempts.
 - `image?` — the container image to run (public or ECR URI), used **verbatim**
   (pulled by ECS at task start). Blocks builds **no** image and deploying needs
   **no local Docker**: your application code is shipped separately as an S3 asset
   and fetched at boot. So a custom image only supplies the runtime environment —
   it must provide a **Node 24** runtime on `PATH`, plus any system libraries your
   handlers need (e.g. media tooling). Defaults to
-  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). See
-  [DESIGN.md](../bb-container-compute/DESIGN.md) for the boot mechanism.
+  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). At boot, a
+  small bootstrap script uses the task's role to download your code from S3 and
+  starts it.
 
 ## API namespaces
 
@@ -103,8 +150,9 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   `Compute` to each; they then run in the same function.
 - **Only `serverless` computes serve API namespaces** today; passing a
   `container` compute is a type error.
-- **Everything else stays on the default compute:** namespaces without a
-  `compute`, `RawRoute`s, and the auth routes.
+- **Everything else stays on the default compute:** namespaces with no
+  `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
+  routes (`/aws-blocks/auth/*`).
 
 ## Local development
 
