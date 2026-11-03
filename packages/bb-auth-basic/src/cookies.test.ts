@@ -123,3 +123,56 @@ describe('AuthBasic session cookie', () => {
 		assert.ok(header.includes('SameSite=Lax'), header);
 	});
 });
+
+/** Sign `USER` in and return the session token from the issued `Set-Cookie`. */
+async function signedInToken(auth: AuthBasic): Promise<string> {
+	await auth.signUp(USER, PASS);
+	const c = ctx();
+	await auth.signIn(USER, PASS, c);
+	const token = c.response.headers.get('set-cookie')?.match(/^[^=]+=([^;]+)/)?.[1];
+	assert.ok(token, 'signIn issued a session token');
+	return token;
+}
+
+/** A request context whose `Cookie` header is exactly `cookieHeader`. */
+function ctxWithCookies(cookieHeader: string): BlocksContext {
+	const headers = new Headers();
+	headers.set('cookie', cookieHeader);
+	return {
+		request: { headers },
+		response: { headers: new Headers() },
+	} as unknown as BlocksContext;
+}
+
+describe('AuthBasic session cookie read', () => {
+	test('reads the session cookie when it is first, middle, or last in the header', async () => {
+		const auth = makeAuth();
+		const token = await signedInToken(auth);
+		const name = `auth_${auth.fullId}`;
+		for (const header of [`${name}=${token}`, `a=1; ${name}=${token}; b=2`, `a=1;${name}=${token}`]) {
+			assert.strictEqual(await auth.checkAuth(ctxWithCookies(header)), true, header);
+		}
+	});
+
+	test('a sibling cookie whose name ends with the session cookie name does not match', async () => {
+		const auth = makeAuth();
+		const token = await signedInToken(auth);
+		const name = `auth_${auth.fullId}`;
+		assert.strictEqual(await auth.checkAuth(ctxWithCookies(`x${name}=${token}`)), false);
+	});
+
+	test('a sibling cookie earlier in the header does not shadow the real session cookie', async () => {
+		const auth = makeAuth();
+		const token = await signedInToken(auth);
+		const name = `auth_${auth.fullId}`;
+		assert.strictEqual(await auth.checkAuth(ctxWithCookies(`x${name}=garbage; ${name}=${token}`)), true);
+	});
+
+	test('regex metacharacters in the fullId are matched literally', async () => {
+		const scope = new Scope(`my.app-${++counter}-${Math.random().toString(36).slice(2, 6)}`);
+		const auth = new AuthBasic(scope, 'auth');
+		const token = await signedInToken(auth);
+		const lookalike = `auth_${auth.fullId.replace('.', 'X')}`;
+		assert.strictEqual(await auth.checkAuth(ctxWithCookies(`${lookalike}=${token}`)), false);
+	});
+});

@@ -193,6 +193,14 @@ function parseSessionEpoch(raw: string | null): number {
 }
 
 /**
+ * Escape regex metacharacters so a cookie name embedding `fullId` is matched
+ * literally: a `fullId` of `my.app` must not also match `myXapp`.
+ */
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Simple username/password authentication composed from KVStore.
  *
  * ## Use Cases
@@ -701,9 +709,11 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		context: BlocksContext,
 	): Promise<{ username: string; jti?: string; exp: number; ep: number } | null> {
 		const secret = await this.getSecret();
-		const cookieName = `auth_${this.fullId}`;
+		const cookieName = escapeRegex(`auth_${this.fullId}`);
 		const cookies = context.request.headers.get('cookie') || '';
-		const match = cookies.match(new RegExp(`${cookieName}=([^;]+)`));
+		// Anchored to the header start or a `;` boundary, so a sibling cookie whose
+		// name ends with this one's (`xauth_<fullId>`) can't supply or shadow the value.
+		const match = cookies.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`));
 		if (!match) return null;
 		try {
 			const payload = jwt.verify(match[1], secret, {
