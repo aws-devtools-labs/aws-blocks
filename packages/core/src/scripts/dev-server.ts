@@ -956,8 +956,11 @@ export async function startDevServer(options: DevServerOptions) {
   if (Number.isInteger(sandboxSession) && sandboxSession > 1) selfRecord.sandbox = { pid: sandboxSession };
   const session = Number(process.env[DEV_SESSION_ENV]);
   delete process.env[DEV_SESSION_ENV]; // not the frontend's to inherit
+  const sessionPid = Number.isInteger(session) && session > 1 ? session : undefined;
+  // The top of the session, which `dev stop` ends on Windows (see DevServerPidRecord.session).
+  if (sessionPid !== undefined) selfRecord.session = { pid: sessionPid };
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
-  const claim = claimDevPidfile(pidfilePath, selfRecord, {}, Number.isInteger(session) && session > 1 ? session : undefined);
+  const claim = claimDevPidfile(pidfilePath, selfRecord, {}, sessionPid);
   if (!claim.acquired) {
     // One dev server per app, whatever its port: the claim names the port of the one that runs.
     failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(claim.port)}\`.`);
@@ -1595,11 +1598,13 @@ export interface StopResult {
   record: DevServerPidRecord | null;
   /**
    * How the server was stopped:
-   *  - `watcher`  — SIGTERM to the recorded `tsx watch` ppid (the clean path).
+   *  - `watcher`  — SIGTERM to the recorded `tsx watch` ppid (the clean path);
+   *                 on Windows, the end of its whole tree.
    *  - `listener` — fallback: killed the recorded child pid's listener tree
    *                 (watcher was already gone / not a tsx watcher).
    *  - `cli`      — SIGTERM to the `blocks dev` CLI whose dev server was still
-   *                 starting (a {@link DevServerPidRecord.starting} record).
+   *                 starting (a {@link DevServerPidRecord.starting} record); on
+   *                 Windows, also the end of the tree of the CLI that runs it.
    *  - `frontend` — the recorded dev server was gone (a SIGKILL of its group),
    *                 and its detached frontend group still held the frontend port:
    *                 stopped that group, which the next start would otherwise
@@ -1658,6 +1663,8 @@ export interface StopDevServerDeps {
   waitFree: (port: number, timeoutMs?: number) => Promise<void>;
   /** Wait (bounded) for `pid` to exit; true once it has. */
   waitExit: (pid: number, timeoutMs: number) => Promise<boolean>;
+  /** The platform: on Windows the session is ended from its top (see {@link windowsSessionRoot}). */
+  platform: NodeJS.Platform;
 }
 
 function defaultStopDeps(): StopDevServerDeps {
@@ -1685,6 +1692,7 @@ function defaultStopDeps(): StopDevServerDeps {
       }
       return true;
     },
+    platform: process.platform,
   };
 }
 
@@ -1715,6 +1723,28 @@ const SANDBOX_STOP_TIMEOUT_MS = 10_000;
  */
 const NO_RUNNER_WATCHER_GRACE_MS = 2000;
 
+/** How long {@link stopDevServer} waits on Windows for the top of a session to exit after `taskkill /T /F`. */
+const WINDOWS_TREE_EXIT_MS = 5000;
+
+/**
+ * The process at the top of the dev session `record` names, on Windows, which
+ * `dev stop` ends with its whole tree: the `blocks dev` CLI that started the
+ * session ({@link DevServerPidRecord.session}), while the recorded `tsx watch`
+ * still descends from it; else that `tsx watch`, while the recorded runner
+ * still descends from it. Undefined unless the recorded `ppid` is a `tsx watch`
+ * that `processes` (CIM) proves: a pid that Windows has handed out again, or a
+ * plain `node` start under the caller's shell, is never ended this way. Pure.
+ */
+export function windowsSessionRoot(
+  record: DevServerPidRecord,
+  processes: ReadonlyMap<number, WindowsProcess>,
+): number | undefined {
+  const watcher = processes.get(record.ppid);
+  if (watcher === undefined || !isTsxWatcher(watcher.command)) return undefined;
+  if (record.session && descendsFrom(processes, record.ppid, record.session.pid)) return record.session.pid;
+  return descendsFrom(processes, record.pid, record.ppid) ? record.ppid : undefined;
+}
+
 /**
  * Stop the dev server recorded for `port` by SIGTERM-ing its `tsx watch`
  * supervisor — the only thing that actually ends `npm run dev` (killing just the
@@ -1737,6 +1767,12 @@ const NO_RUNNER_WATCHER_GRACE_MS = 2000;
  *  4. A {@link DevServerPidRecord.starting} record: the `blocks dev` CLI whose
  *     dev server is still starting → SIGTERM the CLI, which stops what it
  *     started, and wait for it to exit.
+ *  5. On Windows, a signal is `TerminateProcess`: a SIGTERM to `tsx watch` runs
+ *     no cleanup, and what a shell started (the frontend) outlives its parent.
+ *     So the session ends from its top ({@link windowsSessionRoot}: the
+ *     `blocks dev` CLI, else `tsx watch`) with its whole tree (`taskkill /T /F`):
+ *     the CLI does not start the dev server again on the next save. Then the
+ *     stop waits for the ports to be free, and removes the record.
  *
  * The pidfile is removed only once the port is confirmed free (or no owner is
  * left alive), so a server that survived the signal keeps its singleton guard.
@@ -1842,6 +1878,40 @@ export async function stopDevServer(
     }
     reapIfEnded(body);
     return nothingToStop();
+  }
+
+  // Windows: end the session from its top, with its whole tree (see 5. above).
+  if (d.platform === 'win32') {
+    const top = windowsSessionRoot(
+      record,
+      d.processes([record.pid, record.ppid, ...(record.session ? [record.session.pid] : [])]),
+    );
+    if (top !== undefined) {
+      d.killTree(top, 'SIGKILL');
+      const exited = await d.waitExit(top, WINDOWS_TREE_EXIT_MS);
+      await d.waitFree(port, 3000);
+      if (record.frontend) await d.waitFree(record.frontend.port, 3000);
+      // A frontend that a reload orphaned is not in the tree: stop it as a start's reclaim would.
+      const left = await stopLeftFrontend();
+      const sandbox = record.sandbox;
+      const sandboxEnded = !sandbox || !d.isAlive(sandbox.pid) || (await d.waitExit(sandbox.pid, SANDBOX_STOP_TIMEOUT_MS));
+      const portFree = !(await d.probe(port)) && (left === null || left.reclaim.reclaimed);
+      if (portFree && exited) {
+        reapIfEnded(body);
+        // The dev server may have rewritten its record (its frontend) since it was read.
+        const now = d.readPidfile(pidfilePath);
+        if (now != null && now !== body) reapIfEnded(now);
+      }
+      return {
+        ...result(
+          top === record.session?.pid ? 'cli' : 'watcher',
+          [top, ...(left?.reclaim.pids ?? [])],
+          portFree && exited && sandboxEnded,
+        ),
+        ...(left ? { frontend: left.frontend } : {}),
+        ...(sandbox ? { sandbox } : {}),
+      };
+    }
   }
 
   // Primary path: SIGTERM the recorded tsx watch supervisor, and wait for it to
