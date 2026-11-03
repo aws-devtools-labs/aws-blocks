@@ -214,6 +214,17 @@ export function databaseTests(getApi: () => typeof apiType) {
       });
     }
 
+    test('Database - overlapping rollback does not discard a committed transaction', async () => {
+      const api = getApi();
+      const prefix = `overlap-rollback-${Date.now().toString(36)}`;
+      try {
+        const rows = await api.dbOverlappingRollback(prefix);
+        assert.deepStrictEqual(rows, [{ id: `${prefix}-a` }], 'A must persist after it commits');
+      } finally {
+        await api.dbDelete(`${prefix}-a`);
+      }
+    });
+
     // Kysely typed query — the backend builds a typed query via createKyselyAdapter
     // (typing is enforced by the harness tsc check); this just verifies it runs.
     test('Database - Kysely typed select returns typed rows', async () => {

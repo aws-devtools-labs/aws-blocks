@@ -58,6 +58,22 @@ test('queued transactions proceed in order after commit and rollback', { timeout
 	assert.deepEqual(await engine.query('SELECT id FROM items ORDER BY id'), [{ id: 'A' }, { id: 'C' }]);
 });
 
+test('an overlapping rollback cannot discard a transaction that commits', { timeout: 10_000 }, async () => {
+	const engine = await setup();
+	const a = await engine.beginTransaction();
+	await engine.executeInTransaction(a, "INSERT INTO items VALUES ('A', 'a')");
+	// B starts while A is open and rolls back; on a shared session its ROLLBACK
+	// would discard A's insert and A's later COMMIT would silently do nothing.
+	const b = (async () => {
+		const handle = await engine.beginTransaction();
+		await engine.rollbackTransaction(handle);
+	})();
+	await Promise.race([b, delay(50)]);
+	await engine.commitTransaction(a);
+	await b;
+	assert.deepEqual(await engine.query('SELECT id FROM items'), [{ id: 'A' }]);
+});
+
 test('failed commit releases the queue and late rollback cannot undo its successor', { timeout: 10_000 }, async () => {
 	const engine = await setup();
 	await engine.execute("INSERT INTO items VALUES ('original', 'duplicate')");

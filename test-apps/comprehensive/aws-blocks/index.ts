@@ -1949,6 +1949,42 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     }
   },
 
+  // Issue #904 (reverse case): A commits after an overlapping transaction B
+  // rolls back. B's ROLLBACK must not discard A's write while A still reports
+  // success.
+  async dbOverlappingRollback(prefix: string) {
+    let signalInserted!: () => void;
+    let release!: () => void;
+    const inserted = new Promise<void>((resolve) => { signalInserted = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const a = db.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO test_items (id, name, value) VALUES (${`${prefix}-a`}, 'A', 1)`);
+      signalInserted();
+      await released;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([inserted, a.then(() => { throw new Error('A finished before inserting'); })]);
+      const b = db.transaction(async () => {
+        throw new Error('intentional rollback B');
+      }).then(() => 'committed' as const, () => 'rejected' as const);
+      // The broken implementation runs B immediately; a serial engine makes B
+      // wait for A, so release A after a bounded fallback instead of deadlocking.
+      await Promise.race([b, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2_000); })]);
+      clearTimeout(timer);
+      release();
+      await a;
+      if (await b !== 'rejected') throw new Error('Unexpected B outcome');
+      return await db.query<{ id: string }>(
+        sql`SELECT id FROM test_items WHERE id = ${`${prefix}-a`}`
+      );
+    } finally {
+      clearTimeout(timer);
+      release();
+      await a.catch(() => {});
+    }
+  },
+
   // ------------------------------------------------------------------------
   // DSQL Database Tests
   // ------------------------------------------------------------------------
