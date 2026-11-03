@@ -83,7 +83,9 @@ Each server-side subscriber therefore has two delivery paths, and `publish()` dr
 - **Once live**, the socket delivers every message and the local emitter skips that handler.
 - **After the socket closes or errors**, it isn't live again, and the local emitter takes over.
 
-So each published message runs a server-side handler exactly once, matching the local mock. `test-apps/comprehensive` asserts one call per publish for both `getChannel().subscribe()` and `realtime.subscribe()`.
+So once a subscription is established, each published message runs a server-side handler once, matching the local mock. `test-apps/comprehensive` asserts one call per publish for both `getChannel().subscribe()` and `realtime.subscribe()`.
+
+Overall delivery is still at-least-once, not exactly-once. A message published from the same process while the subscription is being established can reach the handler twice: the local emitter delivers it because the socket isn't live yet, and if API Gateway has already registered the connection, the socket frame for the same message can arrive after `subscribe_success`. API Gateway delivery is also best-effort (see the README). Server-side handlers must therefore be idempotent.
 
 ## Infrastructure (CDK)
 
