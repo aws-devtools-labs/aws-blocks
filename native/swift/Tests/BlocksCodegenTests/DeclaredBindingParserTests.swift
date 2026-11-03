@@ -251,7 +251,12 @@ final class DeclaredBindingParserTests: XCTestCase {
             }
         }
         walk("", 4)
-        XCTAssertEqual(accepted, 386, "the sweep must keep exercising the grammar's accepting path")
+        XCTAssertEqual(
+            accepted,
+            386,
+            "the sweep must keep exercising the grammar's accepting path; this count is "
+                + "every accepted string over aZ09-_. to depth 4, so it moves if either changes"
+        )
     }
 
     func testAnExportWhoseSeparatorDoesNotJoinTwoSegmentsIsAnError() {

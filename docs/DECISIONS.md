@@ -884,7 +884,7 @@ The collision rule is not one convention across the four implementations, and th
 
 The package term discriminates because Kotlin keys on `kotlinPackage` and Swift on the Swift module, which two catalog identities may share; Swift's `moduleOwners` guard compares declared `identity` and `product` rather than the catalog's `package` key, so byte-identical Swift package metadata passes it and is rejected on the package term alone.
 
-**Reserved names.** Dart alone refuses a resolved name owned by `dart:core`, `dart:async` or `blocks_runtime`. Swift's `reservedTypeNames` is not a counterpart: `safeTypeName` is its only caller, and consults it for a name the generator invents. Kotlin has no equivalent, and this divergence predates this change too.
+**Reserved names.** Dart refuses a resolved name `dart:core`, `dart:async` or `blocks_runtime` owns; Swift refuses one in `swiftKeywords` or `typeNamesIllegalWhenQualified`. The sets differ rather than one side lacking a guard. Kotlin has no equivalent, and this divergence predates this change too.
 
 Reconciling them changes behavior on whichever side moves, so it is left to its own decision.
 
