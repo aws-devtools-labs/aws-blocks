@@ -22,6 +22,7 @@
 
 - **[reference/ARCHITECTURE-LAYERS.md](./reference/ARCHITECTURE-LAYERS.md)** — Building Block four-export layer architecture
 - **[reference/building-block-structure.md](./reference/building-block-structure.md)** — Building Block file structure and patterns
+- **[reference/error-model.md](./reference/error-model.md)** — How errors are named, thrown, sent to the client and caught
 
 ## Testing
 
