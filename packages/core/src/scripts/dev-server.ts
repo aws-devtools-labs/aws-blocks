@@ -840,6 +840,21 @@ function watchPidfileHandoff(pidfilePath: string): void {
  */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
 
+/**
+ * The environment variable, `1`, that `blocks dev` (and the sandbox's dev
+ * command) set because they run the dev server under `tsx watch`.
+ */
+export const DEV_UNDER_WATCH_ENV = 'BLOCKS_DEV_UNDER_WATCH';
+
+/**
+ * True when the dev server runs under `tsx watch`: `env` says so
+ * ({@link DEV_UNDER_WATCH_ENV}), or the parent's command line is one. On
+ * Windows that command line can't be read (see pidCommand), so only `env` tells.
+ */
+export function runsUnderTsxWatch(env: NodeJS.ProcessEnv, parentCommand: string): boolean {
+  return env[DEV_UNDER_WATCH_ENV] === '1' || isTsxWatcher(parentCommand);
+}
+
 /** `npx --no -- blocks dev stop`, with `--port` when the port isn't the default: a command an app's shell runs as is. */
 export function devStopCommand(port: number): string {
   return port === 3000 ? 'npx --no -- blocks dev stop' : `npx --no -- blocks dev stop --port ${port}`;
@@ -878,13 +893,15 @@ const FAIL_RELAY_GRACE_MS = 2000;
  * End the dev session on a startup failure that editing the backend can't fix.
  * Prints `reason`, records it in {@link DEV_FAILURE_FILE_ENV}'s file, and exits 1.
  *
- * A `tsx watch` parent would otherwise wait for a file change forever after we
- * exit, with nothing left running that `dev stop` could find, so it is stopped
- * too: it gets a SIGTERM, relays it back to us, and we exit 1 then — not
- * before — so that tsx exits with our code instead of reporting a stop.
+ * A `tsx watch` parent (`underWatch`, see {@link runsUnderTsxWatch}) would
+ * otherwise wait for a file change forever after we exit, with nothing left
+ * running that `dev stop` could find, so it is stopped too: it gets a SIGTERM,
+ * relays it back to us, and we exit 1 then — not before — so that tsx exits
+ * with our code instead of reporting a stop. On Windows the SIGTERM is
+ * `TerminateProcess`, which ends `tsx watch` with exit code 1 at once.
  * Returns at once; the process ends shortly after.
  */
-function failDevStartup(reason: string, hint?: string): void {
+function failDevStartup(reason: string, hint: string | undefined, underWatch: boolean): void {
   console.error(`\n❌ ${reason}.${hint ? `\n   ${hint}` : ''}\n`);
   const file = process.env[DEV_FAILURE_FILE_ENV];
   if (file) {
@@ -892,7 +909,7 @@ function failDevStartup(reason: string, hint?: string): void {
   }
   const exit = (): never => process.exit(1);
   const parent = process.ppid;
-  if (!(parent > 1 && isTsxWatcher(pidCommand(parent)))) exit();
+  if (!(parent > 1 && underWatch)) exit();
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
     process.removeAllListeners(signal); // no cleanup: nothing was started
     process.once(signal, exit);
@@ -959,11 +976,13 @@ export async function startDevServer(options: DevServerOptions) {
   const sessionPid = Number.isInteger(session) && session > 1 ? session : undefined;
   // The top of the session, which `dev stop` ends on Windows (see DevServerPidRecord.session).
   if (sessionPid !== undefined) selfRecord.session = { pid: sessionPid };
+  const underTsxWatch = process.ppid > 1 && runsUnderTsxWatch(process.env, selfRecord.parentCommand ?? '');
+  delete process.env[DEV_UNDER_WATCH_ENV]; // not the frontend's to inherit
   mkdirSync(BLOCKS_SANDBOX_DIR, { recursive: true });
   const claim = claimDevPidfile(pidfilePath, selfRecord, {}, sessionPid);
   if (!claim.acquired) {
     // One dev server per app, whatever its port: the claim names the port of the one that runs.
-    failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(claim.port)}\`.`);
+    failDevStartup(claim.reason, `Not starting a second one. Stop it with \`${devStopCommand(claim.port)}\`.`, underTsxWatch);
     return;
   }
   // `tsx watch` restarts us on a file change with a SIGTERM (and relays a
@@ -975,7 +994,6 @@ export async function startDevServer(options: DevServerOptions) {
   // this process, then its `tsx watch`), so a handoff watch removes the kept
   // pidfile once `tsx watch` exits without a successor (see watchPidfileHandoff).
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
-  const underTsxWatch = isTsxWatcher(pidCommand(process.ppid));
   // Until the cleanup below is installed, once the server listens, a stop
   // still ends the session cleanly: it releases the record we now hold (or
   // hands it to a reload's successor), and closes any database the backend
@@ -1434,7 +1452,7 @@ export async function startDevServer(options: DevServerOptions) {
       continue;
     }
     removeOwnPidfile();
-    failDevStartup(describePortHolders(p, result), portInUseHint(p, result, option));
+    failDevStartup(describePortHolders(p, result), portInUseHint(p, result, option), underTsxWatch);
     return;
   }
 
@@ -1472,7 +1490,11 @@ export async function startDevServer(options: DevServerOptions) {
     relisten: () => server.listen(port, host, onListening),
     scheduleRetry: (fn, delayMs) => { scheduleBindRetry(fn, delayMs); },
     onExhausted: () =>
-      failDevStartup(`port ${port} is still in use`, portInUseHint(port, { foreign: [], pids: findListenerPids(port) }, '--port')),
+      failDevStartup(
+        `port ${port} is still in use`,
+        portInUseHint(port, { foreign: [], pids: findListenerPids(port) }, '--port'),
+        underTsxWatch,
+      ),
     warn: (msg) => console.error(msg),
   });
   // Malformed/aborted requests must not become unhandled socket errors.
@@ -1500,7 +1522,7 @@ export async function startDevServer(options: DevServerOptions) {
       duration: Date.now() - devStartTime,
       error: { code: 'UNKNOWN', phase: 'startup' },
     });
-    failDevStartup(`the dev server could not listen on ${host}:${port}: ${err.message}`);
+    failDevStartup(`the dev server could not listen on ${host}:${port}: ${err.message}`, undefined, underTsxWatch);
   });
 
   server.listen(port, host, onListening);
