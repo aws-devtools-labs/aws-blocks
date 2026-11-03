@@ -9,6 +9,6 @@ const scope = new Scope('basic');
 //   with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.
 export const auth = new Auth(scope, 'auth', { session: { ttlSeconds: 86_400 } });
 // Strings that name Object.prototype members, not AuthBasic wire names.
-export const keys = ['constructor', 'toString', 'hasOwnProperty'];
+export const keys = ['constructor', 'toString', '__proto__', 'hasOwnProperty'];
 export const ctor = AuthErrors.constructor;
 export const label = auth.toString();
