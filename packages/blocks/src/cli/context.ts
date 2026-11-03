@@ -311,10 +311,21 @@ export const STOP_GRACE_MS = 10_000;
 /** How long the CLI waits for `tsx watch` to exit once no runner is left under it, before it SIGKILLs it (see {@link SpawnSpec.watcher}). */
 export const WATCHER_EXIT_MS = 1000;
 
-/** The pids of the children of `pid` (POSIX `ps`); none when `ps` fails. */
-function childPids(pid: number): number[] {
+/**
+ * The pids of the children of `pid` (POSIX `ps`); none when `ps` fails, and none
+ * on Windows: there a signal is `TerminateProcess`, so no runner runs a cleanup
+ * to wait for, and a `ps` on `PATH` (Git for Windows' MSYS one) takes no `-A`.
+ * Its stderr never reaches the user's terminal.
+ */
+export function childPids(
+	pid: number,
+	platform: NodeJS.Platform = process.platform,
+	list: () => string = () =>
+		execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }),
+): number[] {
+	if (platform === 'win32') return [];
 	try {
-		return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8' })
+		return list()
 			.split('\n')
 			.map((line) => line.trim().split(/\s+/).map(Number))
 			.filter(([, parent]) => parent === pid)

@@ -13,7 +13,15 @@ import { describe, it } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { resolveDevConfig } from './config.js';
-import { createSpawnChild, findProjectRoot, isCi, logLevelFor, PromptInterrupted, promptLine } from './context.js';
+import {
+	childPids,
+	createSpawnChild,
+	findProjectRoot,
+	isCi,
+	logLevelFor,
+	PromptInterrupted,
+	promptLine,
+} from './context.js';
 import { CliError } from './errors.js';
 import { parseArgv } from './parse.js';
 import { DEV_FAILURE_FILE_ENV, DEV_OPTIONS_ENV, DEV_STATE, runnerArgs, runnerPath, shellQuote } from './runners/launch.js';
@@ -209,6 +217,25 @@ function isGroupRunning(pgid: number): boolean {
 		return (error as NodeJS.ErrnoException).code === 'EPERM';
 	}
 }
+
+describe('the children of a watcher', () => {
+	it('runs no ps on Windows, where a signal is TerminateProcess and runs no runner cleanup', () => {
+		let listed = 0;
+		const list = () => {
+			listed++;
+			return '  41  40\n  42   1\n';
+		};
+		assert.deepStrictEqual(childPids(40, 'win32', list), []);
+		assert.strictEqual(listed, 0);
+		assert.deepStrictEqual(childPids(40, 'linux', list), [41]);
+		assert.deepStrictEqual(
+			childPids(40, 'linux', () => {
+				throw new Error('ps: unknown option -- A');
+			}),
+			[],
+		);
+	});
+});
 
 // On Windows, child.kill() ends the child without running its handlers.
 // These tests signal a real child process, so they run on the real clock: fake
