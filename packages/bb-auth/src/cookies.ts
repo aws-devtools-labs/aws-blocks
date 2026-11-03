@@ -27,7 +27,7 @@
  */
 
 import crypto from 'node:crypto';
-import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLoopbackRequest } from '@aws-blocks/auth-common/cookies';
+import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-blocks/auth-common/cookies';
 import type { BlocksContext } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { sessionCookieName } from './cdk/contract.js';
@@ -35,8 +35,10 @@ import { sessionCookieName } from './cdk/contract.js';
 /**
  * Build the full cookie-attribute string (everything after `name=value`) for a
  * session cookie on this request. Security attributes come from the shared
- * {@link buildCookieSecurityAttrs} helper (D-007); `isLocalhost` is detected
- * per request from the `Origin` / `Host` header, and `plainHttpOrigin` from the
+ * {@link buildCookieSecurityAttrs} helper (D-007); `isLocalhost` is true only for
+ * a loopback `Origin` / `Host` in a local process ({@link isLocalDevRequest}, from
+ * deploy config), so on deployed compute a request header cannot drop `Secure` or
+ * `Partitioned`; and `plainHttpOrigin` comes from the
  * deployed front door's own scheme (`BLOCKS_PUBLIC_ORIGIN`, as `AuthBasic` did):
  * behind an ALB with no TLS listener a `Secure` cookie would be dropped by the
  * browser, and the session with it. Every cookie this block sets (session,
@@ -45,7 +47,7 @@ import { sessionCookieName } from './cdk/contract.js';
 function cookieAttrsForRequest(ctx: BlocksContext, crossDomain: boolean): string {
 	const security = buildCookieSecurityAttrs({
 		crossDomain,
-		isLocalhost: isLoopbackRequest(ctx),
+		isLocalhost: isLocalDevRequest(ctx),
 		plainHttpOrigin: isInsecurePublicOrigin(),
 	});
 	return `HttpOnly; ${security}; Path=/`;

@@ -140,10 +140,11 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
  * (`localhost`, `127.0.0.1`, `[::1]`) by inspecting the `Origin` header
  * (falling back to `Host`).
  *
- * `bb-auth` selects cookie attributes per request and uses this to feed
- * `isLocalhost` (as the removed `bb-auth-basic` / `bb-auth-cognito` did
- * before it). The removed OIDC BB instead decided localhost-ness at construction time via its
- * runtime entry point (mock vs aws), so it did not call this.
+ * `bb-auth` selects cookie attributes per request and feeds `isLocalhost`
+ * from {@link isLocalDevRequest}, which applies this check only in a local
+ * process (the removed `bb-auth-basic` / `bb-auth-cognito` did the same).
+ * The removed OIDC BB instead decided localhost-ness at construction time via
+ * its runtime entry point (mock vs aws), so it did not call this.
  *
  * We can't sniff `https://` reliably because the Blocks dev server always
  * serves plain HTTP even when fronted by HTTPS in production.

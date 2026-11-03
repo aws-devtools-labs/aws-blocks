@@ -7,6 +7,7 @@ import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import {
 	clearAutoSignInCookie,
+	clearPendingAuthCookie,
 	clearSessionCookie,
 	decryptAutoSignInPayload,
 	encryptAutoSignInPayload,
@@ -90,6 +91,59 @@ describe('Set-Cookie writing', () => {
 		const cross = makeContext(undefined, 'api.example.com');
 		setSessionCookie(cross, 'a', 'v.s', 1, true);
 		assert.match(cross.response.headers.getSetCookie()[0] ?? '', /SameSite=None; Secure; Partitioned/);
+	});
+});
+
+describe('on deployed compute a loopback Origin / Host cannot drop Secure (deploy config decides)', () => {
+	/** Run `fn` as on deployed compute: the two variables synth stamps, which `getDeploymentType()` reads. */
+	function withDeployedEnv(fn: () => void): void {
+		const keys = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const;
+		const previous = keys.map((k) => process.env[k]);
+		process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'config.json';
+		try {
+			fn();
+		} finally {
+			keys.forEach((k, i) => {
+				if (previous[i] === undefined) delete process.env[k];
+				else process.env[k] = previous[i];
+			});
+		}
+	}
+	/** Every cookie this block sets and clears, on requests whose `Host` (and `Origin`, if given) is loopback. */
+	function everyCookie(crossDomain: boolean, origin?: string): string[] {
+		const set = makeContext(undefined, 'localhost:3000');
+		const clear = makeContext(undefined, 'localhost:3000');
+		if (origin) for (const ctx of [set, clear]) ctx.request.headers.set('origin', origin);
+		setSessionCookie(set, 'app-auth', 'sid.sig', 100, crossDomain);
+		setAutoSignInCookie(set, 'app-auth', 'bridge', 60, crossDomain);
+		setPendingAuthCookie(set, 'app-auth', 'pending', 60, crossDomain);
+		clearSessionCookie(clear, 'app-auth', crossDomain);
+		clearAutoSignInCookie(clear, 'app-auth', crossDomain);
+		clearPendingAuthCookie(clear, 'app-auth', crossDomain);
+		return [...set.response.headers.getSetCookie(), ...clear.response.headers.getSetCookie()];
+	}
+	const loopbackOrigins = [undefined, 'http://localhost:3000', 'http://127.0.0.1:8080', 'http://[::1]:3000'];
+
+	test('deployed: every cookie keeps Secure, and crossDomain keeps Partitioned', () => {
+		withDeployedEnv(() => {
+			for (const origin of loopbackOrigins) {
+				const lax = everyCookie(false, origin);
+				assert.strictEqual(lax.length, 6);
+				for (const line of lax) assert.match(line, /; SameSite=Lax; Secure; Path=\//, `${origin}: ${line}`);
+				for (const line of everyCookie(true, origin)) {
+					assert.match(line, /; SameSite=None; Secure; Partitioned; Path=\//, `${origin}: ${line}`);
+				}
+			}
+		});
+	});
+
+	test('local process: a loopback request drops Secure (the plain-HTTP dev server)', () => {
+		for (const origin of loopbackOrigins) {
+			for (const line of everyCookie(false, origin)) {
+				assert.match(line, /; SameSite=Lax; Path=\//, `${origin}: ${line}`);
+			}
+		}
 	});
 });
 
