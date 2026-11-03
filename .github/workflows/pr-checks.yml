@@ -303,6 +303,12 @@ jobs:
       - name: Test the Amplify sandbox sweep
         run: node --test scripts/ci/amplify-sweep.test.mjs
 
+      # The stale-stack sweeper spaces and caps the deletes of stacks that own a
+      # REST API, and retains a stuck stack's REST API only once it has been
+      # DELETE_FAILED for over an hour.
+      - name: Test the stale stack sweep
+        run: node --test scripts/ci/stack-sweep.test.mjs
+
       # No required check may pass when a job it depends on fails or is
       # cancelled (GitHub counts a skipped required check as passing).
       - name: Test the required checks' failure paths

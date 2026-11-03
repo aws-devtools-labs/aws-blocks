@@ -752,6 +752,17 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		assert.match(r.summary, /^- Root delete deferred \(nested stack delete started\): 0$/m);
 	});
 
+	it('sends each stack one delete only: a rejected nested retain gets no plain delete, and only the root is retried', () => {
+		// --retain-resources is rejected once another delete of the same stack has
+		// started, so the nested stack must never get a plain delete in the same
+		// run, before or after its retaining one.
+		const r = runStep(sandbox({ [`delete-fails-${key(TODO)}`]: '' }));
+		assert.equal(r.status, 0, r.stdout);
+		assert.deepEqual(r.deletes, [RETAIN_TODO, `cloudformation delete-stack --stack-name ${ROOT}`]);
+		assert.match(r.stdout, /::warning::delete-stack with --retain-resources failed for /);
+		assert.match(r.summary, /^- Root delete deferred \(nested stack delete started\): 0$/m);
+	});
+
 	it('warns and retries plainly when the script fails', () => {
 		const cwd = mkdtempSync(join(tmpdir(), 'amplify-stuck-delete-cwd-'));
 		dirs.push(cwd);

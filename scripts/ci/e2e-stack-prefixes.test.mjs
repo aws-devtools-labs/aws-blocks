@@ -120,6 +120,17 @@ describe('cleanup prefixes', () => {
 		for (const prefix of sweptPrefixes()) assert.ok(patterns.includes(`${prefix}*`), `REST API sweep misses ${prefix}*`);
 	});
 
+	it('retain only the REST API names the REST API sweep reclaims', () => {
+		// The e2e step retains a stuck stack's REST API only when its name passes
+		// the sweep's name gate; a name the sweep skips would be orphaned for good.
+		const gate = (variable) => {
+			const m = CLEANUP.match(new RegExp(`case "\\$${variable}" in\\n\\s*([^\\n]+)\\) ;;`));
+			assert.ok(m, `the case "$${variable}" REST API name patterns are missing from cleanup-stacks.yml`);
+			return m[1].split('|').map((p) => p.trim());
+		};
+		assert.deepEqual(gate('API_NAME'), gate('NAME'));
+	});
+
 	it('still accept e2e-* and *-e2e purpose tags', () => {
 		assert.match(CLEANUP, /^\s*e2e-\* \| \*-e2e\) ;;$/m);
 	});
