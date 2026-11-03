@@ -1082,7 +1082,7 @@ Complete wiring showing the backend API and frontend `useChat` connected togethe
 import { Scope, ApiNamespace } from '@aws-blocks/core';
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
 import type { InterruptResponse } from '@aws-blocks/bb-agent';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 
 const scope = new Scope('my-app');
 
@@ -1091,9 +1091,9 @@ const agent = new Agent(scope, 'chat', {
   systemPrompt: 'You are a helpful assistant.',
 });
 
-// Any auth block works (AuthBasic, AuthCognito, AuthOIDC); the userId comes from
-// the session, never from a request parameter. See "Authorization" above.
-const auth = new AuthBasic(scope, 'auth');
+// Any Auth sign-in method works (email + password, OIDC, social); the userId comes
+// from the session, never from a request parameter. See "Authorization" above.
+const auth = new Auth(scope, 'auth');
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async createConversation() {

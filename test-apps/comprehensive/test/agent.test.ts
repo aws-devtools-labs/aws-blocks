@@ -485,8 +485,8 @@ export function agentTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await signUpAndConfirm(api, userA, password);
-        await signUpAndConfirm(api, userB, password);
+        await provisionConfirmedUser(api, userA, password);
+        await provisionConfirmedUser(api, userB, password);
         await signInAs(api, userA);
         ({ conversationId: convA } = await api.agentCreateConversationId());
         const { channel } = await api.agentGetChannel(convA);
