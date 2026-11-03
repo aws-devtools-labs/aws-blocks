@@ -96,8 +96,11 @@ describe('blocks-generate-client output', () => {
 		});
 	});
 
+	// On Windows a signal is TerminateProcess: no handler runs, so there is nothing to pass on.
 	for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
-		it(`passes a ${signal} sent to its pid alone on to the worker, and ends after it`, async () => {
+		it(`passes a ${signal} sent to its pid alone on to the worker, and ends after it`, {
+			skip: process.platform === 'win32',
+		}, async () => {
 			// The backend prints the worker's pid, then keeps the import pending. Its timer runs in
 			// the worker, not here: it stands for a slow import that the signal must cut short.
 			const backend = [
