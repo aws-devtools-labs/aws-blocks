@@ -334,7 +334,7 @@ describe('AuthErrors', () => {
 
 	test('contains the names added for the unified Auth block', () => {
 		assert.strictEqual(AuthErrors.ReauthenticationRequired, 'ReauthenticationRequiredException');
-		assert.strictEqual(AuthErrors.ProviderMisconfigured, 'ProviderMisconfiguredException');
+		assert.strictEqual(AuthErrors.ProviderUnavailable, 'ProviderUnavailableException');
 		assert.strictEqual(AuthErrors.EmailPasswordNotEnabled, 'EmailPasswordNotEnabledException');
 		assert.strictEqual(AuthErrors.NoFederatedProvider, 'NoFederatedProviderException');
 		assert.strictEqual(AuthErrors.PasskeysNotEnabled, 'PasskeysNotEnabledException');

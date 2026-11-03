@@ -149,7 +149,7 @@ export const AuthErrors: {
     readonly WebAuthnClientMismatch: "WebAuthnClientMismatchException";
     readonly WebAuthnConfigurationMissing: "WebAuthnConfigurationMissingException";
     readonly ProviderNotConfigured: "ProviderNotConfiguredException";
-    readonly ProviderMisconfigured: "ProviderMisconfiguredException";
+    readonly ProviderUnavailable: "ProviderUnavailableException";
     readonly IdpError: "IdpErrorException";
     readonly InvalidState: "InvalidStateException";
     readonly InvalidCallback: "InvalidCallbackException";

@@ -414,7 +414,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 			const res = await signIn(id);
 			assert.strictEqual(res.status, 501, `${id}: never a 404`);
 			const body = await res.json();
-			assert.strictEqual(body.name, AuthErrors.ProviderMisconfigured);
+			assert.strictEqual(body.name, AuthErrors.ProviderUnavailable);
 			assert.match(body.error, /unavailable locally/);
 			assert.match(body.error, /stubIdp\(\)/);
 		}
@@ -498,20 +498,20 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 			assert.match(html, /<title>Google sign-in is not available here<\/title>/);
 			assert.match(html, /Google sign-in works after deploy \(npm run sandbox\), or use stubIdp\(\) locally\./);
 			assert.match(html, /not a configuration error/);
-			assert.match(html, /ProviderMisconfiguredException/);
+			assert.match(html, /ProviderUnavailableException/);
 			assert.doesNotMatch(html, /<script/i);
 		}
 		// No Accept header (fetch, a native SDK): the JSON body, name unchanged.
 		const json = await fetch(url, { redirect: 'manual' });
 		assert.strictEqual(json.status, 501);
 		assert.match(json.headers.get('content-type') ?? '', /^application\/json/);
-		assert.strictEqual((await json.json()).name, AuthErrors.ProviderMisconfigured);
+		assert.strictEqual((await json.json()).name, AuthErrors.ProviderUnavailable);
 		// `?format=json` asks for JSON even from a navigation, as on the signout route.
 		for (const headers of navigations) {
 			const asked = await navigate(headers, `${url}?format=json`);
 			assert.strictEqual(asked.status, 501);
 			assert.match(String(asked.headers['content-type']), /^application\/json/);
-			assert.strictEqual(JSON.parse(asked.body).name, AuthErrors.ProviderMisconfigured);
+			assert.strictEqual(JSON.parse(asked.body).name, AuthErrors.ProviderUnavailable);
 		}
 		// A provider that works offline still redirects a browser.
 		const okta = await fetch(`${server.origin}/aws-blocks/auth/signin/okta`, {
@@ -560,7 +560,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 		const google = await fetch(`${server.origin}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
 		assert.strictEqual(google.status, 500);
 		const body = await google.json();
-		assert.strictEqual(body.name, AuthErrors.ProviderMisconfigured);
+		assert.strictEqual(body.name, AuthErrors.ProviderUnavailable);
 		assert.match(body.error, /no Cognito managed-login configuration/);
 	});
 

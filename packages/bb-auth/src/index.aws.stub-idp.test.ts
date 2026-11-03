@@ -166,7 +166,7 @@ async function assertStubNotServed(): Promise<void> {
 		(e: unknown) =>
 			e instanceof ApiError &&
 			e.status === 501 &&
-			e.name === AuthErrors.ProviderMisconfigured &&
+			e.name === AuthErrors.ProviderUnavailable &&
 			/runs only in local development \(npm run dev\) and sandbox deployments/.test(e.message) &&
 			/getDeploymentType\(\)/.test(e.message) &&
 			/restart `npm run sandbox`/.test(e.message),

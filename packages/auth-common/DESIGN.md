@@ -205,7 +205,7 @@ Adding `AuthErrors` changed nothing about what the predecessor blocks threw. The
 | `AuthOIDC` | `ResourceNotFoundException`, `DuplicateProviderException` | — | excluded: Cognito SDK errors caught inside the IdP-registration custom-resource Lambda, never surfaced |
 | `AuthCognito` | `AccessDeniedException`, `UnrecognizedClientException`, `InvalidSignatureException`, `ExpiredTokenException`, `CredentialsProviderError` | — | excluded: AWS rejected the function role's own credentials or IAM policy, which is a deployment problem and not an auth outcome. Reported by name as a 500 with a generic message; the detail (role ARN, account id) is logged, never sent to the client |
 
-New names with no predecessor: `ReauthenticationRequired`, `ProviderMisconfigured`, `EmailPasswordNotEnabled`, `NoFederatedProvider`, `PasskeysNotEnabled`, `MfaNotEnabled`.
+New names with no predecessor: `ReauthenticationRequired`, `ProviderUnavailable`, `EmailPasswordNotEnabled`, `NoFederatedProvider`, `PasskeysNotEnabled`, `MfaNotEnabled`.
 
 `AuthCognito` also passed any other Cognito exception through by its service name (e.g. `CodeDeliveryFailureException`); those are not part of the vocabulary, and `Auth` reports them as `InternalErrorException`.
 

@@ -1508,7 +1508,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 							`Sign-in provider '${providerId}' does not support client-driven sign-in.`,
 							501,
 							{
-								name: AuthErrors.ProviderMisconfigured,
+								name: AuthErrors.ProviderUnavailable,
 							},
 						);
 					}

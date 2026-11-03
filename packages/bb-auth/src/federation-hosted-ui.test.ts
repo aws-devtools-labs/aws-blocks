@@ -589,7 +589,7 @@ describe('HostedUiFederationEngine — pool-less safety', () => {
 		await assert.rejects(engine.buildSignInUrl(ctxFor(`${APP}/x`), {}), (e: unknown) => {
 			assert.ok(e instanceof ApiError);
 			assert.strictEqual(e.status, 500);
-			assert.strictEqual(e.name, AuthErrors.ProviderMisconfigured);
+			assert.strictEqual(e.name, AuthErrors.ProviderUnavailable);
 			assert.match(e.message, /'google' is not available: this deployment has no Cognito managed-login/);
 			return true;
 		});

@@ -157,7 +157,7 @@ describe('DirectFederationEngine', () => {
 		const { engine, entries } = makeEngine(okta({ clientSecret: secret }));
 
 		// No value yet: `Secret.get()` is `null` — a generic wire message, the fix in the log.
-		await assert.rejects(signIn(idp, engine), rejectsWith(AuthErrors.ProviderMisconfigured));
+		await assert.rejects(signIn(idp, engine), rejectsWith(AuthErrors.ProviderUnavailable));
 		assert.ok(
 			entries.some((e) => /client secret has no value/.test(String(e.message))),
 			'the log names the unset secret',
@@ -360,7 +360,7 @@ describe('DirectFederationEngine', () => {
 		const { engine } = makeEngine(okta());
 		await assert.rejects(
 			engine.buildSignInUrl(ctxFor(`${APP}/x`), {}),
-			rejectsWith(AuthErrors.ProviderMisconfigured),
+			rejectsWith(AuthErrors.ProviderUnavailable),
 		);
 		idp.advertisedIssuer = undefined;
 		const strict = makeEngine(okta(), { allowInsecure: false });
@@ -538,7 +538,7 @@ describe('DirectFederationEngine', () => {
 				},
 			}),
 		);
-		await assert.rejects(signIn(idp, noSecret), assertWireSafe(AuthErrors.ProviderMisconfigured, 502, RAW_ARN));
+		await assert.rejects(signIn(idp, noSecret), assertWireSafe(AuthErrors.ProviderUnavailable, 502, RAW_ARN));
 	});
 
 	// FX60: the callback's own OAuth error response was the last path that still

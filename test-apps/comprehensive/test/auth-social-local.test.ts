@@ -53,7 +53,7 @@ export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
       const json = await fetch(url, { redirect: 'manual' });
       assert.strictEqual(json.status, 501);
       const body = await json.json();
-      assert.strictEqual(body.name, AuthErrors.ProviderMisconfigured, 'the error name is unchanged');
+      assert.strictEqual(body.name, AuthErrors.ProviderUnavailable, 'the error name is unchanged');
     });
   });
 }

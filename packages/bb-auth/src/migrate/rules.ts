@@ -403,7 +403,7 @@ export const AUTH_ERROR_NAMES: ReadonlySet<string> = new Set([
 	'WebAuthnClientMismatchException',
 	'WebAuthnConfigurationMissingException',
 	'ProviderNotConfiguredException',
-	'ProviderMisconfiguredException',
+	'ProviderUnavailableException',
 	'IdpErrorException',
 	'InvalidStateException',
 	'InvalidCallbackException',

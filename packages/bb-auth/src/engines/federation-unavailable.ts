@@ -71,10 +71,10 @@ export function unavailableHint(provider: ResolvedProvider, reason: UnavailableR
 /** @internal */
 export function unavailableFederationEngine(provider: ResolvedProvider, reason: UnavailableReason): FederationEngine {
 	const message = unavailableMessage(provider, reason);
-	// The name stays `ProviderMisconfiguredException`: callers match on it, and
-	// the message says what is actually going on.
+	// The name is `ProviderUnavailableException`, the one callers match on for any
+	// provider that cannot sign in; the message says what is actually going on.
 	const fail = (): Promise<never> =>
-		Promise.reject(new ApiError(message, 501, { name: AuthErrors.ProviderMisconfigured }));
+		Promise.reject(new ApiError(message, 501, { name: AuthErrors.ProviderUnavailable }));
 	return {
 		unavailable: { hint: unavailableHint(provider, reason), message },
 		buildSignInUrl: fail,

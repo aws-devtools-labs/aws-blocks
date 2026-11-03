@@ -248,7 +248,7 @@ function sendUnavailablePage(
 		`<h1>${escapeHtml(title)}</h1>`,
 		`<p><strong>${escapeHtml(unavailable.hint)}</strong></p>`,
 		`<p>${escapeHtml(unavailable.message)}</p>`,
-		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderMisconfigured)}</code>. See "Social sign-in" in the Auth README (<code>@aws-blocks/bb-auth</code>).</p>`,
+		`<p>Error: <code>${escapeHtml(AuthErrors.ProviderUnavailable)}</code>. See "Social sign-in" in the Auth README (<code>@aws-blocks/bb-auth</code>).</p>`,
 		'<p><a href="/">Back to the app</a></p>',
 		'</main>',
 		'</body>',
@@ -673,7 +673,7 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 		const params = async (ctx: BlocksContext): Promise<PublicAuthorizeParams> => {
 			if (!engine.authorizeParams) {
 				throw new ApiError(`Sign-in provider '${provider.id}' does not support client-driven sign-in.`, 501, {
-					name: AuthErrors.ProviderMisconfigured,
+					name: AuthErrors.ProviderUnavailable,
 				});
 			}
 			return engine.authorizeParams(ctx);
@@ -774,7 +774,7 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 				}
 				if (!entry.engine.refreshBearer) {
 					throw new ApiError(`Sign-in provider '${providerId}' does not support bearer refresh.`, 501, {
-						name: AuthErrors.ProviderMisconfigured,
+						name: AuthErrors.ProviderUnavailable,
 					});
 				}
 				const tokens = await entry.engine.refreshBearer(ctx, refreshToken);

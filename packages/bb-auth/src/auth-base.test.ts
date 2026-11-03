@@ -785,7 +785,7 @@ describe('the real entry points construct AuthBase with their engines', () => {
 		});
 		await assert.rejects(fed.getSignInUrl(makeContext(), 'okta'), {
 			status: 500,
-			name: 'ProviderMisconfiguredException',
+			name: 'ProviderUnavailableException',
 			message: /'okta' is not available: this deployment has no Cognito managed-login configuration/,
 		});
 	});

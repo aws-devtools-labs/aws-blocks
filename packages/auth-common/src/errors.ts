@@ -105,8 +105,12 @@ export const AuthErrors = {
 	// ── federation / redirect flow ────────────────────────────────────────────
 	/** The requested sign-in provider is not configured on this auth block. */
 	ProviderNotConfigured: 'ProviderNotConfiguredException',
-	/** The sign-in provider is configured but its configuration is unusable at runtime. */
-	ProviderMisconfigured: 'ProviderMisconfiguredException',
+	/**
+	 * The sign-in provider is configured but its configuration is unusable at runtime,
+	 * it cannot be reached (e.g. OIDC discovery failed), or it is not available in this
+	 * runtime (a Cognito-federated provider under `npm run dev`).
+	 */
+	ProviderUnavailable: 'ProviderUnavailableException',
 	/** The identity provider returned an error, or the token exchange with it failed. */
 	IdpError: 'IdpErrorException',
 	/** The sign-in `state` parameter is missing, invalid, or does not match. */

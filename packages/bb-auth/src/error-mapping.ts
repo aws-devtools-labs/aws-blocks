@@ -231,7 +231,7 @@ export const CLIENT_ERROR_MESSAGES: Readonly<Record<AuthErrorName, string>> = {
 	[AuthErrors.WebAuthnClientMismatch]: 'Passkey client mismatch',
 	[AuthErrors.WebAuthnConfigurationMissing]: 'Passkey configuration missing for this user pool',
 	[AuthErrors.ProviderNotConfigured]: 'Sign-in provider not configured',
-	[AuthErrors.ProviderMisconfigured]: 'Sign-in provider misconfigured',
+	[AuthErrors.ProviderUnavailable]: 'Sign-in provider unavailable',
 	[AuthErrors.IdpError]: 'The identity provider could not complete the sign-in',
 	[AuthErrors.InvalidState]: 'Invalid sign-in state',
 	[AuthErrors.InvalidCallback]: 'Invalid sign-in callback',

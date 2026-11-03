@@ -592,7 +592,7 @@ export interface FederationEngine {
 	 * `state`) as a cookie on `context.response`. The `GET
 	 * /aws-blocks/auth/signin/<id>` route 302s to it.
 	 *
-	 * @throws `ApiError` `ProviderMisconfiguredException` when the provider cannot be reached (e.g. discovery failed).
+	 * @throws `ApiError` `ProviderUnavailableException` when the provider cannot be reached (e.g. discovery failed).
 	 */
 	buildSignInUrl(context: BlocksContext, options: SignInUrlOptions): Promise<string>;
 

@@ -299,7 +299,7 @@ export function createAuthClient<P extends string = string>(options: AuthClientO
 			const nonce = get('nonce');
 			if (typeof authorizeUrl !== 'string' || typeof clientId !== 'string' || typeof state !== 'string') {
 				throw new ApiError('The sign-in parameters response was incomplete', 502, {
-					name: AuthErrors.ProviderMisconfigured,
+					name: AuthErrors.ProviderUnavailable,
 				});
 			}
 			const pending: PendingSignIn = {

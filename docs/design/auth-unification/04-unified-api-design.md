@@ -749,7 +749,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends AuthBase im
 
 All are plain `Error` — per `bb-auth-basic`'s **D-AB-10**, configuration mistakes are not catchable
 conditions and must not get a named constant that code could branch on. One exception:
-`ProviderMisconfigured` is named because it is also reachable at runtime on the mock path.
+`ProviderUnavailable` is named because it is also reachable at runtime on the mock path.
 
 **Configuration coherence:**
 - Duplicate provider id across `socialProviders` / `oidcProviders` / `samlProviders`.
@@ -1252,7 +1252,7 @@ export const AuthErrors = {
 
 	// ── federation / redirect flow ────────────────────────────────────────────
 	ProviderNotConfigured: 'ProviderNotConfiguredException',
-	ProviderMisconfigured: 'ProviderMisconfiguredException',   // NEW
+	ProviderUnavailable: 'ProviderUnavailableException',   // NEW
 	IdpError: 'IdpErrorException',
 	InvalidState: 'InvalidStateException',
 	InvalidCallback: 'InvalidCallbackException',

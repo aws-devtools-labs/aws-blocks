@@ -134,7 +134,7 @@ function invalidState(message: string): ApiError {
 }
 
 function misconfigured(message: string): ApiError {
-	return new ApiError(message, 502, { name: AuthErrors.ProviderMisconfigured });
+	return new ApiError(message, 502, { name: AuthErrors.ProviderUnavailable });
 }
 
 function randomToken(): string {
@@ -505,7 +505,7 @@ export class DirectFederationEngine implements FederationEngine {
 					`Sign-in provider '${this.provider.id}' is a stub IdP, which runs only in local development ` +
 						'(npm run dev). Replace stubIdp() with the real provider before deploying.',
 					501,
-					{ name: AuthErrors.ProviderMisconfigured },
+					{ name: AuthErrors.ProviderUnavailable },
 				);
 			}
 			return this.opts.stubIssuer(context);

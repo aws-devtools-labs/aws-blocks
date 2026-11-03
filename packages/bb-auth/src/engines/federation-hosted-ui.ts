@@ -454,7 +454,7 @@ export class HostedUiFederationEngine implements FederationEngine {
 				`Sign-in provider '${this.provider.id}' is not available: this deployment has no Cognito managed-login ` +
 					'configuration. Redeploy the stack.',
 				500,
-				{ name: AuthErrors.ProviderMisconfigured },
+				{ name: AuthErrors.ProviderUnavailable },
 			);
 		}
 		return { baseUrl, clientId, userPoolId };
