@@ -13,6 +13,18 @@
  * server or deploys, so the backend and these tests hold the same value without
  * reading it back from AWS. A normal build has no namespace at all
  * (`test-support-synth.test.ts`).
+ *
+ * Cognito email budget. Deployed, the `Auth` pools send mail through Cognito's
+ * default sender: 50 emails a day per AWS account, after which every `SignUp`
+ * fails with `LimitExceededException`. A `SignUp` that succeeds with an `email`
+ * attribute sends one; a rejected one (duplicate username, weak password,
+ * PreSignUp rejection) and an admin-created user with the invite suppressed
+ * send none. So a deployed test that needs a signed-in user calls
+ * `provisionConfirmedUser`, never a real sign-up. The whole CI run keeps one
+ * successful real sign-up, the `auth-gated` one in auth-validate-user.test.ts,
+ * in E2E Sandbox only; the native suites sign in a pre-seeded user
+ * (test-apps/native-bindings/aws-blocks/scripts/seed-cognito-user.ts). A new
+ * test that must send a real email runs in E2E Sandbox only.
  */
 
 import { randomBytes } from 'node:crypto';

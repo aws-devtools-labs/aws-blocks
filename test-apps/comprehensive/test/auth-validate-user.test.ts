@@ -7,7 +7,8 @@
  *
  * - Local and deployed: an email + password sign-up outside the policy is
  *   rejected with the developer's `AuthErrors` name and message; one inside
- *   it proceeds.
+ *   it proceeds (local and sandbox: it makes Cognito send a real email, so
+ *   production skips it to stay under the default-sender quota).
  * - Local and sandbox: a stub-IdP sign-in outside the policy is rejected on
  *   the callback and issues no session (production configures no stub IdP:
  *   the stub is local and sandbox only).
@@ -68,12 +69,22 @@ export function authValidateUserTests(getApi: () => typeof apiType) {
       }
     });
 
-    test('a sign-up inside the policy proceeds to email confirmation', async () => {
-      const api = getApi();
-      const id = unique();
-      const result = await api.gatedSignUp(`ada${id}`, 'secret1', `ada${id}@allowed.example`);
-      assert.strictEqual(result.isSignUpComplete, false);
-    });
+    // The only successful real sign-up in the deployed e2e (see "Cognito email
+    // budget" in ./test-support.ts): it runs in E2E Sandbox, not production.
+    test(
+      'a sign-up inside the policy proceeds to email confirmation',
+      {
+        skip:
+          ENV === 'production' &&
+          'real Cognito sign-up email is covered by E2E Sandbox; skipped here to stay under the Cognito default-sender quota',
+      },
+      async () => {
+        const api = getApi();
+        const id = unique();
+        const result = await api.gatedSignUp(`ada${id}`, 'secret1', `ada${id}@allowed.example`);
+        assert.strictEqual(result.isSignUpComplete, false);
+      },
+    );
 
     test(
       'a stub-IdP sign-in outside the policy is rejected and issues no session',
