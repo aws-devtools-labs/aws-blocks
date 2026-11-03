@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from "node:child_process";
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
@@ -170,7 +169,7 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, previe
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -200,7 +199,7 @@ export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: Sand
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -276,7 +275,7 @@ export function buildSandboxDeployArgs({
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -822,6 +821,17 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
 }
 
 /**
+ * Quote `backendPath` for the `--app` command string. CDK runs that string
+ * through a shell, so an unquoted path containing a space would split. cmd.exe
+ * (Windows) does not treat single quotes as quoting and would keep them in the
+ * path, so Windows gets double quotes; POSIX shells get single quotes.
+ */
+export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
+	if (platform === 'win32') return `"${backendPath}"`;
+	return `'${backendPath.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * The stacks of the assembly a `cdk destroy --output <assemblyDir>` attempt
  * synthesized (see {@link topLevelStacks}): the set that `--all` deletes, by
  * stack name and Region. Warns when the assembly can't be read (the synth
@@ -1257,9 +1267,10 @@ export function sandboxDestroyDeps(
     // resolve the same stack names.
     "--context", "sandboxMode=true",
     "--context", `projectRoot=${process.cwd()}`,
-    // Single-quote backendPath: CDK re-runs the --app string through a shell,
-    // so an unquoted path containing a space would split.
-    "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
+    // Quote backendPath: CDK re-runs the --app string through a shell, so an
+    // unquoted path containing a space would split. quoteCdkAppPath picks the
+    // quoting that shell understands — cmd.exe keeps a literal single quote.
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
   // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
   // the retry loop prints it once the destroy finally fails.

@@ -66,6 +66,18 @@ describe('WebSocket server: subscribe authorization', () => {
 		ws.close();
 	});
 
+	it('rejects a subscribe whose channel is not a channel path', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		for (const channel of [42, '__connection__', 'my-app-rt/chat']) {
+			const { ws, reply } = await subscribe({ channel, token });
+			try {
+				assert.deepStrictEqual(reply, { type: 'error', message: 'Invalid channel' });
+			} finally {
+				ws.close();
+			}
+		}
+	});
+
 	it('accepts a subscribe with a valid token', async () => {
 		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
 		const { ws, reply } = await subscribe({ channel: CHANNEL, token });

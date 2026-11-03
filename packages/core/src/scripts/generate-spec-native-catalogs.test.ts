@@ -256,9 +256,25 @@ describe('generateSpec — native catalogs', () => {
 						err.errors[0].path,
 						'methods["api.connectDevice"].result.schema.x-blocks-type-args',
 					);
+					assert.match(err.errors[0].message, /by binding "example-device-link"/);
+					assert.match(err.errors[0].message, /\(declared by @example\/bb-iot\)$/);
 					return true;
 				},
 			);
+		});
+	});
+
+	it('emits type args as an array at arity 1 (enforced by generateSpec, not by the assertion)', async () => {
+		// Both deviations abort generation before the assertion runs — an absent key
+		// on the arity count, a non-array on its own branch — so the assertion records
+		// the emitted shape and `generateSpec` is what fails the test.
+		await withBackend('type-args-array', AST_BACKEND, async (foundationPath) => {
+			const doc = await generateSpec(foundationPath, stubTransferableLoader(), {
+				nativeDeclarations: iotDeclarations(1),
+			});
+
+			const schema = doc.methods[0].result.schema as Record<string, unknown>;
+			assert.ok(Array.isArray(schema['x-blocks-type-args']));
 		});
 	});
 
