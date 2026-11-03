@@ -427,7 +427,11 @@ describe('lifecycle commands', () => {
 				previewInvocation: 'npx --no -- blocks sandbox preview',
 			},
 		);
-		assert.match(options.devCommand, /cli\.mjs' 'watch' '.*dev-server\.js'$/);
+		// Quoted for the shell that runs it: cmd.exe's double quotes on Windows (see shellQuote).
+		assert.match(
+			options.devCommand,
+			process.platform === 'win32' ? /cli\.mjs" "watch" ".*dev-server\.js"$/ : /cli\.mjs' 'watch' '.*dev-server\.js'$/,
+		);
 		// The runner and core's client generation in it load the same tsx, by URL; the dev command uses its CLI.
 		const loader = spec.env[TSX_IMPORT_ENV] ?? '';
 		assert.match(loader, /^file:.*[\\/]tsx[\\/]dist[\\/]loader\.mjs$/);
