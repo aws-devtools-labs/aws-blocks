@@ -511,7 +511,11 @@ jobs:
 
   e2e-templates:
     name: E2E Templates
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge, as in the AWS E2E jobs (see e2e-sandbox):
+    # the only local output it uses is the dist-registry artifact, which Local
+    # Build and Checks uploads, so it doesn't wait for the unit test shards
+    # and Local E2E.
+    needs: [local-build, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -555,7 +559,8 @@ jobs:
   # real Windows deploy smoke stays in windows-e2e.yml (scheduled).
   e2e-templates-windows:
     name: E2E Templates (Windows)
-    needs: [build-and-test-local, detect-changes]
+    # Needs local-build, not build-and-test-local, as e2e-templates does.
+    needs: [local-build, detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'templates-windows') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     timeout-minutes: 60
@@ -601,8 +606,8 @@ jobs:
     # they start as soon as detect-changes finishes.
     # "Build, Unit Tests, E2E Local" is a required check itself, so a red unit
     # job still blocks merge. Trade-off: AWS deploys also run when unit tests
-    # fail. The Templates jobs keep the edge because they download its
-    # dist-registry artifact.
+    # fail. The Templates jobs need local-build instead, for its dist-registry
+    # artifact.
     needs: [detect-changes]
     # Required check: see "Check that Detect Changes succeeded" below. Only
     # that branch uses always(); the run branch keeps success() so a cancelled
