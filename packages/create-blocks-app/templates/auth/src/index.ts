@@ -113,10 +113,11 @@ function renderTodo(todo: Todo): HTMLElement {
   return row;
 }
 
-async function refreshTodos() {
+// Returns whether the list was reloaded. On failure it has already shown why.
+async function refreshTodos(): Promise<boolean> {
   const todoList = document.getElementById('todo-list');
   const errorDiv = document.getElementById('todo-error');
-  if (!todoList) return;
+  if (!todoList) return false;
   // todo-error is status-only: reset it to an empty idle region rather than
   // clear(), so the persistent `role="status"` live region stays mounted and a
   // subsequent showError() mutates it in place (reliably announced).
@@ -132,17 +133,19 @@ async function refreshTodos() {
       const p = document.createElement('p');
       p.textContent = 'No todos yet. Add one above!';
       todoList.replaceChildren(p);
-      return;
+      return true;
     }
     todoList.replaceChildren(...todos.map(renderTodo));
+    return true;
   } catch (error) {
     if (isBlocksError(error, 'NotAuthenticatedException')) {
       const p = document.createElement('p');
       p.textContent = 'Please sign in to view todos';
       todoList.replaceChildren(p);
-      return;
+      return false;
     }
     if (errorDiv) showError(errorDiv, error);
+    return false;
   }
 }
 
@@ -170,14 +173,28 @@ async function changeSort(sortBy: string) {
   await refreshTodos();
 }
 
-async function toggleTodo(todoId: string, completed: boolean) {
-  await api.updateTodo(todoId, { completed });
+// Reload either way: on failure the row still shows the unsaved checkbox/select/title.
+// The error is shown after the reload, because refreshTodos() resets todo-error to idle.
+// If the reload failed too, keep its message (sign-in prompt or load error) instead.
+async function mutateTodo(action: () => Promise<unknown>) {
+  try {
+    await action();
+  } catch (error) {
+    const reloaded = await refreshTodos();
+    const signedOut = isBlocksError(error, 'NotAuthenticatedException');
+    const errorDiv = document.getElementById('todo-error');
+    if (reloaded && !signedOut && errorDiv) showError(errorDiv, error);
+    return;
+  }
   await refreshTodos();
 }
 
+async function toggleTodo(todoId: string, completed: boolean) {
+  await mutateTodo(() => api.updateTodo(todoId, { completed }));
+}
+
 async function changePriority(todoId: string, priority: number) {
-  await api.updateTodo(todoId, { priority });
-  await refreshTodos();
+  await mutateTodo(() => api.updateTodo(todoId, { priority }));
 }
 
 async function updateTitle(todoId: string, title: string) {
@@ -186,13 +203,11 @@ async function updateTitle(todoId: string, title: string) {
     await refreshTodos();
     return;
   }
-  await api.updateTodo(todoId, { title: trimmedTitle });
-  await refreshTodos();
+  await mutateTodo(() => api.updateTodo(todoId, { title: trimmedTitle }));
 }
 
 async function deleteTodo(todoId: string) {
-  await api.deleteTodo(todoId);
-  await refreshTodos();
+  await mutateTodo(() => api.deleteTodo(todoId));
 }
 
 // ── Auth UI ─────────────────────────────────────────────────────────────
@@ -266,7 +281,13 @@ function bindUi() {
 
 async function refreshLastCode() {
   const out = document.getElementById('last-code-result')!;
-  const last = await api.getLastCode();
+  let last: Awaited<ReturnType<typeof api.getLastCode>>;
+  try {
+    last = await api.getLastCode();
+  } catch (error) {
+    showError(out, error);
+    return;
+  }
   if (!last) {
     out.textContent = '(none)';
     return;

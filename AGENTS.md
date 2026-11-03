@@ -175,7 +175,8 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 1. Read `docs/design/API-DESIGN.md` for API guidelines (G1–G18)
 2. Study an existing BB (e.g., `packages/bb-kv-store/`) for the file pattern
 3. Read `docs/reference/building-block-structure.md` for conventions
-4. Follow the **"Authoring a NEW Building Block"** section above
+4. Read `docs/reference/error-model.md` for how to name, brand and throw errors
+5. Follow the **"Authoring a NEW Building Block"** section above
 
 ### Fixing a Bug
 **Always repro before you fix.** Write a failing test that demonstrates the bug — this is your red. Then make it green. Never fix a bug without a test that would have caught it.

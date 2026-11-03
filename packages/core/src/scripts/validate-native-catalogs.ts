@@ -13,6 +13,7 @@ import {
 	isPlainObject,
 	KNOWN_TRANSFERABLE_ABIS,
 	MAX_GENERIC_ARITY,
+	NATIVE_BINDING_FIELDS,
 	NATIVE_BINDINGS_EXTENSION,
 	NATIVE_CATALOG_SCHEMA_VERSION,
 	NATIVE_PACKAGES_EXTENSION,
@@ -222,8 +223,12 @@ function collectPackages(
 
 			// `canonicalJson` below compares `platforms` only, so an unrecognized
 			// sibling would be neither compared nor emitted. Rejecting it keeps
-			// "byte-identical" a statement about the whole registration.
-			for (const key of Object.keys(declaration)) {
+			// "byte-identical" a statement about the whole registration. Every
+			// allowlist here walks own string names rather than `Object.keys`,
+			// because a non-enumerable one is dropped just the same and no manifest
+			// can produce it. A symbol key is dropped too and stays unreported, for
+			// the same reason: it cannot come from JSON.
+			for (const key of Object.getOwnPropertyNames(declaration)) {
 				if (key !== 'identity' && key !== 'platforms') {
 					errors.push({
 						path: `${path}.${key}`,
@@ -322,7 +327,7 @@ function validatePlatformEntry(
 		return;
 	}
 
-	for (const key of Object.keys(entry)) {
+	for (const key of Object.getOwnPropertyNames(entry)) {
 		if (key !== 'package') {
 			errors.push({
 				path: `${path}.${key}`,
@@ -367,7 +372,7 @@ function validatePlatformEntry(
 			});
 		}
 	}
-	for (const key of Object.keys(entry.package)) {
+	for (const key of Object.getOwnPropertyNames(entry.package)) {
 		if (fields.includes(key)) continue;
 		const message =
 			key === 'version'
@@ -419,6 +424,18 @@ function collectBindings(
 				errors.push({ path: `${path}.id`, message: `Binding "id" must be a non-blank string (${declaredBy})` });
 				continue;
 			}
+
+			// Rejected rather than ignored, so the author learns it would be dropped.
+			for (const key of Object.getOwnPropertyNames(declaration)) {
+				if ((NATIVE_BINDING_FIELDS as readonly string[]).includes(key)) continue;
+				errors.push({
+					path: `${path}.${key}`,
+					message:
+						`Unexpected field "${key}" — a binding holds only ` +
+						`${NATIVE_BINDING_FIELDS.join(', ')} (${declaredBy})`,
+				});
+			}
+
 			const prior = seenIds.get(id);
 			if (prior) {
 				errors.push({
@@ -451,7 +468,7 @@ function collectBindings(
 			// A built-in tag reaches no arity check: it cannot be bound by a block, so
 			// `validateBindingTag` rejects it and returns `undefined`.
 			if (arity !== undefined && tag !== undefined) {
-				validateArityAgainstMethods(tag, arity, methods, errors);
+				validateArityAgainstMethods(tag, arity, id, declaredBy, methods, errors);
 			}
 
 			if (declaration.kind !== TRANSFERABLE_BINDING_KIND) continue;
@@ -593,11 +610,15 @@ function validateArity(
 
 /**
  * An unbound tag on a method result is deliberately not an error here; the
- * native generators degrade it to `UnknownTransferable`.
+ * native generators degrade it to `UnknownTransferable`. The path names the
+ * result the app must fix; the message names the binding, because with several
+ * blocks installed the result alone does not say whose arity it violated.
  */
 function validateArityAgainstMethods(
 	tag: string,
 	arity: number,
+	id: string,
+	declaredBy: string,
 	methods: readonly ValidatableMethod[],
 	errors: SpecValidationError[],
 ): void {
@@ -610,7 +631,12 @@ function validateArityAgainstMethods(
 		const typeArgs = schema[TYPE_ARGS_FIELD];
 
 		if (typeArgs !== undefined && !Array.isArray(typeArgs)) {
-			errors.push({ path, message: `${TYPE_ARGS_FIELD} must be an array of JSON Schema objects` });
+			errors.push({
+				path,
+				message:
+					`${TYPE_ARGS_FIELD} must be an array of JSON Schema objects, ` +
+					`for tag "${tag}" bound by binding "${id}" (${declaredBy})`,
+			});
 			continue;
 		}
 
@@ -621,8 +647,9 @@ function validateArityAgainstMethods(
 			errors.push({
 				path,
 				message:
-					`Tag "${tag}" is bound with genericArity ${arity}, so this result needs exactly ${arity} ` +
-					`${TYPE_ARGS_FIELD} ${arity === 1 ? 'entry' : 'entries'}, found ${count}`,
+					`Tag "${tag}" is bound with genericArity ${arity} by binding "${id}", so this result ` +
+					`needs exactly ${arity} ${TYPE_ARGS_FIELD} ${arity === 1 ? 'entry' : 'entries'}, ` +
+					`found ${count} (${declaredBy})`,
 			});
 		}
 	}
