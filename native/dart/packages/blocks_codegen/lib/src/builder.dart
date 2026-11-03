@@ -853,7 +853,18 @@ class CodegenModelBuilder {
           variantPath,
           {...enclosingKeys, ref.discriminant, for (final f in fields) f.name},
         );
-        embeddedUnion = resolved is SealedClassType ? resolved : null;
+        // A union deduplicated into an earlier one embeds that one, so its
+        // arm keeps the embedded union's fields (`challenge`).
+        embeddedUnion = switch (resolved) {
+          final SealedClassType s => s,
+          _ =>
+            _dedupRefs.entries
+                    .firstWhere(
+                      (e) => e.value.any((r) => identical(r, resolved)),
+                    )
+                    .key
+                as SealedClassType,
+        };
       }
 
       // An open arm (`additionalProperties`) keeps its extra keys, typed like

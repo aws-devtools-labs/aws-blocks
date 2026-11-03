@@ -469,6 +469,69 @@ void main() {
     });
   });
 
+  group('a union embedded in an arm, deduplicated', () {
+    test('keeps the embedded union in every namespace', () {
+      // `alpha` and `beta` declare one union; its `confirmSignIn` arm embeds
+      // a `challenge` union, which the second occurrence deduplicates.
+      RpcMethod setState(String ns) => RpcMethod(
+        name: '$ns.setState',
+        params: [
+          RpcParam(
+            name: 'input',
+            isRequired: true,
+            schema: const DiscriminatedUnionRef(
+              discriminant: 'action',
+              variants: [
+                UnionVariant(
+                  discriminantValue: 'confirmSignIn',
+                  properties: {'session': PrimitiveRef('String')},
+                  required: {'session'},
+                  embeddedUnion: DiscriminatedUnionRef(
+                    discriminant: 'challenge',
+                    variants: [
+                      UnionVariant(
+                        discriminantValue: 'code',
+                        properties: {'code': PrimitiveRef('String')},
+                        required: {'code'},
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        result: const PrimitiveRef('void'),
+      );
+      final model = CodegenModelBuilder().build(
+        RpcModel(
+          title: 't',
+          version: '1',
+          schemas: {},
+          methods: [setState('alpha'), setState('beta')],
+        ),
+      );
+      for (final ns in model.namespaces) {
+        final type = ns.operations.single.params.single.type;
+        final union = type is SchemaReference ? model.types[type.name] : type;
+        expect(
+          (union! as SealedClassType).variants.single.embeddedUnion,
+          isNotNull,
+          reason: ns.name,
+        );
+      }
+      final out = const DartCodeGenerator().generate(model);
+      expect(
+        RegExp(
+          r'^class \w*ConfirmSignInInput extends',
+          multiLine: true,
+        ).allMatches(out),
+        hasLength(1),
+      );
+      expect(out, contains('final ConfirmSignInInputChallenge challenge;'));
+    });
+  });
+
   group('union arms shared by two unions', () {
     test('take the namespace prefix, whatever the spec order', () {
       final names = <Set<String>>[];

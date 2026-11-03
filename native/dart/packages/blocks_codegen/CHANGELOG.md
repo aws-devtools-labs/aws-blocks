@@ -15,6 +15,12 @@
   an open (`additionalProperties`) channel payload is no longer merged into a
   closed one of the same properties, and two unions whose variants differ
   only in an embedded union are now separate types.
+- Fix an arm's embedded union being dropped when that union deduplicated
+  into an identical one declared earlier. With one `setAuthState` input in
+  three namespaces, the second and third namespace's `confirmSignIn` arm lost
+  its `challenge`, so `authCognitoApi` and `oidcAuthApi` sent
+  `{action: confirmSignIn, session}` with no challenge answer. The arm now
+  embeds the shared union, so the identical inputs are one class again.
 - Fix two distinct unions with an arm of one name (a `setAuthState` input in
   two namespaces, both with a `signUp` arm) declaring the same Dart class
   twice, which didn't compile. The union whose name sorts first keeps the arm
