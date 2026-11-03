@@ -7,7 +7,7 @@
 import { BlocksBackend, BlocksPresets } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import type { Stack } from 'aws-cdk-lib';
+import type { Stack } from 'aws-cdk-lib/core';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

@@ -103,7 +103,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 **aws-blocks/index.cdk.ts**
 ```typescript
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import { BlocksStack } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
