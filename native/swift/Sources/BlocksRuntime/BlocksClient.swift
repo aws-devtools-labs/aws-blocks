@@ -276,7 +276,8 @@ public final class BlocksClient: Sendable {
                 let errorIsCode = blocksName == nil
                     && error.map { description != nil || !$0.contains(" ") } == true
                 let name = blocksName ?? (errorIsCode ? error : nil)
-                let detail = errorIsCode ? description : error
+                // A body with only `error_description` keeps it as the detail.
+                let detail = errorIsCode ? description : (error ?? description)
                 let reason = [name, detail].compactMap { $0 }.joined(separator: ": ")
                 throw RawRouteError(
                     message: "\(path) answered HTTP \(httpResponse.statusCode)" + (reason.isEmpty ? "" : " (\(reason))"),

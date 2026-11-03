@@ -311,6 +311,28 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testRawRouteErrorKeepsADescriptionWithoutAnErrorCode() async {
+        OIDCMockURLProtocol.handler = { request in
+            let body: [String: Any] = ["error_description": "unknown or expired code"]
+            let data = try JSONSerialization.data(withJSONObject: body)
+            return (errorResponse(for: request.url!, status: 400), data)
+        }
+
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(
+                code: "c", verifier: "v", callbackURL: "x", provider: "google", state: "s", nonce: "n"
+            )
+            XCTFail("Expected RawRouteError")
+        } catch let error as RawRouteError {
+            XCTAssertNil(error.errorName)
+            XCTAssertTrue(error.message.hasSuffix("HTTP 400 (unknown or expired code)"), error.message)
+        } catch {
+            XCTFail("Expected RawRouteError, got \(error)")
+        }
+    }
+
     func testRawRouteErrorKeepsANamelessMessageOutOfErrorName() async {
         // A Blocks route that answers with a message and no `name`
         // (`{ error: 'Missing required fields' }`): the message is detail, not a name.
