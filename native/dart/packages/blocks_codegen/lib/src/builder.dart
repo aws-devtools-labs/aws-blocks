@@ -1218,9 +1218,11 @@ class CodegenModelBuilder {
   /// are top-level, and an `…Input` union names its arms `<Value>Input`, so
   /// two distinct unions with a `signUp` arm (one method in two namespaces)
   /// would both declare `SignUpInput`. The union with the smallest origin
-  /// (canonical key: `schema:<Name>` or `<method>#param:…`, over every
-  /// occurrence of a deduplicated union) keeps the arm name, so spec order
-  /// doesn't matter; a union added with a smaller origin takes it over.
+  /// keeps the arm name: a `schema:<Name>` origin ranks before every
+  /// `<method>#param:…` one, and keys of one kind compare as strings, over
+  /// every occurrence of a deduplicated union. So spec order doesn't matter,
+  /// declaring the union as a named schema pins the short name, and a union
+  /// added with a smaller origin takes it over.
   /// Another union's arm, or an arm named like a model or enum, takes its
   /// namespace's prefix (`AuthCognitoApiSignUpInput`). When that is taken too
   /// (two unions of one namespace, or a type or another arm already has it),
@@ -1242,11 +1244,17 @@ class CodegenModelBuilder {
     }
     // Per union, the smallest canonical key of its origins (its rank) and of
     // its method origins (its namespace prefix), so spec order picks neither.
+    // `schema:` keys rank before method keys, so a named schema can pin it.
     final ranks = Map<SealedClassType, String>.identity();
     final keys = Map<SealedClassType, String>.identity();
     final schemas = Set<SealedClassType>.identity();
+    int byOrigin(String a, String b) {
+      final (sa, sb) = (a.startsWith('schema:'), b.startsWith('schema:'));
+      return sa == sb ? a.compareTo(b) : (sa ? -1 : 1);
+    }
+
     bool smaller(String k, String? than) =>
-        than == null || k.compareTo(than) < 0;
+        than == null || byOrigin(k, than) < 0;
     for (final o in _origins) {
       if (o.type case final SealedClassType u) {
         final k = o.canonicalKey;
@@ -1256,7 +1264,7 @@ class CodegenModelBuilder {
       }
     }
     unions.sort((a, b) {
-      final byRank = (ranks[a] ?? a.name).compareTo(ranks[b] ?? b.name);
+      final byRank = byOrigin(ranks[a] ?? a.name, ranks[b] ?? b.name);
       return byRank != 0 ? byRank : a.name.compareTo(b.name);
     });
     // Name -> the union whose arm owns it ('' for a model, enum or union).

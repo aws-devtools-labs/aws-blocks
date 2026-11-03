@@ -25,7 +25,9 @@ Dart declares a union's arm classes at the top level, named `<Value><Suffix>`
 have an arm of one name, the union with the smallest origin keeps it: its
 origins' keys (`schema:<Name>` for a schema, `<method>#param:<name>` or
 `<method>#result` for an inline union, over every namespace that declares
-it) compared as strings, so spec order never decides. The other union's arm
+it), with every `schema:` key ranked before every method key and keys of one
+kind compared as strings, so spec order never decides. To pin the short name
+on a union, declare it as a named schema. The other union's arm
 takes its namespace's prefix (`AuthCognitoApiSignUpInput`), or, when that is
 taken or the union is a `$ref` schema, its union's name
 (`AuthInputSignUp`). A union added later with a smaller origin (an `authApi`

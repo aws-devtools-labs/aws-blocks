@@ -25,7 +25,9 @@
   two namespaces, both with a `signUp` arm) declaring the same Dart class
   twice, which didn't compile. The union with the smallest origin (its
   `schema:<Name>` or `<method>#param:…` key, over every namespace that
-  declares it) keeps the arm name (`SignUpInput`), whatever the spec order;
+  declares it, with `schema:` keys ranked before method keys) keeps the arm
+  name (`SignUpInput`), whatever the spec order, so declaring a union as a
+  named schema pins the short name;
   the other's arm takes its namespace's prefix (`AuthCognitoApiSignUpInput`).
   If that name is taken too (two unions in one namespace, or another type
   already has it), or the union is a `$ref` schema, the arm is named after

@@ -702,7 +702,9 @@ void main() {
 
     test('of a \$ref union never take an inline twin\'s prefix', () {
       // `zz.setState` declares the same union inline as the `ZInput` schema,
-      // so it deduplicates into it; `bb`'s union keeps the short names.
+      // so it deduplicates into it. A `schema:` origin ranks before every
+      // method origin, so `ZInput` keeps the short names and `bb`'s union
+      // takes its prefix.
       final zInput = DiscriminatedUnionRef(
         discriminant: 'action',
         variants: [
@@ -734,10 +736,84 @@ void main() {
         );
         expect(
           classes,
-          containsAll(['SignUpInput', 'ZInputSignUp', 'ZInputSignOut']),
+          containsAll([
+            'SignUpInput',
+            'SignOutInput',
+            'BbSignUpInput',
+            'BbSignOutInput',
+          ]),
         );
         expect(classes, isNot(contains('ZzSignUpInput')));
+        expect(classes, isNot(contains('ZInputSignUp')));
       }
+      // When a smaller schema (`AInput`) keeps the short names, `ZInput`'s
+      // arms are named after it, never after `zz`, its inline twin.
+      final aInput = DiscriminatedUnionRef(
+        discriminant: 'action',
+        variants: [
+          UnionVariant(
+            discriminantValue: 'signUp',
+            properties: {
+              for (var f = 0; f < 3; f++) 'f$f': const PrimitiveRef('String'),
+            },
+            required: {for (var f = 0; f < 3; f++) 'f$f'},
+          ),
+          const UnionVariant(
+            discriminantValue: 'signOut',
+            properties: {},
+            required: {},
+          ),
+        ],
+      );
+      final classes = _classes(
+        CodegenModelBuilder().build(
+          _sharedArmNames(
+            methods: const ['bb.setState', 'zz.setState'],
+            fields: const [1, 2],
+            schemas: {'ZInput': zInput, 'AInput': aInput},
+          ),
+        ),
+      );
+      expect(
+        classes,
+        containsAll(['SignUpInput', 'ZInputSignUp', 'BbSignUpInput']),
+      );
+      expect(classes, isNot(contains('ZzSignUpInput')));
+    });
+
+    test('of a named schema win the short name over a method origin', () {
+      // `aa.setState#param:input` sorts before `schema:ZInput` as a string,
+      // but a `schema:` origin ranks first, so declaring the union as a
+      // named schema pins its arms' short names.
+      final zInput = DiscriminatedUnionRef(
+        discriminant: 'action',
+        variants: [
+          const UnionVariant(
+            discriminantValue: 'signUp',
+            properties: {
+              'f0': PrimitiveRef('String'),
+              'f1': PrimitiveRef('String'),
+            },
+            required: {'f0', 'f1'},
+          ),
+          const UnionVariant(
+            discriminantValue: 'signOut',
+            properties: {},
+            required: {},
+          ),
+        ],
+      );
+      final out = const DartCodeGenerator().generate(
+        CodegenModelBuilder().build(
+          _sharedArmNames(
+            methods: const ['aa.setState'],
+            fields: const [1],
+            schemas: {'ZInput': zInput},
+          ),
+        ),
+      );
+      expect(out, contains('class SignUpInput extends ZInput {'));
+      expect(out, contains('class AaSignUpInput extends AaSetStateInput {'));
     });
 
     test('throws with --fail-on-collision', () {
