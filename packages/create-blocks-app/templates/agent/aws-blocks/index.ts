@@ -18,6 +18,9 @@ const auth = new AuthBasic(scope, 'auth');
 const agent = new Agent(scope, 'assistant', {
   model: { deployed: { provider: 'bedrock' }, local: { provider: 'canned' } },
   systemPrompt: 'You are a helpful assistant. Use tools when asked. Keep responses short.',
+  // Typed per-call context: `stream()` must pass it, and every tool handler
+  // receives it, so tools can scope their writes to the signed-in caller.
+  toolContextSchema: z.object({ userId: z.string() }),
   tools: (tool) => ({
     // A tool with an observable side effect: the e2e asserts the note landed in
     // the KVStore, proving the model asked to call it and the handler ran — not
@@ -27,8 +30,8 @@ const agent = new Agent(scope, 'assistant', {
     saveNote: tool({
       description: 'Save a short note for the user',
       parameters: z.object({ text: z.string() }),
-      handler: async ({ input }) => {
-        await store.put('agent-note', input.text);
+      handler: async ({ input, context }) => {
+        await store.put(`${context.userId}:agent-note`, input.text);
         return { saved: true };
       },
     }),
@@ -48,15 +51,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // request/response caller needs. Gated so each turn is tied to a signed-in user.
   async chat(message: string) {
     const user = await auth.requireAuth(context);
-    const result = await agent.stream(message, { userId: user.username });
+    const result = await agent.stream(message, { userId: user.username, context: { userId: user.username } });
     const done = await result.complete();
     return { text: done.text ?? '' };
   },
 
-  // The note the `saveNote` tool wrote, so a caller can confirm a tool-calling
-  // turn actually executed its handler (not just produced text).
+  // The caller's note from the `saveNote` tool, so a caller can confirm a
+  // tool-calling turn actually executed its handler (not just produced text).
   async lastNote() {
-    await auth.requireAuth(context);
-    return await store.get('agent-note');
+    const user = await auth.requireAuth(context);
+    return await store.get(`${user.username}:agent-note`);
   },
 }));
