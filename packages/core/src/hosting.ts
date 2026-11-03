@@ -1393,9 +1393,10 @@ export class Hosting extends Construct {
     // A CloudFront distribution's custom error responses apply to every path,
     // the proxied API included: with an `httpErrorStatus` namespace, a 403/404
     // from the API would come back as the error page (HTML) instead of its
-    // JSON-RPC body. Warn at synth; CloudFront's behavior is left as it is.
+    // JSON-RPC body. CloudFront can't scope error responses away from
+    // `/aws-blocks/*`, so the combination fails synth.
     if (props.api && publicDistribution) {
-      warnHttpErrorStatusShadowed(this, publicDistribution, props.api);
+      assertHttpErrorStatusNotShadowed(publicDistribution, props.api);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -1818,13 +1819,19 @@ export class Hosting extends Construct {
 }
 
 /**
- * Warn when `distribution` has custom error responses for 4xx codes and the
+ * Fail synth when `distribution` has custom error responses for 4xx codes and the
  * backend it fronts has namespaces created with `httpErrorStatus: true`:
  * CloudFront applies error responses distribution-wide, so such a namespace's
  * 403 / 404 (whichever codes are mapped) reaches the browser as the error page
  * instead of the JSON-RPC body, and the typed client cannot read it.
+ *
+ * This was a synth warning; it is an error because a warning still deploys a
+ * client that receives HTML where it expects a JSON-RPC body, and CloudFront
+ * cannot scope error responses away from `/aws-blocks/*`.
+ *
+ * @throws HostingError('HttpErrorStatusErrorPagesError') naming the namespaces and the mapped codes.
  */
-function warnHttpErrorStatusShadowed(scope: Construct, distribution: Distribution, api: object): void {
+function assertHttpErrorStatusNotShadowed(distribution: Distribution, api: object): void {
   const exports: unknown = Reflect.get(api, HTTP_ERROR_STATUS_EXPORTS);
   if (!Array.isArray(exports) || exports.length === 0) return;
   const cfn = distribution.node.defaultChild;
@@ -1839,14 +1846,17 @@ function warnHttpErrorStatusShadowed(scope: Construct, distribution: Distributio
     .filter((c): c is number => typeof c === 'number' && c >= 400 && c <= 499);
   if (codes.length === 0) return;
   const list = [...new Set(codes)].sort().join(', ');
-  cdk.Annotations.of(scope).addWarningV2(
-    '@aws-blocks/hosting:HttpErrorStatusErrorPages',
-    `API namespace${exports.length > 1 ? 's' : ''} ${exports.map((e) => `'${e}'`).join(', ')} ` +
+  const resolution =
+    "Remove the 4xx error pages (`errorPages.notFound`, a build's own 404 page), " +
+    'or turn `httpErrorStatus` off for these namespaces.';
+  throw new HostingError('HttpErrorStatusErrorPagesError', {
+    message:
+      `API namespace${exports.length > 1 ? 's' : ''} ${exports.map((e) => `'${e}'`).join(', ')} ` +
       `use${exports.length > 1 ? '' : 's'} \`httpErrorStatus: true\`, but this CloudFront distribution maps HTTP ${list} to an error page, ` +
-      'and CloudFront applies that to the proxied API too (`/aws-blocks/*`): such a response reaches the client as the HTML page ' +
-      'instead of its JSON-RPC error, which the typed client cannot read. Remove the 4xx error pages (`errorPages.notFound`, a ' +
-      "build's own 404 page), or turn `httpErrorStatus` off for these namespaces.",
-  );
+      'and CloudFront applies that to the proxied API too (`/aws-blocks/*`): such a response would reach the client as the HTML page ' +
+      `instead of its JSON-RPC error, which the typed client cannot read. ${resolution}`,
+    resolution,
+  });
 }
 
 /**

@@ -209,9 +209,11 @@ export interface ApiNamespaceOptions {
    *   multi-page site (no server, no SPA fallback, no 404 page of its own) — a
    *   403 / 404 from this namespace reaches the browser as that HTML page, and
    *   the typed client's `response.json()` throws instead of rejecting with the
-   *   `ApiError`. `Hosting` emits a synth warning
-   *   (`@aws-blocks/hosting:HttpErrorStatusErrorPages`) for that combination; a
-   *   401, a 409 or a 429 is not mapped and is unaffected.
+   *   `ApiError`. `Hosting` fails synth for that combination with a
+   *   `HostingError` named `HttpErrorStatusErrorPagesError`: CloudFront
+   *   cannot scope error responses away from `/aws-blocks/*`. Remove the 4xx
+   *   error pages, or leave this option off for the namespace. A 401, a 409 or
+   *   a 429 is not mapped and is unaffected.
    *
    * @default false
    */

@@ -524,10 +524,11 @@ the built-in not-found page. The Blocks API normally answers every call with
 HTTP 200, so this never touches it; but an `ApiNamespace` created with
 `httpErrorStatus: true` (`@aws-blocks/core`) answers a 4xx `ApiError` with that
 status, and its 403 / 404 then reach the browser as that HTML page instead of
-the JSON-RPC error, which the typed client cannot read. `Hosting` from
-`@aws-blocks/core` warns at synth when it sees both
-(`@aws-blocks/hosting:HttpErrorStatusErrorPages`); CloudFront's behavior is
-unchanged. Remove the 4xx error pages, or leave `httpErrorStatus` off for those
+the JSON-RPC error, which the typed client cannot read. CloudFront cannot
+scope error responses away from `/aws-blocks/*`, so `Hosting` from
+`@aws-blocks/core` fails synth when it sees both, with a `HostingError` named
+`HttpErrorStatusErrorPagesError` that names the namespaces and the mapped codes.
+Remove the 4xx error pages, or leave `httpErrorStatus` off for those
 namespaces.
 
 ### Settings per door kind

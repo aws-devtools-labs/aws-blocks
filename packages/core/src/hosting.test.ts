@@ -1834,11 +1834,11 @@ describe('Hosting', () => {
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
     });
 
-    it('warns when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
+    it('fails synth when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
       createSpaBuildOutput(tmpDir);
       const notFoundPath = path.join(tmpDir, '404.html');
       fs.writeFileSync(notFoundPath, '<!DOCTYPE html><html><body>Not Found</body></html>');
-      const warningsFor = (exports: string[] | undefined, errorPages: boolean) => {
+      const synth = (exports: string[] | undefined, errorPages: boolean) => () => {
         const app = new App();
         const stack = new Stack(app, `HttpErrorStatusPages${exports?.length ?? 'X'}${errorPages ? 'P' : 'N'}`);
         // What BlocksStack / BlocksBackend record from the imported backend module; plumbing only.
@@ -1848,16 +1848,18 @@ describe('Hosting', () => {
         return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('httpErrorStatus'));
       };
 
-      const shadowed = warningsFor(['api'], true);
-      assert.strictEqual(shadowed.length, 1);
-      const text = JSON.stringify(shadowed[0].entry.data);
-      assert.match(text, /'api'/);
-      assert.match(text, /404/);
-      assert.match(text, /aws-blocks/);
+      assert.throws(synth(['api'], true), (err: Error) => {
+        assert.strictEqual(err.name, 'HttpErrorStatusErrorPagesError');
+        assert.match(err.message, /'api'/);
+        assert.match(err.message, /404/);
+        assert.match(err.message, /aws-blocks/);
+        assert.match(err.message, /errorPages\.notFound/, 'the message names the fix');
+        return true;
+      });
 
-      assert.strictEqual(warningsFor([], true).length, 0, 'no httpErrorStatus namespace: no warning');
-      assert.strictEqual(warningsFor(undefined, true).length, 0, 'a plain { apiUrl } backend: no warning');
-      assert.strictEqual(warningsFor(['api'], false).length, 0, 'no 4xx error page: no warning');
+      assert.deepStrictEqual(synth([], true)(), [], 'no httpErrorStatus namespace: synths, no warning');
+      assert.deepStrictEqual(synth(undefined, true)(), [], 'a plain { apiUrl } backend: synths, no warning');
+      assert.deepStrictEqual(synth(['api'], false)(), [], 'no 4xx error page: synths, no warning');
     });
 
     it('does not produce duplicate 404 responses when 404.html is in build output', () => {
