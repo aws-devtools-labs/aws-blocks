@@ -267,7 +267,8 @@ public final class BlocksClient: Sendable {
                 // `{ error: <code>, error_description }`.
                 // A Blocks body without a `name` (`{ error: 'Missing required fields' }`) holds a
                 // message, so `error` is a name only beside `error_description` or when it reads
-                // like a code (no spaces).
+                // like a code (no spaces). Known approximation: a nameless one-word message
+                // (`{ error: 'Unauthorized' }`) reads as a code and becomes the error name.
                 let errorBody = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 let blocksName = errorBody?["name"] as? String
                 let error = errorBody?["error"] as? String
@@ -372,7 +373,8 @@ public struct RawRouteError: BlocksError {
     public let statusCode: Int?
     /// The error name from the response body (`name`, else `error`), when the body is JSON and has one.
     /// `error` counts as a name only beside `error_description` (an OAuth body) or when it has no
-    /// spaces; a nameless Blocks body's `error` is a message and goes into `message` instead.
+    /// spaces; a nameless Blocks body's `error` is a message and goes into `message` instead. A
+    /// nameless one-word message (`{ "error": "Unauthorized" }`) has no spaces, so it is taken as the name.
     public let errorName: String?
 
     public init(message: String, statusCode: Int? = nil, errorName: String? = nil) {
