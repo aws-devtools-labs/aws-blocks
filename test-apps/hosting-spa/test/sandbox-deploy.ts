@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { startSandbox, destroySandbox } from '@aws-blocks/blocks/scripts';
+import { waitForHostingReady } from '../../../scripts/ci/hosting-ready.js';
 
 const backendPath = process.argv[2];
 if (!backendPath) {
@@ -16,4 +17,13 @@ try {
   // Expected — no previous stack to clean up
 }
 
-await startSandbox({ backendPath, deployOnly: true });
+let hostingUrl: string | undefined;
+await startSandbox({
+  backendPath,
+  deployOnly: true,
+  onDeployed: (deployed) => { hostingUrl = deployed.hostingUrl; },
+});
+
+// The deploy returns before the site serves the app; hold the suite until it
+// does (see scripts/ci/hosting-ready.ts).
+await waitForHostingReady(hostingUrl);
