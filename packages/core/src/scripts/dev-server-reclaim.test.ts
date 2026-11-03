@@ -26,6 +26,7 @@ import {
   type ReclaimResult,
   stopDevServer,
   ownsLeftoverFrontend,
+  runsUnderTsxWatch,
 } from './dev-server.js';
 import {
   descendsFrom,
@@ -758,6 +759,16 @@ describe('Windows processes — CIM query, creation-time identity and ancestry',
     );
     assert.deepStrictEqual(record?.frontend, { port: 3100, listeners: [{ pid: 901, created: '134000000000000000' }] });
     assert.strictEqual(parsePidRecord(JSON.stringify({ pid: 7, ppid: 5, port: 3000, frontend: { port: 3100, listeners: [] } }))?.frontend, undefined);
+  });
+});
+
+// ── runsUnderTsxWatch — a failed first start ends its tsx watch too ──────────
+describe('runsUnderTsxWatch — whether a failed first start must end its tsx watch', () => {
+  it('believes blocks dev, which says so, where the parent command line cannot be read (Windows)', () => {
+    assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '1' }, ''), true);
+    assert.strictEqual(runsUnderTsxWatch({}, ''), false);
+    assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '0' }, 'bash'), false);
+    assert.strictEqual(runsUnderTsxWatch({}, 'node /app/node_modules/.bin/tsx watch aws-blocks/scripts/server.ts'), true);
   });
 });
 
