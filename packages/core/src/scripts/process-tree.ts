@@ -131,8 +131,11 @@ interface CommandOutput {
  * - **POSIX**: `lsof -ti tcp:<port> -sTCP:LISTEN` — `-t` prints bare PIDs and the
  *   `-sTCP:LISTEN` state filter restricts the match to the *listener*, so a
  *   transient client socket on the same port is never targeted.
- * - **Windows**: `netstat -ano -p tcp`, keeping the trailing PID column of
- *   `LISTENING` rows whose local address ends in `:<port>`.
+ * - **Windows**: `netstat -ano`, which lists TCP and TCPv6 (`-p tcp` lists
+ *   IPv4 only, and a `localhost` frontend such as Vite binds `[::1]`), keeping
+ *   the trailing PID column of listener rows whose local address ends in
+ *   `:<port>`. A listener is a TCP row with no remote end (`0.0.0.0:0`,
+ *   `[::]:0`), which also holds on a Windows that does not say `LISTENING`.
  *
  * Best-effort and never throws: a missing tool, a non-zero exit ("nothing is
  * listening"), or unparseable output all yield `[]`. The `spawnSync` runs with a
@@ -151,14 +154,13 @@ export function findListenerPids(
   try {
     const pids = new Set<number>();
     if (platform === 'win32') {
-      const { stdout } = runner('netstat', ['-ano', '-p', 'tcp']);
+      const { stdout } = runner('netstat', ['-ano']);
       if (!stdout) return [];
       for (const line of stdout.split(/\r?\n/)) {
-        if (!/LISTENING/i.test(line)) continue;
         // Columns: Proto  Local-Address  Foreign-Address  State  PID
         const cols = line.trim().split(/\s+/);
-        const local = cols[1] ?? '';
-        if (!local.endsWith(`:${port}`)) continue;
+        if (cols.length < 5 || cols[0].toUpperCase() !== 'TCP' || !/^(0\.0\.0\.0|\[::\]):0$/.test(cols[2])) continue;
+        if (!cols[1].endsWith(`:${port}`)) continue;
         const pid = Number(cols[cols.length - 1]);
         if (Number.isInteger(pid) && pid > 1) pids.add(pid);
       }
