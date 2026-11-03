@@ -190,7 +190,7 @@ Extend `getMockDataDir` with an optional `options` parameter: `getMockDataDir(sc
 
 ### References
 - D-001: original mock data convention
-- PR #769: AWS Resource Groups and console shortcut routes
+- AWS Resource Groups and console shortcut routes (the change that introduced settings vs resources)
 
 ## D-007: Auth cookies default to `SameSite=Lax`; cross-domain is opt-in
 
@@ -208,7 +208,7 @@ The three auth Building Blocks disagreed on the session cookie's `SameSite` attr
 
 `bb-auth-basic` and `bb-auth-cognito` chose `SameSite=None` to make the session cookie work in the legacy cross-port dev setup (frontend `:3000`, backend `:3001`). That choice rested on a misdiagnosis: cross-port is cross-*origin* but **same-site** — `SameSite` is defined by registrable domain + scheme, and the port is not part of "site" (RFC 6265bis). A `SameSite=Lax` cookie is therefore sent on a same-site cross-port request, so `None` was never required for it. The actual requirement for a credentialed cross-origin `fetch` is CORS (`Access-Control-Allow-Credentials: true` + a specific `Origin`), which the dev server already set. `bb-auth-oidc` had already chosen `Lax` and worked fine cross-port, which corroborates this. Each BB hand-rolled its own attribute selection, which is how they drifted. No prior decision record resolved this.
 
-The single-origin dev proxy ([#769](https://github.com/aws-devtools-labs/aws-blocks/pull/769)) makes local dev same-origin, so the question is moot either way: `Lax` is correct, and `None`'s extra CSRF surface buys nothing.
+The single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`) makes local dev same-origin, so the question is moot either way: `Lax` is correct, and `None`'s extra CSRF surface buys nothing.
 
 ### Decision
 All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `crossDomain` (default `false`), switches a BB to the cross-domain recipe:
@@ -218,7 +218,7 @@ All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `
 
 The attribute selection lives in one shared helper, `@aws-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
 
-This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on #769: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
+This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on the single-origin dev proxy: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
 
 ### Rationale
 - **Same-origin by default.** With the dev proxy, both dev and a standard (same-domain) production deploy are same-origin, where `Lax` cookies are never dropped. `Lax` is the correct default for the common case.
@@ -234,8 +234,8 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 
 ### References
 - Helper: `packages/auth-common/src/cookies.ts`
-- Enabler: #769 (single-origin dev proxy)
-- Related: #704 (docs), #748 (cross-port behavior, obsoleted by the proxy)
+- Enabler: the single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`)
+- Related: the earlier cross-port cookie notes, obsoleted by the proxy
 
 ## D-008: BB documentation follows a progressive-disclosure model (README entry point + task-scoped references)
 
@@ -244,7 +244,7 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 **Amends**: [D-002](#d-002-bb-documentation-ships-as-readmemd--designmd)
 
 ### Context
-D-002 established a fixed two-file rule: each BB ships `README.md` + `DESIGN.md`. PR #834 (custom auth UI guide, #700) needed a third doc, `packages/auth-common/CUSTOMIZING-AUTH-UI.md`, for a reader goal that fits neither file — it's not quick-start usage (README) and not internal design (DESIGN), but a substantial customization contract. The two-file rule had no clean home for it: the content either bloats the README or is mis-filed in DESIGN.
+D-002 established a fixed two-file rule: each BB ships `README.md` + `DESIGN.md`. The custom auth UI guide needed a third doc, `packages/auth-common/CUSTOMIZING-AUTH-UI.md`, for a reader goal that fits neither file — it's not quick-start usage (README) and not internal design (DESIGN), but a substantial customization contract. The two-file rule had no clean home for it: the content either bloats the README or is mis-filed in DESIGN.
 
 ### Decision
 Generalize D-002 from a fixed two-file rule to a **progressive-disclosure model**: one always-read entry point plus as many task-scoped reference docs as the package's surface area warrants.
@@ -272,7 +272,7 @@ Every reference doc MUST ship via `"files"` in package.json (so it reaches `node
 ### References
 - Amends: D-002 (original two-file rule)
 - Skill convention this mirrors: `.skills/blocks-pr-review/` (`SKILL.md` + `references/`)
-- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md` (PR #834, issue #700)
+- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md`
 
 ## D-009: External databases — Blocks-applied, version-controlled schema migrations
 
@@ -304,7 +304,7 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - **Aurora DSQL support.** Out of scope — needs a separate runner (no advisory locks, one-DDL-per-transaction with no DDL/DML mixing, IAM-token auth).
 
 ### References
-- #793 (this PR); connection/port resolution shipped separately in #861
+- Connection/port resolution shipped as a separate change
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
@@ -371,7 +371,7 @@ To capture events without sending to the server: combine `--telemetry-file` with
 
 ### References
 
-- PR #880: implementation
+- Code: `packages/core/src/telemetry/client.ts`, `packages/create-blocks-app/src/telemetry.ts`
 
 ## D-011: `db pull` is interactive-only; dev/prod intent routes the connection string (R1)
 
@@ -420,7 +420,7 @@ earlier planning decisions and removed a released behavior:
   (`--prod` / `--provider`) — non-interactive mode is removed, so those flags are unnecessary.
 
 ### References
-- PR #922 (this change); follows #895 (db-pull modularization), #793 (external-DB migrations).
+- Follows the db-pull modularization and the external-DB migrations decision ([D-009](#d-009-external-databases--blocks-applied-version-controlled-schema-migrations)).
 - Code: `packages/bb-data/src/db-pull/pull.ts` (`dbPullInteractive`, `dbPullDevInteractive`,
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).

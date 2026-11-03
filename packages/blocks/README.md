@@ -232,7 +232,7 @@ Run with `npm run test:e2e`. Write the test first, iterate against mocks until i
 - **Validate with schemas** — pass a Zod/Valibot schema to data blocks for compile-time *and* runtime type safety.
 - **Don't block the request** — use `AsyncJob` for anything slow; `submit()` returns a `jobId` immediately.
 - **Guard against races** — use conditional writes (`ifNotExists`, `ifValueEquals`, `ifFieldEquals`) instead of read-modify-write.
-- **Test locally first** — mocks behave like the real service; deploy once it's green.
+- **Test locally first** — mocks implement the same API as the real service, but not every AWS behavior (limits, TTL expiry, IAM, partial failures); check the mock-vs-AWS differences in each block's `DESIGN.md`. Deploy to a sandbox once it's green.
 
 ## Common mistakes
 
