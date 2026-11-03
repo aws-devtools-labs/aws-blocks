@@ -1,0 +1,35 @@
+name: node_modules cache
+
+# Saves node_modules on main for the current lockfile, so PR Checks jobs
+# restore it (.github/actions/npm-install) instead of running npm ci. A cache
+# saved on the default branch is readable from every PR; one a PR saves is
+# readable only from that PR, so PRs never save. Runs on every push: when the
+# entry for this lockfile already exists it is only looked up (seconds), and
+# when it was evicted it is saved again.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-modules-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  save:
+    name: Save node_modules
+    # The runner PR Checks restores it on (the key includes the OS and CPU).
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/npm-install
+        with:
+          save: 'true'
