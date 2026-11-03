@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
+import { minimatch } from 'minimatch';
 import { trackCommand } from './telemetry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -107,15 +108,37 @@ async function isAmplifyGen2Project(dir: string): Promise<boolean> {
   return exists(join(dir, 'amplify', 'backend.ts'));
 }
 
-/** Whether an npm `workspaces` glob (`apps/*`, `packages/**`, `./web`) matches `path`, relative to the workspace root with `/` separators. */
-function workspaceGlobMatches(pattern: string, path: string): boolean {
-  const glob = pattern.replace(/^\.\//, '').replace(/\/+$/, '');
-  const source = glob
-    .split('/')
-    .map((segment) => (segment === '**' ? '.*' : segment.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[^/]*').replace(/\?/g, '[^/]')))
-    .join('/')
-    .replace(/\.\*\//g, '(?:.*/)?');
-  return new RegExp(`^${source}$`).test(path);
+/**
+ * Whether the folder `member` (relative to the workspace root, with `/` separators) is one of
+ * the root's npm `workspaces`, decided the way npm's `@npmcli/map-workspaces` does. Each entry
+ * is a minimatch glob (`apps/*`, `{apps,packages}/*`, `packages/**`, `./web`); one with an odd
+ * number of leading `!` excludes the folders it matches, unless an entry after it lists them again.
+ */
+function isWorkspaceMember(workspaces: string[], member: string): boolean {
+  // npm finds the folders with `glob`, which matches case-insensitively on macOS and Windows.
+  const nocase = process.platform === 'darwin' || process.platform === 'win32';
+  let patterns: string[] = [];
+  let excluded: string[] = [];
+  for (const entry of workspaces) {
+    const bangs = /^!*/.exec(entry)![0].length;
+    const pattern = entry.slice(bangs).replace(/^\.?\/+/, '');
+    if (bangs % 2 === 1) {
+      excluded.push(pattern);
+    } else {
+      // An entry drops every exclusion before it that matches the entry itself: in ['packages/**',
+      // '!packages/b/**', 'packages/b/a'], all of packages/b is a workspace again.
+      excluded = excluded.filter((negated) => !minimatch(pattern, negated));
+      patterns.push(pattern);
+    }
+  }
+  patterns = patterns.filter((pattern) => !excluded.some((negated) => minimatch(pattern, negated)));
+  // npm's glob skips node_modules and the excluded folders, matched with `dot` on.
+  const ignoreOptions = { dot: true, nocase };
+  const ignored = ['**/node_modules/**', ...excluded].some(
+    (pattern) => minimatch(member, pattern, ignoreOptions) || minimatch(`${member}/`, pattern, ignoreOptions),
+  );
+  // npm globs each entry with a trailing `/` so that it matches folders only: `apps/*/` as well as `apps/*`.
+  return !ignored && patterns.some((pattern) => minimatch(`${member}/`, pattern.replace(/\\/g, '/').replace(/([^/])$/, '$1/'), { nocase }));
 }
 
 /**
@@ -133,10 +156,10 @@ async function enclosingWorkspaceRoot(appDir: string): Promise<string | undefine
     const pkg = await readFile(join(root, 'package.json'), 'utf-8').then((text) => JSON.parse(text), () => undefined);
     const workspaces: unknown = Array.isArray(pkg?.workspaces) ? pkg.workspaces : pkg?.workspaces?.packages;
     if (Array.isArray(workspaces)) {
-      const patterns = workspaces.filter((p): p is string => typeof p === 'string' && !p.startsWith('!'));
+      const patterns = workspaces.filter((p): p is string => typeof p === 'string');
       const member = relative(root, appDir).split(sep).join('/');
-      if (patterns.some((p) => workspaceGlobMatches(p, member))) {
-        if (patterns.some((p) => workspaceGlobMatches(p, `${member}/aws-blocks`))) return root;
+      if (isWorkspaceMember(patterns, member)) {
+        if (isWorkspaceMember(patterns, `${member}/aws-blocks`)) return root;
         console.error(`Error: ${appDir} is a workspace of the npm workspace root ${root}.`);
         console.error('npm installs its dependencies at that root and does not read the app\'s own');
         console.error('"workspaces": ["aws-blocks"], so the app\'s aws-blocks/ package would never be linked.');

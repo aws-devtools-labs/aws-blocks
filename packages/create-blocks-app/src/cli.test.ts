@@ -990,6 +990,54 @@ describe('create-blocks-app auto-detection', () => {
       rmSync(mono, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  it('expands braces in npm workspace globs, as npm does', { skip: process.platform === 'win32' && 'uses a POSIX npm stand-in' }, () => {
+    const mono = mkdtempSync(join(tmpdir(), 'create-blocks-app-workspace-braces-'));
+    const writeRoot = (workspaces: string[]) =>
+      writeFileSync(join(mono, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces }));
+    try {
+      // npm reads "{apps,packages}/*" as apps/* and packages/*, so apps/web is a workspace.
+      writeRoot(['{apps,packages}/*']);
+      const unlisted = run(['apps/web', '-y', '--skip-install'], mono);
+      assert.strictEqual(unlisted.exitCode, 1, unlisted.stdout);
+      assert.ok(unlisted.stderr.includes('"workspaces": ["{apps,packages}/*", "apps/web/aws-blocks"]'), unlisted.stderr);
+      assert.ok(!existsSync(join(mono, 'apps', 'web')), 'nothing is written');
+
+      // With its aws-blocks/ folder listed by a brace glob too, it installs at the workspace root.
+      writeRoot(['{apps,packages}/*', '{apps,packages}/*/aws-blocks']);
+      const bin = join(mono, '.bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'npm'), `#!/bin/sh\npwd -P > ${JSON.stringify(join(mono, 'npm-cwd'))}\n`, { mode: 0o755 });
+      const listed = run(['apps/web', '-y'], mono, { PATH: `${bin}:${process.env.PATH}` });
+      assert.strictEqual(listed.exitCode, 0, listed.stderr);
+      assert.strictEqual(readFileSync(join(mono, 'npm-cwd'), 'utf-8').trim(), realpathSync(mono));
+    } finally {
+      rmSync(mono, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('leaves a folder a "!" npm workspace glob excludes as a project of its own', { skip: process.platform === 'win32' && 'uses a POSIX npm stand-in' }, () => {
+    const mono = mkdtempSync(join(tmpdir(), 'create-blocks-app-workspace-negation-'));
+    try {
+      writeFileSync(join(mono, 'package.json'), JSON.stringify({ name: 'mono', private: true, workspaces: ['packages/*', '!packages/legacy', 'apps/*'] }));
+      // npm leaves packages/legacy out of the workspaces, so it installs in its own folder.
+      const bin = join(mono, '.bin');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'npm'), `#!/bin/sh\npwd -P > ${JSON.stringify(join(mono, 'npm-cwd'))}\n`, { mode: 0o755 });
+      const excluded = run(['packages/legacy', '-y'], mono, { PATH: `${bin}:${process.env.PATH}` });
+      assert.strictEqual(excluded.exitCode, 0, excluded.stderr);
+      assert.doesNotMatch(excluded.stdout, /workspace root/);
+      assert.strictEqual(readFileSync(join(mono, 'npm-cwd'), 'utf-8').trim(), realpathSync(join(mono, 'packages', 'legacy')));
+
+      // packages/core is still a workspace, so it is refused with the entry to add.
+      const included = run(['packages/core', '-y', '--skip-install'], mono);
+      assert.strictEqual(included.exitCode, 1, included.stdout);
+      assert.ok(included.stderr.includes('"workspaces": ["packages/*", "!packages/legacy", "apps/*", "packages/core/aws-blocks"]'), included.stderr);
+      assert.ok(!existsSync(join(mono, 'packages', 'core')), 'nothing is written');
+    } finally {
+      rmSync(mono, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
 });
 
 describe('create-blocks-app scaffold allowlist safety', () => {
