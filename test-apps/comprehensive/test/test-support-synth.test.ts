@@ -48,7 +48,14 @@ const ADMIN_LIFECYCLE = [
 	'cognito-idp:AdminUserGlobalSignOut',
 ];
 const ADMIN_GROUPS = ['cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup', 'cognito-idp:ListUsersInGroup'];
-const ADMIN_SURFACE = new Set([...ADMIN_LIFECYCLE, ...ADMIN_GROUPS]);
+/**
+ * Every email + password pool grants these outside the `admin` surface: a completed
+ * password reset resolves the pool username and signs the user out everywhere (#912).
+ * So they're checked on their own (user pools only), not as admin surface.
+ */
+const PASSWORD_RESET = ['cognito-idp:AdminGetUser', 'cognito-idp:AdminUserGlobalSignOut'];
+const ADMIN_SURFACE = new Set([...ADMIN_LIFECYCLE, ...ADMIN_GROUPS].filter((a) => !PASSWORD_RESET.includes(a)));
+const withoutReset = (actions: readonly string[]) => actions.filter((a) => !PASSWORD_RESET.includes(a));
 
 interface CfnResource {
 	Type: string;
@@ -82,8 +89,8 @@ function synth(testEnv: string | undefined): ProbeResult {
 	}
 }
 
-/** Admin-surface actions granted per resource logical id (`Fn::GetAtt [id, 'Arn']`), across every IAM policy. */
-function adminGrants(template: ProbeResult['template']): Map<string, Set<string>> {
+/** Actions of `surface` (default: the admin surface) granted per resource logical id (`Fn::GetAtt [id, 'Arn']`), across every IAM policy. */
+function adminGrants(template: ProbeResult['template'], surface: ReadonlySet<string> = ADMIN_SURFACE): Map<string, Set<string>> {
 	const grants = new Map<string, Set<string>>();
 	const statements = Object.values(template.Resources).flatMap((r) => {
 		if (r.Type !== 'AWS::IAM::Policy' && r.Type !== 'AWS::IAM::ManagedPolicy' && r.Type !== 'AWS::IAM::Role') return [];
@@ -92,7 +99,7 @@ function adminGrants(template: ProbeResult['template']): Map<string, Set<string>
 	});
 	for (const statement of statements) {
 		const actions = asArray(field(statement, 'Action')).filter((a): a is string => typeof a === 'string');
-		const admin = actions.filter((a) => ADMIN_SURFACE.has(a));
+		const admin = actions.filter((a) => surface.has(a));
 		if (admin.length === 0) continue;
 		for (const resource of asArray(field(statement, 'Resource'))) {
 			const getAtt = asArray(field(resource, 'Fn::GetAtt'));
@@ -153,6 +160,16 @@ describe('comprehensive test support: normal synth vs e2e synth', () => {
 			assert.deepStrictEqual(grants, {});
 		});
 
+		test('grants the password-reset actions only on user pools', () => {
+			const t = normal.template;
+			const grants = [...adminGrants(t, new Set(PASSWORD_RESET))];
+			assert.ok(grants.length > 0, 'expected the email + password pools to grant the password-reset actions');
+			for (const [id, actions] of grants) {
+				assert.strictEqual(t.Resources[id]?.Type, 'AWS::Cognito::UserPool', `${id} is not a user pool`);
+				assert.deepStrictEqual([...actions].sort(), [...PASSWORD_RESET].sort(), id);
+			}
+		});
+
 		test('carries no test-support secret or handler flag', () => {
 			const json = JSON.stringify(normal.template);
 			assert.ok(!json.includes('test-support-secret'), 'a test-support-secret parameter is synthesized');
@@ -175,10 +192,10 @@ describe('comprehensive test support: normal synth vs e2e synth', () => {
 			const t = e2e.template;
 			const grants = Object.fromEntries([...adminGrants(t)].map(([id, s]) => [id, [...s].sort()]));
 			assert.deepStrictEqual(grants, {
-				[poolId(t, 'auth')]: [...ADMIN_LIFECYCLE].sort(),
-				[poolId(t, 'auth-same-origin')]: [...ADMIN_LIFECYCLE].sort(),
-				[poolId(t, 'auth-cross-domain')]: [...ADMIN_LIFECYCLE].sort(),
-				[poolId(t, 'authC')]: [...ADMIN_LIFECYCLE, ...ADMIN_GROUPS].sort(),
+				[poolId(t, 'auth')]: withoutReset(ADMIN_LIFECYCLE).sort(),
+				[poolId(t, 'auth-same-origin')]: withoutReset(ADMIN_LIFECYCLE).sort(),
+				[poolId(t, 'auth-cross-domain')]: withoutReset(ADMIN_LIFECYCLE).sort(),
+				[poolId(t, 'authC')]: withoutReset([...ADMIN_LIFECYCLE, ...ADMIN_GROUPS]).sort(),
 			});
 		});
 
