@@ -13,6 +13,8 @@ import { describeResponse, isHtmlDocument, type ReadyResponse, waitForHostingRea
 
 const URL_ = 'https://d123.cloudfront.net';
 const XML = '<?xml version="1.0" encoding="UTF-8"?>\n<ListBucketResult><Name>bucket</Name></ListBucketResult>';
+/** How the helper reports `XML`: whitespace runs collapsed to one space. */
+const XML_SNIPPET = '<?xml version="1.0" encoding="UTF-8"?> <ListBucketResult><Name>bucket</Name></ListBucketResult>';
 const HTML = '<!doctype html><html><body><div id="app-status">Loading</div></body></html>';
 
 /** A response the way the helper reads it. */
@@ -66,7 +68,7 @@ describe('describeResponse', () => {
 	it('names the status, the content type and the start of the body on one line', () => {
 		assert.equal(
 			describeResponse(res(200, 'application/xml', XML), XML),
-			`HTTP 200 application/xml: ${XML.replace('\n', ' ')}`,
+			`HTTP 200 application/xml: ${XML_SNIPPET}`,
 		);
 		assert.equal(describeResponse(res(403, null, ''), ''), 'HTTP 403 (no content-type)');
 		assert.equal(
@@ -105,7 +107,7 @@ describe('waitForHostingReady', () => {
 		// One line per new kind of answer, then the result.
 		assert.deepEqual(lines, [
 			`⏳ ${URL_} is not serving the app yet: TypeError: fetch failed (ENOTFOUND)`,
-			`⏳ ${URL_} is not serving the app yet: HTTP 200 application/xml: ${XML.replace('\n', ' ')}`,
+			`⏳ ${URL_} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
 			`⏳ ${URL_} is not serving the app yet: HTTP 503 text/html: No route found`,
 			`✅ ${URL_} serves HTML (20.0s after the deploy, 5 request(s))`,
 		]);
@@ -120,7 +122,7 @@ describe('waitForHostingReady', () => {
 				assert.equal(
 					error.message,
 					`${URL_} did not serve an HTML document (HTTP 200, text/html) within 12s of the deploy (4 requests). ` +
-						`Last response: HTTP 200 application/xml: ${XML.replace('\n', ' ')}`,
+						`Last response: HTTP 200 application/xml: ${XML_SNIPPET}`,
 				);
 				return true;
 			},
