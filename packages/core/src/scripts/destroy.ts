@@ -7,7 +7,8 @@ import { getCdkTelemetryEnv } from './cdk-telemetry-env.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
-import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
+import type { DestroyRetryDeps } from './destroy-retry-types.js';
+import { destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox-destroy.js';
 
 export interface DestroyOptions {
   cdkAppPath: string;
