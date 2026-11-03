@@ -11,6 +11,7 @@ import {
 	readFileSync,
 	renameSync,
 	rmSync,
+	rmdirSync,
 	symlinkSync,
 	writeFileSync,
 } from 'node:fs';
@@ -18,7 +19,13 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { GENERATED_WRAPPERS, SCRIPT_REWRITES, SERVER_DEV_OPTIONS, sourceHash } from './commands/migrate.js';
+import {
+	GENERATED_WRAPPERS,
+	removeIfEmpty,
+	SCRIPT_REWRITES,
+	SERVER_DEV_OPTIONS,
+	sourceHash,
+} from './commands/migrate.js';
 import { parseArgv } from './parse.js';
 import { runCli } from './test-helpers.js';
 
@@ -916,6 +923,51 @@ describe('blocks migrate', () => {
 			assert.deepStrictEqual(scriptsDir(root), []);
 			assert.strictEqual(readPkg(root).scripts.deploy, 'blocks deploy');
 		}
+	});
+
+	it('on Windows, retries a scripts directory that a concurrent run holds, then leaves it to that run', () => {
+		const busy = (code: string) => Object.assign(new Error(`${code}: operation not permitted, rmdir`), { code });
+		const dir = mkdtempSync(join(tmpdir(), 'blocks-migrate-rmdir-'));
+		let calls = 0;
+		removeIfEmpty(
+			dir,
+			(path) => {
+				if (++calls < 3) throw busy(calls === 1 ? 'EPERM' : 'EBUSY');
+				rmdirSync(path);
+			},
+			'win32',
+		);
+		assert.strictEqual(calls, 3);
+		assert.strictEqual(existsSync(dir), false);
+		// Still busy after the retries: the other run removes it.
+		mkdirSync(dir);
+		calls = 0;
+		removeIfEmpty(
+			dir,
+			() => {
+				calls++;
+				throw busy('EPERM');
+			},
+			'win32',
+		);
+		assert.strictEqual(calls, 5);
+		// On POSIX an EPERM is a real error; a directory refilled meanwhile is fine everywhere.
+		assert.throws(
+			() =>
+				removeIfEmpty(
+					dir,
+					() => {
+						throw busy('EPERM');
+					},
+					'linux',
+				),
+			/EPERM/,
+		);
+		removeIfEmpty(dir, () => {
+			throw busy('ENOTEMPTY');
+		});
+		rmSync(dir, { recursive: true, force: true });
+		removeIfEmpty(dir);
 	});
 
 	it('refuses a repository that git does not read, quoting git, unless --force', async (t) => {

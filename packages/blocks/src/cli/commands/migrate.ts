@@ -828,9 +828,32 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 	return lines.join('\n');
 }
 
-/** Remove `dir` when it is empty; a directory that is already gone is fine. */
-function removeIfEmpty(dir: string): void {
-	if (unlessGone(() => readdirSync(dir))?.length === 0) unlessGone(() => rmdirSync(dir));
+/** How many times {@link removeIfEmpty} tries a directory that Windows reports busy, 50 ms apart. */
+const BUSY_DIR_ATTEMPTS = 5;
+
+/**
+ * Remove `dir` when it is empty; a directory that is already gone, or that was
+ * refilled meanwhile, is fine. On Windows, reading or removing a directory that
+ * another process holds open or is deleting (a concurrent `blocks migrate`)
+ * fails with EPERM or EBUSY: try again briefly, then leave it to that process.
+ */
+export function removeIfEmpty(
+	dir: string,
+	rmdir: (dir: string) => void = rmdirSync,
+	platform: NodeJS.Platform = process.platform,
+): void {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			if (readdirSync(dir).length === 0) rmdir(dir);
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (code === 'ENOENT' || code === 'ENOTEMPTY') return;
+			if (platform !== 'win32' || (code !== 'EPERM' && code !== 'EBUSY')) throw error;
+			if (attempt >= BUSY_DIR_ATTEMPTS) return;
+			Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+		}
+	}
 }
 
 /**
