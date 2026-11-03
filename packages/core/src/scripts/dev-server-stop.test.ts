@@ -12,7 +12,9 @@ import {
   portInUseHint,
   type StopDevServerDeps,
   type StopResult,
+  windowsSessionRoot,
 } from './dev-server.js';
+import type { WindowsProcess } from './process-tree.js';
 
 // Fully injected: no real processes, ports, or filesystem. We assert ownership
 // (only the pids the pidfile recorded are ever signalled) and that the tsx-watch
@@ -47,6 +49,7 @@ function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
     processes: () => new Map(),
     waitFree: async () => {},
     waitExit: async () => true,
+    platform: 'linux',
     ...overrides,
   };
   return { deps, sigs, removed };
@@ -230,6 +233,91 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     assert.equal(r.via, 'watcher');
     assert.equal(r.portFree, false);
     assert.deepEqual(removed, [], 'a surviving server keeps its singleton guard');
+  });
+});
+
+describe('stopDevServer on Windows — ends the session from its top', () => {
+  // A signal is TerminateProcess there: a SIGTERM to `tsx watch` runs no cleanup, and the `blocks dev` CLI
+  // above it started the dev server again on the next save (W1). The record names the CLI (`session`).
+  const WIN_TSX = '"C:\\node.exe" "C:\\app\\node_modules\\tsx\\dist\\cli.mjs" watch "C:\\blocks\\dist\\cli\\runners\\dev-server.js"';
+  const proc = (pid: number, ppid: number, created: string, command = ''): WindowsProcess => ({ pid, ppid, created, command });
+  const session = (overrides: Array<[number, WindowsProcess]> = []) =>
+    new Map<number, WindowsProcess>([
+      [10, proc(10, 1, '100', '"C:\\node.exe" "C:\\blocks\\dist\\cli\\bin.js" dev')],
+      [20, proc(20, 10, '200', WIN_TSX)],
+      [30, proc(30, 20, '300', '"C:\\node.exe" dev-server.js')],
+      ...overrides,
+    ]);
+  const record = { pid: 30, ppid: 20, port: 3000, command: '', session: { pid: 10 }, frontend: { port: 3100, listeners: [{ pid: 40, created: '400' }] } };
+
+  it('ends the blocks dev CLI with its whole tree, waits for both ports, and removes the record', async () => {
+    let alive = true;
+    const freed: number[] = [];
+    const { deps, sigs, removed } = makeDeps({
+      platform: 'win32',
+      readPidfile: () => JSON.stringify(record),
+      isAlive: (pid) => alive && [10, 20, 30].includes(pid),
+      processes: (pids) => {
+        assert.deepEqual([...pids].sort(), [10, 20, 30]);
+        return session();
+      },
+      killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); alive = false; },
+      waitFree: async (p) => { freed.push(p); },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 10, signal: 'SIGKILL', via: 'killTree' }], 'the CLI, never a lone signal to tsx watch');
+    assert.deepEqual(freed, [3000, 3100]);
+    assert.equal(r.via, 'cli');
+    assert.equal(r.portFree, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.equal(stopMessage(r), '🛑 Stopped the dev server on :3000 (pid 10).');
+  });
+
+  it('ends tsx watch when no CLI is recorded, or the recorded one is not its parent any more', async () => {
+    for (const [label, rec, table] of [
+      ['no session', { ...record, session: undefined }, session()],
+      // The CLI's pid now names a process created after tsx watch: not its parent.
+      ['reused pid', record, session([[10, proc(10, 1, '250')]])],
+    ] as const) {
+      const { deps, sigs } = makeDeps({
+        platform: 'win32',
+        readPidfile: () => JSON.stringify(rec),
+        isAlive: (pid) => [10, 20, 30].includes(pid) && sigs.length === 0,
+        processes: () => table,
+      });
+      const r = await stopDevServer(3000, deps);
+      assert.deepEqual(sigs, [{ pid: 20, signal: 'SIGKILL', via: 'killTree' }], label);
+      assert.equal(r.via, 'watcher', label);
+    }
+  });
+
+  it('never ends the tree of a parent that is not a tsx watch (a plain node start under a shell)', async () => {
+    const shell = new Map<number, WindowsProcess>([
+      [20, proc(20, 1, '200', 'C:\\Windows\\System32\\cmd.exe')],
+      [30, proc(30, 20, '300', 'node dev-server.js')],
+    ]);
+    const { deps, sigs } = makeDeps({
+      platform: 'win32',
+      readPidfile: () => JSON.stringify({ pid: 30, ppid: 20, port: 3000, command: '' }),
+      isAlive: (pid) => pid === 20 || pid === 30,
+      processes: () => shell,
+      probe: seqProbe([true, false]),
+      listPids: () => [30],
+    });
+    const r = await stopDevServer(3000, deps);
+    // The listener fallback: only the recorded runner's tree.
+    assert.equal(r.via, 'listener');
+    assert.deepEqual(sigs, [{ pid: 30, signal: 'SIGTERM', via: 'killTree' }]);
+  });
+
+  it('picks the top of the session from what CIM proves', () => {
+    assert.equal(windowsSessionRoot(record, session()), 10);
+    assert.equal(windowsSessionRoot(record, new Map()), undefined, 'nothing running');
+    // Between two reloads: no runner, but tsx watch still descends from the CLI.
+    const reloading = session();
+    reloading.delete(30);
+    assert.equal(windowsSessionRoot(record, reloading), 10);
+    assert.equal(windowsSessionRoot({ ...record, session: undefined }, reloading), undefined);
   });
 });
 

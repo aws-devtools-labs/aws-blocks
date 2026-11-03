@@ -59,6 +59,14 @@ export interface DevServerPidRecord {
    * server, so `dev stop` waits for it and says it stopped the sandbox.
    */
   sandbox?: { pid: number };
+  /**
+   * The `blocks dev` CLI that started this dev server's `tsx watch` (its
+   * process), set from {@link DEV_SESSION_ENV}: the top of the session. On
+   * Windows, where a signal runs no cleanup and a process that a shell started
+   * outlives its parent, `dev stop` ends the session by ending this process's
+   * whole tree, once the recorded `tsx watch` is proven to descend from it.
+   */
+  session?: { pid: number };
 }
 
 /** A process of the frontend's tree that listened on its port, on Windows: its pid and CIM creation time (a FILETIME). */
@@ -86,6 +94,7 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
       const frontend = parseFrontend(o.frontend);
       if (frontend) record.frontend = frontend;
       if (o.sandbox && Number.isInteger(o.sandbox.pid) && o.sandbox.pid > 1) record.sandbox = { pid: o.sandbox.pid };
+      if (o.session && Number.isInteger(o.session.pid) && o.session.pid > 1) record.session = { pid: o.session.pid };
       return record;
     }
   } catch {
