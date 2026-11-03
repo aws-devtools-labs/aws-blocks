@@ -34,7 +34,7 @@ const audit = new Database(scope, 'audit', { cluster: shared });
 const search = new Database(scope, 'search', { cluster: shared });
 ```
 
-> **⚠️ Data lives on the cluster, and AWS Blocks does not move it.** A `Database` keeps the cluster it was first deployed on. Changing its `cluster` option, or renaming a `Database` or `DatabaseCluster` id, points the block at a different, empty cluster or schema. The old data stays where it was under `removalPolicy: 'retain'` (the production default) and is **deleted with the stack** under `'destroy'`. To move data, add a new block on the target cluster, copy the rows yourself, switch your handlers, then remove the old block (see [Sharing a cluster](#sharing-a-cluster)).
+> **⚠️ Data lives on the cluster, and AWS Blocks does not move it.** Treat the cluster a `Database` first deploys to as permanent. Changing its `cluster` option, or renaming a `Database` or `DatabaseCluster` id, points the block at a different, empty cluster or schema, and nothing copies the rows across. The old data stays where it was: a schema on a shared cluster is never dropped, and an owned cluster that leaves the template is kept under `removalPolicy: 'retain'` (the production default) and **deleted in that same deploy** under `'destroy'` (the sandbox default). To move data, add a new block on the target cluster, copy the rows yourself, switch your handlers, then remove the old block (see [Sharing a cluster](#sharing-a-cluster)).
 
 Create tables in a migration file, not in a handler; the app can only read and write rows. Put it in `aws-blocks/migrations/shop/001_init.sql`, written in DSQL (see [Migrations](#migrations)):
 
