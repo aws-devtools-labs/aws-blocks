@@ -98,6 +98,21 @@ class UnionSerializerTest : FunSpec({
         api shouldContain "return Variant7(input.json.decodeFromJsonElement<JsonElement>(element))"
     }
 
+    test("an enum value arm is matched as a string, not an object") {
+        val api = api(
+            spec(
+                echo(
+                    "level",
+                    """{ "anyOf": [ { "anyOf": [ { "type": "string", "enum": ["low", "high"] }, { "type": "null" } ] },
+                        $OBJECT_TEXT ] }""",
+                ),
+            ),
+        )
+        api shouldContain "if (element is JsonNull || element is JsonPrimitive && element.isString) {"
+        api shouldNotContain "element is JsonNull || element is JsonObject"
+        api shouldContain "expected null or a string; or an object with"
+    }
+
     test("arms are tried in spec order in a union without a discriminator") {
         val api = api(
             spec(

@@ -335,7 +335,8 @@ internal object UnionSerializerGenerator {
             PrimitiveKind.NUMBER -> nonStringPrimitive(doubleOrNullProperty)
             PrimitiveKind.UNKNOWN, PrimitiveKind.VOID -> CodeBlock.of("true")
         }
-        is ResolvedType.FormattedType -> stringPredicate()
+        // A generated enum class is read and written as its string serial name.
+        is ResolvedType.FormattedType, is ResolvedType.Enum -> stringPredicate()
         is ResolvedType.ListType, is ResolvedType.TupleType -> CodeBlock.of("element is %T", jsonArrayClass)
         is ResolvedType.Transferable -> CodeBlock.of(
             "element is %T && element[%S] == %T(%S)",
@@ -409,6 +410,7 @@ internal object UnionSerializerGenerator {
             FormatKind.TIME -> "a time string"
             FormatKind.UUID -> "a UUID string"
         }
+        is ResolvedType.Enum -> "a string"
         is ResolvedType.ListType, is ResolvedType.TupleType -> "an array"
         is ResolvedType.MapType -> "an object"
         is ResolvedType.Transferable -> "a ${type.transferableName} transferable"
