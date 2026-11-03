@@ -107,8 +107,11 @@ func variantNameFromDiscriminator(fieldName: String, value: String) -> String {
         return name
     }
     let spelled = String(value.map { $0.isLetter || $0.isNumber ? $0 : "_" })
+    // Each `_` part is PascalCased on its own: a whole-value SCREAMING_SNAKE collapse would make
+    // `1.5` and `15` both `Code15`, `A$B` and `A$$B` both `ActionAB`.
+    let parts = spelled.split(separator: "_", omittingEmptySubsequences: false).map { pascalCase(String($0)) }
     // PascalCased, so the enum case (its camelCase) spells the struct name the same way.
-    return specTypeName(fieldName) + pascalCase(spelled)
+    return pascalCase(specTypeName(fieldName) + parts.joined(separator: "_"))
 }
 
 /// Keywords a type can't be named, though they're identifiers in form.

@@ -124,6 +124,24 @@ final class LiteralUnionArmTests: XCTestCase {
         assertContains(output.api, "default:")
     }
 
+    func testDiscriminatorValuesThatSpellAlikeGetDistinctNamedVariants() throws {
+        let decimal = object(["code": const("1.5"), "a": string])
+        let whole = object(["code": const("15"), "b": string])
+        let single = object(["action": const(#""A$B""#), "a": string])
+        let double = object(["action": const(#""A$$B""#), "b": string])
+        let output = try generate(methods: [
+            method("status", result: oneOf(decimal, whole)),
+            method("act", result: oneOf(single, double))
+        ])
+
+        assertContains(output.api, "case 1.5: self = .code1_5(try Code1_5(from: decoder))")
+        assertContains(output.api, "case 15: self = .code15(try Code15(from: decoder))")
+        assertContains(output.api, #"case "A$B": self = .actionA_B(try ActionA_B(from: decoder))"#)
+        assertContains(output.api, #"case "A$$B": self = .actionA__B(try ActionA__B(from: decoder))"#)
+        assertNotContains(output.api, "Code15_1")
+        assertNotContains(output.api, "ActionAB")
+    }
+
     func testNumericDiscriminator() throws {
         let one = object(["code": const("1"), "a": string])
         let two = object(["code": const("2"), "b": string])
