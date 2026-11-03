@@ -5,11 +5,37 @@ Values supplied when a `Blocks` instance is built, as opposed to the build-time 
 instance in a process; values that govern a single operation are *options* and are passed to that
 operation instead, as `OidcSignInOptions` is to a [sign-in](oidc.md).
 
-## `BlocksConfig`
+## Building an instance
+
+Three forms, shortest first:
 
 ```kotlin
-val blocks = Blocks(BlocksConfig(server = Servers.prod))
+Blocks()                                        // the spec's first server
+Blocks(Servers.sandbox)                         // a server the spec declares
+Blocks(BlocksConfig(server = Servers.prod))     // anything beyond the server
 ```
+
+### `Blocks()`
+
+This one is generated, not part of the runtime. The runtime never sees your spec, so it cannot know
+which server to default to; codegen emits an `invoke` operator on `Blocks.Companion` that supplies
+the spec's first one. Regenerating against a different backend therefore leaves the call site
+alone.
+
+Because it is an extension, it has to be imported:
+
+```kotlin
+import com.example.myapp.generated.invoke
+```
+
+Without that import the call resolves to the runtime's own constructor and the compiler reports a
+missing `server` argument — it points at the call, not at the import, so this is one worth adding
+by hand if completion does not offer it.
+
+The accessors for each API namespace (`blocks.api`, `blocks.authApi`) are generated extensions too,
+but those resolve from the receiver, so an IDE offers them.
+
+### `BlocksConfig`
 
 `BlocksConfig` is a `data class`, so varying one value across environments is a `copy`:
 
@@ -17,14 +43,6 @@ val blocks = Blocks(BlocksConfig(server = Servers.prod))
 val base = BlocksConfig(server = Servers.prod)
 val staging = Blocks(base.copy(server = Servers.staging))
 ```
-
-The shorter forms remain available: `Blocks()` follows the spec's first server, and
-`Blocks(Servers.sandbox)` names one without building a config.
-
-`Blocks()` following the spec means regenerating against a different backend leaves the call site
-alone. It is the generated `invoke` import that brings that form into scope, and without the import
-the compiler reports a missing `server` argument rather than a missing import — so it is worth
-adding by hand if completion does not offer it.
 
 ## The instance's HTTP engine
 

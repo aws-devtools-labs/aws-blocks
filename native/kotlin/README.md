@@ -44,10 +44,6 @@ See the [Gradle plugin reference](docs/gradle-plugin.md) for full configuration 
 Codegen runs as part of compilation, so building the module is all it takes to get the client.
 
 ```kotlin
-// Worth importing by hand: without it, `Blocks()` reports a missing `server` argument
-// rather than a missing import. The rest your IDE will add for you.
-import com.example.myapp.generated.invoke
-
 val blocks = Blocks()
 
 suspend fun todos() {
@@ -65,8 +61,9 @@ suspend fun todos() {
 }
 ```
 
-`Blocks()` follows the spec's first server. Pinning one, closing the engine it owns, and the rest
-of the instance's lifecycle are in [runtime configuration](docs/runtime-configuration.md).
+Building the instance — which server it reaches, the imports the generated accessors need, and
+closing the engine it owns — is covered in
+[runtime configuration](docs/runtime-configuration.md#building-an-instance).
 
 > **On JVM and desktop, give the client a [storage location](docs/runtime-configuration.md#storing-the-session-on-the-jvm)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
