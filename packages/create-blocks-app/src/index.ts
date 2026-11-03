@@ -193,7 +193,7 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
  * - Adding "aws-blocks" to workspaces (array or Yarn Classic object format)
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
- * - Adding the `blocks` CLI settings (`package.json#blocks`) when the project has none
+ * - Adding the `cdk-blocks` CLI settings (`package.json#blocks`) when the project has none
  * - Patching .gitignore
  * - Monorepo detection and file: path rewriting
  * - Running npm install
@@ -202,7 +202,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   devDeps: Record<string, string>;
   deps: Record<string, string>;
   scripts: Record<string, string>;
-  /** `package.json#blocks`, read by the `blocks` CLI (for example `{ dev: { port: 3001 } }`). */
+  /** `package.json#blocks`, read by the `cdk-blocks` CLI (for example `{ dev: { port: 3001 } }`). */
   blocksConfig?: Record<string, unknown>;
   gitignoreEntries: string[];
   skipInstall?: boolean;
@@ -256,7 +256,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
     if (!pkg.scripts[name]) pkg.scripts[name] = cmd;
   }
 
-  // Add the `blocks` CLI settings, without overriding any the project already has
+  // Add the `cdk-blocks` CLI settings, without overriding any the project already has
   if (blocksConfig) {
     if (!pkg.blocks || typeof pkg.blocks !== 'object') pkg.blocks = {};
     for (const [key, value] of Object.entries(blocksConfig)) {
@@ -472,7 +472,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   if (!skipInstall) installDependencies(targetDir, workspaceRoot);
   
-  // The local server port the template's `blocks dev` listens on: 3001 for the backend-only templates.
+  // The local server port the template's `cdk-blocks dev` listens on: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
@@ -486,7 +486,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   } else {
     console.log(`\nThen open http://localhost:${devPort}`);
   }
-  console.log(`\nEvery npm script calls the blocks CLI; run \`npx --no -- blocks --help\` to see all commands.`);
+  console.log(`\nEvery npm script calls the cdk-blocks CLI; run \`npx --no -- cdk-blocks --help\` to see all commands.`);
   console.log(`\nSee README.md for an overview and AGENTS.md for AI agent instructions.`);
 }
 
@@ -587,14 +587,14 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     scripts: {
       'sandbox': 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox',
       'sandbox:delete': 'cross-env NODE_OPTIONS="--conditions=cdk" npx ampx sandbox delete --yes',
-      'blocks:dev': 'blocks dev',
-      'blocks:stop': 'blocks dev stop',
-      // The CLI's `blocks generate client` has no Amplify preamble (auth middleware and
+      'blocks:dev': 'cdk-blocks dev',
+      'blocks:stop': 'cdk-blocks dev stop',
+      // The CLI's `cdk-blocks generate client` has no Amplify preamble (auth middleware and
       // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
-    // so `"frontend": false` stops `blocks dev` from detecting the app's vite or next.
+    // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
     blocksConfig: { dev: { port: 3001, frontend: false } },
     gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
@@ -623,7 +623,7 @@ function printMigrationInstructions() {
   console.log('   - Import Amplify resources into the Blocks stack');
   console.log('');
   console.log('2. Run the sandbox through Blocks: change the `sandbox` script (now `npx ampx sandbox`)');
-  console.log('   to `blocks sandbox`, then use `npm run sandbox`');
+  console.log('   to `cdk-blocks sandbox`, then use `npm run sandbox`');
   console.log('   - Blocks sandbox uses CDK directly (no Amplify CLI dependency)');
   console.log('');
   console.log('3. Update amplify.yml to use CDK deploy directly:');
@@ -696,7 +696,7 @@ frontend:
  * The template's `blocks` settings that suit any existing project: the dev server
  * `port` and the backend-only `frontend: false`. The template's frontend settings
  * describe the template's own frontend, not the project's, so they are left out and
- * `blocks dev` detects the project's frontend dev server from its dependencies.
+ * `cdk-blocks dev` detects the project's frontend dev server from its dependencies.
  * `undefined` when nothing is left to copy.
  */
 function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined {
@@ -727,7 +727,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
 
   console.log('\n📦 Adding Blocks backend...\n');
 
-  // 1. Copy aws-blocks/ from the requested template. `blocks dev` detects the
+  // 1. Copy aws-blocks/ from the requested template. `cdk-blocks dev` detects the
   // project's own frontend dev server (`next dev` or `vite`) from its dependencies,
   // so only the template's backend settings are copied below.
   const templateDir = join(__dirname, '../templates', templateName);
@@ -775,13 +775,13 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       '@types/node': tplDevDeps['@types/node'] || '^20.0.0',
     },
     scripts: {
-      'sandbox': 'blocks sandbox',
-      'sandbox:destroy': 'blocks sandbox destroy',
-      'sandbox:console': 'blocks sandbox console',
-      'deploy': 'blocks deploy',
-      'destroy': 'blocks destroy',
-      'dev:server': 'blocks dev',
-      'dev:stop': 'blocks dev stop',
+      'sandbox': 'cdk-blocks sandbox',
+      'sandbox:destroy': 'cdk-blocks sandbox destroy',
+      'sandbox:console': 'cdk-blocks sandbox console',
+      'deploy': 'cdk-blocks deploy',
+      'destroy': 'cdk-blocks destroy',
+      'dev:server': 'cdk-blocks dev',
+      'dev:stop': 'cdk-blocks dev stop',
     },
     blocksConfig: backendDevConfig(templatePkg.blocks),
     gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
@@ -793,7 +793,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('Next steps:');
   console.log('  npm run sandbox         # Deploy backend to your AWS sandbox');
   console.log('  npm run dev:server      # Run local dev server');
-  console.log('  npx --no -- blocks --help  # Every command of the blocks CLI (--no: never install from npm)');
+  console.log('  npx --no -- cdk-blocks --help  # Every command of the cdk-blocks CLI (--no: never install from npm)');
   console.log('');
   console.log('Import your API in frontend code:');
   console.log('  import { api } from \'aws-blocks\'');

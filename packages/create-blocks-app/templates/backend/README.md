@@ -37,8 +37,8 @@ npm run config -- set KEY value # Set a config value (also list, remove KEY)
 npm run typegen          # Regenerate secret/config key types; run once and commit .blocks/hosting-values.d.ts before gating CI on -- --check
 ```
 
-Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
 The dev server settings (port; `"frontend": false` keeps it backend-only) are in `package.json` under `"blocks": { "dev": … }`.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
@@ -85,7 +85,7 @@ This template is backend-only. To add a frontend:
    ```
    Then add a build script and the frontend dev server to `package.json`. Replace
    `"blocks": { "dev": { "port": 3001, "frontend": false } }` with the frontend settings, so `npm run dev`
-   (`blocks dev`) starts Vite behind the dev server and serves both on http://localhost:3000:
+   (`cdk-blocks dev`) starts Vite behind the dev server and serves both on http://localhost:3000:
    ```json
    {
      "scripts": {

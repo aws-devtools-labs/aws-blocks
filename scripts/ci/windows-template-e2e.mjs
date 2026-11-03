@@ -141,7 +141,7 @@ async function main() {
     run('npm', ['run', 'deploy'], inApp);
     console.log('OK: npm run deploy succeeded');
   } finally {
-    // `blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
+    // `cdk-blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
     runTeardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 

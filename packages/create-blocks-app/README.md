@@ -117,26 +117,26 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
-Every lifecycle script is a thin alias of the `blocks` CLI that ships with `@aws-blocks/blocks`, so the npm script names stay the same and `npm run deploy` runs `blocks deploy`. Run `npx --no -- blocks --help` in the app for every command and its options. The dev server settings that the scripts used to hard-code live in `package.json#blocks.dev`.
+Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`, so the npm script names stay the same and `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings that the scripts used to hard-code live in `package.json#blocks.dev`.
 
 ```json
 {
   "scripts": {
-    "dev": "blocks dev",
-    "dev:stop": "blocks dev stop",
-    "sandbox": "blocks sandbox",
-    "sandbox:deploy": "blocks sandbox deploy",
-    "sandbox:preview": "blocks sandbox preview",
-    "sandbox:destroy": "blocks sandbox destroy",
-    "sandbox:console": "blocks sandbox console",
-    "cleanup": "blocks dev stop --all",
-    "deploy": "blocks deploy",
-    "destroy": "blocks destroy",
-    "secret": "blocks secret",
-    "typegen": "blocks generate types",
-    "spec": "blocks generate spec",
-    "vendorize": "blocks vendorize",
-    "prebuild": "blocks generate client",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:preview": "cdk-blocks sandbox preview",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "deploy": "cdk-blocks deploy",
+    "destroy": "cdk-blocks destroy",
+    "secret": "cdk-blocks secret",
+    "typegen": "cdk-blocks generate types",
+    "spec": "cdk-blocks generate spec",
+    "vendorize": "cdk-blocks vendorize",
+    "prebuild": "cdk-blocks generate client",
     "build": "tsc && vite build"
   },
   "blocks": {
@@ -145,7 +145,7 @@ Every lifecycle script is a thin alias of the `blocks` CLI that ships with `@aws
 }
 ```
 
-No template sets `frontendCommand`: `blocks dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `blocks dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `blocks dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`blocks dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`.
+No template sets `frontendCommand`: `cdk-blocks dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `cdk-blocks dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `cdk-blocks dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`cdk-blocks dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`.
 
 `npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question.
 

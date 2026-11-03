@@ -11,9 +11,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
 
 /**
- * The dev server settings that `blocks dev` resolves for an app, from the built
+ * The dev server settings that `cdk-blocks dev` resolves for an app, from the built
  * `@aws-blocks/blocks` CLI in this repository: what the scaffolded `blocks.dev` does.
- * `flags` are the `blocks dev` options, for example `{ 'frontend-port': '41902' }`.
+ * `flags` are the `cdk-blocks dev` options, for example `{ 'frontend-port': '41902' }`.
  */
 async function resolvedDevConfig(
   root: string,
@@ -185,29 +185,29 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, [], `Deployable templates missing "build": ${missing.join(', ')}`);
   });
 
-  it('every deployable template runs its lifecycle scripts through the blocks CLI', () => {
-    // The npm script names stay the same; each one is a thin alias of a `blocks`
+  it('every deployable template runs its lifecycle scripts through the cdk-blocks CLI', () => {
+    // The npm script names stay the same; each one is a thin alias of a `cdk-blocks`
     // command, so no template ships aws-blocks/scripts/*.ts wrappers any more.
     // `sandbox:deploy` is the one-shot variant of `sandbox` that CI uses, and
     // `sandbox:preview` the one-shot deploy with a hosted preview.
     const expected: Record<string, string> = {
-      dev: 'blocks dev',
-      'dev:server': 'blocks dev',
-      'dev:stop': 'blocks dev stop',
-      sandbox: 'blocks sandbox',
-      'sandbox:deploy': 'blocks sandbox deploy',
-      'sandbox:preview': 'blocks sandbox preview',
-      'sandbox:destroy': 'blocks sandbox destroy',
-      'sandbox:console': 'blocks sandbox console',
-      cleanup: 'blocks dev stop --all',
-      deploy: 'blocks deploy',
-      destroy: 'blocks destroy',
-      secret: 'blocks secret',
-      config: 'blocks config',
-      typegen: 'blocks generate types',
-      spec: 'blocks generate spec',
-      vendorize: 'blocks vendorize',
-      prebuild: 'blocks generate client',
+      dev: 'cdk-blocks dev',
+      'dev:server': 'cdk-blocks dev',
+      'dev:stop': 'cdk-blocks dev stop',
+      sandbox: 'cdk-blocks sandbox',
+      'sandbox:deploy': 'cdk-blocks sandbox deploy',
+      'sandbox:preview': 'cdk-blocks sandbox preview',
+      'sandbox:destroy': 'cdk-blocks sandbox destroy',
+      'sandbox:console': 'cdk-blocks sandbox console',
+      cleanup: 'cdk-blocks dev stop --all',
+      deploy: 'cdk-blocks deploy',
+      destroy: 'cdk-blocks destroy',
+      secret: 'cdk-blocks secret',
+      config: 'cdk-blocks config',
+      typegen: 'cdk-blocks generate types',
+      spec: 'cdk-blocks generate spec',
+      vendorize: 'cdk-blocks vendorize',
+      prebuild: 'cdk-blocks generate client',
     };
     const templatesDir = join(__dirname, '..', 'templates');
     const problems: string[] = [];
@@ -234,9 +234,9 @@ describe('create-blocks-app template metadata', () => {
   });
 
   it('every deployable template sets its dev server in package.json "blocks.dev"', () => {
-    // `blocks dev` and the sandbox's dev server read these settings; they replace
+    // `cdk-blocks dev` and the sandbox's dev server read these settings; they replace
     // the options the removed aws-blocks/scripts/server.ts passed to startDevServer.
-    // No template sets `frontendCommand`: `blocks dev` builds it from the app's
+    // No template sets `frontendCommand`: `cdk-blocks dev` builds it from the app's
     // `vite` or `next` dependency and the effective frontend port.
     const frontend = { frontendPort: 3100 };
     const expected: Record<string, unknown> = {
@@ -330,11 +330,11 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(missing, []);
   });
 
-  it('AGENTS.md names the blocks db and blocks vendorize commands of the scaffolded app', () => {
+  it('AGENTS.md names the cdk-blocks db and cdk-blocks vendorize commands of the scaffolded app', () => {
     const guide = readFileSync(join(__dirname, '..', 'resources', 'AGENTS.md'), 'utf-8');
     assert.ok(existsSync(join(__dirname, '..', 'templates', 'sql', 'aws-blocks', 'migrations')), 'the sql template keeps aws-blocks/migrations');
-    assert.match(guide, /`npx --no -- blocks db migrate aws-blocks\/migrations`/);
-    assert.match(guide, /`npx --no -- blocks db status aws-blocks\/migrations`/);
+    assert.match(guide, /`npx --no -- cdk-blocks db migrate aws-blocks\/migrations`/);
+    assert.match(guide, /`npx --no -- cdk-blocks db status aws-blocks\/migrations`/);
     assert.match(guide, /`npm run vendorize -- @aws-blocks\/[\w-]+`/);
   });
 
@@ -396,8 +396,8 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(unwrapped, [], 'every <section> in page.tsx should wrap its content in <SectionBoundary>');
   });
 
-  it('the amplify overlay keeps only the generator the blocks CLI does not cover', () => {
-    // `blocks generate client` writes the standard client; the overlay's client
+  it('the amplify overlay keeps only the generator the cdk-blocks CLI does not cover', () => {
+    // `cdk-blocks generate client` writes the standard client; the overlay's client
     // needs an Amplify preamble (auth middleware, API URL from amplify_outputs.json).
     const scriptsDir = join(__dirname, '..', 'templates', 'amplify', 'aws-blocks', 'scripts');
     assert.deepStrictEqual(readdirSync(scriptsDir), ['generate-client.ts']);
@@ -463,7 +463,7 @@ describe('create-blocks-app auto-detection', () => {
   it('detects Amplify Gen 2 project over plain project, and keeps its Blocks dev server backend-only', async () => {
     const tmpDir = join(__dirname, '../.test-autodetect-amplify');
     mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
-    // An Amplify app usually has its own frontend dependency, which `blocks dev` would otherwise start.
+    // An Amplify app usually has its own frontend dependency, which `cdk-blocks dev` would otherwise start.
     writeFileSync(
       join(tmpDir, 'package.json'),
       JSON.stringify({ name: 'amplify-app', version: '1.0.0', devDependencies: { vite: '*', next: '*' } }),
@@ -477,8 +477,8 @@ describe('create-blocks-app auto-detection', () => {
       const packageJson = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
       const generateClientPath = join(tmpDir, 'aws-blocks', 'scripts', 'generate-client.ts');
       const cognitoVerifierPath = join(tmpDir, 'aws-blocks', 'cognito-verifier.ts');
-      assert.strictEqual(packageJson.scripts['blocks:dev'], 'blocks dev');
-      assert.strictEqual(packageJson.scripts['blocks:stop'], 'blocks dev stop');
+      assert.strictEqual(packageJson.scripts['blocks:dev'], 'cdk-blocks dev');
+      assert.strictEqual(packageJson.scripts['blocks:stop'], 'cdk-blocks dev stop');
       // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
       assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
@@ -493,7 +493,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
       // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
       assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
-      assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `blocks sandbox`/);
+      assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `cdk-blocks sandbox`/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -843,8 +843,8 @@ describe('create-blocks-app auto-detection', () => {
       );
       // The existing-project path must also wire the sanctioned stop command.
       const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-      assert.strictEqual(pkg.scripts['dev:server'], 'blocks dev');
-      assert.strictEqual(pkg.scripts['dev:stop'], 'blocks dev stop');
+      assert.strictEqual(pkg.scripts['dev:server'], 'cdk-blocks dev');
+      assert.strictEqual(pkg.scripts['dev:stop'], 'cdk-blocks dev stop');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
@@ -882,7 +882,7 @@ describe('create-blocks-app auto-detection', () => {
       const scripts = JSON.parse(readFileSync(pkgPath, 'utf-8')).scripts ?? {};
       // Only deployable templates (those with a sandbox lifecycle) are expected
       // to carry vendorize; e.g. the amplify template has no sandbox/deploy.
-      if (scripts.sandbox && scripts.vendorize !== 'blocks vendorize') {
+      if (scripts.sandbox && scripts.vendorize !== 'cdk-blocks vendorize') {
         missing.push(name);
       }
     }

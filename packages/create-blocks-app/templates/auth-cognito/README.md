@@ -64,8 +64,8 @@ email.
 | `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
 | `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
 
-Each script is an alias of the `blocks` CLI that ships with `@aws-blocks/blocks` (for example
-`"deploy": "blocks deploy"`); run `npx --no -- blocks --help` to see every command and its options.
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
 The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
 `npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
