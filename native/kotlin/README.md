@@ -32,26 +32,20 @@ dependencies {
 
 ```kotlin
 awsBlocks {
-    apiSpec = rootProject.file("aws-blocks/blocks.spec.json")
-    packageName = "com.example.myapp.generated"
+    apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
+    packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
 ```
 
-Both default — `rootProject.file("blocks.spec.json")` and `com.aws.blocks.generated` — so a project
-that matches those can skip this. Every other property, including server URLs and OIDC setup, is in
-the [Gradle plugin reference](docs/gradle-plugin.md).
+See the [Gradle plugin reference](docs/gradle-plugin.md) for full configuration options.
 
 ### 4. Call your backend
 
 Codegen runs as part of compilation, so building the module is all it takes to get the client.
 
 ```kotlin
-import com.aws.blocks.kotlin.Blocks
-import com.example.myapp.generated.Api.ListTodos
-import com.example.myapp.generated.Api.UpdateTodo
-import com.example.myapp.generated.Todo
-import com.example.myapp.generated.api
-import com.example.myapp.generated.authApi
+// Worth importing by hand: without it, `Blocks()` reports a missing `server` argument
+// rather than a missing import. The rest your IDE will add for you.
 import com.example.myapp.generated.invoke
 
 val blocks = Blocks()
@@ -71,17 +65,10 @@ suspend fun todos() {
 }
 ```
 
-`Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
-call site alone — the `invoke` import is what brings it into scope, and without it the compiler
-reports a missing `server` argument. Name a server to pin one: `Blocks(Servers.sandbox)`.
+`Blocks()` follows the spec's first server. Pinning one, closing the engine it owns, and the rest
+of the instance's lifecycle are in [runtime configuration](docs/runtime-configuration.md).
 
-Every RPC call and every OIDC client share the one HTTP engine the instance owns; file handles and
-realtime channels still open their own. `close()` shuts that engine down, after which calls through
-the instance report it rather than failing inside the HTTP client.
-
-> **On JVM and desktop, tell the client where to keep its session.** Without a `storageLocation` it
-> holds cookies in memory and the user signs in again on every launch, with no warning. One line —
-> see [runtime configuration](docs/runtime-configuration.md#storing-the-session-on-the-jvm).
+> **On JVM and desktop, give the client a [storage location](docs/runtime-configuration.md#storing-the-session-on-the-jvm)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
 ## Documentation
 
@@ -100,11 +87,11 @@ iOS and desktop.
 
 ## Supported Platforms
 
-| Platform | Engine | Cookie Storage |
-|----------|--------|----------------|
-| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox |
-| iOS | Darwin (URLSession) | Keychain Services, scoped to the app |
-| JVM | OkHttp | AES-256-GCM encrypted files, in a [directory you supply](docs/runtime-configuration.md#storing-the-session-on-the-jvm) — in memory if you supply none |
+| Platform | Engine | Cookie Storage                                                                                                          |
+|----------|--------|-------------------------------------------------------------------------------------------------------------------------|
+| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
+| JVM | OkHttp | AES-256-GCM encrypted files, in a [directory you supply](docs/runtime-configuration.md#storing-the-session-on-the-jvm)  |
 
 ## Support by Target
 

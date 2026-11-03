@@ -21,6 +21,22 @@ val staging = Blocks(base.copy(server = Servers.staging))
 The shorter forms remain available: `Blocks()` follows the spec's first server, and
 `Blocks(Servers.sandbox)` names one without building a config.
 
+`Blocks()` following the spec means regenerating against a different backend leaves the call site
+alone. It is the generated `invoke` import that brings that form into scope, and without the import
+the compiler reports a missing `server` argument rather than a missing import — so it is worth
+adding by hand if completion does not offer it.
+
+## The instance's HTTP engine
+
+Every RPC call and every OIDC client share the one HTTP engine the instance owns. File handles and
+realtime channels open their own — see [transferables](transferables.md#http-clients).
+
+`close()` shuts the instance's engine down, after which calls through it report the closed instance
+rather than failing inside the HTTP client. `Blocks` implements `AutoCloseable`, but `use { }` is
+the wrong idiom for it: the instance is meant to live as long as the application, not one block.
+Hold one and close it at shutdown — and on Android, tie it to the application rather than to an
+`Activity`.
+
 ## `BlocksPlatformConfig`
 
 Configuration that applies only to the target the app is built for. Each target declares its own
