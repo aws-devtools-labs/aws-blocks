@@ -383,7 +383,7 @@ export async function assertAwsCredentials({
 					invocation,
 					account: verified.account,
 					region,
-					// The profile CDK deploys with, AWS_PROFILE included (`blocks --profile` sets it for this
+					// The profile CDK deploys with, AWS_PROFILE included (`cdk-blocks --profile` sets it for this
 					// process): resolveDeploymentTarget's `profile` is only cdk.json's or AWS_DEFAULT_PROFILE.
 					profile: environmentKeys ? undefined : profile || env.AWS_PROFILE,
 					credentials: verified.credentials,

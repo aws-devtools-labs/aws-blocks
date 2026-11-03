@@ -598,7 +598,7 @@ export function portInUseHint(
   platform: NodeJS.Platform = process.platform,
 ): string {
   const pids = result.foreign.length > 0 ? result.foreign.map((h) => h.pid) : result.pids;
-  const again = 'then run `npx --no -- blocks dev` again';
+  const again = 'then run `npx --no -- cdk-blocks dev` again';
   const windows = platform === 'win32';
   if (pids.length > 0) {
     const stop = windows ? pids.map((pid) => `taskkill /PID ${pid} /T /F`).join(' && ') : `kill ${pids.join(' ')}`;
@@ -793,13 +793,13 @@ function watchPidfileHandoff(pidfilePath: string): void {
 /**
  * The environment variable naming a file the dev server writes a one-line
  * reason to when it can't start (another dev server owns the port, the port is
- * taken, the bind fails). `blocks dev` sets it, so it can tell this failure
+ * taken, the bind fails). `cdk-blocks dev` sets it, so it can tell this failure
  * apart from a requested stop: both end its `tsx watch` with a signal.
  */
 export const DEV_FAILURE_FILE_ENV = 'BLOCKS_DEV_FAILURE_FILE';
 
 /**
- * The environment variable, `1`, that `blocks dev` (and the sandbox's dev
+ * The environment variable, `1`, that `cdk-blocks dev` (and the sandbox's dev
  * command) set because they run the dev server under `tsx watch`.
  */
 export const DEV_UNDER_WATCH_ENV = 'BLOCKS_DEV_UNDER_WATCH';
@@ -813,9 +813,9 @@ export function runsUnderTsxWatch(env: NodeJS.ProcessEnv, parentCommand: string)
   return env[DEV_UNDER_WATCH_ENV] === '1' || isTsxWatcher(parentCommand);
 }
 
-/** `npx --no -- blocks dev stop`, with `--port` when the port isn't the default: a command an app's shell runs as is. */
+/** `npx --no -- cdk-blocks dev stop`, with `--port` when the port isn't the default: a command an app's shell runs as is. */
 export function devStopCommand(port: number): string {
-  return port === 3000 ? 'npx --no -- blocks dev stop' : `npx --no -- blocks dev stop --port ${port}`;
+  return port === 3000 ? 'npx --no -- cdk-blocks dev stop' : `npx --no -- cdk-blocks dev stop --port ${port}`;
 }
 
 /** The `Symbol.for` key of the local data engines' pending closers (see `closeOnProcessExit` in `@aws-blocks/data-common`). */
@@ -877,7 +877,7 @@ function failDevStartup(reason: string, hint: string | undefined, underWatch: bo
 }
 
 export async function startDevServer(options: DevServerOptions) {
-  // A closed output pipe (`blocks dev | head`, a background job whose reader
+  // A closed output pipe (`cdk-blocks dev | head`, a background job whose reader
   // went away) must not kill the server on its next log line (see ignoreClosedOutput).
   ignoreClosedOutput();
   // Bind loopback unless the developer explicitly opts into a wider interface.
@@ -903,13 +903,13 @@ export async function startDevServer(options: DevServerOptions) {
   const devStartTime = Date.now();
 
   // ── Singleton guard ─────────────────────────────────────────────────────
-  // One dev server per front-door port: a second `blocks dev` must not start a
+  // One dev server per front-door port: a second `cdk-blocks dev` must not start a
   // supervisor that fights the first over :3000/:3100. The per-port pidfile is
   // created exclusively (see {@link claimDevPidfile}), so this holds even for
   // two starts at the same moment. The recorded `ppid` (the stable `tsx watch`
   // watcher) tells a hot-reload relaunch of OUR OWN script from a second
   // invocation, and the recorded command lines tell a live owner from a reused
-  // pid. A stale pidfile (dead owner) never blocks startup. Under `blocks dev`,
+  // pid. A stale pidfile (dead owner) never blocks startup. Under `cdk-blocks dev`,
   // the CLI claimed the session before it started us (see claimDevSession), and
   // we take its record over.
   const pidfilePath = devPidfilePath(port);
@@ -945,7 +945,7 @@ export async function startDevServer(options: DevServerOptions) {
   // pidfile stays: a `dev stop` run before the successor has booted must still
   // find it. The successor takes it over (see evaluateSingleton), and `dev stop`
   // removes it once the port is free. Every other signal ends the session.
-  // A SIGTERM that was a stop looks the same to us (the `blocks` CLI SIGTERMs
+  // A SIGTERM that was a stop looks the same to us (the `cdk-blocks` CLI SIGTERMs
   // this process, then its `tsx watch`), so a handoff watch removes the kept
   // pidfile once `tsx watch` exits without a successor (see watchPidfileHandoff).
   const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
@@ -1560,7 +1560,7 @@ export interface StopResult {
    *                 on Windows, the end of its whole tree.
    *  - `listener` — fallback: killed the recorded child pid's listener tree
    *                 (watcher was already gone / not a tsx watcher).
-   *  - `cli`      — SIGTERM to the `blocks dev` CLI whose dev server was still
+   *  - `cli`      — SIGTERM to the `cdk-blocks dev` CLI whose dev server was still
    *                 starting (a {@link DevServerPidRecord.starting} record); on
    *                 Windows, also the end of the tree of the CLI that runs it.
    *  - `frontend` — the recorded dev server was gone (a SIGKILL of its group),
@@ -1588,7 +1588,7 @@ export interface StopResult {
    */
   killed?: true;
   /**
-   * The `blocks sandbox` session whose dev server this was (see
+   * The `cdk-blocks sandbox` session whose dev server this was (see
    * {@link DevServerPidRecord.sandbox}): it ends with its dev server, stopping
    * its `cdk watch`, and the stop waited for it.
    */
@@ -1655,7 +1655,7 @@ function defaultStopDeps(): StopDevServerDeps {
 }
 
 /**
- * How long {@link stopDevServer} waits for a starting `blocks dev` CLI to exit
+ * How long {@link stopDevServer} waits for a starting `cdk-blocks dev` CLI to exit
  * after its SIGTERM: the CLI waits up to 10 s for its dev server's cleanup.
  */
 const CLI_STOP_TIMEOUT_MS = 12_000;
@@ -1668,7 +1668,7 @@ const CLI_STOP_TIMEOUT_MS = 12_000;
 const WATCHER_EXIT_TIMEOUT_MS = 8000;
 
 /**
- * How long {@link stopDevServer} waits for a `blocks sandbox` session to exit
+ * How long {@link stopDevServer} waits for a `cdk-blocks sandbox` session to exit
  * once its dev server has: it stops its `cdk watch` (2 s) and its dev server
  * tree (6 s) at the same time, then exits.
  */
@@ -1686,7 +1686,7 @@ const WINDOWS_TREE_EXIT_MS = 5000;
 
 /**
  * The process at the top of the dev session `record` names, on Windows, which
- * `dev stop` ends with its whole tree: the `blocks dev` CLI that started the
+ * `dev stop` ends with its whole tree: the `cdk-blocks dev` CLI that started the
  * session ({@link DevServerPidRecord.session}), while the recorded `tsx watch`
  * still descends from it; else that `tsx watch`, while the recorded runner
  * still descends from it. Undefined unless the recorded `ppid` is a `tsx watch`
@@ -1722,13 +1722,13 @@ export function windowsSessionRoot(
  *     that would be the self-kill this command exists to prevent.)
  *  3. Watcher gone / not a tsx watcher but the recorded child `pid` still holds
  *     the port → fall back to SIGTERM→SIGKILL of that child's listener tree.
- *  4. A {@link DevServerPidRecord.starting} record: the `blocks dev` CLI whose
+ *  4. A {@link DevServerPidRecord.starting} record: the `cdk-blocks dev` CLI whose
  *     dev server is still starting → SIGTERM the CLI, which stops what it
  *     started, and wait for it to exit.
  *  5. On Windows, a signal is `TerminateProcess`: a SIGTERM to `tsx watch` runs
  *     no cleanup, and what a shell started (the frontend) outlives its parent.
  *     So the session ends from its top ({@link windowsSessionRoot}: the
- *     `blocks dev` CLI, else `tsx watch`) with its whole tree (`taskkill /T /F`):
+ *     `cdk-blocks dev` CLI, else `tsx watch`) with its whole tree (`taskkill /T /F`):
  *     the CLI does not start the dev server again on the next save. Then the
  *     stop waits for the ports to be free, and removes the record.
  *
@@ -1781,7 +1781,7 @@ export async function stopDevServer(
     d.isAlive(record.pid) && (record.command === undefined || d.commandOf(record.pid) === record.command);
   const childAlive = runnerAlive();
 
-  // A `blocks dev` CLI whose dev server has not taken the session over yet: it
+  // A `cdk-blocks dev` CLI whose dev server has not taken the session over yet: it
   // stops what it started on a SIGTERM, and exits once all of it has.
   if (record.starting) {
     if (!childAlive) {
@@ -1898,7 +1898,7 @@ export async function stopDevServer(
     // A runner that died by a signal ran no cleanup: its frontend is still up.
     const left = childAlive ? null : await stopLeftFrontend();
     await d.waitFree(port, 3000);
-    // A `blocks sandbox` session ends with its dev server: it stops its `cdk watch` and exits. Wait for that.
+    // A `cdk-blocks sandbox` session ends with its dev server: it stops its `cdk watch` and exits. Wait for that.
     const sandbox = record.sandbox;
     const sandboxEnded = !sandbox || !d.isAlive(sandbox.pid) || (await d.waitExit(sandbox.pid, SANDBOX_STOP_TIMEOUT_MS));
     const portFree = !(await d.probe(port)) && (left === null || left.reclaim.reclaimed);
@@ -1963,15 +1963,15 @@ export function stopMessage(result: StopResult): string {
     const how = result.killed ? '; its tsx watch had lost its runner and ignored SIGTERM, so it was killed' : '';
     if (result.sandbox) {
       return (
-        `🛑 Stopped the blocks sandbox session on :${result.port}${who}: its dev server and its cdk watch${how}. ` +
-        'Its AWS resources are still deployed; `npx --no -- blocks sandbox destroy` deletes them.'
+        `🛑 Stopped the cdk-blocks sandbox session on :${result.port}${who}: its dev server and its cdk watch${how}. ` +
+        'Its AWS resources are still deployed; `npx --no -- cdk-blocks sandbox destroy` deletes them.'
       );
     }
     return `🛑 Stopped the dev server on :${result.port}${who}${how}.`;
   }
   if (result.sandbox) {
     return (
-      `⚠️  Signalled the blocks sandbox session on :${result.port}${who}, but it has not ended yet: ` +
+      `⚠️  Signalled the cdk-blocks sandbox session on :${result.port}${who}, but it has not ended yet: ` +
       'its dev server or its cdk watch may still be shutting down.'
     );
   }

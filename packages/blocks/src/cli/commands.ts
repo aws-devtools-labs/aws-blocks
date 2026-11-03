@@ -458,7 +458,7 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		try {
 			return await runRunner(ctx, {
 				runner: 'dev-server',
-				operation: 'blocks dev',
+				operation: 'cdk-blocks dev',
 				watch: true,
 				env: {
 					...devServerEnv(ctx.env, { backendPath, ...devConfig }),

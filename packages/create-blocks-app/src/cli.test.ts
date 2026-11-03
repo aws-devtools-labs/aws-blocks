@@ -326,7 +326,7 @@ describe('create-blocks-app template metadata', () => {
   });
 
   it("every template's cdk watch ignores the generated aws-blocks/client.js", () => {
-    // blocks deploy regenerates it; a running blocks sandbox then started a watch synth, and the deploy failed
+    // cdk-blocks deploy regenerates it; a running cdk-blocks sandbox then started a watch synth, and the deploy failed
     // on CDK's cdk.out lock (JW-02). The deployed backend does not use the browser client.
     const templatesDir = join(__dirname, '..', 'templates');
     const problems: string[] = [];

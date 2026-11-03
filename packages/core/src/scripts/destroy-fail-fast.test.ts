@@ -176,12 +176,12 @@ describe('destroy fails fast on a deterministic error', () => {
 		await assert.rejects(
 			assertAwsCredentials({
 				command: 'destroy',
-				invocation: 'blocks destroy',
+				invocation: 'cdk-blocks destroy',
 				projectRoot: directory,
 				requireRegion: true,
 				probe: async () => undefined,
 			}),
-			/No AWS Region is set, so `blocks destroy` can't find the stack to delete\. .*re-run `blocks destroy`\./,
+			/No AWS Region is set, so `cdk-blocks destroy` can't find the stack to delete\. .*re-run `cdk-blocks destroy`\./,
 		);
 	});
 

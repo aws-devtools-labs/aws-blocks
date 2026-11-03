@@ -772,7 +772,7 @@ describe('cdk-blocks migrate', () => {
 
 	it('gives an amplify overlay without a server.ts the overlay dev config', async () => {
 		// Overlays 0.1.0-0.1.15 ship no server.ts, so no generated server.ts gives the dev config,
-		// but `blocks dev` would still replace the overlay's own client.js. Their generated
+		// but `cdk-blocks dev` would still replace the overlay's own client.js. Their generated
 		// generate-client.ts tells migrate that the app is the overlay.
 		const root = writeApp('amplify@0.1.0');
 		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
@@ -780,7 +780,7 @@ describe('cdk-blocks migrate', () => {
 		const result = JSON.parse(run.stdout);
 		assert.deepStrictEqual(result.scriptsRewritten['blocks:dev'], {
 			from: 'tsx watch aws-blocks/scripts/server.ts',
-			to: 'blocks dev',
+			to: 'cdk-blocks dev',
 		});
 		assert.deepStrictEqual(result.devConfig, { port: 3001, frontend: false, generateClient: false });
 		assert.deepStrictEqual(readPkg(root).blocks, { dev: { port: 3001, frontend: false, generateClient: false } });

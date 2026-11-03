@@ -244,7 +244,7 @@ function spawnDevServer(options: {
 
 /**
  * Stop a detached dev server and wait until its whole process group is gone.
- * `blocks dev` allows one dev server per app, so the next case's server in
+ * `cdk-blocks dev` allows one dev server per app, so the next case's server in
  * APP_ROOT is refused while this one, or its tsx watch, still runs.
  */
 async function killProcess(proc: ChildProcess): Promise<void> {

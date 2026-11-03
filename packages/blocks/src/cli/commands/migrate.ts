@@ -153,7 +153,7 @@ function isAmplifyOverlay(root: string): boolean {
 	return text !== undefined && AMPLIFY_CLIENT_GENERATORS.includes(sourceHash(text));
 }
 
-/** The generated npm-script commands, and the `blocks` alias that replaces each one. */
+/** The generated npm-script commands, and the `cdk-blocks` alias that replaces each one. */
 export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: WrapperFile }>> = {
 	'tsx watch aws-blocks/scripts/server.ts': { alias: 'cdk-blocks dev', wrapper: 'server.ts' },
 	'tsx aws-blocks/scripts/stop.ts': { alias: 'cdk-blocks dev stop', wrapper: 'stop.ts' },
@@ -815,7 +815,7 @@ export function planMigration(
 		result.devConfig = frontendCommand !== undefined && frontendCommand === detected ? rest : options;
 	} else if (server === undefined && pkg.blocks?.dev === undefined && isAmplifyOverlay(root)) {
 		// The overlays from before it shipped a server.ts (0.1.0-0.1.15) need the same config:
-		// without it, `blocks dev` would replace the overlay's own client.js.
+		// without it, `cdk-blocks dev` would replace the overlay's own client.js.
 		result.devConfig = { ...SERVER_DEV_OPTIONS[AMPLIFY_SERVER] };
 	}
 

@@ -5,7 +5,7 @@
  * The dev server's per-port pidfile protocol: the record of the session that
  * owns a front-door port, its exclusive claim, and its release.
  *
- * It has no dependency beyond Node.js, so the `blocks dev` CLI loads it
+ * It has no dependency beyond Node.js, so the `cdk-blocks dev` CLI loads it
  * (`@aws-blocks/core/scripts/dev-pidfile`) to claim the session the moment it
  * starts, well before the dev server it starts has loaded (see
  * {@link claimDevSession}).
@@ -44,7 +44,7 @@ export interface DevServerPidRecord {
    */
   frontend?: { port: number; pgid?: number; listeners?: FrontendListener[] };
   /**
-   * The record of a `blocks dev` CLI (`pid`, with its own parent as `ppid`)
+   * The record of a `cdk-blocks dev` CLI (`pid`, with its own parent as `ppid`)
    * whose dev server has not taken the session over yet. The CLI writes it
    * before it starts `tsx watch`, so that a `dev stop` during startup finds the
    * session, and stops it by signalling the CLI. The dev server that the CLI
@@ -54,13 +54,13 @@ export interface DevServerPidRecord {
   /** Random, new for every record written: names the record's reap file (see {@link claimDevPidfile}). */
   token?: string;
   /**
-   * The `blocks sandbox` session (its process) that started this dev server,
+   * The `cdk-blocks sandbox` session (its process) that started this dev server,
    * set from {@link SANDBOX_SESSION_ENV}: that session ends with its dev
    * server, so `dev stop` waits for it and says it stopped the sandbox.
    */
   sandbox?: { pid: number };
   /**
-   * The `blocks dev` CLI that started this dev server's `tsx watch` (its
+   * The `cdk-blocks dev` CLI that started this dev server's `tsx watch` (its
    * process), set from {@link DEV_SESSION_ENV}: the top of the session. On
    * Windows, where a signal runs no cleanup and a process that a shell started
    * outlives its parent, `dev stop` ends the session by ending this process's
@@ -76,7 +76,7 @@ export interface FrontendListener {
 }
 
 /**
- * The environment variable carrying the pid of the `blocks sandbox` process to
+ * The environment variable carrying the pid of the `cdk-blocks sandbox` process to
  * the dev server it starts, which records it (see {@link DevServerPidRecord.sandbox}).
  */
 export const SANDBOX_SESSION_ENV = 'BLOCKS_SANDBOX_SESSION';
@@ -463,7 +463,7 @@ function livePeer(d: ClaimPidfileDeps, path: string): DevServerPidRecord | null 
  * take that record over: any other start sees the live watcher and bows out,
  * and `tsx watch` runs one child at a time.
  *
- * Likewise the {@link DevServerPidRecord.starting} record of the `blocks dev`
+ * Likewise the {@link DevServerPidRecord.starting} record of the `cdk-blocks dev`
  * CLI that started this dev server (`adopt`, its pid) is replaced in place: the
  * session it claimed is this one. Any other start sees the live CLI and bows out.
  * Neither looks at the other ports again: the session that claimed the app did.
@@ -521,14 +521,14 @@ export function devPidfilePath(port: number): string {
   return join(BLOCKS_SANDBOX_DIR, `dev-server.${port}.pid`);
 }
 
-/** A running `blocks sandbox` session of an app: its process, and the port of its dev server. */
+/** A running `cdk-blocks sandbox` session of an app: its process, and the port of its dev server. */
 export interface SandboxSession {
   pid: number;
   port: number;
 }
 
 /**
- * The `blocks sandbox` session running in the app at `root`, if any: a live
+ * The `cdk-blocks sandbox` session running in the app at `root`, if any: a live
  * dev-server record (see {@link recordLiveness}) whose `sandbox` process is
  * alive too. Its `cdk watch` deploys every change and writes the app's
  * `.blocks-sandbox/cdk.out`, so another sandbox deploy or destroy of the app
@@ -572,7 +572,7 @@ export function reapDevPidfile(path: string, inspected: string, deps: Partial<Cl
 }
 
 /**
- * The environment variable carrying the pid of the `blocks dev` CLI to the dev
+ * The environment variable carrying the pid of the `cdk-blocks dev` CLI to the dev
  * server it starts, which takes over the CLI's starting record (see
  * {@link claimDevSession}).
  */
@@ -593,7 +593,7 @@ export type DevSessionClaim =
     };
 
 /**
- * Claim the dev session on `port` for this process, the `blocks dev` CLI of
+ * Claim the dev session on `port` for this process, the `cdk-blocks dev` CLI of
  * the app at `root`, before it starts its dev server: write a
  * {@link DevServerPidRecord.starting} record with the same exclusive claim as
  * the dev server's. A `dev stop` from then on finds the session and SIGTERMs

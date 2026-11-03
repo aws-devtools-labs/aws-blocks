@@ -187,7 +187,7 @@ async function main() {
 			failed.push(template);
 			continue;
 		}
-		// Windows only: the user's `blocks dev` → edit → `dev stop` session, which `test:e2e`'s
+		// Windows only: the user's `cdk-blocks dev` → edit → `dev stop` session, which `test:e2e`'s
 		// `taskkill /T` teardown does not exercise (see windows-dev-lifecycle.mjs).
 		if (isWin && template === 'default') {
 			try {
