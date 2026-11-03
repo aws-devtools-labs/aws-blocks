@@ -35,11 +35,14 @@ export interface DevServerPidRecord {
   /** `ppid`'s command line when the record was written; see {@link command}. */
   parentCommand?: string;
   /**
-   * The frontend dev server this process started (POSIX only): its process
-   * group and port. A later start of this app may reclaim the port from
-   * processes in that group — and from nothing else (see {@link reclaimPort}).
+   * The frontend dev server this process started, and its port. A later start
+   * of this app may reclaim the port from that frontend — and from nothing else
+   * (see {@link reclaimPort}). On POSIX it is recorded by its process group
+   * (`pgid`). Windows has no process groups: there it is recorded by the
+   * processes of its tree that listened on the port (`listeners`), each with its
+   * creation time, which a pid that Windows hands out again does not have.
    */
-  frontend?: { pgid: number; port: number };
+  frontend?: { port: number; pgid?: number; listeners?: FrontendListener[] };
   /**
    * The record of a `blocks dev` CLI (`pid`, with its own parent as `ppid`)
    * whose dev server has not taken the session over yet. The CLI writes it
@@ -58,6 +61,12 @@ export interface DevServerPidRecord {
   sandbox?: { pid: number };
 }
 
+/** A process of the frontend's tree that listened on its port, on Windows: its pid and CIM creation time (a FILETIME). */
+export interface FrontendListener {
+  pid: number;
+  created: string;
+}
+
 /**
  * The environment variable carrying the pid of the `blocks sandbox` process to
  * the dev server it starts, which records it (see {@link DevServerPidRecord.sandbox}).
@@ -74,9 +83,8 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
       if (typeof o.parentCommand === 'string') record.parentCommand = o.parentCommand;
       if (o.starting === true) record.starting = true;
       if (typeof o.token === 'string') record.token = o.token;
-      if (o.frontend && Number.isInteger(o.frontend.pgid) && o.frontend.pgid > 1 && Number.isInteger(o.frontend.port)) {
-        record.frontend = { pgid: o.frontend.pgid, port: o.frontend.port };
-      }
+      const frontend = parseFrontend(o.frontend);
+      if (frontend) record.frontend = frontend;
       if (o.sandbox && Number.isInteger(o.sandbox.pid) && o.sandbox.pid > 1) record.sandbox = { pid: o.sandbox.pid };
       return record;
     }
@@ -84,6 +92,23 @@ export function parsePidRecord(text: string): DevServerPidRecord | null {
     // Corrupt / empty pidfile — treat as absent.
   }
   return null;
+}
+
+/** A record's `frontend`: a port, with a process group (POSIX) or the listeners (Windows) it may reclaim it from. */
+function parseFrontend(o: unknown): DevServerPidRecord['frontend'] | undefined {
+  if (!o || typeof o !== 'object') return undefined;
+  const { port, pgid, listeners } = o as Record<string, unknown>;
+  if (!Number.isInteger(port)) return undefined;
+  const frontend: NonNullable<DevServerPidRecord['frontend']> = { port: port as number };
+  if (Number.isInteger(pgid) && (pgid as number) > 1) frontend.pgid = pgid as number;
+  const owned = Array.isArray(listeners)
+    ? listeners.filter(
+        (l): l is FrontendListener =>
+          !!l && Number.isInteger(l.pid) && l.pid > 1 && typeof l.created === 'string' && /^\d+$/.test(l.created),
+      )
+    : [];
+  if (owned.length > 0) frontend.listeners = owned.map(({ pid, created }) => ({ pid, created }));
+  return frontend.pgid !== undefined || frontend.listeners !== undefined ? frontend : undefined;
 }
 
 /** True iff a signal can be delivered to `pid` (exists). `EPERM` (exists, not ours) counts as alive. */
