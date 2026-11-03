@@ -20,6 +20,7 @@
     "@aws-blocks/blocks": "*",
     "@aws-blocks/bb-kv-store": "*",
     "@aws-blocks/bb-distributed-data": "*",
-    "@aws-blocks/data-common": "*"
+    "@aws-blocks/data-common": "*",
+    "vite": "^6.4.5"
   }
 }
