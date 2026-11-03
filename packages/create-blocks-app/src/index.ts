@@ -557,13 +557,14 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     // so the workspace and the root resolve to one copy of it. Only packages the
     // CLI stamps are overridden (a missing stamp still fails here, before any
     // write), devDependencies win as they do in npm's resolution of the root,
-    // and protocol specs (`file:`, `link:`, ...) are skipped since they would
-    // resolve from a different directory here.
+    // and only semver ranges are copied: `*`, blanks, dist-tags and path or
+    // protocol specs (`./x`, `file:`, `link:`, ...) get the CLI's stamp instead,
+    // since a path would resolve from a different directory here.
     const rootPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
     const rootRanges: Record<string, unknown> = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
     const workspaceVersions = { ...stampedVersions };
     for (const [name, range] of Object.entries(rootRanges)) {
-      if (name in stampedVersions && typeof range === 'string' && range !== '*' && !range.includes(':')) {
+      if (name in stampedVersions && typeof range === 'string' && /^\s*(?:[\^~]\s*v?\d|[<>=]|v?\d)/.test(range)) {
         workspaceVersions[name] = range;
       }
     }

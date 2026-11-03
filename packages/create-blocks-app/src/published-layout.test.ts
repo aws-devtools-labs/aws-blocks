@@ -165,6 +165,31 @@ describe('create-blocks-app version stamping from the published package', () => 
     );
   });
 
+  it('in the Amplify workspace, prefers a root devDependency range and stamps over path specs', () => {
+    const project = join(root, 'amplify-mixed');
+    mkdirSync(join(project, 'amplify'), { recursive: true });
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({
+        name: 'amplify-mixed',
+        version: '1.0.0',
+        dependencies: { '@aws-blocks/blocks': '^0.1.0', '@aws-blocks/bb-kv-store': './vendor/kv' },
+        devDependencies: { '@aws-blocks/blocks': '~0.1.2' },
+      }),
+    );
+    writeFileSync(join(project, 'amplify', 'backend.ts'), 'const backend = defineBackend({});\n');
+
+    const result = run(['.', '--yes', '--skip-install'], project);
+    assert.strictEqual(result.exitCode, 0, result.output);
+    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
+    assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.2', 'the root devDependency range wins');
+    assert.strictEqual(
+      workspace.dependencies?.['@aws-blocks/bb-kv-store'],
+      cliManifest.devDependencies?.['@aws-blocks/bb-kv-store'],
+      'a path spec is not copied into the workspace',
+    );
+  });
+
   it('fails non-zero, before writing anything, when the CLI has no range for a template package', () => {
     const manifestPath = join(dirname(dirname(cli)), 'package.json');
     const original = readFileSync(manifestPath, 'utf-8');
