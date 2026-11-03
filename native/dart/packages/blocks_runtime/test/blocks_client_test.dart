@@ -146,30 +146,33 @@ void main() {
       },
     );
 
-    test('with an auth provider, a 401 JSON-RPC error refreshes and runs the method once more', () async {
-      // Documented with `httpErrorStatus`: a non-idempotent method can run twice.
-      var calls = 0;
-      final client = BlocksClient(
-        baseUrl: 'http://test/aws-blocks/api',
-        client: MockClient((_) async {
-          calls++;
-          return http.Response(
-            jsonEncode({
-              'jsonrpc': '2.0',
-              'error': {'code': 401, 'message': 'Authentication required'},
-              'id': calls,
-            }),
-            401,
-          );
-        }),
-        authProvider: _RefreshingAuthProvider(),
-      );
-      await expectLater(
-        client.call('api.authRequired', []),
-        throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
-      );
-      expect(calls, 2);
-    });
+    test(
+      'with an auth provider, a 401 JSON-RPC error refreshes and runs the method once more',
+      () async {
+        // Documented with `httpErrorStatus`: a non-idempotent method can run twice.
+        var calls = 0;
+        final client = BlocksClient(
+          baseUrl: 'http://test/aws-blocks/api',
+          client: MockClient((_) async {
+            calls++;
+            return http.Response(
+              jsonEncode({
+                'jsonrpc': '2.0',
+                'error': {'code': 401, 'message': 'Authentication required'},
+                'id': calls,
+              }),
+              401,
+            );
+          }),
+          authProvider: _RefreshingAuthProvider(),
+        );
+        await expectLater(
+          client.call('api.authRequired', []),
+          throwsA(isA<BlocksRpcException>().having((e) => e.code, 'code', 401)),
+        );
+        expect(calls, 2);
+      },
+    );
 
     test('resends the same list params after a 401 refresh', () async {
       final sentParams = <Object?>[];
