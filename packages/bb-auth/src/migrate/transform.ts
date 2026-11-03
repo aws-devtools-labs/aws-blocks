@@ -628,8 +628,10 @@ class FileMigrator {
 			const { decl } = job;
 			const current = moduleText(this.ts, decl.moduleSpecifier) ?? '';
 			const target = job.newModule ?? current;
-			const seen = seenByModule.get(target) ?? new Set<string>();
-			seenByModule.set(target, seen);
+			// Imports and re-exports bind names separately: `export { X } from` is kept when X is also imported.
+			const seenKey = `${target}\0${this.ts.isExportDeclaration(decl) ? 'export' : 'import'}`;
+			const seen = seenByModule.get(seenKey) ?? new Set<string>();
+			seenByModule.set(seenKey, seen);
 			const out: string[] = [];
 			const goneTodos: string[] = [];
 			for (const s of job.specs) {

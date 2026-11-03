@@ -1,0 +1,10 @@
+import { AuthCognito, AuthCognitoErrors, type CognitoUser } from '@aws-blocks/bb-auth-cognito';
+import { Scope } from '@aws-blocks/core';
+
+export { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+export type { CognitoUser } from '@aws-blocks/bb-auth-cognito';
+
+const scope = new Scope('app');
+export const auth = new AuthCognito(scope, 'auth', {});
+export const notAuthorized = AuthCognitoErrors.NotAuthorized;
+export type User = CognitoUser;
