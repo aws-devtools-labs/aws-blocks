@@ -650,15 +650,25 @@ describe('findListenerPids — lsof/netstat listener discovery', () => {
     assert.deepStrictEqual(findListenerPids(3000, () => { throw new Error('ENOENT'); }, 'linux'), []);
   });
 
-  it('parses LISTENING rows for the port from `netstat -ano` on Windows', () => {
+  it('parses the listener rows for the port from `netstat -ano` on Windows, IPv4 and IPv6', () => {
+    const calls: Array<[string, readonly string[]]> = [];
     const stdout = [
       '  Proto  Local Address          Foreign Address        State           PID',
       '  TCP    0.0.0.0:3100           0.0.0.0:0              LISTENING       4242',
       '  TCP    0.0.0.0:3000           0.0.0.0:0              LISTENING       9001', // different port
       '  TCP    127.0.0.1:3100         127.0.0.1:55123        ESTABLISHED     8888', // not listening
+      '  TCP    [::1]:3100             [::]:0                 LISTENING       5151', // a `localhost` Vite
+      '  TCP    [::1]:55124            [::1]:3100             ESTABLISHED     8889', // a client of it
+      '  TCP    [::]:3100              [::]:0                 ABHÖREN         6161', // a German Windows
+      '  UDP    0.0.0.0:3100           *:*                                    7171',
     ].join('\r\n');
-    const pids = findListenerPids(3100, () => ({ stdout }), 'win32');
-    assert.deepStrictEqual(pids, [4242]);
+    const pids = findListenerPids(3100, (cmd, args) => {
+      calls.push([cmd, args]);
+      return { stdout };
+    }, 'win32');
+    assert.deepStrictEqual(pids, [4242, 5151, 6161]);
+    // Not `-p tcp`, which lists IPv4 only.
+    assert.deepStrictEqual(calls, [['netstat', ['-ano']]]);
   });
 });
 
