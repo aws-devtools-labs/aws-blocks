@@ -29,6 +29,7 @@ import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import { killFrontendTree, terminateProcessTree, findListenerPids, killListenerTree } from './process-tree.js';
+import { isCuratedLevel, log, resolveLogLevel } from './log.js';
 
 function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
   if (!text) return null;
@@ -151,6 +152,15 @@ export interface DevServerOptions {
  * no secrets, typegen is unavailable, or it is disabled). The watcher is `unref`'d
  * so it can never block the dev server's shutdown.
  */
+/**
+ * Options for the dev session's typegen watcher. Regeneration notices are
+ * `log.detail`: hidden once output is curated and routed by `BLOCKS_LOG_STREAM`;
+ * unchanged (`console.log`) with neither variable set. Exported for tests.
+ */
+export function typegenWatchOptions(): { unref: true; log: (msg: string) => void } {
+  return { unref: true, log: (msg) => log.detail(msg) };
+}
+
 async function startTypegenWatch(): Promise<(() => void) | undefined> {
   try {
     const { scanValueKeys, watchHostingValues } = await import('@aws-blocks/hosting/scripts');
@@ -158,11 +168,12 @@ async function startTypegenWatch(): Promise<(() => void) | undefined> {
     if (scan.secretKeys.length === 0 && scan.configKeys.length === 0) {
       return undefined; // app doesn't use secret()/config() → nothing to type, skip silently
     }
-    console.log('🔑 Type-safe secret()/config() keys — watching for changes...');
-    return await watchHostingValues({ unref: true });
+    log.detail('🔑 Type-safe secret()/config() keys — watching for changes...');
+    return await watchHostingValues(typegenWatchOptions());
   } catch (error) {
     // Never break the dev server over typegen (e.g. `typescript` not installed).
-    console.warn(`⚠️  hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
+    log.warn(`⚠️  hosting-typegen skipped: ${error instanceof Error ? error.message : String(error)}`);
+    log.debugError(error);
     return undefined;
   }
 }
@@ -175,7 +186,7 @@ async function deployLocal(backend: Record<string, any>): Promise<void> {
   const initPromises: Promise<void>[] = [];
   for (const [name, value] of Object.entries(backend)) {
     if (value && typeof value.initialize === 'function') {
-      console.log(`  Initializing ${name}...`);
+      log.detail(`  Initializing ${name}...`);
       initPromises.push(value.initialize());
     }
   }
@@ -723,7 +734,7 @@ export async function startDevServer(options: DevServerOptions) {
   (globalThis as any).__BLOCKS_DEV_ATTACHMENTS__ = [];
 
   // 2. Import backend (sync construction phase — BBs register plugins via globals)
-  console.log('Loading backend...');
+  log.detail('Loading backend...');
   const backend = await import(backendUrl);
 
   // 3. Read collected dev attachments and clean up
@@ -732,7 +743,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // 4. Deploy local (async initialization phase) — skip in sandbox mode
   if (!isSandbox) {
-    console.log('Deploying local resources...');
+    log.detail('Deploying local resources...');
     await deployLocal(backend);
   }
 
@@ -1021,7 +1032,7 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Attach dev servers ─────────────────────────────────────────────────
   for (const specifier of devAttachments) {
-    console.log(`  🔌 Attaching dev server (from ${specifier})`);
+    log.detail(`  🔌 Attaching dev server (from ${specifier})`);
     const mod = await import(specifier);
     if (typeof mod.attach !== 'function') {
       throw new Error(`Dev attachment '${specifier}' does not export an attach() function`);
@@ -1040,7 +1051,7 @@ export async function startDevServer(options: DevServerOptions) {
   if (!isSandbox) {
     const awsBlocksDir = dirname(resolvedPath);
     const clientPath = join(awsBlocksDir, 'client.js');
-    console.log('📝 Generating client code...');
+    log.progress('📝 Generating client code...');
     await writeClientCode(resolvedPath, clientPath);
   }
 
@@ -1064,12 +1075,12 @@ export async function startDevServer(options: DevServerOptions) {
   // treat any stderr line as a failure.
   const r3000 = await reclaimPort(port);
   if (r3000.wasOpen) {
-    (r3000.reclaimed ? console.log : console.error)(reclaimMessage(port, r3000, 'a stale/orphaned listener'));
+    (r3000.reclaimed ? log.progress : console.error)(reclaimMessage(port, r3000, 'a stale/orphaned listener'));
   }
   if (frontendCommand) {
     const rFrontend = await reclaimPort(frontendPort);
     if (rFrontend.wasOpen) {
-      (rFrontend.reclaimed ? console.log : console.error)(reclaimMessage(frontendPort, rFrontend, 'a stale/orphaned dev server'));
+      (rFrontend.reclaimed ? log.progress : console.error)(reclaimMessage(frontendPort, rFrontend, 'a stale/orphaned dev server'));
     }
   }
 
@@ -1139,7 +1150,7 @@ export async function startDevServer(options: DevServerOptions) {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
     isShuttingDown = true; // stop the supervisor from respawning the frontend
-    console.log('\nShutting down...');
+    log.progress('\nShutting down...');
 
     if (respawnTimer) { clearTimeout(respawnTimer); respawnTimer = null; }
     stopTypegen?.(); // tear down the typegen watcher (unref'd, but close it cleanly)
@@ -1437,6 +1448,24 @@ export function parsePortArg(argv: readonly string[]): number | null {
   return null;
 }
 
+/**
+ * What the local API handler logs, from `BLOCKS_DEV_QUIET` (silences all of
+ * it, as before) and `BLOCKS_LOG_LEVEL`:
+ * - `traffic`: the per-call `[rpc-in]`/`[rpc-call]`/`[rpc-ok]` lines — the
+ *   default level and `verbose`/`debug`; hidden at `quiet`/`normal`.
+ * - `errors`: a failed call's name, message and `cause` — every level.
+ * - `stacks`: its stack trace — the default level and `debug`.
+ */
+export function devRequestLogging(env: NodeJS.ProcessEnv = process.env): {
+  traffic: boolean;
+  errors: boolean;
+  stacks: boolean;
+} {
+  if (env.BLOCKS_DEV_QUIET) return { traffic: false, errors: false, stacks: false };
+  const level = resolveLogLevel(env);
+  return { traffic: !isCuratedLevel(level), errors: true, stacks: level === 'legacy' || level === 'debug' };
+}
+
 // ── Local API handler ────────────────────────────────────────────────────────
 
 function handleApiRequest(
@@ -1453,9 +1482,11 @@ function handleApiRequest(
       const rpcHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
       // Verbose request/response logging — useful when debugging cross-stack
       // wire format mismatches (e.g. native client codegen vs server). Set
-      // BLOCKS_DEV_QUIET=1 to suppress. Sensitive fields (passwords, session
+      // BLOCKS_DEV_QUIET=1 to suppress (BLOCKS_LOG_LEVEL=quiet|normal keeps only
+      // the error lines; see devRequestLogging). Sensitive fields (passwords, session
       // tokens, OTP codes) are redacted so they never reach the log stream.
-      if (!process.env.BLOCKS_DEV_QUIET) {
+      const logging = devRequestLogging();
+      if (logging.traffic) {
         let inLog: string;
         try {
           inLog = redactToJson(JSON.parse(body || '{}'));
@@ -1471,14 +1502,14 @@ function handleApiRequest(
       const parsed = parseRpcRequest(body, { pathname: url.pathname });
 
       if (!parsed.ok) {
-        if (!process.env.BLOCKS_DEV_QUIET) console.log('[rpc-out parse-error]', parsed.response);
+        if (logging.traffic) console.log('[rpc-out parse-error]', parsed.response);
         res.writeHead(200, rpcHeaders);
         res.end(parsed.response);
         return;
       }
 
       const { apiNamespace, method: rpcMethod, args, id: rpcId } = parsed.request;
-      if (!process.env.BLOCKS_DEV_QUIET) {
+      if (logging.traffic) {
         // redactToJson handles circulars and serialization failures itself.
         console.log('[rpc-call]', `${apiNamespace}.${rpcMethod}`, redactToJson(args));
       }
@@ -1544,7 +1575,7 @@ function handleApiRequest(
         if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
 
         const successPayload = successResponse(responseBody ?? result, rpcId);
-        if (!process.env.BLOCKS_DEV_QUIET) {
+        if (logging.traffic) {
           // Log a redacted copy of the response value — never the raw
           // payload, which can carry challenge `session` tokens, MFA shared
           // secrets, etc. that the client legitimately round-trips.
@@ -1556,13 +1587,13 @@ function handleApiRequest(
         res.end(successPayload);
       } catch (error: any) {
         const errPayload = errorResponseFromCatch(error, rpcId);
-        if (!process.env.BLOCKS_DEV_QUIET) {
+        if (logging.errors) {
           console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
           // A re-tagged/branded error carries a stable BB message; the raw driver/SDK
           // text lives on `cause` (server-side only). Surface it here so a SQL typo or
           // connection error shows useful text in the local terminal.
           if (error?.cause) console.log('  cause:', error.cause);
-          if (error?.stack) console.log(error.stack);
+          if (logging.stacks && error?.stack) console.log(error.stack);
         }
         // Only Set-Cookie values that DELETE a cookie survive into the error
         // response (e.g. a 401 that also clears a dead session cookie) — a
@@ -1584,6 +1615,7 @@ function handleApiRequest(
     let body = '';
     req.on('data', (chunk: string) => body += chunk);
     req.on('end', async () => {
+      const logging = devRequestLogging();
       // Hoisted above the try so the error catch below can reuse any headers
       // the handler set on `ctx.response` before throwing (CORS, Set-Cookie,
       // custom) — matching the production lambda-handler error path, which also
@@ -1631,13 +1663,13 @@ function handleApiRequest(
         res.writeHead(responseStatus, headerObj);
         res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
       } catch (error: any) {
-        if (!process.env.BLOCKS_DEV_QUIET) {
+        if (logging.errors) {
           console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);
           // A branded error carries a stable BB message; the raw driver/SDK text
           // lives on `cause` (server-side only). Surface it here, matching the RPC
           // catch above, so a developer debugging a raw-route failure sees it.
           if (error?.cause) console.error('  cause:', error.cause);
-          if (error?.stack) console.error(error.stack);
+          if (logging.stacks && error?.stack) console.error(error.stack);
         }
         const { status, body: errBody } = rawRouteErrorFromCatch(error);
         // Reuse any headers the handler set on `ctx.response` before throwing

@@ -123,7 +123,11 @@ const flags = await getConfig('FEATURE_FLAGS'); // SSM
 ```
 
 Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
-the value in a `.env` file. On a deployed function it fetches + decrypts from its
+the value in `.env.local`. That is the file the Blocks dev server (`npm run dev`)
+and the sandbox (`npm run sandbox`) load into the backend; they don't load `.env`,
+so a value only in `.env` isn't seen there and the getter throws
+`no config reference found`. (Next.js SSR code under `next dev` also reads `.env`,
+because Next loads it.) On a deployed function it fetches + decrypts from its
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
 
@@ -301,15 +305,15 @@ The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
 build doesn't download it:
 
 ```bash
-npm install --save-dev @opennextjs/aws@~4.0.3
+npm install --save-dev @opennextjs/aws@~4.1.14
 ```
 
-- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0`.
+- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`.
   Outside that range the build warns and continues.
 - If the app doesn't declare OpenNext, the adapter builds with
-  `@opennextjs/aws@4.0.3` and prints a warning.
+  `@opennextjs/aws@4.1.14` and prints a warning.
 - OpenNext declares the Next.js versions it supports as a `next` peer range
-  (4.0.3: `>=15.5.18 <16 || >=16.2.6`). When your `next` version is outside
+  (4.1.14: `>=15.5.28 <16 || >=16.4.1`). When your `next` version is outside
   it, the build prints a warning. Upgrade `next` within its major version to
   one that range accepts.
 - A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the

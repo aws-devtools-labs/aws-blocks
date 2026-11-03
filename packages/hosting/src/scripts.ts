@@ -12,5 +12,12 @@
  * @module
  */
 
-export { listValues, removeValue, runValueCli, setValue, type ValueCliOptions } from './secret-cli.js';
+export {
+	listValues,
+	removeValue,
+	runValueCli,
+	setValue,
+	type ValueCliOptions,
+	ValueCliUsageError,
+} from './secret-cli.js';
 export { runTypegenCli, scanValueKeys, watchHostingValues } from './secret-typegen.js';

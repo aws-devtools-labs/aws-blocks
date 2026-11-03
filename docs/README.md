@@ -3,6 +3,7 @@
 ## Guides
 
 - **[guides/extending-with-existing-aws-resources.md](./guides/extending-with-existing-aws-resources.md)** — Brownfield interop: `BlocksStack`, `BlocksBackend`, `fromExisting`, custom BBs, vendorize
+- **[guides/upgrading-older-apps.md](./guides/upgrading-older-apps.md)** — Edits an app scaffolded from an older `create-blocks-app` template needs to synth on the current release
 
 ## Design
 

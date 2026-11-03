@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 /**
- * Generates tech-design documents as PDF + DOCX:
- * - All numbered sections (01-16) → single "tech-design" document
- * - Every other file → individual document
+ * Generates the docs in docs/tech-design as PDF + DOCX:
+ * - Numbered sections (`NN-*.md`), if any → one combined "tech-design" document
+ * - Every other file → its own document
  *
  * Mermaid diagrams rendered, code syntax highlighted.
  *
@@ -53,7 +53,7 @@ const others = allFiles.filter((f) => !/^\d/.test(f));
 
 /** @type {{ name: string, files: string[] }[]} */
 const documents = [
-	{ name: "tech-design", files: numbered },
+	...(numbered.length > 0 ? [{ name: "tech-design", files: numbered }] : []),
 	...others.map((f) => ({ name: f.replace(/\.md$/, ""), files: [f] })),
 ];
 

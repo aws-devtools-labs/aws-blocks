@@ -13,12 +13,13 @@
  * runtime store hint needed.
  *
  * **Resolution order** for a key:
- *   1. `process.env[KEY]` — local dev; put the value in a `.env` file, no AWS call.
+ *   1. `process.env[KEY]` — local dev; put the value in `.env.local` (the file `npm run dev` and
+ *      `npm run sandbox` load; `.env` is not loaded there), no AWS call.
  *   2. the injected store locator — fetch, then cache.
  *
  * ⚠️ **Local-dev caveat:** step 1 keys off the bare `process.env[KEY]`, which is
  * NOT kind-prefixed — so if you declare both `secret('K')` and `config('K')`, a
- * single `.env` entry `K=…` satisfies BOTH `getSecret('K')` and `getConfig('K')`
+ * single `.env.local` entry `K=…` satisfies BOTH `getSecret('K')` and `getConfig('K')`
  * locally. The per-kind namespace independence (secret ≠ config for the same key)
  * only holds on the deployed store path (step 2), where each getter reads its own
  * `HOSTING_SECRET_PARAM_*` / `HOSTING_CONFIG_PARAM_*` locator. Reusing the same key
@@ -235,9 +236,11 @@ export type ConfigValueOf<K extends ConfigKey> = keyof HostingConfigRegistry ext
 /**
  * Resolve a **secret** (AWS Secrets Manager) at runtime.
  *
- * **Local development.** Reads `process.env.KEY` first, so a `.env` file supplies
- * the value with no AWS call. On a deployed function it falls through to fetching
- * the wired secret from Secrets Manager.
+ * **Local development.** Reads `process.env.KEY` first, so a local env file supplies
+ * the value with no AWS call: `.env.local` for the Blocks backend, which is the file
+ * `npm run dev` and `npm run sandbox` load (`.env` is not loaded there). Next.js SSR
+ * code under `next dev` also sees `.env`, because Next loads it. On a deployed
+ * function it falls through to fetching the wired secret from Secrets Manager.
  *
  * **Type safety.** `key` is typed as {@link SecretKey}: by default any `string`, but
  * once you run `npm run typegen` (which generates a `.d.ts` augmenting

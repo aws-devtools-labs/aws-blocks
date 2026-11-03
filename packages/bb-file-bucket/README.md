@@ -261,6 +261,27 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
+On a versioned bucket, `delete(path)` creates a delete marker without removing
+stored data versions; `get()` returns `null` and `scan()` omits the file.
+`delete(path, { versionId })` permanently removes that specific data version.
+On S3, deleting the current data version exposes the next entry in the version
+history, which may be another data version or a delete marker.
+
+The local mock reconciles its current body and metadata with the next stored
+data version when the newest data version is permanently deleted, or removes
+the current copies when none remain. This creates no replacement version and
+does not remove an active delete-marker flag; `get()` and `scan()` still honor
+that flag.
+
+**Local limitation:** the mock keeps only an active delete-marker flag, not
+delete markers ordered within the version history. A subsequent `put()` removes
+the flag. Consequently, `put(old)` → `delete()` → `put(replacement)` → permanent
+deletion of the replacement can expose `old` locally, whereas S3 would make the
+earlier delete marker current and treat the key as deleted. This case is not
+fixed by current-copy reconciliation. See
+[Mock vs AWS Behavior Differences](./DESIGN.md#mock-vs-aws-behavior-differences)
+and use a sandbox when testing deletion history across re-uploads.
+
 ### Access Logging
 
 Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox, `ONE_YEAR` in production):
@@ -334,6 +355,6 @@ Object Lock can only be turned on when the bucket is first deployed, and can't b
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
+Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Version-aware operations are available locally, with the historical delete-marker limitation described under [Versioned Bucket](#versioned-bucket). Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
 
 

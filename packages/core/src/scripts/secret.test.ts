@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { describe, it } from 'node:test';
+import { afterEach, describe, it, mock } from 'node:test';
+import { ValueCliUsageError } from '@aws-blocks/hosting/scripts';
 import { runConfigCli } from './config.js';
 import { runSecretCli } from './secret.js';
 
@@ -33,3 +34,26 @@ void describe('blocks secret / config CLI argv parsing', () => {
 		await assert.rejects(runSecretCli(['set', '1bad', 'value']), /Invalid key/);
 	});
 });
+
+void describe('blocks secret / config CLI options forwarding', () => {
+	afterEach(() => mock.restoreAll());
+
+	void it('forwards `interactive: false` to the hosting CLI', async () => {
+		for (const run of [runSecretCli, runConfigCli]) {
+			await assert.rejects(
+				run(['set', 'ONLY_KEY'], { interactive: false }),
+				(e: unknown) => e instanceof ValueCliUsageError && /cannot prompt/.test(e.message),
+			);
+		}
+	});
+
+	void it('forwards `yes` so a forced secret delete is confirmed', async () => {
+		await assert.rejects(runSecretCli(['remove', 'K', '--force']), ValueCliUsageError);
+		// The forced delete warns before any store call; stop there.
+		mock.method(console, 'warn', () => {
+			throw new Error('reached the forced delete');
+		});
+		await assert.rejects(runSecretCli(['remove', 'K', '--force'], { yes: true }), /reached the forced delete/);
+	});
+});
+
