@@ -469,7 +469,9 @@ function entersProject(text: string, dir: string, prefix: string): boolean {
  * `import('../../aws-blocks/scripts/server')`), with or without an extension.
  * With `bare` (CI, shell and Docker files, and scripts, which run commands
  * from another working directory), a word `deploy.ts`, `scripts/deploy.ts` or
- * `./scripts/deploy.ts` counts as well.
+ * `./scripts/deploy.ts` counts as well. A path counts with backslashes too
+ * (`aws-blocks\scripts\deploy.ts` in a `.cmd`, `.bat` or `.ps1` file, or
+ * escaped in JSON and YAML strings).
  *
  * In the project, the project path also counts as the end of a longer path.
  * Above it, the project path counts only after the project's own directory
@@ -482,11 +484,13 @@ function entersProject(text: string, dir: string, prefix: string): boolean {
  * count for `apps/web`.
  */
 function refersTo(
-	text: string,
+	written: string,
 	sourcePath: string,
 	wrapper: Wrapper,
 	{ bare = false, prefix = '' }: { bare?: boolean; prefix?: string } = {},
 ): boolean {
+	// Windows scripts name the wrappers with backslashes: `npx tsx aws-blocks\scripts\deploy.ts`.
+	const text = written.replace(/\\+/g, '/');
 	const target = wrapper.path.replace(SOURCE_EXTENSION, '');
 	const escaped = target.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
 	const name = wrapper.file.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');

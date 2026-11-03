@@ -187,6 +187,28 @@ describe('blocks migrate references', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'destroy.ts', 'server.ts', 'typegen.ts']);
 	});
 
+	it('keeps a generated wrapper that a Windows script or a package.json script names with backslashes', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['release.cmd'] = '@echo off\r\nnpx tsx aws-blocks\\scripts\\deploy.ts\r\n';
+			app.files['tools/teardown.ps1'] = 'npx tsx .\\aws-blocks\\scripts\\destroy.ts\r\n';
+			app.files['tools/console.bat'] = 'cd aws-blocks && npx tsx scripts\\console.ts\r\n';
+			app.packageJson.scripts['typegen:win'] = 'tsx aws-blocks\\scripts\\typegen.ts';
+		});
+		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/console.ts', 'generated, but still used by tools/console.bat'],
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by release.cmd'],
+			['aws-blocks/scripts/destroy.ts', 'generated, but still used by tools/teardown.ps1'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by script "typegen:win"'],
+			[
+				'package.json#scripts.typegen:win',
+				'"tsx aws-blocks\\scripts\\typegen.ts" is not a generated command; replace it with a blocks command by hand',
+			],
+		]);
+		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'destroy.ts', 'typegen.ts']);
+	});
+
 	it('outside git, skips dependencies, build output, tool state, binary and oversized files', async () => {
 		const mention = 'npx tsx aws-blocks/scripts/deploy.ts\n';
 		const root = writeApp('api-only@0ab6b047', (app) => {
