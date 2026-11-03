@@ -16,14 +16,13 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
 //
 // Each export below includes a brief summary of what the Building Block does
 // and when to use it. For full documentation (API reference, examples, best
-// practices, scaling characteristics), read the README in the corresponding
-// node_modules package listed in each JSDoc block.
+// practices, scaling characteristics), read the block's docs bundled in this
+// package under `docs/<package>/`, where `<package>` is the name in each JSDoc
+// block without the `@aws-blocks/` scope (e.g. `docs/bb-kv-store/README.md`).
 //
-// To locate a package README, try these paths in order:
-//   1. node_modules/@aws-blocks/<package>/README.md          (hoisted)
-//   2. node_modules/@aws-blocks/blocks/node_modules/@aws-blocks/<package>/README.md  (nested)
-//   3. Glob: **/node_modules/@aws-blocks/<package>/README.md (fallback)
-//   4. node -e "console.log(require.resolve('@aws-blocks/<package>/package.json').replace('/package.json',''))"  (last resort)
+// To locate the bundled docs folder:
+//   node -p "require('path').dirname(require.resolve('@aws-blocks/blocks/docs/README.md'))"
+// If resolution fails, fall back to node_modules/@aws-blocks/blocks/docs.
 //
 
 /**
@@ -34,7 +33,7 @@ Scope._setDefaultBlockForTelemetry(BB_NAME, BB_VERSION);
  * `onAuthChange`). Import these when writing provider-agnostic auth code.
  *
  * Package: `@aws-blocks/auth-common`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/auth-common/README.md` in `@aws-blocks/blocks`.
  */
 export type { AuthAction, AuthActionInput, AuthField, AuthState, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
 export type {
@@ -62,7 +61,7 @@ export type {
  * Set `inferenceOnly: true` for simple prompt→response without persistence.
  *
  * Package: `@aws-blocks/bb-agent`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-agent/README.md` in `@aws-blocks/blocks`.
  */
 export { Agent, AgentErrors, BedrockModels, OllamaModels } from '@aws-blocks/bb-agent';
 export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
@@ -77,7 +76,7 @@ export type { AppSettingOptions } from '@aws-blocks/bb-app-setting';
  * validation for typed objects.
  *
  * Package: `@aws-blocks/bb-app-setting`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-app-setting/README.md` in `@aws-blocks/blocks`.
  */
 export { AppSetting, AppSettingErrors } from '@aws-blocks/bb-app-setting';
 export type {
@@ -102,7 +101,7 @@ export type {
  * with dead-letter queue.
  *
  * Package: `@aws-blocks/bb-async-job`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-async-job/README.md` in `@aws-blocks/blocks`.
  */
 export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
 /**
@@ -117,7 +116,7 @@ export { AsyncJob, AsyncJobErrors } from '@aws-blocks/bb-async-job';
  * the workload uses the app default (serverless).
  *
  * Package: `@aws-blocks/bb-compute`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-compute/README.md` in `@aws-blocks/blocks`.
  */
 export { Compute, type ComputeProps } from '@aws-blocks/bb-compute';
 export type {
@@ -137,7 +136,7 @@ export type {
  * sessions, optional email-confirmed signup, and password reset flows.
  *
  * Package: `@aws-blocks/bb-auth-basic`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-auth-basic/README.md` in `@aws-blocks/blocks`.
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
@@ -191,7 +190,7 @@ export type {
  * OIDC (no Cognito), use `AuthOIDC`.
  *
  * Package: `@aws-blocks/bb-auth-cognito`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-auth-cognito/README.md` in `@aws-blocks/blocks`.
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
@@ -214,7 +213,7 @@ export type {
  * for profile-row upserts and audit logging.
  *
  * Package: `@aws-blocks/bb-auth-oidc`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-auth-oidc/README.md` in `@aws-blocks/blocks`.
  *
  * @see {@link BlocksAuth} for the provider-agnostic auth interface all auth BBs implement.
  */
@@ -239,7 +238,7 @@ export type { CronJobEvent, CronJobOptions } from '@aws-blocks/bb-cron-job';
  * constructor defines the schedule and handler.
  *
  * Package: `@aws-blocks/bb-cron-job`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-cron-job/README.md` in `@aws-blocks/blocks`.
  */
 export { CronJob, CronJobErrors } from '@aws-blocks/bb-cron-job';
 export type {
@@ -258,7 +257,7 @@ export type {
  * `logs` / `traces` options.
  *
  * Package: `@aws-blocks/bb-dashboard`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-dashboard/README.md` in `@aws-blocks/blocks`.
  */
 export { Dashboard, DashboardErrors } from '@aws-blocks/bb-dashboard';
 export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from '@aws-blocks/bb-data';
@@ -271,7 +270,7 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
  * Requires a `migrations/` folder with `.sql` files.
  *
  * Package: `@aws-blocks/bb-data`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-data/README.md` in `@aws-blocks/blocks`.
  */
 export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
@@ -285,7 +284,7 @@ export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks
  * For full PostgreSQL with FK/RLS/triggers, use `Database`.
  *
  * Package: `@aws-blocks/bb-distributed-data`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-distributed-data/README.md` in `@aws-blocks/blocks`.
  */
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 export type {
@@ -309,7 +308,7 @@ export type {
  * `Database` when you need SQL JOINs/transactions.
  *
  * Package: `@aws-blocks/bb-distributed-table`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-distributed-table/README.md` in `@aws-blocks/blocks`.
  */
 export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
@@ -321,7 +320,7 @@ export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@a
  * batch sending with partial failure handling.
  *
  * Package: `@aws-blocks/bb-email-client`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-email-client/README.md` in `@aws-blocks/blocks`.
  */
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
@@ -348,7 +347,7 @@ export type {
  * records with indexes, use `DistributedTable`.
  *
  * Package: `@aws-blocks/bb-file-bucket`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-file-bucket/README.md` in `@aws-blocks/blocks`.
  */
 export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
@@ -371,7 +370,7 @@ export type {
  * and indexed via Bedrock with configurable chunking and embedding models.
  *
  * Package: `@aws-blocks/bb-knowledge-base`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-knowledge-base/README.md` in `@aws-blocks/blocks`.
  */
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 export type {
@@ -390,7 +389,7 @@ export type {
  * If you need queries, indexes, or structured data, use `DistributedTable`.
  *
  * Package: `@aws-blocks/bb-kv-store`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-kv-store/README.md` in `@aws-blocks/blocks`.
  */
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';
@@ -406,7 +405,7 @@ export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-block
  * request tracing, use `Tracing`.
  *
  * Package: `@aws-blocks/bb-logger`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-logger/README.md` in `@aws-blocks/blocks`.
  */
 export { Logger, LoggingErrors } from '@aws-blocks/bb-logger';
 export type {
@@ -428,7 +427,7 @@ export type {
  * batch emission, and child emitters for scoped dimension inheritance.
  *
  * Package: `@aws-blocks/bb-metrics`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-metrics/README.md` in `@aws-blocks/blocks`.
  */
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export type {
@@ -446,7 +445,7 @@ export type {
  * AppSync Events API.
  *
  * Package: `@aws-blocks/bb-realtime`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-realtime/README.md` in `@aws-blocks/blocks`.
  */
 export { Realtime } from '@aws-blocks/bb-realtime';
 export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from '@aws-blocks/bb-secret';
@@ -466,7 +465,7 @@ export type { SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo
  * for a low-value secret (e.g. a prototype).
  *
  * Package: `@aws-blocks/bb-secret`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-secret/README.md` in `@aws-blocks/blocks`.
  */
 export { Secret, SecretErrors } from '@aws-blocks/bb-secret';
 export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tracer';
@@ -479,7 +478,7 @@ export type { AnnotationValue, Segment, TracerOptions } from '@aws-blocks/bb-tra
  * annotations for searchable values and metadata for debugging data.
  *
  * Package: `@aws-blocks/bb-tracer`
- * Full docs: `README.md` in the package directory above.
+ * Full docs: `docs/bb-tracer/README.md` in `@aws-blocks/blocks`.
  */
 export { Tracer } from '@aws-blocks/bb-tracer';
 
