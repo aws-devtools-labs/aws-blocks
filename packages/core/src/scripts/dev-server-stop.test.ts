@@ -439,10 +439,21 @@ describe('stopDevServer — the frontend a SIGKILLed dev server left behind', ()
 describe('portInUseHint — an exact next command', () => {
   it('names the pids to stop, how to start again, and the flag for another port', () => {
     assert.equal(
-      portInUseHint(3100, { foreign: [{ pid: 3181756, command: 'node vite --port 3100 --strictPort' }], pids: [] }, '--frontend-port'),
+      portInUseHint(3100, { foreign: [{ pid: 3181756, command: 'node vite --port 3100 --strictPort' }], pids: [] }, '--frontend-port', 'linux'),
       'Stop it with `kill 3181756`, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
     );
-    assert.match(portInUseHint(3000, { foreign: [], pids: [] }, '--port'), /`lsof -i :3000`/);
+    assert.match(portInUseHint(3000, { foreign: [], pids: [] }, '--port', 'linux'), /`lsof -i :3000`/);
+  });
+
+  it('names Windows commands on Windows', () => {
+    assert.equal(
+      portInUseHint(4610, { foreign: [], pids: [4242, 4243] }, '--frontend-port', 'win32'),
+      'Stop it with `taskkill /PID 4242 /T /F && taskkill /PID 4243 /T /F`, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
+    );
+    assert.equal(
+      portInUseHint(4610, { foreign: [], pids: [] }, '--frontend-port', 'win32'),
+      'Find the process that holds it with `netstat -ano | findstr :4610` and stop it, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
+    );
   });
 });
 

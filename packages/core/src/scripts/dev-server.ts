@@ -641,13 +641,24 @@ export function describePortHolders(port: number, result: ReclaimResult): string
 /**
  * What to run next when `result`'s port stays taken, `option` being the flag
  * that picks another one (`--port` or `--frontend-port`): an exact command,
- * since an agent told only to "stop that process" reaches for `pkill`. Pure.
+ * since an agent told only to "stop that process" reaches for `pkill`; a
+ * Windows one on Windows (`taskkill`, `netstat`). Pure.
  */
-export function portInUseHint(port: number, result: Pick<ReclaimResult, 'foreign' | 'pids'>, option: string): string {
+export function portInUseHint(
+  port: number,
+  result: Pick<ReclaimResult, 'foreign' | 'pids'>,
+  option: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
   const pids = result.foreign.length > 0 ? result.foreign.map((h) => h.pid) : result.pids;
   const again = 'then run `npx --no -- blocks dev` again';
-  if (pids.length > 0) return `Stop it with \`kill ${pids.join(' ')}\`, ${again}, or choose another port with ${option}.`;
-  return `Find the process that holds it with \`lsof -i :${port}\` and stop it, ${again}, or choose another port with ${option}.`;
+  const windows = platform === 'win32';
+  if (pids.length > 0) {
+    const stop = windows ? pids.map((pid) => `taskkill /PID ${pid} /T /F`).join(' && ') : `kill ${pids.join(' ')}`;
+    return `Stop it with \`${stop}\`, ${again}, or choose another port with ${option}.`;
+  }
+  const find = windows ? `netstat -ano | findstr :${port}` : `lsof -i :${port}`;
+  return `Find the process that holds it with \`${find}\` and stop it, ${again}, or choose another port with ${option}.`;
 }
 
 /**
