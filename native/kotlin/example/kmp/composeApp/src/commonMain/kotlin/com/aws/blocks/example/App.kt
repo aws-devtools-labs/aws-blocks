@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.aws.blocks.kotlin.Blocks
+import com.aws.blocks.kotlin.BlocksConfig
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.example.screens.AuthScreen
 import com.aws.blocks.example.screens.FileScreen
@@ -23,18 +24,20 @@ import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
 import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
+import blocks.testapp.Servers
 import blocks.testapp.api
 import blocks.testapp.authApi
-import blocks.testapp.invoke
 
 @Composable
 fun App() {
-    // Every RPC call below runs on the HTTP client this owns. The zero-argument form reaches the
-    // server the spec declares, so switching backends is a regeneration rather than an edit here.
-    // It is remembered because the DisposableEffect closes the engine it owns, and `api` because
-    // the screens take it as a parameter and a new instance on each recomposition would defeat
-    // skipping.
-    val blocks = remember { Blocks() }
+    // Every RPC call below runs on the HTTP client this owns. `platformConfig()` is what gives
+    // the desktop target somewhere to keep the session: without it the JVM holds cookies in
+    // memory and a restart signs the user out. It is remembered because the DisposableEffect
+    // closes the engine it owns, and `api` because the screens take it as a parameter and a new
+    // instance on each recomposition would defeat skipping.
+    val blocks = remember {
+        Blocks(BlocksConfig(server = Servers.local, platformConfig = platformConfig()))
+    }
     val api = remember { blocks.api }
     DisposableEffect(blocks) {
         onDispose { blocks.close() }

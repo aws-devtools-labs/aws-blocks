@@ -10,7 +10,8 @@ import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
+/** [platformConfig] is empty on Android: the sandbox is the per-application location. */
+internal actual fun platformKeyValueStore(name: String, platformConfig: BlocksPlatformConfig): KeyValueStore =
     AndroidKeyValueStore(name)
 
 private class AndroidKeyValueStore(

@@ -1,7 +1,6 @@
 package com.aws.blocks.kotlin.e2e
 
 import blocks.e2e.Api
-import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.exceptions.ApiException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeFalse
@@ -24,7 +23,7 @@ class TodosE2ETest {
 
     @Test
     fun authGateRejectsUnauthenticated() = runTest {
-        BlocksClient.clearCookies()
+        e2eBlocks().clearStoredState()
 
         shouldThrow<ApiException> { api.listTodos() }
         shouldThrow<ApiException> { api.createTodo("should-fail") }

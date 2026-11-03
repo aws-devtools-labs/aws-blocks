@@ -1,5 +1,7 @@
 package com.aws.blocks.kotlin
 
+import io.ktor.client.engine.HttpClientEngine
+
 /**
  * The entry point to a Blocks backend.
  *
@@ -15,21 +17,45 @@ package com.aws.blocks.kotlin
  * ```
  *
  * `Blocks()` comes from generated code and follows the server the spec declares; pass one to
- * reach a different server from a multi-server spec, as in `Blocks(Servers.sandbox)`.
+ * reach a different server from a multi-server spec, as in `Blocks(Servers.sandbox)`. Pass a
+ * [BlocksConfig] to configure anything else:
+ *
+ * ```
+ * val blocks = Blocks(
+ *     BlocksConfig(
+ *         server = Servers.prod,
+ *         platformConfig = BlocksPlatformConfig(/* target-specific values */),
+ *     ),
+ * )
+ * ```
+ *
+ * The instance also owns the cookie jar its session lives in, which is why two instances
+ * configured with different storage hold different sessions. On the JVM, an instance configured
+ * with no storage location keeps its session in memory and forgets it when the process ends — see
+ * [BlocksPlatformConfig].
  *
  * Each access to a generated property builds a new wrapper over [client], so keep one where a
  * stable reference matters — a Compose parameter, say. The instance is what owns the engine, and
  * what to [close] once the backend is no longer in use.
  */
-class Blocks(
-    server: BlocksServer,
+class Blocks internal constructor(
+    config: BlocksConfig,
+    engine: HttpClientEngine?,
 ) : AutoCloseable {
+
+    /** Configures the instance. [BlocksConfig.platformConfig] carries the target-specific values. */
+    constructor(config: BlocksConfig) : this(config, engine = null)
+
+    /** Reaches [server] with every other value left at its default. */
+    constructor(server: BlocksServer) : this(BlocksConfig(server), engine = null)
 
     // Nothing public on this class may be a property, which is why the server is not one. A spec
     // may name a namespace anything, a member always wins over an extension of the same name, and
     // that leaves the generated accessor unreachable behind nothing louder than a compiler
     // warning. Functions are safe: a member function and an extension property can share a name.
-    private val client: BlocksClient = BlocksClient(server)
+    private val cookies = cookieJar(config.platformConfig)
+
+    private val client: BlocksClient = BlocksClient(config.server, defaultHttpClient(engine, cookies))
 
     /**
      * The client every API generated for this instance runs its requests through, the same one on
@@ -40,6 +66,22 @@ class Blocks(
      * `client` without the generated accessor for it being shadowed. See the note above.
      */
     fun client(): BlocksClient = client
+
+    /**
+     * Drops everything this instance has stored, including the session cookie.
+     *
+     * This is not how to sign out. A sign-out is a call to the backend's own sign-out, which
+     * revokes the session server-side and expires the cookie as part of its response; dropping
+     * the cookie here instead leaves a live session on the server that the caller believes is
+     * gone. This exists so a test suite can start from a clean slate on the targets where storage
+     * cannot be pointed somewhere disposable — Android and iOS, where the OS supplies the
+     * location. On the JVM, configure a [BlocksPlatformConfig.storageLocation] in a temporary
+     * directory instead.
+     */
+    @InternalBlocksApi
+    suspend fun clearStoredState() {
+        cookies.clear()
+    }
 
     /**
      * Shuts down the HTTP engine this instance owns. Requests issued through any API obtained from

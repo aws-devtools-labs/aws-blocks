@@ -21,9 +21,15 @@ internal const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 30_000L
 /** Default maximum inactivity between two data packets on a connection. */
 internal const val DEFAULT_SOCKET_TIMEOUT_MILLIS = 60_000L
 
+/**
+ * A null [cookiesStorage] installs no cookie jar at all, which is what the clients talking to a
+ * pre-authorized URL want: a file handle's URL and a realtime channel's connect token each carry
+ * their own credential, so a cookie would add nothing and the jar belongs to a [Blocks] instance
+ * those objects have no path back to.
+ */
 internal fun defaultHttpClient(
     engine: HttpClientEngine? = null,
-    cookiesStorage: CookiesStorage = sharedCookiesStorage,
+    cookiesStorage: CookiesStorage? = null,
 ): HttpClient {
     val configure: HttpClientConfig<*>.() -> Unit = {
         install(WebSockets)
@@ -37,8 +43,10 @@ internal fun defaultHttpClient(
         // direct-to-AWS paths (presigned S3, WebSocket) read the standard User-Agent.
         install(UserAgent) { agent = blocksUserAgentToken }
         install(DefaultRequest) { header("x-blocks-user-agent", blocksUserAgentToken) }
-        install(HttpCookies) {
-            storage = cookiesStorage
+        if (cookiesStorage != null) {
+            install(HttpCookies) {
+                storage = cookiesStorage
+            }
         }
         install(ContentNegotiation) {
             json()

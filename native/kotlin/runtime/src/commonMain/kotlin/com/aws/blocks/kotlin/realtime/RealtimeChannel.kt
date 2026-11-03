@@ -21,6 +21,8 @@ class RealtimeChannel<T>(
     val wsUrl: String,
     val token: String,
     private val deserializer: (JsonElement) -> T,
+    // No cookie jar: the connect token on [wsUrl] is this channel's credential, and the jar
+    // belongs to the Blocks instance, which `fromJson` has no path back to.
     private val httpClient: HttpClient = defaultHttpClient(),
     private val pool: WebSocketPool = WebSocketPool.default
 ) {

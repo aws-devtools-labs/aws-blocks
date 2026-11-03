@@ -13,11 +13,16 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 
+/** The name the cookie jar takes within the storage a target gives it. */
+private const val COOKIE_STORE_NAME = "cookies"
+
 /**
- * The cookie jar shared by every client in the process. Two clients built for the same backend
- * hold the same session, and a single instance means one lock and one on-disk copy of the jar.
+ * The cookie jar for a client configured with [platformConfig], persisted through whatever
+ * storage that target resolves to. On the JVM that is the location the application supplied, or
+ * memory alone when it supplied none.
  */
-internal val sharedCookiesStorage: PersistentCookiesStorage by lazy { PersistentCookiesStorage() }
+internal fun cookieJar(platformConfig: BlocksPlatformConfig): PersistentCookiesStorage =
+    PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, platformConfig))
 
 /**
  * A [CookiesStorage] that keeps cookies in memory and mirrors the whole jar to [store] under a
@@ -34,13 +39,11 @@ internal val sharedCookiesStorage: PersistentCookiesStorage by lazy { Persistent
  * does not carry, so the arrival time is persisted alongside each cookie.
  */
 internal class PersistentCookiesStorage(
-    private val store: KeyValueStore = encryptedKeyValueStore(STORE_NAME),
+    private val store: KeyValueStore,
     private val clock: () -> Long = { getTimeMillis() },
 ) : CookiesStorage {
 
     private companion object {
-        const val STORE_NAME = "cookies"
-
         /** The single key under which the whole jar is stored. */
         const val JAR_KEY = "jar"
     }
@@ -136,9 +139,10 @@ internal class PersistentCookiesStorage(
     }
 
     /**
-     * Deliberately empty. One jar is shared by every client in the process, and Ktor's
-     * `HttpCookies` closes its storage when its client closes, so releasing anything here would
-     * take the jar away from the clients still using it.
+     * Deliberately empty. Ktor's `HttpCookies` closes its storage when its client closes, and
+     * there is nothing to release: the jar is held in memory and its store keeps no handle open.
+     * A close also has to leave the jar usable, because [Blocks.clearStoredState] reaches it after
+     * the instance has closed its client.
      */
     override fun close() {}
 

@@ -43,7 +43,9 @@ import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 import platform.darwin.OSStatus
 
-internal actual fun encryptedKeyValueStore(name: String): KeyValueStore = KeychainKeyValueStore(name)
+/** [platformConfig] is empty on iOS: the Keychain access group is the per-application location. */
+internal actual fun platformKeyValueStore(name: String, platformConfig: BlocksPlatformConfig): KeyValueStore =
+    KeychainKeyValueStore(name)
 
 /**
  * Builds a Keychain query directly as a `CFDictionary`, runs [block] with it, then releases

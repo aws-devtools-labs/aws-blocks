@@ -18,16 +18,26 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
-    EncryptedFileKeyValueStore(name)
+/**
+ * Falls back to an in-memory store when the application supplied no location. Picking one would
+ * mean picking a directory under `$HOME`, which every Blocks application the user runs would
+ * share — the defect this fallback exists instead of.
+ */
+internal actual fun platformKeyValueStore(name: String, platformConfig: BlocksPlatformConfig): KeyValueStore =
+    platformConfig.storageLocation
+        ?.let { EncryptedFileKeyValueStore(name, it) }
+        ?: InMemoryKeyValueStore()
 
 /**
- * Stores each entry as an AES-GCM encrypted file under `<[root]>/.blocks/<[name]>`, with the key
- * in `.key` in the same directory.
+ * Stores each entry as an AES-GCM encrypted file under `<[location]>/<[name]>`, with the key in
+ * `.key` in the same directory.
+ *
+ * [location] is already private to the application that supplied it, so the store names its
+ * entries directly within it rather than inserting a directory of its own.
  */
 internal class EncryptedFileKeyValueStore(
     private val name: String,
-    private val root: File = File(System.getProperty("user.home")),
+    private val location: BlocksStorageLocation,
 ) : KeyValueStore {
 
     private companion object {
@@ -42,7 +52,7 @@ internal class EncryptedFileKeyValueStore(
     }
 
     private val storageDir: Path by lazy {
-        val dir = File(root, ".blocks/$name").toPath()
+        val dir = File(location.directory(), name).toPath()
         Files.createDirectories(dir)
         restrictToOwner(dir, directory = true)
         dir
