@@ -282,7 +282,7 @@ describe('parseArgv', () => {
 		assert.strictEqual(parseArgv(['--help', '--output', 'json']).globals.help, true);
 	});
 
-	it('checks a blocks migrate --query path against its result, scripts by any name', () => {
+	it('checks a cdk-blocks migrate --query path against its result, scripts by any name', () => {
 		for (const path of ['kept.0.reason', 'scriptsRewritten.dev.to', 'devConfig.frontendPort', 'removed.1']) {
 			assert.strictEqual(parseArgv(['migrate', '--query', path]).globals.query, path);
 		}

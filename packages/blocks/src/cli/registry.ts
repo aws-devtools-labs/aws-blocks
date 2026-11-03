@@ -527,11 +527,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ['migrate'],
 		group: 'Project',
-		summary: 'Move an app from aws-blocks/scripts wrappers to blocks commands',
+		summary: 'Move an app from aws-blocks/scripts wrappers to cdk-blocks commands',
 		description:
 			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the blocks\n' +
 			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
-			'become blocks aliases ("blocks deploy"); every other script stays as it is. The options of a\n' +
+			'become blocks aliases ("cdk-blocks deploy"); every other script stays as it is. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
 			'app file other than Markdown docs uses any more are deleted. Only the wrappers of public\n' +
 			'create-blocks-app releases are recognised; any other version is reported as unrecognised and is\n' +
@@ -569,10 +569,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null },
 		},
 		examples: [
-			{ command: 'blocks migrate --dry-run', description: 'Show what would change' },
-			{ command: 'blocks migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
+			{ command: 'cdk-blocks migrate --dry-run', description: 'Show what would change' },
+			{ command: 'cdk-blocks migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
 			{
-				command: 'blocks migrate --output json',
+				command: 'cdk-blocks migrate --output json',
 				description: 'Print {changed, removed, kept, scriptsRewritten, devConfig}',
 			},
 		],

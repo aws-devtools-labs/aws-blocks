@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `blocks migrate`: move an app that create-blocks-app scaffolded with
- * `aws-blocks/scripts/*.ts` lifecycle wrappers to the `blocks` CLI.
+ * `cdk-blocks migrate`: move an app that create-blocks-app scaffolded with
+ * `aws-blocks/scripts/*.ts` lifecycle wrappers to the `cdk-blocks` CLI.
  *
  * - A wrapper is "generated" when its text, with whitespace normalised, matches
  *   a version that a create-blocks-app template shipped (the hashes below come
@@ -125,31 +125,44 @@ export const SERVER_DEV_OPTIONS: Readonly<Record<string, MigratedDevConfig>> = {
 	},
 };
 
-/** The generated npm-script commands, and the `blocks` alias that replaces each one. */
+/** The generated npm-script commands, and the `cdk-blocks` alias that replaces each one. */
 export const SCRIPT_REWRITES: Readonly<Record<string, { alias: string; wrapper: WrapperFile }>> = {
-	'tsx watch aws-blocks/scripts/server.ts': { alias: 'blocks dev', wrapper: 'server.ts' },
-	'tsx aws-blocks/scripts/stop.ts': { alias: 'blocks dev stop', wrapper: 'stop.ts' },
-	'tsx aws-blocks/scripts/sandbox.ts': { alias: 'blocks sandbox', wrapper: 'sandbox.ts' },
-	'tsx aws-blocks/scripts/sandbox.ts --deploy-only': { alias: 'blocks sandbox deploy', wrapper: 'sandbox.ts' },
-	'tsx aws-blocks/scripts/sandbox.ts --preview': { alias: 'blocks sandbox preview', wrapper: 'sandbox.ts' },
+	'tsx watch aws-blocks/scripts/server.ts': { alias: 'cdk-blocks dev', wrapper: 'server.ts' },
+	'tsx aws-blocks/scripts/stop.ts': { alias: 'cdk-blocks dev stop', wrapper: 'stop.ts' },
+	'tsx aws-blocks/scripts/sandbox.ts': { alias: 'cdk-blocks sandbox', wrapper: 'sandbox.ts' },
+	'tsx aws-blocks/scripts/sandbox.ts --deploy-only': { alias: 'cdk-blocks sandbox deploy', wrapper: 'sandbox.ts' },
+	'tsx aws-blocks/scripts/sandbox.ts --preview': { alias: 'cdk-blocks sandbox preview', wrapper: 'sandbox.ts' },
 	'tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts': {
-		alias: 'blocks sandbox destroy',
+		alias: 'cdk-blocks sandbox destroy',
 		wrapper: 'sandbox-destroy.ts',
 	},
-	'tsx aws-blocks/scripts/console.ts': { alias: 'blocks sandbox console', wrapper: 'console.ts' },
-	'tsx aws-blocks/scripts/cleanup.ts': { alias: 'blocks dev stop --all', wrapper: 'cleanup.ts' },
-	'tsx aws-blocks/scripts/deploy.ts': { alias: 'blocks deploy', wrapper: 'deploy.ts' },
-	'tsx aws-blocks/scripts/destroy.ts': { alias: 'blocks destroy', wrapper: 'destroy.ts' },
-	'tsx aws-blocks/scripts/secret.ts': { alias: 'blocks secret', wrapper: 'secret.ts' },
-	'tsx aws-blocks/scripts/typegen.ts': { alias: 'blocks generate types', wrapper: 'typegen.ts' },
+	'tsx aws-blocks/scripts/console.ts': { alias: 'cdk-blocks sandbox console', wrapper: 'console.ts' },
+	'tsx aws-blocks/scripts/cleanup.ts': { alias: 'cdk-blocks dev stop --all', wrapper: 'cleanup.ts' },
+	'tsx aws-blocks/scripts/deploy.ts': { alias: 'cdk-blocks deploy', wrapper: 'deploy.ts' },
+	'tsx aws-blocks/scripts/destroy.ts': { alias: 'cdk-blocks destroy', wrapper: 'destroy.ts' },
+	'tsx aws-blocks/scripts/secret.ts': { alias: 'cdk-blocks secret', wrapper: 'secret.ts' },
+	'tsx aws-blocks/scripts/typegen.ts': { alias: 'cdk-blocks generate types', wrapper: 'typegen.ts' },
 };
+
+/**
+ * The `cdk-blocks` scripts that a prerelease build scaffolded under the
+ * command's earlier name, `blocks` (`"dev": "blocks dev"`). That command no
+ * longer exists, so migrate renames them.
+ */
+const RENAMED_ALIASES: ReadonlySet<string> = new Set([
+	...Object.values(SCRIPT_REWRITES).map(({ alias }) => alias),
+	'cdk-blocks generate client',
+	'cdk-blocks generate spec',
+	'cdk-blocks config',
+	'cdk-blocks vendorize',
+]);
 
 /**
  * Wrappers a wrapper runs at runtime, beyond what its import statements show.
  * Every generated `sandbox.ts` starts `server.ts` as the sandbox's local dev
  * server, through `devCommand` or core's default
  * (`npx tsx watch aws-blocks/scripts/server.ts`), and so does a customized one
- * unless it changed that. The `blocks sandbox` alias uses the CLI's own dev
+ * unless it changed that. The `cdk-blocks sandbox` alias uses the CLI's own dev
  * runner instead, so a customized `server.ts` would be silently bypassed; and a
  * `sandbox.ts` that stays keeps its `server.ts`.
  */
@@ -160,7 +173,7 @@ export const WRAPPER_RUNTIME_DEPENDENCIES: Readonly<Partial<Record<WrapperFile, 
 /**
  * Generated wrapper versions, by hash, that equal their alias only while
  * another wrapper is generated. The Amplify overlay's `stop.ts` defaults to the
- * port of the overlay's `server.ts`; `blocks dev stop` takes the port from
+ * port of the overlay's `server.ts`; `cdk-blocks dev stop` takes the port from
  * `package.json#blocks.dev`, which migrate writes from a generated `server.ts`
  * only, so with a customized `server.ts` the alias would stop the wrong port.
  */
@@ -169,17 +182,17 @@ export const VERSION_DEPENDENCIES: Readonly<Record<string, readonly WrapperFile[
 };
 
 /**
- * Wrappers whose alias needs `.blocks/config.json#stackId`: `blocks deploy` and
- * `blocks destroy` name the production stack `<stackId>-prod`, while the
+ * Wrappers whose alias needs `.blocks/config.json#stackId`: `cdk-blocks deploy` and
+ * `cdk-blocks destroy` name the production stack `<stackId>-prod`, while the
  * wrappers call core's deploy and destroy, which do not. Apps scaffolded before
  * create-blocks-app wrote that file keep these wrappers until it exists.
  */
 const STACK_ID_WRAPPERS: readonly WrapperFile[] = ['deploy.ts', 'destroy.ts'];
 
 const STACK_ID_HINT =
-	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" must equal the name of the production stack that your aws-blocks/index.cdk.ts defines (an app whose index.cdk.ts hard-codes "my-blocks-stack-prod" uses {"stackId": "my-blocks-stack"}), commit it, and run blocks migrate again';
+	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" must equal the name of the production stack that your aws-blocks/index.cdk.ts defines (an app whose index.cdk.ts hard-codes "my-blocks-stack-prod" uses {"stackId": "my-blocks-stack"}), commit it, and run cdk-blocks migrate again';
 
-/** True when `.blocks/config.json` has the stackId that `blocks deploy` and `blocks destroy` need. */
+/** True when `.blocks/config.json` has the stackId that `cdk-blocks deploy` and `cdk-blocks destroy` need. */
 function hasStackId(root: string): boolean {
 	try {
 		const config = JSON.parse(readFileSync(join(root, '.blocks', 'config.json'), 'utf-8')) as { stackId?: unknown };
@@ -241,7 +254,7 @@ function posix(path: string): string {
 }
 
 /**
- * `read()`, or `undefined` when the file is gone: another `blocks migrate`
+ * `read()`, or `undefined` when the file is gone: another `cdk-blocks migrate`
  * run (or the user) can delete a wrapper while this one plans.
  */
 function unlessGone<T>(read: () => T): T | undefined {
@@ -710,10 +723,13 @@ export function planMigration(
 			}
 			scripts[name] = rewrite.alias;
 			result.scriptsRewritten[name] = { from: value, to: rewrite.alias };
+		} else if (RENAMED_ALIASES.has(`cdk-${value}`)) {
+			scripts[name] = `cdk-${value}`;
+			result.scriptsRewritten[name] = { from: value, to: `cdk-${value}` };
 		} else if (wrappers.some((w) => refersTo(value, 'package.json', w, { bare: true }))) {
 			result.kept.push({
 				file: `package.json#scripts.${name}`,
-				reason: `"${value}" is not a generated command; replace it with a blocks command by hand`,
+				reason: `"${value}" is not a generated command; replace it with a cdk-blocks command by hand`,
 			});
 		}
 	}
@@ -721,7 +737,7 @@ export function planMigration(
 	const server = byFile.get('server.ts');
 	if (server?.generated && pkg.blocks?.dev === undefined) {
 		const options = Object.hasOwn(SERVER_DEV_OPTIONS, server.hash) ? SERVER_DEV_OPTIONS[server.hash] : {};
-		// `blocks dev` detects the same command from the dependencies; leaving it out keeps --frontend-port working.
+		// `cdk-blocks dev` detects the same command from the dependencies; leaving it out keeps --frontend-port working.
 		const { frontendCommand, ...rest } = options;
 		const detected =
 			frontendCommand !== undefined && options.frontendPort !== undefined
@@ -739,7 +755,7 @@ export function planMigration(
 		if (wrapper.generated && stackless.includes(wrapper.file)) {
 			result.kept.push({
 				file: wrapper.path,
-				reason: `generated, but kept until .blocks/config.json has the "stackId" that the blocks deploy and destroy commands need: ${STACK_ID_HINT}`,
+				reason: `generated, but kept until .blocks/config.json has the "stackId" that the cdk-blocks deploy and destroy commands need: ${STACK_ID_HINT}`,
 			});
 		}
 	}
@@ -811,7 +827,7 @@ function describe(result: MigrateResult, dryRun: boolean): string {
 	}
 	const acted = rewritten.length > 0 || result.removed.length > 0 || devConfig !== null;
 	if (acted)
-		lines.push(dryRun ? 'Dry run; nothing was written. blocks migrate would:' : 'Migrated to the blocks CLI:');
+		lines.push(dryRun ? 'Dry run; nothing was written. cdk-blocks migrate would:' : 'Migrated to the cdk-blocks CLI:');
 	else lines.push('Nothing could be migrated automatically.');
 	for (const [name, { from, to }] of rewritten) lines.push(`  rewrite script "${name}": ${from} -> ${to}`);
 	if (devConfig) lines.push(`  set package.json "blocks.dev" to ${JSON.stringify(devConfig)}`);
@@ -834,7 +850,7 @@ const BUSY_DIR_ATTEMPTS = 5;
 /**
  * Remove `dir` when it is empty; a directory that is already gone, or that was
  * refilled meanwhile, is fine. On Windows, reading or removing a directory that
- * another process holds open or is deleting (a concurrent `blocks migrate`)
+ * another process holds open or is deleting (a concurrent `cdk-blocks migrate`)
  * fails with EPERM or EBUSY: try again briefly, then leave it to that process.
  */
 export function removeIfEmpty(
@@ -867,19 +883,19 @@ function checkGit(root: string, dryRun: boolean, force: boolean): GitView {
 	if (dryRun || force) return git;
 	if (git.kind === 'refused') {
 		throw new CliError(`git failed in ${root}: ${git.message}`, {
-			hint: 'fix what git reports, or "blocks migrate --force" to migrate without git',
+			hint: 'fix what git reports, or "cdk-blocks migrate --force" to migrate without git',
 		});
 	}
 	if (git.kind === 'unseen') {
 		throw new CliError(
 			'git does not track this app (a parent repository may ignore its directory), so its changes could not be undone with git.',
-			{ where: [`project: ${root}`], hint: '"blocks migrate --force" to migrate anyway' },
+			{ where: [`project: ${root}`], hint: '"cdk-blocks migrate --force" to migrate anyway' },
 		);
 	}
 	if (git.kind === 'listed' && gitStatus(root).trim() !== '') {
 		throw new CliError('the git working tree has uncommitted changes; commit or stash them first.', {
 			where: [`project: ${root}`],
-			hint: 'git stash, or "blocks migrate --force" to migrate anyway',
+			hint: 'git stash, or "cdk-blocks migrate --force" to migrate anyway',
 		});
 	}
 	return git;
