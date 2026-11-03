@@ -12,8 +12,8 @@ dependencies:
   args: ^2.4.0
   build: ^4.0.0
   # Generated clients need blocks_runtime 0.1.5 (`minimumRuntimeVersion` in
-  # lib/src/generator.dart, named in each generated header). Raise this to ^0.1.5
-  # in the same change that publishes blocks_runtime 0.1.5.
+  # lib/src/generator.dart), which is unreleased. test/generator_test.dart fails
+  # once blocks_runtime's version reaches it until this is raised to match.
   blocks_runtime: ^0.1.4
 
 dev_dependencies:

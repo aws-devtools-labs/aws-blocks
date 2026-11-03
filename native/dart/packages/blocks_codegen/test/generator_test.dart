@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:blocks_codegen/src/builder.dart';
 import 'package:blocks_codegen/src/generator.dart';
@@ -97,6 +98,45 @@ void main() {
       output,
       contains('// Requires blocks_runtime $minimumRuntimeVersion or later.\n'),
     );
+  });
+
+  test('minimumRuntimeVersion and the blocks_runtime constraint agree with '
+      'the runtime package', () {
+    String field(String path, String pattern) => RegExp(
+      pattern,
+      multiLine: true,
+    ).firstMatch(File(path).readAsStringSync())![1]!;
+    final runtime = field(
+      '../blocks_runtime/pubspec.yaml',
+      r'^version: (\S+)$',
+    );
+    final constraint = field('pubspec.yaml', r'^  blocks_runtime: (\S+)$');
+    // Whether dotted version [x] is at least [y].
+    bool atLeast(String x, String y) {
+      final [a, b] = [
+        x,
+        y,
+      ].map((v) => v.split('.').map(int.parse).toList()).toList();
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] != b[i]) return a[i] > b[i];
+      }
+      return true;
+    }
+
+    if (atLeast(runtime, minimumRuntimeVersion)) {
+      // Released: depend on the minimum.
+      expect(constraint, '^$minimumRuntimeVersion');
+    } else {
+      // The minimum is the runtime's pending release, which pub can't
+      // resolve yet, so the constraint stays on the released runtime. The
+      // release that bumps blocks_runtime's version fails this until the
+      // constraint is raised to match.
+      expect(
+        File('../blocks_runtime/CHANGELOG.md').readAsStringSync(),
+        startsWith('## Unreleased'),
+      );
+      expect(constraint, '^$runtime');
+    }
   });
 
   group('transferable hydration', () {
