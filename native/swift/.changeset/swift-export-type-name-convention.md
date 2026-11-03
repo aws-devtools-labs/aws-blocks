@@ -2,7 +2,7 @@
 "aws-blocks-swift": minor
 ---
 
-fix(swift): keep an export's acronym casing, and reject an export the grammar does not admit
+fix(swift): keep an export's acronym casing and reject an export the grammar does not admit
 
 An `x-blocks-native-bindings` export now raises only each segment's first character, so an
 export of `API_link` resolves to `APILink` rather than the `ApiLink` it previously lowered an

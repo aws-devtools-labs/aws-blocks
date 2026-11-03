@@ -874,7 +874,6 @@ class DeclaredTransferableBindingTest : FunSpec({
             src shouldNotContain "UnknownTransferable"
         }
 
-        // The colliding tag is unconstrained by any grammar, so it must arrive escaped.
         test("a newline in a tag cannot split the collision rejection") {
             val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
             val message = collided(
@@ -887,7 +886,6 @@ class DeclaredTransferableBindingTest : FunSpec({
             message shouldNotContain "\n"
         }
 
-        // The prior package identity is an unconstrained catalog key, so it must arrive escaped too.
         test("a newline in the prior package identity cannot split the collision rejection") {
             val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
             val message = collided(

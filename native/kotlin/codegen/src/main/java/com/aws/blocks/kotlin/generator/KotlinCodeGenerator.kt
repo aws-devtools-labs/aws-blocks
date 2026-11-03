@@ -144,7 +144,7 @@ private fun resolveBoundTransferables(
                     throw CodegenException(
                         "x-blocks-native-bindings binds tag \"${binding.tag.forDiagnostic()}\" to " +
                             "${type.canonicalName}, already resolved by export " +
-                            "\"${prior.export}\" in package " +
+                            "\"${prior.export.forDiagnostic()}\" in package " +
                             "\"${prior.packageIdentity.forDiagnostic()}\" " +
                             "at generic arity ${prior.genericArity}",
                     )
