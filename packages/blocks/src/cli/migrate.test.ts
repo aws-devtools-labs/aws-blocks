@@ -51,9 +51,10 @@ const SCAFFOLDED_BEFORE_STACK_ID: readonly string[] = ['backend@1aeebe50'];
  * The git these tests and `cdk-blocks migrate` run reads no system or user config,
  * which can change what it reports: a CI runner's `safe.directory=*` hides the
  * dubious ownership one test asserts. Migrate's git inherits `process.env`.
+ * Auto-maintenance and auto-gc are off so no background git writes into a test repo.
  */
 const GIT_HOME = mkdtempSync(join(tmpdir(), 'blocks-migrate-home-'));
-writeFileSync(join(GIT_HOME, '.gitconfig'), '');
+writeFileSync(join(GIT_HOME, '.gitconfig'), '[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n');
 Object.assign(process.env, {
 	GIT_CONFIG_NOSYSTEM: '1',
 	GIT_CONFIG_GLOBAL: join(GIT_HOME, '.gitconfig'),
@@ -89,14 +90,24 @@ function scriptsDir(root: string): string[] {
 	return existsSync(dir) ? readdirSync(dir).sort() : [];
 }
 
-/** A snapshot of every file under `root`, for "wrote nothing" checks. */
+/**
+ * A snapshot of every file under `root` outside `.git`, for "wrote nothing" checks.
+ * Git owns `.git` and may change it on its own; a file that vanishes mid-walk is skipped.
+ */
 function snapshot(root: string): Record<string, string> {
 	const files: Record<string, string> = {};
 	const walk = (dir: string): void => {
 		for (const name of readdirSync(dir, { withFileTypes: true })) {
+			if (name.name === '.git') continue;
 			const path = join(dir, name.name);
 			if (name.isDirectory()) walk(path);
-			else files[path.slice(root.length)] = readFileSync(path, 'utf-8');
+			else {
+				try {
+					files[path.slice(root.length)] = readFileSync(path, 'utf-8');
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+				}
+			}
 		}
 	};
 	walk(root);
