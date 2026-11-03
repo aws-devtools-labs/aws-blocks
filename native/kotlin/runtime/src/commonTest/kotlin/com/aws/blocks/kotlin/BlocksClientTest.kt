@@ -74,7 +74,7 @@ class BlocksClientTest {
         """{"jsonrpc":"2.0","error":{"code":401,"message":"Authentication required","data":{"name":"NotAuthenticatedException"}},"id":1}"""
 
     @Test
-    fun `a JSON-RPC error on HTTP 401 (httpErrorStatus) is the same ApiException as on HTTP 200`() = runTest {
+    fun `a JSON-RPC error on HTTP 401 via httpErrorStatus is the same ApiException as on HTTP 200`() = runTest {
         for (status in listOf(HttpStatusCode.Unauthorized, HttpStatusCode.OK)) {
             val e = assertFailsWith<ApiException> {
                 clientAnswering(status, unauthenticatedBody)
