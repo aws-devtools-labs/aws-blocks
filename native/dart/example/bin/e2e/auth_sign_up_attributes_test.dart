@@ -86,7 +86,7 @@ Future<void> _signUpAttributesReachTheUser(Blocks blocks) async {
   final email = '$username@example.com';
 
   final state = await blocks.authCognitoApi.setAuthState(
-    input: SignUpInput(
+    input: AuthCognitoApiSetAuthStateInputSignUp(
       username: username,
       password: e2ePassword,
       additionalProperties: {'email': email, 'name': 'Ada Lovelace'},
