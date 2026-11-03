@@ -42,6 +42,8 @@ describe('readSessionCookie (anchored, escaped)', () => {
 		assert.strictEqual(readSessionCookie(makeContext(`${name}=v1`), 'app-auth'), 'v1');
 		assert.strictEqual(readSessionCookie(makeContext(`a=1; ${name}=v1; b=2`), 'app-auth'), 'v1');
 		assert.strictEqual(readSessionCookie(makeContext(`a=1;${name}=v1`), 'app-auth'), 'v1');
+		// A lookalike earlier in the header must not shadow the real cookie (#1253).
+		assert.strictEqual(readSessionCookie(makeContext(`x${name}=evil; ${name}=v1`), 'app-auth'), 'v1');
 		for (const sibling of [`my_${name}=v`, `x${name}=v`, `${name}x=v`, `${name}_old=v`]) {
 			assert.strictEqual(readSessionCookie(makeContext(sibling), 'app-auth'), null, sibling);
 		}
