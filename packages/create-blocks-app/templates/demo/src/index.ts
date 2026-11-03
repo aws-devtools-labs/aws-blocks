@@ -114,8 +114,9 @@ const toggleTodo = async (todoId: string, completed: boolean) => {
     await api.updateTodo(todoId, { completed });
     await refreshTodos();
   } catch (error) {
-    if (errorDiv) showError(errorDiv, messageOf(error));
+    // Reload first: refreshTodos() resets todo-error to idle, which would clear the error.
     await refreshTodos();
+    if (errorDiv) showError(errorDiv, messageOf(error));
   }
 };
 
@@ -128,8 +129,9 @@ const changePriority = async (todoId: string, priority: number) => {
     await api.updateTodo(todoId, { priority });
     await refreshTodos();
   } catch (error) {
-    if (errorDiv) showError(errorDiv, messageOf(error));
+    // Reload first: refreshTodos() resets todo-error to idle, which would clear the error.
     await refreshTodos();
+    if (errorDiv) showError(errorDiv, messageOf(error));
   }
 };
 
@@ -148,8 +150,9 @@ const updateTitle = async (todoId: string, title: string) => {
     await api.updateTodo(todoId, { title: trimmedTitle });
     await refreshTodos();
   } catch (error) {
-    if (errorDiv) showError(errorDiv, messageOf(error));
+    // Reload first: refreshTodos() resets todo-error to idle, which would clear the error.
     await refreshTodos();
+    if (errorDiv) showError(errorDiv, messageOf(error));
   }
 };
 
