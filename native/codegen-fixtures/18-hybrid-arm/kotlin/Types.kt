@@ -14,6 +14,7 @@ public data class AuthAction(
   public val url: String? = null,
   public val method: Method? = null,
   public val capability: Capability? = null,
+  public val unavailable: String? = null,
 ) {
   @Serializable
   public enum class Capability {

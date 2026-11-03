@@ -17,6 +17,7 @@ public nonisolated struct AuthAction: Codable {
     public let label: String
     public let method: AuthActionMethod?
     public let name: String
+    public let unavailable: String?
     public let url: String?
 
     enum CodingKeys: String, CodingKey {
@@ -25,6 +26,7 @@ public nonisolated struct AuthAction: Codable {
         case label
         case method
         case name
+        case unavailable
         case url
     }
 
@@ -35,15 +37,17 @@ public nonisolated struct AuthAction: Codable {
         try c.encode(self.label, forKey: .label)
         try c.encodeIfPresent(self.method, forKey: .method)
         try c.encode(self.name, forKey: .name)
+        try c.encodeIfPresent(self.unavailable, forKey: .unavailable)
         try c.encodeIfPresent(self.url, forKey: .url)
     }
 
-    public init(capability: Capability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, url: String? = nil) {
+    public init(capability: Capability? = nil, fields: [AuthField], label: String, method: AuthActionMethod? = nil, name: String, unavailable: String? = nil, url: String? = nil) {
         self.capability = capability
         self.fields = fields
         self.label = label
         self.method = method
         self.name = name
+        self.unavailable = unavailable
         self.url = url
     }
 }

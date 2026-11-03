@@ -732,6 +732,16 @@
                 "type": "null"
               }
             ]
+          },
+          "unavailable": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [

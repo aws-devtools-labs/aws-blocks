@@ -159,6 +159,7 @@ class AuthAction {
   final String? url;
   final AuthActionMethod? method;
   final AuthActionCapability? capability;
+  final String? unavailable;
 
   const AuthAction({
     required this.name,
@@ -167,6 +168,7 @@ class AuthAction {
     this.url,
     this.method,
     this.capability,
+    this.unavailable,
   });
 
   factory AuthAction.fromJson(Map<String, dynamic> json) {
@@ -177,6 +179,7 @@ class AuthAction {
       url: json['url'] as String?,
       method: json['method'] != null ? AuthActionMethod.fromJson(json['method'] as String) : null,
       capability: json['capability'] != null ? AuthActionCapability.fromJson(json['capability'] as String) : null,
+      unavailable: json['unavailable'] as String?,
     );
   }
 
@@ -188,6 +191,7 @@ class AuthAction {
       if (url != null) 'url': url,
       if (method != null) 'method': method?.toJson(),
       if (capability != null) 'capability': capability?.toJson(),
+      if (unavailable != null) 'unavailable': unavailable,
     };
   }
 
@@ -200,13 +204,14 @@ class AuthAction {
           blocksDeepEquals(fields, other.fields) &&
           url == other.url &&
           method == other.method &&
-          capability == other.capability;
+          capability == other.capability &&
+          unavailable == other.unavailable;
 
   @override
-  int get hashCode => Object.hash(name, label, blocksDeepHash(fields), url, method, capability);
+  int get hashCode => Object.hash(name, label, blocksDeepHash(fields), url, method, capability, unavailable);
 
   @override
-  String toString() => 'AuthAction(name: $name, label: $label, fields: $fields, url: $url, method: $method, capability: $capability)';
+  String toString() => 'AuthAction(name: $name, label: $label, fields: $fields, url: $url, method: $method, capability: $capability, unavailable: $unavailable)';
 }
 
 
