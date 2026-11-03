@@ -3,7 +3,7 @@
 
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -22,8 +22,7 @@ describe('getCdkTelemetryEnv', () => {
   it('returns CDK_CLI_USERAGENT when telemetry is enabled', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
     // chdir to a temp dir with no .blocks/config.json so defaults apply
-    const tmp = join(tmpdir(), `cdk-telemetry-test-${Date.now()}`);
-    mkdirSync(tmp, { recursive: true });
+    const tmp = mkdtempSync(join(tmpdir(), 'cdk-telemetry-test-'));
     process.chdir(tmp);
 
     const env = getCdkTelemetryEnv('sandbox');
@@ -46,7 +45,7 @@ describe('getCdkTelemetryEnv', () => {
 
   it('returns CDK_DISABLE_CLI_TELEMETRY when project config disables telemetry', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    const tmp = join(tmpdir(), `cdk-telemetry-test-${Date.now()}`);
+    const tmp = mkdtempSync(join(tmpdir(), 'cdk-telemetry-test-'));
     mkdirSync(join(tmp, '.blocks'), { recursive: true });
     writeFileSync(join(tmp, '.blocks', 'config.json'), JSON.stringify({ telemetry: { enabled: false } }));
     process.chdir(tmp);
@@ -61,8 +60,7 @@ describe('getCdkTelemetryEnv', () => {
 
   it('includes the command name in the user-agent string', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    const tmp = join(tmpdir(), `cdk-telemetry-test-${Date.now()}`);
-    mkdirSync(tmp, { recursive: true });
+    const tmp = mkdtempSync(join(tmpdir(), 'cdk-telemetry-test-'));
     process.chdir(tmp);
 
     const sandboxEnv = getCdkTelemetryEnv('sandbox');
@@ -86,8 +84,7 @@ describe('getFrameworkSinkEnv', () => {
 
   it('returns the sink path when telemetry is enabled', () => {
     delete process.env.AWS_BLOCKS_DISABLE_TELEMETRY;
-    const tmp = join(tmpdir(), `framework-sink-env-test-${Date.now()}`);
-    mkdirSync(tmp, { recursive: true });
+    const tmp = mkdtempSync(join(tmpdir(), 'framework-sink-env-test-'));
     process.chdir(tmp);
 
     assert.deepStrictEqual(getFrameworkSinkEnv('/tmp/sink'), { [FRAMEWORK_SINK_ENV]: '/tmp/sink' });
