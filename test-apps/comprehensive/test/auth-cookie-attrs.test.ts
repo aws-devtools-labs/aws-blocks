@@ -119,16 +119,20 @@ export function authCookieAttrsTests(getApi: () => typeof apiType) {
         return;
       }
       const forged = { Origin: 'http://localhost:3000' };
+      const laxUser = uniqueUser();
+      const crossUser = uniqueUser();
+      await provisionConfirmedUser(getApi(), laxUser, 'password123', 'auth-same-origin');
+      await provisionConfirmedUser(getApi(), crossUser, 'password123', 'auth-cross-domain');
 
       const lax = sessionCookie(
-        await rpcSetCookies(baseUrl, 'authSameOriginSignInSetsCookie', [uniqueUser(), 'password123'], forged),
+        await rpcSetCookies(baseUrl, 'authSameOriginSignInSetsCookie', [laxUser, 'password123'], forged),
         'auth-same-origin',
       );
       assert.match(lax, /SameSite=Lax/, 'default cookie should be SameSite=Lax');
       assert.match(lax, /;\s*Secure/i, 'a localhost Origin header must not drop Secure on deployed compute');
 
       const cross = sessionCookie(
-        await rpcSetCookies(baseUrl, 'authCrossDomainSignInSetsCookie', [uniqueUser(), 'password123'], forged),
+        await rpcSetCookies(baseUrl, 'authCrossDomainSignInSetsCookie', [crossUser, 'password123'], forged),
         'auth-cross-domain',
       );
       assert.match(cross, /SameSite=None/, 'crossDomain cookie should be SameSite=None');
