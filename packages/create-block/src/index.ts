@@ -488,7 +488,7 @@ async function wireContributor(root: string, names: DerivedNames, dryRun: boolea
 			(s) =>
 				insertBetweenMarkers(
 					s,
-					`/**\n * **${className}** — TODO: one-line summary shown in IDE hover.\n *\n * Package: \`${pkgName}\`\n * Full docs: \`README.md\` in the package directory above.\n */\nexport { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
+					`/**\n * **${className}** — TODO: one-line summary shown in IDE hover.\n *\n * Package: \`${pkgName}\`\n * Full docs: \`docs/${folder}/README.md\` in \`@aws-blocks/blocks\`.\n */\nexport { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
 				),
 			'packages/blocks/src/index.ts → re-export',
 		);
