@@ -2218,24 +2218,24 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentCreateConversationId() {
     const user = await auth.getCurrentUser(context);
-    return { conversationId: await agent.createConversationId(user?.userId ?? 'anonymous') };
+    return { conversationId: await agent.createConversationId(user?.userSub ?? 'anonymous') };
   },
 
   async agentListConversations() {
     const user = await auth.getCurrentUser(context);
-    return { conversations: await agent.listConversations(user?.userId ?? 'anonymous') };
+    return { conversations: await agent.listConversations(user?.userSub ?? 'anonymous') };
   },
 
   async agentStream(message: string, conversationId?: string, channelId?: string) {
     const user = await auth.getCurrentUser(context);
-    const userId = user?.userId ?? 'anonymous';
+    const userId = user?.userSub ?? 'anonymous';
     const result = await agent.stream(message, conversationId ? { conversationId, channelId, userId } : { channelId, userId });
     return { channelId: result.channelId };
   },
 
   async agentGetChannel(channelId: string) {
     const user = await auth.getCurrentUser(context);
-    return { channel: await agent.getChannel(channelId, { userId: user?.userId ?? 'anonymous' }) };
+    return { channel: await agent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentGetRawDescriptor(channelId: string) {
@@ -2246,7 +2246,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // channel (agent.getChannel(channelId, { userId }), scoped to the session user) so the
     // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
     const user = await auth.getCurrentUser(context);
-    const ch = await agent.getChannel(channelId, { userId: user?.userId ?? 'anonymous' });
+    const ch = await agent.getChannel(channelId, { userId: user?.userSub ?? 'anonymous' });
     const raw = ch.toJSON() as Record<string, unknown>;
     const { __blocks, ...rest } = raw;
     // Preserve the descriptor's real channel key (the full `{fullId}/chunks/u/{user}/{channelId}`
@@ -2259,23 +2259,23 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean; trust?: boolean; toolName?: string; input?: any }>, conversationId?: string) {
     const user = await auth.getCurrentUser(context);
-    await agent.resume(channelId, responses, { conversationId, userId: user?.userId ?? 'anonymous' });
+    await agent.resume(channelId, responses, { conversationId, userId: user?.userSub ?? 'anonymous' });
     return { ok: true };
   },
 
   async agentGetPendingInterrupts(conversationId: string) {
     const user = await auth.getCurrentUser(context);
-    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user?.userId ?? 'anonymous' }) };
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentGetConversation(conversationId: string) {
     const user = await auth.getCurrentUser(context);
-    return { messages: await agent.getConversation(conversationId, { userId: user?.userId ?? 'anonymous' }) };
+    return { messages: await agent.getConversation(conversationId, { userId: user?.userSub ?? 'anonymous' }) };
   },
 
   async agentDeleteConversation(conversationId: string) {
     const user = await auth.getCurrentUser(context);
-    await agent.deleteConversation(conversationId, user?.userId ?? 'anonymous');
+    await agent.deleteConversation(conversationId, user?.userSub ?? 'anonymous');
     return { deleted: true };
   },
 

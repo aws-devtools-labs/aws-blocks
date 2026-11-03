@@ -79,13 +79,13 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 
 **`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
 
-These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
+These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session user's `userSub` and don't spread a caller-supplied object into it (`{ userId: user.userSub, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userSub }` or pick only `limit`). Pass `user.userSub` rather than `user.userId`: `AuthenticatedUser` (from `@aws-blocks/bb-auth`) documents `userSub` as the id to key your data on, stable for the user's lifetime, while `userId` is the username for a user-pool user. `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getMessages(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return agent.getConversation(conversationId, { userId: user.userId });
+    return agent.getConversation(conversationId, { userId: user.userSub });
   },
 }));
 ```
@@ -564,7 +564,7 @@ const agent = new Agent(scope, 'support', {
 });
 
 const user = await auth.requireAuth(requestContext);
-await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
+await agent.stream(message, { conversationId, userId: user.userSub, context: { userId: user.userSub } });
 ```
 
 To make context required and type-safe, declare a `toolContextSchema`:
@@ -1091,35 +1091,36 @@ const agent = new Agent(scope, 'chat', {
   systemPrompt: 'You are a helpful assistant.',
 });
 
-// Any Auth sign-in method works (email + password, OIDC, social); the userId comes
-// from the session, never from a request parameter. See "Authorization" above.
+// Any Auth sign-in method works (email + password, OIDC, social); the owner id
+// (user.userSub) comes from the session, never from a request parameter. See
+// "Authorization" above.
 const auth = new Auth(scope, 'auth');
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async createConversation() {
     const user = await auth.requireAuth(context);
-    return { conversationId: await agent.createConversationId(user.userId) };
+    return { conversationId: await agent.createConversationId(user.userSub) };
   },
   async sendMessage(conversationId: string, message: string, channelId: string) {
     const user = await auth.requireAuth(context);
-    const result = await agent.stream(message, { conversationId, channelId, userId: user.userId });
+    const result = await agent.stream(message, { conversationId, channelId, userId: user.userSub });
     return { channelId: result.channelId };
   },
   async getConversation(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return { messages: await agent.getConversation(conversationId, { userId: user.userId }) };
+    return { messages: await agent.getConversation(conversationId, { userId: user.userSub }) };
   },
   async getPendingInterrupts(conversationId: string) {
     const user = await auth.requireAuth(context);
-    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userId }) };
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userSub }) };
   },
   async resume(channelId: string, responses: InterruptResponse[], conversationId?: string) {
     const user = await auth.requireAuth(context);
-    await agent.resume(channelId, responses, { conversationId, userId: user.userId });
+    await agent.resume(channelId, responses, { conversationId, userId: user.userSub });
   },
   async getChannel(channelId: string) {
     const user = await auth.requireAuth(context);
-    return agent.getChannel(channelId, { userId: user.userId });
+    return agent.getChannel(channelId, { userId: user.userSub });
   },
 }));
 ```
@@ -1278,8 +1279,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     return await agent.stream(message, {
       conversationId,
-      userId: user.userId,
-      context: { userId: user.userId },
+      userId: user.userSub,
+      context: { userId: user.userSub },
     });
   },
 }));

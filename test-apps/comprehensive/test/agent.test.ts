@@ -415,6 +415,25 @@ export function agentTests(getApi: () => typeof apiType) {
         // Clean up
         await api.authSignOut();
       });
+
+      // Ownership is keyed on `userSub`, the id that is stable for the user's lifetime,
+      // so the user-scoped channel key carries it rather than the username.
+      test('conversation ownership is keyed on userSub', async () => {
+        const api = getApi();
+        const username = `agent-test-sub-${Date.now()}`;
+        await provisionConfirmedUser(api, username, 'password123');
+        const { userSub } = await api.authSignIn(username, 'password123');
+        assert.notStrictEqual(userSub, username, 'this pool gives users a sub distinct from the username');
+
+        const { conversationId } = await api.agentCreateConversationId();
+        const { channel } = await api.agentGetRawDescriptor(conversationId);
+        assert.ok(
+          channel.endsWith(`/u/${encodeURIComponent(userSub)}/${conversationId}`),
+          `channel key should be scoped to the userSub, got ${channel}`,
+        );
+
+        await api.authSignOut();
+      });
     });
 
     // User B knows user A's conversation id (it is also A's default channel id). Every
