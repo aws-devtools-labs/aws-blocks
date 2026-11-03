@@ -53,10 +53,10 @@ new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async 
   both are child constructs of it.
 - **Nearest wins.** A block's own `compute` option, then the nearest scope that
   sets `compute`, then the app's default compute.
-- **A container scope** places its `AsyncJob`s on the container. An
-  `ApiNamespace` or `CronJob` under it fails synth with an error naming the
-  compute, because they run only on a `serverless` compute for now: give them
-  their own serverless `compute`, or create them outside that scope. Setting an
+- **A container scope** places its `AsyncJob`s and `CronJob`s on the container.
+  An `ApiNamespace` under it fails synth with an error naming the compute,
+  because it runs only on a `serverless` compute for now: give it its own
+  serverless `compute`, or create it outside that scope. Setting an
   `AsyncJob`'s `maxConcurrencyPerCPU` still needs the container passed as the
   job's own `compute`, so the option is typed for it.
 - **`Realtime` and `RawRoute` stay on the default compute**, inside such a scope
@@ -91,14 +91,30 @@ type is a compile error.
   Application Auto Scaling. `strategy` is one or more of `cpu`/`memory`/`queue-depth`
   signals; omit it and Blocks infers one (queue-depth for a job worker, CPU
   otherwise).
+- Use `minInstances: 1` or more for most workloads: a running task starts a job
+  or CronJob tick within seconds. Those tasks are billed around the clock, even
+  when no job is running. Set `minInstances: 0` only for long-running jobs that
+  can tolerate high latency before they start. The compute then scales
+  to zero tasks between jobs, and each job has to start a task first. That
+  usually takes a few minutes, and up to about 20 minutes when the job's queue
+  has been idle for more than six hours. `minInstances: 0` needs at least one
+  `AsyncJob` or `CronJob` on the compute and the default (or `queue-depth`)
+  scaling strategy; anything else fails synth, because nothing would start a task
+  or scale-in could stop one under a running job.
+- **Deploys restart running jobs.** A deploy that changes your code replaces
+  the container's tasks. A stopping task stops taking new jobs and gives running
+  ones up to about 2 minutes to finish (the AWS Fargate maximum). A job still
+  running after that is stopped and runs again from the start, and the restart
+  counts as one of its attempts.
 - `image?` — the container image to run (public or ECR URI), used **verbatim**
   (pulled by ECS at task start). Blocks builds **no** image and deploying needs
   **no local Docker**: your application code is shipped separately as an S3 asset
   and fetched at boot. So a custom image only supplies the runtime environment —
   it must provide a **Node 24** runtime on `PATH`, plus any system libraries your
   handlers need (e.g. media tooling). Defaults to
-  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). See
-  [DESIGN.md](../bb-container-compute/DESIGN.md) for the boot mechanism.
+  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). At boot, a
+  small bootstrap script uses the task's role to download your code from S3 and
+  starts it.
 
 ## API namespaces
 
