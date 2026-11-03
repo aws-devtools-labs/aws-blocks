@@ -55,7 +55,8 @@ function installedCoreVersion(): string | undefined {
  * or no core at all. `undefined` for any other error.
  */
 export function coreMismatchError(error: unknown): CliError | undefined {
-	if (!(error instanceof Error) || !error.message.includes(CORE)) return undefined;
+	// Node names the package by its path, which on Windows is `node_modules\@aws-blocks\core\package.json`.
+	if (!(error instanceof Error) || !error.message.replaceAll('\\', '/').includes(CORE)) return undefined;
 	const code = 'code' in error && typeof error.code === 'string' ? error.code : undefined;
 	const missingExport = error instanceof SyntaxError && error.message.includes('does not provide an export named');
 	if (!missingExport && !(code !== undefined && RESOLVE_ERROR_CODES[code])) return undefined;

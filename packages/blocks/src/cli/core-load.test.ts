@@ -79,13 +79,20 @@ describe('an installed @aws-blocks/core that does not match the CLI', () => {
 			new Error(`Package subpath './scripts/dev-pidfile' is not defined by "exports" in /app/node_modules/@aws-blocks/core/package.json`),
 			{ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
 		);
+		// Node's message on Windows names the package by its path, with backslashes.
+		const notExportedOnWindows = Object.assign(
+			new Error(
+				`Package subpath './scripts' is not defined by "exports" in C:\\app\\node_modules\\@aws-blocks\\core\\package.json`,
+			),
+			{ code: 'ERR_PACKAGE_PATH_NOT_EXPORTED' },
+		);
 		const missingExport = new SyntaxError(
 			"The requested module '@aws-blocks/core/scripts' does not provide an export named 'claimDevSession'",
 		);
 		const notInstalled = Object.assign(new Error("Cannot find package '@aws-blocks/core' imported from /app/x.js"), {
 			code: 'ERR_MODULE_NOT_FOUND',
 		});
-		for (const error of [notExported, missingExport, notInstalled]) {
+		for (const error of [notExported, notExportedOnWindows, missingExport, notInstalled]) {
 			assert.match(coreMismatchError(error)?.message ?? '', /cannot load @aws-blocks\/core.*, which does not match it: /);
 		}
 		const other = Object.assign(new Error("Cannot find package 'left-pad' imported from /app/x.js"), {
