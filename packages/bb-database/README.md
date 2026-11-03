@@ -72,9 +72,11 @@ The 404 thrown inside the transaction reaches the client as an `ApiError` with `
 ## API
 
 ```ts
-const db = new Database(scope, id, options?);
-const cluster = new DatabaseCluster(scope, id, { type: 'dsql', removalPolicy? });
+new Database(scope: ScopeParent, id: string, options?: DatabaseOptions)
+new DatabaseCluster(scope: ScopeParent, id: string, options: DatabaseClusterOptions)
 ```
+
+Both option types are described under [Options](#options). A `DatabaseCluster` has no methods; it exists to be passed as a `Database`'s `cluster`. The methods below are on `Database`:
 
 | Method | Returns | Description |
 |---|---|---|
