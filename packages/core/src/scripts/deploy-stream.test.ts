@@ -163,6 +163,19 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[args.indexOf('--progress') + 1], 'events');
   });
 
+  it('selects every stack so multi-stack apps deploy without a stack-selector error', () => {
+    assert.ok(args.includes('--all'), `expected --all in: ${args.join(' ')}`);
+  });
+
+  it('keeps the sandbox-only speedups out of the production deploy', () => {
+    // A production deploy must keep a reviewable change set and full
+    // stabilization with rollback: the sandbox speedups must never appear here,
+    // even if someone later "aligns" the two arg builders.
+    assert.ok(!args.includes('--method'), `production deploy must not use --method: ${args.join(' ')}`);
+    assert.ok(!args.includes('--express'), `production deploy must not use --express: ${args.join(' ')}`);
+    assert.ok(!args.includes('--hotswap'), `production deploy must not use --hotswap: ${args.join(' ')}`);
+  });
+
   it('keeps the existing non-interactive deploy contract', () => {
     assert.strictEqual(args[0], 'cdk');
     assert.strictEqual(args[1], 'deploy');
@@ -604,7 +617,9 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
   /**
    * argv for one probe deploy. The flag under test *replaces* the `--ci` that
    * {@link buildCdkDeployArgs} already adds instead of being appended after it,
-   * so a probe never argues with itself over two conflicting CI flags.
+   * so a probe never argues with itself over two conflicting CI flags. `--all`
+   * is likewise dropped: the probe selects its own single stack (`ProbeStack`)
+   * explicitly, and the CDK CLI rejects `--all` together with a named stack.
    */
   function probeArgv(assembly: string, ciFlag: '--ci' | '--no-ci'): string[] {
     const deployArgs = buildCdkDeployArgs({
@@ -612,7 +627,7 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
       outputsFile: join(assembly, 'outputs.json'),
     })
       .slice(1) // drop the leading `cdk`: the CLI entry point is invoked directly
-      .filter((arg) => arg !== '--ci');
+      .filter((arg) => arg !== '--ci' && arg !== '--all');
     return [...deployArgs, ciFlag, 'ProbeStack', '--app', assembly];
   }
 

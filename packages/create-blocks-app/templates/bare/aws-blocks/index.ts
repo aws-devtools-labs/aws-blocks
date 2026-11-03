@@ -29,7 +29,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // ─── Examples (uncomment to use) ─────────────────────────────────────────────
 //
 // import { AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
-// import { z } from 'zod';  // add zod to package.json: npm install zod
+// import { z } from 'zod';  // zod ships with new bare apps; when adding AWS Blocks to an existing project, run npm install zod
 //
 // // Auth (see node_modules/@aws-blocks/bb-auth-basic/README.md for full API):
 // const auth = new AuthBasic(scope, 'auth', {

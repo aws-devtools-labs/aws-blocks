@@ -29,15 +29,19 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   defaults: BlocksPresets.sandbox,
 });
 
-// Hosting — SPA (static site served via CloudFront)
+// Hosting — SPA (static site). HOSTING_FRONT_DOOR=alb runs the same suite
+// behind the regional ALB door (plain HTTP, its own VPC with no NAT gateway);
+// unset is the default CloudFront door.
 new Hosting(blocksStack, 'Hosting', {
   root: join(__dirname, '..'),
   buildCommand: 'npm run build',
   buildOutputDir: 'dist',
   framework: 'spa',
   api: blocksStack,
+  ...(process.env.HOSTING_FRONT_DOOR === 'alb' ? { frontDoor: { kind: 'alb' as const } } : {}),
 });
 
 cdk.Tags.of(blocksStack).add('blocks:purpose', 'e2e-hosting-spa');
+cdk.Tags.of(blocksStack).add('blocks:front-door', process.env.HOSTING_FRONT_DOOR || 'cloudfront');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');
 cdk.Tags.of(blocksStack).add('blocks:created-at', new Date().toISOString().split('T')[0]);

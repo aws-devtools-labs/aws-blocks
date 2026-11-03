@@ -58,6 +58,93 @@ test('fromField handles boolean', () => {
   assert.strictEqual(fromField({ booleanValue: false }), false);
 });
 
+// --- fromField: array columns (text[], int[], ...) ---
+// The Data API returns array columns as `arrayValue`; without handling, they
+// came back `null` while PGlite / pg returned real JS arrays (issue #996).
+
+test('fromField unmarshals a text[] column to a string array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { stringValues: ['a', 'b'] } }), ['a', 'b']);
+});
+
+test('fromField unmarshals an int[] column to a number array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { longValues: [1, 2, 3] } }), [1, 2, 3]);
+});
+
+test('fromField unmarshals a float[] column to a number array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { doubleValues: [1.5, 2.5] } }), [1.5, 2.5]);
+});
+
+test('fromField unmarshals a bool[] column to a boolean array', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { booleanValues: [true, false] } }), [true, false]);
+});
+
+test('fromField unmarshals a nested array column recursively', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { arrayValues: [{ longValues: [1, 2] }, { longValues: [3, 4] }] } }),
+    [[1, 2], [3, 4]],
+  );
+});
+
+test('fromField returns an empty array for an empty array column', () => {
+  assert.deepStrictEqual(fromField({ arrayValue: { stringValues: [] } }), []);
+});
+
+test('fromField preserves null elements in an array column (SQL NULL)', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { stringValues: ['a', null, 'b'] } as any }),
+    ['a', null, 'b'],
+  );
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { longValues: [1, null, 3] } as any }),
+    [1, null, 3],
+  );
+});
+
+// --- fromField: json / jsonb columns ---
+// jsonb arrives as a stringValue; without the column typeName it was returned
+// unparsed. With the typeName it is parsed to match PGlite / pg (issue #996).
+
+test('fromField parses a jsonb column into an object', () => {
+  assert.deepStrictEqual(fromField({ stringValue: '{"estimate":3}' }, 'jsonb'), { estimate: 3 });
+});
+
+test('fromField parses a json column into an object', () => {
+  assert.deepStrictEqual(fromField({ stringValue: '{"count":2}' }, 'json'), { count: 2 });
+});
+
+test('fromField parses a jsonb array value (scalar in jsonb)', () => {
+  assert.deepStrictEqual(fromField({ stringValue: '[1,2,3]' }, 'jsonb'), [1, 2, 3]);
+});
+
+test('fromField leaves a plain text column unparsed even if it looks like JSON', () => {
+  assert.strictEqual(fromField({ stringValue: '{"x":1}' }, 'text'), '{"x":1}');
+});
+
+test('fromField leaves a jsonb string unchanged when it is not valid JSON', () => {
+  // Defensive: a value the server round-trips as jsonb is always valid JSON, but
+  // a malformed string must not throw and fail the whole query.
+  assert.strictEqual(fromField({ stringValue: 'not json' }, 'jsonb'), 'not json');
+});
+
+test('fromField parses each element of a jsonb[] column', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { stringValues: ['{"a":1}', '{"b":2}'] } }, '_jsonb'),
+    [{ a: 1 }, { b: 2 }],
+  );
+});
+
+test('fromField does not JSON-parse elements of a plain text[] column', () => {
+  assert.deepStrictEqual(
+    fromField({ arrayValue: { stringValues: ['{"a":1}'] } }, '_text'),
+    ['{"a":1}'],
+  );
+});
+
+test('fromField still unmarshals scalars with no typeName (back-compat)', () => {
+  assert.strictEqual(fromField({ stringValue: 'hi' }), 'hi');
+  assert.strictEqual(fromField({ longValue: 99 }), 99);
+});
+
 // --- Mock client helper ---
 
 function mockClient(handlers: Record<string, (input: any) => any>) {
@@ -147,6 +234,32 @@ test('query returns empty array for no records', async () => {
   });
   const rows = await engine.query('SELECT * FROM t');
   assert.deepStrictEqual(rows, []);
+});
+
+test('query maps array and jsonb columns using columnMetadata typeName (issue #996)', async () => {
+  // Mirrors the reproduction in issue #996: a row with a text[] column, a jsonb
+  // column and a scalar. All three must land as native JS values, matching what
+  // the PGlite / pg engines return for the same query.
+  const engine = createEngine({
+    ExecuteStatementCommand: () => ({
+      columnMetadata: [
+        { name: 'tags', typeName: '_text' },
+        { name: 'meta', typeName: 'jsonb' },
+        { name: 'title', typeName: 'text' },
+      ],
+      records: [[
+        { arrayValue: { stringValues: ['a', 'b'] } },
+        { stringValue: '{"estimate":3}' },
+        { stringValue: 'first item' },
+      ]],
+    }),
+  });
+  const rows = await engine.query<{ tags: string[]; meta: { estimate: number }; title: string }>(
+    'SELECT tags, meta, title FROM items',
+  );
+  assert.deepStrictEqual(rows, [{ tags: ['a', 'b'], meta: { estimate: 3 }, title: 'first item' }]);
+  assert.ok(Array.isArray(rows[0].tags), 'tags must be a real array, not null');
+  assert.strictEqual(typeof rows[0].meta, 'object', 'meta must be a parsed object, not a string');
 });
 
 // --- execute ---
@@ -359,6 +472,67 @@ test('Data API unique violation (DatabaseErrorException, SQLState 23505) maps to
     },
   );
 });
+
+const REQUEST_ERROR_CASES = [
+  { code: '42501', driver: 'new row violates row-level security policy for table "notes"', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '42501', driver: 'permission denied for table projects', status: 403, name: DatabaseErrors.PermissionDenied },
+  { code: '23514', driver: 'new row for relation "projects" violates check constraint "projects_name_check"', status: 400, name: DatabaseErrors.CheckViolation },
+  { code: '23502', driver: 'null value in column "name" of relation "projects" violates not-null constraint', status: 400, name: DatabaseErrors.NotNullViolation },
+  { code: '23503', driver: 'insert or update on table "notes" violates foreign key constraint "notes_project_id_fkey"', status: 409, name: DatabaseErrors.ForeignKeyViolation },
+];
+
+for (const { code, driver, status, name } of REQUEST_ERROR_CASES) {
+  test(`Data API request error (SQLState ${code}: ${driver.slice(0, 40)}…) maps to ${name} (ApiError ${status})`, async () => {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error(`ERROR: ${driver}; SQLState: ${code}`);
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(
+      () => engine.execute('INSERT INTO t VALUES ($1)', ['x']),
+      (err: unknown) => {
+        assert.ok(err instanceof ApiError, 'expected an ApiError');
+        assert.strictEqual(err.status, status);
+        assert.strictEqual(err.name, name);
+        assert.strictEqual(err.retriable, false);
+        assert.ok(!err.message.includes(driver), 'driver text must not reach the message');
+        return true;
+      },
+    );
+  });
+}
+
+// Postgres echoes caller input before the Data API's trailing SQLState, so a
+// caller can plant a decoy "SQLState: <code>" earlier in the message. Only the
+// last one, appended by the Data API, may classify the error.
+const DECOY_CASES = [
+  { message: 'ERROR: invalid input syntax for type uuid: "SQLState: 42501"; SQLState: 22P02', status: undefined, name: DatabaseErrors.QueryFailed },
+  { message: 'ERROR: new row for relation "t" violates check constraint "t_check"\n  Detail: Failing row contains (2, hi SQLState: 42501).; SQLState: 23514', status: 400, name: DatabaseErrors.CheckViolation },
+  { message: 'ERROR: new row for relation "t" violates check constraint "t_check"\n  Detail: Failing row contains (2, hi SQLState: 40001).; SQLState: 23514', status: 400, name: DatabaseErrors.CheckViolation },
+];
+for (const { message, status, name } of DECOY_CASES) {
+  test(`Data API decoy SQLState in caller input is ignored: ${message.slice(-16)} → ${name}`, async () => {
+    const engine = createEngine({
+      ExecuteStatementCommand: () => {
+        const err = new Error(message);
+        err.name = 'DatabaseErrorException';
+        throw err;
+      },
+    });
+    await assert.rejects(
+      () => engine.execute('INSERT INTO t VALUES ($1)', ['x']),
+      (err: unknown) => {
+        assert.strictEqual((err as Error).name, name);
+        if (status === undefined) assert.ok(!(err instanceof ApiError), 'a 500 QueryFailed carries no 4xx status');
+        else assert.strictEqual((err as ApiError).status, status);
+        assert.notStrictEqual((err as ApiError).retriable, true, 'a decoy 40001 must not make it retriable');
+        return true;
+      },
+    );
+  });
+}
 
 test('a genuine non-serialization query error still maps to QueryFailed', async () => {
   const engine = createEngine({

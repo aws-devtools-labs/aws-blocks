@@ -6,8 +6,4 @@ export class CronJob {
 	constructor(...args: any[]) {}
 }
 
-export const CronJobErrors = {
-	InvalidSchedule: 'InvalidScheduleExpression',
-	InvalidTimezone: 'InvalidTimezoneExpression',
-	UnsupportedCompute: 'UnsupportedComputeException',
-} as const;
+export { CronJobErrors } from './errors.js';

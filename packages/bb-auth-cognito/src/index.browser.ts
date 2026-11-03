@@ -17,7 +17,6 @@
  * `ApiNamespace`.
  */
 
-import { ApiNamespace } from '@aws-blocks/core';
 import type { AuthStateApi } from '@aws-blocks/auth-common';
 import { makeExternalUserPoolRef, type AuthCognitoOptions, type AdminGetterOf } from './types.js';
 
@@ -41,15 +40,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	createApi(): AuthStateApi {
 		// Real state-machine lives on the server. Browsers invoke the typed
 		// generated client, not this stub — these methods only exist so the
-		// shape typechecks under `--conditions=browser`.
-		return new ApiNamespace({ id: 'auth' }, 'auth', () => ({
-			getAuthState: async () => {
-				throw new Error('AuthCognito.createApi() is server-only; the browser should call the generated client');
-			},
-			setAuthState: async () => {
-				throw new Error('AuthCognito.createApi() is server-only; the browser should call the generated client');
-			},
-		}));
+		// shape typechecks under `--conditions=browser`. Throws rather than
+		// build an ApiNamespace, which the browser build of core does not ship.
+		throw new Error('AuthCognito.createApi() is server-only; the browser should call the generated client');
 	}
 	static fromExisting = makeExternalUserPoolRef;
 }

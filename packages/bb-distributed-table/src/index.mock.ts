@@ -2,12 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BB_NAME, BB_VERSION } from './version.js';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-distributed-table');
 
 export { DistributedTableErrors } from './errors.js';
 export type {
@@ -22,6 +25,7 @@ export type {
 	KeyCondition,
 	QueryOptions,
 	ScanOptions,
+	GetOptions,
 	PutOptions,
 	DeleteOptions,
 } from './types.js';
@@ -33,6 +37,7 @@ import type {
 	ExternalKmsKeyRef,
 	SortKeyCondition,
 	ScanOptions,
+	GetOptions,
 	PutOptions,
 	DeleteOptions,
 	TableKey,
@@ -149,7 +154,8 @@ export class DistributedTable<
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
 	}
 
-	async get(key: TableKey<T, K>): Promise<T | null> {
+	// The in-memory store is always strongly consistent, so `options.consistentRead` needs no handling.
+	async get(key: TableKey<T, K>, _options?: GetOptions): Promise<T | null> {
 		return this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null);
 	}
 

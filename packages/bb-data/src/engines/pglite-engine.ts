@@ -1,12 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { PGlite } from '@electric-sql/pglite';
+import { PGlite, type Extensions } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { initializePgliteWithRetry, type DatabaseEngine, type TransactionHandle } from '@aws-blocks/data-common';
-import { DatabaseErrors, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import {
+  initializePgliteWithRetry,
+  type DatabaseEngine,
+  type TransactionHandle,
+} from '@aws-blocks/data-common';
+import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
+import { DatabaseErrors, wrapError, reTagged, requestError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { resolveExtensions } from './pglite-extensions.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -34,6 +40,9 @@ const PGLITE_DATA_DIR_MARKERS = [
  * @example
  * // PostgreSQL error code 23505 → UniqueConstraintViolation
  * // PostgreSQL error code 40001 → SerializationFailure (ApiError, HTTP 409)
+ * // PostgreSQL error code 42501 → PermissionDenied (ApiError, HTTP 403)
+ * // PostgreSQL error codes 23514 / 23502 → CheckViolation / NotNullViolation (ApiError, HTTP 400)
+ * // PostgreSQL error code 23503 → ForeignKeyViolation (ApiError, HTTP 409)
  * // PostgreSQL error code 08xxx → ConnectionFailed
  * // All other errors → QueryFailed
  */
@@ -49,6 +58,8 @@ function translateError(e: unknown): never {
       // retriable — a blind retry of the same insert fails identically.
       throw uniqueConstraintConflict(e);
     }
+    const request = code ? requestError(code, e) : undefined;
+    if (request) throw request;
     const name = code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
       ? DatabaseErrors.ConnectionFailed
       : DatabaseErrors.QueryFailed;
@@ -127,10 +138,20 @@ function recoverIncompletePgliteDataDir(dataDir: string): void {
  * `beginTransaction()` will interleave on the same connection. This is
  * acceptable for single-threaded local dev servers but must not be used
  * in multi-request concurrent environments.
+ *
+ * Process lifetime: the engine never keeps the Node.js process alive by itself
+ * (PGlite's emulated timers are `unref()`'d), and once the event loop has
+ * nothing left to do it closes PGlite, so PostgreSQL shuts down cleanly and no
+ * stale `postmaster.pid` is left behind. A query after that reopens the engine.
  */
 export class PGliteEngine implements DatabaseEngine {
   private db: PGlite;
   private closed = false;
+  /** Closed by the process-exit hook; the next query reopens a fresh instance. */
+  private closedForExit = false;
+  /** The exit hook's in-flight close; a reopen waits for it, so two instances never share the data dir. */
+  private exitClosing?: Promise<void>;
+  private cancelExitClose?: () => void;
   private readonly dataDir: string;
   private readonly createClient: (dataDir: string) => PGlite;
   private ready?: Promise<PGlite>;
@@ -140,11 +161,37 @@ export class PGliteEngine implements DatabaseEngine {
    * @param createClient - factory for the underlying PGlite instance; defaults
    *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
    *   that simulates a WASM init trap.
+   *
+   * To load Postgres extensions (PostGIS, pgvector) use the async
+   * {@link PGliteEngine.create} factory instead — extension packages are
+   * resolved by dynamic import, which the synchronous constructor cannot do.
    */
-  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = (dir) => new PGlite(dir)) {
+  constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = createLocalPglite) {
     this.dataDir = dataDir;
     this.createClient = createClient;
     this.db = this.createDb();
+  }
+
+  /**
+   * Construct a PGliteEngine with Postgres extensions loaded (PostGIS, pgvector).
+   *
+   * Extensions are resolved by dynamic `import()` of their optional peer packages
+   * (see {@link resolveExtensions}), so this is async where the constructor is
+   * sync. The resolved `{ namespace: extension }` object is captured in the
+   * `createClient` closure, so it is reapplied on every PGlite instance the
+   * init-trap retry path recreates — the extensions survive a WASM-trap retry.
+   *
+   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir)`.
+   *
+   * @param dataDir - directory PGlite persists to (nested paths are created).
+   * @param extensions - extension names from `DatabaseOptions.extensions`.
+   */
+  static async create(dataDir: string = '.bb-data', extensions?: readonly string[]): Promise<PGliteEngine> {
+    const resolved = await resolveExtensions(extensions);
+    if (Object.keys(resolved).length === 0) {
+      return new PGliteEngine(dataDir);
+    }
+    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }));
   }
 
   /**
@@ -167,7 +214,21 @@ export class PGliteEngine implements DatabaseEngine {
     mkdirSync(this.dataDir, { recursive: true });
     recoverIncompletePgliteDataDir(this.dataDir);
     cleanStaleLock(this.dataDir);
+    this.cancelExitClose ??= closeOnProcessExit(() => this.closeForExit());
     return this.createClient(this.dataDir);
+  }
+
+  /**
+   * Close PGlite when the process is about to exit (see {@link closeOnProcessExit}),
+   * so PostgreSQL shuts down cleanly and removes its `postmaster.pid`.
+   */
+  private async closeForExit(): Promise<void> {
+    this.cancelExitClose = undefined;
+    if (this.closed || this.closedForExit) return;
+    this.closedForExit = true;
+    this.ready = undefined;
+    this.exitClosing = this.db.close().catch(() => {});
+    await this.exitClosing;
   }
 
   /**
@@ -177,6 +238,19 @@ export class PGliteEngine implements DatabaseEngine {
    * transient memory pressure eases.
    */
   private ensureReady(): Promise<PGlite> {
+    if (this.closedForExit && !this.closed) {
+      // Closed by the exit hook, but the process kept going (e.g. another
+      // `beforeExit` listener ran a query) — reopen once that close has finished.
+      this.closedForExit = false;
+      const closing = this.exitClosing ?? Promise.resolve();
+      this.exitClosing = undefined;
+      this.ready = closing.then(() => {
+        this.db = this.createDb();
+        this.ready = undefined;
+        return this.ensureReady();
+      });
+      return this.ready;
+    }
     if (!this.ready) {
       this.ready = initializePgliteWithRetry(this.db, () => (this.db = this.createDb()), {
         onRetry: (attempt, error) =>
@@ -262,6 +336,12 @@ export class PGliteEngine implements DatabaseEngine {
   async destroy(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.cancelExitClose?.();
+    this.cancelExitClose = undefined;
+    if (this.closedForExit) {
+      await this.exitClosing;
+      return;
+    }
     // PGlite 0.5.10's close() never resolves while the instance is still
     // initializing, so let init settle (or fail) before closing. Fixed upstream
     // in electric-sql/pglite#1149 (issue #1148), unreleased as of 0.5.10; remove
@@ -270,4 +350,22 @@ export class PGliteEngine implements DatabaseEngine {
     await Promise.resolve(this.db.waitReady).catch(() => {});
     await this.db.close();
   }
+}
+
+/**
+ * The default PGlite factory: a real `PGlite` whose emulated timers never keep
+ * the process alive by itself (see {@link pgliteUnrefTimersExtension}).
+ */
+function createLocalPglite(dataDir: string): PGlite {
+  return new PGlite(dataDir, { extensions: withUnrefTimers({}) });
+}
+
+/**
+ * Add the unref-timers extension to a resolved user extension set, so a
+ * short-lived script that declares `extensions` still exits on its own. The
+ * `awsBlocksUnrefTimers` key cannot collide with the `postgis` / `vector`
+ * namespaces.
+ */
+export function withUnrefTimers(extensions: Extensions): Extensions {
+  return { awsBlocksUnrefTimers: pgliteUnrefTimersExtension, ...extensions };
 }

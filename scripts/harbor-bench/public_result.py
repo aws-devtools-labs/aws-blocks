@@ -1,5 +1,8 @@
 """Never publish raw Harbor logs, trajectories, generated app files, or exception text."""
 import json
+import re
+import tarfile
+import zlib
 
 from accounting import tool_uses
 from diagnostics import public_failure
@@ -10,6 +13,12 @@ TOOLS = {'Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TodoWrite', 'Skill', 
 CHECKS = ('package_provenance', 'build', 'all_phases_and_reload', 'blocks_persistence',
           'server_restart_fresh_browser')
 SKILL_USE = ('skill_tool', 'file_read', 'none')
+USAGE = ('input_tokens', 'cache_read_tokens', 'cache_write_tokens', 'output_tokens', 'input_processed_tokens',
+         'cost_usd', 'cache_neutral_cost_usd')
+STORAGE_CLASSES = {'KVStore': 'kv_store', 'DistributedTable': 'distributed_table', 'Database': 'database',
+                   'DistributedDatabase': 'distributed_database', 'FileBucket': 'file_bucket'}
+STORAGE = (*STORAGE_CLASSES.values(), 'multiple', 'none', 'unknown')
+CONSTRUCTED = re.compile(r'\bnew\s+(' + '|'.join(STORAGE_CLASSES) + r')\b')
 
 
 def load(path):
@@ -23,13 +32,29 @@ def numeric(value):
     return value if type(value) in (int, float) and value >= 0 else None
 
 
+def storage(snapshot):
+    """Blocks storage the app constructs in its backend sources; only the fixed STORAGE names leave here."""
+    found = set()
+    try:
+        with tarfile.open(snapshot, 'r:gz') as archive:
+            for member in archive:
+                parts = member.name.split('/')
+                if (member.isfile() and parts[:2] == ['todo-app', 'aws-blocks'] and member.name.endswith('.ts')
+                        and 'node_modules' not in parts):
+                    text = archive.extractfile(member).read().decode('utf-8', 'replace')
+                    found.update(STORAGE_CLASSES[name] for name in CONSTRUCTED.findall(text))
+    except (OSError, tarfile.TarError, EOFError, zlib.error):
+        return 'unknown'
+    return found.pop() if len(found) == 1 else 'multiple' if found else 'none'
+
+
 def collect(work, identity, exit_code, error):
     result = {
         'schema': 2, 'arm': identity['arm'], 'commit': identity['commit'],
         'status': 'infrastructure_error', 'harbor_exit_code': exit_code,
         'error': error, 'model': MODEL, 'harbor_revision': HARBOR_REVISION,
         'claude_version': CLAUDE_VERSION, 'skill_revision': identity['skill_revision'],
-        'packages': identity['packages'], 'phases': [],
+        'packages': identity['packages'], 'phases': [], 'storage': 'unknown',
         'harness_commit': identity.get('harness_commit'),
     }
     trials = list((work / 'jobs' / identity['arm']).glob('*/result.json'))
@@ -38,6 +63,8 @@ def collect(work, identity, exit_code, error):
     trial_path = trials[0]
     trial = load(trial_path) or {}
     steps = {step['step_name']: step for step in trial.get('step_results') or []}
+    # The create phase fixes the data model; later phases extend it.
+    result['storage'] = storage(trial_path.parent / 'steps' / 'create' / 'verifier' / 'snapshot.tar.gz')
     session_ids = []  # One entry per executed step; Harbor stops after a failed gated phase.
     for name in PHASES:
         step = steps.get(name)
@@ -65,8 +92,7 @@ def collect(work, identity, exit_code, error):
             'skill_use': metrics.get('skill_use') if metrics.get('skill_use') in SKILL_USE else None,
             'turns': numeric(metrics.get('turns')), 'tool_calls': numeric(metrics.get('tool_calls')),
             'llm_calls': numeric(metrics.get('llm_calls')), 'duration_ms': numeric(metrics.get('duration_ms')),
-            'usage': {key: numeric((metrics.get('usage') or {}).get(key)) for key in
-                      ('input_tokens', 'cache_read_tokens', 'cache_write_tokens', 'output_tokens', 'cost_usd')},
+            'usage': {key: numeric((metrics.get('usage') or {}).get(key)) for key in USAGE},
             'checks': checks,
             'failure': public_failure(verification, ui_results),
         })

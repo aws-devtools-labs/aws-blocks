@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
-import { BlocksStack, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { BlocksStack, BlocksPresets, Scope, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -152,3 +152,33 @@ test('CDK: sandbox leaves the WebSocket stage without access logging', async () 
 // (it wires the ApiUrl output from it), so a non-Lambda default can't be stood
 // up to trip the guard here. The guard's discriminator — LambdaCompute's brand
 // check — is unit-tested directly in bb-lambda-compute (isLambdaCompute).
+
+// ── One handler per event key, at synth ─────────────────────────────────────
+// The Lambda runtime registers each Realtime's WebSocket handler under
+// `blocks.websocket:<fullId>`. `fullId` joins ids with '-', so `a-b`/`c` and
+// `a`/`b-c` share one; CDK accepts both construct paths, and the second runtime
+// registration would throw on every cold start. Synth must refuse it.
+
+test('CDK: two Realtime blocks that share a fullId fail synth, naming the key and both blocks', async () => {
+	const stack = await setup(BlocksPresets.production, 'RtCollide');
+	const namespaces = { chat: Realtime.namespace(passthroughSchema) };
+	new Realtime(new Scope('a-b', { parent: stack }), 'c', { namespaces });
+	const other = new Scope('a', { parent: stack });
+	assert.throws(
+		() => new Realtime(other, 'b-c', { namespaces }),
+		(e: unknown) => {
+			assert.ok(e instanceof Error);
+			assert.match(e.message, /"blocks\.websocket:RtCollide-a-b-c"/);
+			assert.match(e.message, /Scope 'RtCollide-a-b-c'/);
+			assert.match(e.message, /already registered by Building Block 'RtCollide-a-b-c'/);
+			return true;
+		},
+	);
+});
+
+test('CDK: distinct Realtime blocks in one stack synthesize (setup already adds `rt`)', async () => {
+	const stack = await setup(BlocksPresets.production, 'RtDistinct');
+	new Realtime(stack, 'rt2', { namespaces: { chat: Realtime.namespace(passthroughSchema) } });
+	// Shared per-stack infra: still one WebSocket API.
+	Template.fromStack(stack).resourceCountIs('AWS::ApiGatewayV2::Api', 1);
+});

@@ -1,12 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, DEFAULT_API_ERROR_NAME, isWireSafeError, isBlocksError } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
-import { buildCookieSecurityAttrs, isLoopbackRequest } from '@aws-blocks/auth-common/cookies';
+import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-blocks/auth-common/cookies';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -147,6 +147,17 @@ interface UserRecord {
 const CODE_TTL = 600; // 10 minutes
 
 /**
+ * Maximum number of failed verification attempts allowed for a single
+ * verification code before it is invalidated. A 6-digit code (~19.8 bits) is
+ * exhaustively guessable within its {@link CODE_TTL} lifetime at any reasonable
+ * request rate, so the attempt cap — not the code entropy — is what bounds a
+ * brute-force reset/sign-up confirmation. Always on (not gated behind the
+ * opt-in sign-in `lockout` policy): unlimited OTP guesses is a flat security
+ * hole regardless of sign-in-throttling configuration.
+ */
+const MAX_CODE_ATTEMPTS = 5;
+
+/**
  * bcrypt cost factor. 12 is a sensible default aligned with current OWASP
  * guidance; raise it for higher-value credentials.
  */
@@ -158,6 +169,36 @@ const BCRYPT_COST = 12;
  * writer under the shared `codes` store can't accidentally widen the contract.
  */
 const REVOKED_MARKER = '1';
+
+/**
+ * How many times `bumpSessionEpoch` tries its compare-and-swap before giving
+ * up. A retry covers both a lost CAS (a stale read or a concurrent bump) and a
+ * transient store error such as a throttle.
+ */
+const MAX_EPOCH_BUMP_ATTEMPTS = 3;
+
+/** Base backoff before retrying a bump that failed with a store error (ms, linear). */
+const EPOCH_BUMP_BACKOFF_MS = 50;
+
+/**
+ * Parse a stored session-epoch marker. Absent reads as 0. A corrupt or
+ * non-numeric marker also reads as 0 rather than NaN, which would make every
+ * `ep < NaN` comparison false and silently disable the check; the next bump
+ * re-establishes a valid value.
+ */
+function parseSessionEpoch(raw: string | null): number {
+	if (raw === null) return 0;
+	const n = Number.parseInt(raw, 10);
+	return Number.isSafeInteger(n) && n >= 0 ? n : 0;
+}
+
+/**
+ * Escape regex metacharacters so a cookie name embedding `fullId` is matched
+ * literally: a `fullId` of `my.app` must not also match `myXapp`.
+ */
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Simple username/password authentication composed from KVStore.
@@ -278,28 +319,121 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		// Reap abandoned sign-up/reset codes via the store's TTL: the DynamoDB row
 		// self-expires at the code's own expiry, so unused codes don't pile up.
 		const expiresAt = Math.floor(Date.now() / 1000) + CODE_TTL;
-		await this.codes.put(`${purpose}:${username}`, JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000 }), {
-			expiresAt,
-		});
+		await this.codes.put(
+			`${purpose}:${username}`,
+			JSON.stringify({ hmac, expires: Date.now() + CODE_TTL * 1000, attempts: 0 }),
+			{ expiresAt },
+		);
 		return code;
 	}
 
 	private async verifyCode(purpose: string, username: string, code: string): Promise<void> {
-		const raw = await this.codes.get(`${purpose}:${username}`);
+		const key = `${purpose}:${username}`;
+		const raw = await this.codes.get(key);
 		if (!raw) {
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		const { hmac, expires } = JSON.parse(raw) as { hmac: string; expires: number };
-		if (Date.now() > expires) {
-			await this.codes.delete(`${purpose}:${username}`);
+		// `attempts` counts failed guesses so far; legacy rows written before
+		// attempt-limiting default to 0.
+		const { hmac, expires, attempts = 0 } = JSON.parse(raw) as {
+			hmac: string;
+			expires: number;
+			attempts?: number;
+		};
+		if (Date.now() > expires || attempts >= MAX_CODE_ATTEMPTS) {
+			// Expired, or the cap is already spent. Delete only if the row is still
+			// exactly what we read, so a concurrent fresh issuance isn't clobbered.
+			await this.deleteCodeIfUnchanged(key, raw);
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
+
+		// RESERVE the attempt before evaluating the guess, with a compare-and-swap
+		// on the exact row we read (`ifValueEquals: raw`). This is what makes the
+		// cap hold under concurrency: in a parallel burst every request reads the
+		// same row, but only ONE CAS write per `attempts` value can win — the losers
+		// get ConditionalCheckFailed and are rejected WITHOUT their guess being
+		// evaluated, so they consume no budget and leak nothing. A plain
+		// read-modify-write would instead let the whole burst read `attempts` and
+		// each write back the same `attempts + 1`, advancing the counter once per
+		// burst rather than once per guess (slack scaling with attacker
+		// parallelism). The same CAS runs across Lambda instances on one DynamoDB
+		// row. `ifValueEquals` compares the serialized value, so the guard MUST be
+		// the original `raw` string, never a re-stringified object (key order).
+		const reserved = JSON.stringify({ hmac, expires, attempts: attempts + 1 });
+		try {
+			await this.codes.put(key, reserved, {
+				ifValueEquals: raw,
+				expiresAt: Math.floor(expires / 1000),
+			});
+		} catch (e) {
+			// Lost the race (another guess advanced or consumed the row first): the
+			// guess was never evaluated, so reject it exactly like a wrong code.
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) {
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			throw e;
+		}
+
 		const secret = await this.getSecret();
 		const expected = crypto.createHmac('sha256', secret).update(`${purpose}:${username}:${code}`).digest('hex');
 		if (!constantTimeEquals(hmac, expected)) {
+			// Wrong guess, attempt already reserved above. The row stays at the
+			// incremented count until the cap is reached, at which point the next
+			// attempt is rejected by the `attempts >= MAX_CODE_ATTEMPTS` guard and
+			// the row is cleaned up — no delete-then-resurrect race (a late stale
+			// write cannot re-create a deleted row, because the row is not deleted
+			// on each wrong guess; it self-reaps at the code TTL).
 			throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		}
-		await this.codes.delete(`${purpose}:${username}`);
+		// Correct code: succeed only if THIS request consumes the row. A plain
+		// swallow-on-conflict delete is unsafe here — a ConditionalCheckFailed on
+		// the success path is not only "a fresh code was issued"; it also fires
+		// when another request reserved the NEXT attempt between this request's
+		// reserve and its delete, leaving the row intact (same hmac). Swallowing
+		// that would return success while the code survives, so it could be
+		// replayed. Instead retry against the current row and FAIL CLOSED if the
+		// row is gone (consumed by another verifier) or its hmac changed (replaced
+		// by a fresh issuance). Bounded: a retry only happens when another request
+		// changed the row, and at most MAX_CODE_ATTEMPTS attempts can exist.
+		let current = reserved;
+		for (;;) {
+			try {
+				await this.codes.delete(key, { ifValueEquals: current });
+				return;
+			} catch (e) {
+				if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) throw e;
+			}
+			const raw2 = await this.codes.get(key);
+			if (!raw2) {
+				// Already consumed by another verifier — this request did not win.
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			const { hmac: curHmac } = JSON.parse(raw2) as { hmac: string };
+			if (curHmac !== hmac) {
+				// Replaced by a fresh issuance — the code this request verified is gone.
+				throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
+			}
+			current = raw2; // same code, attempts advanced by a concurrent guess — retry the delete
+		}
+	}
+
+	/**
+	 * Delete a code row only if it still holds exactly `expected`, swallowing a
+	 * ConditionalCheckFailed (another writer already replaced or removed it).
+	 *
+	 * Only safe on the **expired / exhausted** paths, where the code is already
+	 * unusable, so "someone else changed the row" is an acceptable no-op. The
+	 * success (correct-code) path must NOT use this: there, a swallowed conflict
+	 * would let the code survive and be replayed — it requires the fail-closed
+	 * retry loop in `verifyCode` instead.
+	 */
+	private async deleteCodeIfUnchanged(key: string, expected: string): Promise<void> {
+		try {
+			await this.codes.delete(key, { ifValueEquals: expected });
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return;
+			throw e;
+		}
 	}
 
 	// ── Validation ───────────────────────────────────────────────────────
@@ -463,11 +597,18 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	/**
 	 * Complete a password reset with the verification code.
 	 *
+	 * On success this ALSO invalidates every outstanding session for the user
+	 * (by bumping their session epoch), so a token stolen before the reset can no
+	 * longer authenticate — password reset is the primary remediation for a
+	 * compromised account. Subsequent requests carrying a pre-reset cookie fail
+	 * with {@link AuthBasicErrors.SessionRevoked}.
+	 *
 	 * @param username - The username.
 	 * @param code - The 6-digit verification code.
 	 * @param newPassword - The new password (must satisfy password policy).
 	 * @throws {AuthBasicErrors.InvalidCode} If the code is invalid or expired.
 	 * @throws {AuthBasicErrors.InvalidPassword} If the new password does not satisfy the password policy.
+	 * @throws {AuthBasicErrors.SignOutIncomplete} If outstanding sessions could not be invalidated. The password is NOT changed in that case and the code has been used, so request a new code with `resetPassword` and try again.
 	 */
 	async confirmResetPassword(username: string, code: string, newPassword: string): Promise<void> {
 		await this.verifyCode('reset', username, code);
@@ -475,16 +616,49 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const record = await this.getUserRecord(username);
 		if (!record) throw new ApiError('Invalid or expired code', 400, { name: AuthBasicErrors.InvalidCode });
 		record.hash = await bcrypt.hash(newPassword, BCRYPT_COST);
+		// Invalidate every outstanding session BEFORE the new password goes live.
+		// The code is already consumed, so this order is what keeps a failure
+		// recoverable: if the bump fails, nothing has changed and the user can
+		// request a new code and reset again. Bumping only after the password
+		// write would leave the new password live and the stolen session valid,
+		// with no code left to retry.
+		try {
+			await this.bumpSessionEpoch(username);
+		} catch (e) {
+			this.throwInvalidationIncomplete(
+				'AuthBasic: failed to bump session epoch on password reset; password not changed',
+				'Your password was not changed because other sessions could not be signed out. Request a new reset code and try again.',
+				e,
+			);
+		}
 		await this.users.put(username, JSON.stringify(record));
+		// Bump again after the write, so a sign-in that read the epoch between
+		// the first bump and the password write (still using the old password)
+		// cannot keep a valid token. Every pre-reset token is already invalid at
+		// this point, so a failure here is logged rather than thrown: the reset
+		// succeeded, and failing it would push the user to retry a reset whose
+		// code is spent.
+		try {
+			await this.bumpSessionEpoch(username);
+		} catch (e) {
+			this.log.error('AuthBasic: failed to bump session epoch after password write', { error: e });
+		}
 	}
 
 	// ── Cookie management ────────────────────────────────────────────────
 
 	private async setCookie(context: BlocksContext, username: string): Promise<void> {
 		const secret = await this.getSecret();
+		// Stamp the user's current session epoch into the token (`ep` claim). A
+		// password reset bumps the stored epoch (see `bumpSessionEpoch`), and
+		// `resolveSession` rejects any token whose `ep` is older than the stored
+		// value — this is how "revoke ALL outstanding sessions" works without
+		// knowing each session's `jti` (the per-`jti` list only covers the one
+		// signing-out token).
+		const epoch = await this.readSessionEpoch(username);
 		// `jwtid` stamps a unique `jti` claim on the token so sign-out can revoke
 		// this specific session server-side (see `signOut` / `isRevoked`).
-		const token = jwt.sign({ username }, secret, {
+		const token = jwt.sign({ username, ep: epoch }, secret, {
 			expiresIn: this.sessionDuration,
 			issuer: `bb-auth-basic:${this.fullId}`,
 			subject: username,
@@ -493,7 +667,11 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const cookieName = `auth_${this.fullId}`;
 		const security = buildCookieSecurityAttrs({
 			crossDomain: this.crossDomain,
-			isLocalhost: isLoopbackRequest(context),
+			isLocalhost: isLocalDevRequest(context),
+			// A deployed HTTP-only front door (S3-website endpoint, TLS-less ALB)
+			// can't carry a `Secure` cookie; drop it on the same-origin `Lax` cookie
+			// so the session survives. Derived from the door's own scheme.
+			plainHttpOrigin: isInsecurePublicOrigin(),
 		});
 		context.response.headers.set(
 			'Set-Cookie',
@@ -505,7 +683,11 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const cookieName = `auth_${this.fullId}`;
 		const security = buildCookieSecurityAttrs({
 			crossDomain: this.crossDomain,
-			isLocalhost: isLoopbackRequest(context),
+			isLocalhost: isLocalDevRequest(context),
+			// A deployed HTTP-only front door (S3-website endpoint, TLS-less ALB)
+			// can't carry a `Secure` cookie; drop it on the same-origin `Lax` cookie
+			// so the session survives. Derived from the door's own scheme.
+			plainHttpOrigin: isInsecurePublicOrigin(),
 		});
 		context.response.headers.set('Set-Cookie', `${cookieName}=; Max-Age=0; Path=/; ${security}`);
 	}
@@ -525,19 +707,24 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 */
 	private async parseSessionToken(
 		context: BlocksContext,
-	): Promise<{ username: string; jti?: string; exp: number } | null> {
+	): Promise<{ username: string; jti?: string; exp: number; ep: number } | null> {
 		const secret = await this.getSecret();
-		const cookieName = `auth_${this.fullId}`;
+		const cookieName = escapeRegex(`auth_${this.fullId}`);
 		const cookies = context.request.headers.get('cookie') || '';
-		const match = cookies.match(new RegExp(`${cookieName}=([^;]+)`));
+		// Anchored to the header start or a `;` boundary, so a sibling cookie whose
+		// name ends with this one's (`xauth_<fullId>`) can't supply or shadow the value.
+		const match = cookies.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]+)`));
 		if (!match) return null;
 		try {
 			const payload = jwt.verify(match[1], secret, {
 				algorithms: ['HS256'],
 				issuer: `bb-auth-basic:${this.fullId}`,
-			}) as { username: string; jti?: string; exp?: number };
+			}) as { username: string; jti?: string; exp?: number; ep?: number };
 			if (typeof payload.exp !== 'number') return null;
-			return { username: payload.username, jti: payload.jti, exp: payload.exp };
+			// A token issued before the `ep` claim existed (or any token without it)
+			// is treated as epoch 0, so the first password-reset bump (to >= 1)
+			// invalidates it just like any other stale-epoch token.
+			return { username: payload.username, jti: payload.jti, exp: payload.exp, ep: payload.ep ?? 0 };
 		} catch {
 			return null;
 		}
@@ -555,16 +742,22 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	): Promise<{ user: AuthBasicUser } | { user: null; reason: 'absent' | 'revoked' }> {
 		const payload = await this.parseSessionToken(context);
 		if (!payload) return { user: null, reason: 'absent' };
-		// The revocation check and the user-record lookup don't depend on each
-		// other, so run them concurrently — an authenticated request stays at a
-		// single round trip rather than two sequential reads.
-		const [revoked, record] = await Promise.all([
+		// The revocation check, the epoch read, and the user-record lookup don't
+		// depend on each other, so run them concurrently — an authenticated
+		// request stays at a single round trip rather than three sequential reads.
+		const [revoked, currentEpoch, record] = await Promise.all([
 			payload.jti ? this.isRevoked(payload.jti) : false,
+			this.readSessionEpoch(payload.username),
 			this.getUserRecord(payload.username),
 		]);
 		// A token whose jti was revoked at sign-out is rejected even though it
 		// is still cryptographically valid and unexpired.
 		if (revoked) return { user: null, reason: 'revoked' };
+		// A token issued before the user's current session epoch is rejected: a
+		// password reset bumps the epoch, so every session that predates the
+		// reset is invalidated at once. Reported as `revoked` — semantically the
+		// reset revoked it.
+		if (payload.ep < currentEpoch) return { user: null, reason: 'revoked' };
 		if (!record || record.unconfirmed) return { user: null, reason: 'absent' };
 		return { user: this.toAuthBasicUser(payload.username, record) };
 	}
@@ -607,11 +800,25 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		try {
 			await this.codes.put(this.revokedKey(payload.jti), REVOKED_MARKER, { expiresAt });
 		} catch (e) {
-			this.log.error('AuthBasic: failed to record session revocation on sign-out', { error: e });
-			throw new ApiError('Sign-out could not be completed; please retry', 503, {
-				name: AuthBasicErrors.SignOutIncomplete,
-			});
+			this.throwInvalidationIncomplete(
+				'AuthBasic: failed to record session revocation on sign-out',
+				'Sign-out could not be completed; please retry',
+				e,
+			);
 		}
+	}
+
+	/**
+	 * Throw the branded 503 for "a security-relevant session invalidation did not
+	 * persist". Shared by sign-out and password reset so the status, the error
+	 * name, and the rule that the raw store error (which carries `$metadata` and
+	 * ARNs) is only logged, never attached, stay in one place. The name is
+	 * deliberately the same for both paths; apps tell them apart by the action
+	 * they called.
+	 */
+	private throwInvalidationIncomplete(logMessage: string, clientMessage: string, error: unknown): never {
+		this.log.error(logMessage, { error });
+		throw new ApiError(clientMessage, 503, { name: AuthBasicErrors.SignOutIncomplete });
 	}
 
 	/**
@@ -622,6 +829,61 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 */
 	private async isRevoked(jti: string): Promise<boolean> {
 		return (await this.codes.get(this.revokedKey(jti))) === REVOKED_MARKER;
+	}
+
+	/** Session-epoch key for a username. Stored in the shared `codes` store. */
+	private epochKey(username: string): string {
+		return `epoch:${username}`;
+	}
+
+	/**
+	 * The user's current session epoch — a monotonically increasing integer
+	 * bumped on password reset (`confirmResetPassword`). Absent (never bumped)
+	 * reads as 0.
+	 *
+	 * Unlike the `revoked:<jti>` markers, the epoch marker carries NO TTL: it
+	 * must outlive every outstanding token so a pre-change token can still be
+	 * recognized as stale. It is one small integer per user that has ever reset
+	 * a credential, so it never grows unbounded.
+	 */
+	private async readSessionEpoch(username: string): Promise<number> {
+		return parseSessionEpoch(await this.codes.get(this.epochKey(username)));
+	}
+
+	/**
+	 * Bump the user's session epoch, invalidating every token issued before now.
+	 * Called on password reset (`confirmResetPassword`).
+	 *
+	 * The write is a compare-and-swap against the exact value read
+	 * (`ifValueEquals`, or `ifNotExists` for a user who has never reset).
+	 * `codes.get` is eventually consistent, so a plain read-modify-write could
+	 * read a stale epoch and write back a value an already-issued token still
+	 * matches, letting that token survive the reset. DynamoDB evaluates the
+	 * condition against the item's current value, so a stale read or a
+	 * concurrent bump fails the condition and the loop re-reads. A store error
+	 * (for example a throttle) is retried with a short backoff. After
+	 * {@link MAX_EPOCH_BUMP_ATTEMPTS} failures the last error is rethrown, and
+	 * the caller decides how to report it.
+	 */
+	private async bumpSessionEpoch(username: string): Promise<void> {
+		const key = this.epochKey(username);
+		let lastError: unknown;
+		for (let attempt = 0; attempt < MAX_EPOCH_BUMP_ATTEMPTS; attempt++) {
+			try {
+				const raw = await this.codes.get(key);
+				const next = String(parseSessionEpoch(raw) + 1);
+				await this.codes.put(key, next, raw === null ? { ifNotExists: true } : { ifValueEquals: raw });
+				return;
+			} catch (e) {
+				lastError = e;
+				// A lost CAS means the value moved; re-read at once. Back off only
+				// for a store error, which an immediate retry would likely repeat.
+				if (!isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) {
+					await new Promise((resolve) => setTimeout(resolve, EPOCH_BUMP_BACKOFF_MS * (attempt + 1)));
+				}
+			}
+		}
+		throw lastError;
 	}
 
 	// ── Sign-in throttling / account lockout ─────────────────────────────

@@ -45,6 +45,7 @@ runs once. Add a migration by dropping a higher-numbered `.sql` file into
 npm run typecheck   # Check TypeScript types (run after code changes)
 npm run dev         # Local dev server on http://localhost:3001 (long-running)
 npm run sandbox     # Deploy to AWS sandbox (Aurora Serverless v2)
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 npm run deploy      # Deploy to production
 npm run test:e2e    # Run end-to-end tests against the dev server
 npm run sandbox:destroy  # Tear down the AWS sandbox stack

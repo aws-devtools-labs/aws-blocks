@@ -6,6 +6,8 @@ import assert from 'node:assert';
 import { mock } from 'node:test';
 import { PgClientEngine } from './pg-client-engine.js';
 import { tlsConnectionMessage } from './pg-client-engine.js';
+import { ApiError } from '@aws-blocks/core';
+import { DatabaseErrors } from '../errors.js';
 
 // We test PgClientEngine by verifying it correctly delegates to pg.Pool.
 // Since pg is an external dep, we mock at the module level.
@@ -209,4 +211,27 @@ describe('tlsConnectionMessage', () => {
     assert.doesNotMatch(message, / to /);
     assert.match(message, /verified/);
   });
+});
+
+test('commitTransaction translates a deferred constraint failure at COMMIT and releases the client', async (t) => {
+  const commitError = Object.assign(new Error('insert or update on table "notes" violates foreign key constraint "notes_fk"'), { code: '23503' });
+  const client = {
+    query: t.mock.fn(async (q: string) => {
+      if (q === 'COMMIT') throw commitError;
+      return { rows: [] };
+    }),
+    release: t.mock.fn(),
+  };
+  const engine = new PgClientEngine({ connectionString: 'postgres://mock' });
+  await assert.rejects(
+    () => engine.commitTransaction(client as any),
+    (e: unknown) => {
+      assert.ok(e instanceof ApiError, 'expected an ApiError');
+      assert.strictEqual(e.status, 409);
+      assert.strictEqual(e.name, DatabaseErrors.ForeignKeyViolation);
+      return true;
+    },
+  );
+  assert.strictEqual(client.release.mock.callCount(), 1, 'the client is released even when COMMIT fails');
+  await engine.destroy();
 });

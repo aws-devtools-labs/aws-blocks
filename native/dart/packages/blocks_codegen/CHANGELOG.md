@@ -1,5 +1,9 @@
 ## Unreleased
 
+- Ignore an `oidc/client` result's `x-blocks-type-args`, which
+  `blocks-generate-spec` now fills with the app's provider names, so the
+  generated `OidcClient` result is unchanged. Turning those names into an unused
+  enum emits constants such as `default` or `okta:corp` that don't compile.
 - Resolve a direct result's transferable tag through the spec's
   `x-blocks-native-packages` and `x-blocks-native-bindings` catalogs, emitting
   the declared import, its export in upper camel case, and
@@ -11,6 +15,13 @@
   flag, which exclude a logical package identity from binding resolution.
 - Warn with `AWSBLOCKS-NATIVE-003` for a declared native package that no binding
   references, since nothing imports it.
+- Warn with `AWSBLOCKS-NATIVE-004` for a binding whose `kind` schema 1 does not
+  define. It was skipped in silence, so a typo in `kind` was indistinguishable
+  from a binding that applied.
+- **Breaking:** `NativeBinding` gains a required `id`, which the new diagnostic names.
+  It is exported, so every external construction must add the field.
+- **A binding entry with a missing or empty `id` is now a spec error.** The
+  field was never read before, so such an entry generated.
 - Warn with `AWSBLOCKS-NATIVE-006` when an opt-out names a package the spec does
   not declare. A misspelled identity used to opt nothing out in silence,
   indistinguishable from a working opt-out.

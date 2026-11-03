@@ -399,7 +399,7 @@ Tags currently emitted:
 | `realtime/channel` | `RealtimeChannel<T>` (where `T` comes from `x-blocks-type-args[0]`) | `bb-realtime` |
 | `file-bucket/download` | `FileDownloadHandle` | `bb-file-bucket` |
 | `file-bucket/upload` | `FileUploadHandle` | `bb-file-bucket` |
-| `oidc/client` | `OidcClient` (`OIDCClient` on Swift) | `bb-auth-oidc` |
+| `oidc/client` | `OidcClient<P>` (`OIDCClient<P>` on Swift), where `P` is the provider enum from `x-blocks-type-args[0]`, else Kotlin's `AnyProvider` or Swift's `String`; `x-blocks-type-args[0]`, when the emitter infers it, is a string enum of provider names | `bb-auth-oidc` |
 
 **Codegen contract.** When `x-blocks-transferable` is present on a result schema, ignore any other properties on the schema and emit the SDK type for that tag. The platform SDK is responsible for hydrating the descriptor returned over the wire into a live handle.
 
@@ -418,7 +418,24 @@ Carries the JSON Schema for each generic type argument of the SDK type, in decla
 }
 ```
 
-Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. For non-generic transferables (`file-bucket/download`, `file-bucket/upload`, `oidc/client` today), this field is omitted.
+Each entry is a valid JSON Schema and may use `$ref` against `components.schemas`. The emitter writes the field when a method's return type spells out the arguments, on a namespace the entry file exports directly (`export const api = new ApiNamespace(...)`). It's omitted for non-generic transferables (`file-bucket/download`, `file-bucket/upload`), for a `RealtimeChannel` whose message type isn't written in the return type, and for every method of a namespace built elsewhere, such as a block's `createApi()` or a factory function.
+
+The one exception is an `oidc/client`, which carries the provider names the type checker infers, as a string enum, on either path. `AuthOIDC.createApi()` types `getClient()` as `OIDCClient<ProviderName<P>>`, which the checker resolves from the configured providers. Provider names that resolve to plain `string` (or `any`) emit no type args:
+
+```json
+{
+	"x-blocks-transferable": "oidc/client",
+	"x-blocks-type-args": [
+		{ "type": "string", "enum": ["google", "github"] }
+	]
+}
+```
+
+Swift turns it into a `Provider` enum in the method's namespace (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `swift:` warning when the method's own types already use that name) and returns `OIDCClient<OidcAuthApi.GetClient.Provider>`, whose `signIn(provider:relayTo:launcher:)` takes only those providers. Without the field, the client is `OIDCClient<String>`.
+
+Kotlin does the same: a `Provider` enum in the method's object (`OidcAuthApi.GetClient.Provider`, or `ResultProvider` with a `kotlin:` warning when the object already uses that name), whose constants carry the names the backend knows the providers by, and `getClient()` returns `OidcClient<OidcAuthApi.GetClient.Provider>`, whose `signIn` takes only those providers. Without the field, the client is `OidcClient<AnyProvider>`, where `AnyProvider` is the Kotlin runtime's own carrier for a provider the spec didn't name, and `signIn` takes that name. Dart ignores it for now.
+
+Because both meanings share one field, each generator classifies the argument itself: `realtime/channel`'s is a payload to generate and decode, `oidc/client`'s is the set of values its client accepts. Kotlin declares it per argument position (`TransferableTypeArg` in `codegen/.../model/Transferables.kt`): an `Out` or `InOut` argument has to represent anything the backend may send, so it is generated from the spec's schema, while an `In` one has to express just what a caller may send, so it becomes an enum of the values the spec permits. A tag's arguments can mix. The fact is still restated per platform — a new transferable with a narrowed argument has to be added to each. A dedicated spec field would be the way to stop that.
 
 ### `x-blocks-native-packages` (document root)
 
@@ -492,9 +509,13 @@ class DeviceLink<T> {
 
 Block authors do not edit `blocks.spec.json`. A block declares its native packages and bindings as static JSON under an `aws-blocks.native` key in its own `package.json`. The `aws-blocks` namespace is already in use for `vendorize` on the umbrella package.
 
+A block that declares nothing omits the key. Present but not an object — a string, a number, `null`, or the key's own value wrapped in an array — is an error rather than an absence, `"aws-blocks" must be an object (declared by <block>)`, because the declarations are usually inside and would otherwise be dropped without a word. A namespace object carrying only other keys, `vendorize` among them, declares no native metadata and is skipped, and a manifest whose own top level is not an object is skipped too, with the manifest case listed further down.
+
+That rule is the key's own, not a general one. Inside a registration, at `aws-blocks.native.packages[].platforms`, a field set to `null` is reported as the absence it resembles, `Missing "platforms" object (declared by <block>)`, while `packages` or `bindings` set to `null` is an error.
+
 `packages` and `bindings` are independently optional. Field values reach the two catalogs intact, but the catalogs are not a copy: bindings sort by `id`, packages sort by identity, each object's fields are emitted in a fixed order, `identity` becomes the catalog key rather than a field of the entry, and a repeated identity is emitted once.
 
-Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`.
+Every binding field shown below is required, `genericArity` included — a binding that omits it fails generation with `Binding "genericArity" must be an integer (declared by <block>)`. The seven are also the only fields a binding may carry, whatever its `kind`: once its `id` is usable, an eighth is rejected with `Unexpected field "<name>" — a binding holds only id, kind, tag, package, export, abi, genericArity (declared by <block>)`. The emitter rebuilds those seven unconditionally, so a field outside them would be dropped from the catalog rather than carried to a generator. A binding whose `id` is blank is reported for that alone.
 
 ```json
 {
@@ -533,11 +554,15 @@ npm nests a copy only when two dependents need different versions, so a block th
 
 `schemaVersion` is not authored here — the generator stamps it.
 
-Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while it carries the `aws-blocks` key.
+Generation aborts with `NativeCatalogError` before any file is written when a declaration is invalid, and when an installed `package.json` cannot be parsed while it carries the `aws-blocks` key. Every manifest the scan reaches counts, so a malformed key in a hoisted transitive dependency fails the whole app's generation, not only one authored by the app; a copy nested inside another package is skipped with the rest of that directory.
 
-The last is deliberate — a manifest that carries the `aws-blocks` key but will not parse cannot be ruled out as the block that owns a binding, so it is not treated as declaring nothing.
+On the CLI path the manifests are read before anything is validated, so a malformed `aws-blocks` in any resolvable manifest — including a hoisted one you do not own — is reported alongside every other read error and masks every validation error until it is fixed. A caller that supplies its own declarations skips the read and sees no masking.
 
-Two neighbouring failures are warned and skipped instead: a `node_modules` directory or a manifest that cannot be read for a reason other than absence, which holds no metadata to rule out, and an unparseable manifest that does not carry `aws-blocks` as a JSON key, escapes decoded, which belongs to a package that declares nothing.
+Validation collects its errors and returns them rather than throwing, so a run reports every problem it can reach in the declarations it was given.
+
+Aborting on a manifest that will not parse is deliberate — one that carries the `aws-blocks` key cannot be ruled out as the block that owns a binding, so it is not treated as declaring nothing.
+
+Two neighbouring failures are warned and skipped instead: a `node_modules` directory or a manifest that cannot be read for a reason other than absence, which holds no metadata to rule out, and an unparseable manifest in which `aws-blocks` never appears as a quoted token followed by a colon or by the end of the text, escapes decoded, which belongs to a package that declares nothing. The test is textual rather than structural, so a truncated manifest whose final token is the *value* `"aws-blocks"` is treated as carrying the key and aborts generation.
 
 Three more are skipped silently, because each is an answer rather than a failure: a level with no `node_modules`, a `node_modules` that is not a directory, and a manifest that parses to something other than an object.
 
@@ -549,7 +574,7 @@ A dependency that declares a binding therefore participates in the generated cli
 
 Once a generator consumes the catalogs, the client it emits will import the declared package and hand it the descriptor, which may carry a signed URL or a short-lived credential.
 
-Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` is unchecked. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
+Several rules bound the surface, among them: a tag is claimed once, the four built-in tags cannot be claimed at all, and a `transferable` binding's `abi` must be `blocks-transferable-v1` — `kind` is an open enumeration, so another kind's `abi` value is unchecked. Its field set is not: the seven-field rule above holds for every kind, so a new kind cannot carry a field of its own without a core change. Publisher trust is bounded by none of them: per the design doc, signing, attestation, revocation and vulnerability policy are separate release controls.
 
 Restricting the scan to the spec project's own `dependencies` would narrow it further and is deferred, not rejected — see [D-019](../DECISIONS.md#d-019-native-declarations-are-read-from-every-resolvable-manifest-not-only-declared-dependencies).
 

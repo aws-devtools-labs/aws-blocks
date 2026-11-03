@@ -8,14 +8,18 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import type { ApiFrontDoorTier } from '../common/index.js';
+import type { ApiFrontDoorTier, ApiWafOptions } from '../common/index.js';
+import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import {
 	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
 	claimApiFrontDoor,
+	publishPublicOrigin,
 	publicApiUrl,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
@@ -25,9 +29,9 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
-import { BLOCKS_BACKEND_ROOT } from './root-registry.js';
+import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
-import { addBlocksStackMetadata } from './stack-metadata.js';
+import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
 import type { BlocksVpcOptions } from './vpc-types.js';
@@ -87,6 +91,15 @@ export interface BlocksBackendProps {
 	 * @see BlocksStackProps.apiFrontDoor for the full description of each tier.
 	 */
 	apiFrontDoor?: ApiFrontDoorTier;
+	/**
+	 * Put AWS WAF in front of the backend API: a `REGIONAL` web ACL on the API
+	 * Gateway stage under `apiFrontDoor: 'apigateway'`, a `CLOUDFRONT` one on the
+	 * managed distribution under `'cloudfront'`. Default: off.
+	 *
+	 * @see BlocksStackProps.apiWaf for the full description, including the
+	 * us-east-1 requirement and what happens when `Hosting` fronts the API.
+	 */
+	apiWaf?: ApiWafOptions;
 }
 
 /**
@@ -157,17 +170,35 @@ function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDef
  * by a compute: the shared execution role, resource groups, and console-redirect
  * routes.
  */
+/** Guide for apps scaffolded from older templates; linked from the missing-`defaults` error. */
+export const UPGRADE_GUIDE_URL =
+	'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md';
+
+/**
+ * Fail fast with an actionable message if `defaults` is missing. TypeScript
+ * callers get a compile error, but `cdk` runs `aws-blocks/index.cdk.ts` through a
+ * loader that doesn't type-check, so an app scaffolded before `defaults` became
+ * required (or a plain-JS caller, `as any`, or a dynamically built props object)
+ * reaches the constructors without it, which then throw a cryptic
+ * `Cannot read properties of undefined (reading 'vpc')`. Called at the top of
+ * `BlocksStack.create()` and `BlocksBackend.create()`, before either constructs.
+ *
+ * @internal
+ */
+export function assertBlocksDefaults(props: { defaults?: unknown }, kind: 'BlocksStack' | 'BlocksBackend'): void {
+	if (props.defaults) return;
+	throw new Error(
+		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
+			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
+			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
+			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
+			`aws-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
+	);
+}
+
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
-	// Fail fast with an actionable message at the create() call site if `defaults`
-	// is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
-	// object) — otherwise the first Building Block to read `scope.defaults` throws
-	// a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
-	if (!props.defaults) {
-		throw new Error(
-			'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
-				'`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
-		);
-	}
+	// Belt and braces for callers that reach here without create().
+	assertBlocksDefaults(props, 'BlocksBackend');
 
 	// Surface the audit-trail tradeoff at synth when running a durable posture
 	// with access logging off. Non-fatal: warning only.
@@ -326,7 +357,7 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
-	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl);
+	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
 }
 
@@ -345,6 +376,29 @@ export function requireSharedGateway(owner: SharedGatewayOwner, kind: 'BlocksSta
 		);
 	}
 	return owner._sharedGateway;
+}
+
+/**
+ * The shared REST API's base URL (`restApi.url`,
+ * `https://{id}.execute-api.{region}.amazonaws.com/{stage}/` — trailing slash
+ * included) for the backend root that owns `scope`, or `undefined` when that
+ * root has no shared gateway yet (e.g. the backend module is still being
+ * imported, or the root is a bare `cdk.Stack` in a unit test). Read-only.
+ *
+ * Building Blocks are constructed while the backend module is imported, before
+ * `create()` builds the gateway, so they must call this from inside a
+ * `cdk.Lazy` producer, which runs at synth once the gateway exists. The gateway
+ * fronts every compute target the same way, so the URL is compute-agnostic.
+ *
+ * @internal First-party plumbing for Building Blocks that resolve late-built
+ * values from a `cdk.Lazy` producer; exported for them, not a stability-guaranteed
+ * public API.
+ *
+ * @param scope - Any construct in the backend (used to locate the backend root).
+ */
+export function getSharedGatewayUrl(scope: Construct): string | undefined {
+	const root = getBlocksRoot(scope) as { _sharedGateway?: SharedGateway };
+	return root._sharedGateway?.restApi.url;
 }
 
 /**
@@ -407,8 +461,14 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiFrontDoorClaimedByHosting?: boolean;
 	/** Public origin of whichever front door ended up fronting the API. @internal */
 	_apiFrontDoorResolvedUrl?: string;
+	/** Set when `Hosting` published the browser-facing origin (see {@link publishPublicOrigin}). @internal */
+	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting; set in the constructor. @internal */
+	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -418,6 +478,25 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
+	}
+
+	/**
+	 * Record that a `Hosting` door publishes this backend's browser-facing origin
+	 * (`BLOCKS_PUBLIC_ORIGIN`), so the managed `cloudfront` distribution doesn't
+	 * overwrite it. See {@link publishPublicOrigin}.
+	 * @internal Framework-only.
+	 */
+	publishPublicOrigin(): void {
+		publishPublicOrigin(this);
 	}
 
 	/** The backend's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
@@ -506,6 +585,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Validate and record the tier before the backend module is imported, so an
 		// invalid value fails before any app code runs.
 		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
+		this._apiWaf = resolveApiWaf(props.apiWaf);
 
 		// Brand as a backend root so getBlocksRoot() finds this by walking the
 		// construct tree — the key that keeps two BlocksBackends in one cdk.Stack
@@ -530,12 +610,20 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 		const infra = setupBlocksInfra(this, props, id);
 		this.executionRole = infra.executionRole;
+
+		// A committed baseline whose block left the app (renamed or removed) would
+		// let CloudFormation delete the resource it guards. Checked here, not by
+		// the block, so it still runs when no instance of the block is left. Keyed
+		// by `fullId`, the backend's BLOCKS_STACK_NAME (resolved at validation).
+		addOrphanedBaselineCheck(this, props.backendHandlerPath, () => this.fullId);
+
 		// The default compute (and thus handler/gateway) is created in create(),
 		// after construction — it derives BLOCKS_STACK_NAME from this.fullId.
 	}
 
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksBackend');
 		// Stack-level children before this backend exists, so the boundary can also
 		// cap the per-stack CDK singletons its blocks add (see the end of create()).
 		const stackChildrenBefore = snapshotChildren(cdk.Stack.of(scope));
@@ -551,6 +639,15 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// where an absolute path like `D:\...` is rejected as URL scheme `d:`.
 		const backendUrl = pathToFileURL(props.backendCDKPath);
 		backendUrl.searchParams.set('stack', id);
+		// Propagate the synth-time deployment type to deployed compute (via the BB
+		// config) and to this synth process, before the backend module imports so
+		// blocks can read getDeploymentType() during construction. The CDK context
+		// is authoritative at synth, so this overwrites any inherited value here.
+		// On deployed compute getDeploymentType() reads only the BB config entry,
+		// so an environment variable set on the compute cannot override it.
+		const deploymentType = isSandboxContext(backend) ? 'sandbox' : 'production';
+		registerConfig(backend, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
+		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {

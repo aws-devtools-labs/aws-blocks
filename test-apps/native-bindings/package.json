@@ -19,8 +19,9 @@
     "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
     "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
     "preview": "vite preview",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "deploy": "npm run deploy:sandbox",
+    "deploy:sandbox": "tsx aws-blocks/scripts/deploy-sandbox.ts",
+    "destroy": "npm run sandbox:destroy",
     "seed:cognito": "tsx aws-blocks/scripts/seed-cognito-user.ts",
     "vendorize": "blocks-vendorize"
   },
@@ -31,11 +32,11 @@
   "devDependencies": {
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
-    "vite": "^6.4.4",
+    "vite": "^6.4.5",
     "tsx": "^4.23.15",
     "concurrently": "^8.2.2",
     "esbuild": "^0.28.2",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk-lib": "^2.274.0",
     "constructs": "^10.8.1"
   }
 }

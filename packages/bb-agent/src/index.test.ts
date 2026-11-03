@@ -1,18 +1,22 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Scope } from '@aws-blocks/core';
+import { Scope, getSdkIdentifiers, isBlocksError } from '@aws-blocks/core';
 import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from './index.mock.js';
 import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
-import type { AgentStreamChunk } from './types.js';
+import type { AgentStreamChunk, ModelConfig } from './types.js';
+import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
+import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
+import { AgentBase } from './agent.js';
 import { checkModelHealth } from './model-factory.js';
+import { _setMantleResolverForTest } from './mantle.js';
 import { z } from 'zod';
 import { createStrandsModel } from './model-factory.js';
 
@@ -23,6 +27,149 @@ describe('AgentErrors', () => {
 		assert.strictEqual(AgentErrors.PersistenceRequired, 'PersistenceRequiredException');
 		assert.strictEqual(AgentErrors.InvalidModelConfig, 'InvalidModelConfigException');
 		assert.strictEqual(AgentErrors.BrowserNotSupported, 'BrowserNotSupportedException');
+		assert.strictEqual(AgentErrors.ConversationNotFound, 'ConversationNotFoundException');
+	});
+});
+
+// ── classifyModelAccessError ────────────────────────────────────────────────
+
+describe('classifyModelAccessError', () => {
+	const FIRST_TIME_USE = 'Model use case details have not been submitted for this account. Fill out the Anthropic use case details form before using the model. If you have already filled out the form, try again in 15 minutes.';
+	const MARKETPLACE_NOT_SUBSCRIBED = 'Model access is denied due to IAM user or service role is not authorized to perform the required AWS Marketplace actions (aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe) to enable access to this model. Refer to the Amazon Bedrock documentation for further details. Your AWS Marketplace subscription for this model cannot be completed at this time. If you recently fixed this issue, try again after 15 minutes.';
+	const NOT_ENTITLED = 'Model access is denied. The model global.anthropic.claude-opus-4-8 is not available for this account. Please contact AWS Sales.';
+
+	/** Build an Error with a specific `name`, as the AWS SDK does for service exceptions. */
+	function named(name: string, message: string, cause?: unknown): Error {
+		const err = cause === undefined ? new Error(message) : new Error(message, { cause });
+		err.name = name;
+		return err;
+	}
+
+	test('recognises the Anthropic first-time-use refusal and names the model', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', FIRST_TIME_USE), 'global.anthropic.claude-sonnet-4-6');
+		assert.ok(message, 'should classify');
+		assert.match(message, /Bedrock model 'global\.anthropic\.claude-sonnet-4-6'/);
+		assert.match(message, /first-time-use form/);
+		assert.match(message, /PutUseCaseForModelAccess/);
+	});
+
+	test('recognises a missing one-time AWS Marketplace subscription before the entitlement check', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', MARKETPLACE_NOT_SUBSCRIBED), 'global.anthropic.claude-haiku-4-5');
+		assert.ok(message, 'should classify');
+		assert.match(message, /^Bedrock model 'global\.anthropic\.claude-haiku-4-5' has not had its one-time AWS Marketplace subscription activated/);
+		assert.match(message, /aws-marketplace:Subscribe, aws-marketplace:Unsubscribe and aws-marketplace:ViewSubscriptions/);
+		assert.doesNotMatch(message, /contact AWS/, 'not reported as an entitlement problem');
+		// Even when the same text also says the model is not available, the subscription fix wins.
+		const combined = classifyModelAccessError(named('AccessDeniedException', `${MARKETPLACE_NOT_SUBSCRIBED} The model is not available for this account.`));
+		assert.match(combined ?? '', /AWS Marketplace subscription/);
+	});
+
+	test('recognises the entitlement refusal in its full Bedrock wording', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', NOT_ENTITLED));
+		assert.ok(message, 'should classify');
+		assert.match(message, /not available for this AWS account/);
+		assert.match(message, /contact AWS/);
+		assert.doesNotMatch(message, /Marketplace/);
+	});
+
+	test('recognises a model that is not available for the account', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', 'global.anthropic.claude-opus-4-8 is not available for this account. Contact AWS Sales.'));
+		assert.ok(message, 'should classify');
+		assert.match(message, /^The selected Bedrock model is not available for this AWS account/);
+		assert.match(message, /different model or preset/);
+	});
+
+	test('recognises a Bedrock model-access AccessDeniedException', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', "You don't have access to the model with the specified model ID."), 'us.amazon.nova-pro-v1:0');
+		assert.ok(message, 'should classify');
+		assert.match(message, /^Access to Bedrock model 'us\.amazon\.nova-pro-v1:0' was denied/);
+	});
+
+	test('finds the refusal on a nested, non-enumerable cause chain', () => {
+		const raw = named('AccessDeniedException', FIRST_TIME_USE);
+		const wrapped = new Error('outer', { cause: new Error('Model stream failed', { cause: raw }) });
+		assert.strictEqual(Object.keys(wrapped).includes('cause'), false, 'precondition: cause is non-enumerable');
+		assert.match(classifyModelAccessError(wrapped) ?? '', /first-time-use form/);
+		assert.match(classifyModelAccessError(new Error('outer', { cause: named('AccessDeniedException', NOT_ENTITLED) })) ?? '', /not available for this AWS account/);
+		assert.match(classifyModelAccessError(new Error('outer', { cause: named('AccessDeniedException', MARKETPLACE_NOT_SUBSCRIBED) })) ?? '', /AWS Marketplace subscription/);
+	});
+
+	test('does not echo the raw provider message', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', `${FIRST_TIME_USE} requestId=abc-123`));
+		assert.ok(message && !message.includes('abc-123'), 'only the composed message is returned');
+	});
+
+	test('returns undefined for unrelated errors', () => {
+		assert.strictEqual(classifyModelAccessError(new Error('simulated mid-stream failure')), undefined);
+		assert.strictEqual(classifyModelAccessError(named('ThrottlingException', 'Too many requests')), undefined);
+		// An IAM denial on a non-model action is not a model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('AccessDeniedException', 'User is not authorized to perform: s3:GetObject')), undefined);
+		// A denial that merely mentions model access in passing is not Bedrock's model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('AccessDeniedException', 'Not authorized to update model access settings for this project')), undefined);
+		assert.strictEqual(classifyModelAccessError(undefined), undefined);
+		assert.strictEqual(classifyModelAccessError('plain string'), undefined);
+	});
+	test('leaves an IAM denial of the Bedrock invoke action itself unclassified', () => {
+		const iamDenial = named('AccessDeniedException', 'User: arn:aws:sts::123456789012:assumed-role/Runtime/abc is not authorized to perform: bedrock:InvokeModelWithResponseStream on resource: arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.anthropic.claude-sonnet-4-6 because no identity-based policy allows the bedrock:InvokeModelWithResponseStream action');
+		assert.strictEqual(classifyModelAccessError(iamDenial, 'global.anthropic.claude-sonnet-4-6'), undefined);
+	});
+
+	test('requires a Bedrock access refusal (AccessDeniedException or HTTP 403) somewhere in the chain', () => {
+		// The same wording under another error name and no 403 is not a model-access refusal.
+		assert.strictEqual(classifyModelAccessError(named('ValidationException', 'Prompt caching is not available for this account')), undefined);
+		assert.strictEqual(classifyModelAccessError(new Error(FIRST_TIME_USE)), undefined);
+		assert.strictEqual(classifyModelAccessError(named('ValidationException', MARKETPLACE_NOT_SUBSCRIBED)), undefined);
+		assert.strictEqual(classifyModelAccessError(new Error('outer', { cause: new Error("You don't have access to the model with the specified model ID.") })), undefined);
+		// A 403 status from the AWS SDK's `$metadata` qualifies whatever the error is named.
+		const forbidden = Object.assign(named('BedrockRuntimeServiceException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 403 } });
+		assert.match(classifyModelAccessError(new Error('Model stream failed', { cause: forbidden })) ?? '', /first-time-use form/);
+		const otherStatus = Object.assign(named('BedrockRuntimeServiceException', FIRST_TIME_USE), { $metadata: { httpStatusCode: 400 } });
+		assert.strictEqual(classifyModelAccessError(otherStatus), undefined);
+	});
+
+	test('names only the resource part of an ARN model id, not the account id', () => {
+		const message = classifyModelAccessError(named('AccessDeniedException', FIRST_TIME_USE), 'arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz');
+		assert.ok(message, 'should classify');
+		assert.match(message, /Bedrock model 'abc123xyz'/);
+		assert.ok(!message.includes('123456789012'), 'the account id is not published');
+		assert.ok(!message.includes('arn:'), 'the ARN is not published');
+	});
+
+	/** Wrap `innermost` so that it sits at 1-based level `level` of the cause chain. */
+	function nestAtLevel(innermost: Error, level: number): Error {
+		let current = innermost;
+		for (let i = 1; i < level; i++) current = new Error(`wrapper ${i}`, { cause: current });
+		return current;
+	}
+
+	test('walks at most five levels of the cause chain', () => {
+		assert.match(classifyModelAccessError(nestAtLevel(named('AccessDeniedException', FIRST_TIME_USE), 5)) ?? '', /first-time-use form/, 'found at level 5');
+		assert.strictEqual(classifyModelAccessError(nestAtLevel(named('AccessDeniedException', FIRST_TIME_USE), 6)), undefined, 'not found at level 6');
+	});
+
+	test('terminates on a self-referencing or cyclic cause chain', () => {
+		const selfRef = named('AccessDeniedException', FIRST_TIME_USE);
+		selfRef.cause = selfRef;
+		assert.match(classifyModelAccessError(selfRef) ?? '', /first-time-use form/);
+		assert.strictEqual(walkCauseChain(selfRef).length, 1, 'a level is visited once');
+		const a = new Error('a');
+		const b = new Error('b', { cause: a });
+		a.cause = b;
+		assert.strictEqual(classifyModelAccessError(a), undefined);
+		assert.deepStrictEqual(walkCauseChain(a), [a, b]);
+	});
+});
+
+describe('agentErrorFromChunk', () => {
+	test('maps a ModelUnavailable errorName to a branded ModelUnavailable error', () => {
+		const err = agentErrorFromChunk({ error: 'no access', errorName: AgentErrors.ModelUnavailable });
+		assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+		assert.match(err.message, /no access/);
+	});
+
+	test('falls back to StreamFailed when errorName is absent or unrecognised', () => {
+		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom' }), AgentErrors.StreamFailed));
+		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom', errorName: 'SomethingElse' }), AgentErrors.StreamFailed));
 	});
 });
 
@@ -229,7 +376,7 @@ describe('inferenceOnly error handling', () => {
 
 	test('getConversation throws PersistenceRequired', async () => {
 		await assert.rejects(
-			() => agent.getConversation('any-id'),
+			() => agent.getConversation('any-id', { userId: 'test-user' }),
 			(err: any) => err.name === AgentErrors.PersistenceRequired,
 		);
 	});
@@ -244,6 +391,26 @@ describe('inferenceOnly error handling', () => {
 	test('stream still works', async () => {
 		const result = await agent.stream('hello', { userId: 'test-user' });
 		assert.ok(result.channelId);
+	});
+
+	// inferenceOnly agents keep no conversation records, so the ownership check must
+	// not apply to them: a conversationId is passed through, not rejected.
+	test('stream() with a conversationId is not ownership-checked', async () => {
+		const result = await agent.stream('hello', { conversationId: crypto.randomUUID(), userId: 'u' });
+		const done = await result.complete();
+		assert.strictEqual(done.type, 'done');
+	});
+
+	// The per-user channel scoping only applies with persistence: an inferenceOnly
+	// agent has no owner to scope by, so its channel is the bare channelId.
+	test("the channel is not user-scoped (getChannel's userId is not used)", async () => {
+		const channelId = crypto.randomUUID();
+		const channel = await agent.getChannel(channelId, { userId: 'someone-else' });
+		const received: unknown[] = [];
+		const sub = channel.subscribe((chunk) => { received.push(chunk); });
+		await (await agent.stream('hello', { channelId })).complete();
+		sub.unsubscribe();
+		assert.ok(received.some((c: any) => c.type === 'done'));
 	});
 
 	// Regression: resuming an interrupted agent needs a conversationId to restore
@@ -285,14 +452,14 @@ describe('deleteConversation ownership scoping', () => {
 		const r = await agent.stream('hello', { conversationId: convId, userId: ownerId });
 		await r.complete();
 
-		const before = await agent.getConversation(convId);
+		const before = await agent.getConversation(convId, { userId: ownerId });
 		assert.ok(before.length > 0, 'owner should have messages before delete');
 
 		// A different (non-owner) user attempts to delete this conversation.
 		await agent.deleteConversation(convId, 'attacker-2');
 
 		// The owner's messages must survive a non-owner delete.
-		const after = await agent.getConversation(convId);
+		const after = await agent.getConversation(convId, { userId: ownerId });
 		assert.ok(after.length > 0, 'owner messages must not be deleted by a non-owner caller');
 	});
 
@@ -304,12 +471,278 @@ describe('deleteConversation ownership scoping', () => {
 		const convId = await agent.createConversationId(ownerId);
 		const r = await agent.stream('hello', { conversationId: convId, userId: ownerId });
 		await r.complete();
-		assert.ok((await agent.getConversation(convId)).length > 0);
+		assert.ok((await agent.getConversation(convId, { userId: ownerId })).length > 0);
 
 		await agent.deleteConversation(convId, ownerId);
 
-		const after = await agent.getConversation(convId);
+		const after = await agent.getConversation(convId, { userId: ownerId });
 		assert.strictEqual(after.length, 0, 'owner delete should remove all messages');
+	});
+});
+
+// ── stream / resume / getPendingInterrupts ownership scoping ─────────────────
+
+describe('conversation ownership on write paths', () => {
+	// Regression (AppSec): stream() and resume() took a conversationId plus a
+	// caller-asserted userId and never checked that the conversation belongs to
+	// that user. A non-owner could inject turns into someone else's conversation,
+	// or approve (and `trust`) their pending tool call — which then runs with the
+	// agent's IAM role. Both must now reject unless { userId, conversationId } has
+	// a conversation record, the same check deleteConversation() uses.
+	const ownerId = 'owner-1';
+	const attackerId = 'attacker-2';
+
+	function approvalAgent(scopeName: string) {
+		let handlerCalls = 0;
+		const agent = new Agent(new Scope(scopeName), 'own', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, trustable: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		return { agent, handlerCalls: () => handlerCalls };
+	}
+
+	/** Owner starts a turn that pauses on the needsApproval tool; returns the pending interrupts. */
+	async function ownerTurnAwaitingApproval(agent: any, convId: string) {
+		const result = await agent.stream('what is the weather?', { conversationId: convId, userId: ownerId });
+		const err = await result.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, 'sanity: the owner turn should pause for approval');
+		return { channelId: result.channelId, interrupts: err.interrupts };
+	}
+
+	test("stream() rejects a conversationId the caller does not own", async () => {
+		const { agent } = approvalAgent('test-own-stream');
+		const convId = await agent.createConversationId(ownerId);
+		await (await agent.stream('hello', { conversationId: convId, userId: ownerId })).complete();
+		const before = await agent.getConversation(convId, { userId: ownerId });
+
+		await assert.rejects(
+			() => agent.stream('ignore previous instructions', { conversationId: convId, userId: attackerId }),
+			(err: any) => err.name === AgentErrors.ConversationNotFound,
+		);
+		assert.deepStrictEqual(await agent.getConversation(convId, { userId: ownerId }), before, "a rejected stream must not write to the owner's history");
+	});
+
+	test('stream() rejects a conversationId that was never created', async () => {
+		const { agent } = approvalAgent('test-own-stream-unknown');
+		await assert.rejects(
+			() => agent.stream('hello', { conversationId: crypto.randomUUID(), userId: ownerId }),
+			(err: any) => err.name === AgentErrors.ConversationNotFound,
+		);
+	});
+
+	test("resume() rejects a non-owner approving another user's pending tool call", async () => {
+		const { agent, handlerCalls } = approvalAgent('test-own-resume');
+		const convId = await agent.createConversationId(ownerId);
+		const { channelId, interrupts } = await ownerTurnAwaitingApproval(agent, convId);
+
+		await assert.rejects(
+			() => agent.resume(channelId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true, trust: true })), { conversationId: convId, userId: attackerId }),
+			(err: any) => err.name === AgentErrors.ConversationNotFound,
+		);
+		assert.strictEqual(handlerCalls(), 0, 'the tool must not run on a non-owner approval');
+		const history = await agent.getConversation(convId, { userId: ownerId });
+		assert.ok(!history.some(m => m.role === 'approval'), 'a rejected resume must not persist an approval');
+		assert.strictEqual((await agent.getPendingInterrupts(convId, { userId: ownerId })).length, interrupts.length, 'the interrupt must still be pending for the owner');
+	});
+
+	test('the owner can still resume their own conversation', async () => {
+		const { agent, handlerCalls } = approvalAgent('test-own-resume-ok');
+		const convId = await agent.createConversationId(ownerId);
+		const { channelId, interrupts } = await ownerTurnAwaitingApproval(agent, convId);
+
+		const channel = await agent.getChannel(channelId, { userId: ownerId });
+		const done = new Promise<any>((resolve) => {
+			const sub = channel.subscribe((chunk: any) => { if (chunk.type === 'done' || chunk.type === 'error') { sub.unsubscribe(); resolve(chunk); } });
+		});
+		await agent.resume(channelId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), { conversationId: convId, userId: ownerId });
+		assert.strictEqual((await done).type, 'done');
+		assert.strictEqual(handlerCalls(), 1);
+	});
+
+	test("getPendingInterrupts() returns nothing for a conversation the caller does not own", async () => {
+		const { agent } = approvalAgent('test-own-pending');
+		const convId = await agent.createConversationId(ownerId);
+		const { interrupts } = await ownerTurnAwaitingApproval(agent, convId);
+
+		assert.strictEqual((await agent.getPendingInterrupts(convId, { userId: ownerId })).length, interrupts.length);
+		assert.deepStrictEqual(await agent.getPendingInterrupts(convId, { userId: attackerId }), []);
+	});
+
+	// Regression: on AWS a plain GetItem is eventually consistent, so the ownership
+	// read right after createConversationId() could miss the record it just wrote and
+	// reject the user's first message with ConversationNotFound. The mock is strongly
+	// consistent, so simulate the lag: an eventually consistent get() misses, a
+	// consistentRead get() sees the record.
+	test('the ownership read is strongly consistent, so stream() right after createConversationId() is not rejected', async () => {
+		const { agent } = approvalAgent('test-own-consistent');
+		const convId = await agent.createConversationId(ownerId);
+		const conversations = (agent as any).conversations;
+		const realGet = conversations.get.bind(conversations);
+		conversations.get = (key: unknown, options?: { consistentRead?: boolean }) =>
+			options?.consistentRead ? realGet(key, options) : Promise.resolve(null);
+
+		const done = await (await agent.stream('hello', { conversationId: convId, userId: ownerId })).complete();
+		assert.strictEqual(done.type, 'done');
+	});
+
+	// Regression: a JavaScript (or any-typed) caller still on the old one-argument
+	// form got [] on the mock and an opaque marshalling error on AWS. It must fail
+	// loudly with a message that names the new signature.
+	test('getPendingInterrupts() without a userId throws InvalidUsage instead of returning []', async () => {
+		const { agent } = approvalAgent('test-own-pending-nouser');
+		const convId = await agent.createConversationId(ownerId);
+		await ownerTurnAwaitingApproval(agent, convId);
+
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getPendingInterrupts(convId),
+			(err: any) => err.name === AgentErrors.InvalidUsage && /getPendingInterrupts\(conversationId, \{ userId \}\)/.test(err.message),
+		);
+		// A bare userId string (the positional form) is not an options object: it must
+		// neither return the owner's interrupts nor be mistaken for an empty result.
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getPendingInterrupts(convId, ownerId),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+	});
+
+	// Regression: getConversation() read by conversationId alone, so anyone who knew
+	// a conversation id got its full history. It is now owner-scoped like
+	// getPendingInterrupts(): "not found" (empty) for a conversation the caller doesn't own.
+	test("getConversation() returns nothing for a conversation the caller does not own", async () => {
+		const { agent } = approvalAgent('test-own-getconv');
+		const convId = await agent.createConversationId(ownerId);
+		await (await agent.stream('hello', { conversationId: convId, userId: ownerId })).complete();
+
+		assert.ok((await agent.getConversation(convId, { userId: ownerId })).length > 0, 'the owner still reads their history');
+		assert.strictEqual((await agent.getConversation(convId, { userId: ownerId, limit: 1 })).length, 1, 'limit still applies');
+		assert.deepStrictEqual(await agent.getConversation(convId, { userId: attackerId }), []);
+	});
+
+	test('getConversation() without a userId throws InvalidUsage', async () => {
+		const { agent } = approvalAgent('test-own-getconv-nouser');
+		const convId = await agent.createConversationId(ownerId);
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getConversation(convId),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		// The old (id, { limit }) form must not be mistaken for a userId either.
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getConversation(convId, { limit: 5 }),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		// Nor the positional (id, userId, { limit }) form.
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getConversation(convId, ownerId, { limit: 5 }),
+			(err: any) => err.name === AgentErrors.InvalidUsage && /getConversation\(id, \{ userId, limit\? \}\)/.test(err.message),
+		);
+	});
+
+	// Regression: the default channel is the conversation id, and stream() accepted
+	// any caller-chosen channelId, so a non-owner could push chunks onto the owner's
+	// live channel with stream({ conversationId: <own>, channelId: <owner's id> }).
+	test("a caller-chosen channelId does not reach another user's channel", async () => {
+		const { agent } = approvalAgent('test-own-channel-push');
+		const ownerConv = await agent.createConversationId(ownerId);
+		const ownerChannel = await agent.getChannel(ownerConv, { userId: ownerId });
+		const received: unknown[] = [];
+		const sub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
+
+		const attackerConv = await agent.createConversationId(attackerId);
+		const result = await agent.stream('spoofed', { conversationId: attackerConv, channelId: ownerConv, userId: attackerId });
+		assert.strictEqual(result.channelId, ownerConv, 'stream() still returns the channelId the caller chose');
+		await result.complete();
+		sub.unsubscribe();
+		assert.deepStrictEqual(received, [], "the non-owner's turn must not reach the owner's channel");
+	});
+
+	// Regression: getChannel(channelId) minted a subscription for any channel, so a
+	// non-owner who knew a conversation id could listen to the owner's live turn.
+	test("getChannel() for another user's conversation id does not receive that user's chunks", async () => {
+		const { agent } = approvalAgent('test-own-channel-sub');
+		const ownerConv = await agent.createConversationId(ownerId);
+		const spy = await agent.getChannel(ownerConv, { userId: attackerId });
+		const leaked: unknown[] = [];
+		const spySub = spy.subscribe((chunk) => { leaked.push(chunk); });
+		const ownerChannel = await agent.getChannel(ownerConv, { userId: ownerId });
+		const received: unknown[] = [];
+		const ownerSub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
+
+		await (await agent.stream('private', { conversationId: ownerConv, userId: ownerId })).complete();
+		spySub.unsubscribe();
+		ownerSub.unsubscribe();
+		assert.deepStrictEqual(leaked, [], "a non-owner must not receive the owner's chunks");
+		assert.ok(received.some((c: any) => c.type === 'done'), 'the owner still receives their own chunks');
+	});
+
+	// The turn runs fire-and-forget, so a failure while reporting its own error must not become an
+	// unhandled rejection; and a channel that can't be scoped must not fall back to the bare,
+	// caller-chosen channelId, which may be another user's scoped channel.
+	test('invokeTurn() never rejects and never reports on an unscoped channel', async () => {
+		const { agent } = approvalAgent('test-own-invoke-fail');
+		const ownerConv = await agent.createConversationId(ownerId);
+		const ownerChannel = await agent.getChannel(ownerConv, { userId: ownerId });
+		const received: unknown[] = [];
+		const sub = ownerChannel.subscribe((chunk) => { received.push(chunk); });
+		const loneSurrogate = String.fromCharCode(0xd800);
+		// A channelId that is the owner's scoped key, from a userId that can't be scoped.
+		await agent.invokeTurn({ message: 'hi', channelId: `u/${ownerId}/${ownerConv}`, userId: loneSurrogate });
+		// A channel path over Realtime's size limit: every publish, including the error chunk, fails.
+		await agent.invokeTurn({ message: 'hi', channelId: 'x'.repeat(1100), userId: attackerId });
+		sub.unsubscribe();
+		assert.deepStrictEqual(received, []);
+		await assert.rejects(
+			() => agent.stream('hi', { channelId: `u/${ownerId}/${ownerConv}`, userId: loneSurrogate }),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+	});
+
+	test('resume() rejects an invalid tool context before persisting any approval', async () => {
+		const agent = new Agent(new Scope('test-own-resume-ctx'), 'ctx', {
+			systemPrompt: 'test',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			toolContextSchema: z.object({ tenant: z.string() }),
+		});
+		const convId = await agent.createConversationId(ownerId);
+		await assert.rejects(
+			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: ownerId }),
+			(err: any) => err.name === AgentErrors.InvalidModelConfig,
+		);
+		const history = await agent.getConversation(convId, { userId: ownerId });
+		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
+	});
+
+	test('resume() rejects an unscopable userId before persisting any approval', async () => {
+		const { agent } = approvalAgent('test-own-resume-unscopable');
+		const loneSurrogate = String.fromCharCode(0xd800);
+		const convId = await agent.createConversationId(loneSurrogate);
+		await assert.rejects(
+			() => agent.resume('chan-1', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: loneSurrogate }),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		const history = await agent.getConversation(convId, { userId: loneSurrogate });
+		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
+	});
+
+	test('getChannel() without a userId throws InvalidUsage when persistence is enabled', async () => {
+		const { agent } = approvalAgent('test-own-channel-nouser');
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getChannel('some-channel'),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		await assert.rejects(
+			// @ts-expect-error -- an old call form: no options object with a userId
+			() => agent.getChannel('some-channel', ownerId),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
 	});
 });
 
@@ -703,7 +1136,7 @@ describe('CannedProvider', () => {
 		const convId = await agent.createConversationId('test-user');
 		const result = await agent.stream('help me find the answer', { conversationId: convId, userId: 'test-user' });
 		await result.complete();
-		const messages = await agent.getConversation(convId);
+		const messages = await agent.getConversation(convId, { userId: 'test-user' });
 		const toolCall = messages.find(m => m.role === 'tool-call');
 		assert.ok(toolCall, 'trigger keyword should have fired a tool call');
 		assert.strictEqual(toolCall.metadata.toolName, 'searchDocs');
@@ -786,8 +1219,8 @@ describe('CannedProvider', () => {
 			const r = await agent.stream(msg, { conversationId: convId, userId: 'test-user' });
 			await r.complete();
 		}
-		const all = await agent.getConversation(convId);
-		const limited = await agent.getConversation(convId, { limit: 2 });
+		const all = await agent.getConversation(convId, { userId: 'test-user' });
+		const limited = await agent.getConversation(convId, { userId: 'test-user', limit: 2 });
 		assert.ok(all.length >= 6, 'should have at least 6 messages');
 		assert.strictEqual(limited.length, 2, 'limit should cap results');
 		// Limited should return the most recent messages
@@ -806,9 +1239,9 @@ describe('CannedProvider', () => {
 			const r = await agent.stream(msg, { conversationId: convId, userId: 'test-user' });
 			await r.complete();
 		}
-		assert.ok((await agent.getConversation(convId)).length > 0, 'sanity: conversation has messages');
-		assert.strictEqual((await agent.getConversation(convId, { limit: 0 })).length, 0, 'limit 0 should return an empty array, not all messages');
-		assert.strictEqual((await agent.getConversation(convId, { limit: -1 })).length, 0, 'negative limit should return an empty array, not all messages');
+		assert.ok((await agent.getConversation(convId, { userId: 'test-user' })).length > 0, 'sanity: conversation has messages');
+		assert.strictEqual((await agent.getConversation(convId, { userId: 'test-user', limit: 0 })).length, 0, 'limit 0 should return an empty array, not all messages');
+		assert.strictEqual((await agent.getConversation(convId, { userId: 'test-user', limit: -1 })).length, 0, 'negative limit should return an empty array, not all messages');
 	});
 
 	test("token mode publishes multiple chunks", async () => {
@@ -868,6 +1301,109 @@ describe('CannedProvider', () => {
 		await assert.rejects(() => result.complete(), (err: any) => {
 			assert.strictEqual(err.name, 'StreamFailedException');
 			assert.ok(err.message.includes('simulated mid-stream failure'));
+			return true;
+		});
+	});
+
+	/** The test-only 'throwing' provider; the public ModelConfig union deliberately omits it. */
+	function throwingModel(modelId?: string): ModelConfig {
+		const config: ModelConfig = modelId === undefined ? { provider: 'canned' } : { provider: 'canned', modelId };
+		// Deliberately bypasses the ModelConfig provider union (without a cast) to select the test-only provider.
+		Reflect.set(config, 'provider', 'throwing');
+		return config;
+	}
+
+	test("a Bedrock model-access refusal publishes an actionable error chunk tagged ModelUnavailable", async () => {
+		const scope = new Scope('test-model-access-chunk');
+		const agent = new Agent(scope, 'macc', {
+			systemPrompt: 'test',
+			model: { deployed: throwingModel(), local: throwingModel() },
+			inferenceOnly: true,
+		});
+		const chunks: AgentStreamChunk[] = [];
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		const ch = await result.channel;
+		const sub = ch.subscribe((chunk: AgentStreamChunk) => { chunks.push(chunk); });
+		await assert.rejects(() => result.complete());
+		sub.unsubscribe();
+		const errorChunk = chunks.find((c) => c.type === 'error');
+		assert.ok(errorChunk, 'should publish an error chunk');
+		assert.strictEqual(errorChunk.errorName, AgentErrors.ModelUnavailable);
+		assert.match(errorChunk.error ?? '', /first-time-use form/);
+		assert.ok(!(errorChunk.error ?? '').includes('Model stream failed'), 'raw wrapper message is not published');
+	});
+
+	test("complete() rejects with ModelUnavailable on a Bedrock model-access refusal", async () => {
+		const scope = new Scope('test-model-access-complete');
+		const agent = new Agent(scope, 'macc2', {
+			systemPrompt: 'test',
+			model: { deployed: throwingModel(), local: throwingModel() },
+			inferenceOnly: true,
+		});
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable), 'should reject with ModelUnavailable, not StreamFailed');
+			assert.ok(err instanceof Error && /PutUseCaseForModelAccess/.test(err.message));
+			return true;
+		});
+	});
+
+	test("complete() rejects with ModelUnavailable, prefixed once, when no model passes the health check", async () => {
+		const scope = new Scope('test-model-health-unavailable');
+		const unreachable: ModelConfig = { provider: 'openai-api', modelId: 'gpt-4', endpoint: 'http://127.0.0.1:1/v1', apiKey: 'sk-test' };
+		// AgentBase directly: the mock Agent appends a canned fallback, which always passes the health check.
+		const agent = new AgentBase(scope, 'mhu', { systemPrompt: 'test', inferenceOnly: true }, [unreachable], (bucket) => new FileBucketSnapshotStorage(bucket));
+		const result = await agent.stream('hello', { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable), 'should reject with ModelUnavailable, not StreamFailed');
+			assert.ok(err instanceof Error);
+			assert.match(err.message, /No model available/);
+			assert.strictEqual(err.message.split(AgentErrors.ModelUnavailable).length - 1, 1, 'the ModelUnavailableException prefix appears exactly once');
+			assert.ok(!err.message.includes(AgentErrors.StreamFailed));
+			return true;
+		});
+	});
+
+	test("a model-access refusal is persisted with its composed message and errorName, not the raw provider text", async () => {
+		const scope = new Scope('test-model-access-persist');
+		const agent = new Agent(scope, 'maccp', {
+			systemPrompt: 'test',
+			model: { deployed: throwingModel(), local: throwingModel() },
+			inferenceOnly: false,
+		});
+		const convId = await agent.createConversationId('test-user');
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { conversationId: convId, userId: 'test-user' });
+		let composed = '';
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+			composed = err.message.slice(`${AgentErrors.ModelUnavailable}: `.length);
+			return true;
+		});
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
+		const errorRow = history.find((m) => m.role === 'assistant' && m.metadata.error !== undefined);
+		assert.ok(errorRow, 'the error is persisted to the conversation');
+		assert.deepStrictEqual(errorRow.metadata, { error: composed, errorName: AgentErrors.ModelUnavailable });
+		const serialized = JSON.stringify(errorRow.metadata);
+		assert.ok(!serialized.includes('Model stream failed'), 'raw wrapper message is not persisted');
+		assert.ok(!serialized.includes('If you have already filled out the form'), 'raw provider message is not persisted');
+	});
+
+	test("a refusal names the model only when exactly one candidate is configured", async () => {
+		// AgentBase directly, so the candidate list is exactly the one given (the mock Agent appends a canned fallback).
+		const single = new AgentBase(new Scope('test-model-access-single'), 'maccs', { systemPrompt: 'test', inferenceOnly: true }, [throwingModel('model-a')], (bucket) => new FileBucketSnapshotStorage(bucket));
+		const singleResult = await single.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		await assert.rejects(() => singleResult.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+			assert.match(err.message, /Bedrock model 'model-a' requires Anthropic use case details/);
+			return true;
+		});
+
+		const agent = new AgentBase(new Scope('test-model-access-multi'), 'maccm', { systemPrompt: 'test', inferenceOnly: true }, [throwingModel('model-a'), throwingModel('model-b')], (bucket) => new FileBucketSnapshotStorage(bucket));
+		const result = await agent.stream(`hello ${SIMULATE_MODEL_ACCESS_DENIED}`, { userId: 'test-user' });
+		await assert.rejects(() => result.complete(), (err: unknown) => {
+			assert.ok(isBlocksError(err, AgentErrors.ModelUnavailable));
+			assert.match(err.message, /The selected Bedrock model requires Anthropic use case details/);
+			assert.doesNotMatch(err.message, /Bedrock model '|model-a|model-b/);
 			return true;
 		});
 	});
@@ -1043,7 +1579,7 @@ describe('runaway protection caps', () => {
 		const result = await agent.stream('run alpha and bravo', { conversationId: convId, userId: 'test-user' });
 		await assert.rejects(() => result.complete());
 
-		const history = await agent.getConversation(convId);
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
 		const toolCalls = history.filter(m => m.role === 'tool-call');
 		const toolResults = history.filter(m => m.role === 'tool-result');
 		assert.ok(toolCalls.length > 0, 'sanity: a tool call was persisted before the cap fired');
@@ -1074,7 +1610,7 @@ describe('runaway protection caps', () => {
 		assert.match(terminal.error, /maxLlmCalls/, 'the error should name the cap that tripped');
 
 		// History must stay paired and explain itself.
-		const history = await agent.getConversation(convId);
+		const history = await agent.getConversation(convId, { userId: 'test-user' });
 		const resumeToolCalls = history.filter(m => m.role === 'tool-call');
 		const resumeToolResults = history.filter(m => m.role === 'tool-result');
 		assert.strictEqual(resumeToolResults.length, resumeToolCalls.length, 'every tool-call needs a matching tool-result');
@@ -1492,6 +2028,96 @@ describe('model-factory', () => {
 			if (original) process.env.OPENAI_API_KEY = original;
 		}
 	});
+
+	test('openai-api on a Bedrock Mantle endpoint needs neither apiKey nor OPENAI_API_KEY', async () => {
+		const original = process.env.OPENAI_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+		try {
+			// Keys are minted lazily per request, so building the model touches no credentials.
+			const model = await createStrandsModel({ provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' });
+			assert.ok(model);
+		} finally {
+			if (original) process.env.OPENAI_API_KEY = original;
+		}
+	});
+
+	test('openai-api on a Mantle lookalike host still requires apiKey or OPENAI_API_KEY', async () => {
+		const original = process.env.OPENAI_API_KEY;
+		delete process.env.OPENAI_API_KEY;
+		try {
+			await assert.rejects(
+				() => createStrandsModel({ provider: 'openai-api', modelId: 'm', endpoint: 'https://bedrock-mantle.us-east-1.api.aws.example.com/v1' }),
+				(err: any) => err.name === AgentErrors.InvalidModelConfig,
+			);
+		} finally {
+			if (original) process.env.OPENAI_API_KEY = original;
+		}
+	});
+});
+
+describe('createStrandsModel on a Bedrock Mantle endpoint', () => {
+	const MANTLE = { provider: 'openai-api' as const, modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' };
+	const originalFetch = globalThis.fetch;
+	const originalKey = process.env.OPENAI_API_KEY;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+		else process.env.OPENAI_API_KEY = originalKey;
+		_setMantleResolverForTest('us-east-1', undefined);
+	});
+
+	/** Minimal streamed Chat Completions response (the chat adapter always requests `stream: true`). */
+	function chatCompletionStream(): Response {
+		const chunk = (delta: object, finish: string | null) => `data: ${JSON.stringify({ id: 'c1', object: 'chat.completion.chunk', created: 0, model: MANTLE.modelId, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+		const body = `${chunk({ role: 'assistant', content: 'hi' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`;
+		return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+	}
+
+	/** Stubs fetch (before the model's OpenAI client captures it) and records each request's Authorization header. */
+	function captureAuthorization(): string[] {
+		const seen: string[] = [];
+		globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+			seen.push(new Headers(init?.headers).get('authorization') ?? '');
+			return chatCompletionStream();
+		}) as typeof fetch;
+		return seen;
+	}
+
+	async function callModel(model: Awaited<ReturnType<typeof createStrandsModel>>): Promise<void> {
+		const { Message, TextBlock } = await import('@strands-agents/sdk');
+		for await (const _event of model.stream([new Message({ role: 'user', content: [new TextBlock('hello')] })])) {
+			// Drain the stream so the request completes.
+		}
+	}
+
+	test('resolves the minted key before each request, so a refreshed key is sent', async () => {
+		const keys = ['k1', 'k2'];
+		let resolved = 0;
+		_setMantleResolverForTest('us-east-1', async () => keys[resolved++] ?? 'unexpected');
+		const seen = captureAuthorization();
+		const model = await createStrandsModel(MANTLE);
+		await callModel(model);
+		await callModel(model);
+		assert.deepStrictEqual(seen, ['Bearer k1', 'Bearer k2']);
+	});
+
+	test('an explicit apiKey is sent as-is and no key is minted', async () => {
+		let minted = 0;
+		_setMantleResolverForTest('us-east-1', async () => { minted++; return 'minted'; });
+		const seen = captureAuthorization();
+		await callModel(await createStrandsModel({ ...MANTLE, apiKey: 'explicit' }));
+		assert.deepStrictEqual(seen, ['Bearer explicit']);
+		assert.strictEqual(minted, 0);
+	});
+
+	test('an empty apiKey counts as omitted: the minted key is sent, not OPENAI_API_KEY', async () => {
+		process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+		_setMantleResolverForTest('us-east-1', async () => 'minted');
+		const seen = captureAuthorization();
+		await callModel(await createStrandsModel({ ...MANTLE, apiKey: '' }));
+		assert.deepStrictEqual(seen, ['Bearer minted']);
+	});
 });
 
 // ── useChat ──────────────────────────────────────────────────────────────────
@@ -1589,6 +2215,33 @@ describe('useChat', () => {
 
 		assert.strictEqual(errorReceived, 'model throttled');
 		assert.strictEqual(loadingStates.at(-1), false, 'loading should be false after error');
+	});
+
+	test('onError receives the branded error as cause for a classified error chunk', async () => {
+		const { cap, subscribe } = subscribeCapture();
+		const reports: Array<{ error: string; cause: unknown }> = [];
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-err-cause' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			subscribe,
+			onError: (error, cause) => { reports.push({ error, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'error', error: 'no model access', errorName: AgentErrors.ModelUnavailable });
+		assert.strictEqual(reports.length, 1);
+		assert.strictEqual(reports[0]?.error, 'no model access');
+		assert.ok(isBlocksError(reports[0]?.cause, AgentErrors.ModelUnavailable), 'cause is the branded ModelUnavailable error');
+
+		// An unclassified error chunk keeps the message-only report.
+		await chat.sendMessage('again');
+		cap.handler!({ type: 'error', error: 'boom' });
+		assert.strictEqual(reports.length, 2);
+		assert.strictEqual(reports[1]?.error, 'boom');
+		assert.strictEqual(reports[1]?.cause, undefined);
 	});
 
 	test('an error chunk before any text drops the empty assistant placeholder (mirrors createChat)', async () => {
@@ -2389,6 +3042,84 @@ describe('checkModelHealth', () => {
 		assert.strictEqual(await checkModelHealth({ provider: 'bedrock', modelId: 'global.anthropic.claude-opus-4-8-v1' }, log, undefined, mockClient), true);
 	});
 
+	describe('Bedrock Mantle endpoint', () => {
+		const MANTLE = { provider: 'openai-api' as const, modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' };
+		const originalFetch = globalThis.fetch;
+		const originalKey = process.env.OPENAI_API_KEY;
+
+		afterEach(() => {
+			globalThis.fetch = originalFetch;
+			if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+			else process.env.OPENAI_API_KEY = originalKey;
+			_setMantleResolverForTest('us-east-1', undefined);
+		});
+
+		test('returns false and warns when a key cannot be minted', async () => {
+			_setMantleResolverForTest('us-east-1', async () => { throw new Error('no credentials'); });
+			const warnings: string[] = [];
+			const warnLog = { ...log, warn: (msg: string) => { warnings.push(msg); } };
+			let fetched = false;
+			globalThis.fetch = (async () => { fetched = true; return new Response('{}'); }) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, warnLog), false);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0], /Bedrock API key/);
+			assert.strictEqual(fetched, false, 'no request without a key');
+		});
+
+		test('sends the minted key, not OPENAI_API_KEY, and finds the model', async () => {
+			process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+			_setMantleResolverForTest('us-east-1', async () => 'bedrock-api-key-test');
+			const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+			globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+				calls.push({ url: String(input), headers: (init?.headers ?? {}) as Record<string, string> });
+				return new Response(JSON.stringify({ data: [{ id: 'openai.gpt-oss-120b' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, log), true);
+			assert.strictEqual(calls.length, 1);
+			assert.strictEqual(calls[0].url, 'https://bedrock-mantle.us-east-1.api.aws/v1/models');
+			assert.strictEqual(calls[0].headers.Authorization, 'Bearer bedrock-api-key-test');
+		});
+
+		test('an explicit apiKey is sent as-is and no key is minted', async () => {
+			let minted = 0;
+			_setMantleResolverForTest('us-east-1', async () => { minted++; return 'minted'; });
+			const seen: string[] = [];
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				seen.push(new Headers(init?.headers).get('authorization') ?? '');
+				return new Response(JSON.stringify({ data: [{ id: MANTLE.modelId }] }), { status: 200 });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth({ ...MANTLE, apiKey: 'explicit' }, log), true);
+			assert.deepStrictEqual(seen, ['Bearer explicit']);
+			assert.strictEqual(minted, 0);
+		});
+
+		test('an empty apiKey counts as omitted: the minted key is sent, not OPENAI_API_KEY', async () => {
+			process.env.OPENAI_API_KEY = 'sk-should-not-be-sent';
+			_setMantleResolverForTest('us-east-1', async () => 'minted');
+			const seen: string[] = [];
+			globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+				seen.push(new Headers(init?.headers).get('authorization') ?? '');
+				return new Response(JSON.stringify({ data: [{ id: MANTLE.modelId }] }), { status: 200 });
+			}) as typeof fetch;
+			assert.strictEqual(await checkModelHealth({ ...MANTLE, apiKey: '' }, log), true);
+			assert.deepStrictEqual(seen, ['Bearer minted']);
+		});
+
+		test('a rejected minted key returns false and logs a permissions hint without the key', async () => {
+			_setMantleResolverForTest('us-east-1', async () => 'bedrock-api-key-secret');
+			const warnings: Array<{ msg: string; meta?: any }> = [];
+			const warnLog = { ...log, warn: (msg: string, meta?: any) => { warnings.push({ msg, meta }); } };
+			globalThis.fetch = (async () => new Response(`{"error":"not authorized"}${'x'.repeat(500)}`, { status: 403 })) as typeof fetch;
+			assert.strictEqual(await checkModelHealth(MANTLE, warnLog), false);
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0].msg, /Mantle rejected the minted key \(HTTP 403\) at https:\/\/bedrock-mantle\.us-east-1\.api\.aws\/v1\./);
+			assert.match(warnings[0].msg, /bedrock-mantle:CallWithBearerToken, bedrock-mantle:ListModels and bedrock-mantle:CreateInference in us-east-1/);
+			assert.ok(warnings[0].meta.bodySnippet.startsWith('{"error":"not authorized"}'));
+			assert.strictEqual(warnings[0].meta.bodySnippet.length, 200);
+			assert.ok(!JSON.stringify(warnings).includes('bedrock-api-key-secret'), 'the key is never logged');
+		});
+	});
+
 	test('openai-api with unreachable endpoint returns false', async () => {
 		assert.strictEqual(await checkModelHealth({ provider: 'openai-api', modelId: 'gpt-4', endpoint: 'http://localhost:19999/v1' }, log), false);
 	});
@@ -2543,7 +3274,8 @@ describe('OllamaModels presets', () => {
 // drives the mock/local path, so this covers agent.aws.ts by spying the S3Storage ctor.
 
 import { Agent as DeployedAgent } from './index.aws.js';
-import { createDeployedSnapshotStorage } from './agent.aws.js';
+import { createDeployedSnapshotStorage, Agent as AwsAgent } from './agent.aws.js';
+import { handleInvocation } from './agentcore-invocation.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
@@ -2596,7 +3328,7 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 			const bucket = new FileBucket(new Scope(scopeId), 'sn');
 			createDeployedSnapshotStorage(bucket, noopLog(), Spy);
 			assert.strictEqual(configs.length, 1, 'S3Storage should be constructed exactly once');
-			assert.strictEqual(configs[0].bucket, bucket.fullId, 'session bucket id should be passed through');
+			assert.strictEqual(configs[0].bucket, getSdkIdentifiers(bucket).bucketName, 'the session bucket name the FileBucket registered should be passed through');
 			return configs[0];
 		} finally {
 			if (prev === undefined) delete process.env.AWS_REGION;
@@ -2965,6 +3697,29 @@ describe('createChat', () => {
 		assert.strictEqual(chat.isLoading(), false, 'done should clear loading');
 		assert.deepStrictEqual(loadingStates, [true, false]);
 		assert.strictEqual(chat.getConversationId(), 'conv-1', 'first turn lazily creates the conversation');
+	});
+
+	test('a classified error chunk reports onError with a branded cause; an unclassified one without', async () => {
+		const reports: { message: string; cause: unknown }[] = [];
+		const make = (chunk: AgentStreamChunk) => createChat({
+			transport: fakeTransport([chunk]),
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-err' }),
+				getConversation: async () => ({ messages: [] }),
+			},
+			onError: (message, cause) => reports.push({ message, cause }),
+		});
+
+		await make({ type: 'error', error: 'no model access', errorName: AgentErrors.ModelUnavailable }).sendMessage('hi');
+		await new Promise(r => setTimeout(r, 10));
+		await make({ type: 'error', error: 'boom' }).sendMessage('hi');
+		await new Promise(r => setTimeout(r, 10));
+
+		assert.strictEqual(reports.length, 2);
+		assert.strictEqual(reports[0].message, 'no model access');
+		assert.ok(isBlocksError(reports[0].cause, AgentErrors.ModelUnavailable), 'classified chunk carries a ModelUnavailable cause');
+		assert.strictEqual(reports[1].message, 'boom');
+		assert.strictEqual(reports[1].cause, undefined, 'unclassified chunk keeps the message-only report');
 	});
 
 	test('interrupt fires onInterrupt and resume via sendMessage continues the turn', async () => {
@@ -3726,6 +4481,30 @@ describe('createChat', () => {
 
 		stream.unsubscribe();
 	});
+
+	test('realtimeTransport calls the subscription unsubscribe on its own receiver after attach', async () => {
+		class Subscription {
+			detached = false;
+			established = Promise.resolve();
+			unsubscribe() {
+				this.detached = true;
+			}
+		}
+		const sub = new Subscription();
+		const transport = realtimeTransport({
+			subscribe: async () => sub,
+			sendMessage: async () => {},
+			resume: async () => {},
+		});
+
+		const stream = transport.subscribe('conv-1');
+		await stream.established;
+
+		assert.doesNotThrow(() => stream.unsubscribe(), 'unsubscribe must not lose the subscription receiver');
+		assert.strictEqual(sub.detached, true, 'the subscription instance must be detached');
+		const next = await stream[Symbol.asyncIterator]().next();
+		assert.strictEqual(next.done, true, 'the iterator must complete after unsubscribe');
+	});
 });
 
 describe('createChat loadConversation + metadata narrowing', () => {
@@ -3840,3 +4619,59 @@ describe('createChat loadConversation + metadata narrowing', () => {
 	});
 });
 
+// ── AgentCore dispatch for a turn without a conversation ────────────────────
+
+describe('AgentCore: a turn without a conversation never runs in another session', () => {
+	// Regression: on AWS a turn with no conversationId used the caller-chosen channelId as
+	// the AgentCore runtimeSessionId, and the AgentCore entry fell back to that session id
+	// as the conversationId. stream({ channelId: <another user's conversation id> }) then
+	// ran inside that user's session (history, trusted tools) without any ownership check.
+	test("the runtime session id is not the caller's channelId", async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session'), 'acs', { systemPrompt: 'test' });
+		const sent: Array<{ runtimeSessionId?: string; payload?: Uint8Array }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		const ownerConv = crypto.randomUUID();
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: ownerConv, userId: 'attacker-2' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: ownerConv, channelId: ownerConv, userId: 'owner-1' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		assert.notStrictEqual(sent[0].runtimeSessionId, ownerConv, 'a conversation-less turn must not reuse a conversation id as its session');
+		assert.ok((sent[0].runtimeSessionId ?? '').length >= 33, 'AgentCore needs a session id of at least 33 characters');
+		assert.strictEqual(JSON.parse(new TextDecoder().decode(sent[0].payload)).conversationId, undefined);
+		assert.strictEqual(sent[1].runtimeSessionId, ownerConv, 'a conversation keeps routing to its own session');
+	});
+
+	test('each conversation-less turn gets a fresh session, whatever its userId or channelId', async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session-io'), 'acsio', { systemPrompt: 'test', inferenceOnly: true });
+		const sent: Array<{ runtimeSessionId?: string }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: String.fromCharCode(0xd800) });
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: 'a' });
+			await (agent as any).dispatchTurn({ message: 'hi', channelId: 'c', userId: 'a' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^turn-[0-9a-f-]{36}$/);
+		assert.strictEqual(new Set(sent.map(s => s.runtimeSessionId)).size, 3, 'no two conversation-less turns share a session');
+	});
+
+	test('the AgentCore entry does not turn the session id into a conversationId', async () => {
+		const turns: Array<{ conversationId?: string }> = [];
+		const agent = { invokeTurn: async (payload: { conversationId?: string }) => { turns.push(payload); } };
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		const ownerConv = crypto.randomUUID();
+		// The session id a conversation-less turn would have used before the fix: the caller's channelId.
+		const ack = handleInvocation(agent, tasks, { prompt: 'hi', channelId: ownerConv, userId: 'attacker-2' }, { sessionId: ownerConv });
+		handleInvocation(agent, tasks, { prompt: '', channelId: 'chan-1', conversationId: 'conv-1', userId: 'owner-1' }, { sessionId: 'conv-1' });
+		assert.deepStrictEqual(ack, { channelId: ownerConv, status: 'accepted' });
+		assert.strictEqual(turns[0].conversationId, undefined);
+		assert.strictEqual(turns[1].conversationId, 'conv-1');
+	});
+});

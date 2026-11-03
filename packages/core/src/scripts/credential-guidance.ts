@@ -225,7 +225,7 @@ const SIGN_IN_OPTIONS_URL = 'https://docs.aws.amazon.com/cli/latest/userguide/cl
 const SHELL_SAFE_PROFILE = /^\w[\w.@+-]*$/;
 
 /** A profile name for prose; quoted, with control characters escaped, when it has unusual characters. */
-function profileName(profile: string): string {
+export function profileName(profile: string): string {
 	return SHELL_SAFE_PROFILE.test(profile) ? profile : JSON.stringify(profile);
 }
 
@@ -234,7 +234,7 @@ function profileName(profile: string): string {
  * (`$(…)`, backticks, spaces, quotes) prints as a `<profile>` placeholder, so a
  * copied command never runs anything else. The message names the profile elsewhere.
  */
-function profileArg(profile: string): string {
+export function profileArg(profile: string): string {
 	return SHELL_SAFE_PROFILE.test(profile) ? profile : '<profile>';
 }
 
@@ -381,6 +381,11 @@ function guidanceLines(source: CredentialSource, failure: CredentialFailure, log
 export interface CredentialFailureMessageOptions {
 	/** The npm script name, used in the message (for example `sandbox` or `deploy`). */
 	command: string;
+	/**
+	 * How the user runs the command, when it is not an npm script (for example `blocks whoami`).
+	 * Default: `npm run <command>`.
+	 */
+	invocation?: string;
 	/** The SDK error name. The message includes it for debugging. */
 	errorName: string;
 	failure: CredentialFailure;
@@ -400,6 +405,7 @@ export interface CredentialFailureMessageOptions {
  */
 export async function credentialFailureMessage({
 	command,
+	invocation = `npm run ${command}`,
 	errorName,
 	failure,
 	env = process.env,
@@ -423,8 +429,8 @@ export async function credentialFailureMessage({
 		];
 	}
 	return [
-		`AWS credentials could not be verified for \`npm run ${command}\` (${errorName}).`,
+		`AWS credentials could not be verified for \`${invocation}\` (${errorName}).`,
 		...lines.map((line) => `  ${line}`),
-		`Then re-run \`npm run ${command}\`.`,
+		`Then re-run \`${invocation}\`.`,
 	].join('\n');
 }

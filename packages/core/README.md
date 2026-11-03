@@ -14,6 +14,10 @@ import { Scope } from '@aws-blocks/core';
 const scope = new Scope('my-app');
 ```
 
+Pass `compute` to place everything created under a scope, and in its child
+scopes, on one `Compute` (`new Scope('reports', { parent: scope, compute })`);
+see the `@aws-blocks/bb-compute` README for what follows it.
+
 ### ApiNamespace
 
 Define type-safe APIs with automatic frontend/backend integration.
@@ -38,7 +42,7 @@ const result = await api.greet('World');
 
 #### Authentication — every method is a public endpoint
 
-Each method you define becomes a public, internet-reachable RPC endpoint. There is **no authentication by default** — a method is callable by anyone until you gate it. Auth is opt-in, per method, by calling an auth Building Block at the top of the handler:
+Each method you define becomes a public, internet-reachable RPC endpoint. There is **no authentication by default** — a method is callable by anyone until you gate it. Auth is opt-in, per method, by calling the `Auth` Building Block at the top of the handler:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -55,7 +59,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
-The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See your auth block's README (e.g. `@aws-blocks/bb-auth-cognito`) for `requireAuth` / `requireRole`.
+The local mock applies no auth either, so an ungated method passes every local check and still ships callable by anyone. See the `Auth` README (`@aws-blocks/bb-auth`) for `requireAuth` / `requireRole`.
+
+Only the methods your handler's object defines are callable — its own properties (including any spread in from another object), or methods its class defines. Members every object inherits (`constructor`, `toString`, `hasOwnProperty`, `__proto__`, …), properties hidden with `Object.defineProperty`, and the methods of a Building Block (exported, e.g. `export const notes = new KVStore(...)`, or returned by a handler) are never endpoints; calling one returns the same "Method not found" error as an unknown name.
 
 #### What the RPC endpoint can reach
 
@@ -91,7 +97,7 @@ Error responses use these JSON-RPC codes:
 |------|---------|---------------------|
 | `-32700` | Parse error | Request body is not valid JSON. |
 | `-32600` | Invalid Request | Body is not a valid Blocks JSON-RPC request, such as missing `jsonrpc: "2.0"` or a `method` that is not `namespace.method`. |
-| `-32601` | Method not found | The requested namespace or method is not exported by the backend. |
+| `-32601` | Method not found | The requested namespace is not exported by the backend, or the method is not one the API defines (inherited members such as `toString` don't count). |
 | `-32602` | Invalid params | Reserved for JSON-RPC parameter validation failures. Application-level validation should throw an `ApiError` with the appropriate HTTP status instead. |
 | `-32603` | Internal error | Reserved for generic JSON-RPC internal errors. Unhandled application errors currently use code `500`. |
 
@@ -105,6 +111,26 @@ curl -X POST http://localhost:3000/aws-blocks/api \
   -d '{"jsonrpc":"2.0","method":"api.greet","params":["World"],"id":1}'
 # → {"jsonrpc":"2.0","result":{"message":"Hello, World!"},"id":1}
 ```
+
+#### Closed connections and the single resend (Node clients)
+
+Node's `fetch` keeps idle connections open for reuse. A deployed API (API Gateway, a load balancer) can close an idle connection at any moment without warning, and if that close crosses your next call, Node's `fetch` fails it with `TypeError: fetch failed` (cause `SocketError: other side closed`, `ECONNRESET` or `EPIPE`) and does not resend it, even for a `GET`. This shows up in CLIs, SSR servers and scripts after a few idle seconds.
+
+The typed client handles it: when `fetch` fails with `TypeError: fetch failed` whose cause is an undici socket error (`UND_ERR_SOCKET`, for example `other side closed`), `ECONNRESET` or `EPIPE`, **before the response headers arrived**, it resends the identical request **once** on a new connection. A partial status line followed by a close counts too, since the headers never arrived. In the idle-close race the first copy never reached the server. Node's `fetch` doesn't say whether the failed connection was a reused one, so the client matches on the error alone: the same failure on a fresh connection, such as a server that read the request and crashed before answering, is resent too, and in that rare case a method runs twice. Delivery is therefore **at-least-once**. The server can't tell a resend from a new call. Behind API Gateway or CloudFront a crashed backend answers with a `5xx` instead, which is never retried. Keep state-changing methods idempotent where a duplicate would matter. Nothing else is retried: not a second connection failure, not a timeout or abort, not a failure after the response headers arrived (while reading the body), not an HTTP or JSON-RPC error. Browsers already do this resend themselves, so frontend behaviour is unchanged.
+
+To turn the resend off (at-most-once delivery; the failure reaches your code instead), pass `retryStaleConnection: false`:
+
+```ts
+import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
+
+const api = ApiNamespaceClient<typeof import('./aws-blocks/index.js').api>('api', {
+  retryStaleConnection: false,
+});
+```
+
+The generated client's `generateClient` takes the same options: `generateClient({ url, retryStaleConnection: false })`.
+
+Your own `fetch` calls (to a `RawRoute`, or the JSON-RPC endpoint called by hand) don't get this. In Node, resend a request yourself when it fails with one of those causes and is safe to repeat.
 
 #### How the server reads `params` (and what it rejects)
 
@@ -166,10 +192,14 @@ So a real config problem looks like the client throwing `Blocks API URL not conf
 
 A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
 
-- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), which the gateway can route to a different compute without changing the app's endpoint.
+- **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-blocks/bb-compute`) is routed there without changing the app's endpoint.
 - **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
 - **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
-- **WAF** is not included by default. Associate a `REGIONAL` WebACL with the gateway's stage (`new wafv2.CfnWebACLAssociation(stack, 'ApiWaf', { resourceArn: stack.gateway.deploymentStage.stageArn, webAclArn })`, with `wafv2` from `aws-cdk-lib/aws-wafv2`), or enable it on the CloudFront distribution when you use `Hosting` (`waf: { enabled: true }`).
+- **WAF** is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBackend`: `apiWaf: { enabled: true, rateLimit? }` creates a web ACL with the AWS managed Common rule set and Known Bad Inputs rule set, plus a per-IP rate limit (default 1000 requests per 5 minutes). The Common rule set's body rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`) only count, so normal RPC payloads, including user-written HTML or Markdown, pass. `apiWaf: { webAclArn }` attaches a web ACL you already have instead; its scope and region are checked at synth. It's attached as-is, so behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. The web ACL goes on whichever front door clients use:
+  - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. If a `Hosting` door also forwards browser traffic to it, the rate rule adjusts so browser users aren't counted as one client: a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts, and behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`), so rate-limit on the door's own WAF. In both cases browser requests arriving through Hosting aren't rate-limited by `apiWaf`; turn on the door's own WAF (`frontDoor: { features: { waf: { enabled: true } } }`) to rate-limit them.
+  - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth).
+  - `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting the API: the API is served from Hosting's distribution, so set the WAF on Hosting (`frontDoor: { features: { waf: { enabled: true } } }`); `apiWaf` then creates nothing and synth warns (`blocks:api-waf:deferred-to-hosting`).
+  - Not covered: the gateway's `execute-api` endpoint under `'cloudfront'` (callable directly, and reached by browser traffic that a non-CloudFront `Hosting` door forwards), and `bb-realtime`'s WebSocket API (AWS WAF can't attach to API Gateway WebSocket APIs).
 
 ### API front door
 
@@ -182,15 +212,15 @@ Under either tier, the URL clients should call is `publicApiUrl` on the stack or
 
 The default is a constant — it is never derived from the app's shape, so adding or removing Building Blocks never silently changes how the API is exposed.
 
-Either tier serves the API at the same path. The typed client (and any manual caller) POSTs JSON-RPC to a per-namespace path:
+Either tier serves the API at the same path. The TypeScript client (and any manual caller that addresses a namespace) POSTs JSON-RPC to a per-namespace path:
 
 ```
 POST /aws-blocks/api/{namespace}
 ```
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function.
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute.
 
-**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, Hosting's distribution takes the front-door role and no second distribution is created.
+**Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
 
 Neither tier makes CloudFront the only way in: the gateway's own `execute-api` URL stays publicly reachable, so a WebACL on a CloudFront distribution doesn't cover direct calls to it.
 
@@ -257,11 +287,11 @@ function hasAuthError<T extends { errorName?: string }, N extends string>(
 ): state is T & { errorName: N }
 ```
 
-The auth blocks' recommended client path (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
+`Auth`'s recommended client path (`setAuthState()` / `getAuthState()`) **returns** a failed `AuthState` instead of throwing, so there is no `Error` for `isBlocksError` to inspect. `hasAuthError` is the equivalent guard for that returned object: it compares `state.errorName` to `name` and narrows the type. It's a plain equality check, so a `null` / `undefined` state and a state with no `errorName` both return `false` and no defensive wrapping is needed.
 
 ```typescript
 const next = await authApi.setAuthState({ action: 'signIn', username, password });
-if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) {
+if (hasAuthError(next, AuthErrors.NotAuthorized)) {
   // unknown user or wrong password → offer sign-up
 }
 ```
@@ -355,7 +385,7 @@ CDK Pipelines-based CI/CD construct for multi-branch, multi-stage deployments. C
 
 ### Hosting
 
-CDK construct (from the `/cdk` entry point) that deploys a frontend on CloudFront + S3, with a single-origin API proxy when a backend stack is provided.
+CDK construct (from the `/cdk` entry point) that deploys a frontend on S3 behind a front door — CloudFront by default, or another door (`frontDoor`, below) — with a single-origin API proxy when a backend stack is provided.
 
 ```typescript
 import { Hosting } from '@aws-blocks/core/cdk';
@@ -381,6 +411,93 @@ new Hosting(stack, 'Web', {
 
 Core's top-level `buildRetentionDays` maps to the L3 construct's `storage.buildRetentionDays`.
 
+#### Front door and its settings
+
+`frontDoor` picks the public entry point: omit it for CloudFront (the default), or pass `{ kind: 'alb' }`, `{ kind: 'apiGateway', api?: 'http' | 'rest' }`, `{ kind: 'stacked', edge: 'cloudfront', router: 'alb' }`, `{ kind: 'custom', door }` or `'none'` (a public S3 website bucket). The settings the app asks the door for go in `frontDoor.features`, typed per kind, so a setting the chosen door doesn't implement does not compile. `{ features }` with no `kind` is the CloudFront default with settings:
+
+```typescript
+import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
+import { Hosting } from '@aws-blocks/core/cdk';
+
+new Hosting(stack, 'Web', {
+  root: join(__dirname, '..'),
+  api: blocksStack,
+  frontDoor: {
+    features: {
+      domain: { domainName: 'app.example.com', hostedZone: 'example.com' },
+      waf: { enabled: true },
+      priceClass: PriceClass.PRICE_CLASS_ALL,
+    },
+  },
+});
+```
+
+A `config()` domain works in `frontDoor.features.domain` too, through the async `Hosting.create()`, as for the top-level `domain`.
+
+| Setting | CloudFront | ALB | API Gateway | Stacked | Custom |
+|---|---|---|---|---|---|
+| `domain` | ✓ | ✓ (with `certificate`; no `wwwRedirect`) | ✓ (no `wwwRedirect`) | `router.domain` (the name the edge reaches the router at over HTTPS, with `certificate`) | ✓ |
+| `waf` | ✓ | ✓ (REGIONAL) | – | `edge.waf.webAclArn` (CLOUDFRONT), `router.waf` (REGIONAL) | ✓ |
+| `logging` | ✓ | ✓ (off unless set) | – | `router.logging` | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only, on unless `enabled: false`) | – | `router.monitoring` (`enabled` only) | ✓ |
+| `skewProtection` | ✓ | – | – | – | ✓ |
+| `geoRestriction` | ✓ | – | – | – | ✓ |
+| `contentSecurityPolicy` | ✓ | – | – | `edge.contentSecurityPolicy` | – |
+| `priceClass`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – | – |
+
+The stacked door's edge → router hop is HTTPS on port 443 with a router `certificate` and `features.router.domain`; without them it is plain HTTP (unencrypted; on the AWS network with `internal: true`, else to the ALB's public addresses, which synth warns about). The router admits only the edge through a header whose value Secrets Manager generates once per stack.
+
+Switching `frontDoor` on a deployed app replaces the front door: the URL changes (sessions scoped to the old host end), and a custom domain moving from one door to another collides in Route 53 while both exist — remove it from the old door first. See the `@aws-blocks/hosting` README.
+
+The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
+
+
+#### Preview mode and `HostingPresets`
+
+`HostingPresets` are the hosting counterpart of `BlocksPresets`: plain bundles of `Hosting` props. `HostingPresets.preview` is a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes); `HostingPresets.production` is the full shape (it sets nothing). Spread one first and override settings after it:
+
+```typescript
+import { Hosting, HostingPresets } from '@aws-blocks/core/cdk';
+
+new Hosting(stack, 'Web', {
+  ...(process.env.DEPLOY_ENV === 'preview' ? HostingPresets.preview : HostingPresets.production),
+  root: join(__dirname, '..'),
+  api: blocksStack,
+});
+
+// a preview that keeps image optimization
+new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, root, api: blocksStack });
+```
+
+`HostingPresets.preview` sets:
+
+| Prop | Value | Effect |
+|---|---|---|
+| `frontDoor` | `{ kind: 'apiGateway' }` | The API Gateway HTTP API door: no CloudFront; buffered server responses, about 6 MB each |
+| `imageOptimization` | `false` | No image function; the image endpoints serve the source image (a remote one is redirected only when its host is in the app's image allowlist, else 404) |
+| `incrementalRegeneration` | `false` | Next.js builds without the tag cache and revalidation queue; prerendered pages come from the build's snapshot |
+| `edgeRoutes` | `'regional'` | Next.js `runtime: 'edge'` routes run as regional Lambda functions, not Lambda@Edge |
+| `buildId` | `'fixed'` | A build id keyed on the build's content: an unchanged build keeps it, so a re-deploy skips the asset upload and can hotswap; a changed build gets a new prefix (deleted files stop being served). The door's asset proxy is created alongside the asset uploads, so there is no atomic switch-over |
+
+Each prop also works on its own. `incrementalRegeneration: false` works behind every door. `imageOptimization: false` and `edgeRoutes: 'regional'` need the API Gateway HTTP API door (where `edgeRoutes` defaults to `'regional'`, since that door can't invoke Lambda@Edge), and `buildId: 'fixed'` needs a door without an edge cache (not CloudFront or the stacked door). Any other combination fails synth with `UnsupportedHostingSettingError`.
+
+From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`). On a re-deploy, a backend-only change is hotswapped; a changed frontend build or an infrastructure change does a full deploy. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy one stack: a plain sandbox deploy removes the preview (it warns first), and running `sandbox:preview` again adds it back at a new URL:
+
+```typescript
+const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+const previewMode = app.node.tryGetContext('previewMode') === 'true';
+
+if (!sandboxMode || previewMode) {
+  new Hosting(blocksStack, 'Hosting', {
+    ...(previewMode ? HostingPresets.preview : HostingPresets.production),
+    root: join(__dirname, '..'),
+    api: blocksStack,
+  });
+}
+```
+
+Tear a preview sandbox down with `npm run sandbox:destroy`.
+
 
 ## Building Blocks
 
@@ -389,7 +506,7 @@ Import Building Blocks from their specific packages (or from the `@aws-blocks/bl
 - `@aws-blocks/bb-kv-store` — Key-value storage
 - `@aws-blocks/bb-distributed-table` — Tables with Zod schemas and indexes
 - `@aws-blocks/auth-common` — Auth interfaces and Authenticator component
-- `@aws-blocks/bb-auth-basic` — Username/password authentication
+- `@aws-blocks/bb-auth` — Authentication (email + password, social, OIDC and SAML)
 - `@aws-blocks/bb-data` — SQL database
 - `@aws-blocks/bb-realtime` — Real-time pub/sub
 
@@ -427,6 +544,28 @@ You can also pass `host` to `startDevServer({ host })` in `aws-blocks/scripts/se
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
 
+## Script output (`BLOCKS_LOG_LEVEL`)
+
+The lifecycle scripts in `@aws-blocks/core/scripts` (`deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer`, which the generated `npm run deploy` / `sandbox` / `sandbox:destroy` / `destroy` / `dev` scripts call) read the `BLOCKS_LOG_LEVEL` environment variable to decide how much to print:
+
+| `BLOCKS_LOG_LEVEL` | What prints |
+|---|---|
+| unset (or any other value) | Everything, exactly as before this variable existed. |
+| `quiet` | Errors and final results only. CDK output is hidden while it runs. |
+| `normal` | Short progress steps and results. CDK output is condensed into a few lines (`Synthesizing app...`, a resource count); failure and rollback lines still print as they happen. |
+| `verbose` | The same lines as unset: every progress step plus the raw CDK output (the dev server leaves out RPC error stack traces, see below). |
+| `debug` | `verbose` plus stack traces for errors the scripts catch and report as warnings. |
+
+```bash
+BLOCKS_LOG_LEVEL=normal npm run deploy
+```
+
+No level hides the lines other tools read: the deployment-target summary, the `API URL` / `Frontend URL` lines, the early `🌐 Frontend deploying to:` line, the `BLOCKS_DEPLOYED …` line, and error messages.
+
+At `quiet` and `normal` the scripts keep the last 500 lines of the hidden CDK output (`cdk synth`, `cdk deploy`, `cdk destroy`, `cdk watch`). If the deploy or destroy fails, they print those lines to stderr under a `──── cdk deploy output (…) ────` header before the error, so you don't need to run it again to see why it failed. `cdk watch` prints them when a watch deploy fails or `cdk watch` exits with an error.
+
+In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-call]` / `[rpc-ok]` lines but keep the `[rpc-err]` and `RawRoute Error:` lines (name, message and `cause`); the stack trace prints when `BLOCKS_LOG_LEVEL` is unset or `debug`. `BLOCKS_DEV_QUIET=1` still hides all of those lines at every level.
+
 ## CORS Configuration
 
 By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
@@ -435,8 +574,8 @@ By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin
 
 If you use the `Hosting` construct with your API, CORS is handled automatically:
 
-- **Same-origin requests** (frontend fetches through the CloudFront proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
-- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the CloudFront distribution's domain (or your custom domain) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
+- **Same-origin requests** (frontend fetches through the front door's proxy at `/aws-blocks/api`) work without CORS headers since the browser treats them as same-origin.
+- **Cross-origin requests** (e.g. direct API Gateway calls) are also covered: when you pass a `BlocksStack` or `BlocksBackend` as the `api` prop, the Hosting construct registers the front door's URL (the CloudFront distribution's domain, your custom domain, or another door's address) as `CORS_HOSTING_ORIGINS` in the backend's S3 config, where it is compiled separately as an escaped literal origin. Your `CORS_ALLOWED_ORIGINS` is left untouched. You do **not** need to configure CORS manually.
 
 With the sandbox preset, the localhost pattern from `defaults.allowedOrigins` is also kept, so your local dev frontend still works.
 
@@ -485,6 +624,16 @@ Multiple patterns are comma-separated. If a pattern is invalid regex, it falls b
 > **Escape the dots.** Because each entry is a regex, an unescaped `.` matches *any* character — so `https://app.example.com` also matches unrelated hosts like `https://appXexample.com`. Always escape literal dots: write `https://app\\.example\\.com`, not `https://app.example.com`. Each entry is compiled as `^(?:<entry>)$`, so it must match the whole origin: `^https://app\\.example\\.com` (or just `https://app\\.example\\.com`) matches that exact origin, not `https://app.example.com.extra`. Because the anchors wrap the whole expression, every branch of a top-level `|` alternation is anchored too. Prefer separate comma-separated entries over one `|`-joined entry for readability. The CloudFront origin the `Hosting` construct injects for you is always escaped and anchored automatically.
 
 If an origin doesn't match any pattern, the handler omits the `Access-Control-Allow-Origin` header (browser blocks the response) and logs a `[CORS]` warning to CloudWatch.
+
+## Committed baselines (`aws-blocks/baselines/`)
+
+Some Building Blocks refuse a destructive change at synth by comparing it with a **baseline file** they write into your app: `aws-blocks/baselines/<stack>/<file>.json`, next to the backend handler file the stack was created with. `Auth` is the first: it records the user-pool settings that Cognito cannot change after the pool exists.
+
+- **Commit these files.** The check only protects a synth that sees them; a fresh checkout without them starts a new baseline from whatever the configuration is now.
+- **Renaming or removing a block** whose baseline says it owns a stateful resource fails synth on every `BlocksStack` / `BlocksBackend`, even when the block's package is no longer imported. The message names what CloudFormation would delete and the re-baseline variable to set if the removal is intended.
+- **The format is versioned.** Every file has a top-level `version` (currently `1`; a file without one is read as `1`), a `fullId` naming the block that owns it, and, while that block owns a stateful resource, a `removalGuard`. The rest of the file belongs to the block that wrote it. Every later release keeps reading every earlier version. A file with a higher version than this release knows fails synth with a message to upgrade `@aws-blocks/core` and `@aws-blocks/blocks`; a file whose `version` is not a whole number from 1 fails synth as invalid (restore it from version control). Neither is ever rewritten or deleted.
+
+Building Block authors: the protocol (`claimBaseline`, `baselineDir`, `hasOrphanedBaselines`, `BASELINE_FORMAT_VERSION`) is framework-internal and lives in `@aws-blocks/core/cdk/internal`; see `src/cdk/baselines.ts`.
 
 ## IAM: permissions boundary and the composed-policy report
 
