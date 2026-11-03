@@ -894,6 +894,8 @@ class CodegenModelBuilder {
     for (final entry in _types.entries) {
       if (entry.value is SealedClassType &&
           _structuralKeyOfSealed(entry.value as SealedClassType) == sealedKey) {
+        // Recorded too, so the arm prefix can come from any of its origins.
+        _recordOrigin(entry.value, path);
         return _dedupRef(entry.value);
       }
     }
@@ -1056,7 +1058,8 @@ class CodegenModelBuilder {
 
   /// Records the origin of a freshly-synthesized named type for collision
   /// detection. Dedup-merged types are never recorded here (they return a
-  /// [SchemaReference] before reaching this point).
+  /// [SchemaReference] before reaching this point), except unions: every
+  /// occurrence of a deduplicated union is recorded against the one class.
   void _recordOrigin(ResolvedType type, String? path) {
     final key = path ?? _displayName(type);
     _origins.add(
@@ -1224,15 +1227,17 @@ class CodegenModelBuilder {
       if (type is SealedClassType) addUnion(type);
     }
     unions.sort((a, b) => a.name.compareTo(b.name));
-    // A union's namespace prefix, from the method its first origin is under.
-    final prefixes = Map<SealedClassType, String>.identity();
+    // A union's namespace prefix, from the method of its origin with the
+    // smallest canonical key, so spec order doesn't pick it.
+    final keys = Map<SealedClassType, String>.identity();
     for (final o in _origins) {
-      final hash = o.canonicalKey.indexOf('#');
-      if (o.type is! SealedClassType || hash < 0) continue;
-      prefixes.putIfAbsent(
-        o.type as SealedClassType,
-        () => _namespacePrefix(o.canonicalKey.substring(0, hash)),
-      );
+      if (o.type case final SealedClassType u
+          when o.canonicalKey.contains('#')) {
+        final k = keys[u];
+        if (k == null || o.canonicalKey.compareTo(k) < 0) {
+          keys[u] = o.canonicalKey;
+        }
+      }
     }
     // Name -> the union whose arm owns it ('' for a model, enum or union).
     final owners = <String, String>{
@@ -1253,7 +1258,10 @@ class CodegenModelBuilder {
         if (owners.putIfAbsent(v.className, () => union.name) == union.name) {
           continue;
         }
-        final prefix = prefixes[union] ?? '';
+        final key = keys[union];
+        final prefix = key == null
+            ? ''
+            : _namespacePrefix(key.substring(0, key.indexOf('#')));
         var name = '$prefix${v.className}';
         if (prefix.isEmpty || taken(name)) {
           final base = '${union.name}${_capitalize(v.discriminantValue)}';

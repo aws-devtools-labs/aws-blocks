@@ -83,16 +83,20 @@ RpcModel _nestedVsFlat() {
 /// `setState`-style methods (`ns.method`) whose input unions share the
 /// `signUp` and `signOut` arms but differ in shape. Dart names an `…Input`
 /// union's arms `<Value>Input`, so every union's arm wants `SignUpInput`.
-/// [extra] adds one more arm to the last union only.
+/// [extra] adds one more arm to the last union only. [fields] sets how many
+/// fields each method's `signUp` arm has (by default `i + 1`, all distinct),
+/// so that equal counts make structurally identical, deduplicated unions.
 RpcModel _sharedArmNames({
   bool reversed = false,
   List<String> methods = const ['basic.setState', 'cognito.setState'],
   Map<String, TypeRef> schemas = const {},
   String? extra,
+  List<int>? fields,
 }) {
   RpcMethod setState(int i) {
     final signUp = {
-      for (var f = 0; f <= i; f++) 'f$f': const PrimitiveRef('String'),
+      for (var f = 0; f < (fields?[i] ?? i + 1); f++)
+        'f$f': const PrimitiveRef('String'),
     };
     return RpcMethod(
       name: methods[i],
@@ -582,6 +586,26 @@ void main() {
           contains('class CognitoSignUpInput extends XSetStateInput {'),
         );
       }
+    });
+
+    test('of a union two namespaces share take one prefix in any order', () {
+      // `bb` and `zz` declare one union, deduplicated into one class. Its
+      // arms take the prefix of the namespace that sorts first, whichever
+      // the spec lists first. (The union class itself is still named after
+      // the first one listed.)
+      final classes = [
+        for (final methods in [
+          ['aa.setState', 'bb.setState', 'zz.setState'],
+          ['aa.setState', 'zz.setState', 'bb.setState'],
+        ])
+          _classes(
+            CodegenModelBuilder().build(
+              _sharedArmNames(methods: methods, fields: [1, 2, 2]),
+            ),
+          ),
+      ];
+      expect(classes.first, containsAll(['SignUpInput', 'BbSignUpInput']));
+      expect(classes.first, classes.last);
     });
 
     test('throws with --fail-on-collision', () {
