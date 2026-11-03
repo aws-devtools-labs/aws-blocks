@@ -4,7 +4,9 @@
 import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import {
+	existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, copyFileSync, utimesSync, rmSync,
+} from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { assertContainedPath } from './mock-utils.js';
 import {
@@ -205,6 +207,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * On non-versioned buckets, permanently removes the file.
 	 * On versioned buckets without `versionId`, places a delete marker (file appears deleted
 	 * but previous versions are preserved). With `versionId`, permanently removes that version.
+	 * Deleting the newest stored data version promotes the next stored data version, if any,
+	 * without creating a new version. An active local delete marker continues to hide the key.
 	 *
 	 * No-op if the file does not exist (matches S3 behavior).
 	 *
@@ -220,9 +224,28 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.validateKey(path);
 		const versionId = (options as any)?.versionId as string | undefined;
 		if (this.versioned && versionId) {
-			// Permanently delete a specific version
-			try { unlinkSync(versionContentPath(this.dataDir, path, versionId)); } catch {}
-			try { unlinkSync(versionMetaPath(this.dataDir, path, versionId)); } catch {}
+			const versions = this.readVersions(path);
+			if (!versions.some(version => version.versionId === versionId)) return;
+			if (versions[0].versionId === versionId) {
+				// The current copy is also read by scan() and the dev file-server.
+				// Promote without put(), which would create a version and clear the marker.
+				// Keep the target version until reconciliation succeeds so failures are retryable.
+				const next = versions[1];
+				if (next) {
+					const filePath = contentPath(this.dataDir, path);
+					const source = versionContentPath(this.dataDir, path, next.versionId);
+					const stat = statSync(source);
+					mkdirSync(dirname(filePath), { recursive: true });
+					copyFileSync(source, filePath);
+					utimesSync(filePath, stat.atime, stat.mtime);
+					this.writeMeta(path, this.readVersionMeta(path, next.versionId));
+				} else {
+					rmSync(contentPath(this.dataDir, path), { force: true });
+					rmSync(metaPath(this.dataDir, path), { force: true });
+				}
+			}
+			rmSync(versionMetaPath(this.dataDir, path, versionId), { force: true });
+			unlinkSync(versionContentPath(this.dataDir, path, versionId));
 			return;
 		}
 		if (this.versioned) {
@@ -439,30 +462,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async listVersions(path: string): Promise<FileVersionInfo[]> {
 		this.validateKey(path);
-		const versionsDir = versionsDirFor(this.dataDir, path);
-		if (!existsSync(versionsDir)) return [];
-		const entries = readdirSync(versionsDir).filter(isVersionEntry);
-		if (entries.length === 0) return [];
-
-		const hasDeleteMarker = existsSync(deleteMarkerPath(this.dataDir, path));
-		const versions: FileVersionInfo[] = entries.map(versionId => {
-			const vPath = versionContentPath(this.dataDir, path, versionId);
-			const stat = statSync(vPath);
-			return { versionId, lastModified: stat.mtime, size: stat.size, isCurrent: false };
-		});
-		// Sort newest first; break ties by version number (descending) for deterministic ordering
-		versions.sort((a, b) => {
-			const timeDiff = b.lastModified.getTime() - a.lastModified.getTime();
-			if (timeDiff !== 0) return timeDiff;
-			const aNum = parseInt(a.versionId.slice(1), 10);
-			const bNum = parseInt(b.versionId.slice(1), 10);
-			return bNum - aNum;
-		});
-		// Mark the newest as current (unless there's a delete marker)
-		if (versions.length > 0 && !hasDeleteMarker) {
-			versions[0].isCurrent = true;
-		}
-		return versions;
+		return this.readVersions(path);
 	}
 
 	/**
@@ -512,6 +512,35 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	}
 
 	// ── Internal helpers ──────────────────────────────────────────────────
+
+	private readVersions(path: string): FileVersionInfo[] {
+		const versionsDir = versionsDirFor(this.dataDir, path);
+		if (!existsSync(versionsDir)) return [];
+		const entries = readdirSync(versionsDir, { withFileTypes: true })
+			.filter(entry => entry.isFile() && isVersionEntry(entry.name))
+			.map(entry => entry.name);
+		if (entries.length === 0) return [];
+
+		const hasDeleteMarker = existsSync(deleteMarkerPath(this.dataDir, path));
+		const versions: FileVersionInfo[] = entries.map(versionId => {
+			const vPath = versionContentPath(this.dataDir, path, versionId);
+			const stat = statSync(vPath);
+			return { versionId, lastModified: stat.mtime, size: stat.size, isCurrent: false };
+		});
+		// Sort newest first; break ties by version number (descending) for deterministic ordering
+		versions.sort((a, b) => {
+			const timeDiff = b.lastModified.getTime() - a.lastModified.getTime();
+			if (timeDiff !== 0) return timeDiff;
+			const aNum = parseInt(a.versionId.slice(1), 10);
+			const bNum = parseInt(b.versionId.slice(1), 10);
+			return bNum - aNum;
+		});
+		// Mark the newest as current (unless there's a delete marker)
+		if (versions.length > 0 && !hasDeleteMarker) {
+			versions[0].isCurrent = true;
+		}
+		return versions;
+	}
 
 	private assertPresignedUploadSupported(): void {
 		if (this.objectLocked) {
