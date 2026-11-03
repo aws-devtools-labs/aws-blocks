@@ -36,7 +36,7 @@ function pgliteEngine(dataDir: string, schemaName: string): SchemaEngine {
  * A cluster several `Database` blocks share, each in its own schema. `type: 'dsql'`
  * is Aurora DSQL. Part of the `Database` block, not a block on its own.
  *
- * Locally it is one PGlite under `.bb-data/{fullId}/`.
+ * Locally it is one PGlite under `.bb-data/{fullId}/pglite/`.
  *
  * @example
  * const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });

@@ -67,8 +67,8 @@ export interface DatabaseBlockOptions {
 	migrationsPath?: string;
 	/**
 	 * The PostgreSQL schema this block's tables live in. `public` when the block
-	 * owns its cluster, otherwise the block id. Two blocks on one cluster may not
-	 * share a schema.
+	 * owns its cluster, otherwise the block id as a PostgreSQL identifier (lower-cased,
+	 * `_` for other characters). Two blocks on one cluster may not share a schema.
 	 */
 	schemaName?: string;
 	/** Optional logger for internal operations. Defaults to an error-level Logger. */
