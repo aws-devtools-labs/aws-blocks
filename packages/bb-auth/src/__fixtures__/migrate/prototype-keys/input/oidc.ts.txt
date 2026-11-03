@@ -1,0 +1,22 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import { AuthOIDC, cognitoFederated } from '@aws-blocks/bb-auth-oidc';
+
+const scope = new Scope('oidc');
+const id = new AppSetting(scope, 'id', { secret: true });
+const secret = new AppSetting(scope, 'secret', { secret: true });
+
+export const auth = new AuthOIDC(scope, 'auth', {
+	providers: [
+		cognitoFederated({
+			name: 'proto',
+			identityProvider: 'constructor',
+			cognitoDomain: 'myapp',
+			region: 'us-east-1',
+			clientId: id,
+			clientSecret: secret,
+		}),
+	],
+});
+export const label = auth.toString();
+export const ctor = auth.constructor;

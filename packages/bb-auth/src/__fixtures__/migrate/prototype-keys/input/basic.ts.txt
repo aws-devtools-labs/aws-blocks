@@ -1,0 +1,9 @@
+import { AuthBasic, AuthBasicErrors } from '@aws-blocks/bb-auth-basic';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('basic');
+export const auth = new AuthBasic(scope, 'auth', {});
+// Strings that name Object.prototype members, not AuthBasic wire names.
+export const keys = ['constructor', 'toString', 'hasOwnProperty'];
+export const ctor = AuthBasicErrors.constructor;
+export const label = auth.toString();

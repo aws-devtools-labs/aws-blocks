@@ -9,6 +9,14 @@
  * Every row here is mirrored in `MIGRATION.md`; keep the two in step.
  */
 
+/**
+ * `table[key]` for the table's own rows only. The keys come from user code, and a
+ * bare `table[key]` reads `Object.prototype` for `'constructor'`, `'toString'`, ….
+ */
+export function own<V>(table: Readonly<Record<string, V>>, key: string): V | undefined {
+	return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 /** Which old block a symbol came from. */
 export type OldBlock = 'basic' | 'cognito' | 'oidc';
 

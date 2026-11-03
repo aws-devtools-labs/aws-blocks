@@ -48,6 +48,7 @@ import {
 	OLD_MODULES,
 	OLD_SUBPATHS,
 	type OldBlock,
+	own,
 	SOCIAL_IDPS,
 	SUBPATH_NAME_RULES,
 	type SUMMARY_WARNINGS,
@@ -145,7 +146,7 @@ function oldClassLocals(ts: TypeScript, sf: TS.SourceFile): Map<string, OldBlock
 		if (!ts.isImportDeclaration(stmt)) continue;
 		const spec = moduleText(ts, stmt.moduleSpecifier);
 		if (spec === undefined) continue;
-		const fromOld = OLD_MODULES[spec];
+		const fromOld = own(OLD_MODULES, spec);
 		const fromUmbrella = UMBRELLA_MODULES.has(spec);
 		if (!fromOld && !fromUmbrella) continue;
 		const bindings = stmt.importClause?.namedBindings;
@@ -153,7 +154,7 @@ function oldClassLocals(ts: TypeScript, sf: TS.SourceFile): Map<string, OldBlock
 		for (const el of bindings.elements) {
 			const imported = (el.propertyName ?? el.name).text;
 			const block = fromOld ?? umbrellaBlockFor(imported);
-			if (block && NAME_RULES[block][imported]?.role === 'class') out.set(el.name.text, block);
+			if (block && own(NAME_RULES[block], imported)?.role === 'class') out.set(el.name.text, block);
 		}
 	}
 	return out;
@@ -192,7 +193,7 @@ export function analyzeFile(
 		if (!ts.isPropertyAccessExpression(e) || !ts.isIdentifier(e.expression)) return undefined;
 		if (!namespaces.has(e.expression.text)) return undefined;
 		const block = umbrellaBlockFor(e.name.text);
-		return block && NAME_RULES[block][e.name.text]?.role === 'class' ? block : undefined;
+		return block && own(NAME_RULES[block], e.name.text)?.role === 'class' ? block : undefined;
 	};
 	if (namespaces.size > 0) {
 		const visit = (n: TS.Node): void => {
@@ -212,7 +213,7 @@ export function analyzeFile(
 	for (const stmt of sf.statements) {
 		if (!ts.isImportDeclaration(stmt) && !ts.isExportDeclaration(stmt)) continue;
 		const spec = moduleText(ts, stmt.moduleSpecifier);
-		const block = spec === undefined ? undefined : OLD_MODULES[spec];
+		const block = spec === undefined ? undefined : own(OLD_MODULES, spec);
 		if (block) blocks.add(block);
 	}
 	const locals = new Map<string, OldBlock>();
@@ -403,14 +404,14 @@ class FileMigrator {
 					}
 				}
 			}
-			const dead = DEAD_SUBPATHS[spec];
+			const dead = own(DEAD_SUBPATHS, spec);
 			if (dead) {
 				this.authTouching = true;
 				this.scanDeadSubpath(stmt, dead, takenNames);
 				continue;
 			}
-			const subpath = OLD_SUBPATHS[spec];
-			const oldBlock = OLD_MODULES[spec];
+			const subpath = own(OLD_SUBPATHS, spec);
+			const oldBlock = own(OLD_MODULES, spec);
 			const umbrella = UMBRELLA_MODULES.has(spec);
 			if (!subpath && !oldBlock && !umbrella) {
 				if (unknownOldSubpath(spec)) {
@@ -453,7 +454,7 @@ class FileMigrator {
 				const umbrellaBlock =
 					SHARED_FACTORY_NAMES.has(imported) && !oidcStyle ? undefined : umbrellaBlockFor(imported);
 				const block = oldBlock ?? umbrellaBlock;
-				const rule = block ? NAME_RULES[block][imported] : undefined;
+				const rule = block ? own(NAME_RULES[block], imported) : undefined;
 				const s: ImportedSpec = {
 					node: el,
 					imported,
@@ -514,7 +515,7 @@ class FileMigrator {
 		target: string,
 		takenNames: ReadonlySet<string>,
 	): void {
-		const rules = SUBPATH_NAME_RULES[spec] ?? {};
+		const rules = own(SUBPATH_NAME_RULES, spec) ?? {};
 		const named = this.namedBindingsOf(stmt);
 		const isNamespace = this.ts.isImportDeclaration(stmt)
 			? stmt.importClause?.namedBindings !== undefined &&
@@ -522,7 +523,7 @@ class FileMigrator {
 			: stmt.exportClause !== undefined && this.ts.isNamespaceExport(stmt.exportClause);
 		if (isNamespace) this.todo(stmt, TODOS.namespaceImport);
 		const specs = named
-			? named.elements.map((el) => this.specFor(el, rules[(el.propertyName ?? el.name).text], takenNames))
+			? named.elements.map((el) => this.specFor(el, own(rules, (el.propertyName ?? el.name).text), takenNames))
 			: [];
 		this.importJobs.push({ decl: stmt, specs, newModule: target });
 	}
@@ -547,7 +548,7 @@ class FileMigrator {
 		const mapped: ImportedSpec[] = [];
 		const leftover: ImportedSpec[] = [];
 		for (const el of named.elements) {
-			const rule = NAME_RULES.oidc[(el.propertyName ?? el.name).text];
+			const rule = own(NAME_RULES.oidc, (el.propertyName ?? el.name).text);
 			const s = this.specFor(el, rule, takenNames);
 			if (!rule) {
 				leftover.push(s);
@@ -584,7 +585,7 @@ class FileMigrator {
 		for (const stmt of this.sf.statements) {
 			if (ts.isImportDeclaration(stmt)) {
 				const spec = moduleText(ts, stmt.moduleSpecifier);
-				if (spec && (OLD_MODULES[spec] || UMBRELLA_MODULES.has(spec) || spec === NEW_MODULE)) continue;
+				if (spec && (own(OLD_MODULES, spec) || UMBRELLA_MODULES.has(spec) || spec === NEW_MODULE)) continue;
 				const clause = stmt.importClause;
 				if (clause?.name) names.add(clause.name.text);
 				const b = clause?.namedBindings;
@@ -848,7 +849,7 @@ class FileMigrator {
 			return undefined;
 		if (SHARED_FACTORY_NAMES.has(right.text)) return undefined;
 		const block = umbrellaBlockFor(right.text);
-		const rule = block ? NAME_RULES[block][right.text] : undefined;
+		const rule = block ? own(NAME_RULES[block], right.text) : undefined;
 		return block && rule ? { block, rule, name: right } : undefined;
 	}
 
@@ -1018,7 +1019,7 @@ class FileMigrator {
 			ts.isIdentifier(callee.expression) &&
 			this.umbrellaNamespaces.has(callee.expression.text)
 		) {
-			return NAME_RULES.oidc[callee.name.text]?.factory;
+			return own(NAME_RULES.oidc, callee.name.text)?.factory;
 		}
 		return undefined;
 	}
@@ -1135,7 +1136,7 @@ class FileMigrator {
 		obj: TS.ObjectLiteralExpression,
 		handled: Set<string>,
 	): { path: string[]; entry: OutEntry }[] {
-		const simple = SIMPLE_OPTIONS[block][key];
+		const simple = own(SIMPLE_OPTIONS[block], key);
 		if (simple) {
 			const path = simple.slice(0, -1);
 			const newKey = simple[simple.length - 1] ?? key;
@@ -1557,7 +1558,7 @@ class FileMigrator {
 				const idpProp = props.get('identityProvider');
 				const idpValue = idpProp ? valueNode(ts, idpProp) : undefined;
 				const idp = idpValue ? literalOf(ts, idpValue) : undefined;
-				const social = idp ? SOCIAL_IDPS[idp] : undefined;
+				const social = idp ? own(SOCIAL_IDPS, idp) : undefined;
 				const nameProp = props.get('name');
 				const nameValue = nameProp ? valueNode(ts, nameProp) : undefined;
 				const nameLit = nameValue ? literalOf(ts, nameValue) : undefined;
@@ -1630,7 +1631,7 @@ class FileMigrator {
 		// import('@aws-blocks/bb-auth-cognito') / require(...)
 		if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === 'require')) {
 			const spec = moduleText(ts, node.arguments[0]);
-			if (spec && (OLD_MODULES[spec] || DEAD_SUBPATHS[spec] || OLD_SUBPATHS[spec])) {
+			if (spec && (own(OLD_MODULES, spec) || own(DEAD_SUBPATHS, spec) || own(OLD_SUBPATHS, spec))) {
 				this.authTouching = true;
 				this.todo(node, TODOS.dynamicImport);
 			}
@@ -1655,7 +1656,7 @@ class FileMigrator {
 		const block = this.receiverBlock(callee.expression);
 		if (!block) {
 			if (this.authTouching && DISTINCTIVE_OLD_METHODS.has(method)) {
-				const to = COGNITO_METHOD_RENAMES[method] ?? 'updateUserAttributes';
+				const to = own(COGNITO_METHOD_RENAMES, method) ?? 'updateUserAttributes';
 				this.todo(node, TODOS.unknownReceiver(method, to));
 			}
 			if (method === 'getClient' && node.arguments.length === 0 && this.project.blocks.has('oidc')) {
@@ -1669,14 +1670,14 @@ class FileMigrator {
 			if (method === 'signIn' && this.resultUsed(node)) this.todo(node, TODOS.basicSignInResult);
 		}
 		if (block === 'oidc') {
-			const gone = OIDC_GONE_MEMBERS[method];
+			const gone = own(OIDC_GONE_MEMBERS, method);
 			if (gone) this.todo(node, gone);
 		}
 	}
 
 	private handleCognitoCall(node: TS.CallExpression, callee: TS.PropertyAccessExpression, method: string): void {
 		const { ts } = this;
-		const renamed = COGNITO_METHOD_RENAMES[method];
+		const renamed = own(COGNITO_METHOD_RENAMES, method);
 		if (renamed) {
 			this.edit(callee.name.getStart(this.sf), callee.name.getEnd(), renamed);
 			this.changes.push(`${method}() → ${renamed}()`);
@@ -1823,7 +1824,7 @@ class FileMigrator {
 		// <Old>Errors.<key> (or blocks.<Old>Errors.<key>)
 		const errorsBlock = this.errorsBlockOf(node.expression);
 		if (errorsBlock) {
-			const rule = ERROR_KEY_RULES[errorsBlock][node.name.text];
+			const rule = own(ERROR_KEY_RULES[errorsBlock], node.name.text);
 			if (rule && rule.to !== node.name.text) {
 				this.edit(node.name.getStart(this.sf), node.name.getEnd(), rule.to);
 				this.changes.push(`${node.expression.getText(this.sf)}.${node.name.text} → AuthErrors.${rule.to}`);
@@ -1834,7 +1835,7 @@ class FileMigrator {
 		if (ts.isCallExpression(node.parent) && node.parent.expression === node) return;
 		const block = this.receiverBlock(node.expression);
 		if (block === 'oidc') {
-			const gone = OIDC_GONE_MEMBERS[node.name.text];
+			const gone = own(OIDC_GONE_MEMBERS, node.name.text);
 			if (gone) this.todo(node, gone);
 		}
 	}
@@ -1854,7 +1855,7 @@ class FileMigrator {
 		at: TS.Node,
 		edit: (to: string) => string,
 	): void {
-		const rule = ERROR_KEY_RULES[block][key];
+		const rule = own(ERROR_KEY_RULES[block], key);
 		if (!rule) return;
 		if (rule.to !== key) {
 			this.edit(keyNode.getStart(this.sf), keyNode.getEnd(), edit(rule.to));
@@ -1945,7 +1946,7 @@ class FileMigrator {
 		if (ts.isImportDeclaration(p) || ts.isExportDeclaration(p) || ts.isExternalModuleReference(p)) return;
 		if (ts.isLiteralTypeNode(p) && ts.isImportTypeNode(p.parent)) return;
 		if (this.project.blocks.has('basic')) {
-			const rule = BASIC_STRING_RENAMES[node.text];
+			const rule = own(BASIC_STRING_RENAMES, node.text);
 			if (rule && 'gone' in rule) this.todo(node, rule.gone);
 			else if (rule) {
 				const raw = node.getText(this.sf);

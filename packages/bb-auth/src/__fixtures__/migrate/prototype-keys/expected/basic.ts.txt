@@ -1,0 +1,14 @@
+import { Auth, AuthErrors } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('basic');
+// TODO(aws-blocks-auth-migrate): AuthBasic has no migration path to Auth. Existing users cannot sign in after this deploy and must sign up again.
+//   Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret
+//   parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.
+//   Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day
+//   with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.
+export const auth = new Auth(scope, 'auth', { session: { ttlSeconds: 86_400 } });
+// Strings that name Object.prototype members, not AuthBasic wire names.
+export const keys = ['constructor', 'toString', 'hasOwnProperty'];
+export const ctor = AuthErrors.constructor;
+export const label = auth.toString();
