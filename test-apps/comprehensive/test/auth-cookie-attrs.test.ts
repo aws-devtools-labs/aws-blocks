@@ -48,10 +48,11 @@ async function rpcSetCookies(
   baseUrl: string,
   method: string,
   args: unknown[],
+  extraHeaders: Record<string, string> = {},
 ): Promise<string[]> {
   const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
     body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
   });
   const body = await resp.json();
@@ -107,6 +108,32 @@ export function authCookieAttrsTests(getApi: () => typeof apiType) {
       } else {
         assert.match(cookie, /Partitioned/i, 'crossDomain cookie over HTTPS should set Partitioned');
       }
+    });
+
+    // On deployed compute, whether to relax the cookie comes from deploy config,
+    // so a request claiming a localhost Origin must not strip Secure/Partitioned.
+    test('deployed: a forged localhost Origin keeps Secure and Partitioned', async (t) => {
+      const baseUrl = getBaseUrl();
+      if (isHttpLocalhost(baseUrl)) {
+        t.skip('only meaningful against deployed compute');
+        return;
+      }
+      const forged = { Origin: 'http://localhost:3000' };
+
+      const lax = sessionCookie(
+        await rpcSetCookies(baseUrl, 'authSameOriginSignInSetsCookie', [uniqueUser(), 'password123'], forged),
+        'auth-same-origin',
+      );
+      assert.match(lax, /SameSite=Lax/, 'default cookie should be SameSite=Lax');
+      assert.match(lax, /;\s*Secure/i, 'a localhost Origin header must not drop Secure on deployed compute');
+
+      const cross = sessionCookie(
+        await rpcSetCookies(baseUrl, 'authCrossDomainSignInSetsCookie', [uniqueUser(), 'password123'], forged),
+        'auth-cross-domain',
+      );
+      assert.match(cross, /SameSite=None/, 'crossDomain cookie should be SameSite=None');
+      assert.match(cross, /;\s*Secure/i, 'SameSite=None requires Secure');
+      assert.match(cross, /Partitioned/i, 'a localhost Origin header must not drop Partitioned on deployed compute');
     });
   });
 }

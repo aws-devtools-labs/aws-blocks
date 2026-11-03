@@ -21,7 +21,7 @@
  * @module
  */
 
-import type { BlocksContext } from '@aws-blocks/core';
+import { type BlocksContext, getDeploymentType } from '@aws-blocks/core';
 
 /**
  * Inputs that determine the security attributes of a session cookie.
@@ -154,6 +154,29 @@ export function buildCookieSecurityAttrs(input: CookieSecurityInput): string {
 export function isLoopbackRequest(ctx: BlocksContext): boolean {
 	const origin = ctx.request.headers.get('origin') ?? ctx.request.headers.get('host') ?? '';
 	return /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/.test(origin);
+}
+
+/**
+ * Whether a request should get the plain-HTTP local-dev cookie attributes
+ * ({@link CookieSecurityInput.isLocalhost}): the process is running locally
+ * AND the request comes from a loopback origin.
+ *
+ * The local-vs-deployed half comes from deploy configuration
+ * (`getDeploymentType()`, which reads the config synth stamps on every
+ * Blocks-configured compute), never from a request header. So on deployed
+ * compute a request that sends `Origin: http://localhost` cannot drop `Secure`
+ * or `Partitioned`; the header only picks between loopback and non-loopback
+ * callers of the local dev server and tests.
+ *
+ * On compute Blocks does not configure (no deploy config present) this falls
+ * back to the header check alone, the same boundary `getDeploymentType()`
+ * documents.
+ *
+ * @param ctx - The request context.
+ * @returns `true` only for a loopback request in a local process.
+ */
+export function isLocalDevRequest(ctx: BlocksContext): boolean {
+	return getDeploymentType() === 'local' && isLoopbackRequest(ctx);
 }
 
 /**

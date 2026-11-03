@@ -13,7 +13,7 @@ Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAu
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField`, `AuthErrorName`. Values: `AuthErrors`, `isAuthError`, `isAuthErrorName` |
 | `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `MfaSettings`, `StatusMessage`. Custom UI: `submitAuthAction`, `subscribeAuthState`, `getAuthStateSnapshot`, `onAuthChange`, `broadcastAuthChange`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
 | `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
-| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
+| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLocalDevRequest`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
 
 ## Session-cookie security policy (`/cookies`)
 
@@ -26,9 +26,9 @@ Shared interfaces and UI components for AWS Blocks authentication: the `BlocksAu
 | `true` | `false` | `SameSite=None; Secure; Partitioned` |
 | `true` | `true` | `SameSite=None; Secure` |
 
-`buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLoopbackRequest(ctx)` detects loopback origins (`localhost`, `127.0.0.1`, `[::1]`) for per-request `isLocalhost` decisions.
+`buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLocalDevRequest(ctx)` is the per-request `isLocalhost` input: it is `true` only when the process is local (`getDeploymentType()` from `@aws-blocks/core` is `'local'`) and the request comes from a loopback origin. On deployed compute it is always `false`, so a request header such as `Origin: http://localhost` cannot drop `Secure` or `Partitioned`. `isLoopbackRequest(ctx)` is the header check on its own (`localhost`, `127.0.0.1`, `[::1]`).
 
-The optional `plainHttpOrigin` input marks a deployed front door served over plain HTTP (an ALB with no certificate): it drops `Secure` from the same-origin `Lax` cookie, which a browser would otherwise discard over HTTP. It doesn't change the cross-domain cookie, which the API's own HTTPS response sets. `isInsecurePublicOrigin()` derives it from the door's own scheme (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`), never from a request header. Today `bb-auth-basic` passes it; the other auth BBs keep `Secure`, so behind a plain-HTTP door their sessions don't persist.
+The optional `plainHttpOrigin` input marks a deployed front door served over plain HTTP (an ALB with no certificate): it drops `Secure` from the same-origin `Lax` cookie, which a browser would otherwise discard over HTTP. It doesn't change the cross-domain cookie, which the API's own HTTPS response sets. `isInsecurePublicOrigin()` derives it from the door's own scheme (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`), never from a request header. `Auth` (`bb-auth`) passes it for every cookie it sets.
 
 
 ## Server-Side Interface (`BlocksAuth`)
