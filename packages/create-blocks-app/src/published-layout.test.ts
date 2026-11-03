@@ -144,6 +144,27 @@ describe('create-blocks-app version stamping from the published package', () => 
     assert.ok(workspace.dependencies?.['@aws-blocks/bb-kv-store'], 'the Amplify workspace should depend on bb-kv-store');
   });
 
+  it('gives the Amplify aws-blocks/ workspace the range the project root already lists', () => {
+    const project = join(root, 'amplify-pinned');
+    mkdirSync(join(project, 'amplify'), { recursive: true });
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'amplify-pinned', version: '1.0.0', dependencies: { '@aws-blocks/blocks': '~0.1.0' } }),
+    );
+    writeFileSync(join(project, 'amplify', 'backend.ts'), 'const backend = defineBackend({});\n');
+
+    const result = run(['.', '--yes', '--skip-install'], project);
+    assert.strictEqual(result.exitCode, 0, result.output);
+    assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['@aws-blocks/blocks'], '~0.1.0');
+    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
+    assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.0', 'workspace should follow the root range');
+    assert.strictEqual(
+      workspace.dependencies?.['@aws-blocks/bb-kv-store'],
+      cliManifest.devDependencies?.['@aws-blocks/bb-kv-store'],
+      'a package the root does not list is stamped as usual',
+    );
+  });
+
   it('fails non-zero, before writing anything, when the CLI has no range for a template package', () => {
     const manifestPath = join(dirname(dirname(cli)), 'package.json');
     const original = readFileSync(manifestPath, 'utf-8');

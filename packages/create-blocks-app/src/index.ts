@@ -553,8 +553,16 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   let workspacePkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> } | null = null;
   if (stampedVersions) {
     workspacePkg = JSON.parse(await readFile(join(awsBlocksSrc, 'package.json'), 'utf-8'));
-    stampBlocksVersions(workspacePkg?.dependencies, stampedVersions);
-    stampBlocksVersions(workspacePkg?.devDependencies, stampedVersions);
+    // A package the project root already lists keeps the root's range here too,
+    // so the workspace and the root resolve to one copy of it.
+    const rootPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+    const rootRanges: Record<string, string> = { ...rootPkg.devDependencies, ...rootPkg.dependencies };
+    const workspaceVersions = { ...stampedVersions };
+    for (const [name, range] of Object.entries(rootRanges)) {
+      if (name.startsWith('@aws-blocks/') && typeof range === 'string' && range !== '*') workspaceVersions[name] = range;
+    }
+    stampBlocksVersions(workspacePkg?.dependencies, workspaceVersions);
+    stampBlocksVersions(workspacePkg?.devDependencies, workspaceVersions);
   }
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
   if (workspacePkg) {
