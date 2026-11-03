@@ -141,8 +141,8 @@ Every `@aws-blocks/*` package the CLI writes into your `package.json` (and into 
 ```json
 {
   "dependencies": {
-    "@aws-blocks/blocks": "^0.8.0",
-    "@aws-blocks/hosting": "^0.4.1"
+    "@aws-blocks/blocks": "^0.9.0",
+    "@aws-blocks/hosting": "^0.5.0"
   }
 }
 ```
