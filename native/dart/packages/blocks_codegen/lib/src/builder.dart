@@ -419,9 +419,7 @@ class CodegenModelBuilder {
       // namespace + method + param — so they don't collide across operations
       // (the namespace segment is required: two namespaces can share a method
       // name like `create`). A `$ref` param keeps its named-schema identity.
-      final nsPrefix = ns == '_default'
-          ? ''
-          : ns.split('.').map(_capitalize).join();
+      final nsPrefix = _namespacePrefix(method.name);
 
       final params = method.params.map((p) {
         return OperationParam(
@@ -1192,13 +1190,27 @@ class CodegenModelBuilder {
       ..addAll(rebuilt);
   }
 
+  /// The prefix a method's namespace gives its inline param types:
+  /// `authCognitoApi.setAuthState` is `AuthCognitoApi`, `a.b.m` is `AB`, and
+  /// an unqualified (`_default`) method has none.
+  String _namespacePrefix(String method) {
+    final parts = method.split('.');
+    if (parts.length < 2) return '';
+    final ns = parts.sublist(0, parts.length - 1).join('.');
+    return ns == '_default' ? '' : ns.split('.').map(_capitalize).join();
+  }
+
   /// Kotlin and Swift nest a union's arm classes in the union, but Dart's
   /// are top-level, and an `…Input` union names its arms `<Value>Input`, so
   /// two distinct unions with a `signUp` arm (one method in two namespaces)
   /// would both declare `SignUpInput`. The union whose name sorts first (so
   /// spec order doesn't matter) keeps the arm name; another union's arm, or
-  /// an arm named like a model or enum, becomes `<Union><Value>`, as Kotlin's
-  /// `Union.Value` flattened. Throws with [failOnCollision], else warns.
+  /// an arm named like a model or enum, takes its namespace's prefix
+  /// (`AuthCognitoApiSignUpInput`). When that is taken too (two unions of one
+  /// namespace, or a type or another arm already has it), or the union has no
+  /// namespace (a `$ref` schema), it becomes `<Union><Value>`, as Kotlin's
+  /// `Union.Value` flattened. Throws with [failOnCollision], else warns once
+  /// per renamed union.
   void _resolveVariantNameCollisions() {
     final unions = <SealedClassType>[];
     void addUnion(SealedClassType u) {
@@ -1212,34 +1224,58 @@ class CodegenModelBuilder {
       if (type is SealedClassType) addUnion(type);
     }
     unions.sort((a, b) => a.name.compareTo(b.name));
+    // A union's namespace prefix, from the method its first origin is under.
+    final prefixes = Map<SealedClassType, String>.identity();
+    for (final o in _origins) {
+      final hash = o.canonicalKey.indexOf('#');
+      if (o.type is! SealedClassType || hash < 0) continue;
+      prefixes.putIfAbsent(
+        o.type as SealedClassType,
+        () => _namespacePrefix(o.canonicalKey.substring(0, hash)),
+      );
+    }
     // Name -> the union whose arm owns it ('' for a model, enum or union).
     final owners = <String, String>{
       for (final type in _types.values)
         if (_isDeclared(type)) _displayName(type): '',
     };
-    final renamed = <String>[];
+    // Arm names as specced, so a rename never takes one a later arm keeps.
+    final armNames = {
+      for (final u in unions)
+        for (final v in u.variants) v.className,
+    };
+    bool taken(String name) =>
+        owners.containsKey(name) || armNames.contains(name);
+    final lines = <String>[];
     for (final union in unions) {
+      final renamed = <String>[];
       for (final v in union.variants) {
         if (owners.putIfAbsent(v.className, () => union.name) == union.name) {
           continue;
         }
-        final base = '${union.name}${_capitalize(v.discriminantValue)}';
-        var name = base;
-        for (var i = 2; owners.containsKey(name); i++) {
-          name = '$base$i';
+        final prefix = prefixes[union] ?? '';
+        var name = '$prefix${v.className}';
+        if (prefix.isEmpty || taken(name)) {
+          final base = '${union.name}${_capitalize(v.discriminantValue)}';
+          name = base;
+          for (var i = 2; taken(name); i++) {
+            name = '$base$i';
+          }
         }
-        renamed.add('`${v.className}` of ${union.name} -> $name');
+        renamed.add('${v.className} -> $name');
         v.className = name;
         owners[name] = union.name;
       }
+      if (renamed.isEmpty) continue;
+      lines.add(
+        'Naming conflict: union ${union.name} shares Dart arm class names '
+        'with another type; generated as ${renamed.join(', ')}. Rename the '
+        'arms or the union in your spec to keep the short names.',
+      );
     }
-    if (renamed.isEmpty) return;
-    final message =
-        'Naming conflict: union arms of distinct types generate one Dart '
-        'class name. Generated as: ${renamed.join(', ')}. Rename the arm or '
-        'its union in your spec to keep the short name.';
-    if (failOnCollision) throw NamingConflictException(message);
-    _warnings.add(message);
+    if (lines.isEmpty) return;
+    if (failOnCollision) throw NamingConflictException(lines.join('\n'));
+    _warnings.addAll(lines);
   }
 
   /// Warns when distinct spec names of one scope generate one Dart

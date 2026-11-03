@@ -80,48 +80,71 @@ RpcModel _nestedVsFlat() {
   );
 }
 
-/// Two namespaces whose `setState` input unions share the `signUp` arm but
-/// differ in shape. Dart names an `…Input` union's arms `<Value>Input`, so both
-/// arms want `SignUpInput`.
-RpcModel _sharedArmNames({bool reversed = false}) {
-  RpcMethod setState(String ns, Map<String, TypeRef> signUp) => RpcMethod(
-    name: '$ns.setState',
-    params: [
-      RpcParam(
-        name: 'input',
-        isRequired: true,
-        schema: DiscriminatedUnionRef(
-          discriminant: 'action',
-          variants: [
-            UnionVariant(
-              discriminantValue: 'signUp',
-              properties: signUp,
-              required: signUp.keys.toSet(),
-            ),
-            const UnionVariant(
-              discriminantValue: 'signOut',
-              properties: {},
-              required: {},
-            ),
-          ],
+/// `setState`-style methods (`ns.method`) whose input unions share the
+/// `signUp` and `signOut` arms but differ in shape. Dart names an `…Input`
+/// union's arms `<Value>Input`, so every union's arm wants `SignUpInput`.
+/// [extra] adds one more arm to the last union only.
+RpcModel _sharedArmNames({
+  bool reversed = false,
+  List<String> methods = const ['basic.setState', 'cognito.setState'],
+  Map<String, TypeRef> schemas = const {},
+  String? extra,
+}) {
+  RpcMethod setState(int i) {
+    final signUp = {
+      for (var f = 0; f <= i; f++) 'f$f': const PrimitiveRef('String'),
+    };
+    return RpcMethod(
+      name: methods[i],
+      params: [
+        RpcParam(
+          name: 'input',
+          isRequired: true,
+          schema: DiscriminatedUnionRef(
+            discriminant: 'action',
+            variants: [
+              UnionVariant(
+                discriminantValue: 'signUp',
+                properties: signUp,
+                required: signUp.keys.toSet(),
+              ),
+              const UnionVariant(
+                discriminantValue: 'signOut',
+                properties: {},
+                required: {},
+              ),
+              if (extra != null && i == methods.length - 1)
+                UnionVariant(
+                  discriminantValue: extra,
+                  properties: const {},
+                  required: const {},
+                ),
+            ],
+          ),
         ),
-      ),
-    ],
-    result: const PrimitiveRef('void'),
-  );
-  final methods = [
-    setState('basic', const {'username': PrimitiveRef('String')}),
-    setState('cognito', const {
-      'username': PrimitiveRef('String'),
-      'code': PrimitiveRef('String'),
-    }),
-  ];
+      ],
+      result: const PrimitiveRef('void'),
+    );
+  }
+
+  final built = [for (var i = 0; i < methods.length; i++) setState(i)];
   return RpcModel(
     title: 't',
     version: '1',
-    schemas: {},
-    methods: reversed ? methods.reversed.toList() : methods,
+    schemas: schemas,
+    methods: reversed ? built.reversed.toList() : built,
   );
+}
+
+/// The generated library's top-level class names, checked to be distinct.
+Set<String> _classes(CodegenModel model) {
+  final out = const DartCodeGenerator().generate(model);
+  final classes = RegExp(
+    r'^class (\w+)',
+    multiLine: true,
+  ).allMatches(out).map((m) => m[1]!).toList();
+  expect(classes.toSet(), hasLength(classes.length), reason: '$classes');
+  return classes.toSet();
 }
 
 void main() {
@@ -443,17 +466,14 @@ void main() {
   });
 
   group('union arms shared by two unions', () {
-    test('get distinct classes, qualified by their union', () {
+    test('take the namespace prefix, whatever the spec order', () {
+      final names = <Set<String>>[];
       for (final reversed in [false, true]) {
         final model = CodegenModelBuilder().build(
           _sharedArmNames(reversed: reversed),
         );
         final out = const DartCodeGenerator().generate(model);
-        final classes = RegExp(
-          r'^class (\w+)',
-          multiLine: true,
-        ).allMatches(out).map((m) => m[1]).toList();
-        expect(classes.toSet(), hasLength(classes.length), reason: '$classes');
+        names.add(_classes(model));
         // The union whose name sorts first keeps the short names.
         expect(out, contains('class SignUpInput extends BasicSetStateInput {'));
         expect(
@@ -462,30 +482,104 @@ void main() {
         );
         expect(
           out,
-          contains(
-            'class CognitoSetStateInputSignUp extends CognitoSetStateInput {',
-          ),
+          contains('class CognitoSignUpInput extends CognitoSetStateInput {'),
         );
         expect(
           out,
-          contains(
-            'class CognitoSetStateInputSignOut extends CognitoSetStateInput {',
-          ),
+          contains('class CognitoSignOutInput extends CognitoSetStateInput {'),
         );
         expect(
           out,
-          contains(
-            "case 'signUp': return CognitoSetStateInputSignUp.fromJson(json);",
+          contains("case 'signUp': return CognitoSignUpInput.fromJson(json);"),
+        );
+        // One compact line per renamed union.
+        expect(model.warnings, [
+          'Naming conflict: union CognitoSetStateInput shares Dart arm class '
+              'names with another type; generated as SignUpInput -> '
+              'CognitoSignUpInput, SignOutInput -> CognitoSignOutInput. '
+              'Rename the arms or the union in your spec to keep the short '
+              'names.',
+        ]);
+      }
+      expect(names.first, names.last);
+    });
+
+    test('in one namespace fall back to the union name', () {
+      for (final reversed in [false, true]) {
+        final model = CodegenModelBuilder().build(
+          _sharedArmNames(
+            reversed: reversed,
+            methods: ['basic.setState', 'cognito.setState', 'cognito.update'],
           ),
+        );
+        final classes = _classes(model);
+        expect(classes, containsAll(['SignUpInput', 'CognitoSignUpInput']));
+        expect(
+          classes,
+          containsAll([
+            'CognitoUpdateInputSignUp',
+            'CognitoUpdateInputSignOut',
+          ]),
         );
         expect(
           model.warnings,
           contains(
             contains(
-              '`SignUpInput` of CognitoSetStateInput -> '
-              'CognitoSetStateInputSignUp',
+              'union CognitoUpdateInput shares Dart arm class names with '
+              'another type; generated as SignUpInput -> '
+              'CognitoUpdateInputSignUp, SignOutInput -> '
+              'CognitoUpdateInputSignOut.',
             ),
           ),
+        );
+      }
+    });
+
+    test('fall back to the union name when the prefixed name is taken', () {
+      for (final reversed in [false, true]) {
+        // Taken by a model.
+        final byModel = CodegenModelBuilder().build(
+          _sharedArmNames(
+            reversed: reversed,
+            schemas: {
+              'CognitoSignUpInput': const InlineObjectRef(
+                properties: {'x': PrimitiveRef('String')},
+                required: {'x'},
+              ),
+            },
+          ),
+        );
+        expect(
+          _classes(byModel),
+          containsAll([
+            'CognitoSignUpInput',
+            'CognitoSetStateInputSignUp',
+            'CognitoSignOutInput',
+          ]),
+        );
+
+        // Taken by another union's own arm (`cognitoSignUp` in `x.setState`),
+        // which keeps it.
+        final byArm = CodegenModelBuilder().build(
+          _sharedArmNames(
+            reversed: reversed,
+            methods: ['basic.setState', 'cognito.setState', 'x.setState'],
+            extra: 'cognitoSignUp',
+          ),
+        );
+        final classes = _classes(byArm);
+        expect(
+          classes,
+          containsAll([
+            'CognitoSignUpInput',
+            'CognitoSetStateInputSignUp',
+            'XSignUpInput',
+          ]),
+        );
+        final out = const DartCodeGenerator().generate(byArm);
+        expect(
+          out,
+          contains('class CognitoSignUpInput extends XSetStateInput {'),
         );
       }
     });
@@ -498,7 +592,7 @@ void main() {
           isA<NamingConflictException>().having(
             (e) => e.message,
             'message',
-            contains('`SignUpInput`'),
+            contains('SignUpInput -> CognitoSignUpInput'),
           ),
         ),
       );

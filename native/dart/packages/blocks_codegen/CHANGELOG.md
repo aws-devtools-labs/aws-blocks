@@ -18,9 +18,11 @@
 - Fix two distinct unions with an arm of one name (a `setAuthState` input in
   two namespaces, both with a `signUp` arm) declaring the same Dart class
   twice, which didn't compile. The union whose name sorts first keeps the arm
-  name (`SignUpInput`); the other's arm is named after its union
-  (`AuthCognitoApiSetAuthStateInputSignUp`), and the codegen warns, or fails
-  with `--fail-on-collision`.
+  name (`SignUpInput`); the other's arm takes its namespace's prefix
+  (`AuthCognitoApiSignUpInput`). If that name is taken too (two unions in one
+  namespace, or another type already has it), the arm is named after its
+  union (`AuthCognitoApiSetAuthStateInputSignUp`). The codegen warns with one
+  line per renamed union, or fails with `--fail-on-collision`.
 - A realtime channel without type arguments (`RealtimeChannel<dynamic>`) now
   hydrates with `RealtimeChannel.fromJsonValue`, so a message that isn't a
   JSON object reaches the stream instead of failing a `Map` cast.
