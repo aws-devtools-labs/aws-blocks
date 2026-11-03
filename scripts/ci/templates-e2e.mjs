@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { killTree, runBool, startRegistry, isWin } from './_proc.mjs';
+import { checkDevLifecycle } from './windows-dev-lifecycle.mjs';
 
 const ROOT = join(fileURLToPath(import.meta.url), '..', '..', '..');
 const REGISTRY_PORT = 4873;
@@ -228,6 +229,17 @@ async function main() {
 			console.error(`  FAIL: vendorized source not found for template ${template}`);
 			failed.push(template);
 			continue;
+		}
+		// Windows only: the user's `blocks dev` → edit → `dev stop` session, which `test:e2e`'s
+		// `taskkill /T` teardown does not exercise (see windows-dev-lifecycle.mjs).
+		if (isWin && template === 'default') {
+			try {
+				await checkDevLifecycle(app, env, work);
+			} catch (error) {
+				console.error(`  FAIL: ${error?.message ?? error}`);
+				failed.push(`${template} (dev lifecycle)`);
+				continue;
+			}
 		}
 		console.log(`  ✓ Template ${template} passed all checks`);
 	}
