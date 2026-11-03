@@ -25,8 +25,16 @@ import {
   type DevServerPidRecord,
   type ReclaimResult,
   stopDevServer,
+  ownsLeftoverFrontend,
 } from './dev-server.js';
-import { findListenerPids, killListenerTree } from './process-tree.js';
+import {
+  descendsFrom,
+  findListenerPids,
+  killListenerTree,
+  parseWindowsProcesses,
+  type WindowsProcess,
+  windowsProcesses,
+} from './process-tree.js';
 import { claimDevSession, pidCommand } from './dev-pidfile.js';
 
 function getFreePort(): Promise<number> {
@@ -669,6 +677,87 @@ describe('findListenerPids — lsof/netstat listener discovery', () => {
     assert.deepStrictEqual(pids, [4242, 5151, 6161]);
     // Not `-p tcp`, which lists IPv4 only.
     assert.deepStrictEqual(calls, [['netstat', ['-ano']]]);
+  });
+});
+
+// ── Windows processes (CIM) — identity by creation time, ancestry ─────────────
+describe('Windows processes — CIM query, creation-time identity and ancestry', () => {
+  const proc = (pid: number, ppid: number, created: string, command = ''): WindowsProcess => ({ pid, ppid, created, command });
+
+  it('parses one pid, parent, creation time and command line per line, and skips the rest', () => {
+    const table = parseWindowsProcesses(
+      [
+        '0\t0\t\t', // the System Idle Process has no creation time
+        '4100\t4000\t134000000000000100\t"C:\\node.exe" "C:\\app\\node_modules\\tsx\\dist\\cli.mjs" watch x.js',
+        '4200\t4100\t134000000000000200\tnode\twith a tab',
+        'garbage',
+        '',
+      ].join('\r\n'),
+    );
+    assert.deepStrictEqual([...table.keys()], [4100, 4200]);
+    assert.deepStrictEqual(table.get(4200), proc(4200, 4100, '134000000000000200', 'node\twith a tab'));
+  });
+
+  it('asks powershell once for the pids it needs, and for none without a query', () => {
+    const calls: Array<readonly string[]> = [];
+    const runner = (cmd: string, args: readonly string[]) => {
+      calls.push([cmd, ...args]);
+      return { stdout: '901\t1\t134000000000000000\tnode vite.js\r\n' };
+    };
+    assert.strictEqual(windowsProcesses([901, 902], runner).get(901)?.created, '134000000000000000');
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0][0], 'powershell.exe');
+    assert.match(calls[0].at(-1) ?? '', /Win32_Process -Filter "ProcessId=901 OR ProcessId=902"/);
+    assert.strictEqual(windowsProcesses([], runner).size, 0);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(windowsProcesses([1], () => { throw new Error('ENOENT'); }).size, 0);
+  });
+
+  it('follows parents that were created no later than their children', () => {
+    const table = new Map([
+      [10, proc(10, 1, '100')], // the CLI
+      [20, proc(20, 10, '200')], // tsx watch
+      [30, proc(30, 20, '300')], // the runner
+      [40, proc(40, 99, '400')], // its parent exited
+      [50, proc(50, 60, '500')], // its parent's pid now names a newer process
+      [60, proc(60, 1, '600')],
+    ]);
+    assert.strictEqual(descendsFrom(table, 30, 10), true);
+    assert.strictEqual(descendsFrom(table, 30, 20), true);
+    assert.strictEqual(descendsFrom(table, 20, 30), false);
+    assert.strictEqual(descendsFrom(table, 40, 99), false);
+    assert.strictEqual(descendsFrom(table, 50, 60), false);
+    assert.strictEqual(descendsFrom(table, 77, 10), false);
+  });
+
+  it("owns a previous frontend's listener on Windows only while it is the process that was recorded", () => {
+    const frontend = { port: 3100, listeners: [{ pid: 901, created: '134000000000000000' }] };
+    const now = (created: string) => () => new Map([[901, proc(901, 1, created)]]);
+    const noGroup = () => undefined;
+    assert.strictEqual(ownsLeftoverFrontend(frontend, noGroup, now('134000000000000000'))(901), true);
+    assert.strictEqual(ownsLeftoverFrontend(frontend, noGroup, now('134000000000999999'))(901), false, 'a reused pid');
+    assert.strictEqual(ownsLeftoverFrontend(frontend, noGroup, () => new Map())(901), false, 'exited');
+    assert.strictEqual(ownsLeftoverFrontend(frontend, noGroup, now('134000000000000000'))(902), false);
+    assert.strictEqual(ownsLeftoverFrontend(undefined, noGroup, now('134000000000000000'))(901), false);
+    // POSIX: the recorded group, never the Windows lookup.
+    const posix = ownsLeftoverFrontend({ port: 3100, pgid: 900 }, (pid) => (pid === 901 ? 900 : undefined), () => {
+      throw new Error('no CIM on POSIX');
+    });
+    assert.strictEqual(posix(901), true);
+    assert.strictEqual(posix(902), false);
+  });
+
+  it('keeps the Windows listeners of a frontend in a pidfile record, and drops malformed ones', () => {
+    const record = parsePidRecord(
+      JSON.stringify({
+        pid: 777,
+        ppid: 500,
+        port: 3000,
+        frontend: { port: 3100, listeners: [{ pid: 901, created: '134000000000000000' }, { pid: 1, created: '1' }, { pid: 902 }] },
+      }),
+    );
+    assert.deepStrictEqual(record?.frontend, { port: 3100, listeners: [{ pid: 901, created: '134000000000000000' }] });
+    assert.strictEqual(parsePidRecord(JSON.stringify({ pid: 7, ppid: 5, port: 3000, frontend: { port: 3100, listeners: [] } }))?.frontend, undefined);
   });
 });
 

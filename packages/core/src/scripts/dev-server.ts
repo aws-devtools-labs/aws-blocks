@@ -35,6 +35,7 @@ import {
   claimDevPidfile,
   DEV_SESSION_ENV,
   type DevServerPidRecord,
+  type FrontendListener,
   devPidfilePath,
   isPidAlive,
   isTsxWatcher,
@@ -59,12 +60,16 @@ export {
   type SingletonDecision,
 } from './dev-pidfile.js';
 import {
+  descendsFrom,
   KILL_GRACE_MS,
   killFrontendTree,
   terminateProcessTree,
   findListenerPids,
   killListenerTree,
   waitForProcessGroupExit,
+  type WindowsProcess,
+  windowsProcesses,
+  windowsProcessesAsync,
 } from './process-tree.js';
 import { ignoreClosedOutput, isCuratedLevel, log, resolveLogLevel } from './log.js';
 
@@ -712,6 +717,25 @@ function processGroupOf(pid: number): number | undefined {
 }
 
 /**
+ * Whether `pid` is a process of the frontend that a previous dev server of this
+ * app recorded (see {@link DevServerPidRecord.frontend}): on POSIX a member of
+ * its process group; on Windows one of its listeners, still with the creation
+ * time it had, so a pid that Windows handed out again is not. Nothing is, with
+ * no recorded frontend.
+ */
+export function ownsLeftoverFrontend(
+  frontend: DevServerPidRecord['frontend'],
+  groupOf: (pid: number) => number | undefined,
+  processes: (pids: readonly number[]) => ReadonlyMap<number, WindowsProcess>,
+): (pid: number) => boolean {
+  return (pid) => {
+    if (frontend?.pgid !== undefined) return groupOf(pid) === frontend.pgid;
+    const listener = frontend?.listeners?.find((l) => l.pid === pid);
+    return listener !== undefined && processes([pid]).get(pid)?.created === listener.created;
+  };
+}
+
+/**
  * The script {@link watchPidfileHandoff} runs (`node --input-type=module -e`):
  * every 100 ms, while the pidfile still holds the exited dev server's record,
  * check its `tsx watch`; once that has exited too, the session is over, so reap
@@ -907,17 +931,17 @@ export async function startDevServer(options: DevServerOptions) {
     void closeLocalEngines().finally(() => process.exit(0));
   };
   for (const sig of signals) process.on(sig, startupStop);
-  // The only processes this start may stop to free a port: those in the
-  // frontend group that the record it took over (a crashed predecessor, or its
+  // The only processes this start may stop to free a port: those of the
+  // frontend that the record it took over (a crashed predecessor, or its
   // own `tsx watch` predecessor) wrote down.
-  const leftoverGroup = claim.previous?.frontend?.pgid;
-  const ownedLeftover = (pid: number): boolean => leftoverGroup !== undefined && processGroupOf(pid) === leftoverGroup;
-  /** Rewrite our pidfile with the frontend group we now run, while the pidfile is still ours. */
-  const recordFrontend = (pgid: number): void => {
+  const leftoverFrontend = claim.previous?.frontend;
+  const ownedLeftover = ownsLeftoverFrontend(leftoverFrontend, processGroupOf, windowsProcesses);
+  /** Rewrite our pidfile with the frontend we now run, while the pidfile is still ours. */
+  const recordFrontend = (frontend: { pgid?: number; listeners?: FrontendListener[] }): void => {
     try {
       if (parsePidRecord(readFileSync(pidfilePath, 'utf-8'))?.pid !== process.pid) return;
       const tmp = `${pidfilePath}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ ...selfRecord, frontend: { pgid, port: frontendPort } }));
+      writeFileSync(tmp, JSON.stringify({ ...selfRecord, frontend: { ...frontend, port: frontendPort } }));
       renameSync(tmp, pidfilePath);
     } catch { /* best effort: only a later reclaim of this frontend's port depends on it */ }
   };
@@ -1040,6 +1064,23 @@ export async function startDevServer(options: DevServerOptions) {
   let frontendRestarts: number[] = [];
   let respawnTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Windows has no process groups, and a frontend that a shell started outlives
+   * a dev server that `tsx watch` restarted or that was killed: once `child`
+   * listens, record the processes of its tree that hold the port, for a later
+   * start's reclaim and `dev stop` (see {@link ownsLeftoverFrontend}).
+   */
+  const recordWindowsFrontend = async (child: ChildProcess): Promise<void> => {
+    const root = child.pid;
+    const listening = findListenerPids(frontendPort);
+    if (root === undefined || listening.length === 0) return;
+    const processes = await windowsProcessesAsync();
+    const listeners = listening
+      .filter((pid) => descendsFrom(processes, pid, root))
+      .map((pid) => ({ pid, created: processes.get(pid)!.created }));
+    if (listeners.length > 0 && child === frontendProcess && !isShuttingDown) recordFrontend({ listeners });
+  };
+
   const announceFrontendReady = async (child: ChildProcess | null, suffix = ''): Promise<void> => {
     try {
       await waitForPort(frontendPort);
@@ -1054,6 +1095,7 @@ export async function startDevServer(options: DevServerOptions) {
       // editor-triggered Vite full reloads) still never gets left down.
       if (shouldCreditFrontendReady(child, frontendProcess)) {
         frontendRestarts = [];
+        if (!usePosixProcessGroups && child) void recordWindowsFrontend(child);
       }
       console.log(`\n  ➜  ${frontDoor}/${suffix}\n`);
     } catch (e) {
@@ -1072,7 +1114,7 @@ export async function startDevServer(options: DevServerOptions) {
     });
     frontendProcess = child;
     // Detached on POSIX, so its pid is its group id: what a later start of this app may reclaim the port from.
-    if (usePosixProcessGroups && child.pid) recordFrontend(child.pid);
+    if (usePosixProcessGroups && child.pid) recordFrontend({ pgid: child.pid });
 
     // Suppress frontend output — only show errors.
     child.stderr?.on('data', (d: Buffer) => {
@@ -1309,7 +1351,8 @@ export async function startDevServer(options: DevServerOptions) {
   // (see {@link reclaimPort}).
   const reclaimDeps = {
     owned: ownedLeftover,
-    killTree: (pid: number, signal: NodeJS.Signals) => killListenerTree(leftoverGroup ?? pid, signal),
+    // POSIX: the recorded group. Windows: the recorded listener's tree (taskkill /T).
+    killTree: (pid: number, signal: NodeJS.Signals) => killListenerTree(leftoverFrontend?.pgid ?? pid, signal),
   };
   const ports: Array<[number, string]> = [[port, '--port']];
   if (frontendCommand) ports.push([frontendPort, '--frontend-port']);
@@ -1498,8 +1541,8 @@ export interface StopResult {
    * holding it, which `dev stop` never signals. Empty otherwise.
    */
   holders: PortHolder[];
-  /** The recorded frontend group and port that were stopped: for `frontend`, and for `watcher` when the runner was already dead. */
-  frontend?: { pgid: number; port: number };
+  /** The recorded frontend and its port that were stopped: for `frontend`, and for `watcher` when the runner was already dead. */
+  frontend?: NonNullable<DevServerPidRecord['frontend']>;
   /**
    * For `via: 'watcher'`: the `tsx watch` did not exit on its SIGTERM with its
    * runner dead (a runner killed by a signal leaves tsx waiting forever), so it
@@ -1534,6 +1577,8 @@ export interface StopDevServerDeps {
   killTree: (pid: number, sig: NodeJS.Signals) => void;
   /** `pid`'s process group, or undefined when it can't be read: a frontend group is recorded by its pgid. */
   groupOf: (pid: number) => number | undefined;
+  /** Windows: the running processes of `pids`, from one CIM query; a frontend's listeners are recorded by their creation time. */
+  processes: (pids: readonly number[]) => ReadonlyMap<number, WindowsProcess>;
   /** Wait (bounded) for a port to be released. */
   waitFree: (port: number, timeoutMs?: number) => Promise<void>;
   /** Wait (bounded) for `pid` to exit; true once it has. */
@@ -1557,6 +1602,7 @@ function defaultStopDeps(): StopDevServerDeps {
     listPids: (p) => findListenerPids(p),
     killTree: (pid, sig) => killListenerTree(pid, sig),
     groupOf: (pid) => processGroupOf(pid),
+    processes: (pids) => windowsProcesses(pids),
     waitFree: (p, t) => waitForPortFree(p, t),
     waitExit: async (pid, timeoutMs) => {
       for (const deadline = Date.now() + timeoutMs; isPidAlive(pid); await sleep(50)) {
@@ -1688,20 +1734,21 @@ export async function stopDevServer(
   }
 
   /**
-   * Stop the recorded frontend group, once the dev server that ran it is gone,
-   * if it still holds the frontend port: with the same ownership test as a
-   * start's reclaim, so nothing but that group is signalled. Null when the
+   * Stop the recorded frontend, once the dev server that ran it is gone, if it
+   * still holds the frontend port: with the same ownership test as a start's
+   * reclaim (see {@link ownsLeftoverFrontend}), so nothing but that group (POSIX),
+   * or the trees of those listeners (Windows), is signalled. Null when the
    * record has none, or nothing of it holds the port.
    */
-  const stopLeftFrontend = async (): Promise<{ frontend: { pgid: number; port: number }; reclaim: ReclaimResult } | null> => {
+  const stopLeftFrontend = async (): Promise<{ frontend: NonNullable<DevServerPidRecord['frontend']>; reclaim: ReclaimResult } | null> => {
     const frontend = record.frontend;
     if (!frontend) return null;
     const reclaim = await reclaimPort(frontend.port, {
       probe: d.probe,
       listPids: d.listPids,
-      owned: (pid) => d.groupOf(pid) === frontend.pgid,
+      owned: ownsLeftoverFrontend(frontend, d.groupOf, d.processes),
       commandOf: d.commandOf,
-      killTree: (_pid, sig) => d.killTree(frontend.pgid, sig),
+      killTree: (pid, sig) => d.killTree(frontend.pgid ?? pid, sig),
       waitFree: d.waitFree,
     });
     return reclaim.wasOpen && reclaim.pids.length > 0 ? { frontend, reclaim } : null;

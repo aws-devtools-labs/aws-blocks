@@ -44,6 +44,7 @@ function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
     listPids: () => [],
     killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); },
     groupOf: () => undefined,
+    processes: () => new Map(),
     waitFree: async () => {},
     waitExit: async () => true,
     ...overrides,
@@ -306,6 +307,44 @@ describe('stopDevServer — the frontend a SIGKILLed dev server left behind', ()
     assert.equal(r.via, 'none');
     assert.deepEqual(sigs, []);
     assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  // Windows has no process groups: the record names the frontend's listeners, with their creation times.
+  const windowsRecord = JSON.stringify({
+    pid: 777,
+    ppid: 500,
+    port: 3000,
+    command: '',
+    frontend: { port: 3100, listeners: [{ pid: 901, created: '134000000000000000' }] },
+  });
+  const running = (pid: number, created: string) => new Map([[pid, { pid, ppid: 1, created, command: 'node vite.js' }]]);
+
+  it('on Windows, stops the recorded listener that an orphaned frontend still holds the port with', async () => {
+    let held = true;
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => windowsRecord,
+      probe: async (p) => p === 3100 && held,
+      listPids: (p) => (p === 3100 && held ? [901] : []),
+      processes: (pids) => (pids.includes(901) ? running(901, '134000000000000000') : new Map()),
+      killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); held = false; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'frontend');
+    assert.equal(r.portFree, true);
+    assert.deepEqual(sigs, [{ pid: 901, signal: 'SIGTERM', via: 'killTree' }], "the listener's tree (taskkill /T)");
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  it('on Windows, leaves a listener whose pid now names a process created later alone', async () => {
+    const { deps, sigs } = makeDeps({
+      readPidfile: () => windowsRecord,
+      probe: async (p) => p === 3100,
+      listPids: (p) => (p === 3100 ? [901] : []),
+      processes: () => running(901, '134000000000999999'),
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'none');
+    assert.deepEqual(sigs, []);
   });
 });
 
