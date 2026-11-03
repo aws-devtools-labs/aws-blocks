@@ -554,12 +554,18 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   if (stampedVersions) {
     workspacePkg = JSON.parse(await readFile(join(awsBlocksSrc, 'package.json'), 'utf-8'));
     // A package the project root already lists keeps the root's range here too,
-    // so the workspace and the root resolve to one copy of it.
+    // so the workspace and the root resolve to one copy of it. Only packages the
+    // CLI stamps are overridden (a missing stamp still fails here, before any
+    // write), devDependencies win as they do in npm's resolution of the root,
+    // and protocol specs (`file:`, `link:`, ...) are skipped since they would
+    // resolve from a different directory here.
     const rootPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
-    const rootRanges: Record<string, string> = { ...rootPkg.devDependencies, ...rootPkg.dependencies };
+    const rootRanges: Record<string, unknown> = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
     const workspaceVersions = { ...stampedVersions };
     for (const [name, range] of Object.entries(rootRanges)) {
-      if (name.startsWith('@aws-blocks/') && typeof range === 'string' && range !== '*') workspaceVersions[name] = range;
+      if (name in stampedVersions && typeof range === 'string' && range !== '*' && !range.includes(':')) {
+        workspaceVersions[name] = range;
+      }
     }
     stampBlocksVersions(workspacePkg?.dependencies, workspaceVersions);
     stampBlocksVersions(workspacePkg?.devDependencies, workspaceVersions);
