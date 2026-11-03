@@ -13,6 +13,10 @@
  * those methods use, and passes the run's secret only as config — never as an
  * SSM parameter or a value in the template.
  *
+ * The e2e synth also runs with `E2E_FROM_EMAIL` set, as CI's e2e jobs do: every
+ * user pool then sends through that SES identity (`EmailSendingAccount:
+ * DEVELOPER`), and without it every pool keeps Cognito's default sender.
+ *
  * Each synth runs in its own process (`test-support-synth.probe.ts`, under
  * `--conditions=cdk`), because the flag is read when the backend module loads.
  */
@@ -30,6 +34,12 @@ const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** The secret the e2e synth runs with (a stand-in for the per-run one). */
 const E2E_SECRET = `synth-probe-secret-${'0'.repeat(48)}`;
+
+/** The SES sender the e2e synth runs with (a stand-in for the `E2E_FROM_EMAIL` secret). */
+const E2E_SENDER = 'e2e-sender@example.com';
+
+/** Every `Auth` block of the app that creates a user pool (the OIDC-only ones create none). */
+const POOL_BLOCKS = ['auth', 'auth-same-origin', 'auth-cross-domain', 'authC', 'authCMfa', 'auth-gated'];
 
 /**
  * `cognito-idp` actions only the `admin` surface grants (bb-auth's
@@ -78,9 +88,11 @@ function synth(testEnv: string | undefined): ProbeResult {
 		const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: '', CDK_CONTEXT_JSON: JSON.stringify({ sandboxMode: 'true' }) };
 		delete env.BLOCKS_TEST_ENV;
 		delete env.BLOCKS_TEST_SUPPORT_SECRET;
+		delete env.E2E_FROM_EMAIL;
 		if (testEnv) {
 			env.BLOCKS_TEST_ENV = testEnv;
 			env.BLOCKS_TEST_SUPPORT_SECRET = E2E_SECRET;
+			env.E2E_FROM_EMAIL = E2E_SENDER;
 		}
 		execFileSync('npx', ['tsx', '-C', 'cdk', 'test/test-support-synth.probe.ts', out], { cwd: APP_ROOT, env, stdio: 'pipe' });
 		return JSON.parse(readFileSync(out, 'utf-8'));
@@ -170,6 +182,15 @@ describe('comprehensive test support: normal synth vs e2e synth', () => {
 			}
 		});
 
+		test('every user pool keeps the default sender without E2E_FROM_EMAIL', () => {
+			const pools = Object.values(normal.template.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPool');
+			assert.strictEqual(pools.length, POOL_BLOCKS.length);
+			for (const pool of pools) {
+				const account = field(pool.Properties?.EmailConfiguration, 'EmailSendingAccount');
+				assert.ok(account === undefined || account === 'COGNITO_DEFAULT', `EmailSendingAccount: ${account}`);
+			}
+		});
+
 		test('carries no test-support secret or handler flag', () => {
 			const json = JSON.stringify(normal.template);
 			assert.ok(!json.includes('test-support-secret'), 'a test-support-secret parameter is synthesized');
@@ -197,6 +218,21 @@ describe('comprehensive test support: normal synth vs e2e synth', () => {
 				[poolId(t, 'auth-cross-domain')]: withoutReset(ADMIN_LIFECYCLE).sort(),
 				[poolId(t, 'authC')]: withoutReset([...ADMIN_LIFECYCLE, ...ADMIN_GROUPS]).sort(),
 			});
+		});
+
+		test('every user pool sends through the E2E_FROM_EMAIL SES identity', () => {
+			const t = e2e.template;
+			const pools = Object.values(t.Resources).filter((r) => r.Type === 'AWS::Cognito::UserPool');
+			assert.strictEqual(pools.length, POOL_BLOCKS.length);
+			for (const block of POOL_BLOCKS) {
+				const config = t.Resources[poolId(t, block)]?.Properties?.EmailConfiguration;
+				assert.strictEqual(field(config, 'EmailSendingAccount'), 'DEVELOPER', block);
+				assert.strictEqual(field(config, 'From'), E2E_SENDER, block);
+				// arn:<partition>:ses:<stack region>:<stack account>:identity/<address>
+				const arn = asArray(field(field(config, 'SourceArn'), 'Fn::Join'))[1];
+				assert.ok(JSON.stringify(arn).endsWith(`":identity/${E2E_SENDER}"]`), `${block} SourceArn: ${JSON.stringify(arn)}`);
+				assert.ok(JSON.stringify(arn).includes('":ses:",{"Ref":"AWS::Region"}'), `${block} SourceArn: ${JSON.stringify(arn)}`);
+			}
 		});
 
 		test('forwards the flag and the secret as config, never as an SSM parameter or a template value', () => {

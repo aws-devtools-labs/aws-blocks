@@ -52,10 +52,19 @@ function codeInbox() {
   };
 }
 
+// --- Deployed e2e email sender -------------------------------------------------
+// The deployed pools send mail through SES, not Cognito's default sender (50
+// emails a day per account, after which every `SignUp` fails). CI sets
+// `E2E_FROM_EMAIL` to a verified SES identity; unset (local dev, forks), the
+// pools keep the default sender. Read at synth only: the runtime does not use
+// `email`. The OIDC-only block has no pool, and `Auth` refuses `email` there.
+const e2eEmail = process.env.E2E_FROM_EMAIL ? { email: { fromAddress: process.env.E2E_FROM_EMAIL } } : {};
+
 // --- Auth: email + password ----------------------------------------------------
 // Block id kept from the `AuthBasic` instance this replaces.
 const basicCodes = codeInbox();
 const authBasic = new Auth(scope, 'auth-basic', {
+  ...e2eEmail,
   // Disposable test stack: say so explicitly (a real app retains its pool).
   removalPolicy: 'destroy',
   codeDelivery: basicCodes.deliver,
@@ -67,6 +76,7 @@ const authBasic = new Auth(scope, 'auth-basic', {
 // `users.attributes` (only custom attributes are).
 const cognitoCodes = codeInbox();
 const authCognito = new Auth(scope, 'auth-cognito', {
+  ...e2eEmail,
   emailPassword: {
     selfSignUp: true,
     passwordPolicy: { minLength: 8, requireDigits: true },

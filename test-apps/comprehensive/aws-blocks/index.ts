@@ -154,6 +154,14 @@ async function purgeDeliveredCodes(username?: string): Promise<number> {
 // the deployed identity (it names the user pool, the session table and the
 // session cookie), so it must never change.
 
+// Deployed e2e pools send mail through SES, not Cognito's default sender
+// (50 emails a day per account, after which every `SignUp` fails). CI sets
+// `E2E_FROM_EMAIL` to a verified SES identity (the same one `EmailClient` sends
+// from); unset (local dev, forks), the pools keep the default sender. Only
+// instances that create a user pool take it: `Auth` refuses `email` at synth
+// on a configuration with no pool (the OIDC-only instances below).
+const e2eEmail = process.env.E2E_FROM_EMAIL ? { email: { fromAddress: process.env.E2E_FROM_EMAIL } } : {};
+
 // Email + password, formerly `AuthBasic`. Every sign-up confirms with an
 // emailed code (locally: `codeDelivery`, recorded for the e2e read-back). The
 // policy reproduces AuthBasic's: length only, no character classes.
@@ -162,6 +170,7 @@ async function purgeDeliveredCodes(username?: string): Promise<number> {
 // agent tests) work against a deployed sandbox too. Outside the e2e build the
 // list is empty, so no Admin* IAM action is granted on this pool.
 const auth = new Auth(scope, 'auth', {
+  ...e2eEmail,
   emailPassword: {
     passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
   },
@@ -185,6 +194,7 @@ const sameOriginOptions = {
     passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
   },
   admin: { actions: e2eBuild ? ['lifecycle'] : [] },
+  ...e2eEmail,
 } as const satisfies AuthOptions;
 const authSameOrigin = new Auth(scope, 'auth-same-origin', {
   ...sameOriginOptions,
@@ -230,6 +240,7 @@ async function signInExisting(
 // auth-cognito.test.ts). MFA stays off here (`types` carried over verbatim) —
 // MFA-specific tests use the `authCMfa` pool below.
 const authC = new Auth(scope, 'authC', {
+  ...e2eEmail,
   emailPassword: {
     selfSignUp: true,
     passwordPolicy: { minLength: 8, requireDigits: true },
@@ -260,9 +271,10 @@ const authC = new Auth(scope, 'authC', {
 //
 // Only `TOTP` in `types` (stated explicitly: `Auth` would otherwise default to
 // SMS + TOTP) — AWS Cognito Email MFA requires an SES-backed sender (`email`),
-// which this test app doesn't set up. TOTP has no such external dependency and exercises the
+// which this test app sets only when `E2E_FROM_EMAIL` is set. TOTP has no such external dependency and exercises the
 // full signIn → CONFIRM_SIGN_IN_WITH_TOTP_CODE → confirmSignIn round-trip.
 const authCMfa = new Auth(scope, 'authCMfa', {
+  ...e2eEmail,
   emailPassword: {
     selfSignUp: true,
     passwordPolicy: { minLength: 8, requireDigits: true },
@@ -409,12 +421,17 @@ const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
 
 // `validateUser` (decision Q10): one policy for every sign-up and sign-in on
 // this instance — email + password and the stub IdP alike. Only addresses at
-// `@allowed.example` may join. On AWS the pool also gets a Cognito PreSignUp
+// `@allowed.example` may join, plus the SES mailbox simulator's success
+// address tagged `+allowed-` (`success+allowed-<id>@simulator.amazonses.com`):
+// with `E2E_FROM_EMAIL` the pool sends through SES, whose sandbox delivers only
+// to verified or simulator recipients, so the deployed in-policy sign-up uses
+// that address. On AWS the pool also gets a Cognito PreSignUp
 // trigger, so a `SignUp` sent straight to Cognito is held to the same policy.
 // The stub IdP's only user is outside the policy, so its sign-in is rejected.
 // Custom paths keep its routes apart from the other OIDC instances.
 const GATED_POLICY_MESSAGE = 'Only @allowed.example accounts may join';
 const authGated = new Auth(scope, 'auth-gated', {
+  ...e2eEmail,
   emailPassword: {
     passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
   },
@@ -433,7 +450,7 @@ const authGated = new Auth(scope, 'auth-gated', {
     signOutPath: '/aws-blocks/auth/gated/signout',
   },
   validateUser: async ({ email }) => {
-    if (!email?.endsWith('@allowed.example')) {
+    if (!email?.endsWith('@allowed.example') && !/^success\+allowed-[^@]+@simulator\.amazonses\.com$/.test(email ?? '')) {
       throw new ApiError(GATED_POLICY_MESSAGE, 403, { name: AuthErrors.NotAuthorized });
     }
   },

@@ -81,7 +81,12 @@ export function authValidateUserTests(getApi: () => typeof apiType) {
       async () => {
         const api = getApi();
         const id = unique();
-        const result = await api.gatedSignUp(`ada${id}`, 'secret1', `ada${id}@allowed.example`);
+        // With `E2E_FROM_EMAIL` the pool sends through SES (sandbox: verified or
+        // simulator recipients only), so use the policy's simulator address.
+        const email = process.env.E2E_FROM_EMAIL
+          ? `success+allowed-${id}@simulator.amazonses.com`
+          : `ada${id}@allowed.example`;
+        const result = await api.gatedSignUp(`ada${id}`, 'secret1', email);
         assert.strictEqual(result.isSignUpComplete, false);
       },
     );
