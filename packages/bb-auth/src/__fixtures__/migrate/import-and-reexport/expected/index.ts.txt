@@ -3,6 +3,7 @@ import { Scope } from '@aws-blocks/core';
 
 export { Auth, AuthErrors } from '@aws-blocks/bb-auth';
 export type { AuthenticatedUser } from '@aws-blocks/bb-auth';
+export * from '@aws-blocks/bb-auth';
 
 const scope = new Scope('app');
 export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });
