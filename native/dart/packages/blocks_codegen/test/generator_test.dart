@@ -100,13 +100,28 @@ void main() {
     );
   });
 
-  test('_atLeast compares the semver core', () {
+  test('_atLeast follows semver precedence, ignoring build metadata', () {
     expect(_atLeast('0.1.5', '0.1.5'), isTrue);
     expect(_atLeast('0.1.10', '0.1.5'), isTrue);
     expect(_atLeast('0.1.4', '0.1.5'), isFalse);
-    expect(_atLeast('0.1.5-dev', '0.1.5'), isTrue);
     expect(_atLeast('0.1.4-dev.1+build.7', '0.1.5'), isFalse);
     expect(_atLeast('0.2.0+1', '0.1.5-dev'), isTrue);
+    // A pre-release is below its release, as pub orders it.
+    expect(_atLeast('0.1.5-dev', '0.1.5'), isFalse);
+    expect(_atLeast('0.1.5', '0.1.5-dev'), isTrue);
+    expect(_atLeast('0.1.5-dev', '0.1.5-dev'), isTrue);
+    // Pre-release identifiers: numeric by value, below alphanumeric, and a
+    // shorter prefix first.
+    expect(_atLeast('0.1.5-dev.10', '0.1.5-dev.2'), isTrue);
+    expect(_atLeast('0.1.5-dev.2', '0.1.5-dev.10'), isFalse);
+    expect(_atLeast('0.1.5-1', '0.1.5-alpha'), isFalse);
+    expect(_atLeast('0.1.5-beta', '0.1.5-alpha'), isTrue);
+    expect(_atLeast('0.1.5-dev', '0.1.5-dev.1'), isFalse);
+    expect(_atLeast('0.1.5-rc-1', '0.1.5-rc'), isTrue);
+    // Build metadata never counts.
+    expect(_atLeast('0.1.5', '0.1.5+1'), isTrue);
+    expect(_atLeast('0.1.5-dev+1', '0.1.5-dev+2'), isTrue);
+    expect(_atLeast('0.1.5-dev+9', '0.1.5'), isFalse);
   });
 
   test('minimumRuntimeVersion and the blocks_runtime constraint agree with '
@@ -1860,16 +1875,34 @@ String _generateModel(CodegenModel model) =>
 
 String _generate(String spec) => _generateModel(_build(spec));
 
-/// Whether version [x] is at least [y], by their semver cores
-/// (`0.1.5-dev+1` is `0.1.5`).
+/// Whether version [x] is at least [y] in semver precedence, as pub orders
+/// versions: a pre-release is below its release (`0.1.5-dev` < `0.1.5`).
+/// Build metadata is ignored (`0.1.5+1` is `0.1.5`).
 bool _atLeast(String x, String y) {
-  final [a, b] = [x, y]
-      .map(
-        (v) => v.split(RegExp('[-+]')).first.split('.').map(int.parse).toList(),
-      )
-      .toList();
+  (List<int>, List<String>?) parse(String v) {
+    final s = v.split('+').first;
+    final dash = s.indexOf('-');
+    return (
+      (dash < 0 ? s : s.substring(0, dash)).split('.').map(int.parse).toList(),
+      dash < 0 ? null : s.substring(dash + 1).split('.'),
+    );
+  }
+
+  final (a, aPre) = parse(x);
+  final (b, bPre) = parse(y);
   for (var i = 0; i < a.length; i++) {
     if (a[i] != b[i]) return a[i] > b[i];
   }
-  return true;
+  if (aPre == null || bPre == null) return aPre == null;
+  for (var i = 0; i < aPre.length && i < bPre.length; i++) {
+    final (m, n) = (int.tryParse(aPre[i]), int.tryParse(bPre[i]));
+    final c = switch ((m, n)) {
+      (final m?, final n?) => m.compareTo(n),
+      (_?, null) => -1, // a numeric identifier is below an alphanumeric one
+      (null, _?) => 1,
+      _ => aPre[i].compareTo(bPre[i]),
+    };
+    if (c != 0) return c > 0;
+  }
+  return aPre.length >= bPre.length;
 }
