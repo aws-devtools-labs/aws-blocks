@@ -125,7 +125,7 @@ This allows the Authenticator UI component to display errors without losing trac
 
 **Rationale:**
 - **HttpOnly** — prevents JavaScript access, mitigating XSS token theft.
-- **Secure** — only sent over HTTPS; enforced in production and dropped on plain-HTTP localhost (`SameSite=Lax` does not require it).
+- **Secure** — only sent over HTTPS; enforced in production and dropped on plain-HTTP localhost (`SameSite=Lax` does not require it). "Localhost" is `isLocalDevRequest` from `auth-common`: a loopback request in a local process. Whether the process is local comes from deploy configuration (`getDeploymentType()`), not a request header, so a deployed request sending `Origin: http://localhost` still gets `Secure`.
 - **SameSite=Lax (default)** — withheld from cross-site subrequests (shrinking CSRF surface) but sent on same-site requests, including same-site cross-port dev. Correct now that dev and standard production deploys are same-origin.
 - **SameSite=None; Secure; Partitioned (`crossDomain: true`)** — only for genuinely cross-domain deployments (frontend and API on a different registrable domain); `Partitioned` adds CHIPS isolation and is dropped on localhost (requires HTTPS).
 - **Path=/** — cookie is sent with all requests to the API origin.

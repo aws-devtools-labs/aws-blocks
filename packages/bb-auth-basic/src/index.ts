@@ -6,7 +6,7 @@ import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { BlocksAuth, AuthUser, AuthState, AuthActionInput } from '@aws-blocks/auth-common';
-import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLoopbackRequest } from '@aws-blocks/auth-common/cookies';
+import { buildCookieSecurityAttrs, isInsecurePublicOrigin, isLocalDevRequest } from '@aws-blocks/auth-common/cookies';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
@@ -667,7 +667,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const cookieName = `auth_${this.fullId}`;
 		const security = buildCookieSecurityAttrs({
 			crossDomain: this.crossDomain,
-			isLocalhost: isLoopbackRequest(context),
+			isLocalhost: isLocalDevRequest(context),
 			// A deployed HTTP-only front door (S3-website endpoint, TLS-less ALB)
 			// can't carry a `Secure` cookie; drop it on the same-origin `Lax` cookie
 			// so the session survives. Derived from the door's own scheme.
@@ -683,7 +683,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const cookieName = `auth_${this.fullId}`;
 		const security = buildCookieSecurityAttrs({
 			crossDomain: this.crossDomain,
-			isLocalhost: isLoopbackRequest(context),
+			isLocalhost: isLocalDevRequest(context),
 			// A deployed HTTP-only front door (S3-website endpoint, TLS-less ALB)
 			// can't carry a `Secure` cookie; drop it on the same-origin `Lax` cookie
 			// so the session survives. Derived from the door's own scheme.

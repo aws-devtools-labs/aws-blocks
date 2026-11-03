@@ -238,7 +238,7 @@ Set `crossDomain: true` only when the frontend and API are served from **differe
 const auth = new AuthBasic(app, 'auth', { crossDomain: true });
 ```
 
-On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS).
+On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS). This applies only to the local dev server (`npm run dev`). Deployed compute takes the attributes from deploy configuration, so a request header cannot drop them. That includes a sandbox (`npm run sandbox`): its dev server proxies the API to deployed compute, so sandbox sign-in on `http://localhost` gets `Secure` (and `Partitioned` with `crossDomain: true`).
 
 ### Revocation: read cost and consistency
 
