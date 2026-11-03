@@ -15,7 +15,7 @@ The decisions behind this are [D-003](../DECISIONS.md) (the `name` crosses the w
 | `ApiError(message, status, options)` | `@aws-blocks/core` | Throw an error with a status code, usually from an API method |
 | `hasAuthError(state, name)` | `@aws-blocks/core` | Branch on a failed `AuthState` returned by `setAuthState` |
 
-`isWireSafeError` and `isApiErrorLike` are also exported. They are the checks the serializer uses, described under [Sending errors to the client](#sending-errors-to-the-client).
+`isWireSafeError` is also exported. It is one of the checks the serializer uses, described under [Sending errors to the client](#sending-errors-to-the-client); the other, `isApiErrorLike`, is internal to core.
 
 ## Naming errors
 
