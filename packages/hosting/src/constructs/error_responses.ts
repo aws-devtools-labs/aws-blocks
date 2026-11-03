@@ -9,7 +9,7 @@
  *
  * @internal Framework-only.
  */
-import { Duration } from 'aws-cdk-lib';
+import { Duration } from 'aws-cdk-lib/core';
 import type { ErrorResponse } from 'aws-cdk-lib/aws-cloudfront';
 
 /** Inputs to {@link customErrorResponses}. */

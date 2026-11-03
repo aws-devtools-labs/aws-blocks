@@ -13,7 +13,7 @@ import {
   RemovalPolicy,
   Stack,
   Token,
-} from 'aws-cdk-lib';
+} from 'aws-cdk-lib/core';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnOriginAccessControl } from 'aws-cdk-lib/aws-cloudfront';
 import { HttpOrigin, type HttpOriginProps } from 'aws-cdk-lib/aws-cloudfront-origins';

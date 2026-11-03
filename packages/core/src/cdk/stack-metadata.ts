@@ -1,4 +1,4 @@
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import type { Construct, IConstruct } from 'constructs';
 import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { isDisableValue } from '../telemetry/consent.js';

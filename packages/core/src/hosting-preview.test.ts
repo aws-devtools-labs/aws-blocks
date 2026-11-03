@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { type BuildProfile, buildProfile } from '@aws-blocks/hosting/adapters';
 import type { DeployManifest } from '@aws-blocks/hosting/constructs';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { type BlocksStackApi, Hosting, type HostingProps, HostingPresets } from './hosting.js';
 import { clearRouteRegistry } from './raw-route.js';

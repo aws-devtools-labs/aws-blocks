@@ -5,7 +5,9 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_lambda from 'aws-cdk-lib/aws-lambda';
+import * as aws_logs from 'aws-cdk-lib/aws-logs';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -29,16 +31,16 @@ import { BlocksPresets, BlocksStack, Scope } from './index.js';
 // @aws-blocks/blocks injects LambdaCompute.
 class StubLambdaCompute extends ComputeBase {
 	readonly fn: lambda.NodejsFunction;
-	readonly logGroup: cdk.aws_logs.LogGroup;
+	readonly logGroup: aws_logs.LogGroup;
 
 	constructor(scope: ScopeParent, id: string) {
 		super(id, { parent: scope });
-		this.logGroup = new cdk.aws_logs.LogGroup(this, 'HandlerLogGroup', {
+		this.logGroup = new aws_logs.LogGroup(this, 'HandlerLogGroup', {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
-			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
+			runtime: aws_lambda.Runtime.NODEJS_22_X,
 			handler: 'handler',
 			role: this.executionRole,
 			logGroup: this.logGroup,

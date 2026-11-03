@@ -48,7 +48,7 @@
  * The router still sees `x-forwarded-proto: http` on the edge → router hop
  * when that hop is plain HTTP (the ALB sets the header from its listener).
  */
-import { Annotations, Duration } from 'aws-cdk-lib';
+import { Annotations, Duration } from 'aws-cdk-lib/core';
 import { AWS_DEFAULT_QUOTAS } from './quota_budget.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
 import {

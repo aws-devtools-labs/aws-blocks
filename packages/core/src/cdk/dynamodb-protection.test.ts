@@ -11,8 +11,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
 import { Construct } from 'constructs';
-import * as cdk from 'aws-cdk-lib';
-import { RemovalPolicy } from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import { RemovalPolicy } from 'aws-cdk-lib/core';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Table, type ITable, AttributeType, BillingMode, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import { BlocksPresets, type BlocksDefaults } from './blocks-defaults.js';

@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { type KmsEncryptionOption, resolveKmsEncryption } from './kms-encryption.js';
 

@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { Duration } from 'aws-cdk-lib';
+import { Duration } from 'aws-cdk-lib/core';
 import { PriceClass } from 'aws-cdk-lib/aws-cloudfront';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { defineFrontDoor } from './front_door.js';

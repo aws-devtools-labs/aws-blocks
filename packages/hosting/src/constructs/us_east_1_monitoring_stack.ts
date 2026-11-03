@@ -1,5 +1,5 @@
 import type { Construct } from 'constructs';
-import { CfnOutput, Duration, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, Stack, type StackProps } from 'aws-cdk-lib/core';
 import {
   Alarm,
   ComparisonOperator,

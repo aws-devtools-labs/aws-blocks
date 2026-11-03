@@ -1,5 +1,5 @@
 import type { Construct } from 'constructs';
-import { Annotations, Stack, Token } from 'aws-cdk-lib';
+import { Annotations, Stack, Token } from 'aws-cdk-lib/core';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import {
   CfnDelivery,

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { Construct, type IDependable } from 'constructs';
-import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib/core';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,

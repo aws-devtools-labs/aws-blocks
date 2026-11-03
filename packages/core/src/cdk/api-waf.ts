@@ -18,7 +18,7 @@
  *   Hosting's distribution, so its WAF belongs there, and a synth warning says so.
  */
 
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import type { Stage } from 'aws-cdk-lib/aws-apigateway';
 import { CfnWebACL, CfnWebACLAssociation } from 'aws-cdk-lib/aws-wafv2';
 import type { Construct } from 'constructs';

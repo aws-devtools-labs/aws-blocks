@@ -7,7 +7,8 @@
  */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_apigateway from 'aws-cdk-lib/aws-apigateway';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import {
 	type ApiFrontDoorOwner,
@@ -32,11 +33,11 @@ const CLOUDFRONT_ACL = 'arn:aws:wafv2:us-east-1:111122223333:global/webacl/mine/
 /** A stack standing in for the backend owner, with a real REST API stage to attach to. */
 function owner(waf: ResolvedApiWaf | undefined, region = 'us-east-1'): {
 	stack: cdk.Stack & ApiFrontDoorOwner;
-	stage: cdk.aws_apigateway.Stage;
+	stage: aws_apigateway.Stage;
 } {
 	const stack: cdk.Stack & ApiFrontDoorOwner = new cdk.Stack(new cdk.App(), 'S', { env: { region } });
 	stack._apiWaf = waf;
-	const api = new cdk.aws_apigateway.RestApi(stack, 'Api');
+	const api = new aws_apigateway.RestApi(stack, 'Api');
 	api.root.addMethod('ANY');
 	return { stack, stage: api.deploymentStage };
 }

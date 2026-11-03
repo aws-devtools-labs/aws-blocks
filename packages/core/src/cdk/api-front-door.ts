@@ -23,7 +23,7 @@
  * distribution stands down (see `claimApiFrontDoor`).
  */
 
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import {
 	type AddBehaviorOptions,
 	AllowedMethods,

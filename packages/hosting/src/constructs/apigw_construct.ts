@@ -29,7 +29,7 @@
  * payload / ~6 MB response cap. Stage-level config (TLS/domain, throttle)
  * applies to the whole API, not per route.
  */
-import { Annotations, CfnOutput, Duration, Names, Stack } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Names, Stack } from 'aws-cdk-lib/core';
 import { ApiMapping, DomainName, HttpApi, HttpMethod, type HttpRouteIntegrationBindOptions } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpLambdaIntegration, HttpUrlIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { ServicePrincipal } from 'aws-cdk-lib/aws-iam';

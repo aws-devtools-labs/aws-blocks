@@ -16,7 +16,7 @@ import {
 	sandboxDestroyDeps,
 	stackDeleteThrottled,
 	throttleBackoffDelay,
-} from './sandbox.js';
+} from './sandbox-destroy.js';
 
 // API Gateway allows one DeleteRestApi per 30s per account (a fixed quota), so
 // parallel teardowns in one account fail with `Too Many Requests (Service:

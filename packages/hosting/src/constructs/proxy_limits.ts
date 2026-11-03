@@ -24,7 +24,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { gzipSync } from 'node:zlib';
-import { Annotations } from 'aws-cdk-lib';
+import { Annotations } from 'aws-cdk-lib/core';
 import type { IConstruct } from 'constructs';
 
 /** An ALB Lambda target's response JSON limit (1 MB). */

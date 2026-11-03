@@ -39,7 +39,7 @@
  * error in `frontDoor.features` and a synth error through the deprecated
  * top-level props.
  */
-import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration } from 'aws-cdk-lib/core';
 import {
 	BasePathMapping,
 	ConnectionType,

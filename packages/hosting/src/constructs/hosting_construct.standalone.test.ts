@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { Certificate } from 'aws-cdk-lib/aws-certificatemanager';
 import * as fs from 'node:fs';

@@ -24,7 +24,8 @@ import * as os from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_lambda from 'aws-cdk-lib/aws-lambda';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
@@ -43,7 +44,7 @@ class StubLambdaCompute extends ComputeBase {
 		super(id, { parent: scope });
 		this.fn = new lambda.NodejsFunction(this, 'Handler', {
 			entry: this.backendHandlerPath,
-			runtime: cdk.aws_lambda.Runtime.NODEJS_22_X,
+			runtime: aws_lambda.Runtime.NODEJS_22_X,
 			handler: 'handler',
 			role: this.executionRole,
 			bundling: { minify: true, esbuildArgs: { '--conditions': 'aws-runtime' } },

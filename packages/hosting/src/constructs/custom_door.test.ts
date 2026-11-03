@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { App, CfnResource, Stack } from 'aws-cdk-lib';
+import { App, CfnResource, Stack } from 'aws-cdk-lib/core';
 import { Annotations, Match } from 'aws-cdk-lib/assertions';
 import { Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import { S3BucketOrigin } from 'aws-cdk-lib/aws-cloudfront-origins';

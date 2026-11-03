@@ -12,7 +12,7 @@
  *
  * @internal Framework-only.
  */
-import { Fn } from 'aws-cdk-lib';
+import { Fn } from 'aws-cdk-lib/core';
 import { FunctionUrlAuthType, type IFunction, type IFunctionUrl, InvokeMode } from 'aws-cdk-lib/aws-lambda';
 import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import type { HostingPlan } from '../plan/types.js';

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { pathToFileURL } from 'node:url';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_logs from 'aws-cdk-lib/aws-logs';
 import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
@@ -526,7 +527,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
 	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
-	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+	get handlerLogGroup(): aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
 

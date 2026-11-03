@@ -14,7 +14,7 @@
  * HTTPS. The one thing the door refuses is an app with a server — it would
  * deploy with nothing to render its pages.
  */
-import { Fn } from 'aws-cdk-lib';
+import { Fn } from 'aws-cdk-lib/core';
 import { HostingError } from '../hosting_error.js';
 import type { HostingPlan } from '../plan/types.js';
 import { type DoorInput, defineFrontDoor, type FrontDoorResult } from './front_door.js';

@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Stack, Token } from 'aws-cdk-lib';
+import { Stack, Token } from 'aws-cdk-lib/core';
 import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { HostingError } from '../hosting_error.js';
 

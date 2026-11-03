@@ -20,7 +20,7 @@
  *
  * @internal Framework-only.
  */
-import { Annotations } from 'aws-cdk-lib';
+import { Annotations } from 'aws-cdk-lib/core';
 import type { IConstruct } from 'constructs';
 import type { DoorHeaderRule, DoorRedirect } from './front_door.js';
 import { CF_MATCH_HELPERS, headerRowsJs, redirectRowsJs } from './kvs_router.js';

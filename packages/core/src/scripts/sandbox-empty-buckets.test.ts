@@ -18,7 +18,7 @@ import {
 	runDestroyWithRetries,
 	toDeleteObjects,
 	topLevelStacks,
-} from './sandbox.js';
+} from './sandbox-destroy.js';
 
 // The teardown bucket-emptying must delete BOTH live versions and delete
 // markers — a versioned bucket left with either still blocks `cdk destroy`.

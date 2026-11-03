@@ -17,10 +17,9 @@ import {
   findHostingUrl,
   previewRemovalWarning,
   PREVIEW_MODE_CONTEXT,
-  findExpressUnsafeStacks,
   sandboxFailureRecoveryHint,
-  stacksWithExpressUnsafeResources,
 } from './sandbox.js';
+import { findExpressUnsafeStacks, stacksWithExpressUnsafeResources } from './sandbox-destroy.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 

@@ -28,7 +28,7 @@
  * @internal
  */
 
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import * as cxapi from 'aws-cdk-lib/cx-api';
 import { Construct, type IConstruct } from 'constructs';
 

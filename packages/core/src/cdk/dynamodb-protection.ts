@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Annotations, type RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, type RemovalPolicy } from 'aws-cdk-lib/core';
 import { type ITable, TableEncryption } from 'aws-cdk-lib/aws-dynamodb';
 import type { IKey } from 'aws-cdk-lib/aws-kms';
 import type { Construct } from 'constructs';

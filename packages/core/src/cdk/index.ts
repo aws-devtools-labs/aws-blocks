@@ -3,7 +3,10 @@
 
 import { pathToFileURL } from 'node:url';
 import { __PIPELINE_STAGE_SCOPE__ } from '@aws-blocks/pipeline';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as aws_iam from 'aws-cdk-lib/aws-iam';
+import * as aws_logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import {
 	type ApiFrontDoorTier,
@@ -107,7 +110,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	 */
 	public readonly backendModulePath: string;
 	/** Shared IAM role assumed by all Blocks compute. Building Blocks grant to this role. */
-	public readonly executionRole: cdk.aws_iam.IRole;
+	public readonly executionRole: aws_iam.IRole;
 	/** Infrastructure defaults for Building Blocks created under this stack. */
 	public readonly defaults: BlocksDefaults;
 	/** The default compute (owns the Lambda function); set in `create()`. @internal */
@@ -157,7 +160,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	}
 
 	/** The stack's shared REST API gateway. To be removed once consumers move to the multi-compute model. */
-	get gateway(): cdk.aws_apigateway.RestApi {
+	get gateway(): aws_apigateway.RestApi {
 		return this.requireSharedGateway().restApi;
 	}
 	/**
@@ -183,7 +186,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	/** The default compute's handler CloudWatch log group. Its retention comes from
 	 * the compute's `logRetention` (falling back to `defaults.logRetention`); the
 	 * `bb-logger` CDK construct is a no-op and no longer touches it. */
-	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+	get handlerLogGroup(): aws_logs.ILogGroup {
 		return this.requireDefaultCompute().logGroup;
 	}
 
@@ -407,7 +410,7 @@ export class Scope extends Construct {
 	 * their permissions to this role; CDK's `grant*()` / `addToPrincipalPolicy()`
 	 * route those grants to the role's default (inline) policy.
 	 */
-	get executionRole(): cdk.aws_iam.IRole {
+	get executionRole(): aws_iam.IRole {
 		return this.root.executionRole;
 	}
 
@@ -485,7 +488,7 @@ export class Scope extends Construct {
 	 * `logRetention` (falling back to `defaults.logRetention`); the `bb-logger`
 	 * CDK construct is a no-op and no longer reconfigures it.
 	 */
-	get handlerLogGroup(): cdk.aws_logs.ILogGroup {
+	get handlerLogGroup(): aws_logs.ILogGroup {
 		return this.root.handlerLogGroup;
 	}
 

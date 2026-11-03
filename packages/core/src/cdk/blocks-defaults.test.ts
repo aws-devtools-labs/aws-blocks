@@ -9,7 +9,7 @@
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { RemovalPolicy } from 'aws-cdk-lib';
+import { RemovalPolicy } from 'aws-cdk-lib/core';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BlocksPresets } from './blocks-defaults.js';
 

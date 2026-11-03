@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket, ObjectOwnership } from 'aws-cdk-lib/aws-s3';
 import { CdnConstruct } from './cdn_construct.js';

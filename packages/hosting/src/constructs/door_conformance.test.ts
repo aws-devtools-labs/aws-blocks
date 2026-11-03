@@ -40,7 +40,7 @@ import * as path from 'node:path';
 import { after, describe, it } from 'node:test';
 import * as zlib from 'node:zlib';
 import { isDeepStrictEqual } from 'node:util';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { DeployManifest } from '../manifest/types.js';
 import { cloudFrontEdgeDoor } from './cloudfront_edge_door.js';

@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type * as cdk from 'aws-cdk-lib';
+import type * as cdk from 'aws-cdk-lib/core';
 import { CfnAccount } from 'aws-cdk-lib/aws-apigateway';
 import { ManagedPolicy, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 

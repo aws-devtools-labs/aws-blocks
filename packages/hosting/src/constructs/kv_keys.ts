@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Construct } from 'constructs';
-import { CustomResource, Duration } from 'aws-cdk-lib';
+import { CustomResource, Duration } from 'aws-cdk-lib/core';
 import { Code, Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Provider } from 'aws-cdk-lib/custom-resources';

@@ -73,7 +73,7 @@
 
 import { existsSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
 import type { Construct, IConstruct } from 'constructs';
 
 /**

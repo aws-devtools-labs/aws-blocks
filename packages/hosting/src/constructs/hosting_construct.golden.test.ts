@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, it } from 'node:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { App, Stack } from 'aws-cdk-lib';
+import { App, Stack } from 'aws-cdk-lib/core';
 import { Template } from 'aws-cdk-lib/assertions';
 import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';

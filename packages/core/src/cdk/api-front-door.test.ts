@@ -9,7 +9,9 @@
  */
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as aws_sns from 'aws-cdk-lib/aws-sns';
 import { Template } from 'aws-cdk-lib/assertions';
 import { Distribution, type IOrigin, ResponseHeadersPolicy } from 'aws-cdk-lib/aws-cloudfront';
 import {
@@ -58,7 +60,7 @@ describe('httpOriginFromEndpoint', () => {
 		// Doing it in JS would slice the unresolved placeholder text and silently
 		// produce a nonsense domain.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
-		const api = new cdk.aws_apigateway.RestApi(stack, 'Api');
+		const api = new aws_apigateway.RestApi(stack, 'Api');
 		api.root.addMethod('ANY');
 		const gatewayUrl = `${api.url}aws-blocks/api`;
 		distributionWith(stack, httpOriginFromEndpoint(gatewayUrl));
@@ -171,8 +173,8 @@ describe('scheduleApiFrontDoor', () => {
 		// The aspect is invoked for every construct in the stack; without the one-shot
 		// guard it would emit a distribution per node and fail on a duplicate output.
 		const stack = new cdk.Stack(new cdk.App(), 'S');
-		new cdk.aws_sns.Topic(stack, 'T1');
-		new cdk.aws_sns.Topic(stack, 'T2');
+		new aws_sns.Topic(stack, 'T1');
+		new aws_sns.Topic(stack, 'T2');
 		scheduleApiFrontDoor(stack, true, GATEWAY_URL);
 		Template.fromStack(stack).resourceCountIs('AWS::CloudFront::Distribution', 1);
 	});

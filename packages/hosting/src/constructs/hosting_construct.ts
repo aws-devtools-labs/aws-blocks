@@ -12,7 +12,7 @@ import {
   Stack,
   Stage,
   Token,
-} from 'aws-cdk-lib';
+} from 'aws-cdk-lib/core';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import {
   type Distribution,

@@ -17,7 +17,7 @@ import {
   formatRetainedOutput,
 } from './cdk-output.js';
 import { DeployProcessError, type OutputSink, runStreaming, type SignalRegistry } from './deploy-stream.js';
-import { runDestroyWithRetries } from './sandbox.js';
+import { runDestroyWithRetries } from './sandbox-destroy.js';
 
 afterEach(() => mock.restoreAll());
 
@@ -501,7 +501,7 @@ describe('destroy output end to end (fake cdk on PATH)', { skip: process.platfor
       writeFileSync(
         harness,
         `const { productionDestroyDeps } = await import(${JSON.stringify(new URL('./destroy.js', import.meta.url).href)});
-const { runDestroyWithRetries } = await import(${JSON.stringify(new URL('./sandbox.js', import.meta.url).href)});
+const { runDestroyWithRetries } = await import(${JSON.stringify(new URL('./sandbox-destroy.js', import.meta.url).href)});
 const deps = productionDestroyDeps({ cdkAppPath: '', projectRoot: process.cwd() }, process.env);
 try { await runDestroyWithRetries({ ...deps, sleep: async () => {}, retryDelays: [0] }); } catch { process.exitCode = 3; }
 `,

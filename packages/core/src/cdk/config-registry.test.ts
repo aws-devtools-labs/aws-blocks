@@ -11,7 +11,9 @@
  */
 import assert from 'node:assert';
 import { afterEach, test } from 'node:test';
-import * as cdk from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import * as aws_iam from 'aws-cdk-lib/aws-iam';
+import * as aws_lambda from 'aws-cdk-lib/aws-lambda';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
@@ -30,14 +32,14 @@ afterEach(() => {
 // depend on. This is the same shape: a Compute that owns a real Lambda function and injects config
 // via addEnvironment — enough for finalizeConfigRegistry to stamp BLOCKS_CONFIG_BUCKET/KEY on it.
 class TestCompute extends ComputeBase {
-	readonly fn: cdk.aws_lambda.Function;
+	readonly fn: aws_lambda.Function;
 
 	constructor(scope: Construct, id: string) {
 		super(id, { parent: scope as never });
-		this.fn = new cdk.aws_lambda.Function(this, 'Handler', {
+		this.fn = new aws_lambda.Function(this, 'Handler', {
 			runtime: DEFAULT_NODE_RUNTIME,
 			handler: 'index.handler',
-			code: cdk.aws_lambda.Code.fromInline('exports.handler = async () => {};'),
+			code: aws_lambda.Code.fromInline('exports.handler = async () => {};'),
 		});
 	}
 
@@ -61,13 +63,13 @@ class TestCompute extends ComputeBase {
 
 function stackWithCompute(id: string): {
 	stack: cdk.Stack;
-	role: cdk.aws_iam.Role;
+	role: aws_iam.Role;
 	computes: readonly ComputeBase[];
 } {
 	const app = new cdk.App();
 	const stack = new cdk.Stack(app, id);
-	const role = new cdk.aws_iam.Role(stack, 'BlocksRole', {
-		assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+	const role = new aws_iam.Role(stack, 'BlocksRole', {
+		assumedBy: new aws_iam.ServicePrincipal('lambda.amazonaws.com'),
 	});
 	const compute = new TestCompute(stack, 'Compute');
 	return { stack, role, computes: [compute] };
@@ -89,8 +91,8 @@ class PresetStack extends cdk.Stack {
 function synthWithPreset(preset: 'sandbox' | 'production'): Template {
 	const app = new cdk.App();
 	const stack = new PresetStack(app, `Preset${preset}`, BlocksPresets[preset]);
-	const role = new cdk.aws_iam.Role(stack, 'BlocksRole', {
-		assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com'),
+	const role = new aws_iam.Role(stack, 'BlocksRole', {
+		assumedBy: new aws_iam.ServicePrincipal('lambda.amazonaws.com'),
 	});
 	const compute = new TestCompute(stack, 'Compute');
 	registerConfig(stack, 'BLOCKS_SOMETHING', 'value');

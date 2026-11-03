@@ -16,8 +16,11 @@ import {
   defineFrontDoor,
   type RouteBehavior,
 } from '@aws-blocks/hosting/constructs';
-import * as cdk from 'aws-cdk-lib';
-import { App, Duration, Stack, Token, aws_apigateway } from 'aws-cdk-lib';
+import * as cdk from 'aws-cdk-lib/core';
+import { App, Duration, Stack, Token } from 'aws-cdk-lib/core';
+import * as aws_apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as aws_certificatemanager from 'aws-cdk-lib/aws-certificatemanager';
+import * as aws_cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
 import {
@@ -646,7 +649,7 @@ describe('Hosting', () => {
       const proxyDoor = defineFrontDoor({
         service: 'my-proxy',
         build(scope, input) {
-          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+          new aws_cloudfront.Distribution(scope, 'Cdn', {
             defaultBehavior: { origin: cf.origin(input.origins.assets) },
             additionalBehaviors: cf.apiBehaviors(input.origins.api),
           });
@@ -1513,7 +1516,7 @@ describe('Hosting', () => {
 
       // A custom domain requires a certificate when no hostedZone is given
       // (mirrors the BYO-domain tests above).
-      const cert = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+      const cert = aws_certificatemanager.Certificate.fromCertificateArn(
         stack,
         'ImportedCert',
         'arn:aws:acm:us-east-1:123456789012:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -1688,7 +1691,7 @@ describe('Hosting', () => {
 
       // When hostedZone is omitted, a BYO certificate is required (the construct
       // cannot create one via DNS validation without a zone).
-      const cert = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+      const cert = aws_certificatemanager.Certificate.fromCertificateArn(
         stack,
         'ImportedCert',
         'arn:aws:acm:us-east-1:123456789012:certificate/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -2527,7 +2530,7 @@ describe('Hosting', () => {
         service: 'my-edge',
         build(scope, input) {
           seen.input = input;
-          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+          new aws_cloudfront.Distribution(scope, 'Cdn', {
             defaultBehavior: { origin: cf.origin(input.origins.assets) },
             additionalBehaviors: cf.apiBehaviors(input.origins.api),
           });
@@ -2591,7 +2594,7 @@ describe('Hosting', () => {
       const assetsOnly = defineFrontDoor({
         service: 'assets-only',
         build(scope, { origins }) {
-          new cdk.aws_cloudfront.Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
+          new aws_cloudfront.Distribution(scope, 'Cdn', { defaultBehavior: { origin: cf.origin(origins.assets) } });
           return { url: 'https://edge.example.com' };
         },
       });
@@ -2610,7 +2613,7 @@ describe('Hosting', () => {
       const invalidatingDoor = defineFrontDoor({
         service: 'my-invalidating-cdn',
         build(scope, input) {
-          const dist = new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+          const dist = new aws_cloudfront.Distribution(scope, 'Cdn', {
             defaultBehavior: { origin: cf.origin(input.origins.assets) },
             additionalBehaviors: cf.apiBehaviors(input.origins.api),
           });
@@ -2756,7 +2759,7 @@ describe('Hosting', () => {
     it('the ALB door with a certificate and a custom domain: the origins are the domain', () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'PublicOrigin-albdomain', { env: { account: '111111111111', region: 'us-east-1' } });
-      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+      const certificate = aws_certificatemanager.Certificate.fromCertificateArn(
         stack,
         'Cert',
         'arn:aws:acm:us-east-1:111111111111:certificate/c',
@@ -2779,7 +2782,7 @@ describe('Hosting', () => {
     it('the ALB door with several domain names: every name is an allowed CORS origin (each one serves the app)', async () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'PublicOrigin-albnames', { env: { account: '111111111111', region: 'us-east-1' } });
-      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-east-1:111111111111:certificate/c');
+      const certificate = aws_certificatemanager.Certificate.fromCertificateArn(stack, 'Cert', 'arn:aws:acm:us-east-1:111111111111:certificate/c');
       new Hosting(stack, 'Hosting', {
         root: tmpDir,
         api: MOCK_API,
@@ -3427,7 +3430,7 @@ describe('Hosting', () => {
     it('a router certificate and domain: the edge reaches the router over HTTPS :443 at that name', () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'StackedTls', { env: { account: '111111111111', region: 'us-east-1' } });
-      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+      const certificate = aws_certificatemanager.Certificate.fromCertificateArn(
         stack,
         'RouterCert',
         'arn:aws:acm:us-east-1:111111111111:certificate/r',
@@ -3487,7 +3490,7 @@ describe('Hosting', () => {
     it('a router certificate without a router domain fails synth', () => {
       createSpaBuildOutput(tmpDir);
       const stack = new Stack(new App(), 'StackedCertNoDomain', { env: { account: '111111111111', region: 'us-east-1' } });
-      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(stack, 'C', 'arn:aws:acm:us-east-1:111111111111:certificate/r');
+      const certificate = aws_certificatemanager.Certificate.fromCertificateArn(stack, 'C', 'arn:aws:acm:us-east-1:111111111111:certificate/r');
       assert.throws(
         () =>
           new Hosting(stack, 'Hosting', {
@@ -3597,7 +3600,7 @@ describe('Hosting — frontDoor.features', () => {
       api: MOCK_API,
       frontDoor: {
         features: {
-          priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL,
+          priceClass: aws_cloudfront.PriceClass.PRICE_CLASS_ALL,
           waf: { enabled: false, webAclArn: EDGE_ACL },
           geoRestriction: { type: 'whitelist', countries: ['US'] },
         },
@@ -3618,7 +3621,7 @@ describe('Hosting — frontDoor.features', () => {
       logging: { enabled: true, retentionDays: 30 },
       monitoring: { enabled: true },
       skewProtection: { enabled: true, maxAge: 3600 },
-      priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_200,
+      priceClass: aws_cloudfront.PriceClass.PRICE_CLASS_200,
       contentSecurityPolicy: "default-src 'self'",
       domain: { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' },
     };
@@ -3733,8 +3736,8 @@ describe('Hosting — frontDoor.features', () => {
       () =>
         new Hosting(newStack('FeatConflict'), 'Hosting', {
           root: tmpDir,
-          priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_100,
-          frontDoor: { features: { priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
+          priceClass: aws_cloudfront.PriceClass.PRICE_CLASS_100,
+          frontDoor: { features: { priceClass: aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
         }),
       (e: Error) =>
         e.name === 'FrontDoorSettingConflictError' &&
@@ -3763,7 +3766,7 @@ describe('Hosting — frontDoor.features', () => {
       service: 'recorder',
       build(scope, input) {
         seen = input;
-        const dist = new cdk.aws_cloudfront.Distribution(scope, 'Cdn', {
+        const dist = new aws_cloudfront.Distribution(scope, 'Cdn', {
           defaultBehavior: { origin: cf.origin(input.origins.assets) },
           additionalBehaviors: cf.apiBehaviors(input.origins.api),
         });
@@ -3806,7 +3809,7 @@ describe('Hosting — frontDoor.features', () => {
         DistributionConfig: Match.objectLike({ Aliases: ['app.example.com'] }),
       });
       const albStack = newStack('FeatDomainCreateAlb');
-      const certificate = cdk.aws_certificatemanager.Certificate.fromCertificateArn(
+      const certificate = aws_certificatemanager.Certificate.fromCertificateArn(
         albStack,
         'Cert',
         'arn:aws:acm:us-east-1:111111111111:certificate/c',
@@ -3826,7 +3829,7 @@ describe('Hosting — frontDoor.features', () => {
 // Compile-time contract on the Blocks `Hosting`: each kind accepts exactly the
 // settings its door implements (this file is typechecked by the build).
 const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
-  { features: { domain: { domainName: config('DOMAIN_PROD') }, priceClass: cdk.aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
+  { features: { domain: { domainName: config('DOMAIN_PROD') }, priceClass: aws_cloudfront.PriceClass.PRICE_CLASS_ALL } },
   { kind: 'apiGateway', api: 'rest', features: { domain: { domainName: config('DOMAIN_PROD') } } },
   { kind: 'stacked', edge: 'cloudfront', router: 'alb', features: { router: { logging: { enabled: true } } } },
   // @ts-expect-error — the stacked edge has no access logs.

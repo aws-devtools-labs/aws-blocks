@@ -1,5 +1,5 @@
 import { Construct } from 'constructs';
-import { Duration } from 'aws-cdk-lib';
+import { Duration } from 'aws-cdk-lib/core';
 import {
   HeadersFrameOption,
   HeadersReferrerPolicy,
