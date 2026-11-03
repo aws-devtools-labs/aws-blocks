@@ -11,6 +11,10 @@
  * IdP as provider `web-idp`). The frontend is `http://127.0.0.1:5173`, a
  * loopback origin the relay always allows.
  *
+ * The stub IdP is local and sandbox only: in production the app configures a
+ * placeholder real provider under the same id (see `e2eOidcProvider()` in
+ * `aws-blocks/index.ts`), so the provider round trip is skipped there.
+ *
  * The page is simulated (address bar, sessionStorage, navigations) and every
  * request carries the frontend's `Origin`, as a browser's cross-origin fetch
  * does. Cookies travel through the suite's cookie jar on `global.fetch`. The
@@ -27,6 +31,7 @@ import { isBlocksError } from '@aws-blocks/core';
 const SPA = 'http://127.0.0.1:5173';
 const RETURN_PAGE = `${SPA}/return`;
 const BASE = '/aws-blocks/auth/web';
+const stubSkip = process.env.BLOCKS_TEST_ENV === 'production' && 'stub IdP is sandbox-only';
 
 function getBaseUrl(): string {
   const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
@@ -78,7 +83,7 @@ class Page {
 
 export function browserClientTests(): void {
   describe('Auth browser redirect client (frontend on another origin)', () => {
-    test('sign in with a provider, read the session, sign out', async () => {
+    test('sign in with a provider, read the session, sign out', { skip: stubSkip }, async () => {
       const baseUrl = getBaseUrl();
       const page = new Page();
       const auth = createAuthClient<'web-idp'>({
