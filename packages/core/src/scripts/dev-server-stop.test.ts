@@ -127,7 +127,7 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     assert.deepEqual(removed, [], 'a live session keeps its record');
   });
 
-  it("waits for the blocks sandbox session a dev server records, and says it stopped the sandbox (U2)", async () => {
+  it("waits for the cdk-blocks sandbox session a dev server records, and says it stopped the sandbox (U2)", async () => {
     let ended = false;
     const waited: number[] = [];
     const { deps, removed } = makeDeps({
@@ -141,7 +141,7 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     assert.deepEqual(r.sandbox, { pid: 6000 });
     assert.equal(r.portFree, true);
     assert.deepEqual(removed, [devPidfilePath(3000)]);
-    assert.match(stopMessage(r), /^🛑 Stopped the blocks sandbox session on :3000 \(pid 4000\): its dev server and its cdk watch\. .*blocks sandbox destroy/);
+    assert.match(stopMessage(r), /^🛑 Stopped the cdk-blocks sandbox session on :3000 \(pid 4000\): its dev server and its cdk watch\. .*cdk-blocks sandbox destroy/);
   });
 
   it('warns when the sandbox session outlives its dev server', async () => {
@@ -153,7 +153,7 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     });
     const r = await stopDevServer(3000, deps);
     assert.equal(isStopWarning(r), true);
-    assert.match(stopMessage(r), /Signalled the blocks sandbox session on :3000 .* has not ended yet/);
+    assert.match(stopMessage(r), /Signalled the cdk-blocks sandbox session on :3000 .* has not ended yet/);
   });
 
   it('does NOT signal the ppid when it is a bare shell, not a tsx watcher (self-kill guard)', async () => {
@@ -237,7 +237,7 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
 });
 
 describe('stopDevServer on Windows — ends the session from its top', () => {
-  // A signal is TerminateProcess there: a SIGTERM to `tsx watch` runs no cleanup, and the `blocks dev` CLI
+  // A signal is TerminateProcess there: a SIGTERM to `tsx watch` runs no cleanup, and the `cdk-blocks dev` CLI
   // above it started the dev server again on the next save (W1). The record names the CLI (`session`).
   const WIN_TSX = '"C:\\node.exe" "C:\\app\\node_modules\\tsx\\dist\\cli.mjs" watch "C:\\blocks\\dist\\cli\\runners\\dev-server.js"';
   const proc = (pid: number, ppid: number, created: string, command = ''): WindowsProcess => ({ pid, ppid, created, command });
@@ -250,7 +250,7 @@ describe('stopDevServer on Windows — ends the session from its top', () => {
     ]);
   const record = { pid: 30, ppid: 20, port: 3000, command: '', session: { pid: 10 }, frontend: { port: 3100, listeners: [{ pid: 40, created: '400' }] } };
 
-  it('ends the blocks dev CLI with its whole tree, waits for both ports, and removes the record', async () => {
+  it('ends the cdk-blocks dev CLI with its whole tree, waits for both ports, and removes the record', async () => {
     let alive = true;
     const freed: number[] = [];
     const { deps, sigs, removed } = makeDeps({
@@ -440,7 +440,7 @@ describe('portInUseHint — an exact next command', () => {
   it('names the pids to stop, how to start again, and the flag for another port', () => {
     assert.equal(
       portInUseHint(3100, { foreign: [{ pid: 3181756, command: 'node vite --port 3100 --strictPort' }], pids: [] }, '--frontend-port', 'linux'),
-      'Stop it with `kill 3181756`, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
+      'Stop it with `kill 3181756`, then run `npx --no -- cdk-blocks dev` again, or choose another port with --frontend-port.',
     );
     assert.match(portInUseHint(3000, { foreign: [], pids: [] }, '--port', 'linux'), /`lsof -i :3000`/);
   });
@@ -448,11 +448,11 @@ describe('portInUseHint — an exact next command', () => {
   it('names Windows commands on Windows', () => {
     assert.equal(
       portInUseHint(4610, { foreign: [], pids: [4242, 4243] }, '--frontend-port', 'win32'),
-      'Stop it with `taskkill /PID 4242 /T /F && taskkill /PID 4243 /T /F`, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
+      'Stop it with `taskkill /PID 4242 /T /F && taskkill /PID 4243 /T /F`, then run `npx --no -- cdk-blocks dev` again, or choose another port with --frontend-port.',
     );
     assert.equal(
       portInUseHint(4610, { foreign: [], pids: [] }, '--frontend-port', 'win32'),
-      'Find the process that holds it with `netstat -ano | findstr :4610` and stop it, then run `npx --no -- blocks dev` again, or choose another port with --frontend-port.',
+      'Find the process that holds it with `netstat -ano | findstr :4610` and stop it, then run `npx --no -- cdk-blocks dev` again, or choose another port with --frontend-port.',
     );
   });
 });
@@ -516,7 +516,7 @@ describe('runStopCli', () => {
   });
 });
 
-describe('stopDevServer — a blocks dev CLI whose dev server is still starting', () => {
+describe('stopDevServer — a cdk-blocks dev CLI whose dev server is still starting', () => {
   const CLI = 'node /app/node_modules/@aws-blocks/blocks/dist/cli/bin.js dev';
   const starting = JSON.stringify({ pid: 700, ppid: 600, port: 3000, command: CLI, parentCommand: 'bash', starting: true });
 

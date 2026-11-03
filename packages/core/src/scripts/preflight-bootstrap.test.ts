@@ -89,7 +89,7 @@ describe('CDK bootstrap check', () => {
 			const { read, calls } = reader(NOT_FOUND);
 			const message = await failure(read, { command });
 			// The same Region, profile and verified credentials as the deploy, and the default qualifier.
-			// The profile is AWS_PROFILE, which `blocks --profile` sets (PN2): cdk.json selects none here.
+			// The profile is AWS_PROFILE, which `cdk-blocks --profile` sets (PN2): cdk.json selects none here.
 			assert.deepEqual(calls, [
 				[
 					{ region: 'eu-south-2', profile: 'starter', credentials: CREDENTIALS },

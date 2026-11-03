@@ -266,7 +266,7 @@ export function buildSandboxWatchArgs({ outDir, projectRoot }: SandboxDeployArgs
     "cdk", "watch",
     "--hotswap-fallback",
     // Its own assembly directory, as the sandbox deploy has: in the default
-    // `./cdk.out`, a `blocks deploy` of the app beside it failed on CDK's lock.
+    // `./cdk.out`, a `cdk-blocks deploy` of the app beside it failed on CDK's lock.
     "--output", `${outDir}/cdk.out`,
     "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
@@ -287,7 +287,7 @@ export function sandboxIsDeployOnly({ deployOnly = false, preview = false }: Pic
 }
 
 /**
- * Refuse a sandbox deploy or destroy while a `blocks sandbox` session of the
+ * Refuse a sandbox deploy or destroy while a `cdk-blocks sandbox` session of the
  * app at `projectRoot` runs (see {@link liveSandboxSession}): its `cdk watch`
  * deploys every change to the same stack and uses the same cloud assembly
  * directory, so both would fail on CDK's lock or race on the stack.
@@ -297,9 +297,9 @@ export function assertNoRunningSandbox(projectRoot: string, invocation: string):
   const running = liveSandboxSession(projectRoot);
   if (!running) return;
   throw new Error(
-    `A \`blocks sandbox\` is running in this app (pid ${running.pid}, dev server on :${running.port}), and its cdk watch ` +
+    `A \`cdk-blocks sandbox\` is running in this app (pid ${running.pid}, dev server on :${running.port}), and its cdk watch ` +
       `deploys every change to the sandbox. Stop it first, with Ctrl-C in its terminal or ` +
-      `\`npx --no -- blocks dev stop --port ${running.port}\`, then re-run \`${invocation}\`.`,
+      `\`npx --no -- cdk-blocks dev stop --port ${running.port}\`, then re-run \`${invocation}\`.`,
   );
 }
 
@@ -517,7 +517,7 @@ export function sandboxFailureHint(
 /**
  * Stop the sandbox's watch processes: reap both detached trees first, then
  * report. The report comes last because stdout/stderr may already be gone —
- * `blocks sandbox 2>&1 | tee log` loses `tee` to the same Ctrl-C — and nothing
+ * `cdk-blocks sandbox 2>&1 | tee log` loses `tee` to the same Ctrl-C — and nothing
  * printed may delay or prevent the reap: both children run in their own
  * process groups, so nothing else signals them, and a leaked `cdk watch` keeps
  * deploying to AWS.
@@ -612,7 +612,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   const sandboxStartTime = Date.now();
   // A closed output pipe or terminal must not crash the runner (see ignoreClosedOutput).
   ignoreClosedOutput();
-  // Before anything reaches AWS: a running `blocks sandbox` already deploys every change.
+  // Before anything reaches AWS: a running `cdk-blocks sandbox` already deploys every change.
   assertNoRunningSandbox(process.cwd(), invocation);
   migrateLegacyDeployedConfig(outDir);
 
@@ -849,7 +849,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
       ...process.env,
       NODE_OPTIONS: '',
       BLOCKS_API_URL: apiUrl,
-      // The dev server records this session in its pidfile, so `blocks dev stop` says it stopped the sandbox.
+      // The dev server records this session in its pidfile, so `cdk-blocks dev stop` says it stopped the sandbox.
       [SANDBOX_SESSION_ENV]: String(process.pid),
     },
   });
@@ -865,7 +865,7 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
   process.on("SIGINT", () => cleanup());
   process.on("SIGTERM", () => cleanup());
   // The session is its dev server and its `cdk watch`: when the dev server ends
-  // (`blocks dev stop`, a crash), stop the watch too, which would otherwise go
+  // (`cdk-blocks dev stop`, a crash), stop the watch too, which would otherwise go
   // on hotswapping every save into the sandbox, out of reach of any command.
   devServer.once('exit', (code, signal) => {
     if (cleaningUp) return;
@@ -878,8 +878,8 @@ async function runStartSandbox(options: SandboxOptions, history: SandboxHistory)
 }
 
 /**
- * The exit code of `blocks sandbox` when its dev server ends on its own: 0 when
- * it was stopped (exit 0, a signal, or a shell's 128+n for one: `blocks dev
+ * The exit code of `cdk-blocks sandbox` when its dev server ends on its own: 0 when
+ * it was stopped (exit 0, a signal, or a shell's 128+n for one: `cdk-blocks dev
  * stop` SIGTERMs or SIGKILLs it), 1 when it failed (a startup failure exits 1).
  */
 export function sandboxDevServerExitCode(code: number | null, signal: NodeJS.Signals | null): number {

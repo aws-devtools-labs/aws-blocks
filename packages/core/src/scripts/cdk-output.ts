@@ -99,7 +99,7 @@ export function formatRetainedOutput(ring: OutputRing, label: string, level: Blo
   ].join('\n');
 }
 
-// ── Line classification (ported from the `blocks` CLI prototype's stream filter) ──
+// ── Line classification (ported from the `cdk-blocks` CLI prototype's stream filter) ──
 
 /** Runtime/SDK chatter that is never worth showing, even as a milestone. */
 const NOISE_LINE =
@@ -162,7 +162,7 @@ export interface CdkProgressReporter {
  * Failure lines are written verbatim to the stream they came from; everything
  * else is dropped (the caller retains it for the failure dump).
  *
- * Adapted from the `blocks` CLI prototype's deploy-progress reporter.
+ * Adapted from the `cdk-blocks` CLI prototype's deploy-progress reporter.
  */
 export function createCdkProgressReporter(
   stdout: OutputSink,

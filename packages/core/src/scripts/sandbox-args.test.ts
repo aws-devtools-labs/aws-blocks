@@ -418,7 +418,7 @@ describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
     assert.strictEqual(watch.env.NODE_OPTIONS, '--conditions=cdk');
   });
 
-  it("watches into the sandbox's own assembly directory, never the ./cdk.out a blocks deploy uses (JW-02)", () => {
+  it("watches into the sandbox's own assembly directory, never the ./cdk.out a cdk-blocks deploy uses (JW-02)", () => {
     const watch = buildSandboxWatchSpawn({ outDir: '.blocks-sandbox', projectRoot: '/app', backendPath: '/app/aws-blocks/index.cdk.ts' });
     assert.strictEqual(valueAfter(watch.args, '--output'), '.blocks-sandbox/cdk.out');
     assert.strictEqual(valueAfter(buildSandboxSynthArgs({ outDir: '.blocks-sandbox', projectRoot: '/app' }), '--output'), '.blocks-sandbox/cdk.out');
@@ -426,7 +426,7 @@ describe('cdkAppCommand — the --app command CDK runs through a shell', () => {
 });
 
 describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () => {
-  it('refuses a sandbox deploy or destroy while the app runs blocks sandbox, naming it and how to stop it', () => {
+  it('refuses a sandbox deploy or destroy while the app runs cdk-blocks sandbox, naming it and how to stop it', () => {
     const root = mkdtempSync(join(tmpdir(), 'blocks-running-sandbox-'));
     try {
       mkdirSync(join(root, '.blocks-sandbox'));
@@ -434,13 +434,13 @@ describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () =>
       const record = { pid: process.pid, ppid: 1, port: 41950, command: pidCommand(process.pid), sandbox: { pid: process.pid } };
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify(record));
       assert.throws(
-        () => assertNoRunningSandbox(root, 'npx --no -- blocks sandbox deploy'),
+        () => assertNoRunningSandbox(root, 'npx --no -- cdk-blocks sandbox deploy'),
         new RegExp(
-          `^Error: A \`blocks sandbox\` is running in this app \\(pid ${process.pid}, dev server on :41950\\).*` +
-            'npx --no -- blocks dev stop --port 41950.*re-run `npx --no -- blocks sandbox deploy`',
+          `^Error: A \`cdk-blocks sandbox\` is running in this app \\(pid ${process.pid}, dev server on :41950\\).*` +
+            'npx --no -- cdk-blocks dev stop --port 41950.*re-run `npx --no -- cdk-blocks sandbox deploy`',
         ),
       );
-      // A plain blocks dev, or a session that has ended, is no reason to refuse.
+      // A plain cdk-blocks dev, or a session that has ended, is no reason to refuse.
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: undefined }));
       assertNoRunningSandbox(root, 'x');
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: { pid: 4194301 } }));

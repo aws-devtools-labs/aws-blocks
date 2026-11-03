@@ -560,10 +560,10 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.strictEqual(fs.files.get(path), other);
   });
 
-  describe('the starting record of a blocks dev CLI', () => {
+  describe('the starting record of a cdk-blocks dev CLI', () => {
     // The CLI (pid 700, run from a shell, pid 600) claimed the port before it started tsx watch.
-    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node blocks dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
-    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node blocks dev' : 'bash') };
+    const cli = { pid: 700, ppid: 600, port: 3000, command: 'node cdk-blocks dev', parentCommand: 'bash', starting: true as const, frontend: { pgid: 4242, port: 3100 } };
+    const live = { isAlive: (pid: number) => pid === 700 || pid === 600, commandOf: (pid: number) => (pid === 700 ? 'node cdk-blocks dev' : 'bash') };
 
     it('is replaced in place by the dev server that CLI started, which keeps its leftover frontend group', () => {
       const fs = memoryFs({ [path]: JSON.stringify(cli) });
@@ -764,7 +764,7 @@ describe('Windows processes — CIM query, creation-time identity and ancestry',
 
 // ── runsUnderTsxWatch — a failed first start ends its tsx watch too ──────────
 describe('runsUnderTsxWatch — whether a failed first start must end its tsx watch', () => {
-  it('believes blocks dev, which says so, where the parent command line cannot be read (Windows)', () => {
+  it('believes cdk-blocks dev, which says so, where the parent command line cannot be read (Windows)', () => {
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '1' }, ''), true);
     assert.strictEqual(runsUnderTsxWatch({}, ''), false);
     assert.strictEqual(runsUnderTsxWatch({ BLOCKS_DEV_UNDER_WATCH: '0' }, 'bash'), false);

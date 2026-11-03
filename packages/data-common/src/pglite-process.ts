@@ -162,7 +162,7 @@ function closePendingOnBeforeExit(): void {
  *
  * `beforeExit` is not emitted for `process.exit()` or a fatal signal. The dev
  * server runs the pending closers itself before it exits on a stop (Ctrl-C,
- * `blocks dev stop`), so only a crash or a SIGKILL leaves `postmaster.pid` behind.
+ * `cdk-blocks dev stop`), so only a crash or a SIGKILL leaves `postmaster.pid` behind.
  *
  * @internal
  */

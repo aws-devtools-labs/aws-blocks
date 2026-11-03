@@ -38,7 +38,7 @@ describe('deployed config — where a deploy records its API URL', () => {
   it("tells an older deploy's config.json from a dev server's", () => {
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://p.example/aws-blocks/api', environment: 'production' }), 'production');
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'https://s.example/prod/aws-blocks/api', environment: 'sandbox' }), 'sandbox');
-    // The dev servers of `blocks dev` and `blocks sandbox` (which proxies to the sandbox) write http URLs.
+    // The dev servers of `cdk-blocks dev` and `cdk-blocks sandbox` (which proxies to the sandbox) write http URLs.
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://localhost:3000/aws-blocks/api', environment: 'local' }), null);
     assert.strictEqual(legacyDeployedStage({ apiUrl: 'http://10.0.0.5:3000/aws-blocks/api', environment: 'sandbox' }), null);
     assert.strictEqual(legacyDeployedStage(null), null);

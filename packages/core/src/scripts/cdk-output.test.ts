@@ -507,7 +507,7 @@ describe('runDestroyWithRetries failure dump', () => {
 });
 
 describe('createCdkOutput — deferSignals (a real cdk tree)', { skip: process.platform === 'win32' ? 'POSIX signals' : false }, () => {
-  // The sandbox deploy and destroy ran cdk with no signal handling: one SIGTERM (the blocks CLI forwards
+  // The sandbox deploy and destroy ran cdk with no signal handling: one SIGTERM (the cdk-blocks CLI forwards
   // it at once) killed the runner and left cdk running, unwatched (JA-2).
   it('defers a first SIGTERM, and on a second one stops the whole cdk tree and reports the operator signal', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cdk-defer-'));

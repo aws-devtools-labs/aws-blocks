@@ -134,7 +134,7 @@ async function resolveApiUrl(): Promise<string> {
       if (stage) {
         throw new Error(
           `.blocks-sandbox/config.json points at the deployed ${stage} stack (${String(config.apiUrl)}), written by an older deploy. ` +
-            'Start the dev server (`npx --no -- blocks dev`), which rewrites it, ' +
+            'Start the dev server (`npx --no -- cdk-blocks dev`), which rewrites it, ' +
             'or set BLOCKS_API_URL to target that stack on purpose.',
         );
       }

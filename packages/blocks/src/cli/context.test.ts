@@ -447,7 +447,7 @@ setInterval(() => {}, 1000);
 	});
 
 	/**
-	 * Start `blocks dev` in a process group of its own, run `blocks dev stop` `delayMs` after it, and
+	 * Start `cdk-blocks dev` in a process group of its own, run `cdk-blocks dev stop` `delayMs` after it, and
 	 * check that the stop stopped it, whatever stage of its startup it was in, leaving nothing running.
 	 */
 	async function stopDuringStartup(delayMs: number): Promise<void> {
@@ -485,12 +485,12 @@ setInterval(() => {}, 1000);
 			await sleep(delayMs);
 			const stop = run(['dev', 'stop', '--port', String(port)], false);
 			const stopCode = await stop.closed;
-			const context = `\n--- after ${delayMs} ms, dev stop:\n${stop.output()}\n--- blocks dev:\n${dev.output()}`;
+			const context = `\n--- after ${delayMs} ms, dev stop:\n${stop.output()}\n--- cdk-blocks dev:\n${dev.output()}`;
 			assert.strictEqual(stopCode, 0, context);
 			assert.match(stop.output(), /Stopped the dev server/, context);
 			const devCode = await Promise.race([dev.closed, sleep(15_000).then(() => 'still running')]);
 			assert.strictEqual(devCode, 0, context);
-			assert.strictEqual(isGroupRunning(pgid), false, `a process of blocks dev outlived it${context}`);
+			assert.strictEqual(isGroupRunning(pgid), false, `a process of cdk-blocks dev outlived it${context}`);
 			// The frontend starts only once the dev server listens, which the later stops may come after.
 			const frontendPid = join(root, 'frontend.pid');
 			if (existsSync(frontendPid)) {
@@ -514,7 +514,7 @@ setInterval(() => {}, 1000);
 		}
 	}
 
-	it('stops `blocks dev` on a `blocks dev stop` at any moment of its startup, leaving nothing running', {
+	it('stops `cdk-blocks dev` on a `cdk-blocks dev stop` at any moment of its startup, leaving nothing running', {
 		timeout: 300_000,
 	}, async () => {
 		// Before the dev server has loaded, the pidfile names the CLI, which `dev stop` signals.

@@ -83,11 +83,11 @@ export async function loadCoreScripts(): Promise<typeof CoreScriptsModule> {
 	}
 }
 
-/** Load `@aws-blocks/core/scripts/dev-pidfile` (what `blocks dev` needs of core); a core that does not match fails with {@link coreMismatchError}. */
+/** Load `@aws-blocks/core/scripts/dev-pidfile` (what `cdk-blocks dev` needs of core); a core that does not match fails with {@link coreMismatchError}. */
 export async function loadDevPidfile(): Promise<typeof DevPidfileModule> {
 	try {
 		// Loaded on demand, not imported: a static import would fail every command, `--version` and `--help` too,
-		// on an installed core that lacks this entry; this way only `blocks dev` fails, with the reinstall message.
+		// on an installed core that lacks this entry; this way only `cdk-blocks dev` fails, with the reinstall message.
 		return await import('@aws-blocks/core/scripts/dev-pidfile');
 	} catch (error) {
 		throw coreMismatchError(error) ?? error;

@@ -121,13 +121,13 @@ describe('sandboxFailureHint', () => {
 	it('names the commands the user runs', () => {
 		const kinds = ['failed-stack', 'unknown', 'synth', 'locked', 'in-progress', 'healthy'] as const;
 		for (const kind of kinds) {
-			const hint = sandboxFailureHint(kind, [], 'blocks sandbox deploy', 'blocks sandbox destroy');
-			assert.match(hint, /`?blocks sandbox (deploy|destroy)`?/, kind);
+			const hint = sandboxFailureHint(kind, [], 'cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy');
+			assert.match(hint, /`?cdk-blocks sandbox (deploy|destroy)`?/, kind);
 			assert.doesNotMatch(hint, /npm run/, kind);
 		}
 		assert.match(
-			sandboxFailureHint('locked', [], 'blocks sandbox deploy', 'blocks sandbox destroy'),
-			/another `blocks sandbox deploy` or\n\s+`blocks sandbox destroy`/,
+			sandboxFailureHint('locked', [], 'cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy'),
+			/another `cdk-blocks sandbox deploy` or\n\s+`cdk-blocks sandbox destroy`/,
 		);
 	});
 });
