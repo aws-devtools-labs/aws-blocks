@@ -14,11 +14,11 @@ public struct DeviceHandle {
     }
 }
 
-public struct DeviceLink<Message> {
+public struct APILink<Message> {
     public static func fromBlocksDescriptor(
         _ descriptor: [String: Any],
         decode: @escaping (Data) throws -> Message
-    ) throws -> DeviceLink<Message> {
-        DeviceLink()
+    ) throws -> APILink<Message> {
+        APILink()
     }
 }

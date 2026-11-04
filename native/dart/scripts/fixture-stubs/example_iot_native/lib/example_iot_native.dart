@@ -13,9 +13,9 @@ class DeviceHandle {
       DeviceHandle._(descriptor);
 }
 
-/// Binding `example-iot/device-link`, generic arity 1.
-class DeviceLink<T> {
-  DeviceLink._(this.descriptor, this.decode);
+/// Binding `example-iot/device-link` (export `API_link`), generic arity 1.
+class APILink<T> {
+  APILink._(this.descriptor, this.decode);
 
   /// The validated `{"__blocks": …}` descriptor.
   final Map<String, dynamic> descriptor;
@@ -23,8 +23,8 @@ class DeviceLink<T> {
   /// Decodes one payload as `T`.
   final T Function(Map<String, dynamic>) decode;
 
-  factory DeviceLink.fromBlocksDescriptor(
+  factory APILink.fromBlocksDescriptor(
     Map<String, dynamic> descriptor,
     T Function(Map<String, dynamic>) decode,
-  ) => DeviceLink._(descriptor, decode);
+  ) => APILink._(descriptor, decode);
 }
