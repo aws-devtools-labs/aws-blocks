@@ -93,11 +93,30 @@ describe('excludeBackendInTsconfig', () => {
     assert.strictEqual(readFileSync(file, 'utf-8'), once);
   });
 
-  it('reports a manual step instead of guessing on input it cannot scan', () => {
+  it('reports a manual step instead of guessing on input it cannot parse', () => {
     const original = '{ "include": ["**/*.ts"], "exclude": ["node_modules" ';
     const file = write('tsconfig.json', original);
     assert.strictEqual(excludeBackendInTsconfig(file).status, 'manual');
     assert.strictEqual(readFileSync(file, 'utf-8'), original);
+  });
+
+  it('declines to edit a config that extends another, rather than overriding the base exclude', () => {
+    // A local `exclude` replaces the base's outright, and we can't see whether
+    // the base's `include` covers the backend — so this must not be guessed.
+    const original = JSON.stringify({ extends: './tsconfig.base.json', compilerOptions: { strict: true } }, null, 2);
+    const file = write('tsconfig.json', original);
+    const result = excludeBackendInTsconfig(file);
+    assert.strictEqual(result.status, 'manual');
+    assert.match(result.status === 'manual' ? result.reason : '', /extends/);
+    assert.strictEqual(readFileSync(file, 'utf-8'), original, 'the user file is untouched');
+  });
+
+  it('keeps a trailing comma and comments intact when appending', () => {
+    const file = write('tsconfig.json', `{\n  // top\n  "include": ["**/*.ts"],\n  "exclude": [\n    "node_modules",\n  ],\n}\n`);
+    assert.strictEqual(excludeBackendInTsconfig(file).status, 'updated');
+    const text = readFileSync(file, 'utf-8');
+    assert.deepStrictEqual(parse(file).exclude, ['node_modules', 'aws-blocks']);
+    assert.match(text, /\/\/ top/);
   });
 });
 
