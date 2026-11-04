@@ -120,3 +120,7 @@ native/swift/Demo/typescript-demo/package-lock.json
 
 # Per-run fixture of packages/core/src/cdk/lambda-code.test.ts (removed after the run)
 .lambda-code-fixture.*/
+
+# Generated backend declarations (see core/scripts/generate-types.ts)
+aws-blocks/.types/
+**/aws-blocks/.types/

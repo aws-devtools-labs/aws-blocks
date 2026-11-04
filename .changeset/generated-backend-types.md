@@ -16,4 +16,11 @@ New apps now generate the backend's declaration files into `aws-blocks/.types/` 
 - Adding Blocks to an existing project adds `"aws-blocks"` to the frontend tsconfig's `exclude` when its `include` would cover the backend (Next.js, `tsc --init`), keeping the file's comments. It prints a manual step if it can't edit the file.
 - `@aws-blocks/core/scripts` exports `generateBackendTypes`. Generation runs the app's own `tsc`, so it works with TypeScript 5.x and 7.
 
-Existing apps are unchanged: generation only runs for a workspace whose `exports["."].types` is a `.d.ts` path. To opt in, copy `aws-blocks/tsconfig.types.json` from a new app, set `exports["."].types` to `./.types/index.d.ts`, add `aws-blocks/.types/` to `.gitignore`, and run `npx blocks-generate-client`.
+**Breaking for apps scaffolded before this change.** Generated types are now the only supported layout, so a backend workspace that still points `exports["."].types` at `./index.ts`, or that has no `aws-blocks/tsconfig.types.json`, fails with the migration steps instead of carrying on. It is a hard error on purpose: carrying on means the frontend keeps typechecking the backend source — the bug this fixes — without saying so.
+
+To migrate an existing app:
+
+1. Copy `aws-blocks/tsconfig.types.json` from a newly created app.
+2. Set `exports["."].types` in `aws-blocks/package.json` to `./.types/index.d.ts`.
+3. Add `aws-blocks/.types/` to `.gitignore`.
+4. Run `npx blocks-generate-client`.

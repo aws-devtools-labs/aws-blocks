@@ -114,7 +114,9 @@ worker.on('exit', async (code, signal) => {
 	// Backend declaration files for the frontend's typed import (see
 	// `generateBackendTypes`). Only after the client succeeded, and a failure
 	// exits non-zero: this runs as `prebuild`/`pretypecheck`, and a build must
-	// not continue with missing or stale types.
+	// not continue with missing or stale types. That includes a workspace
+	// predating generated types — it fails here with the migration steps,
+	// rather than building against the backend source.
 	const types = await generateBackendTypes(dirname(foundationPath));
 	if (types.status === 'failed') {
 		console.error(`blocks-generate-client: backend types not written: ${types.message}`);

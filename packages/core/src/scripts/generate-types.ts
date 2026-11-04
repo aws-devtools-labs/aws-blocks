@@ -16,9 +16,11 @@
  * types are computed once here, under the backend's own `aws-blocks/tsconfig.types.json`
  * (Node types, `lib: ["ESNext"]`), and the frontend only reads the result.
  *
- * Generation is opt-in by the workspace layout, so apps scaffolded before this
- * existed are untouched: it runs only when `exports["."].types` is a `.d.ts`
- * path and `tsconfig.types.json` exists.
+ * Generated types are the only supported layout. A backend workspace that still
+ * points `exports["."].types` at its source, or that has no
+ * `tsconfig.types.json`, is a hard error naming the migration — not a silent
+ * skip. Silently skipping would leave the frontend typechecking backend source,
+ * which is the bug this exists to fix, and it would do so without saying so.
  *
  * The app's own `tsc` is run as a child process, like `blocks-generate-client`
  * uses the app's `tsx`. The `tsc` command line is the same on TypeScript 5.x
@@ -45,26 +47,44 @@ export type BackendTypesResult =
 	| { status: 'stale'; outFile: string }
 	/** `mode: 'clean'` only: the declarations and build state were removed. */
 	| { status: 'cleaned' }
-	/** The workspace doesn't use generated types (older layout); nothing to do. */
+	/** The run was aborted (e.g. the dev server restarted). */
 	| { status: 'skipped'; reason: string }
 	/** `tsc` reported errors; nothing was written, so the previous output (if any) is kept. */
 	| { status: 'failed'; message: string; diagnostics: string };
 
+/** How to bring a workspace predating generated types onto the supported layout. */
+const MIGRATION = [
+	`copy aws-blocks/${BACKEND_TYPES_TSCONFIG} from a newly created app`,
+	'set exports["."].types in aws-blocks/package.json to "./.types/index.d.ts"',
+	'add aws-blocks/.types/ to .gitignore',
+]
+	.map((step, i) => `  ${i + 1}. ${step}`)
+	.join('\n');
+
 /**
  * Returns the `.d.ts` path the workspace's `exports["."].types` points at, or
- * `undefined` when the workspace doesn't use generated types.
+ * the reason this workspace is not on the generated-types layout.
  */
-export function backendTypesTarget(awsBlocksDir: string): string | undefined {
+export function backendTypesTarget(awsBlocksDir: string): { outFile: string } | { error: string } {
 	const pkgPath = join(awsBlocksDir, 'package.json');
-	if (!existsSync(pkgPath) || !existsSync(join(awsBlocksDir, BACKEND_TYPES_TSCONFIG))) return undefined;
+	if (!existsSync(pkgPath)) return { error: `no package.json in ${awsBlocksDir}` };
+	if (!existsSync(join(awsBlocksDir, BACKEND_TYPES_TSCONFIG))) {
+		return { error: `aws-blocks/${BACKEND_TYPES_TSCONFIG} is missing. To migrate:\n${MIGRATION}` };
+	}
 	let types: unknown;
 	try {
 		types = JSON.parse(readFileSync(pkgPath, 'utf-8'))?.exports?.['.']?.types;
 	} catch {
-		return undefined;
+		return { error: 'aws-blocks/package.json is not valid JSON' };
 	}
-	if (typeof types !== 'string' || !types.endsWith('.d.ts')) return undefined;
-	return normalize(resolve(awsBlocksDir, types));
+	if (typeof types !== 'string' || !types.endsWith('.d.ts')) {
+		return {
+			error:
+				`exports["."].types in aws-blocks/package.json is ${JSON.stringify(types)}, not a .d.ts path, so the ` +
+				`frontend would typecheck the backend source. To migrate:\n${MIGRATION}`,
+		};
+	}
+	return { outFile: normalize(resolve(awsBlocksDir, types)) };
 }
 
 /** Resolve the app's `tsc` entry script, looking up from the backend workspace. */
@@ -106,10 +126,11 @@ export async function generateBackendTypes(
 	options: { signal?: AbortSignal; mode?: 'build' | 'check' | 'clean' } = {},
 ): Promise<BackendTypesResult> {
 	const mode = options.mode ?? 'build';
-	const outFile = backendTypesTarget(awsBlocksDir);
-	if (!outFile) {
-		return { status: 'skipped', reason: `no ${BACKEND_TYPES_TSCONFIG} or exports["."].types is not a .d.ts file` };
+	const target = backendTypesTarget(awsBlocksDir);
+	if ('error' in target) {
+		return { status: 'failed', message: target.error, diagnostics: '' };
 	}
+	const { outFile } = target;
 	const tsc = resolveTsc(awsBlocksDir);
 	if (!tsc) {
 		return {

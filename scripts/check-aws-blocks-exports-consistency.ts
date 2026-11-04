@@ -6,12 +6,12 @@
  * export conditions required for SSR (react-server, import).
  *
  * Required conditions in exports["."] :
- *   - types    → ./.types/index.d.ts in create-blocks-app templates (the
- *                backend's generated declarations, so a frontend never
- *                typechecks the backend source with its own tsconfig);
- *                ./index.ts or ./.types/index.d.ts in test-apps. Both stay
- *                valid: apps scaffolded earlier point at the source, and a
- *                missing .types/ file falls back to the source.
+ *   - types    → ./.types/index.d.ts everywhere (the backend's generated
+ *                declarations, so a frontend never typechecks the backend
+ *                source with its own tsconfig). Pointing at ./index.ts is no
+ *                longer accepted: a missing .types/ file falls back to the
+ *                source silently, which is the bug the generated types exist
+ *                to fix.
  *   - browser  → ./client.js
  *   - react-server → ./client.js
  *   - import   → ./client.js
@@ -113,9 +113,8 @@ function checkFile(relPath: string): string[] {
     return errors;
   }
 
-  const isTemplate = relPath.startsWith("packages/create-blocks-app/templates/");
   for (const [condition, expectedValue] of Object.entries(REQUIRED_CONDITIONS)) {
-    const accepted = condition === "types" && !isTemplate ? [expectedValue, "./index.ts"] : [expectedValue];
+    const accepted = [expectedValue];
     if (!(condition in dot)) {
       errors.push(`${relPath}: missing condition "${condition}"`);
     } else if (!accepted.includes(dot[condition])) {

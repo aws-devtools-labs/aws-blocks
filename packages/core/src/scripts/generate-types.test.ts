@@ -64,17 +64,23 @@ describe('generateBackendTypes', () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it('skips a workspace whose types still point at its source (apps scaffolded before generated types)', async () => {
+	it('fails with the migration when types still point at the source, rather than skipping quietly', async () => {
+		// Skipping would leave the frontend typechecking backend source — the bug
+		// this exists to fix — and say nothing about it.
 		workspace({ types: './index.ts', source: 'export const x = 1;\n' });
-		assert.strictEqual(backendTypesTarget(dir), undefined);
+		const target = backendTypesTarget(dir);
+		assert.ok('error' in target && /not a \.d\.ts path/.test(target.error));
 		const result = await generateBackendTypes(dir);
-		assert.strictEqual(result.status, 'skipped');
+		assert.strictEqual(result.status, 'failed');
+		assert.match(result.status === 'failed' ? result.message : '', /To migrate:/);
 		assert.ok(!existsSync(join(dir, '.types')));
 	});
 
-	it('skips a workspace without the types tsconfig', async () => {
+	it('fails with the migration when the types tsconfig is missing', async () => {
 		workspace({ tsconfig: false, source: 'export const x = 1;\n' });
-		assert.strictEqual((await generateBackendTypes(dir)).status, 'skipped');
+		const result = await generateBackendTypes(dir);
+		assert.strictEqual(result.status, 'failed');
+		assert.match(result.status === 'failed' ? result.message : '', /tsconfig\.types\.json is missing[\s\S]*To migrate:/);
 	});
 
 	it('writes declarations for backend code that uses Node APIs, with inferred return types intact', async () => {
