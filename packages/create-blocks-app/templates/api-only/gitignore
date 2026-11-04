@@ -20,3 +20,6 @@ aws-blocks/blocks.spec.json
 credentials
 !credentials/
 .aws/
+
+# Logs (for example `npm run dev > dev.log 2>&1 &`)
+*.log
