@@ -190,7 +190,7 @@ Extend `getMockDataDir` with an optional `options` parameter: `getMockDataDir(sc
 
 ### References
 - D-001: original mock data convention
-- AWS Resource Groups and console shortcut routes (the change that introduced settings vs resources)
+- AWS Resource Groups and console shortcut routes: `packages/core/src/cdk/blocks-backend.ts`
 
 ## D-007: Auth cookies default to `SameSite=Lax`; cross-domain is opt-in
 
@@ -235,7 +235,6 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 ### References
 - Helper: `packages/auth-common/src/cookies.ts`
 - Enabler: the single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`)
-- Related: the earlier cross-port cookie notes, obsoleted by the proxy
 
 ## D-008: BB documentation follows a progressive-disclosure model (README entry point + task-scoped references)
 
@@ -304,7 +303,7 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - **Aurora DSQL support.** Out of scope — needs a separate runner (no advisory locks, one-DDL-per-transaction with no DDL/DML mixing, IAM-token auth).
 
 ### References
-- Connection/port resolution shipped as a separate change
+- Connection/port resolution: `findConnectionString` (`packages/core/src/scripts/ensure-secrets.ts`), `toSessionPortUrl` (`packages/bb-data/src/migrations/external-migrations.ts`)
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
@@ -420,7 +419,7 @@ earlier planning decisions and removed a released behavior:
   (`--prod` / `--provider`) — non-interactive mode is removed, so those flags are unnecessary.
 
 ### References
-- Follows the db-pull modularization and the external-DB migrations decision ([D-009](#d-009-external-databases--blocks-applied-version-controlled-schema-migrations)).
+- Follows [D-009](#d-009-external-databases--blocks-applied-version-controlled-schema-migrations) (external-DB migrations); the db-pull modules live in `packages/bb-data/src/db-pull/`.
 - Code: `packages/bb-data/src/db-pull/pull.ts` (`dbPullInteractive`, `dbPullDevInteractive`,
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).
