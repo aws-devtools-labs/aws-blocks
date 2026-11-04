@@ -3,9 +3,26 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import { setTimeout } from 'node:timers/promises';
 import { isBlocksError } from '@aws-blocks/core';
 import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 import type { api as apiType } from 'aws-blocks';
+
+/** Deployed delivery pays for S3 → SQS, the 5s SQS batching window and a possible Lambda cold start. */
+const EVENT_POLL_BUDGET_MS = process.env.BLOCKS_TEST_ENV === 'sandbox' || process.env.BLOCKS_TEST_ENV === 'production' ? 90_000 : 15_000;
+
+/** Poll until `fetch` returns a non-null value or the budget expires; returns the last value. */
+async function pollFor<T>(fetch: () => Promise<T | null>): Promise<T | null> {
+  const deadline = Date.now() + EVENT_POLL_BUDGET_MS;
+  let result = await fetch();
+  while (result === null && Date.now() < deadline) {
+    await setTimeout(250);
+    result = await fetch();
+  }
+  return result;
+}
+
+const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 export function fileBucketTests(getApi: () => typeof apiType) {
   describe('FileBucket BB', () => {
@@ -407,6 +424,68 @@ export function fileBucketTests(getApi: () => typeof apiType) {
         const files = await api.vFileScan('v/scan-');
         assert.strictEqual(files.length, 1);
         assert.ok(files[0].path.includes('scan-b.txt'));
+      });
+    });
+
+    describe('onObjectCreated', () => {
+      test('put() runs the handler with the path, size and created version', async () => {
+        const api = getApi();
+        // A space and a plus sign: S3 URL-encodes notification keys.
+        const path = `incoming/${uid()} a+b.txt`;
+        const { versionId } = await api.inboxPut(path, 'hello');
+        const event = await pollFor(() => api.inboxEvent(path, versionId));
+        assert.ok(event, 'handler should have recorded the event');
+        assert.strictEqual(event.path, path);
+        assert.strictEqual(event.size, 5);
+        assert.strictEqual(event.versionId, versionId);
+        assert.strictEqual(event.receiveCount, 1);
+        assert.strictEqual(event.body, 'hello');
+      });
+
+      test('each upload to one key is notified with its own version', async () => {
+        const api = getApi();
+        const path = `incoming/${uid()}.txt`;
+        const first = await api.inboxPut(path, 'first');
+        const second = await api.inboxPut(path, 'second');
+        const [a, b] = await Promise.all([
+          pollFor(() => api.inboxEvent(path, first.versionId)),
+          pollFor(() => api.inboxEvent(path, second.versionId)),
+        ]);
+        assert.strictEqual(a?.body, 'first');
+        assert.strictEqual(b?.body, 'second');
+      });
+
+      test('a direct presigned upload runs the handler', async () => {
+        const api = getApi();
+        const path = `incoming/${uid()}-direct.txt`;
+        const url = await api.inboxPutUrl(path);
+        const res = await fetch(url, { method: 'PUT', body: 'uploaded directly' });
+        assert.strictEqual(res.status, 200);
+        const versionId = await api.inboxLatestVersionId(path);
+        assert.ok(versionId);
+        const event = await pollFor(() => api.inboxEvent(path, versionId));
+        assert.strictEqual(event?.body, 'uploaded directly');
+      });
+
+      test('keys outside the prefix do not run the handler', async () => {
+        const api = getApi();
+        const id = uid();
+        const outside = await api.inboxPut(`outside/${id}.txt`, 'x');
+        const inside = await api.inboxPut(`incoming/${id}.txt`, 'x');
+        assert.ok(await pollFor(() => api.inboxEvent(`incoming/${id}.txt`, inside.versionId)));
+        assert.strictEqual(await api.inboxEvent(`outside/${id}.txt`, outside.versionId), null);
+      });
+
+      test('an unversioned bucket notifies without a versionId, honoring the suffix', async () => {
+        const api = getApi();
+        const id = uid();
+        await api.plainInboxPut(`${id}.csv`, 'skip');
+        await api.plainInboxPut(`${id}.txt`, 'plain');
+        const event = await pollFor(() => api.plainInboxEvent(`${id}.txt`));
+        assert.ok(event);
+        assert.strictEqual(event.body, 'plain');
+        assert.ok(!('versionId' in event), 'no versionId on an unversioned bucket');
+        assert.strictEqual(await api.plainInboxEvent(`${id}.csv`), null);
       });
     });
   });

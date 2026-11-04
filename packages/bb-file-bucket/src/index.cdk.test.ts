@@ -8,13 +8,18 @@
  * constructor unconditionally provisioned a new S3 bucket. These tests pin
  * the fix.
  */
-import { test } from 'node:test';
+import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
-import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { Scope, BlocksStack, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
 import { FileBucket } from './index.cdk.js';
 import { deriveBucketName } from './bucket-name.js';
 
@@ -671,4 +676,106 @@ test('CDK: fromExisting without encryption / objectLock emits no ignored-options
   new FileBucket(parent, 'wrapped', { bucket: FileBucket.fromExisting('existing') });
   const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('ignored for a bucket wrapped'));
   assert.strictEqual(warnings.length, 0);
+});
+
+// ── onObjectCreated ─────────────────────────────────────────────────────────
+
+describe('CDK: onObjectCreated', () => {
+  const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
+  let tmpDir: string;
+  let handlerPath: string;
+  let backendPath: string;
+
+  before(() => {
+    tmpDir = mkdtempSync(join(dirname(fileURLToPath(import.meta.url)), 'tmp-fb-cdk-'));
+    handlerPath = join(tmpDir, 'handler.mjs');
+    writeFileSync(handlerPath, "export const handler = async () => ({ statusCode: 200, body: '{}' });\n");
+    backendPath = join(tmpDir, 'backend.mjs');
+    writeFileSync(backendPath, 'export default () => {};\n');
+  });
+
+  after(() => rmSync(tmpDir, { recursive: true, force: true }));
+
+  async function makeStack(id: string): Promise<BlocksStack> {
+    return BlocksStack.create(new cdk.App(), id, {
+      backendHandlerPath: handlerPath,
+      backendCDKPath: backendPath,
+      defaults: BlocksPresets.production,
+      defaultComputeFactory: lambdaFactory,
+    });
+  }
+
+  test('routes ObjectCreated notifications, filtered, to a queue the compute consumes', async () => {
+    const stack = await makeStack('fbooc');
+    const bucket = new FileBucket(stack, 'inbox', {
+      onObjectCreated: { prefix: 'incoming/', suffix: '.csv', handler: async () => {} },
+    });
+    const template = Template.fromStack(stack);
+
+    const queueName = `${bucket.fullId}-on-object-created`;
+    const queues = template.findResources('AWS::SQS::Queue', { Properties: { QueueName: queueName } });
+    const [queueId] = Object.keys(queues);
+    assert.ok(queueId, `queue named ${queueName}`);
+    template.hasResourceProperties('AWS::SQS::Queue', { QueueName: `${queueName}-dlq` });
+
+    template.hasResourceProperties('Custom::S3BucketNotifications', {
+      NotificationConfiguration: {
+        QueueConfigurations: [{
+          Events: ['s3:ObjectCreated:*'],
+          Filter: { Key: { FilterRules: [{ Name: 'suffix', Value: '.csv' }, { Name: 'prefix', Value: 'incoming/' }] } },
+          QueueArn: { 'Fn::GetAtt': [queueId, 'Arn'] },
+        }],
+      },
+    });
+
+    // S3 may send only on behalf of this bucket.
+    template.hasResourceProperties('AWS::SQS::QueuePolicy', {
+      Queues: [{ Ref: queueId }],
+      PolicyDocument: {
+        Statement: Match.arrayWith([Match.objectLike({
+          Effect: 'Allow',
+          Principal: { Service: 's3.amazonaws.com' },
+          Action: Match.arrayWith(['sqs:SendMessage']),
+          Condition: { ArnLike: { 'aws:SourceArn': Match.anyValue() } },
+        })]),
+      },
+    });
+
+    const compute = stack._defaultCompute as LambdaCompute;
+    template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      EventSourceArn: { 'Fn::GetAtt': [queueId, 'Arn'] },
+      FunctionName: { Ref: stack.getLogicalId(compute.fn.node.defaultChild as cdk.CfnElement) },
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+    });
+  });
+
+  test('an empty prefix and suffix configure no key filter', async () => {
+    const stack = await makeStack('fboocnofilter');
+    new FileBucket(stack, 'inbox', { onObjectCreated: { prefix: '', suffix: '', handler: async () => {} } });
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties('Custom::S3BucketNotifications', {
+      NotificationConfiguration: {
+        QueueConfigurations: [Match.objectLike({ Events: ['s3:ObjectCreated:*'], Filter: Match.absent() })],
+      },
+    });
+  });
+
+  test('a bucket without onObjectCreated provisions no queue or notification', () => {
+    const { stack, parent } = setup();
+    new FileBucket(parent, 'uploads');
+    const template = Template.fromStack(stack);
+    template.resourceCountIs('AWS::SQS::Queue', 0);
+    template.resourceCountIs('Custom::S3BucketNotifications', 0);
+  });
+
+  test('rejects onObjectCreated on a bucket wrapped with fromExisting', () => {
+    const { parent } = setup();
+    assert.throws(
+      () => new FileBucket(parent, 'wrapped', {
+        bucket: FileBucket.fromExisting('existing'),
+        onObjectCreated: { handler: async () => {} },
+      }),
+      /onObjectCreated is not supported on a bucket wrapped with FileBucket\.fromExisting/,
+    );
+  });
 });

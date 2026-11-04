@@ -605,6 +605,51 @@ const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
 // FileBucket with versioning enabled
 const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: true, removalPolicy: 'destroy' });
 
+// FileBucket onObjectCreated - each handler records what it was notified of, so
+// e2e tests can see uploads (including direct presigned ones) trigger it.
+interface ObjectCreatedRecord {
+  path: string;
+  size: number;
+  versionId?: string;
+  receiveCount: number;
+  body: string | null;
+}
+const inboxEvents = new KVStore<ObjectCreatedRecord>(scope, 'inbox-events');
+const plainInboxEvents = new KVStore<ObjectCreatedRecord>(scope, 'plain-inbox-events');
+
+const inbox = new FileBucket(scope, 'inbox', {
+  removalPolicy: 'destroy',
+  onObjectCreated: {
+    prefix: 'incoming/',
+    handler: async (event, ctx) => {
+      // Read the notified version, not whatever is current now; key the record
+      // per upload so a duplicate delivery rewrites the same entry.
+      const file = await inbox.get(event.path, { versionId: event.versionId });
+      await inboxEvents.put(`${event.path}@${event.versionId}`, {
+        ...event,
+        receiveCount: ctx.receiveCount,
+        body: file ? file.body.toString() : null,
+      });
+    },
+  },
+});
+
+const plainInbox = new FileBucket(scope, 'plain-inbox', {
+  versioned: false,
+  removalPolicy: 'destroy',
+  onObjectCreated: {
+    suffix: '.txt',
+    handler: async (event, ctx) => {
+      const file = await plainInbox.get(event.path);
+      await plainInboxEvents.put(event.path, {
+        ...event,
+        receiveCount: ctx.receiveCount,
+        body: file ? file.body.toString() : null,
+      });
+    },
+  },
+});
+
 // AppSetting - Single configuration values backed by SSM Parameter Store
 // Scope SSM names by stack identity so parallel deploys don't collide.
 const ssmPrefix = `/${scope.fullId}`;
@@ -2587,6 +2632,38 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       await versionedBucket.delete(path, { versionId: v.versionId });
     }
     return { deleted: versions.length };
+  },
+
+  // ------------------------------------------------------------------------
+  // FileBucket onObjectCreated Tests
+  // ------------------------------------------------------------------------
+
+  async inboxPut(path: string, content: string) {
+    await inbox.put(path, content);
+    const [latest] = await inbox.listVersions(path);
+    return { versionId: latest.versionId };
+  },
+
+  async inboxPutUrl(path: string) {
+    return await inbox.putUrl(path);
+  },
+
+  async inboxLatestVersionId(path: string) {
+    const [latest] = await inbox.listVersions(path);
+    return latest ? latest.versionId : null;
+  },
+
+  async inboxEvent(path: string, versionId: string) {
+    return await inboxEvents.get(`${path}@${versionId}`);
+  },
+
+  async plainInboxPut(path: string, content: string) {
+    await plainInbox.put(path, content);
+    return { success: true };
+  },
+
+  async plainInboxEvent(path: string) {
+    return await plainInboxEvents.get(path);
   },
 
   // ------------------------------------------------------------------------

@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import { SqsDestination } from 'aws-cdk-lib/aws-s3-notifications';
+import { Queue } from 'aws-cdk-lib/aws-sqs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import { Annotations, Duration, RemovalPolicy } from 'aws-cdk-lib';
@@ -9,8 +11,12 @@ import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import { resolveKmsEncryption } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { FileBucketOptions, CorsRule, ExternalBucketRef, ExternalKmsKeyRef } from './types.js';
+import { AsyncJob } from '@aws-blocks/bb-async-job';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { FileBucketOptions, CorsRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectCreatedOptions } from './types.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
+import { OBJECT_CREATED_JOB_ID, objectCreatedJobHandler, validateObjectCreatedOptions } from './object-created.js';
+import type { S3NotificationMessage } from './object-created.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 import { BB_NAME } from './version.js';
 
@@ -22,6 +28,7 @@ export type {
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
+	ObjectCreatedOptions, ObjectCreatedEvent, ObjectCreatedContext,
 } from './types.js';
 
 /** Annotation-ID prefix for this block's synth warnings (matches the sibling storage blocks). */
@@ -59,6 +66,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.S3] } });
+
+		// Checked before the wrapped-bucket early return below, which skips every
+		// other option guard.
+		validateObjectCreatedOptions(this.fullId, options);
 
 		if (options?.bucket) {
 			// `fromExisting`: don't provision; bind to the pre-existing bucket and
@@ -216,7 +227,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			});
 		}
 
-		this.bucket = new s3.Bucket(this, 'bucket', {
+		const bucket = new s3.Bucket(this, 'bucket', {
 			bucketName,
 			blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
 			// SSE-KMS buckets enable S3 Bucket Keys, which cut per-request KMS
@@ -242,10 +253,41 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			})),
 			lifecycleRules: lifecycleRules.length > 0 ? lifecycleRules : undefined,
 		});
+		this.bucket = bucket;
 
 		// Also grants the runtime role encrypt/decrypt on the bucket's KMS key
 		// (dedicated or imported) when it uses SSE-KMS.
-		this.bucket.grantReadWrite(this.executionRole);
+		bucket.grantReadWrite(this.executionRole);
+
+		if (options?.onObjectCreated) {
+			this.notifyObjectCreated(bucket, options.onObjectCreated, options.logger);
+		}
+	}
+
+	/**
+	 * Deliver the bucket's `ObjectCreated` notifications to an internal AsyncJob,
+	 * which owns the queue, DLQ, retries and its consumption by this block's
+	 * compute (Lambda event source or container poller). The runtime layers build
+	 * the same child, so the handler resolves when its queue is drained.
+	 */
+	private notifyObjectCreated(bucket: s3.Bucket, onObjectCreated: ObjectCreatedOptions, logger?: ChildLogger): void {
+		new AsyncJob<S3NotificationMessage>(this, OBJECT_CREATED_JOB_ID, {
+			handler: objectCreatedJobHandler(onObjectCreated),
+			logger,
+		});
+		// Found by id: the composed AsyncJob is typed by its default entry, which
+		// has no CDK members. `instanceof` narrows without a cast and fails loud
+		// if the child ever moves.
+		const queue = this.node.findChild(OBJECT_CREATED_JOB_ID).node.tryFindChild('queue');
+		if (!(queue instanceof Queue)) {
+			throw new Error(`FileBucket "${this.fullId}": internal onObjectCreated AsyncJob has no queue.`);
+		}
+		// An empty prefix/suffix means "no filter"; S3 rejects a filter rule with
+		// neither set, so pass a filter only when one has a value.
+		const { prefix, suffix } = onObjectCreated;
+		const filters: s3.NotificationKeyFilter[] =
+			prefix || suffix ? [{ ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) }] : [];
+		bucket.addEventNotification(s3.EventType.OBJECT_CREATED, new SqsDestination(queue), ...filters);
 	}
 
 	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).

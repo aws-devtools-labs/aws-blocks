@@ -191,6 +191,54 @@ export interface FileBucketOptions {
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Run a handler whenever an object is created in this bucket, optionally only
+	 * for keys under a `prefix` and/or ending with a `suffix`.
+	 *
+	 * Fires for every way an object lands in the bucket: `put()`,
+	 * `restoreVersion()`, uploads through a `putUrl()` URL or a
+	 * `createUploadHandle()` handle, and writes by any other client with access
+	 * to the bucket. The handler runs in the background, after the write has
+	 * completed.
+	 *
+	 * On AWS, S3 sends an `ObjectCreated` event notification to a dedicated SQS
+	 * queue that the backend's compute consumes (the same delivery path as
+	 * `AsyncJob`). A handler that throws is retried, up to 3 attempts in total,
+	 * and the event then moves to a dead-letter queue. Locally, the mock runs the
+	 * handler asynchronously after each matching write, with the same retry count.
+	 *
+	 * **Delivery is at least once and unordered.** The handler can see the same
+	 * event twice, and events for two uploads to the same key can arrive in
+	 * either order. Read the notified version with
+	 * `get(event.path, { versionId: event.versionId })` rather than the latest
+	 * one, and write outputs keyed by path and version so that a duplicate
+	 * rewrites the same records and a late, older upload can't overwrite a newer
+	 * one's results.
+	 *
+	 * Not supported when `bucket` wraps an existing bucket (rejected at synth and
+	 * by the mock): S3 keeps a single notification configuration per bucket, which
+	 * other owners may already manage.
+	 *
+	 * @example
+	 * ```ts
+	 * const rows = new KVStore(scope, 'imported-rows');
+	 * const inbox = new FileBucket(scope, 'inbox', {
+	 *   onObjectCreated: {
+	 *     prefix: 'incoming/',
+	 *     suffix: '.csv',
+	 *     handler: async (event) => {
+	 *       const file = await inbox.get(event.path, { versionId: event.versionId });
+	 *       if (!file) return; // that version was permanently deleted since
+	 *       const upload = `${event.path}@${event.versionId}`;
+	 *       for (const [i, line] of file.body.toString().split('\n').entries()) {
+	 *         await rows.put(`${upload}:${i}`, line);
+	 *       }
+	 *     },
+	 *   },
+	 * });
+	 * ```
+	 */
+	onObjectCreated?: ObjectCreatedOptions;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -281,6 +329,43 @@ export type DeleteOptionsFor<O extends FileBucketOptions> =
  */
 export type GetUrlOptionsFor<O extends FileBucketOptions> =
 	O extends { versioned: false } ? GetUrlOptions : VersionedGetUrlOptions;
+
+// ── Object-created events ───────────────────────────────────────────────────
+
+/** Configuration for {@link FileBucketOptions.onObjectCreated}. */
+export interface ObjectCreatedOptions {
+	/** Only run the handler for keys that start with this prefix (for example `incoming/`). Default: every key. */
+	prefix?: string;
+	/** Only run the handler for keys that end with this suffix (for example `.csv`). Default: every key. */
+	suffix?: string;
+	/**
+	 * Called once per created object. Must tolerate duplicate and out-of-order
+	 * deliveries — see {@link FileBucketOptions.onObjectCreated}. A thrown error
+	 * retries the event.
+	 */
+	handler: (event: ObjectCreatedEvent, context: ObjectCreatedContext) => Promise<void>;
+}
+
+/** An object that was created in a FileBucket, passed to {@link ObjectCreatedOptions.handler}. */
+export interface ObjectCreatedEvent {
+	/** The object key — the same string to pass to `get()`. */
+	path: string;
+	/** Size of the created object, in bytes. */
+	size: number;
+	/**
+	 * The version this write created. Always set on a versioned bucket (the
+	 * default) and absent when `versioned: false`. Pass it to
+	 * `get(path, { versionId })` to read the version that was notified, not
+	 * whatever is current when the handler runs.
+	 */
+	versionId?: string;
+}
+
+/** Delivery metadata passed to {@link ObjectCreatedOptions.handler}. */
+export interface ObjectCreatedContext {
+	/** Delivery attempt for this event: `1` on the first delivery, higher on retries. */
+	receiveCount: number;
+}
 
 // ── Return types ────────────────────────────────────────────────────────────
 
