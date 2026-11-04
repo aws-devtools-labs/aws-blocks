@@ -5,8 +5,8 @@ const scope = new Scope('app');
 
 // AuthOIDC serves the stub IdP on sandbox deployments too (an e2e sandbox signs in through it).
 export const auth = new Auth(scope, 'e2e-auth', {
-	emailPassword: false,
-	oidcProviders: {
+	store: 'blocks',
+	providers: {
 		corp: stubIdp({
 
 		}),

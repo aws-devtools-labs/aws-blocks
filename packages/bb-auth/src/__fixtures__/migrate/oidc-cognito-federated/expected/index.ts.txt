@@ -10,7 +10,7 @@ const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
 
 export const auth = new Auth(scope, 'auth', {
 	emailPassword: false,
-	socialProviders: {
+	providers: {
 		// TODO(aws-blocks-auth-migrate): AuthOIDC federated through its own Cognito pool (child id `cognito-pool`); Auth uses `pool`, so the old pool and its
 		//   shadow users are deleted on deploy, and users sign in once more. Auth derives a NEW domain prefix by default:
 		//   re-register https://<new prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse in every IdP console.
@@ -20,17 +20,16 @@ export const auth = new Auth(scope, 'auth', {
 		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
 		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
 		google: {
+			type: 'google',
 			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
 			clientId: googleId,
 			clientSecret: googleSecret,
 		},
-	},
-	oidcProviders: {
 		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),
 		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
 		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
 		entra: {
-			federateVia: 'cognito',
+			type: 'oidc',
 			issuer: 'https://login.microsoftonline.com/tenant/v2.0',
 			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
 			clientId: entraId,

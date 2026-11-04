@@ -8,7 +8,7 @@ const secret = new AppSetting(scope, 'secret', { secret: true });
 
 export const auth = new Auth(scope, 'auth', {
 	emailPassword: false,
-	oidcProviders: {
+	providers: {
 		// TODO(aws-blocks-auth-migrate): AuthOIDC federated through its own Cognito pool (child id `cognito-pool`); Auth uses `pool`, so the old pool and its
 		//   shadow users are deleted on deploy, and users sign in once more. Auth derives a NEW domain prefix by default:
 		//   re-register https://<new prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse in every IdP console.
@@ -18,7 +18,7 @@ export const auth = new Auth(scope, 'auth', {
 		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
 		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
 		proto: {
-			federateVia: 'cognito',
+			type: 'oidc',
 			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
 			clientId: id,
 			clientSecret: secret,

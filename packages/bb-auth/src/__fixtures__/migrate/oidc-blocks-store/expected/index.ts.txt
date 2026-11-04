@@ -1,0 +1,32 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import { Auth, github, stubIdp } from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
+
+// Directly federated (the AuthOIDC default): no user pool, so the block moves to store: 'blocks'.
+export const auth = new Auth(scope, 'sso', {
+	store: 'blocks',
+	providers: {
+		// A public (PKCE-only) client: no secret.
+		okta: {
+			type: 'oidc',
+			issuer: 'https://dev-1.okta.com',
+			clientId: 'okta-client',
+		},
+		github: github({
+			clientId: 'gh-client',
+			clientSecret: githubSecret,
+		}),
+		local: stubIdp({
+
+		}),
+	},
+	allowBearerAuth: true,
+	redirects: {
+		postSignInPath: '/home',
+	},
+});
+
+export const authApi = auth.createApi();

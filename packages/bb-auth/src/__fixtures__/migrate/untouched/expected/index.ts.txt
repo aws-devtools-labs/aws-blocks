@@ -3,8 +3,8 @@ import { Scope } from '@aws-blocks/blocks';
 
 const scope = new Scope('app');
 export const auth = new Auth(scope, 'auth', {
-	emailPassword: false,
-	oidcProviders: { corp: stubIdp() },
+	store: 'blocks',
+	providers: { corp: stubIdp() },
 });
 
 export function expired(e: unknown): boolean {
