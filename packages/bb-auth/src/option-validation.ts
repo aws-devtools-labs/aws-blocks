@@ -35,11 +35,13 @@
  * with `store: 'blocks'`, `attributesRequestMethod` only on the default
  * Cognito store, and needs a `clientSecret` there. A key the same `type`
  * accepts on the other store is reported as a store conflict naming the store
- * it needs. The store value itself, a `type` the store does not accept, the
- * user-pool options a `'blocks'` block refuses and leftover provider maps are
- * `resolveOptions()`'s to reject (it runs right after this check, in every
- * layer); the walk skips an entry whose `type` its store does not accept, so
- * the resolver's message is the one reported.
+ * it needs. A removed key (`socialProviders`, `oidcProviders`, `samlProviders`,
+ * `federateVia`) is reported as unknown, with what replaced it as the hint.
+ * The store value itself, a `type` the store does not accept and the
+ * user-pool options a `'blocks'` block refuses are `resolveOptions()`'s to
+ * reject (it runs right after this check, in every layer); the walk skips an
+ * entry whose `type` its store does not accept, so the resolver's message is
+ * the one reported.
  *
  * Pure and dependency-free.
  *

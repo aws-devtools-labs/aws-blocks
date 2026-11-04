@@ -214,7 +214,8 @@ describe('resolveOptions — backstops for untyped callers', () => {
 			['admin', {}],
 			['mfa', 'required'],
 			['passkeys', { relyingPartyId: 'example.com', origins: [] }],
-			['emailPassword', false],
+			['emailPassword', true],
+			['emailPassword', {}],
 			['codeDelivery', async () => {}],
 		] as const) {
 			const options: unknown = { store: 'blocks', providers: { local: stubIdp() }, [key]: value };
@@ -232,6 +233,11 @@ describe('resolveOptions — backstops for untyped callers', () => {
 			users: { groups: [], attributes: [] },
 		};
 		assert.throws(() => resolveOptions(users as AuthOptions), /`users\.attributes` needs `store: 'cognito'`/);
+	});
+
+	it('accepts emailPassword: false on store: blocks (what the block is anyway)', () => {
+		const resolved = resolveOptions({ store: 'blocks', providers: { local: stubIdp() }, emailPassword: false });
+		assert.equal(resolved.emailPassword, false);
 	});
 
 	it('rejects a store: blocks block with no provider', () => {

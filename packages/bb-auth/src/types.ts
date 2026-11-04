@@ -509,8 +509,14 @@ export interface BlocksAuthOptions extends AuthCommonOptions {
 	 */
 	allowBearerAuth?: boolean;
 
-	/** Email + password needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	emailPassword?: ERROR_needs_store_cognito<'emailPassword'>;
+	/**
+	 * Email + password needs `store: 'cognito'`: a `'blocks'` block has no user pool.
+	 * `false` (what the block is anyway) is accepted, so options shared between
+	 * blocks can spell it out.
+	 */
+	// `false & {}`, not `false`: with a bare literal here, TypeScript reports a default-store block's
+	// unrelated option errors against this arm ("Property 'store' is missing").
+	emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
 	/** MFA needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
 	mfa?: ERROR_needs_store_cognito<'mfa'>;
 	/** Passkeys needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
@@ -1963,8 +1969,8 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
 	groups: GroupOf<O>[];
 	/** The user's attributes, keyed by the declared ones (see {@link AuthenticatedUser.attributes}). */
 	attributes: Partial<Record<ReadAttrOf<O>, string>>;
-	/** `'password'` for email + password sign-in, otherwise the federated provider id. */
-	signInProvider: 'password' | ProviderIdOf<O>;
+	/** `'password'` for email + password sign-in, otherwise the federated provider id (only the latter on a `store: 'blocks'` block). */
+	signInProvider: O extends { store: 'blocks' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
 	/** The name the sign-in UI shows ("Signed in as …"): see `AuthUser.displayName`. */
 	displayName: string;
 }
@@ -2025,8 +2031,11 @@ export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends 
 	 * the guards can still return it: for an access token another app client
 	 * of the pool issued (`allowBearerAuth`), and for a session issued before
 	 * email + password was turned off.
+	 *
+	 * A `store: 'blocks'` block has no password users, so its type is the
+	 * provider ids alone.
 	 */
-	signInProvider: 'password' | ProviderIdOf<O>;
+	signInProvider: O extends { store: 'blocks' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
 	/**
 	 * The provider's verified identity claims, for a user who signed in
 	 * through a `providers` entry of a `store: 'blocks'` block — what `AuthOIDC`'s user carried as `claims`. `sub` and `iss`

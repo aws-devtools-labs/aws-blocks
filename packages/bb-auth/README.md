@@ -353,7 +353,17 @@ const sso = new Auth(scope, 'sso', {
 export const ssoApi = sso.createApi();
 ```
 
-**What is checked when.** The compiler checks the combinations: with `store: 'blocks'`, `emailPassword`, `mfa`, `passkeys`, `admin`, `userPool`, `users.signInWith` and the other user-pool options are compile errors whose type names the fix (`ERROR_needs_store_cognito<'emailPassword'>`), and so is a `type: 'google'` or `type: 'saml'` entry; on the default store, `stubIdp()`, `github()` and a `type: 'oidc'` entry without `clientSecret` are compile errors; a leftover `socialProviders`, `oidcProviders`, `samlProviders` or `federateVia` is one too (`ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`). Autocomplete for `type:` lists only the chosen store's types. The constructor checks the same rules again at runtime (in `npm run dev`, at synth and in Lambda) with a readable message, and also what the compiler cannot see: options from a variable annotated `: AuthOptions`, built from JSON or env, or cast; a social entry keyed differently from its `type` (`providers: { gmail: { type: 'google', … } }`); and a `store: 'blocks'` block with no provider.
+The password-only `auth` block mounts no sign-in routes, so `sso` keeps the default `redirects`. Two blocks that **both** have `providers` (say Google on the default store and Okta on `store: 'blocks'`) would mount the same `/aws-blocks/auth/callback` and `/aws-blocks/auth/signout` routes, and the second one throws when the backend loads (in `npm run dev` and in Lambda; synth does not check it), naming both blocks. Give each its own paths, and register each block's callback URL with its provider:
+
+```typescript
+const sso = new Auth(scope, 'sso', {
+  store: 'blocks',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
+  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
+});
+```
+
+**What is checked when.** The compiler checks the combinations: with `store: 'blocks'`, `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool`, `users.signInWith` and the other user-pool options are compile errors whose type names the fix (`ERROR_needs_store_cognito<'emailPassword'>`), and so is a `type: 'google'` or `type: 'saml'` entry; on the default store, `stubIdp()`, `github()` and a `type: 'oidc'` entry without `clientSecret` are compile errors; a leftover `socialProviders`, `oidcProviders`, `samlProviders` or `federateVia` is one too (`ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`). Autocomplete for `type:` lists only the chosen store's types. The constructor checks the same rules again at runtime (in `npm run dev`, at synth and in Lambda) with a readable message, and also what the compiler cannot see: options from a variable annotated `: AuthOptions`, built from JSON or env, or cast; a social entry keyed differently from its `type` (`providers: { gmail: { type: 'google', … } }`); and a `store: 'blocks'` block with no provider.
 
 ### The sign-in methods
 
@@ -444,6 +454,8 @@ const auth = new Auth(scope, 'auth', {
   users: { groups: ['admin'] },
 });
 ```
+
+`stubIdp()`, like `github()` and `customOauth2()`, needs `store: 'blocks'`. On the default store TypeScript reports `Type 'StubProvider' is not assignable to type 'CognitoProvider'` … `Type '"stub"' is not assignable to type '"oidc"'` (`"oauth2"` for the other two): add `store: 'blocks'`, or put the provider in its own `store: 'blocks'` block.
 
 The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) only. Synthesizing any other deployment with a `stubIdp()` provider fails, so a backend module that is also deployed to production must choose its provider by deployment type. `getDeploymentType()` reports the same value at synth and in the deployed Lambda (`'local'`, `'sandbox'` or `'production'`), so both make the same choice.
 

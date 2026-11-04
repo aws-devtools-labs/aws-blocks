@@ -485,6 +485,40 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 		assert.deepStrictEqual(h.native.calls, []);
 	});
 
+	test("store: 'blocks' → the MFA and passkey methods answer 409 EmailPasswordNotEnabled (naming the store); no engine call", async () => {
+		const h = makeAuth({
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
+		const wide: MockAuth = h.auth;
+		const ctx = makeContext();
+		const mfa: Array<() => Promise<unknown>> = [
+			() => wide.setUpTotp(ctx),
+			() => wide.verifyTotpSetup(ctx, '123456'),
+			() => wide.getMfaPreference(ctx),
+			() => wide.updateMfaPreference(ctx, {}),
+		];
+		for (const call of mfa)
+			await assert.rejects(call(), {
+				name: AuthErrors.EmailPasswordNotEnabled,
+				status: 409,
+				message: /disabled on this Auth instance \(store: 'blocks'\)/,
+			});
+		const passkeys: Array<() => Promise<unknown>> = [
+			() => wide.startPasskeyRegistration(ctx),
+			() => wide.completePasskeyRegistration(ctx, '{}'),
+			() => wide.listPasskeys(ctx),
+			() => wide.deletePasskey(ctx, 'c'),
+		];
+		for (const call of passkeys)
+			await assert.rejects(call(), {
+				name: AuthErrors.EmailPasswordNotEnabled,
+				status: 409,
+				message: /disabled on this Auth instance \(store: 'blocks'\)/,
+			});
+		assert.deepStrictEqual(h.native.calls, []);
+	});
+
 	test('no federated provider → 409 NoFederatedProvider; unknown provider → 400 ProviderNotConfigured', async () => {
 		const none = makeAuth();
 		const wide: { getSignInUrl(ctx: unknown, p: string): Promise<string> } = {

@@ -1604,7 +1604,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	private nativeFor(method: string): NativeEngine {
 		if (!this.passwordEnabled) {
 			throw new ApiError(
-				`Auth.${method}() needs email + password sign-in, which is disabled on this Auth instance (emailPassword: false).`,
+				`Auth.${method}() needs email + password sign-in, which is disabled on this Auth instance (${this.config.store === 'blocks' ? "store: 'blocks'" : 'emailPassword: false'}).`,
 				409,
 				{ name: AuthErrors.EmailPasswordNotEnabled },
 			);
@@ -2128,14 +2128,20 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	}
 
 	private toUser(identity: SessionIdentity): AuthenticatedUser<O> {
-		const provider = identity.signInProvider;
+		const stored = identity.signInProvider;
+		// A configured provider id, else 'password'. A `'blocks'` block has no password users, so there a
+		// provider since removed from `providers` (an older session's) stays as stored. The cast: TypeScript
+		// cannot resolve `signInProvider`'s store-conditional type for a generic `O`.
+		const provider = (
+			stored !== 'password' && (this.config.store === 'blocks' || this.isProviderId(stored)) ? stored : 'password'
+		) as AuthenticatedUser<O>['signInProvider'];
 		const user: AuthenticatedUser<O> = {
 			userId: identity.userId,
 			username: identity.username,
 			userSub: identity.userSub,
 			groups: this.narrowGroups(identity.groups),
 			attributes: this.readAttributes(identity.attributes),
-			signInProvider: provider !== 'password' && this.isProviderId(provider) ? provider : 'password',
+			signInProvider: provider,
 			...(identity.claims ? { claims: Object.freeze({ ...identity.claims }) } : {}),
 			...(identity.federatedIdentity
 				? { federatedIdentity: Object.freeze({ ...identity.federatedIdentity }) }

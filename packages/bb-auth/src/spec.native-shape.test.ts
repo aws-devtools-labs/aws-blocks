@@ -199,7 +199,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		}
 		const providers = (b: Block) => [...(user(b).properties?.signInProvider?.enum ?? [])].sort();
 		for (const b of shared) assert.deepStrictEqual(providers(b), ['password'], b);
-		assert.deepStrictEqual(providers('federated'), ['okta', 'password']);
+		assert.deepStrictEqual(providers('federated'), ['okta'], "a `store: 'blocks'` block has no password users");
 		assert.deepStrictEqual(providers('mixed'), ['okta', 'password']);
 		const groups = user('attributes').properties?.groups as { items?: Schema } | undefined;
 		assert.deepStrictEqual(groups?.items?.enum, ['admins']);

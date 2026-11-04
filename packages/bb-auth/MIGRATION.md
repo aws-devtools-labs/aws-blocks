@@ -505,7 +505,7 @@ Before release, `Auth` configured providers through three records and a per-prov
 | `socialProviders: { google: { clientId, clientSecret } }` (also `facebook`, `amazon`, `apple`) | `providers: { google: { type: 'google', clientId, clientSecret } }` — keyed by its type |
 | `samlProviders: { corp: { metadataUrl } }` | `providers: { corp: { type: 'saml', metadataUrl } }` |
 | `oidcProviders: { entra: { federateVia: 'cognito', issuer, clientId, clientSecret } }` | `providers: { entra: { type: 'oidc', issuer, clientId, clientSecret } }` on the default store (`clientSecret` required) |
-| `oidcProviders: { okta: { issuer, clientId } }` (`federateVia: 'direct'`, the old default) with `emailPassword: false` | `store: 'blocks'`, `providers: { okta: { type: 'oidc', issuer, clientId } }` (`emailPassword` removed) |
+| `oidcProviders: { okta: { issuer, clientId } }` (`federateVia: 'direct'`, the old default) with `emailPassword: false` | `store: 'blocks'`, `providers: { okta: { type: 'oidc', issuer, clientId } }` (`emailPassword: false` may stay; it is accepted and changes nothing) |
 | `oidcProviders: { gh: github(…), local: stubIdp() }` | `store: 'blocks'`, `providers: { gh: github(…), local: stubIdp() }` |
 | email + password (or `mfa`, `passkeys`, `admin`, social, SAML) **and** a `federateVia: 'direct'` provider in one block | two blocks: the Cognito part as it was, and the direct providers in a new `Auth` block with `store: 'blocks'` and a new id |
 | `users: { groups, signInWith, … }` with only direct providers | `users: { groups }` (the other user-pool options need the default store) |

@@ -967,7 +967,7 @@ describe('Auth federation — synth-time checks', () => {
 			constructError({
 				providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: 'x' } },
 			}),
-			/Cognito is a confidential client/,
+			/`providers\.okta\.clientSecret` is required with `store: 'cognito'`.*confidential client/,
 		);
 	});
 

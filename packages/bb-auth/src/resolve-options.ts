@@ -149,7 +149,7 @@ function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Un
  *
  * @throws Error for an unknown `store`; for a leftover `socialProviders`,
  *   `oidcProviders` or `samlProviders`; for an option only a user pool gives
- *   meaning to on `store: 'blocks'` (`emailPassword`, `mfa`, `userPool`,
+ *   meaning to on `store: 'blocks'` (`emailPassword` other than `false`, `mfa`, `userPool`,
  *   `admin`, `users.<anything but groups>`, …) and for a `'blocks'` block with
  *   no provider; for a provider `type` the store does not accept (or none); and
  *   for a social entry keyed differently from its `type` (so two entries of one
@@ -173,7 +173,10 @@ export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
 	}
 
 	if (options.store === 'blocks') {
-		const cognitoOnly = setKeys(options, COGNITO_ONLY_KEYS);
+		// `emailPassword: false` states what a `'blocks'` block is anyway.
+		const cognitoOnly = setKeys(options, COGNITO_ONLY_KEYS).filter(
+			(key) => key !== 'emailPassword' || options.emailPassword !== false,
+		);
 		const userKeys = Object.keys(options.users ?? {}).filter((key) => key !== 'groups');
 		cognitoOnly.push(...userKeys.map((key) => `users.${key}`));
 		if (cognitoOnly.length > 0) {

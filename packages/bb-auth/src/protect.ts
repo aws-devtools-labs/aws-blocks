@@ -127,7 +127,9 @@ function assertNoSharedNames(namespace: string, publicNames: ReadonlySet<string>
  * comment): empty values of the right shape, never a real identity.
  */
 function discoveryUser<O extends AuthOptions>(): AuthenticatedUser<O> {
-	return { userId: '', username: '', userSub: '', groups: [], attributes: {}, signInProvider: 'password' };
+	// The cast: `signInProvider`'s store-conditional type does not resolve for a generic `O`.
+	const signInProvider = 'password' as AuthenticatedUser<O>['signInProvider'];
+	return { userId: '', username: '', userSub: '', groups: [], attributes: {}, signInProvider };
 }
 
 /**

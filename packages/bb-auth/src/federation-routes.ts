@@ -59,7 +59,14 @@
 
 import crypto from 'node:crypto';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
-import { ApiError, BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, type Scope } from '@aws-blocks/core';
+import {
+	ApiError,
+	BLOCKS_AUTH_PREFIX,
+	type BlocksContext,
+	RawRoute,
+	RawRouteErrors,
+	type Scope,
+} from '@aws-blocks/core';
 import { bearerAuthEnabled } from './cdk/contract.js';
 import { clearPendingAuth, hasPendingAuth, readPendingAuth } from './engines/pending-auth.js';
 import type {
@@ -452,14 +459,37 @@ function landingWithState(path: string, appState: string | undefined): string {
 
 // ── Mounting ────────────────────────────────────────────────────────────────
 
+/** The id of the `Auth` block that mounted federation routes at each base / sign-out path: named when another collides. */
+const mountedBy = new Map<string, string>();
+
 /**
  * Mount the federation routes on the `Auth` instance. Called by each runtime
  * entry after `AuthBase` is constructed, only when a provider is configured.
  *
+ * @throws Error when another block's federation routes already use these
+ *   paths (two federated blocks on the default `redirects`): it names both
+ *   blocks and `redirects.callbackPath` / `signOutPath`.
  * @internal
  */
 export function mountFederationRoutes(host: FederationRouteHost): void {
 	const paths = federationRoutePaths(host.options);
+	try {
+		mountRoutes(host, paths);
+	} catch (e) {
+		if (!(e instanceof Error) || e.name !== RawRouteErrors.DuplicateRoute) throw e;
+		const other = mountedBy.get(paths.base) ?? mountedBy.get(paths.signOut);
+		throw new Error(
+			`Auth '${host.scope.id}': its sign-in routes (${paths.base}/…, ${paths.signOut}) are already mounted by ` +
+				`${other ? `Auth '${other}'` : 'another block'}. Each Auth block with \`providers\` needs its own ` +
+				`\`redirects.callbackPath\` and \`redirects.signOutPath\`, e.g. \`redirects: { callbackPath: '${BLOCKS_AUTH_PREFIX}/${host.scope.id}/callback', ` +
+				`signOutPath: '${BLOCKS_AUTH_PREFIX}/${host.scope.id}/signout' }\` (${e.message}).`,
+		);
+	}
+	mountedBy.set(paths.base, host.scope.id);
+	mountedBy.set(paths.signOut, host.scope.id);
+}
+
+function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): void {
 	const postSignIn = paths.postSignIn;
 	const postSignOut = paths.postSignOut;
 	const crossDomain = host.options.session?.crossDomain ?? false;

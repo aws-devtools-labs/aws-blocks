@@ -826,6 +826,12 @@ function wrongStoreOptions() {
 	// Cognito-only options under `store: 'blocks'`.
 	// @ts-expect-error — ERROR_needs_store_cognito<'emailPassword'>
 	new Auth(scope, 'b-pw', { store: 'blocks', providers: { okta }, emailPassword: {} });
+	// @ts-expect-error — ERROR_needs_store_cognito<'emailPassword'>
+	new Auth(scope, 'b-pw-true', { store: 'blocks', providers: { okta }, emailPassword: true });
+	// `false` is what a `'blocks'` block is anyway: accepted, and the password methods stay gated.
+	const pwOff = new Auth(scope, 'b-pw-false', { store: 'blocks', providers: { okta }, emailPassword: false });
+	// @ts-expect-error — no email + password on a `'blocks'` block
+	void pwOff.signUp('a', 'b');
 	// @ts-expect-error — ERROR_needs_store_cognito<'mfa'>
 	new Auth(scope, 'b-mfa', { store: 'blocks', providers: { okta }, mfa: 'optional' });
 	new Auth(scope, 'b-passkeys', {

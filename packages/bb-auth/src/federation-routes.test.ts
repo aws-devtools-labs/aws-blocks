@@ -181,6 +181,32 @@ describe('route table', () => {
 			/must be a path under '\/aws-blocks\/auth\/'/,
 		);
 	});
+	test('two blocks with providers on the default paths: the second names both blocks and the redirects to set', () => {
+		const scope = unique();
+		new Auth(scope, 'auth'); // password only: mounts no sign-in routes
+		new Auth(scope, 'sso', { store: 'blocks', providers: { corp: stubIdp() } });
+		assert.throws(
+			() =>
+				new Auth(scope, 'partners', {
+					store: 'blocks',
+					providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
+				}),
+			(e: Error) => {
+				assert.match(e.message, /^Auth 'partners': .* already mounted by Auth 'sso'\./);
+				assert.match(e.message, /`redirects\.callbackPath` and `redirects\.signOutPath`/);
+				assert.match(e.message, /callbackPath: '\/aws-blocks\/auth\/partners\/callback'/);
+				return true;
+			},
+		);
+		new Auth(scope, 'partners2', {
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
+			redirects: {
+				callbackPath: '/aws-blocks/auth/partners2/callback',
+				signOutPath: '/aws-blocks/auth/partners2/signout',
+			},
+		});
+	});
 });
 
 describe('relay state envelope — the native SDKs’ wire format', () => {
