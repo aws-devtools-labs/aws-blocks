@@ -21,7 +21,7 @@ class EncryptedFileKeyValueStoreTest {
 
     private val root: File = Files.createTempDirectory("blocks-kv-test").toFile()
 
-    private fun store() = EncryptedFileKeyValueStore("cookies") { root }
+    private fun store() = EncryptedFileKeyValueStore("cookies", root)
 
     private val storageDir get() = File(root, "cookies")
 
@@ -65,7 +65,7 @@ class EncryptedFileKeyValueStoreTest {
         // neither could read what the other wrote.
         File(storageDir, ".key").exists() shouldBe true
         store.put("jar", "after")
-        EncryptedFileKeyValueStore("cookies") { root }.get("jar") shouldBe "after"
+        EncryptedFileKeyValueStore("cookies", root).get("jar") shouldBe "after"
     }
 
     @Test
@@ -176,7 +176,7 @@ class EncryptedFileKeyValueStoreTest {
                 pool.submit {
                     start.await()
                     runBlocking {
-                        EncryptedFileKeyValueStore("cookies") { root }.put("entry-$index", "value-$index")
+                        EncryptedFileKeyValueStore("cookies", root).put("entry-$index", "value-$index")
                     }
                 }
             }

@@ -5,7 +5,7 @@ import java.io.File
 
 /** Without a location the signed-in session would be forgotten every time the app restarts. */
 actual fun platformConfig(): BlocksPlatformConfig = BlocksPlatformConfig(
-    storageLocation = { applicationDataDirectory("BlocksKmpExample") },
+    storageLocation = applicationDataDirectory("BlocksKmpExample"),
 )
 
 /**

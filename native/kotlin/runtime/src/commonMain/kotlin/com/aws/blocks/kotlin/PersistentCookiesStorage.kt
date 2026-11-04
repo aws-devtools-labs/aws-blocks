@@ -14,15 +14,19 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 
 /** The name the cookie jar takes within the storage a target gives it. */
-private const val COOKIE_STORE_NAME = "cookies"
+internal const val COOKIE_STORE_NAME = "cookies"
 
 /**
- * The cookie jar for a client configured with [platformConfig], persisted through whatever
- * storage that target resolves to. On the JVM that is the location the application supplied, or
- * memory alone when it supplied none.
+ * The cookie jar for a client configured with [platformConfig], persisted through whatever storage
+ * that target resolves to. On the JVM that is the location the application supplied, or memory
+ * alone when it supplied none.
+ *
+ * **Clients that persist to the same storage get the same jar.** A jar holds its cookies in memory
+ * and mirrors the whole set on write, so two jars over one store do not interleave: whichever
+ * writes second replaces what the other had added rather than adding to it. Sharing is what keeps
+ * two instances — an environment switcher, say — from silently dropping each other's sessions.
  */
-internal fun cookieJar(platformConfig: BlocksPlatformConfig): PersistentCookiesStorage =
-    PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, platformConfig))
+internal expect fun cookieJar(platformConfig: BlocksPlatformConfig): PersistentCookiesStorage
 
 /**
  * A [CookiesStorage] that keeps cookies in memory and mirrors the whole jar to [store] under a
@@ -96,9 +100,10 @@ internal class PersistentCookiesStorage(
         if (cookie.name.isBlank()) return
         // A `Domain` has to be read before `fillDefaults` substitutes the request host for it.
         // Absent, the cookie is host-only; present, it may only widen the cookie to a domain the
-        // responding host itself belongs to. One jar is shared by every client in the process, so
-        // without that check a response from any host could store a cookie that later requests to
-        // an unrelated host would send.
+        // responding host itself belongs to. One jar serves every host its clients talk to -- the
+        // backend, and an identity provider's domain on a redirect -- so without that check a
+        // response from any of them could store a cookie that later requests to an unrelated host
+        // would send.
         val domain = cookie.domain?.takeUnless { it.isBlank() }
         if (domain != null && !requestUrl.host.isWithin(domain)) return
         mutex.withLock {
@@ -139,10 +144,11 @@ internal class PersistentCookiesStorage(
     }
 
     /**
-     * Deliberately empty. Ktor's `HttpCookies` closes its storage when its client closes, and
-     * there is nothing to release: the jar is held in memory and its store keeps no handle open.
-     * A close also has to leave the jar usable, because [Blocks.clearStoredState] reaches it after
-     * the instance has closed its client.
+     * Deliberately empty, and it has to be. Ktor's `HttpCookies` closes its storage when its
+     * client closes, but a jar is shared by every client persisting to the same storage, so
+     * releasing anything here would take it from the ones still using it. There is also nothing
+     * to release: the jar is held in memory and its store keeps no handle open. And
+     * [Blocks.clearStoredState] reaches the jar after the instance has closed its client.
      */
     override fun close() {}
 

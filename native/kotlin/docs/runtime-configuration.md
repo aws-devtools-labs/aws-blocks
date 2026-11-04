@@ -78,7 +78,7 @@ val blocks = Blocks(
     BlocksConfig(
         server = Servers.prod,
         platformConfig = BlocksPlatformConfig(
-            storageLocation = { applicationDataDirectory("MyApp") },
+            storageLocation = applicationDataDirectory("MyApp"),
         ),
     ),
 )
@@ -128,7 +128,7 @@ val blocks = Blocks(BlocksConfig(server = Servers.prod, platformConfig = platfor
 
 // desktopMain — without this, a restart signs the user out
 actual fun platformConfig() = BlocksPlatformConfig(
-    storageLocation = { applicationDataDirectory("MyApp") },
+    storageLocation = applicationDataDirectory("MyApp"),
 )
 
 // androidMain and iosMain — the OS already isolates storage per application

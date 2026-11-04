@@ -29,7 +29,7 @@ class JvmStorageLocationTest {
 
     /** A jar as a freshly launched application would build one, so each call stands in for a launch. */
     private fun jarIn(location: File) = PersistentCookiesStorage(
-        platformKeyValueStore("cookies", BlocksPlatformConfig(storageLocation = { location })),
+        platformKeyValueStore("cookies", BlocksPlatformConfig(storageLocation = location)),
     )
 
     @Test

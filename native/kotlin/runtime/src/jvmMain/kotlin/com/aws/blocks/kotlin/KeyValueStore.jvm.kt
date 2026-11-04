@@ -29,15 +29,16 @@ internal actual fun platformKeyValueStore(name: String, platformConfig: BlocksPl
         ?: InMemoryKeyValueStore()
 
 /**
- * Stores each entry as an AES-GCM encrypted file under `<[location]>/<[name]>`, with the key in
+ * Stores each entry as an AES-GCM encrypted file under `<[directory]>/<[name]>`, with the key in
  * `.key` in the same directory.
  *
- * [location] is already private to the application that supplied it, so the store names its
- * entries directly within it rather than inserting a directory of its own.
+ * [directory] is already private to the application that supplied it, so the store names its
+ * entries directly within it rather than inserting a directory of its own. It is resolved on
+ * first use, off the calling thread, so creating it is not the caller's concern.
  */
 internal class EncryptedFileKeyValueStore(
     private val name: String,
-    private val location: BlocksStorageLocation,
+    private val directory: File,
 ) : KeyValueStore {
 
     private companion object {
@@ -52,7 +53,7 @@ internal class EncryptedFileKeyValueStore(
     }
 
     private val storageDir: Path by lazy {
-        val dir = File(location.directory(), name).toPath()
+        val dir = File(directory, name).toPath()
         Files.createDirectories(dir)
         restrictToOwner(dir, directory = true)
         dir

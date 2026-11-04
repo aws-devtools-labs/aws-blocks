@@ -29,12 +29,20 @@ class JvmBlocksStorageTest {
     fun cleanUp() {
         appA.deleteRecursively()
         appB.deleteRecursively()
+        relaunch()
     }
+
+    /**
+     * Stands in for a relaunched process. Clients persisting to one location share a jar for the
+     * life of the process, so without this a "later instance" would read the jar the earlier one
+     * still holds in memory and prove nothing about what reached storage.
+     */
+    private fun relaunch() = forgetCookieJars()
 
     private val server = BlocksServer(name = "test", url = "https://example.com/aws-blocks/api")
 
     /** Answers every call with a session cookie, and records the cookies it was sent. */
-    private class Backend {
+    private class Backend(private val setCookie: String = "session=a-session; Path=/") {
         val received = mutableListOf<HttpRequestData>()
 
         fun engine() = MockEngine { request ->
@@ -44,7 +52,7 @@ class JvmBlocksStorageTest {
                 status = HttpStatusCode.OK,
                 headers = headersOf(
                     HttpHeaders.ContentType to listOf("application/json"),
-                    HttpHeaders.SetCookie to listOf("session=a-session; Path=/"),
+                    HttpHeaders.SetCookie to listOf(setCookie),
                 ),
             )
         }
@@ -54,13 +62,44 @@ class JvmBlocksStorageTest {
         blocks.client().execute(BlocksRequest(method = "api.greet", params = emptyList(), id = 1))
     }
 
-    private fun blocksIn(location: File, backend: Backend): Blocks = Blocks(
+    private fun blocksIn(
+        location: File,
+        backend: Backend,
+        server: BlocksServer = this.server,
+    ): Blocks = Blocks(
         BlocksConfig(
             server = server,
-            platformConfig = BlocksPlatformConfig(storageLocation = { location }),
+            platformConfig = BlocksPlatformConfig(storageLocation = location),
         ),
         backend.engine(),
     )
+
+    @Test
+    fun `two instances at one location do not discard each other's cookies`() = runTest {
+        // An environment switcher: two instances, two backends, one application directory. Each
+        // holds its jar in memory and mirrors the whole thing on write, so unless they share that
+        // jar the second write replaces the first instance's cookies rather than adding to them.
+        val hostA = BlocksServer(name = "a", url = "https://a.example.com/aws-blocks/api")
+        val hostB = BlocksServer(name = "b", url = "https://b.example.com/aws-blocks/api")
+
+        val a = blocksIn(appA, Backend("session=from-a; Path=/"), hostA)
+        val b = blocksIn(appA, Backend("session=from-b; Path=/"), hostB)
+        call(a)
+        call(b)
+        // A writes again from the state it has held since its own first call, which is where a jar
+        // it does not share with B loses B's cookie.
+        call(a)
+        a.close()
+        b.close()
+        // Read it back from storage rather than from the jar they shared, so this covers the
+        // merged jar reaching disk as well as the two instances agreeing on it.
+        relaunch()
+
+        val next = Backend("session=from-b; Path=/")
+        blocksIn(appA, next, hostB).use { call(it) }
+
+        next.received.single().headers[HttpHeaders.Cookie] shouldBe "session=from-b"
+    }
 
     @Test
     fun `an instance persists its session to the location its configuration names`() = runTest {
@@ -73,6 +112,7 @@ class JvmBlocksStorageTest {
     @Test
     fun `a later instance at the same location resumes the session`() = runTest {
         blocksIn(appA, Backend()).use { call(it) }
+        relaunch()
 
         val next = Backend()
         blocksIn(appA, next).use { call(it) }
@@ -83,6 +123,7 @@ class JvmBlocksStorageTest {
     @Test
     fun `an instance at a different location does not see the session`() = runTest {
         blocksIn(appA, Backend()).use { call(it) }
+        relaunch()
 
         val other = Backend()
         blocksIn(appB, other).use { call(it) }
@@ -106,6 +147,7 @@ class JvmBlocksStorageTest {
             call(blocks)
             blocks.clearStoredState()
         }
+        relaunch()
 
         val next = Backend()
         blocksIn(appA, next).use { call(it) }
