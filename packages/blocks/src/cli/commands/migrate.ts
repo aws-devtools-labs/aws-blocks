@@ -192,14 +192,31 @@ const STACK_ID_WRAPPERS: readonly WrapperFile[] = ['deploy.ts', 'destroy.ts'];
 const STACK_ID_HINT =
 	'create .blocks/config.json with {"stackId": "<id>"}, where "<id>-prod" must equal the name of the production stack that your aws-blocks/index.cdk.ts defines (an app whose index.cdk.ts hard-codes "my-blocks-stack-prod" uses {"stackId": "my-blocks-stack"}), commit it, and run cdk-blocks migrate again';
 
-/** True when `.blocks/config.json` has the stackId that `cdk-blocks deploy` and `cdk-blocks destroy` need. */
-function hasStackId(root: string): boolean {
+/**
+ * Why `.blocks/config.json` lacks the stackId that `cdk-blocks deploy` and
+ * `cdk-blocks destroy` need, and how to fix it; `null` when it has one. A file
+ * that exists but does not parse is not a missing file: say so, as core's
+ * `getStackId` and `cdk-blocks whoami` do.
+ */
+function stackIdProblem(root: string): string | null {
+	const path = join(root, '.blocks', 'config.json');
+	let text: string | undefined;
 	try {
-		const config = JSON.parse(readFileSync(join(root, '.blocks', 'config.json'), 'utf-8')) as { stackId?: unknown };
-		return typeof config.stackId === 'string' && config.stackId !== '';
-	} catch {
-		return false;
+		text = unlessGone(() => readFileSync(path, 'utf-8'));
+	} catch (error) {
+		return `.blocks/config.json cannot be read (${(error as Error).message}): fix ${path}, then run cdk-blocks migrate again`;
 	}
+	if (text === undefined) return `this app has no .blocks/config.json: ${STACK_ID_HINT}`;
+	let config: unknown;
+	try {
+		config = JSON.parse(text);
+	} catch (error) {
+		return `.blocks/config.json is not valid JSON (${(error as Error).message}): fix ${path}, then run cdk-blocks migrate again`;
+	}
+	const stackId = (config as { stackId?: unknown } | null)?.stackId;
+	return typeof stackId === 'string' && stackId !== ''
+		? null
+		: `.blocks/config.json has no string "stackId": ${STACK_ID_HINT}`;
 }
 
 const SCRIPTS_DIR = join('aws-blocks', 'scripts');
@@ -686,7 +703,8 @@ export function planMigration(
 	const byFile = new Map(wrappers.map((w) => [w.file, w]));
 	const result: MigrateResult = { changed: [], removed: [], kept: [], scriptsRewritten: {}, devConfig: null };
 	const scripts = { ...(pkg.scripts ?? {}) };
-	const stackless = hasStackId(root) ? [] : STACK_ID_WRAPPERS;
+	const stackIdIssue = stackIdProblem(root);
+	const stackless = stackIdIssue === null ? [] : STACK_ID_WRAPPERS;
 
 	for (const [name, value] of Object.entries(scripts)) {
 		// Own keys only: a script whose value is "toString" or "constructor" is not a generated command.
@@ -705,7 +723,7 @@ export function planMigration(
 			if (stackless.includes(rewrite.wrapper)) {
 				result.kept.push({
 					file: `package.json#scripts.${name}`,
-					reason: `"${rewrite.alias}" needs "stackId" in .blocks/config.json, which this app lacks: ${STACK_ID_HINT}`,
+					reason: `"${rewrite.alias}" needs "stackId" in .blocks/config.json, but ${stackIdIssue}`,
 				});
 				continue;
 			}
@@ -767,7 +785,7 @@ export function planMigration(
 		if (wrapper.generated && stackless.includes(wrapper.file)) {
 			result.kept.push({
 				file: wrapper.path,
-				reason: `generated, but kept until .blocks/config.json has the "stackId" that the cdk-blocks deploy and destroy commands need: ${STACK_ID_HINT}`,
+				reason: `generated, but kept: the cdk-blocks deploy and destroy commands need "stackId" in .blocks/config.json, but ${stackIdIssue}`,
 			});
 		}
 	}

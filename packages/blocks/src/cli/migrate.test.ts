@@ -661,6 +661,7 @@ describe('cdk-blocks migrate', () => {
 		]);
 		for (const { file, reason } of kept) {
 			assert.match(reason, /\.blocks\/config\.json.*"stackId"/, file);
+			assert.match(reason, /but this app has no \.blocks\/config\.json: create \.blocks\/config\.json/, file);
 			// The stack that cdk-blocks deploy and destroy name must be the one the CDK app defines.
 			assert.match(
 				reason,
@@ -699,7 +700,7 @@ describe('cdk-blocks migrate', () => {
 		]);
 		assert.match(
 			result.kept.find((k: { file: string }) => k.file === 'package.json#scripts.deploy').reason,
-			/"cdk-blocks deploy"/,
+			/^"cdk-blocks deploy" needs "stackId" in \.blocks\/config\.json, but \.blocks\/config\.json has no string "stackId": create/,
 		);
 		assert.strictEqual(result.scriptsRewritten.sandbox.to, 'cdk-blocks sandbox', 'the other scripts migrate');
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
@@ -710,6 +711,27 @@ describe('cdk-blocks migrate', () => {
 		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
 		assert.strictEqual(readPkg(root).scripts.destroy, 'cdk-blocks destroy');
 		assert.deepStrictEqual(scriptsDir(root), []);
+	});
+
+	it('tells a .blocks/config.json that is not valid JSON from a missing one, and keeps deploy and destroy', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.files['.blocks/config.json'] = '{ "stackId": "my-app-a1b2c3", }\n';
+		});
+		const path = join(root, '.blocks', 'config.json');
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		const kept = keptReasons(run.stdout);
+		assert.deepStrictEqual(
+			kept.map(([file]) => file),
+			['aws-blocks/scripts/deploy.ts', 'aws-blocks/scripts/destroy.ts', 'package.json#scripts.deploy', 'package.json#scripts.destroy'],
+		);
+		for (const [file, reason] of kept) {
+			assert.match(reason, /, but \.blocks\/config\.json is not valid JSON \(.+\): fix /, file);
+			assert.ok(reason.endsWith(`fix ${path}, then run cdk-blocks migrate again`), reason);
+			assert.doesNotMatch(reason, /create \.blocks\/config\.json/, file);
+		}
+		assert.strictEqual(readPkg(root).scripts.sandbox, 'cdk-blocks sandbox', 'the other scripts migrate');
+		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
 	});
 
 	it('migrates the amplify overlay and keeps its client generator', async () => {
