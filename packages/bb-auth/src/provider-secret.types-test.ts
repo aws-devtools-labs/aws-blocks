@@ -42,17 +42,18 @@ declare const plainScope: Scope;
 function providerSecretsAccepted() {
 	// A `Secret` and an `AppSetting` both fit every provider-secret slot.
 	new Auth(scope, 'social', {
-		socialProviders: {
-			google: { clientId: 'g', clientSecret: googleSecret },
-			facebook: { clientId: 'f', clientSecret: named },
-			amazon: { clientId: 'a', clientSecret: setting },
-			apple: { clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: existing },
+		providers: {
+			google: { type: 'google', clientId: 'g', clientSecret: googleSecret },
+			facebook: { type: 'facebook', clientId: 'f', clientSecret: named },
+			amazon: { type: 'amazon', clientId: 'a', clientSecret: setting },
+			apple: { type: 'apple', clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: existing },
+			okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: 'o', clientSecret: writable },
 		},
 	});
 	new Auth(scope, 'oidc', {
-		oidcProviders: {
-			okta: { issuer: 'https://dev-1.okta.com', clientId: 'o', clientSecret: writable, federateVia: 'cognito' },
-			entra: { issuer: 'https://login.example.com', clientId: 'e', clientSecret: googleSecret },
+		store: 'blocks',
+		providers: {
+			entra: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'e', clientSecret: googleSecret },
 			gh: github({ clientId: 'Iv1.abc', clientSecret: googleSecret }),
 			custom: customOauth2({
 				name: 'custom',
@@ -76,15 +77,24 @@ function providerSecretsAccepted() {
 }
 
 function providerSecretsRefused() {
-	// @ts-expect-error a plain string is never a provider secret: it would be committed to source.
-	const literal: AuthOptions = { socialProviders: { google: { clientId: 'g', clientSecret: 'plain-text' } } };
-	// @ts-expect-error a `Secret` with a schema holds JSON, not the single string a provider needs.
-	const structured: AuthOptions = { socialProviders: { google: { clientId: 'g', clientSecret: jsonSecret } } };
+	const literal: AuthOptions = {
+		// @ts-expect-error a plain string is never a provider secret: it would be committed to source.
+		providers: { google: { type: 'google', clientId: 'g', clientSecret: 'plain-text' } },
+	};
+	const structured: AuthOptions = {
+		// @ts-expect-error a `Secret` with a schema holds JSON, not the single string a provider needs.
+		providers: { google: { type: 'google', clientId: 'g', clientSecret: jsonSecret } },
+	};
+	const direct: AuthOptions = {
+		store: 'blocks',
+		// @ts-expect-error a plain string is not a secret on the 'blocks' store either.
+		providers: { okta: { type: 'oidc', issuer: 'https://x.example', clientId: 'o', clientSecret: 'plain-text' } },
+	};
 	// @ts-expect-error a KVStore is not a secret: its `get(key)` takes an argument.
 	const kv: ProviderSecretRef = store;
 	// @ts-expect-error a plain Scope has no `get()`.
 	const bare: ProviderSecretRef = plainScope;
-	void [literal, structured, kv, bare];
+	void [literal, structured, direct, kv, bare];
 }
 
 void [providerSecretsAccepted, providerSecretsRefused];

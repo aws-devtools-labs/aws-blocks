@@ -27,6 +27,7 @@ import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import type {
 	AdminActionGate,
 	AdminDisabled,
+	AdminDisabledOnBlocks,
 	AdminGetterOf,
 	AdminSurface,
 	AnySignInNextStep,
@@ -35,11 +36,14 @@ import type {
 	AuthFlowOf,
 	AuthMockOptions,
 	AuthOptions,
+	BlocksAuthOptions,
+	CognitoAuthOptions,
 	DeviceRecord,
 	EmailPasswordEnabled,
 	ERROR_EMAIL_is_not_in_mfa_types,
 	ERROR_SMS_is_not_in_mfa_types,
 	ERROR_TOTP_is_not_in_mfa_types,
+	FederatedActionNameOf,
 	FederationGate,
 	GroupOf,
 	HasFederatedProvider,
@@ -56,8 +60,9 @@ import type {
 	SignInOptions,
 	SignInResult,
 	SignInUrlOptions,
+	UserCandidate,
 } from './index.mock.js';
-import { Auth } from './index.mock.js';
+import { Auth, customOauth2, github, stubIdp } from './index.mock.js';
 import type { AUTH_OPTIONS_SHAPE } from './option-validation.js';
 
 declare const scope: ScopeParent;
@@ -80,13 +85,16 @@ type OptionsOf<A> = A extends Auth<infer O> ? O : never;
 type PasswordOff = [ERROR_emailPassword_is_disabled_on_this_Auth_instance: never];
 type FederationOff = [ERROR_no_federated_provider_is_configured: never];
 
-const okta = { issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' };
+/** An OIDC provider of a `store: 'blocks'` block: verified by the backend, so no client secret is needed. */
+const okta = { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' } as const;
+/** The same IdP federated through Cognito (the default store), which needs a client secret. */
+const oktaViaCognito = { ...okta, clientSecret: oktaSecret };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // (1) PasswordGate on — the password methods are callable normally.
 // ─────────────────────────────────────────────────────────────────────────────
 async function passwordGateOn() {
-	const auth = new Auth(scope, 'pw-on', { oidcProviders: { okta } });
+	const auth = new Auth(scope, 'pw-on', { providers: { okta: oktaViaCognito } });
 	await auth.signIn('alice', 'pw', context);
 	await auth.signIn('alice', 'pw', context, { preferredChallenge: 'PASSWORD' });
 	await auth.signUp('alice', 'pw');
@@ -111,7 +119,7 @@ async function passwordGateOn() {
 //     diagnostic text is asserted in gate-diagnostics.test.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 async function passwordGateOff() {
-	const auth = new Auth(scope, 'pw-off', { emailPassword: false, oidcProviders: { okta } });
+	const auth = new Auth(scope, 'pw-off', { emailPassword: false, providers: { okta: oktaViaCognito } });
 	type _gate = Expect<Equal<PasswordGate<OptionsOf<typeof auth>>, PasswordOff>>;
 	type _signInParams = Expect<Equal<Parameters<typeof auth.signIn>, [string, string, BlocksContext, never]>>;
 
@@ -142,7 +150,7 @@ async function passwordGateOff() {
 // (3) FederationGate on — getSignInUrl is callable normally.
 // ─────────────────────────────────────────────────────────────────────────────
 async function federationGateOn() {
-	const auth = new Auth(scope, 'fed-on', { oidcProviders: { okta } });
+	const auth = new Auth(scope, 'fed-on', { providers: { okta: oktaViaCognito } });
 	const url: string = await auth.getSignInUrl(context, 'okta');
 	await auth.getSignInUrl(context, 'okta', { redirectPath: '/home' });
 	void url;
@@ -179,17 +187,12 @@ async function federationGateOff() {
 // ─────────────────────────────────────────────────────────────────────────────
 async function providerIdNarrowing() {
 	const auth = new Auth(scope, 'ids', {
-		socialProviders: { google: { clientId: 'g', clientSecret: googleSecret } },
-		oidcProviders: {
-			okta,
-			entra: {
-				issuer: 'https://login.example.com',
-				clientId: 'e',
-				federateVia: 'cognito',
-				clientSecret: oktaSecret,
-			},
+		providers: {
+			google: { type: 'google', clientId: 'g', clientSecret: googleSecret },
+			okta: oktaViaCognito,
+			entra: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'e', clientSecret: oktaSecret },
+			partner: { type: 'saml', metadataUrl: 'https://partner.example.com/saml' },
 		},
-		samlProviders: { partner: { metadataUrl: 'https://partner.example.com/saml' } },
 	});
 	await auth.getSignInUrl(context, 'okta');
 	await auth.getSignInUrl(context, 'google');
@@ -202,11 +205,28 @@ async function providerIdNarrowing() {
 	const user = await auth.requireAuth(context);
 	type _provider = Expect<Equal<typeof user.signInProvider, 'password' | 'google' | 'okta' | 'entra' | 'partner'>>;
 
-	// `federateVia: 'cognito'` needs a client secret (Cognito is a confidential client);
-	// the default direct engine does not (public / PKCE-only clients are fine).
-	// @ts-expect-error — clientSecret is required with federateVia: 'cognito'.
-	new Auth(scope, 'ids-2', { oidcProviders: { okta: { ...okta, federateVia: 'cognito' } } });
-	new Auth(scope, 'ids-3', { oidcProviders: { okta: { ...okta, federateVia: 'direct' } } });
+	// The same on a `store: 'blocks'` block, whatever builds the entry.
+	const direct = new Auth(scope, 'ids-blocks', {
+		store: 'blocks',
+		providers: { okta, gh: github({ clientId: 'Iv1.abc', clientSecret: googleSecret }), local: stubIdp() },
+	});
+	await direct.getSignInUrl(context, 'gh');
+	await direct.getSignInUrl(context, 'local', { redirectPath: '/home' });
+	// @ts-expect-error — 'okat' (typo) is not a configured provider.
+	await direct.getSignInUrl(context, 'okat');
+	type _directIds = Expect<Equal<ProviderIdOf<OptionsOf<typeof direct>>, 'okta' | 'gh' | 'local'>>;
+
+	// Through Cognito an OIDC provider needs a client secret (Cognito is a
+	// confidential client); verified by the backend it does not (public /
+	// PKCE-only clients are fine).
+	new Auth(scope, 'ids-2', {
+		// @ts-expect-error — clientSecret is required on the default (Cognito) store.
+		providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' } },
+	});
+	new Auth(scope, 'ids-3', {
+		store: 'blocks',
+		providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' } },
+	});
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -259,15 +279,28 @@ function varianceGuard() {
 	takesWide(new Auth(scope, 'v-attrs', { users: { attributes: [{ name: 'department' }] } }));
 	takesWide(new Auth(scope, 'v-pw-true', { emailPassword: true }));
 	takesWide(new Auth(scope, 'v-pw-object', { emailPassword: { selfSignUp: false } }));
-	takesWide(new Auth(scope, 'v-oidc-only', { emailPassword: false, oidcProviders: { okta } }));
+	takesWide(new Auth(scope, 'v-oidc-only', { emailPassword: false, providers: { okta: oktaViaCognito } }));
+	takesWide(new Auth(scope, 'v-blocks', { store: 'blocks', providers: { okta } }));
 	takesWide(
-		new Auth(scope, 'v-social', { socialProviders: { google: { clientId: 'g', clientSecret: googleSecret } } }),
+		new Auth(scope, 'v-blocks-full', {
+			store: 'blocks',
+			providers: { okta: { ...okta, groupsClaim: 'groups' }, local: stubIdp() },
+			users: { groups: ['admins'] },
+			allowBearerAuth: true,
+		}),
 	);
-	takesWide(new Auth(scope, 'v-saml', { samlProviders: { partner: { metadataUrl: 'https://p.example.com' } } }));
+	takesWide(
+		new Auth(scope, 'v-social', {
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: googleSecret } },
+		}),
+	);
+	takesWide(
+		new Auth(scope, 'v-saml', { providers: { partner: { type: 'saml', metadataUrl: 'https://p.example.com' } } }),
+	);
 	takesWide(
 		new Auth(scope, 'v-mixed', {
 			emailPassword: { passwordPolicy: { minLength: 12 } },
-			oidcProviders: { okta },
+			providers: { okta: oktaViaCognito },
 			users: { groups: ['admins'] },
 			mfa: 'optional',
 			admin: { actions: ['groups'] },
@@ -327,7 +360,7 @@ async function groupNarrowing() {
 function satisfiesBlocksAuth() {
 	const zero: BlocksAuth = new Auth(scope, 'ba-zero');
 	const groups: BlocksAuth = new Auth(scope, 'ba-groups', { users: { groups: ['admins'] } });
-	const oidcOnly: BlocksAuth = new Auth(scope, 'ba-oidc', { emailPassword: false, oidcProviders: { okta } });
+	const oidcOnly: BlocksAuth = new Auth(scope, 'ba-oidc', { store: 'blocks', providers: { okta } });
 	const wide: BlocksAuth = new Auth(scope, 'ba-wide') satisfies Auth;
 	void zero;
 	void groups;
@@ -382,7 +415,11 @@ async function mfaGate() {
 	const offObject = new Auth(scope, 'mfa-off-object', { mfa: { types: ['TOTP'] } });
 	// @ts-expect-error — `{ mode }` defaults to 'off'.
 	await offObject.verifyTotpSetup(context, '123456');
-	const noPassword = new Auth(scope, 'mfa-no-pw', { emailPassword: false, oidcProviders: { okta }, mfa: 'optional' });
+	const noPassword = new Auth(scope, 'mfa-no-pw', {
+		emailPassword: false,
+		providers: { okta: oktaViaCognito },
+		mfa: 'optional',
+	});
 	// @ts-expect-error — MFA applies to email + password only (construction also rejects this combination).
 	await noPassword.setUpTotp(context);
 	type _offGate = Expect<Equal<MfaGate<OptionsOf<typeof off>>, MfaOff>>;
@@ -452,7 +489,7 @@ async function accountSurface() {
 	await auth.sendUserAttributeVerificationCode(context, 'email');
 	await auth.deleteUser(context);
 
-	const oidcOnly = new Auth(scope, 'account-oidc', { emailPassword: false, oidcProviders: { okta } });
+	const oidcOnly = new Auth(scope, 'account-oidc', { store: 'blocks', providers: { okta } });
 	// @ts-expect-error — devices are email + password only.
 	oidcOnly.scanDevices(context);
 	// Attributes and deleteUser are available in every configuration.
@@ -515,7 +552,9 @@ async function adminGate() {
 	const wide: Auth = full;
 	// @ts-expect-error — the wide type does not know admin is enabled.
 	await wide.admin.createUser('u');
-	type _wide = Expect<Equal<AdminGetterOf<AuthOptions>, AdminSurface<AuthOptions> | AdminDisabled>>;
+	type _wide = Expect<
+		Equal<AdminGetterOf<AuthOptions>, AdminSurface<AuthOptions> | AdminDisabled | AdminDisabledOnBlocks>
+	>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -532,7 +571,13 @@ async function adminGate() {
 //      such check can be proven for a still-generic `O`, so both patterns would
 //      need a cast (see DESIGN.md, "Unknown options").
 // ─────────────────────────────────────────────────────────────────────────────
-type _shapeKeys = Expect<Equal<keyof typeof AUTH_OPTIONS_SHAPE, keyof AuthMockOptions>>;
+// The replaced keys (`socialProviders`, …) are typed as errors, not options, so the validator does not list them.
+type _shapeKeys = Expect<
+	Equal<
+		keyof typeof AUTH_OPTIONS_SHAPE,
+		Exclude<keyof AuthMockOptions, 'socialProviders' | 'oidcProviders' | 'samlProviders'>
+	>
+>;
 
 function wrapperPassThrough<const O extends AuthOptions>(options: O): Auth<O> {
 	return new Auth(scope, 'wrapped', options);
@@ -627,7 +672,7 @@ async function signInStepNarrowing() {
 	// MFA applies to email + password only.
 	type _noPasswordMfa = Expect<
 		Equal<
-			StepNames<Auth<{ emailPassword: false; oidcProviders: { okta: typeof okta }; mfa: 'optional' }>>,
+			StepNames<Auth<{ emailPassword: false; providers: { okta: typeof oktaViaCognito }; mfa: 'optional' }>>,
 			AlwaysSteps
 		>
 	>;
@@ -718,7 +763,7 @@ type _adminKeys = Expect<Equal<Exclude<keyof AdminDisabled, '__adminNotEnabled'>
 //      (bearer.mock.test.ts proves both at runtime).
 // ─────────────────────────────────────────────────────────────────────────────
 async function signInProviderWithoutPassword() {
-	const auth = new Auth(scope, 'provider-no-pw', { emailPassword: false, oidcProviders: { okta } });
+	const auth = new Auth(scope, 'provider-no-pw', { emailPassword: false, providers: { okta: oktaViaCognito } });
 	const user = await auth.requireAuth(context);
 	type _provider = Expect<Equal<typeof user.signInProvider, 'password' | 'okta'>>;
 }
@@ -733,7 +778,7 @@ async function signInProviderWithoutPassword() {
 async function satisfiesForms() {
 	const constOpts = {
 		emailPassword: false,
-		oidcProviders: { okta },
+		providers: { okta: oktaViaCognito },
 		users: { groups: ['admins', 'readers'] },
 	} as const satisfies AuthOptions;
 	const narrowed = new Auth(scope, 'satisfies-const', constOpts);
@@ -747,7 +792,7 @@ async function satisfiesForms() {
 
 	const plainOpts = {
 		emailPassword: false,
-		oidcProviders: { okta },
+		providers: { okta: oktaViaCognito },
 		users: { groups: ['admins', 'readers'] },
 	} satisfies AuthOptions;
 	const widened = new Auth(scope, 'satisfies-plain', plainOpts);
@@ -758,12 +803,221 @@ async function satisfiesForms() {
 	type _plainGroups = Expect<Equal<typeof widenedUser.groups, string[]>>;
 	await widened.requireRole(context, 'admin');
 
-	const annotated: AuthOptions = { emailPassword: false, oidcProviders: { okta } };
+	const annotated: AuthOptions = { emailPassword: false, providers: { okta: oktaViaCognito } };
 	const wide = new Auth(scope, 'satisfies-annotated', annotated);
 	await wide.signIn('u', 'p', context); // the wide type: callable, checked at runtime
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// (24) `store` picks where users live; each store accepts only its own options
+//      and provider `type`s. Options are captured by `const O`, which does no
+//      excess-property check, so every wrong-store key is declared with a named
+//      error type on the other arm. What the compiler says for the three most
+//      common mistakes:
+//
+//      - `emailPassword` (or `mfa`, `admin`, …) under `store: 'blocks'`:
+//        "Type '{}' is not assignable to type 'ERROR_needs_store_cognito<"emailPassword">'."
+//      - a leftover `oidcProviders` (or `socialProviders` / `samlProviders`):
+//        "Type '{ okta: { … } }' is not assignable to type 'ERROR_replaced_by_providers'."
+//      - `type: 'google'` under `store: 'blocks'`:
+//        "Type '"google"' is not assignable to type '"oidc" | "oauth2" | "stub"'."
+// ─────────────────────────────────────────────────────────────────────────────
+function wrongStoreOptions() {
+	// Cognito-only options under `store: 'blocks'`.
+	// @ts-expect-error — ERROR_needs_store_cognito<'emailPassword'>
+	new Auth(scope, 'b-pw', { store: 'blocks', providers: { okta }, emailPassword: {} });
+	// @ts-expect-error — ERROR_needs_store_cognito<'mfa'>
+	new Auth(scope, 'b-mfa', { store: 'blocks', providers: { okta }, mfa: 'optional' });
+	new Auth(scope, 'b-passkeys', {
+		store: 'blocks',
+		providers: { okta },
+		// @ts-expect-error — ERROR_needs_store_cognito<'passkeys'>
+		passkeys: { relyingPartyId: 'example.com', origins: ['https://example.com'] },
+	});
+	// @ts-expect-error — ERROR_needs_store_cognito<'admin'>
+	new Auth(scope, 'b-admin', { store: 'blocks', providers: { okta }, admin: {} });
+	new Auth(scope, 'b-pool', {
+		store: 'blocks',
+		providers: { okta },
+		// @ts-expect-error — ERROR_needs_store_cognito<'userPool'>
+		userPool: Auth.fromExisting('us-east-1_AbCdEf123'),
+	});
+	// @ts-expect-error — ERROR_needs_store_cognito<'hostedUi'>
+	new Auth(scope, 'b-hosted-ui', { store: 'blocks', providers: { okta }, hostedUi: { domainPrefix: 'example' } });
+	// @ts-expect-error — ERROR_needs_store_cognito<'users.signInWith'>: only `users.groups` exists here.
+	new Auth(scope, 'b-sign-in-with', { store: 'blocks', providers: { okta }, users: { signInWith: ['email'] } });
+	// @ts-expect-error — the object form of allowBearerAuth (extra Cognito app clients) needs the Cognito store.
+	new Auth(scope, 'b-bearer', { store: 'blocks', providers: { okta }, allowBearerAuth: { clientIds: ['c'] } });
+
+	// Cognito provider types under `store: 'blocks'`.
+	new Auth(scope, 'b-google', {
+		store: 'blocks',
+		// @ts-expect-error — "google" is not "oidc" | "oauth2" | "stub".
+		providers: { google: { type: 'google', clientId: 'g', clientSecret: googleSecret } },
+	});
+	new Auth(scope, 'b-saml', {
+		store: 'blocks',
+		// @ts-expect-error — "saml" is not "oidc" | "oauth2" | "stub".
+		providers: { partner: { type: 'saml', metadataUrl: 'https://partner.example.com/saml' } },
+	});
+
+	// The blocks provider helpers on the default (Cognito) store.
+	// @ts-expect-error — StubProvider is not a CognitoProvider ("stub" is not "oidc").
+	new Auth(scope, 'c-stub', { providers: { local: stubIdp() } });
+	// @ts-expect-error — OAuth2Provider is not a CognitoProvider ("oauth2" is not "oidc").
+	new Auth(scope, 'c-github', { providers: { gh: github({ clientId: 'Iv1.abc', clientSecret: googleSecret }) } });
+	new Auth(scope, 'c-custom', {
+		providers: {
+			// @ts-expect-error — OAuth2Provider is not a CognitoProvider ("oauth2" is not "oidc").
+			custom: customOauth2({
+				name: 'custom',
+				clientId: 'c',
+				clientSecret: googleSecret,
+				scopes: ['read'],
+				endpoints: {
+					authorization: 'https://x.example/a',
+					token: 'https://x.example/t',
+					userInfo: 'https://x.example/u',
+				},
+				mapClaims: () => ({ providerSub: '1', email: null, name: null }),
+			}),
+		},
+	});
+
+	// The replaced keys: alone, and next to a valid option.
+	// @ts-expect-error — ERROR_replaced_by_providers
+	new Auth(scope, 'old-alone', { oidcProviders: { okta: { issuer: 'https://dev-12345.okta.com', clientId: 'o' } } });
+	new Auth(scope, 'old-with-pw', {
+		emailPassword: {},
+		// @ts-expect-error — ERROR_replaced_by_providers
+		socialProviders: { google: { clientId: 'g', clientSecret: googleSecret } },
+	});
+	// @ts-expect-error — ERROR_replaced_by_providers
+	new Auth(scope, 'old-saml', { samlProviders: { partner: { metadataUrl: 'https://partner.example.com/saml' } } });
+	new Auth(scope, 'old-federate-via', {
+		store: 'blocks',
+		providers: {
+			// @ts-expect-error — ERROR_federateVia_replaced_by_store
+			okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: 'o', federateVia: 'direct' },
+		},
+	});
+	new Auth(scope, 'old-federate-via-cognito', {
+		providers: {
+			okta: {
+				type: 'oidc',
+				issuer: 'https://x.example',
+				clientId: 'o',
+				clientSecret: oktaSecret,
+				// @ts-expect-error — ERROR_federateVia_replaced_by_store
+				federateVia: 'cognito',
+			},
+		},
+	});
+
+	// A 'blocks' block has no other way to sign in: `providers` is required.
+	// @ts-expect-error — Property 'providers' is missing in type '{ store: "blocks"; }'.
+	new Auth(scope, 'b-no-providers', { store: 'blocks' });
+	// @ts-expect-error — not a store.
+	new Auth(scope, 'bad-store', { store: 'dynamo', providers: { okta } });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (25) The surface of a `store: 'blocks'` block: no password, MFA, devices or
+//      admin methods (each a compile error naming the store); the providers
+//      narrow everything else, and the instance is still a plain `Auth`.
+// ─────────────────────────────────────────────────────────────────────────────
+async function blocksSurface() {
+	const auth = new Auth(scope, 'blocks-surface', {
+		store: 'blocks',
+		providers: { okta: { ...okta, groupsClaim: 'groups' }, local: stubIdp() },
+		users: { groups: ['admins', 'readers'] },
+		allowBearerAuth: true,
+	});
+	type O = OptionsOf<typeof auth>;
+	type _password = Expect<Equal<EmailPasswordEnabled<O>, false>>;
+	type _gate = Expect<Equal<PasswordGate<O>, PasswordOff>>;
+	type _admin = Expect<Equal<typeof auth.admin, AdminDisabledOnBlocks>>;
+
+	// @ts-expect-error — email + password is disabled on a 'blocks' block.
+	await auth.signIn('alice', 'pw', context);
+	// @ts-expect-error — email + password is disabled on a 'blocks' block.
+	await auth.signUp('alice', 'pw');
+	// @ts-expect-error — email + password is disabled on a 'blocks' block.
+	await auth.resetPassword('alice');
+	// @ts-expect-error — email + password is disabled on a 'blocks' block.
+	await auth.updatePassword(context, 'old-pw', 'new-pw');
+	// @ts-expect-error — devices are email + password only.
+	auth.scanDevices(context);
+	// @ts-expect-error — ERROR_auth_admin_needs_store_cognito
+	await auth.admin.createUser('u');
+	// @ts-expect-error — ERROR_auth_admin_needs_store_cognito
+	await auth.admin.addUserToGroup('u', 'admins');
+	// @ts-expect-error — ERROR_auth_admin_needs_store_cognito
+	auth.admin.scan();
+
+	// Provider ids narrow getSignInUrl and the `signIn:<id>` UI action.
+	await auth.getSignInUrl(context, 'okta');
+	await auth.getSignInUrl(context, 'local', { redirectPath: '/home' });
+	// @ts-expect-error — 'google' is not a configured provider.
+	await auth.getSignInUrl(context, 'google');
+	type _actionNames = Expect<Equal<FederatedActionNameOf<O>, 'signIn:okta' | 'signIn:local'>>;
+	const action: FederatedActionNameOf<O> = 'signIn:local';
+	// @ts-expect-error — no provider 'okat'.
+	const typo: FederatedActionNameOf<O> = 'signIn:okat';
+	void [action, typo];
+
+	// `users.groups` narrows requireRole.
+	const admin = await auth.requireRole(context, 'admins');
+	type _groups = Expect<Equal<typeof admin.groups, ('admins' | 'readers')[]>>;
+	// @ts-expect-error — 'admin' (typo) is not a declared group.
+	await auth.requireRole(context, 'admin');
+
+	// The guards are the same on either store.
+	await auth.requireAuth(context);
+	await auth.getCurrentUser(context);
+	await auth.signOut(context);
+
+	// Assignable to the wide `Auth` and to the auth-common contract.
+	takesWide(auth);
+	const wide: Auth = auth;
+	const contract: BlocksAuth = auth;
+	void [wide, contract];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (26) `validateUser` has the same signature on both stores (a 'blocks' block
+//      only ever calls it with `phase: 'signIn'`), so one hook fits either.
+// ─────────────────────────────────────────────────────────────────────────────
+type ValidateUser = ((candidate: UserCandidate) => Promise<void>) | undefined;
+type _cognitoValidate = Expect<Equal<CognitoAuthOptions['validateUser'], ValidateUser>>;
+type _blocksValidate = Expect<Equal<BlocksAuthOptions['validateUser'], ValidateUser>>;
+type _phases = Expect<Equal<UserCandidate['phase'], 'signUp' | 'signIn'>>;
+function validateUserOnEitherStore() {
+	const corporateOnly = async ({ email }: UserCandidate) => {
+		if (!email?.endsWith('@example.com')) throw new Error('Corporate accounts only');
+	};
+	new Auth(scope, 'validate-cognito', {
+		validateUser: async (candidate) => {
+			type _c = Expect<Equal<typeof candidate, UserCandidate>>;
+			if (candidate.phase === 'signUp') await corporateOnly(candidate);
+		},
+	});
+	new Auth(scope, 'validate-blocks', {
+		store: 'blocks',
+		providers: { okta },
+		validateUser: async (candidate) => {
+			type _c = Expect<Equal<typeof candidate, UserCandidate>>;
+			await corporateOnly(candidate);
+		},
+	});
+	new Auth(scope, 'validate-shared-cognito', { validateUser: corporateOnly });
+	new Auth(scope, 'validate-shared-blocks', { store: 'blocks', providers: { okta }, validateUser: corporateOnly });
+}
+
 void [
+	wrongStoreOptions,
+	blocksSurface,
+	validateUserOnEitherStore,
 	satisfiesForms,
 	unknownOptionsCompile,
 	signInStepNarrowing,
