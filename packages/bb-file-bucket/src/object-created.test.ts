@@ -8,7 +8,7 @@ import { rmSync, existsSync, readdirSync } from 'node:fs';
 import { Scope } from '@aws-blocks/core';
 import { FileBucket } from './index.mock.js';
 import type { ObjectCreatedContext, ObjectCreatedEvent } from './index.mock.js';
-import { encodeS3NotificationKey, toObjectCreatedEvents } from './object-created.js';
+import { encodeS3NotificationKey, objectCreatedJobHandler, toObjectCreatedEvents, toS3NotificationMessage } from './object-created.js';
 
 const scope = new Scope('ooc');
 
@@ -187,6 +187,23 @@ test('encodes keys exactly as S3 does in notifications and filter matching', () 
 		toObjectCreatedEvents({ Records: [{ eventName: 'ObjectCreated:Put', s3: { object: { key: encodeS3NotificationKey(path), size: 1 } } }] }),
 		[{ path, size: 1 }],
 	);
+});
+
+test("the mock's notification message carries S3's key encoding and omits an absent versionId", () => {
+	assert.deepStrictEqual(toS3NotificationMessage({ path: 'a b.txt', size: 1 }), {
+		Records: [{ eventName: 'ObjectCreated:Put', s3: { object: { key: 'a+b.txt', size: 1 } } }],
+	});
+	assert.strictEqual(toS3NotificationMessage({ path: 'k', size: 1, versionId: 'v1' }).Records?.[0].s3.object.versionId, 'v1');
+});
+
+test('a notified key FileBucket rejects fails before the handler runs', async () => {
+	// S3 accepts a newline in a key (another client can write one); get() would reject it.
+	const message = { Records: [{ eventName: 'ObjectCreated:Put', s3: { object: { key: 'in/bad%0Akey.txt', size: 1 } } }] };
+	assert.throws(() => toObjectCreatedEvents(message), { name: 'ValidationFailed' });
+	let called = false;
+	const handler = objectCreatedJobHandler({ handler: async () => { called = true; } });
+	await assert.rejects(handler(message, { receiveCount: 1 }), { name: 'ValidationFailed' });
+	assert.strictEqual(called, false);
 });
 
 test('ignores the s3:TestEvent message and non-create records', () => {

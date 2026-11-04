@@ -215,6 +215,11 @@ export interface FileBucketOptions {
 	 * rewrites the same records and a late, older upload can't overwrite a newer
 	 * one's results.
 	 *
+	 * `event.path` is always a key the FileBucket API accepts. An object that
+	 * another client wrote under a key FileBucket rejects (for example one with a
+	 * newline) fails with `ValidationFailed` before the handler runs, and ends up
+	 * in the dead-letter queue after its retries.
+	 *
 	 * Not supported when `bucket` wraps an existing bucket (rejected at synth and
 	 * by the mock): S3 keeps a single notification configuration per bucket, which
 	 * other owners may already manage.

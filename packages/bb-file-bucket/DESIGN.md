@@ -20,7 +20,7 @@ meta/{key}.json                   sidecar metadata
 versions/{key}/{versionId}        version body
 versions/{key}/{versionId}.json   version metadata
 versions/{key}/__deleted__        delete marker (sentinel)
-versions/{key}/__last-version__   highest version number issued (sentinel)
+version-counters/{sha256(key)}   highest version number issued
 ```
 **Rationale:** Keeps file content byte-identical (no wrapping format) while guaranteeing internal bookkeeping can never collide with user keys. An earlier design co-located metadata as `{path}.__meta__.json` next to each file and relied on marker substrings, which meant a user key like `data.__meta__.json` or a directory named `x.__versions__/` could be silently hidden or shadowed by `scan()`. Because user content now lives only under `content/`, `scan()` walks that root without filtering by bookkeeping-like filenames. On versioned buckets it separately omits keys with an active delete-marker flag.
 
@@ -42,7 +42,7 @@ versions/{key}/__last-version__   highest version number issued (sentinel)
 **Update:** The **default flipped to ON** — see D-FB-10. The runtime API described here is unchanged; only the default value of `versioned` and its typing gate changed.
 
 **D-FB-7: Mock versioning uses filesystem directories**
-**Decision:** Versioned mock stores each version in `versions/{key}/v{n}` with monotonic IDs. Delete markers are `versions/{key}/__deleted__` sentinel files. Like S3, an id is never reissued: `versions/{key}/__last-version__` records the highest number issued, so permanently deleting the newest version doesn't hand its id to the next upload (data written before the sentinel existed resumes from its highest stored version).
+**Decision:** Versioned mock stores each version in `versions/{key}/v{n}` with monotonic IDs. Delete markers are `versions/{key}/__deleted__` sentinel files. Like S3, an id is never reissued: `version-counters/{sha256(key)}` records the highest number issued, so permanently deleting the newest version doesn't hand its id to the next upload (data written before the counter existed resumes from its highest stored version). The counters live in a flat, hash-named directory rather than under `versions/{key}/`, so a nested key can never collide with one.
 **Rationale:** Simple, inspectable, and matches the S3 semantics closely enough for local development. Monotonic IDs (`v1`, `v2`, ...) are deterministic and easy to reason about in tests, unlike S3's opaque version IDs. Version history lives under the segregated `versions/` root (see D-FB-2), so it never appears in `scan()` or collides with a user key.
 **Limitation:** The sentinel represents only the active deleted state. `put()` removes it rather than retaining a historical delete-marker entry. Deleting a later upload therefore cannot make an earlier marker current again, unlike S3. See "Historical delete markers are not retained" below.
 

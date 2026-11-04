@@ -9,6 +9,7 @@
  * run the identical parse-and-dispatch path below. No runtime imports.
  */
 import type { FileBucketOptions, ObjectCreatedEvent, ObjectCreatedOptions } from './types.js';
+import { assertValidKey } from './validation.js';
 
 /**
  * Child id of the internal AsyncJob that delivers object-created events. Every
@@ -50,14 +51,24 @@ export function encodeS3NotificationKey(path: string): string {
 		.replace(/[!'()~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-/** Extract the object-created events from one S3 notification message. */
+/**
+ * Extract the object-created events from one S3 notification message.
+ *
+ * Every `path` is a key the FileBucket API accepts. S3 stores keys this block
+ * rejects (another client can write one with a newline, say), and its event
+ * fails here with `ValidationFailed` before the handler runs, so it retries and
+ * then lands in the dead-letter queue instead of failing inside the handler's
+ * `get()`.
+ */
 export function toObjectCreatedEvents(message: S3NotificationMessage): ObjectCreatedEvent[] {
 	const events: ObjectCreatedEvent[] = [];
 	for (const record of message.Records ?? []) {
 		if (!record.eventName.startsWith('ObjectCreated:')) continue;
 		const { key, size, versionId } = record.s3.object;
+		const path = decodeS3EventKey(key);
+		assertValidKey(path);
 		// Normalize S3's null to an absent property, as `ObjectCreatedEvent` promises.
-		events.push({ path: decodeS3EventKey(key), size, ...(typeof versionId === 'string' ? { versionId } : {}) });
+		events.push({ path, size, ...(typeof versionId === 'string' ? { versionId } : {}) });
 	}
 	return events;
 }

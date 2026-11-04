@@ -634,13 +634,14 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * reuses a version id. Counting only the versions still on disk would hand a
 	 * permanently deleted version's id to the next upload, so a queued
 	 * `onObjectCreated` event (or anything keyed by path and version) would read
-	 * the replacement instead. Data written before the sentinel existed resumes
+	 * the replacement instead. Data written before the counter existed resumes
 	 * from its highest stored version.
 	 */
 	private issueVersionId(path: string): string {
 		const dir = versionsDirFor(this.dataDir, path);
 		mkdirSync(dir, { recursive: true });
 		const counter = lastVersionPath(this.dataDir, path);
+		mkdirSync(dirname(counter), { recursive: true });
 		const issued = readdirSync(dir)
 			.filter(f => f.startsWith('v') && !f.includes('.'))
 			.map(f => parseInt(f.slice(1), 10));

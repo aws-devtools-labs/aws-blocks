@@ -382,6 +382,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 - **Queue names** are the bucket's scope id plus `-on-object-created` (and `-dlq`), capped at 80 characters; characters SQS doesn't allow, such as `.`, are replaced and a short hash is appended. If two buckets' names (scope id plus `-on-object-created`) agree on their first 80 characters, they get the same queue name and `cdk synth` fails, naming the queue; shorten one of the ids.
 - **Locally**, every matching write through the mock (`put()`, `restoreVersion()`, and uploads to the dev server's presigned URLs) runs the handler asynchronously, with the same retry count.
 - `onObjectCreated` can't be combined with `bucket` (a wrapped existing bucket). S3 keeps one notification configuration per bucket, which its owner may already manage; configure the notification there instead.
+- `event.path` is always a key FileBucket accepts. An object another client wrote under a key FileBucket rejects (for example one containing a newline) fails with `ValidationFailed` before your handler runs and ends up in the dead-letter queue.
 - Deletes don't run the handler.
 
 ### Encryption with KMS

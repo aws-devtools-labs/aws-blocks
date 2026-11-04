@@ -763,9 +763,11 @@ describe('CDK: onObjectCreated', () => {
     });
   });
 
-  test('a bucket without onObjectCreated provisions no queue or notification', () => {
-    const { stack, parent } = setup();
-    new FileBucket(parent, 'uploads');
+  // On a stack with a compute, so building the job by mistake would show up as
+  // resources here instead of failing on the missing compute.
+  test('a bucket without onObjectCreated provisions no queue or notification', async () => {
+    const stack = await makeStack('fboocnone');
+    new FileBucket(stack, 'uploads');
     const template = Template.fromStack(stack);
     template.resourceCountIs('AWS::SQS::Queue', 0);
     template.resourceCountIs('Custom::S3BucketNotifications', 0);
