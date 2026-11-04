@@ -740,7 +740,7 @@ class FileMigrator {
 		if (rule.role === 'factory' && rule.to === null) {
 			// google() / customOidc() / cognitoFederated(): dropped once every call was converted.
 			if (!this.hasUnconsumedReference(s.local)) {
-				this.changes.push(`${s.imported}() → oidcProviders / socialProviders entry`);
+				this.changes.push(`${s.imported}() → providers entry`);
 				return null;
 			}
 			goneTodos.push(TODOS.removedProviderFactory(s.imported));
@@ -1051,7 +1051,13 @@ class FileMigrator {
 			}
 			list.push(entry);
 		};
-		if (block === 'oidc') place([], this.textEntry('emailPassword', 'false'));
+		if (block === 'oidc') {
+			const q = this.quote;
+			// AuthOIDC federated directly by default: that is a 'blocks' block; only all-cognitoFederated stays on a pool.
+			if (this.oidcPlan(this.propOf(obj, 'providers')).store === 'cognito')
+				place([], this.textEntry('emailPassword', 'false'));
+			else place([], this.textEntry('store', `${q}blocks${q}`));
+		}
 		const handled = new Set<string>();
 		props.forEach((prop, index) => {
 			const c = comments[index] ?? { leading: [], trailing: undefined };
@@ -1399,29 +1405,49 @@ class FileMigrator {
 			return [{ path: [], entry }];
 		}
 		const out: { path: string[]; entry: OutEntry }[] = [];
-		const leftovers: string[] = [];
+		const { mixed } = this.oidcPlan(prop);
 		let domainTodoDone = false;
+		let leftovers = 0;
 		for (const el of arr.elements) {
 			const fc = this.factoryCall(el);
 			const comments = this.leadingComments(el);
 			if (!fc) {
-				leftovers.push(this.slice(el.getStart(this.sf), el.getEnd()));
+				const q = this.quote;
+				const entry = this.textEntry(
+					`${q}<provider id ${++leftovers}>${q}`,
+					this.slice(el.getStart(this.sf), el.getEnd()),
+				);
+				entry.comments.push(...comments);
+				entry.todos.push(TODOS.providerNotFactory);
+				out.push({ path: ['providers'], entry });
 				continue;
 			}
 			const converted = this.convertProvider(fc.call, fc.factory);
 			converted.entry.comments.unshift(...comments);
-			if (fc.factory === 'cognitoFederated' && !domainTodoDone) {
-				converted.entry.todos.unshift(TODOS.domain);
+			if (fc.factory === 'cognitoFederated') {
+				if (mixed) converted.entry.todos.unshift(TODOS.mixedFederation);
+				if (!domainTodoDone) converted.entry.todos.unshift(TODOS.domain);
 				domainTodoDone = true;
 			}
 			out.push(converted);
 		}
-		if (leftovers.length > 0) {
-			const entry = this.textEntry('providers', `[${leftovers.join(', ')}]`);
-			entry.todos.push(TODOS.providerNotFactory);
-			out.push({ path: [], entry });
-		}
 		return out;
+	}
+
+	/**
+	 * Which store a migrated `AuthOIDC` block gets: `'cognito'` only when every
+	 * provider is a `cognitoFederated()` one; any directly federated provider (the
+	 * `AuthOIDC` default) makes it `'blocks'`. `mixed`: both kinds, which one `Auth`
+	 * block cannot hold.
+	 */
+	private oidcPlan(prop: TS.ObjectLiteralElementLike | undefined): { store: 'cognito' | 'blocks'; mixed: boolean } {
+		const value = valueNode(this.ts, prop);
+		const arr = value ? unwrap(this.ts, value) : undefined;
+		if (!arr || !this.ts.isArrayLiteralExpression(arr)) return { store: 'blocks', mixed: false };
+		const viaCognito = arr.elements.map((el) => this.factoryCall(el)?.factory === 'cognitoFederated');
+		const some = viaCognito.some(Boolean);
+		const all = viaCognito.length > 0 && viaCognito.every(Boolean);
+		return { store: all ? 'cognito' : 'blocks', mixed: some && !all };
 	}
 
 	private convertProvider(call: TS.CallExpression, factory: OidcFactory): { path: string[]; entry: OutEntry } {
@@ -1474,27 +1500,28 @@ class FileMigrator {
 		};
 		const secret = (n: TS.Expression) => this.convertSecret(n);
 		const clientId = (n: TS.Expression) => this.convertClientId(n);
-		const record = (group: string, key: string, value: OutValue): { path: string[]; entry: OutEntry } => ({
-			path: [group],
+		const record = (key: string, value: OutValue): { path: string[]; entry: OutEntry } => ({
+			path: ['providers'],
 			entry: { key, value, comments: [], todos },
 		});
 		const q = this.quote;
 		switch (factory) {
 			case 'google': {
+				entries.push(this.textEntry('type', `${q}oidc${q}`));
 				entries.push(this.textEntry('issuer', `${q}https://accounts.google.com${q}`));
 				take('clientId', 'clientId', clientId);
 				take('clientSecret', 'clientSecret', secret);
 				take('scopes');
 				rest();
-				this.changes.push('google() → oidcProviders.google (direct; userId unchanged)');
-				return record('oidcProviders', 'google', { t: 'obj', entries });
+				this.changes.push("google() → providers.google, type: 'oidc' (direct; userId unchanged)");
+				return record('google', { t: 'obj', entries });
 			}
 			case 'github': {
 				take('clientId', 'clientId', clientId);
 				take('clientSecret', 'clientSecret', secret);
 				take('scopes');
 				rest();
-				return record('oidcProviders', 'github', {
+				return record('github', {
 					t: 'call',
 					callee: this.calleeText(call),
 					arg: { t: 'obj', entries },
@@ -1502,14 +1529,15 @@ class FileMigrator {
 			}
 			case 'customOidc': {
 				const key = nameKey();
+				entries.push(this.textEntry('type', `${q}oidc${q}`));
 				take('issuerUrl', 'issuer');
 				take('clientId', 'clientId', clientId);
 				take('clientSecret', 'clientSecret', secret);
 				take('scopes');
 				take('attributeMapping');
 				rest();
-				this.changes.push('customOidc() → oidcProviders entry (direct; userId unchanged)');
-				return record('oidcProviders', key, { t: 'obj', entries });
+				this.changes.push("customOidc() → providers entry, type: 'oidc' (direct; userId unchanged)");
+				return record(key, { t: 'obj', entries });
 			}
 			case 'customOauth2': {
 				const key = nameKey();
@@ -1533,7 +1561,7 @@ class FileMigrator {
 				take('scopes');
 				take('mapClaims');
 				rest();
-				return record('oidcProviders', key, {
+				return record(key, {
 					t: 'call',
 					callee: this.calleeText(call),
 					arg: { t: 'obj', entries },
@@ -1546,7 +1574,7 @@ class FileMigrator {
 				take('users');
 				rest();
 				// AuthOIDC and Auth both limit the stub to local and sandbox: a 1:1 move.
-				return record('oidcProviders', key, {
+				return record(key, {
 					t: 'call',
 					callee: this.calleeText(call),
 					arg: { t: 'obj', entries },
@@ -1565,6 +1593,7 @@ class FileMigrator {
 				const nameValue = nameProp ? valueNode(ts, nameProp) : undefined;
 				const nameLit = nameValue ? literalOf(ts, nameValue) : undefined;
 				if (social) {
+					entries.push(this.textEntry('type', `${q}${social}${q}`));
 					take('clientId', 'clientId', () => ({
 						text: this.valueText(props.get('clientId')),
 						todo: TODOS.clientIdNotString,
@@ -1576,11 +1605,11 @@ class FileMigrator {
 					take('scopes');
 					rest();
 					if (nameLit !== undefined && nameLit !== social) todos.push(TODOS.socialRenamed(nameLit, social));
-					this.changes.push(`cognitoFederated(${idp}) → socialProviders.${social}`);
-					return record('socialProviders', social, { t: 'obj', entries });
+					this.changes.push(`cognitoFederated(${idp}) → providers.${social}, type: '${social}'`);
+					return record(social, { t: 'obj', entries });
 				}
 				const key = nameKey();
-				entries.push(this.textEntry('federateVia', `${q}cognito${q}`));
+				entries.push(this.textEntry('type', `${q}oidc${q}`));
 				take('idpIssuerUrl', 'issuer');
 				take('clientId', 'clientId', () => ({
 					text: this.valueText(props.get('clientId')),
@@ -1589,8 +1618,8 @@ class FileMigrator {
 				take('clientSecret');
 				take('scopes');
 				rest();
-				this.changes.push("cognitoFederated() → oidcProviders entry with federateVia: 'cognito'");
-				return record('oidcProviders', key, { t: 'obj', entries });
+				this.changes.push("cognitoFederated() → providers entry, type: 'oidc' (through Cognito)");
+				return record(key, { t: 'obj', entries });
 			}
 		}
 	}

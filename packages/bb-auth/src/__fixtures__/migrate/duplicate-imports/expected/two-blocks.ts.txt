@@ -6,8 +6,8 @@ const scope = new Scope('app');
 const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
 export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });
 export const sso = new Federated(scope, 'sso', {
-	emailPassword: false,
-	oidcProviders: {
+	store: 'blocks',
+	providers: {
 		github: github({
 			clientId: 'gh-client',
 			clientSecret: githubSecret,

@@ -1,0 +1,56 @@
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { Scope } from '@aws-blocks/core';
+import { Auth } from '@aws-blocks/bb-auth';
+import { sharedProvider } from './providers.js';
+
+const scope = new Scope('app');
+const googleId = new AppSetting(scope, 'google-id', { secret: true });
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+const entraId = new AppSetting(scope, 'entra-id', { secret: true });
+const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
+
+// Direct and Cognito-federated providers in one block: Auth cannot hold both kinds in one block.
+export const auth = new Auth(scope, 'auth', {
+	store: 'blocks',
+	providers: {
+		okta: {
+			type: 'oidc',
+			issuer: 'https://dev-1.okta.com',
+			clientId: 'okta-client',
+		},
+		// TODO(aws-blocks-auth-migrate): AuthOIDC federated through its own Cognito pool (child id `cognito-pool`); Auth uses `pool`, so the old pool and its
+		//   shadow users are deleted on deploy, and users sign in once more. Auth derives a NEW domain prefix by default:
+		//   re-register https://<new prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse in every IdP console.
+		//   To keep the old prefix instead, set hostedUi: { domainPrefix: <old cognitoDomain> } and deploy twice
+		//   (MIGRATION.md, "AuthOIDC with cognitoFederated()") — a single deploy fails on the domain collision.
+		// TODO(aws-blocks-auth-migrate): this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth
+		//   block now holds one kind of user. The codemod chose store: 'blocks' (no user pool; the direct providers keep their userIds).
+		//   Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),
+		//   with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.
+		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),
+		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
+		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
+		google: {
+			type: 'google',
+			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
+			clientId: googleId,
+			clientSecret: googleSecret,
+		},
+		// TODO(aws-blocks-auth-migrate): this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth
+		//   block now holds one kind of user. The codemod chose store: 'blocks' (no user pool; the direct providers keep their userIds).
+		//   Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),
+		//   with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.
+		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),
+		//   AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId
+		//   (MIGRATION.md, "Re-keying cognitoFederated() users").
+		entra: {
+			type: 'oidc',
+			issuer: 'https://login.microsoftonline.com/tenant/v2.0',
+			// TODO(aws-blocks-auth-migrate): clientId is now a plain string (it is not a secret). It was read from an AppSetting at runtime; paste the client id here.
+			clientId: entraId,
+			clientSecret: entraSecret,
+		},
+		// TODO(aws-blocks-auth-migrate): this provider is not an inline factory call, so the codemod could not key it. Replace the placeholder key with its provider id and tag the entry with its type.
+		'<provider id 1>': sharedProvider,
+	},
+});

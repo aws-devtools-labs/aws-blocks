@@ -308,7 +308,7 @@ export const OIDC_GONE_MEMBERS: Readonly<Record<string, string>> = {
 	refreshBearerTokens: 'Auth serves POST /aws-blocks/auth/exchange/refresh itself; remove this call.',
 	signInRoutePath: 'Use getSignInUrl(context, provider) instead.',
 	signInBasePath: 'Use getSignInUrl(context, provider) instead.',
-	providers: 'Auth has no providers getter; the provider ids are the keys of oidcProviders / socialProviders.',
+	providers: 'Auth has no providers getter; the provider ids are the keys of the providers option.',
 	callbackPath: 'Auth has no callbackPath getter; it is redirects.callbackPath in the options.',
 	signOutPath: 'Auth has no signOutPath getter; it is redirects.signOutPath in the options.',
 	postSignInPath: 'Auth has no postSignInPath getter; it is redirects.postSignInPath in the options.',
@@ -486,9 +486,9 @@ export const TODOS = {
 	unknownOption: (key: string): string =>
 		`unknown option \`${key}\` was kept as is; map it by hand (MIGRATION.md, "Option mapping").`,
 	providersNotArray:
-		'`providers` is not an array literal, so the codemod could not key it. Rewrite it as oidcProviders / socialProviders records keyed by provider id.',
+		'`providers` is not an array literal, so the codemod could not key it. Rewrite it as a providers record keyed by provider id, each entry tagged with its type.',
 	providerNotFactory:
-		'this provider is not an inline factory call, so the codemod could not key it. Add it to oidcProviders / socialProviders by hand.',
+		'this provider is not an inline factory call, so the codemod could not key it. Replace the placeholder key with its provider id and tag the entry with its type.',
 	providerName:
 		'the provider name is not a string literal; it is used as a computed key. The record key is the provider id.',
 	secretNotAppSetting:
@@ -507,6 +507,12 @@ export const TODOS = {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: user-facing text naming the `${iss}:${sub}` id format, not a template
 		'AuthOIDC cognitoFederated() used `${iss}:${sub}`. Re-key any data stored under the old userId',
 		'(MIGRATION.md, "Re-keying cognitoFederated() users").',
+	],
+	mixedFederation: [
+		'this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth',
+		"block now holds one kind of user. The codemod chose store: 'blocks' (no user pool; the direct providers keep their userIds).",
+		"Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),",
+		"with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.",
 	],
 	apple: 'Sign in with Apple needs teamId, keyId and privateKey (an AppSetting with the .p8 key) instead of clientSecret.',
 	socialRenamed: (from: string, to: string): string =>
@@ -552,7 +558,7 @@ export const TODOS = {
 	oidcUserField: (field: string): string =>
 		`OIDCUser.${field} is gone: AuthenticatedUser has signInProvider, attributes (string claims), claims (iss, sub, …) and userId (still \`\${iss}:\${sub}\`).`,
 	oidcUserClaims:
-		'AuthenticatedUser.claims is optional now: it is set for users of a direct oidcProviders entry, and absent for user-pool users (a cognitoFederated() provider becomes one). Read it as claims?.x.',
+		"AuthenticatedUser.claims is optional now: it is set for users of a store: 'blocks' block, and absent for user-pool users (a cognitoFederated() provider becomes one). Read it as claims?.x.",
 	namespaceImport: 'namespace import of an old auth package: rename its members by hand (MIGRATION.md, "Names").',
 	dynamicImport:
 		'dynamic import of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.',
@@ -560,5 +566,5 @@ export const TODOS = {
 	unknownReceiver: (method: string, to: string): string =>
 		`if this is an AuthCognito instance, ${method}() is now ${to}().`,
 	removedProviderFactory: (name: string): string =>
-		`${name}() is gone in Auth: a generic OIDC provider is a plain { issuer, clientId, clientSecret? } entry in oidcProviders.`,
+		`${name}() is gone in Auth: a generic OIDC provider is a plain { type: 'oidc', issuer, clientId, clientSecret? } entry in providers.`,
 } as const;

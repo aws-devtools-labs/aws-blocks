@@ -15,10 +15,11 @@ const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
 const oktaSecret = new AppSetting(scope, 'okta-secret', { secret: true });
 
 export const auth = new Auth(scope, 'oidc-auth', {
-	emailPassword: false,
-	oidcProviders: {
+	store: 'blocks',
+	providers: {
 		// Production IdPs.
 		google: {
+			type: 'oidc',
 			issuer: 'https://accounts.google.com',
 			clientId: 'google-client',
 			clientSecret: googleSecret,
@@ -28,6 +29,7 @@ export const auth = new Auth(scope, 'oidc-auth', {
 			clientSecret: githubSecret,
 		}),
 		okta: {
+			type: 'oidc',
 			issuer: 'https://dev-1.okta.com',
 			clientId: 'okta-client',
 			clientSecret: oktaSecret,
