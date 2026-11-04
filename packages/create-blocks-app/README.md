@@ -117,7 +117,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
-Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`, so the npm script names stay the same and `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings that the scripts used to hard-code live in `package.json#blocks.dev`.
+Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`: `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings live in `package.json#blocks.dev`.
 
 ```json
 {

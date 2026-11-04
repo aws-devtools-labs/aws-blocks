@@ -189,7 +189,7 @@ If you will immediately self-test the frontend, add `npm run deploy -- --wait-li
 
 ## Blocks CLI
 
-Every `npm run …` script above is a thin alias of the `cdk-blocks` command from `@aws-blocks/blocks` (for example `"deploy": "cdk-blocks deploy"`), so prefer the npm scripts: `npm run deploy` runs `cdk-blocks deploy`, and `npm run dev -- --port 4000` passes flags through. When you need the command directly, run `npx --no -- cdk-blocks <command>`. Always keep `--no`: it uses the app's installed CLI and never downloads a package, and `blocks` on the npm registry is an unrelated package.
+Every `npm run …` script above is a thin alias of the `cdk-blocks` command from `@aws-blocks/blocks` (for example `"deploy": "cdk-blocks deploy"`), so prefer the npm scripts: `npm run deploy` runs `cdk-blocks deploy`, and `npm run dev -- --port 4000` passes flags through. When you need the command directly, run `npx --no -- cdk-blocks <command>`. Always keep `--no`: it uses the app's installed CLI and never downloads a package.
 
 - `npx --no -- cdk-blocks --help` lists every command; `npx --no -- cdk-blocks help <command>` (for example `npx --no -- cdk-blocks help sandbox destroy`) shows one command's flags and examples.
 - `--output json` prints one JSON document on stdout and keeps progress on stderr; `--query <field>` prints one field raw, for example `npx --no -- cdk-blocks deploy --query apiUrl` or `npx --no -- cdk-blocks whoami --query stacks.production`.
