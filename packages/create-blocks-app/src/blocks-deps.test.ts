@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync, readdirSync } from 'node:fs';
 
-import { applyBlocksRanges, blocksDepNames, resolveBlocksRanges } from './blocks-deps.js';
+import { PLACEHOLDER, blocksDepNames, takePlaceholderBlocksDeps } from './blocks-deps.js';
 
 // Compiled test runs from dist/; templates live at the package root.
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -25,42 +25,26 @@ describe('blocksDepNames', () => {
   });
 });
 
-describe('resolveBlocksRanges', () => {
-  it('records the resolved release as a caret range', async () => {
-    const ranges = await resolveBlocksRanges(['@aws-blocks/blocks', '@aws-blocks/hosting'], async (name) =>
-      name === '@aws-blocks/blocks' ? '0.9.0' : '0.5.1',
-    );
-    assert.deepStrictEqual(ranges, { '@aws-blocks/blocks': '^0.9.0', '@aws-blocks/hosting': '^0.5.1' });
-  });
-
-  it('fails naming the package when the registry cannot be reached', async () => {
-    await assert.rejects(
-      () => resolveBlocksRanges(['@aws-blocks/blocks'], async () => { throw new Error('ENOTFOUND registry.npmjs.org'); }),
-      /@aws-blocks\/blocks/,
-    );
-  });
-
-  it('fails naming the package when the registry answers with something that is not a version', async () => {
-    await assert.rejects(
-      () => resolveBlocksRanges(['@aws-blocks/blocks'], async () => 'not-a-version'),
-      /@aws-blocks\/blocks/,
-    );
-  });
-});
-
-describe('applyBlocksRanges', () => {
-  it('replaces the placeholder and leaves every other dependency untouched', () => {
+describe('takePlaceholderBlocksDeps', () => {
+  it('removes the placeholders and returns them, so npm can install them by name', () => {
     const pkg = {
-      dependencies: { '@aws-blocks/blocks': '*', 'lit-html': '^3.3.3' },
+      dependencies: { '@aws-blocks/blocks': '*', '@aws-blocks/hosting': '*', 'lit-html': '^3.3.3' },
     };
-    applyBlocksRanges(pkg, { '@aws-blocks/blocks': '^0.9.0' });
-    assert.deepStrictEqual(pkg.dependencies, { '@aws-blocks/blocks': '^0.9.0', 'lit-html': '^3.3.3' });
+    assert.deepStrictEqual(takePlaceholderBlocksDeps(pkg), ['@aws-blocks/blocks', '@aws-blocks/hosting']);
+    assert.deepStrictEqual(pkg.dependencies, { 'lit-html': '^3.3.3' });
   });
 
-  it('keeps a range the project already declared', () => {
-    const pkg = { dependencies: { '@aws-blocks/blocks': '~0.8.0' } };
-    applyBlocksRanges(pkg, { '@aws-blocks/blocks': '^0.9.0' });
-    assert.strictEqual(pkg.dependencies['@aws-blocks/blocks'], '~0.8.0');
+  it('leaves a range the project already declared, and does not install over it', () => {
+    const pkg = { dependencies: { '@aws-blocks/blocks': '~0.8.0', '@aws-blocks/hosting': '*' } };
+    assert.deepStrictEqual(takePlaceholderBlocksDeps(pkg), ['@aws-blocks/hosting']);
+    assert.deepStrictEqual(pkg.dependencies, { '@aws-blocks/blocks': '~0.8.0' });
+  });
+
+  it('is a no-op for a manifest with no placeholders', () => {
+    const pkg = { dependencies: { 'lit-html': '^3.3.3' } };
+    assert.deepStrictEqual(takePlaceholderBlocksDeps(pkg), []);
+    assert.deepStrictEqual(pkg.dependencies, { 'lit-html': '^3.3.3' });
+    assert.deepStrictEqual(takePlaceholderBlocksDeps({}), []);
   });
 });
 
@@ -90,21 +74,26 @@ describe('every template', () => {
   });
 
   for (const { label, path } of manifests) {
-    it(`leaves no unresolved @aws-blocks/* range in ${label}`, async () => {
+    it(`declares its blocks dependencies as the placeholder in ${label}`, () => {
       const pkg = JSON.parse(readFileSync(path, 'utf-8'));
-      const names = blocksDepNames(pkg);
-      if (names.length === 0) return;
-
-      const ranges = await resolveBlocksRanges(names, async () => '0.9.0');
-      applyBlocksRanges(pkg, ranges);
-
-      for (const name of names) {
+      for (const name of blocksDepNames(pkg)) {
         assert.strictEqual(
           pkg.dependencies[name],
-          '^0.9.0',
-          `${label} still declares ${name} as ${pkg.dependencies[name]}`,
+          PLACEHOLDER,
+          `${label} declares ${name} as ${pkg.dependencies[name]}; templates must ship the placeholder so the CLI installs the package by name`,
         );
       }
+    });
+
+    it(`leaves no @aws-blocks/* range behind for npm to resolve in ${label}`, () => {
+      const pkg = JSON.parse(readFileSync(path, 'utf-8'));
+      const taken = takePlaceholderBlocksDeps(pkg);
+      assert.deepStrictEqual(
+        blocksDepNames(pkg),
+        [],
+        `${label} still declares ${blocksDepNames(pkg).join(', ')} after the placeholders were taken`,
+      );
+      if (taken.length > 0) assert.ok(taken.every((n: string) => n.startsWith('@aws-blocks/')));
     });
   }
 });
