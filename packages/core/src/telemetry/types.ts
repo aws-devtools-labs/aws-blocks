@@ -10,6 +10,7 @@ export type CommandName =
   | 'destroy'
   | 'cleanup'
   | 'console'
+  | 'dashboard'
   | 'vendorize';
 
 /**

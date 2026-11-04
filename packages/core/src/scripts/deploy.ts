@@ -11,6 +11,7 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
+import { createDeployRecorder } from './deploy-history.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
@@ -226,6 +227,22 @@ export function makeInvalidationProbe(
 }
 
 export async function deploy(options: DeployOptions) {
+  // Structured deploy history (.blocks/deploy-history.jsonl) is the primary
+  // source for the dashboard's deployments view: IN_PROGRESS at start, one
+  // terminal record (same id) at the end. Best-effort, never fails a deploy.
+  const recorder = createDeployRecorder(options.projectRoot, 'production');
+  recorder.start();
+  try {
+    const result = await runDeploy(options);
+    recorder.succeed();
+    return result;
+  } catch (error) {
+    recorder.fail(error);
+    throw error;
+  }
+}
+
+async function runDeploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
     log.progress('🏗️  Preparing deployment...');
 
