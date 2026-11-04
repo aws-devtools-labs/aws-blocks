@@ -336,3 +336,67 @@ describe('blocks-generate-spec CLI', () => {
 		}
 	});
 });
+
+/**
+ * The bytes each stream carries, modeled on `log-stream.test.ts`: progress and
+ * detail follow `BLOCKS_LOG_STREAM`, the `✅` result line stays on stdout.
+ */
+describe('blocks-generate-spec CLI output streams', () => {
+	function runFixture(env: NodeJS.ProcessEnv) {
+		const dir = join(tmpdir(), `blocks-spec-cli-test-${Date.now()}-streams`);
+		mkdirSync(dir, { recursive: true });
+		const indexPath = makeBackend(dir, 'js');
+		const outputPath = join(dir, 'blocks.spec.json');
+		installBlock(dir, {
+			packages: [
+				{
+					identity: 'example-iot-native',
+					platforms: {
+						dart: { package: { name: 'example_iot_native', library: 'example_iot_native.dart' } },
+					},
+				},
+			],
+		});
+		try {
+			const child = spawnSync(process.execPath, [cliPath, indexPath, outputPath], {
+				encoding: 'utf-8',
+				env: { PATH: process.env.PATH, ...env },
+			});
+			assert.strictEqual(child.status, 0, child.stderr);
+			const declarers = [...ambient.declarers, '@example/bb-iot'].sort().join(', ');
+			return {
+				stdout: child.stdout,
+				stderr: child.stderr,
+				header: '📝 Generating OpenRPC spec...\n',
+				details: `   backend: ${indexPath}\n   output:  ${outputPath}\n   native declarations: ${declarers}\n`,
+				result: `✅ OpenRPC spec written to ${outputPath}\n`,
+			};
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	it('unset: the legacy output is unchanged (everything on stdout)', () => {
+		const { stdout, stderr, header, details, result } = runFixture({});
+		assert.strictEqual(stdout, header + details + result);
+		assert.strictEqual(stderr, '');
+	});
+
+	it('BLOCKS_LOG_STREAM=stderr: stdout carries only the result line', () => {
+		const { stdout, stderr, header, details, result } = runFixture({
+			BLOCKS_LOG_LEVEL: 'verbose',
+			BLOCKS_LOG_STREAM: 'stderr',
+		});
+		assert.strictEqual(stdout, result);
+		assert.strictEqual(stderr, header + details);
+	});
+
+	it('the blocks CLI default (normal, stderr): the header on stderr, the result on stdout', () => {
+		const { stdout, stderr, header, result } = runFixture({
+			BLOCKS_LOG_LEVEL: 'normal',
+			BLOCKS_LOG_STREAM: 'stderr',
+		});
+		assert.strictEqual(stdout, result);
+		assert.strictEqual(stderr, header);
+	});
+});

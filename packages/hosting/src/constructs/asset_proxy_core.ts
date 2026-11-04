@@ -49,7 +49,7 @@ import type { IBucket } from 'aws-cdk-lib/aws-s3';
 import { type ProxyRules, proxyRulesJs } from './proxy_rules.js';
 
 /** `value` without its trailing slashes (a linear scan; a `/\/+$/` regex backtracks on a long slash run). */
-const trimTrailingSlashes = (value: string): string => {
+export const trimTrailingSlashes = (value: string): string => {
   let end = value.length;
   while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
   return value.slice(0, end);
@@ -100,6 +100,20 @@ export type AssetProxyOptions = ProxyRules & {
    * `serverError` (status 500) when S3 fails.
    */
   errorPages?: { notFound?: string; serverError?: string };
+  /**
+   * Answer the framework image endpoints (`/_next/image?url=…`, Nuxt
+   * `/_ipx/<modifiers>/<src>`, Astro `/_image?href=…`) when the deploy has no
+   * image function: a local source is served as stored (unoptimized); a remote
+   * source is redirected (302) to itself when its host is in `hosts`, else
+   * 404. The proxy never fetches a remote URL, so it can't be used to reach
+   * internal endpoints. Only the API Gateway door's proxy reads the request
+   * query, so only it answers these.
+   *
+   * `pathPrefixes` are the path-form (IPX-style, `<prefix>/<modifiers>/<src>`)
+   * endpoints, basePath-relative: `/_ipx` by default, plus a custom
+   * `runtimeConfig.ipx.baseURL`.
+   */
+  imageFallback?: { hosts: readonly string[]; pathPrefixes?: readonly string[] };
 };
 
 /**
@@ -110,6 +124,17 @@ export type AssetProxyOptions = ProxyRules & {
  * @param opts the prefix to strip, the SPA fallback, and the app's rules and error pages.
  * @returns the source, to inline ahead of an envelope handler.
  */
+/**
+ * The path-form image endpoint prefixes: `/_ipx` plus any configured ones,
+ * normalized (one leading slash, no trailing slash) and deduplicated.
+ *
+ * @param prefixes the configured prefixes, basePath-relative.
+ * @returns the prefixes the proxy matches.
+ */
+export const imagePathPrefixes = (prefixes: readonly string[] = []): string[] => [
+  ...new Set(['/_ipx', ...prefixes].map((p) => `/${trimTrailingSlashes(p.replace(/^\/+/, ''))}`).filter((p) => p !== '/')),
+];
+
 export const assetProxyCoreJs = (opts: AssetProxyOptions): string => {
   const pageKey = (page: string | undefined): string => JSON.stringify((page ?? '').replace(/^\/+/, ''));
   return `const { S3Client, GetObjectCommand } = require('@aws-sdk/client-s3');
@@ -120,6 +145,9 @@ const KEY_PREFIX = process.env.ASSET_KEY_PREFIX || '';
 const STRIP_PREFIX = ${JSON.stringify(opts.stripPrefix ?? '')};
 const SPA_FALLBACK = ${opts.spaFallback ? 'true' : 'false'};
 const NOT_FOUND_PAGE = ${pageKey(opts.errorPages?.notFound)};
+const IMAGE_FALLBACK = ${opts.imageFallback ? 'true' : 'false'};
+const IMAGE_REMOTE_HOSTS = ${JSON.stringify(opts.imageFallback?.hosts ?? [])};
+const IMAGE_PATH_PREFIXES = ${JSON.stringify(imagePathPrefixes(opts.imageFallback?.pathPrefixes))};
 const SERVER_ERROR_PAGE = ${pageKey(opts.errorPages?.serverError)};
 
 ${proxyRulesJs(opts)}
@@ -277,6 +305,61 @@ function gzipOnce(key, version, buf) {
     GZIP_CACHE.set(id, gz);
   }
   return gz;
+}
+
+// A remote image host is allowed when it equals an allowlisted host, or
+// matches a '*.' / '**.' wildcard entry (Next.js remotePatterns hostnames), or
+// the allowlist has '**' (an Astro remotePattern with no hostname: any host).
+function imageHostAllowed(host) {
+  host = host.toLowerCase();
+  for (var i = 0; i < IMAGE_REMOTE_HOSTS.length; i++) {
+    var entry = IMAGE_REMOTE_HOSTS[i].toLowerCase();
+    if (entry === host || entry === '**') return true;
+    var star = entry.indexOf('**.') === 0 ? 3 : entry.indexOf('*.') === 0 ? 2 : 0;
+    if (star && host.length > entry.length - star && host.slice(-(entry.length - star + 1)) === '.' + entry.slice(star)) return true;
+  }
+  return false;
+}
+
+// The source behind a framework image endpoint when the deploy has no image
+// function: { uri } for a local file (served as stored), { redirect } for an
+// allowed remote source, { status: 404 } otherwise; null when the request is
+// not an image endpoint.
+function blocksImageSource(requestUri, query) {
+  if (!IMAGE_FALLBACK) return null;
+  var rel = stripBasePath(requestUri, STRIP_PREFIX);
+  var src;
+  var prefix = null;
+  for (var p = 0; p < IMAGE_PATH_PREFIXES.length; p++) {
+    if (rel.indexOf(IMAGE_PATH_PREFIXES[p] + '/') === 0) { prefix = IMAGE_PATH_PREFIXES[p]; break; }
+  }
+  if (prefix !== null) {
+    // '<prefix>/<modifiers>/<src>'; a remote source is inlined ('https://host/…'),
+    // and API Gateway may collapse its '//'.
+    var rest = rel.substring(prefix.length + 1);
+    var slash = rest.indexOf('/');
+    src = slash === -1 ? '' : rest.substring(slash + 1).replace(/^(https?):\\/+/i, '$1://');
+  } else if (rel === '/_next/image' || rel === '/_image') {
+    src = (query && (query.url || query.href)) || '';
+    // API Gateway hands the query value over percent-decoded. A local source
+    // is re-encoded into path form, so the app's redirects and the path
+    // checks (control characters, backslashes, '..') see it as they see a
+    // request path; a raw CR/LF or C0 byte never reaches a Location header.
+    if (!/^https?:/i.test(src)) src = src.split('/').map(encodeURIComponent).join('/');
+  } else {
+    return null;
+  }
+  if (/^https?:/i.test(src)) {
+    // The browser follows the redirect with WHATWG URL rules, so the host is
+    // checked on the parsed URL (userinfo and '\\' would otherwise point it at
+    // another host), and the redirect goes to that same parsed URL.
+    var url;
+    try { url = new URL(src); } catch (e) { return { status: 404 }; }
+    if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.username || url.password) return { status: 404 };
+    return imageHostAllowed(url.hostname) ? { redirect: url.href } : { status: 404 };
+  }
+  if (!src || src.indexOf('//') === 0) return { status: 404 };
+  return { uri: src.charAt(0) === '/' ? src : '/' + src };
 }
 
 async function blocksServe(requestUri, requestHeaders) {

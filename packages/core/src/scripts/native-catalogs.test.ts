@@ -11,10 +11,12 @@ import {
 	isPlainObject,
 	KNOWN_TRANSFERABLE_ABIS,
 	MAX_GENERIC_ARITY,
+	NATIVE_BINDING_FIELDS,
 	NATIVE_BINDINGS_EXTENSION,
 	NATIVE_CATALOG_SCHEMA_VERSION,
 	NATIVE_PACKAGES_EXTENSION,
 	NATIVE_PLATFORMS,
+	type NativeBindingRegistration,
 	type NativeDeclarationSource,
 	type NativePlatformEntry,
 } from './native-catalogs.js';
@@ -341,6 +343,23 @@ describe('schema 1 constants', () => {
 		assert.deepStrictEqual([...KNOWN_TRANSFERABLE_ABIS], ['blocks-transferable-v1']);
 		assert.strictEqual(MAX_GENERIC_ARITY, 1);
 		assert.deepStrictEqual([...NATIVE_PLATFORMS], ['dart', 'swift', 'android']);
+	});
+
+	// `satisfies` on the constant rejects a name the type lacks; this rejects a
+	// name the type has but the list misses.
+	type ListsAllFields = [Exclude<keyof NativeBindingRegistration, (typeof NATIVE_BINDING_FIELDS)[number]>] extends [
+		never,
+	]
+		? true
+		: false;
+	const listsAllFields: ListsAllFields = true;
+
+	it('lists every field a binding declares (checked by tsc)', () => {
+		assert.ok(listsAllFields);
+		assert.deepStrictEqual(
+			[...NATIVE_BINDING_FIELDS],
+			['id', 'kind', 'tag', 'package', 'export', 'abi', 'genericArity'],
+		);
 	});
 
 	it('uses the x- prefix so conforming tooling ignores both objects', () => {

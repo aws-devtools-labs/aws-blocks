@@ -2,18 +2,38 @@ package com.example.app
 
 import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.BlocksClient
-import kotlin.Deprecated
-import kotlin.DeprecationLevel
-import kotlin.Nothing
+import com.aws.blocks.kotlin.BlocksRequest
+import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.OidcProvider
+import kotlin.String
 
 public class Auth(
   private val client: BlocksClient,
 ) {
-  @Deprecated(
-    message = "OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block to enable this method.",
-    level = DeprecationLevel.ERROR,
-  )
-  public suspend fun getClient(): Nothing = throw NotImplementedError("OIDC is not configured. Add oidc { relayTo = \"...\" } to your awsBlocks block to enable this method.")
+  public suspend fun getClient(): OidcClient<GetClient.Provider> {
+    val request = BlocksRequest(method = "auth.getClient", params = emptyList(), id = BlocksRequest.nextId())
+    val result = client.execute(request)
+    return OidcClient.fromJson(result, client, "blocks-fixture://auth")
+  }
+
+  public object GetClient {
+    public enum class Provider(
+      override val providerName: String,
+    ) : OidcProvider {
+      Google("google"),
+      Github("github"),
+      MySso("my-sso"),
+      LoginGov("login.gov"),
+      ;
+
+      public companion object {
+        /**
+         * The provider the backend knows as [name], or null if this spec named none.
+         */
+        public fun fromProviderName(name: String): Provider? = entries.firstOrNull { it.providerName == name }
+      }
+    }
+  }
 }
 
 public val Blocks.auth: Auth

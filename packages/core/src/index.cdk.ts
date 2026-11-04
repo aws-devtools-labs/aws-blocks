@@ -113,6 +113,8 @@ export {
 	type HostingDomainConfig,
 	type HostingProps,
 	type HostingWafConfig,
+	type HostingPreset,
+	HostingPresets,
 } from './hosting.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export {

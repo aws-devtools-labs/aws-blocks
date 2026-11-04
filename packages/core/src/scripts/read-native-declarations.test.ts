@@ -8,6 +8,7 @@ import { join, posix, win32 } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { NativeCatalogError, type NativeDeclarationInput, type NativePackageRegistration } from './native-catalogs.js';
 import { readNativeDeclarations } from './read-native-declarations.js';
+import { validateNativeCatalogs } from './validate-native-catalogs.js';
 
 const roots: string[] = [];
 
@@ -177,11 +178,84 @@ describe('readNativeDeclarations', () => {
 		assert.deepStrictEqual(sourcesFrom(foundationOf(root)), []);
 	});
 
-	it('skips a package whose aws-blocks namespace is null', () => {
-		const root = makeApp();
-		installPackage(root, '@example/bb-iot', { 'aws-blocks': null });
+	it('reports a package whose aws-blocks namespace is not an object', () => {
+		for (const namespace of [
+			null,
+			'transferable',
+			42,
+			true,
+			[{ native: { packages: PACKAGES, bindings: BINDINGS } }],
+		]) {
+			const root = makeApp();
+			installPackage(root, '@example/bb-iot', { 'aws-blocks': namespace });
 
-		assert.deepStrictEqual(sourcesFrom(foundationOf(root)), []);
+			assert.throws(
+				() => readNativeDeclarations(foundationOf(root)),
+				(err: unknown) => {
+					assert.ok(err instanceof NativeCatalogError);
+					assert.strictEqual(err.errors[0].path, 'aws-blocks', JSON.stringify(namespace));
+					assert.strictEqual(
+						err.errors[0].message,
+						'"aws-blocks" must be an object (declared by @example/bb-iot)',
+						JSON.stringify(namespace),
+					);
+					return true;
+				},
+			);
+		}
+	});
+
+	// On the CLI path the read runs first, so a sibling's validation error is
+	// never reached while a malformed key stands.
+	it("masks a sibling's validation errors until the malformed namespace is fixed", () => {
+		const root = makeApp();
+		installPackage(root, '@example/bb-iot', { 'aws-blocks': 'oops' });
+		installPackage(root, '@example/alpha', { 'aws-blocks': { native: { bindings: [{ id: '' }] } } });
+
+		assert.throws(
+			() => readNativeDeclarations(foundationOf(root)),
+			(err: unknown) => {
+				assert.ok(err instanceof NativeCatalogError);
+				assert.deepStrictEqual(
+					err.errors.map((e) => e.message),
+					['"aws-blocks" must be an object (declared by @example/bb-iot)'],
+				);
+				return true;
+			},
+		);
+
+		// With the malformed key removed the blank id is reachable, so the read was
+		// hiding it rather than accepting it.
+		const fixed = makeApp();
+		installPackage(fixed, '@example/alpha', { 'aws-blocks': { native: { bindings: [{ id: '' }] } } });
+		const validated = validateNativeCatalogs(readNativeDeclarations(foundationOf(fixed)), []);
+		assert.ok(!validated.ok);
+		assert.deepStrictEqual(
+			validated.errors.map((e) => e.path),
+			['x-blocks-native-bindings.bindings[0].id'],
+		);
+	});
+
+	it('reports a malformed namespace in every manifest that carries one, not just the first', () => {
+		const root = makeApp();
+		installPackage(root, '@example/bb-iot', { 'aws-blocks': 'oops' });
+		installPackage(root, '@example/alpha', { 'aws-blocks': 42 });
+
+		assert.throws(
+			() => readNativeDeclarations(foundationOf(root)),
+			(err: unknown) => {
+				assert.ok(err instanceof NativeCatalogError);
+				assert.deepStrictEqual(
+					err.errors.map((e) => e.message).sort(),
+					[
+						'"aws-blocks" must be an object (declared by @example/alpha)',
+						'"aws-blocks" must be an object (declared by @example/bb-iot)',
+					],
+					'the read collects across manifests before it throws',
+				);
+				return true;
+			},
+		);
 	});
 
 	it('skips a package whose native object declares neither packages nor bindings', () => {
@@ -631,9 +705,10 @@ describe('readNativeDeclarations', () => {
 });
 
 /**
- * The walk stops on `dirname(dir) === dir`. CI only ever runs it on POSIX — the
- * Windows lane runs templates-e2e.mjs, which never invokes `blocks-generate-spec`
- * — so the Windows roots are pinned here instead of going unexercised.
+ * The walk stops on `dirname(dir) === dir`. CI only ever runs it on POSIX — both
+ * Windows lanes run a template e2e script, and neither invokes
+ * `blocks-generate-spec` — so the Windows roots are pinned here instead of going
+ * unexercised.
  */
 describe('ancestor walk root termination', () => {
 	const WINDOWS_ROOTS = [

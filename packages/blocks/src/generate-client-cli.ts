@@ -24,17 +24,16 @@
  * in a child process with `--conditions=aws-runtime`, so the emitted
  * `client.js` is correct regardless of how the hook itself was invoked.
  *
- * For a TypeScript foundation the worker is loaded with `--import tsx`. Like
- * `blocks-generate-spec`, tsx is expected from the consuming app's
- * devDependencies rather than bundled here, keeping the runtime path JS-only.
+ * For a TypeScript foundation the worker is loaded with `--import <tsx loader>`:
+ * the app's own `tsx` when it is installed, else the one `@aws-blocks/blocks`
+ * depends on, by absolute URL, so that the worker finds it from any app.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { resolve, isAbsolute } from 'node:path';
-
-const require = createRequire(import.meta.url);
+import { isAbsolute, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const [foundationArg, outputArg] = process.argv.slice(2);
 const foundationPath = resolvePath(foundationArg ?? './aws-blocks/index.ts');
@@ -44,23 +43,32 @@ function resolvePath(p: string): string {
 	return isAbsolute(p) ? p : resolve(process.cwd(), p);
 }
 
+/** The file URL of the `tsx` loader: the app's (cwd) own, else this package's dependency. */
+function resolveTsxLoader(): string | undefined {
+	for (const from of [resolve(process.cwd(), 'package.json'), import.meta.url]) {
+		try {
+			return pathToFileURL(createRequire(from).resolve('tsx')).href;
+		} catch {
+			// Not installed there; try the next location.
+		}
+	}
+	return undefined;
+}
+
 if (!existsSync(foundationPath)) {
 	console.error(`blocks-generate-client: cannot find ${foundationPath}`);
 	process.exit(2);
 }
 
-// The worker lives in @aws-blocks/core; resolve it through this package's own
-// dependency so consuming apps don't need a direct core dependency.
-const workerPath = require.resolve('@aws-blocks/core/scripts/generate-client-worker');
+// The worker lives in @aws-blocks/core; `generate-client-worker.js` runs it through
+// this package's own dependency, so consuming apps don't need a direct core dependency.
+const workerPath = fileURLToPath(new URL('./generate-client-worker.js', import.meta.url));
 
 const nodeArgs = ['--conditions=aws-runtime'];
 
 if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
-	try {
-		// Resolve tsx from the app's context (cwd), matching blocks-generate-spec:
-		// the templates ship it as a devDependency, we don't bundle it.
-		createRequire(resolve(process.cwd(), 'package.json')).resolve('tsx');
-	} catch {
+	const loader = resolveTsxLoader();
+	if (!loader) {
 		console.error(
 			[
 				`blocks-generate-client: cannot load TypeScript entry "${foundationPath}" — \`tsx\` is not installed.`,
@@ -70,16 +78,30 @@ if (/\.(ts|tsx|mts|cts)$/i.test(foundationPath)) {
 		);
 		process.exit(2);
 	}
-	nodeArgs.push('--import', 'tsx');
+	nodeArgs.push('--import', loader);
 }
 
-const result = spawnSync(process.execPath, [...nodeArgs, workerPath, foundationPath, outputPath], {
+const worker = spawn(process.execPath, [...nodeArgs, workerPath, foundationPath, outputPath], {
 	stdio: 'inherit',
 	cwd: process.cwd(),
 });
 
-if (result.status !== 0) {
-	process.exit(result.status ?? 1);
-}
+// A signal sent to this process alone (`kill <pid>`, a supervisor, the `cdk-blocks` CLI
+// forwarding one) goes on to the worker, and this process ends after it, so the
+// worker never outlives it and writes the client after a reported failure.
+const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'] as const;
+const forward = (signal: NodeJS.Signals) => worker.kill(signal);
+for (const signal of SIGNALS) process.on(signal, forward);
 
-console.log(`blocks-generate-client: wrote ${outputPath}`);
+worker.on('error', (error) => {
+	console.error(`blocks-generate-client: cannot start the client generator: ${error.message}`);
+	process.exit(1);
+});
+
+worker.on('exit', (code, signal) => {
+	for (const name of SIGNALS) process.off(name, forward);
+	// End as the worker did: by its signal, so the caller sees the interruption, or with its exit code.
+	if (signal) process.kill(process.pid, signal);
+	else if (code !== 0) process.exit(code ?? 1);
+	else console.log(`blocks-generate-client: wrote ${outputPath}`);
+});

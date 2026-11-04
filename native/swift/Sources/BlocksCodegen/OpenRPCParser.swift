@@ -57,6 +57,8 @@ public struct OpenRPCParser {
             return RPCMethod(name: method.name, params: params, result: result)
         }
 
+        try validateDeclaredBindingArity(methods: methods, declared: declared.bindings)
+
         let servers = (spec.servers ?? []).map { ServerDefinition(name: $0.name, url: $0.url) }
 
         return RPCModel(

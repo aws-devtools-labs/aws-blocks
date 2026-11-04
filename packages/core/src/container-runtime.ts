@@ -39,8 +39,16 @@ import { isMainThread, parentPort, Worker, workerData } from 'node:worker_thread
 /** Container port the health server listens on. Matches the CDK port mapping. */
 const HEALTH_PORT = 8080;
 
-/** How long graceful shutdown waits for in-flight workers before exiting. */
-const DRAIN_GRACE_MS = 25_000;
+/**
+ * How long graceful shutdown waits for in-flight workers before exiting. The
+ * container compute sets `BLOCKS_DRAIN_GRACE_SECONDS` just under the task's ECS
+ * `stopTimeout`, so the runtime exits before ECS force-kills it; 25s (under the
+ * ECS default of 30s) when unset.
+ */
+const DRAIN_GRACE_MS = (() => {
+	const seconds = Number(process.env.BLOCKS_DRAIN_GRACE_SECONDS);
+	return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : 25_000;
+})();
 
 /**
  * A poller starter registered by an event Building Block. Called once by

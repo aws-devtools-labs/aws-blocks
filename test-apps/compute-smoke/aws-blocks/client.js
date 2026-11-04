@@ -9,9 +9,15 @@ import { ApiNamespaceClient as __BLOCKS_ApiNamespaceClient__ } from '@aws-blocks
 import '@aws-blocks/bb-file-bucket/middleware';
 
 export const api = __BLOCKS_ApiNamespaceClient__('api');
+export const placedApi = __BLOCKS_ApiNamespaceClient__('placedApi');
+export const placedChildApi = __BLOCKS_ApiNamespaceClient__('placedChildApi');
+export const placedOverrideApi = __BLOCKS_ApiNamespaceClient__('placedOverrideApi');
 export const reports = __BLOCKS_ApiNamespaceClient__('reports');
 
 export const generateClient = (config) => ({
     api: __BLOCKS_ApiNamespaceClient__('api', config),
+    placedApi: __BLOCKS_ApiNamespaceClient__('placedApi', config),
+    placedChildApi: __BLOCKS_ApiNamespaceClient__('placedChildApi', config),
+    placedOverrideApi: __BLOCKS_ApiNamespaceClient__('placedOverrideApi', config),
     reports: __BLOCKS_ApiNamespaceClient__('reports', config),
 });

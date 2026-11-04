@@ -33,7 +33,7 @@ class Boundary extends Component<{ children: ReactNode; onRetry: () => void }, {
       <div role="alert" style={{ background: 'var(--bb-color-surface-alt, #f5f5f5)', padding: '1rem', borderRadius: 'var(--bb-radius-sm, 4px)' }}>
         <p style={{ margin: 0 }}>This section failed to load.</p>
         <p style={{ color: 'var(--bb-color-text-muted, #666)', margin: '0.5rem 0' }}>{this.state.error.message}</p>
-        <button onClick={this.retry} className="bb-button">
+        <button type="button" onClick={this.retry} className="bb-button">
           Try again
         </button>
       </div>

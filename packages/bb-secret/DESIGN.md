@@ -111,8 +111,8 @@ For a stack-managed secret it creates one `aws-cdk-lib/aws-secretsmanager.Secret
   framework-reserved.
 
 For an **external** secret (`Secret.fromExisting(arn)` → `options.secret`) it
-imports the secret with `Secret.fromSecretCompleteArn` and grants read/write to
-it, but creates, seeds, deletes, **and tags** nothing — it is owned outside this
+imports the secret with `Secret.fromSecretCompleteArn` and grants read to it
+(plus write only when `allowRuntimeWrite: true`), but creates, seeds, deletes, **and tags** nothing — it is owned outside this
 stack (often shared across many installations), so stamping it with this stack's
 resource-group tag would mutate a resource we don't own. `registerConfig` still
 records the ARN so the runtime resolves the same identity.
@@ -126,7 +126,7 @@ error instead of a cryptic `X is not a function`.
 `index.aws.ts` captures the construct `id` and any `ExternalSecretRef` in its
 constructor and resolves the secret ARN at **call time** via `resolveSecretArn()`
 — from the `ExternalSecretRef` when wrapping an existing secret, otherwise from
-the config key `BLOCKS_SECRET_ARN_<ID>` the CDK layer registered. Deferring to
+the config key `BLOCKS_SECRET_ARN_<FULLID>` the CDK layer registered. Deferring to
 call time keeps the constructor side-effect-free w.r.t. config, so instantiating
 a Secret during CDK synth / client-spec generation (where the Lambda config env
 is absent) never throws.

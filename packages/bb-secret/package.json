@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-secret",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "keywords": [
     "aws-blocks",
     "secret",
@@ -54,9 +54,9 @@
     "test": "node --test --test-concurrency=1 dist/*.test.js && node --conditions=cdk --test --test-concurrency=1 dist/cdk-conditions/*.test.js && node --conditions=aws-runtime --test --test-concurrency=1 dist/aws-runtime-conditions/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.7.0",
-    "@aws-blocks/bb-app-setting": "^0.3.2",
-    "@aws-blocks/bb-logger": "^0.2.2",
+    "@aws-blocks/core": "^0.8.0",
+    "@aws-blocks/bb-app-setting": "^0.4.0",
+    "@aws-blocks/bb-logger": "^0.3.0",
     "@aws-sdk/client-secrets-manager": "^3.1156.0",
     "@standard-schema/spec": "^1.1.0"
   },

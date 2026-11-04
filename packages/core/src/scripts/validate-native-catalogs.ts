@@ -13,6 +13,7 @@ import {
 	isPlainObject,
 	KNOWN_TRANSFERABLE_ABIS,
 	MAX_GENERIC_ARITY,
+	NATIVE_BINDING_FIELDS,
 	NATIVE_BINDINGS_EXTENSION,
 	NATIVE_CATALOG_SCHEMA_VERSION,
 	NATIVE_PACKAGES_EXTENSION,
@@ -58,26 +59,68 @@ export type NativeValidation =
 	| { ok: true; sources: readonly NativeDeclarationSource[] }
 	| { ok: false; errors: SpecValidationError[] };
 
+/** `matches`, not a pattern: a Swift module reads by grapheme, not code point. */
+interface FieldGrammar {
+	matches: (value: string) => boolean;
+	shape: string;
+}
+
+/** Maven admits a group or artifact id by character class alone. */
+const MAVEN_ID = /^[A-Za-z0-9._-]+$/;
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * One grapheme at a time, as `isValidSwiftIdentifier` reads a Swift `Character`:
+ * a code-point class would reject the decomposed spelling of `CaféNative` and
+ * accept `_\u0301Native`, which Swift treats as one non-letter character. Not
+ * parity — `\p{L}` and `\p{N}` approximate Swift's `isLetter` and `isNumber`,
+ * which are defined over a `Character` rather than its leading scalar.
+ */
+function isSwiftModuleName(value: string): boolean {
+	const graphemes = [...GRAPHEMES.segment(value)].map((s) => s.segment);
+	return (
+		graphemes.length > 0 && graphemes.every((g, i) => g === '_' || (i === 0 ? /^\p{L}/u : /^[\p{L}\p{N}]/u).test(g))
+	);
+}
+
 /**
  * Platform package fields a generator interpolates into generated source, so a
  * value outside the grammar is a compile failure in the customer's app rather
  * than a problem the generator can report against the block that declared it.
- * A platform absent from this map constrains its fields to non-blank only.
+ * A field absent from this map is constrained to non-blank only, as
+ * `swift.identity` and `swift.product` are: SwiftPM derives an identity from
+ * the dependency's location and imposes no grammar on either.
  */
-const PLATFORM_FIELD_GRAMMARS: Partial<
-	Record<NativePlatform, Readonly<Record<string, { pattern: RegExp; shape: string }>>>
-> = {
+const PLATFORM_FIELD_GRAMMARS: Record<NativePlatform, Readonly<Record<string, FieldGrammar>>> = {
 	dart: {
-		name: { pattern: /^[a-z_][a-z0-9_]*$/, shape: 'a pub package name' },
+		name: { matches: (v) => /^[a-z_][a-z0-9_]*$/.test(v), shape: 'a pub package name' },
 		library: {
-			pattern: /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/,
+			matches: (v) => /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/.test(v),
 			shape: 'a .dart file path inside lib/, without the leading "lib/"',
+		},
+	},
+	swift: {
+		module: { matches: isSwiftModuleName, shape: 'a Swift module name' },
+	},
+	android: {
+		group: { matches: (v) => MAVEN_ID.test(v), shape: 'a Maven group id' },
+		artifact: { matches: (v) => MAVEN_ID.test(v), shape: 'a Maven artifact id' },
+		kotlinPackage: {
+			matches: (v) => /^[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*$/u.test(v),
+			shape: 'a Kotlin package name',
 		},
 	},
 };
 
-/** An export must name a public type once a generator upper-camel-cases it. */
+/** An export must name a public type once each segment's first character is raised. */
 const EXPORT_GRAMMAR = /^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$/;
+
+/** Bounds an export before it is interpolated into generated source and diagnostics. */
+const MAX_EXPORT_LENGTH = 64;
+
+/** Keep a diagnostic on one log line even if a spec-supplied value carries a newline. */
+const escapeForDiagnostic = (value: string): string => value.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
 
 /**
  * Every generated Dart client imports this library, so a declared package of
@@ -186,8 +229,12 @@ function collectPackages(
 
 			// `canonicalJson` below compares `platforms` only, so an unrecognized
 			// sibling would be neither compared nor emitted. Rejecting it keeps
-			// "byte-identical" a statement about the whole registration.
-			for (const key of Object.keys(declaration)) {
+			// "byte-identical" a statement about the whole registration. Every
+			// allowlist here walks own string names rather than `Object.keys`,
+			// because a non-enumerable one is dropped just the same and no manifest
+			// can produce it. A symbol key is dropped too and stays unreported, for
+			// the same reason: it cannot come from JSON.
+			for (const key of Object.getOwnPropertyNames(declaration)) {
 				if (key !== 'identity' && key !== 'platforms') {
 					errors.push({
 						path: `${path}.${key}`,
@@ -286,7 +333,7 @@ function validatePlatformEntry(
 		return;
 	}
 
-	for (const key of Object.keys(entry)) {
+	for (const key of Object.getOwnPropertyNames(entry)) {
 		if (key !== 'package') {
 			errors.push({
 				path: `${path}.${key}`,
@@ -314,8 +361,8 @@ function validatePlatformEntry(
 			});
 			continue;
 		}
-		const grammar = grammars?.[field];
-		if (grammar && !grammar.pattern.test(value)) {
+		const grammar = grammars[field];
+		if (grammar && !grammar.matches(value)) {
 			errors.push({
 				path: `${pkgPath}.${field}`,
 				message: `${platform} "package" requires "${field}" to be ${grammar.shape}, got "${value}" (${declaredBy})`,
@@ -331,7 +378,7 @@ function validatePlatformEntry(
 			});
 		}
 	}
-	for (const key of Object.keys(entry.package)) {
+	for (const key of Object.getOwnPropertyNames(entry.package)) {
 		if (fields.includes(key)) continue;
 		const message =
 			key === 'version'
@@ -383,6 +430,18 @@ function collectBindings(
 				errors.push({ path: `${path}.id`, message: `Binding "id" must be a non-blank string (${declaredBy})` });
 				continue;
 			}
+
+			// Rejected rather than ignored, so the author learns it would be dropped.
+			for (const key of Object.getOwnPropertyNames(declaration)) {
+				if ((NATIVE_BINDING_FIELDS as readonly string[]).includes(key)) continue;
+				errors.push({
+					path: `${path}.${key}`,
+					message:
+						`Unexpected field "${key}" — a binding holds only ` +
+						`${NATIVE_BINDING_FIELDS.join(', ')} (${declaredBy})`,
+				});
+			}
+
 			const prior = seenIds.get(id);
 			if (prior) {
 				errors.push({
@@ -415,7 +474,7 @@ function collectBindings(
 			// A built-in tag reaches no arity check: it cannot be bound by a block, so
 			// `validateBindingTag` rejects it and returns `undefined`.
 			if (arity !== undefined && tag !== undefined) {
-				validateArityAgainstMethods(tag, arity, methods, errors);
+				validateArityAgainstMethods(tag, arity, id, declaredBy, methods, errors);
 			}
 
 			if (declaration.kind !== TRANSFERABLE_BINDING_KIND) continue;
@@ -439,13 +498,23 @@ function validateBindingShape(
 			});
 		}
 	}
-	if (isNonBlankString(binding.export) && !EXPORT_GRAMMAR.test(binding.export)) {
-		errors.push({
-			path: `${path}.export`,
-			message:
-				`Binding "export" must be a delimited run of alphanumeric segments starting with a letter, ` +
-				`got "${binding.export}" (${declaredBy})`,
-		});
+	const exportName = binding.export;
+	if (isNonBlankString(exportName)) {
+		if (exportName.length > MAX_EXPORT_LENGTH) {
+			errors.push({
+				path: `${path}.export`,
+				message:
+					`Binding "export" must be at most ${MAX_EXPORT_LENGTH} characters, ` +
+					`got ${exportName.length} (${declaredBy})`,
+			});
+		} else if (!EXPORT_GRAMMAR.test(exportName)) {
+			errors.push({
+				path: `${path}.export`,
+				message:
+					`Binding "export" must be a -, _ or . joined run of alphanumeric segments ` +
+					`starting with a letter, got "${escapeForDiagnostic(exportName)}" (${declaredBy})`,
+			});
+		}
 	}
 	return validateArity(binding.genericArity, path, declaredBy, errors);
 }
@@ -557,11 +626,15 @@ function validateArity(
 
 /**
  * An unbound tag on a method result is deliberately not an error here; the
- * native generators degrade it to `UnknownTransferable`.
+ * native generators degrade it to `UnknownTransferable`. The path names the
+ * result the app must fix; the message names the binding, because with several
+ * blocks installed the result alone does not say whose arity it violated.
  */
 function validateArityAgainstMethods(
 	tag: string,
 	arity: number,
+	id: string,
+	declaredBy: string,
 	methods: readonly ValidatableMethod[],
 	errors: SpecValidationError[],
 ): void {
@@ -574,7 +647,12 @@ function validateArityAgainstMethods(
 		const typeArgs = schema[TYPE_ARGS_FIELD];
 
 		if (typeArgs !== undefined && !Array.isArray(typeArgs)) {
-			errors.push({ path, message: `${TYPE_ARGS_FIELD} must be an array of JSON Schema objects` });
+			errors.push({
+				path,
+				message:
+					`${TYPE_ARGS_FIELD} must be an array of JSON Schema objects, ` +
+					`for tag "${tag}" bound by binding "${id}" (${declaredBy})`,
+			});
 			continue;
 		}
 
@@ -585,8 +663,9 @@ function validateArityAgainstMethods(
 			errors.push({
 				path,
 				message:
-					`Tag "${tag}" is bound with genericArity ${arity}, so this result needs exactly ${arity} ` +
-					`${TYPE_ARGS_FIELD} ${arity === 1 ? 'entry' : 'entries'}, found ${count}`,
+					`Tag "${tag}" is bound with genericArity ${arity} by binding "${id}", so this result ` +
+					`needs exactly ${arity} ${TYPE_ARGS_FIELD} ${arity === 1 ? 'entry' : 'entries'}, ` +
+					`found ${count} (${declaredBy})`,
 			});
 		}
 	}

@@ -1,8 +1,8 @@
 name: PR Checks
 
 # Originally used pull_request_target so fork PRs get secrets and OIDC access.
-# Workflow YAML is always sourced from the default branch (main) with that trigger.
-# All checkout steps explicitly reference the PR head SHA.
+# Workflow YAML is always sourced from the default branch (main) with that
+# trigger, so checkout steps referenced the PR head SHA.
 #
 # Security: this is a private repo. Gate 1 (Settings → Actions → General)
 # requires approval for fork PRs from users without write access.
@@ -11,6 +11,14 @@ name: PR Checks
 # E2E jobs additionally check github.event.pull_request.head.repo.full_name
 # to skip for fork PRs (defense in depth — pull_request already blocks secrets).
 # TODO: Verify with AppSec before making this repo public.
+#
+# With `pull_request`, GitHub reads this file from the PR's merge commit
+# (refs/pull/N/merge), and jobs check out that same commit (actions/checkout's
+# default). A step added on main then finds the script it runs even when the
+# PR branch predates it; checking out the head SHA instead failed every PR not
+# rebased onto such a change. Only Detect Changes and Blocks Package Integrity
+# check out the head SHA: they read the head commit itself (its E2E trailer,
+# and its packed content against the base).
 
 on:
   pull_request:
@@ -79,6 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The head commit, not the merge commit: its E2E trailer counts.
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - id: e2e-slot
@@ -95,6 +104,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Packs the PR head against its base (see the step below).
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
@@ -188,7 +198,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -213,7 +222,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -249,9 +257,10 @@ jobs:
 
       # The Harbor agent check and agent bench only run from main or with model credentials, so
       # their cache-scope hardening (the Harbor build container and output guard, agent bench's
-      # lockfile-pinned Playwright matching PW_VERSION) is checked here on every PR.
-      - name: Test the benchmark workflows' cache-scope hardening
-        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/agent-bench-playwright.test.mjs
+      # lockfile-pinned Playwright matching PW_VERSION) and the Harbor approval gate are checked
+      # here on every PR.
+      - name: Test the benchmark workflows' cache-scope hardening and approval gate
+        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/agent-bench-playwright.test.mjs
 
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
@@ -279,6 +288,15 @@ jobs:
       # Deletes the stacks a cancelled or crashed E2E job leaves behind.
       - name: Test the E2E teardown
         run: node --test scripts/ci/e2e-teardown.test.mjs
+
+      # Retries the Amplify interop sandbox delete when CloudFormation gives up
+      # on a throttled resource delete.
+      - name: Test the Amplify sandbox teardown
+        run: node --test scripts/ci/amplify-sandbox-teardown.test.mjs
+
+      # The stale-stack sweeper deletes Amplify sandboxes one at a time.
+      - name: Test the Amplify sandbox sweep
+        run: node --test scripts/ci/amplify-sweep.test.mjs
 
       # No required check may pass when a job it depends on fails or is
       # cancelled (GitHub counts a skipped required check as passing).
@@ -335,7 +353,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -414,7 +431,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -479,7 +495,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -524,7 +539,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -589,7 +603,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -674,7 +687,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -759,7 +771,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -907,7 +918,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -983,7 +993,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1083,6 +1092,9 @@ jobs:
           - framework: sveltekit
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
+          - framework: preview
+            app-dir: test-apps/hosting-preview
+            script: test:e2e:hosting-preview
           # Same suite with the SSR server on AWS Lambda Web Functions
           # (compute.type: 'web-function'); the app reads HOSTING_COMPUTE_TYPE.
           - framework: sveltekit-web-function
@@ -1114,7 +1126,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1198,7 +1209,6 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

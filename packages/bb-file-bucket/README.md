@@ -39,7 +39,7 @@ const bucket = new FileBucket(scope, id, options?)
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
 | `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.storageAccessLogging`, then `BlocksDefaults.accessLogging`)** when omitted — so a stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
 | `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
-| `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can only be set when the bucket is first created. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
+| `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can be added to a deployed bucket, but can't be turned off once on. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
@@ -55,6 +55,10 @@ The S3 bucket name is derived from the scope chain: the FileBucket id joined to 
 | `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. |
 | `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
 | `cacheControl` | `string` | Cache-Control header value. |
+
+### Presigned URL options
+
+`getUrl`, `putUrl`, `getFileHandle`, and `createUploadHandle` accept `expiresIn` in seconds. It must be an integer from `1` to `604800` (seven days); the default is `3600`.
 
 ### CorsRule
 
@@ -257,6 +261,27 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
+On a versioned bucket, `delete(path)` creates a delete marker without removing
+stored data versions; `get()` returns `null` and `scan()` omits the file.
+`delete(path, { versionId })` permanently removes that specific data version.
+On S3, deleting the current data version exposes the next entry in the version
+history, which may be another data version or a delete marker.
+
+The local mock reconciles its current body and metadata with the next stored
+data version when the newest data version is permanently deleted, or removes
+the current copies when none remain. This creates no replacement version and
+does not remove an active delete-marker flag; `get()` and `scan()` still honor
+that flag.
+
+**Local limitation:** the mock keeps only an active delete-marker flag, not
+delete markers ordered within the version history. A subsequent `put()` removes
+the flag. Consequently, `put(old)` → `delete()` → `put(replacement)` → permanent
+deletion of the replacement can expose `old` locally, whereas S3 would make the
+earlier delete marker current and treat the key as deleted. This case is not
+fixed by current-copy reconciliation. See
+[Mock vs AWS Behavior Differences](./DESIGN.md#mock-vs-aws-behavior-differences)
+and use a sandbox when testing deletion history across re-uploads.
+
 ### Access Logging
 
 Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox, `ONE_YEAR` in production):
@@ -307,7 +332,7 @@ Every new version is locked for `retentionDays`. `delete(path)` still hides the 
 
 **Upload through the backend.** S3 requires a signed `Content-MD5` or checksum header on every upload to an Object Lock bucket. A presigned URL is created before the file is known, so it can't carry one, and S3 rejects the upload. On these buckets `putUrl()` and `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported` (locally and on AWS) rather than return a URL that fails. `put()` works, because the SDK adds the checksum. Downloads (`getUrl()`, `getFileHandle()`) are unaffected.
 
-Object Lock can only be turned on when the bucket is first deployed, and can't be turned off. Locked objects also block teardown, so the bucket must be retained — pass `removalPolicy: 'retain'` when using Object Lock in a sandbox.
+Object Lock can be added to a bucket that is already deployed, but S3 can't turn it off once it's on. Locked objects also block teardown, so the bucket must be retained — pass `removalPolicy: 'retain'` when using Object Lock in a sandbox.
 
 ## Best Practices
 
@@ -330,7 +355,8 @@ Object Lock can only be turned on when the bucket is first deployed, and can't b
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
+Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Version-aware operations are available locally, with the historical delete-marker limitation described under [Versioned Bucket](#versioned-bucket). Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
 
+When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` continue to select the current file.
 
 

@@ -174,7 +174,7 @@ export interface DistributedTableOptions<
 	readValidation?: ReadValidationMode;
 	/** Wrap an existing table instead of creating one. */
 	table?: ExternalTableRef;
-	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
+	/** Optional logger for internal operations. When omitted, a default Logger at warn level is created so `readValidation: 'coerce'` fallback warnings surface. */
 	logger?: ChildLogger;
 }
 
@@ -287,6 +287,22 @@ export type QueryOptions<
 export interface ScanOptions {
 	/** Maximum number of items to return. */
 	limit?: number;
+}
+
+/** Options for `get()`. */
+export interface GetOptions {
+	/**
+	 * Read with strong consistency, so the result reflects every write that
+	 * succeeded before the read. By default `get()` is eventually consistent on
+	 * AWS (a DynamoDB `GetItem` without `ConsistentRead`), and a read issued right
+	 * after a `put()` may briefly miss it. Set this when the next step depends on
+	 * an item that was just written, e.g. an existence or ownership check. A
+	 * strongly consistent read costs twice the read capacity of an eventually
+	 * consistent one. The local mock is always strongly consistent.
+	 *
+	 * @defaultValue false
+	 */
+	consistentRead?: boolean;
 }
 
 export type PutOptions<T> =
