@@ -149,7 +149,7 @@ No template sets `frontendCommand`: `cdk-blocks dev` starts the frontend dev ser
 
 `npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question.
 
-Apps scaffolded before this change ran `aws-blocks/scripts/*.ts` wrappers. Run `npx --no -- cdk-blocks migrate` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `aws-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
+Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `aws-blocks/scripts/*.ts` wrappers. Run `npx --no -- cdk-blocks migrate` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `aws-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
 
 ## Templates
 

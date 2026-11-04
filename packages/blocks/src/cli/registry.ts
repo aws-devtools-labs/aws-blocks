@@ -529,9 +529,9 @@ export const COMMANDS: readonly CommandSpec[] = [
 		group: 'Project',
 		summary: 'Move an app from aws-blocks/scripts wrappers to cdk-blocks commands',
 		description:
-			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the blocks\n' +
+			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the cdk-blocks\n' +
 			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
-			'become blocks aliases ("cdk-blocks deploy"); every other script stays as it is. The options of a\n' +
+			'become cdk-blocks aliases ("cdk-blocks deploy"); every other script stays as it is. The options of a\n' +
 			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
 			'app file other than Markdown docs uses any more are deleted. Only the wrappers of public\n' +
 			'create-blocks-app releases are recognised; any other version is reported as unrecognised and is\n' +
