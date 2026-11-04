@@ -87,7 +87,7 @@ describe('resolveOptions — store omitted / cognito', () => {
 		);
 	});
 
-	it('rejects two entries with the same social type', () => {
+	it('rejects a second entry of one social type (its key cannot also be the type)', () => {
 		assert.throws(
 			() =>
 				resolveOptions({
@@ -96,7 +96,7 @@ describe('resolveOptions — store omitted / cognito', () => {
 						work: { type: 'google', clientId: 'g2', clientSecret: secret },
 					},
 				}),
-			/providers\.google and providers\.work all have `type: 'google'`/,
+			/providers\.work has `type: 'google'`, so its key must be `google`/,
 		);
 	});
 
@@ -185,5 +185,66 @@ describe('provider helpers set type', () => {
 			}).type,
 			'oauth2',
 		);
+	});
+});
+
+describe('resolveOptions — backstops for untyped callers', () => {
+	it('rejects an unknown store', () => {
+		const options: unknown = { store: 'cognit0' };
+		assert.throws(
+			() => resolveOptions(options as AuthOptions),
+			/`store` must be 'cognito' \(the default\) or 'blocks', got "cognit0"/,
+		);
+	});
+
+	it('rejects the replaced provider maps on either store, even next to providers', () => {
+		for (const options of [
+			{ emailPassword: false, oidcProviders: {} },
+			{ providers: {}, socialProviders: {}, samlProviders: {} },
+			{ store: 'blocks', providers: { local: stubIdp() }, oidcProviders: {} },
+		]) {
+			const untyped: unknown = options;
+			assert.throws(() => resolveOptions(untyped as AuthOptions), /replaced by `providers`/);
+		}
+	});
+
+	it('rejects options only a user pool gives meaning to on store: blocks', () => {
+		for (const [key, value] of [
+			['userPool', { __brand: 'ExternalUserPoolRef', userPoolId: 'us-east-1_x' }],
+			['admin', {}],
+			['mfa', 'required'],
+			['passkeys', { relyingPartyId: 'example.com', origins: [] }],
+			['emailPassword', false],
+			['codeDelivery', async () => {}],
+		] as const) {
+			const options: unknown = { store: 'blocks', providers: { local: stubIdp() }, [key]: value };
+			assert.throws(
+				() => resolveOptions(options as AuthOptions),
+				new RegExp(
+					`\`${key}\` needs \`store: 'cognito'\` \\(the default\\): a \`store: 'blocks'\` block has no user pool`,
+				),
+				key,
+			);
+		}
+		const users: unknown = {
+			store: 'blocks',
+			providers: { local: stubIdp() },
+			users: { groups: [], attributes: [] },
+		};
+		assert.throws(() => resolveOptions(users as AuthOptions), /`users\.attributes` needs `store: 'cognito'`/);
+	});
+
+	it('rejects a store: blocks block with no provider', () => {
+		assert.throws(
+			() => resolveOptions({ store: 'blocks', providers: {} }),
+			/`store: 'blocks'` needs at least one provider/,
+		);
+	});
+
+	it('drops a leftover federateVia from a provider entry', () => {
+		const options: unknown = {
+			providers: { okta: { type: 'oidc', issuer, clientId: 'c', clientSecret: secret, federateVia: 'direct' } },
+		};
+		assert.equal(resolveOptions(options as AuthOptions).oidcProviders?.okta?.federateVia, 'cognito');
 	});
 });

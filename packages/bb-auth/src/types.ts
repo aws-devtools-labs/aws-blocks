@@ -105,7 +105,8 @@ import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-block
  * });
  * ```
  */
-export type AuthOptions = CognitoAuthOptions | BlocksAuthOptions;
+// Cognito last: with no `store` in a literal, TypeScript reports errors against the last best-matching member.
+export type AuthOptions = BlocksAuthOptions | CognitoAuthOptions;
 
 /**
  * Where an `Auth` block's users live. Chosen once per block with the `store`
@@ -239,6 +240,28 @@ export interface AuthCommonOptions {
 
 	/** Optional logger. When omitted, a default `Logger` at `error` level is created. */
 	logger?: ChildLogger;
+
+	/**
+	 * @deprecated Replaced by `providers`: move each entry there, keyed as
+	 * before, with `type: 'google' | 'facebook' | 'amazon' | 'apple'`. See
+	 * {@link ERROR_replaced_by_providers}.
+	 */
+	socialProviders?: ERROR_replaced_by_providers;
+
+	/**
+	 * @deprecated Replaced by `providers`: move each entry there, keyed as
+	 * before, with `type: 'oidc'`. A `federateVia: 'cognito'` entry stays on the
+	 * default store; a directly federated one (the old default), `github()`,
+	 * `customOauth2()` and `stubIdp()` move to a block with `store: 'blocks'`.
+	 * See {@link ERROR_replaced_by_providers}.
+	 */
+	oidcProviders?: ERROR_replaced_by_providers;
+
+	/**
+	 * @deprecated Replaced by `providers`: move each entry there, keyed as
+	 * before, with `type: 'saml'`. See {@link ERROR_replaced_by_providers}.
+	 */
+	samlProviders?: ERROR_replaced_by_providers;
 }
 
 /**
@@ -487,26 +510,62 @@ export interface BlocksAuthOptions extends AuthCommonOptions {
 	allowBearerAuth?: boolean;
 
 	/** Email + password needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	emailPassword?: never;
+	emailPassword?: ERROR_needs_store_cognito<'emailPassword'>;
 	/** MFA needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	mfa?: never;
+	mfa?: ERROR_needs_store_cognito<'mfa'>;
 	/** Passkeys needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	passkeys?: never;
+	passkeys?: ERROR_needs_store_cognito<'passkeys'>;
 	/** The Cognito hosted UI needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	hostedUi?: never;
+	hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
 	/** `auth.admin` needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	admin?: never;
+	admin?: ERROR_needs_store_cognito<'admin'>;
 	/** Wrapping an existing user pool needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	userPool?: never;
+	userPool?: ERROR_needs_store_cognito<'userPool'>;
 	/** A Cognito feature plan needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	featurePlan?: never;
+	featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
 	/** An SES email sender needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	email?: never;
-	/** The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	codeDelivery?: never;
-	/** The mock-only `totpVerification` needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
-	totpVerification?: never;
+	email?: ERROR_needs_store_cognito<'email'>;
 }
+
+/**
+ * The type of an option that a `store: 'blocks'` block does not have (it has
+ * no user pool). No value has this type, so setting the option is a compile
+ * error whose message names the option and the fix: `K` needs
+ * `store: 'cognito'` — the default, so drop `store: 'blocks'`, or move the
+ * option to a separate `'cognito'` block.
+ *
+ * A building block of the public option types, exported because they are
+ * built from it, and stable like them.
+ */
+export type ERROR_needs_store_cognito<K extends string> = string & {
+	readonly __blocksOptionError: `${K} needs store: 'cognito'`;
+};
+
+/**
+ * The type of `socialProviders`, `oidcProviders` and `samlProviders`, the
+ * options `providers` replaced. No value has this type, so a leftover key is
+ * a compile error. Move each entry into `providers`, keyed as before, with its
+ * `type` (`'google'`, `'oidc'`, `'saml'`, …); a `federateVia: 'direct'` OIDC
+ * provider moves to a block with `store: 'blocks'`.
+ *
+ * A building block of the public option types, exported because they are
+ * built from it, and stable like them.
+ */
+export type ERROR_replaced_by_providers = string & {
+	readonly __blocksOptionError: 'replaced by providers (each entry tagged with its type)';
+};
+
+/**
+ * The type of an OIDC provider's former `federateVia`. No value has this type,
+ * so a leftover key is a compile error: the block's `store` decides it now —
+ * `'cognito'` (the default) federates through Cognito, `'blocks'` directly.
+ *
+ * A building block of the public option types, exported because they are
+ * built from it, and stable like them.
+ */
+export type ERROR_federateVia_replaced_by_store = string & {
+	readonly __blocksOptionError: "replaced by the block's store";
+};
 
 /**
  * Settings for {@link BlocksAuthOptions.users}: only `groups`. The other
@@ -514,7 +573,7 @@ export interface BlocksAuthOptions extends AuthCommonOptions {
  * not have, so they are compile errors there.
  */
 export type BlocksUserOptions = Pick<UserPoolOptions, 'groups'> & {
-	[K in Exclude<keyof UserPoolOptions, 'groups'>]?: never;
+	[K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
 };
 
 /**
@@ -855,6 +914,12 @@ export interface OidcProviderBase extends ProviderCommon {
 		userInfo: string;
 		jwks: string;
 	};
+	/**
+	 * @deprecated Replaced by the block's `store`: `'cognito'` (the default)
+	 * federates every `type: 'oidc'` entry through Cognito, `'blocks'` directly.
+	 * See {@link ERROR_federateVia_replaced_by_store}.
+	 */
+	federateVia?: ERROR_federateVia_replaced_by_store;
 }
 
 /**
@@ -2403,7 +2468,7 @@ export type CodeDeliveryFn = (username: string, code: string, purpose: CodeDeliv
  * Both fields belong to the user pool, so only the Cognito arm
  * ({@link CognitoAuthMockOptions}) has them.
  */
-export type AuthMockOptions = CognitoAuthMockOptions | BlocksAuthOptions;
+export type AuthMockOptions = BlocksAuthMockOptions | CognitoAuthMockOptions;
 
 /** The Cognito arm of {@link AuthMockOptions}: {@link CognitoAuthOptions} plus the mock-only fields. */
 export interface CognitoAuthMockOptions extends CognitoAuthOptions {
@@ -2443,6 +2508,14 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 	 * ```
 	 */
 	totpVerification?: 'any' | 'rfc6238';
+}
+
+/** The `'blocks'` arm of {@link AuthMockOptions}: the mock-only fields need a user pool. */
+export interface BlocksAuthMockOptions extends BlocksAuthOptions {
+	/** The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'blocks'` block sends no codes. */
+	codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
+	/** The mock-only `totpVerification` needs `store: 'cognito'`: a `'blocks'` block has no MFA. */
+	totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2746,26 +2819,70 @@ export type AdminDisabled = {
 export type AdminOff = [ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: never];
 
 /**
+ * Returned by `auth.admin` on a `store: 'blocks'` block, which has no user
+ * pool to administer — its users live at their identity providers. Like
+ * {@link AdminDisabled}, every call is a compile error, here naming the real
+ * fix (`store: 'cognito'`) rather than `admin: {}`, which that store refuses.
+ * The getter throws at runtime.
+ */
+export type AdminDisabledOnBlocks = {
+	readonly __adminNotEnabled: "auth.admin needs store: 'cognito'";
+	addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	removeUserFromGroup(
+		username: string,
+		group: string,
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks
+	): never;
+	listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	setUserPassword(
+		username: string,
+		password: string,
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks
+	): never;
+	getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+};
+
+/**
+ * The trailing rest parameter of every {@link AdminDisabledOnBlocks} method: a
+ * single `never`, so no call compiles, named after the fix.
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type AdminOffOnBlocks = [ERROR_auth_admin_needs_store_cognito: never];
+
+/**
  * The `auth.admin` getter's return type — the gate.
  *
  * - The check is `{ admin: object }`, NOT `{ admin: any }`: a primitive like
  *   `admin: true` fails the gate, so the opt-in MUST be an object (`admin: {}`).
  *   It also requires the Cognito arm ({@link CognitoAuthOptions}): a
- *   `store: 'blocks'` block has no user pool to administer.
+ *   `store: 'blocks'` block has no user pool to administer, and gets
+ *   {@link AdminDisabledOnBlocks}, whose errors name `store: 'cognito'`.
  * - The gate condition tests a **fixed shape** and the positive branch is a
  *   plain generic interface (`AdminSurface<O>`), so `Auth<O>` stays
  *   covariant in `O`.
  * - For the wide `AuthOptions` (a helper typed `(auth: Auth)`) it is the union
- *   of both branches: no member is reachable without narrowing — like the
- *   zero-config default — and every configured instance, admin-enabled or not,
- *   stays assignable to the wide type. (`AuthCognito`'s gate made an
+ *   of every branch: no member is reachable without narrowing — like the
+ *   zero-config default — and every configured instance, admin-enabled or not
+ *   (and of either store), stays assignable to the wide type. (`AuthCognito`'s gate made an
  *   admin-enabled instance unassignable to the wide type.)
  */
 export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O
-	? AdminSurface<O> | AdminDisabled
-	: O extends { admin: object; store?: 'cognito' }
-		? AdminSurface<O>
-		: AdminDisabled;
+	? AdminSurface<O> | AdminDisabled | AdminDisabledOnBlocks
+	: O extends { store: 'blocks' }
+		? AdminDisabledOnBlocks
+		: O extends { admin: object; store?: 'cognito' }
+			? AdminSurface<O>
+			: AdminDisabled;
 
 /** Options for `signIn`. */
 export interface SignInOptions {

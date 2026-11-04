@@ -9,7 +9,7 @@
  * user-pool engine (`engines/native-cognito.ts`: the sign-in core from D5c,
  * the account + admin surface from D5c2), and the direct
  * federation engine (D6a: OIDC and bare OAuth 2.0 providers, HTTPS only).
- * Hosted-UI providers (social, SAML, `federateVia: 'cognito'`) sign in through
+ * Hosted-UI providers (a `'cognito'` block's social, SAML and OIDC `providers`) sign in through
  * Cognito managed login (`engines/federation-hosted-ui.ts`, D6b); a `stubIdp()`
  * provider answers 501 outside a sandbox.
  *

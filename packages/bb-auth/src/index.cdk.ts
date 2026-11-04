@@ -17,9 +17,9 @@
  * - **Q4:** the pool's removal policy and deletion protection follow the
  *   stack defaults when the per-block option is unset (`AuthCognito`'s pool is
  *   `DESTROY` even under `BlocksPresets.production`).
- * - **Q6:** a configuration with no pool-backed sign-in method (no email +
- *   password, no social or SAML provider, no `federateVia: 'cognito'` OIDC
- *   provider) synthesizes no Cognito resources at all.
+ * - **Q6:** a `store: 'blocks'` configuration (no email + password, and only
+ *   backend-verified OIDC, OAuth 2.0 or stub providers) synthesizes no Cognito
+ *   resources at all.
  *
  * Every runtime method is a `synthGuard` stub, so calling one at the top level
  * of a backend module fails synth with an actionable message instead of a bare
@@ -75,7 +75,7 @@ import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
-import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import { BLOCKS_NEEDS_A_PROVIDER, type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -106,7 +106,7 @@ export type * from './types.js';
  *   With `emailPassword: false`, refresh only — no password flow is reachable.
  * - One `cognito.CfnUserPoolGroup` (`group-<name>`) per `users.groups` entry.
  *
- * When a provider federates through Cognito (social, SAML, `federateVia: 'cognito'`):
+ * When a provider federates through Cognito (any `providers` entry of a `'cognito'` block — social, SAML or OIDC):
  * - `cognito.UserPoolDomain` (`domain`) — prefix derived from `fullId`; create-only.
  * - `cognito.UserPoolClient` (`hosted-ui-client`): a separate public client,
  *   authorization-code grant (PKCE), callback/logout URLs on the real front doors.
@@ -135,7 +135,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	public readonly userPoolClient?: cognito.IUserPoolClient;
 	/**
 	 * The hosted-UI app client (`hosted-ui-client`) used for social, SAML and
-	 * `federateVia: 'cognito'` sign-in. A separate client from
+	 * Cognito-federated OIDC sign-in. A separate client from
 	 * {@link Auth.userPoolClient}. `undefined` when no provider federates through Cognito.
 	 */
 	public readonly hostedUiClient?: cognito.IUserPoolClient;
@@ -727,7 +727,9 @@ function validateOptions(
 		const hasDirectOidc = Object.values(opts.oidcProviders ?? {}).some((p) => p && p.federateVia !== 'cognito');
 		if (!opts.userPool && !hasDirectOidc && cognitoFederatedProviderIds(opts).length === 0) {
 			throw new Error(
-				'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
+				opts.store === 'blocks'
+					? BLOCKS_NEEDS_A_PROVIDER
+					: 'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
 			);
 		}
 	}

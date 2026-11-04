@@ -1442,6 +1442,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 */
 	get admin(): AdminGetterOf<O> {
 		const admin = this.config.admin;
+		if (this.config.store === 'blocks') throw new Error("admin not available: auth.admin needs store: 'cognito'");
 		if (!admin) throw new Error('admin not enabled: construct Auth with { admin: {} }');
 		this.adminSurface ??= buildAdminSurface<O>({
 			actions: admin.actions,

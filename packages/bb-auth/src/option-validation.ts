@@ -160,13 +160,23 @@ type SpecFor<V> =
 			: Exclude<Spec, 'boolean'>;
 
 /**
- * Exactly the keys of `T`, each required, a walked spec for every key whose
+ * Exactly the keys of `T` (except removed ones, see {@link IsRemovedOption}), each required, a walked spec for every key whose
  * type is an options group, and `'boolean'` for every `boolean` option. Used
  * with `satisfies`, so the shape literal must list every option of `T`,
  * nothing else, must descend into every group and must type-check every
  * boolean.
  */
-type ShapeOf<T> = { readonly [K in KeysOf<T>]-?: SpecFor<PropOf<T, K>> };
+type ShapeOf<T> = {
+	readonly [K in KeysOf<T> as IsRemovedOption<PropOf<T, K>> extends true ? never : K]-?: SpecFor<PropOf<T, K>>;
+};
+
+/**
+ * `true` for a key typed only as an option error (`ERROR_replaced_by_providers`,
+ * `ERROR_federateVia_replaced_by_store`): declared so a leftover is a compile
+ * error, but not an option, so the shape leaves it out and the walk reports it
+ * as unknown.
+ */
+type IsRemovedOption<V> = [NonNullable<V>] extends [{ readonly __blocksOptionError: string }] ? true : false;
 
 const PROVIDER_COMMON = {
 	scopes: 'value',

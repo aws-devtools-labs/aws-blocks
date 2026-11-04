@@ -29,12 +29,11 @@ import type {
 	GoogleProvider,
 	OAuth2Provider,
 	SamlProvider,
-	SocialProviderId,
 	StubProvider,
 } from './types.js';
 
 /** A public provider shape without its `type` tag (the resolved maps carry the family instead). */
-type Untagged<P> = Omit<P, 'type'>;
+type Untagged<P> = Omit<P, 'type' | 'federateVia'>;
 
 /** The social providers, keyed by their fixed id (`google`, …). @internal */
 export interface SocialProviders {
@@ -85,7 +84,8 @@ export type SamlProviderOptions = Untagged<SamlProvider>;
  *
  * @internal
  */
-export interface ResolvedAuthOptions extends Omit<CognitoAuthOptions, 'store' | 'providers'> {
+export interface ResolvedAuthOptions
+	extends Omit<CognitoAuthOptions, 'store' | 'providers' | 'socialProviders' | 'oidcProviders' | 'samlProviders'> {
 	/** The block's store; `undefined` is `'cognito'` (a hand-built resolved object in a test). */
 	store?: AuthStore;
 	socialProviders?: SocialProviders;
@@ -93,15 +93,43 @@ export interface ResolvedAuthOptions extends Omit<CognitoAuthOptions, 'store' | 
 	samlProviders?: Record<string, SamlProviderOptions>;
 }
 
-const SOCIAL_TYPES: readonly SocialProviderId[] = ['google', 'facebook', 'amazon', 'apple'];
+/** The options `providers` replaced. */
+const REPLACED_KEYS = ['socialProviders', 'oidcProviders', 'samlProviders'] as const;
+
+/** Options only a user pool gives meaning to, refused on `store: 'blocks'` (including the mock-only ones). */
+const COGNITO_ONLY_KEYS = [
+	'emailPassword',
+	'mfa',
+	'passkeys',
+	'hostedUi',
+	'admin',
+	'userPool',
+	'featurePlan',
+	'email',
+	'codeDelivery',
+	'totpVerification',
+] as const;
+
+/** The message for a `store: 'blocks'` block with no provider (every layer refuses it the same way). @internal */
+export const BLOCKS_NEEDS_A_PROVIDER =
+	"Auth: `store: 'blocks'` needs at least one provider in `providers` (`type: 'oidc'`, `github()`, `stubIdp()`, …): its users can sign in no other way.";
+
+/** The keys of `value` among `keys` that are set (not `undefined`). */
+function setKeys(value: object, keys: readonly string[]): string[] {
+	return keys.filter((key) => Reflect.get(value, key) !== undefined);
+}
+
+function listKeys(keys: readonly string[]): string {
+	return keys.map((key) => `\`${key}\``).join(', ');
+}
 
 function describeType(type: unknown): string {
 	return typeof type === 'string' ? `\`type: '${type}'\`` : 'no `type`';
 }
 
-/** The entry without its `type` tag. */
-function untag<P extends { type: unknown }>(entry: P): Untagged<P> {
-	const { type: _type, ...config } = entry;
+/** The entry without its `type` tag (and without a leftover `federateVia`, which the store now decides). */
+function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Untagged<P> {
+	const { type: _type, federateVia: _federateVia, ...config } = entry;
 	return config;
 }
 
@@ -119,15 +147,58 @@ function untag<P extends { type: unknown }>(entry: P): Untagged<P> {
  * under fixed names, and the resolved map is keyed by them, so the key is the
  * provider id everywhere — at most one entry per social type.
  *
- * @throws Error for a provider `type` the store does not accept (or none), two
- *   entries with the same social `type`, and a social entry keyed differently
- *   from its `type` — the backstop for configurations the compiler did not see
- *   (plain JavaScript, casts, a `: AuthOptions` variable).
+ * @throws Error for an unknown `store`; for a leftover `socialProviders`,
+ *   `oidcProviders` or `samlProviders`; for an option only a user pool gives
+ *   meaning to on `store: 'blocks'` (`emailPassword`, `mfa`, `userPool`,
+ *   `admin`, `users.<anything but groups>`, …) and for a `'blocks'` block with
+ *   no provider; for a provider `type` the store does not accept (or none); and
+ *   for a social entry keyed differently from its `type` (so two entries of one
+ *   social type cannot both pass). The backstop for configurations the compiler
+ *   did not see: plain JavaScript, casts, a `: AuthOptions` variable.
  * @internal
  */
 export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
+	const storeValue: unknown = Reflect.get(options, 'store');
+	if (storeValue !== undefined && storeValue !== 'cognito' && storeValue !== 'blocks') {
+		throw new Error(
+			`Auth: \`store\` must be 'cognito' (the default) or 'blocks', got ${JSON.stringify(storeValue)}.`,
+		);
+	}
+	const replaced = setKeys(options, REPLACED_KEYS);
+	if (replaced.length > 0) {
+		throw new Error(
+			`Auth: ${listKeys(replaced)} ${replaced.length === 1 ? 'was' : 'were'} replaced by \`providers\`: move each entry there, ` +
+				"keyed as before, with its `type` ('google', 'oidc', 'saml', …). Directly federated OIDC providers go in a block with `store: 'blocks'`.",
+		);
+	}
+
 	if (options.store === 'blocks') {
-		const { store, providers, ...rest } = options;
+		const cognitoOnly = setKeys(options, COGNITO_ONLY_KEYS);
+		const userKeys = Object.keys(options.users ?? {}).filter((key) => key !== 'groups');
+		cognitoOnly.push(...userKeys.map((key) => `users.${key}`));
+		if (cognitoOnly.length > 0) {
+			throw new Error(
+				`Auth: ${listKeys(cognitoOnly)} ${cognitoOnly.length === 1 ? 'needs' : 'need'} \`store: 'cognito'\` (the default): ` +
+					"a `store: 'blocks'` block has no user pool. Remove it, or drop `store: 'blocks'`.",
+			);
+		}
+		const {
+			store,
+			providers,
+			users,
+			emailPassword: _emailPassword,
+			mfa: _mfa,
+			passkeys: _passkeys,
+			hostedUi: _hostedUi,
+			admin: _admin,
+			userPool: _userPool,
+			featurePlan: _featurePlan,
+			email: _email,
+			socialProviders: _social,
+			oidcProviders: _oidc,
+			samlProviders: _saml,
+			...rest
+		} = options;
 		const oidcProviders: Record<string, OidcProviderOptions> = {};
 		for (const [id, entry] of Object.entries(providers ?? {})) {
 			if (!entry) continue;
@@ -139,19 +210,18 @@ export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
 			}
 			oidcProviders[id] = { ...untag(entry), federateVia: 'direct' };
 		}
-		return { ...rest, store, emailPassword: false, oidcProviders };
+		if (Object.keys(oidcProviders).length === 0) throw new Error(BLOCKS_NEEDS_A_PROVIDER);
+		return {
+			...rest,
+			...(users ? { users: { groups: users.groups } } : {}),
+			store,
+			emailPassword: false,
+			oidcProviders,
+		};
 	}
 
-	const { store, providers, ...rest } = options;
+	const { store, providers, socialProviders: _social, oidcProviders: _oidc, samlProviders: _saml, ...rest } = options;
 	const entries = Object.entries(providers ?? {}).filter(([, entry]) => entry);
-	for (const type of SOCIAL_TYPES) {
-		const ids = entries.filter(([, entry]) => entry.type === type).map(([id]) => `providers.${id}`);
-		if (ids.length > 1) {
-			throw new Error(
-				`Auth: ${ids.join(' and ')} all have \`type: '${type}'\`. Cognito registers one provider per social type: keep one entry.`,
-			);
-		}
-	}
 	const resolved: ResolvedAuthOptions = { ...rest, store: store ?? 'cognito' };
 	for (const [id, entry] of entries) {
 		switch (entry.type) {

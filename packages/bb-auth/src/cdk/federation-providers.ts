@@ -414,27 +414,14 @@ export function validateDomainPrefix(prefix: unknown, what: string): string {
 
 /**
  * Federation-specific synth-time checks that do not depend on a single
- * provider: provider ids unique across the three records, redirect paths under
- * the auth subtree, and no hosted-UI federation on a wrapped (`userPool`) pool.
+ * provider: provider ids free of `/`, redirect paths under the auth subtree,
+ * and no hosted-UI federation on a wrapped (`userPool`) pool. (Ids are unique
+ * by construction: they are the keys of the one `providers` map.)
  */
 export function validateFederationOptions(options: ResolvedAuthOptions): void {
-	const seen = new Map<string, string>();
-	const records = [
-		['socialProviders', options.socialProviders],
-		['oidcProviders', options.oidcProviders],
-		['samlProviders', options.samlProviders],
-	] as const;
-	for (const [record, value] of records) {
+	for (const value of [options.socialProviders, options.oidcProviders, options.samlProviders]) {
 		for (const [id, entry] of Object.entries(value ?? {})) {
-			if (!entry) continue;
-			const other = seen.get(id);
-			if (other) {
-				throw new Error(
-					`Auth: provider id '${id}' is configured in both \`${other}\` and \`${record}\`. Provider ids must be unique — they name the sign-in route and the \`signIn:<id>\` action.`,
-				);
-			}
-			seen.set(id, record);
-			if (id.includes('/')) throw new Error(`Auth: provider id '${id}' must not contain '/'.`);
+			if (entry && id.includes('/')) throw new Error(`Auth: provider id '${id}' must not contain '/'.`);
 		}
 	}
 

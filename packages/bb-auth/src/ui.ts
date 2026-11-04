@@ -82,7 +82,7 @@ export {
 /**
  * Federated sign-in action names: one `signIn:<id>` action per configured
  * social, OIDC or SAML provider, where `<id>` is the provider's key in
- * `socialProviders` / `oidcProviders` / `samlProviders`. These actions carry a
+ * `providers`. These actions carry a
  * `url`, so the `Authenticator` renders them as a plain form submit (a
  * "Sign in with …" button) rather than calling `setAuthState`.
  */
