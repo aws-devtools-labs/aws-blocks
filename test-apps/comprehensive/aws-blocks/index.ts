@@ -12,7 +12,7 @@ import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blo
 import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { ApiError, isBlocksError, type BlocksContext } from '@aws-blocks/core';
-import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions } from '@aws-blocks/bb-auth';
+import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BlocksProvider, type UserCandidate } from '@aws-blocks/bb-auth';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Secret } from '@aws-blocks/bb-secret';
@@ -333,25 +333,25 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
 const stubsAllowed = getDeploymentType() !== 'production';
 
 /** The OIDC provider of every e2e instance: the stub IdP, or a placeholder real provider in production. */
-function e2eOidcProvider() {
+function e2eOidcProvider(): BlocksProvider {
   return stubsAllowed
     ? stubIdp({ onAuthorize: (req) => req.users[0] })
-    : { issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' };
+    : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' };
 }
 
 // The record key is the provider id on both the server and the client.
-const oidcProviders = {
+const oidcAuthProviders = {
   google: e2eOidcProvider(),
   corporate: e2eOidcProvider(),
 };
 
-function isOidcProvider(id: string): id is keyof typeof oidcProviders {
-  return Object.hasOwn(oidcProviders, id);
+function isOidcProvider(id: string): id is keyof typeof oidcAuthProviders {
+  return Object.hasOwn(oidcAuthProviders, id);
 }
 
 const oidcAuth = new Auth(scope, 'oidc-auth', {
-  emailPassword: false,
-  oidcProviders,
+  store: 'blocks',
+  providers: oidcAuthProviders,
   onSignIn: async (user) => {
     await recordSignIn('oidc-auth', { userId: user.userId, email: user.attributes.email ?? null, provider: user.signInProvider });
   },
@@ -361,8 +361,8 @@ const oidcAuth = new Auth(scope, 'oidc-auth', {
 // pattern and bearer-token auth for native clients. Uses custom paths to avoid
 // colliding with the first instance.
 const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     'google-extras': e2eOidcProvider(),
   },
   redirects: {
@@ -391,8 +391,8 @@ const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
 const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     'google-relay': e2eOidcProvider(),
   },
   redirects: {
@@ -410,8 +410,8 @@ const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
 // frontend's HTTPS origin would go in `allowedRelayOrigins`. Custom paths keep its
 // routes apart from the other OIDC instances.
 const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     'web-idp': e2eOidcProvider(),
   },
   redirects: {
@@ -421,23 +421,41 @@ const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
   },
 });
 
-// `validateUser` (decision Q10): one policy for every sign-up and sign-in on
-// this instance — email + password and the stub IdP alike. Only addresses at
-// `@allowed.example` may join, plus the SES mailbox simulator's success
-// address tagged `+allowed-` (`success+allowed-<id>@simulator.amazonses.com`):
+// `validateUser` (decision Q10): one policy for every sign-up and sign-in. Only
+// addresses at `@allowed.example` may join, plus the SES mailbox simulator's
+// success address tagged `+allowed-` (`success+allowed-<id>@simulator.amazonses.com`):
 // with `E2E_FROM_EMAIL` the pool sends through SES, whose sandbox delivers only
 // to verified or simulator recipients, so the deployed in-policy sign-up uses
-// that address. On AWS the pool also gets a Cognito PreSignUp
-// trigger, so a `SignUp` sent straight to Cognito is held to the same policy.
-// The stub IdP's only user is outside the policy, so its sign-in is rejected.
-// Custom paths keep its routes apart from the other OIDC instances.
+// that address.
+//
+// Two instances share the policy, one per store, because a block keeps its
+// users in one place:
+// - `auth-gated` (Cognito): email + password, so both phases run. On AWS the
+//   pool also gets a Cognito PreSignUp trigger, so a `SignUp` sent straight to
+//   Cognito is held to the same policy.
+// - `auth-gated-idp` (`store: 'blocks'`): the stub IdP, sign-in phase only. The
+//   stub IdP's only user is outside the policy, so its sign-in is rejected.
+//   Custom paths keep its routes apart from the other OIDC instances.
 const GATED_POLICY_MESSAGE = 'Only @allowed.example accounts may join';
+async function gatedPolicy({ email }: UserCandidate): Promise<void> {
+  if (!email?.endsWith('@allowed.example') && !/^success\+allowed-[^@]+@simulator\.amazonses\.com$/.test(email ?? '')) {
+    throw new ApiError(GATED_POLICY_MESSAGE, 403, { name: AuthErrors.NotAuthorized });
+  }
+}
 const authGated = new Auth(scope, 'auth-gated', {
   ...e2eEmail,
   emailPassword: {
     passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
   },
-  oidcProviders: {
+  validateUser: gatedPolicy,
+  codeDelivery: async (username, code, purpose) => {
+    await recordDeliveredCode('auth-gated', { username, code, purpose });
+    logCodeLocally(`[Auth auth-gated] ${purpose} code for "${username}": ${code}`);
+  },
+});
+new Auth(scope, 'auth-gated-idp', {
+  store: 'blocks',
+  providers: {
     // The stub IdP in local and sandbox (see e2eOidcProvider); a placeholder
     // real provider in production, where the gated suite skips the stub flow.
     'gated-idp': stubsAllowed
@@ -445,21 +463,13 @@ const authGated = new Auth(scope, 'auth-gated', {
           users: [{ sub: 'mallory-1', email: 'mallory@blocked.example', name: 'Mallory' }],
           onAuthorize: (req) => req.users[0],
         })
-      : { issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' },
+      : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' },
   },
   redirects: {
     callbackPath: '/aws-blocks/auth/gated/callback',
     signOutPath: '/aws-blocks/auth/gated/signout',
   },
-  validateUser: async ({ email }) => {
-    if (!email?.endsWith('@allowed.example') && !/^success\+allowed-[^@]+@simulator\.amazonses\.com$/.test(email ?? '')) {
-      throw new ApiError(GATED_POLICY_MESSAGE, 403, { name: AuthErrors.NotAuthorized });
-    }
-  },
-  codeDelivery: async (username, code, purpose) => {
-    await recordDeliveredCode('auth-gated', { username, code, purpose });
-    logCodeLocally(`[Auth auth-gated] ${purpose} code for "${username}": ${code}`);
-  },
+  validateUser: gatedPolicy,
 });
 
 /**
@@ -1663,7 +1673,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async oidcGetProviders() {
-    return Object.keys(oidcProviders);
+    return Object.keys(oidcAuthProviders);
   },
 
   // ------------------------------------------------------------------------
@@ -3114,8 +3124,9 @@ export const strictStatusApi = new ApiNamespace(scope, 'strictStatus', (context)
 const localDev = getDeploymentType() === 'local';
 const authSocial = localDev
   ? new Auth(scope, 'auth-social', {
-      socialProviders: {
+      providers: {
         google: {
+          type: 'google',
           clientId: 'e2e-placeholder.apps.googleusercontent.com',
           clientSecret: new Secret(scope, 'auth-social-google-client-secret'),
         },
@@ -3528,7 +3539,7 @@ async function _authTypeChecks(context: BlocksContext) {
   // @ts-expect-error — ERROR_mfa_is_off_on_this_Auth_instance
   await authC.updateMfaPreference(context, {});
 
-  // The OIDC instances have email + password off: the password methods are gated.
+  // The OIDC instances keep no user pool (`store: 'blocks'`): the password methods are gated.
   // @ts-expect-error — ERROR_emailPassword_is_disabled_on_this_Auth_instance
   await oidcAuth.signIn('user', 'password', context);
 

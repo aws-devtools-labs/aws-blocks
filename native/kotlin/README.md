@@ -146,7 +146,7 @@ import com.example.myapp.generated.Servers
 val blocks = Blocks(Servers.local) // or Blocks() for the spec's default server
 val oidc = OidcClient.forAuth(
     blocks.client(),
-    providers = listOf("google"), // the keys of the backend's oidcProviders
+    providers = listOf("google"), // the keys of the backend's providers
     relayTo = "com.yourcompany.yourapp://auth/callback", // as in oidc { relayTo } above
 )
 

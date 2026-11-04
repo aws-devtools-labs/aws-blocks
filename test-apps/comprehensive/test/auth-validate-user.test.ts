@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `validateUser` (decision Q10) on the `auth-gated` instance: one policy for
- * every sign-up and sign-in — only `@allowed.example` addresses may join.
+ * `validateUser` (decision Q10): one policy for every sign-up and sign-in —
+ * only `@allowed.example` addresses may join. Two instances share it, one per
+ * store: `auth-gated` (Cognito, email + password: the sign-up and sign-in
+ * phases) and `auth-gated-idp` (`store: 'blocks'`, the stub IdP: the sign-in
+ * phase).
  *
  * - Local and deployed: an email + password sign-up outside the policy is
  *   rejected with the developer's `AuthErrors` name and message; one inside
@@ -56,7 +59,7 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const unique = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 export function authValidateUserTests(getApi: () => typeof apiType) {
-  describe('Auth validateUser — sign-up and sign-in policy (auth-gated)', () => {
+  describe('Auth validateUser — sign-up and sign-in policy (auth-gated, auth-gated-idp)', () => {
     test('an email + password sign-up outside the policy is rejected with the canonical error', async () => {
       const api = getApi();
       const id = unique();
@@ -109,7 +112,7 @@ export function authValidateUserTests(getApi: () => typeof apiType) {
         const body = await callback.json();
         assert.strictEqual(body.name, AuthErrors.NotAuthorized);
         assert.strictEqual(body.error, POLICY_MESSAGE);
-        const session = cookiesOf(callback).filter((c) => /^auth_[^=]*auth-gated=/.test(c));
+        const session = cookiesOf(callback).filter((c) => /^auth_[^=]*auth-gated-idp=/.test(c));
         assert.deepStrictEqual(session, [], 'no session cookie');
       },
     );

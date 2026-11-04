@@ -64,7 +64,7 @@ class MainViewModel : ViewModel() {
     val blocks = Blocks().also(::addCloseable)
 }
 
-/** Provider ids from the backend's `oidcProviders` (`../typescript/aws-blocks/index.ts`). */
+/** Provider ids from the backend's `providers` (`../typescript/aws-blocks/index.ts`). */
 private val providers = listOf("google")
 
 /**

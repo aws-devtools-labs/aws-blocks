@@ -21,13 +21,13 @@ const GOOGLE_CLIENT_ID = 'replace-me.apps.googleusercontent.com';
 const googleClientSecret = new AppSetting(scope, 'google-client-secret', { secret: true });
 
 const auth = new Auth(scope, 'auth', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     google: {
+      type: 'oidc',
       issuer: 'https://accounts.google.com',
       clientId: GOOGLE_CLIENT_ID,
       clientSecret: googleClientSecret,
-      federateVia: 'direct',
     },
   },
   // Lets native clients authenticate with `Authorization: Bearer <access token>`

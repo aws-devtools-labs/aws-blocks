@@ -108,11 +108,11 @@ const e2eIdpClientId = process.env.NATIVE_E2E_OIDC_CLIENT_ID;
 let lastOidcSignIn: { userId: string; email: string | null; provider: string } | null = null;
 
 const oidcAuth = new Auth(scope, 'auth-oidc', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     google:
       e2eIdpIssuer && e2eIdpClientId
-        ? { issuer: e2eIdpIssuer, clientId: e2eIdpClientId }
+        ? { type: 'oidc', issuer: e2eIdpIssuer, clientId: e2eIdpClientId }
         : stubIdp({ onAuthorize: (req) => req.users[0] }),
   },
   redirects: {
