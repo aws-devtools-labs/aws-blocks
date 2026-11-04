@@ -26,6 +26,7 @@ import {
 import type { ScopeParent } from '@aws-blocks/core';
 import type {
 	AnySignInNextStep,
+	AppSettingRef,
 	AuthActionInputOf,
 	AuthenticatedUser,
 	AuthFlowOf,
@@ -43,6 +44,7 @@ import { Auth } from './index.mock.js';
 
 declare const scope: ScopeParent;
 declare const session: string;
+declare const oktaSecret: AppSettingRef;
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
@@ -51,7 +53,10 @@ type ActionsOf<A extends { createApi(): AuthStateApi<AuthActionInput> }> =
 	ReturnType<A['createApi']> extends AuthStateApi<infer I> ? I['action'] : never;
 type ChallengesOf<O extends AuthOptions> = ConfirmSignInInputOf<O>['challenge'];
 
-const okta = { issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' };
+/** An OIDC provider of a `store: 'blocks'` block. */
+const okta = { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' } as const;
+/** The same IdP federated through Cognito (the default store), which needs a client secret. */
+const oktaViaCognito = { ...okta, clientSecret: oktaSecret };
 const passwordActions = [
 	'signIn',
 	'signUp',
@@ -73,11 +78,12 @@ type TotpActionName = 'setUpTotp' | 'verifyTotpSetup';
 type MfaPreferenceActionName = 'getMfaPreference' | 'updateMfaPreference';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (1) emailPassword: false + one OIDC provider — the reviewer's repro. The
-//     password actions are compile errors; signOut is the only action.
+// (1) One OIDC provider and no email + password (`store: 'blocks'`) — the
+//     reviewer's repro. The password actions are compile errors; signOut is
+//     the only action. `emailPassword: false` on the Cognito store is the same.
 // ─────────────────────────────────────────────────────────────────────────────
 async function oidcOnly() {
-	const auth = new Auth(scope, 'oidc-only', { emailPassword: false, oidcProviders: { okta } });
+	const auth = new Auth(scope, 'oidc-only', { store: 'blocks', providers: { okta } });
 	const authApi = auth.createApi();
 	await authApi.setAuthState({ action: 'signOut' });
 	// @ts-expect-error — email + password is off on this block
@@ -91,6 +97,11 @@ async function oidcOnly() {
 	// @ts-expect-error — passkeys need email + password
 	await authApi.setAuthState({ action: 'listPasskeys' });
 	type _actions = Expect<Equal<ActionsOf<typeof auth>, 'signOut'>>;
+	const viaCognito = new Auth(scope, 'oidc-only-cognito', {
+		emailPassword: false,
+		providers: { okta: oktaViaCognito },
+	});
+	type _cognitoActions = Expect<Equal<ActionsOf<typeof viaCognito>, 'signOut'>>;
 
 	// The federated action name is typed by the configured provider ids.
 	const name: FederatedActionNameOf<OptionsOf<typeof auth>> = 'signIn:okta';
@@ -195,10 +206,16 @@ async function mfaEnrolmentActions() {
 	await smsApi.setAuthState({ action: 'verifyTotpSetup', code: '123456' });
 	// @ts-expect-error — 'TOTP' is not in mfa.types
 	await smsApi.setAuthState({ action: 'updateMfaPreference', totp: 'ENABLED' });
-	type _smsActions = Expect<Equal<ActionsOf<typeof smsOnly>, PasswordActionName | MfaPreferenceActionName | 'signOut'>>;
+	type _smsActions = Expect<
+		Equal<ActionsOf<typeof smsOnly>, PasswordActionName | MfaPreferenceActionName | 'signOut'>
+	>;
 
 	// MFA needs email + password.
-	const oidc = new Auth(scope, 'mfa-oidc', { emailPassword: false, oidcProviders: { okta }, mfa: 'optional' });
+	const oidc = new Auth(scope, 'mfa-oidc', {
+		emailPassword: false,
+		providers: { okta: oktaViaCognito },
+		mfa: 'optional',
+	});
 	type _oidcActions = Expect<Equal<ActionsOf<typeof oidc>, 'signOut'>>;
 	type _totp = Expect<Equal<TotpEnabled<{ mfa: { mode: 'optional'; types: ['TOTP'] } }>, true>>;
 	type _noTotp = Expect<Equal<TotpEnabled<{ mfa: { mode: 'optional'; types: ['EMAIL'] } }>, false>>;
@@ -268,7 +285,7 @@ function takesPlainApi(_api: AuthStateApi): void {
 	/* no-op */
 }
 async function compatibility() {
-	const oidcApi = new Auth(scope, 'c-oidc', { emailPassword: false, oidcProviders: { okta } }).createApi();
+	const oidcApi = new Auth(scope, 'c-oidc', { store: 'blocks', providers: { okta } }).createApi();
 	const pwApi = new Auth(scope, 'c-pw', { emailPassword: { selfSignUp: false } }).createApi();
 	takesPlainApi(oidcApi);
 	takesPlainApi(pwApi);
