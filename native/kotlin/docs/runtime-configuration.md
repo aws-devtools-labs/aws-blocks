@@ -10,27 +10,33 @@ operation instead, as `OidcSignInOptions` is to a [sign-in](oidc.md).
 Three forms, shortest first:
 
 ```kotlin
-Blocks()                                        // the spec's first server
-Blocks(Servers.sandbox)                         // a server the spec declares
-Blocks(BlocksConfig(server = Servers.prod))     // anything beyond the server
+Blocks()                                                 // the spec's first server
+Blocks(Servers.sandbox)                                  // a server the spec declares
+Blocks(BlocksConfig(server = Blocks.defaultServer))      // anything beyond the server
 ```
 
-### `Blocks()`
+### `Blocks()` and `Blocks.defaultServer`
 
-This one is generated, not part of the runtime. The runtime never sees your spec, so it cannot know
+Both are generated, not part of the runtime. The runtime never sees your spec, so it cannot know
 which server to default to; codegen emits an `invoke` operator on `Blocks.Companion` that supplies
-the spec's first one. Regenerating against a different backend therefore leaves the call site
-alone.
+the spec's first one, and `Blocks.defaultServer` as the same server in value form. Regenerating
+against a different backend therefore leaves either call site alone.
 
-Because it is an extension, it has to be imported:
+Reach for `Blocks.defaultServer` whenever you build a `BlocksConfig` and have no reason to pin a
+particular environment — on the JVM that is every app that wants its session to persist. Naming a
+generated constant like `Servers.local` there instead would pin a name the spec is free to rename,
+and ties the call site to one environment.
+
+Because they are extensions, they have to be imported:
 
 ```kotlin
 import com.example.myapp.generated.invoke
+import com.example.myapp.generated.defaultServer
 ```
 
-Without that import the call resolves to the runtime's own constructor and the compiler reports a
-missing `server` argument — it points at the call, not at the import, so this is one worth adding
-by hand if completion does not offer it.
+Without the `invoke` import, `Blocks()` resolves to the runtime's own constructor and the compiler
+reports a missing `server` argument — it points at the call, not at the import, so this is one
+worth adding by hand if completion does not offer it.
 
 The accessors for each API namespace (`blocks.api`, `blocks.authApi`) are generated extensions too,
 but those resolve from the receiver, so an IDE offers them.
@@ -40,7 +46,7 @@ but those resolve from the receiver, so an IDE offers them.
 `BlocksConfig` is a `data class`, so varying one value across environments is a `copy`:
 
 ```kotlin
-val base = BlocksConfig(server = Servers.prod)
+val base = BlocksConfig(server = Blocks.defaultServer)
 val staging = Blocks(base.copy(server = Servers.staging))
 ```
 

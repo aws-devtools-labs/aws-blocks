@@ -80,10 +80,10 @@ match what you expected from the spec.
 
 ## One spec per compilation scope
 
-The generated namespace accessors and `Blocks()` are extensions on the runtime's `Blocks`, so one
-spec is assumed per compilation scope. Two generated packages visible in the same file make
-`Blocks()` ambiguous, and an accessor imported from one while `Blocks()` comes from the other would
-send its calls to the wrong backend.
+The generated namespace accessors, `Blocks()` and `Blocks.defaultServer` are all extensions on the
+runtime's `Blocks`, so one spec is assumed per compilation scope. Two generated packages visible in
+the same file make `Blocks()` and `Blocks.defaultServer` ambiguous, and an accessor imported from
+one while the entry point comes from the other would send its calls to the wrong backend.
 
 A module that generates a client for its own use should set its own `packageName` and
 `visibility = GeneratedVisibility.Internal`, so that its accessors stay out of its consumers' scope

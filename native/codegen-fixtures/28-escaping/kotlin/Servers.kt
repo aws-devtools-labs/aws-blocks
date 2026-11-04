@@ -9,3 +9,6 @@ public object Servers {
 }
 
 public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.primary)
+
+public val Blocks.Companion.defaultServer: BlocksServer
+  get() = Servers.primary

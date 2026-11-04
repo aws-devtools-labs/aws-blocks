@@ -24,7 +24,7 @@ import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
 import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
-import blocks.testapp.Servers
+import blocks.testapp.defaultServer
 import blocks.testapp.api
 import blocks.testapp.authApi
 
@@ -36,7 +36,7 @@ fun App() {
     // closes the engine it owns, and `api` because the screens take it as a parameter and a new
     // instance on each recomposition would defeat skipping.
     val blocks = remember {
-        Blocks(BlocksConfig(server = Servers.local, platformConfig = platformConfig()))
+        Blocks(BlocksConfig(server = Blocks.defaultServer, platformConfig = platformConfig()))
     }
     val api = remember { blocks.api }
     DisposableEffect(blocks) {

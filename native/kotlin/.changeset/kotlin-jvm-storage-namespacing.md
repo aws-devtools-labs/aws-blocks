@@ -11,3 +11,5 @@ A `Blocks` instance now owns its cookie jar rather than sharing one per process,
 **`BlocksClient.clearCookies()` is removed.** Signing out is a call to the backend's own sign-out, which revokes the session and expires the cookie; clearing locally left a live server session behind. `Blocks.clearStoredState()` replaces it for test isolation and is marked `@InternalBlocksApi`.
 
 Realtime channels and file handles no longer carry a cookie jar. Each authenticates with the credential on its own URL, and neither could reach a per-instance jar.
+
+Codegen also emits `Blocks.defaultServer`, the spec's first server as a value rather than only as the server the no-argument `Blocks()` reaches. A client that configures anything has to assemble a `BlocksConfig`, which names a server — on the JVM that is now every client that wants its session to persist — and without this it would have to name a generated constant directly, pinning a server name the spec is free to change.
