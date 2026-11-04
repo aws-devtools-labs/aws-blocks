@@ -11,7 +11,7 @@ import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
 import { trackCommand } from './telemetry.js';
-import { excludeBackendFromFrontendTsconfigs } from './tsconfig-exclude.js';
+import { checkFrontendTsconfigs } from './frontend-tsconfig-check.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -212,21 +212,37 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
 /**
  * The frontend reads the backend's generated types (`aws-blocks/.types/`)
  * through the `aws-blocks` package. A frontend tsconfig whose `include` also
- * covers `aws-blocks/` (Next.js's `**\/*.ts`, or no `include` at all) would
- * still typecheck the backend source with frontend settings, so exclude it.
- * Edits the user's file in place, keeping its comments; prints a manual step
- * when it can't.
+ * covers `aws-blocks/` (Next.js's `**\/*.ts`, or no `include` at all) makes the
+ * backend a program root, and a rooted file is checked under the config that
+ * rooted it — so the backend gets frontend settings again.
+ *
+ * Reported, not fixed: editing a tsconfig we don't own is more risk than one
+ * line is worth, and skipping the fix fails loudly on the next typecheck — it
+ * names the backend files directly — so a printed instruction is enough.
+ *
+ * This print is the only channel for the integration paths: `AGENTS.md` carries
+ * the same fix, but `copySharedResources()` only runs for a fresh project, so
+ * an existing project never receives it. There the note covers a different
+ * case — a scaffolded app whose tsconfig is widened later.
  */
-function excludeBackendFromFrontend(targetDir: string): void {
-  for (const result of excludeBackendFromFrontendTsconfigs(targetDir)) {
-    const name = relative(targetDir, result.file) || result.file;
-    if (result.status === 'updated') {
-      console.log(`  ✓ Excluded aws-blocks/ in ${name}`);
-    } else if (result.status === 'manual') {
-      console.log(`  ⚠ Could not edit ${name} (${result.reason}).`);
-      console.log('    Add "aws-blocks" to its "exclude" so the frontend uses the generated backend types.');
+function reportFrontendTsconfigs(targetDir: string): void {
+  const findings = checkFrontendTsconfigs(targetDir);
+  if (findings.length === 0) return;
+
+  console.log('');
+  for (const finding of findings) {
+    const name = relative(targetDir, finding.file) || finding.file;
+    if (finding.kind === 'covers-backend') {
+      console.log(`  ⚠ ${name} includes aws-blocks/, so your frontend would typecheck the backend source.`);
+    } else if (finding.kind === 'unknown-extends') {
+      console.log(`  ⚠ ${name} extends another config, so we cannot tell whether it includes aws-blocks/.`);
+    } else {
+      console.log(`  ⚠ ${name} is not valid JSONC, so we cannot tell whether it includes aws-blocks/.`);
     }
   }
+  console.log('    Add "aws-blocks" to "exclude" in the file(s) above, e.g.:');
+  console.log('      "exclude": ["node_modules", "aws-blocks"]');
+  console.log('    Without it the backend is typechecked with frontend settings and Node APIs fail.');
 }
 
 /**
@@ -578,7 +594,6 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries)');
-  console.log('  MODIFY  tsconfig.json         (excludes aws-blocks/ if it would typecheck it)');
   console.log('  CREATE  amplify.yml           (or modify existing — adds CDK conditions)');
   console.log('');
   console.log('No changes will be committed. Review the diff before committing.');
@@ -645,7 +660,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     }
   }
 
-  excludeBackendFromFrontend(targetDir);
+  reportFrontendTsconfigs(targetDir);
 
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
@@ -789,7 +804,6 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
   console.log('  MODIFY  .gitignore            (adds Blocks entries)');
-  console.log('  MODIFY  tsconfig.json         (excludes aws-blocks/ if it would typecheck it)');
   console.log('');
 
   const proceed = skipConfirm || await confirm('Proceed?');
@@ -833,7 +847,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     console.log('  ⚠ cdk.json already exists, skipping');
   }
 
-  excludeBackendFromFrontend(targetDir);
+  reportFrontendTsconfigs(targetDir);
 
   // 3. Add Blocks workspace (package.json, .gitignore, deps, install).
   // Source devDeps versions from the template's package.json — single source of truth.
