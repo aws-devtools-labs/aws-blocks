@@ -16,7 +16,7 @@ import { rmSync } from 'node:fs';
 import { get as httpGet } from 'node:http';
 import { after, afterEach, before, beforeEach, describe, test } from 'node:test';
 import type { AuthState } from '@aws-blocks/auth-common';
-import { ApiError, clearRouteRegistry, getRegisteredRoutes } from '@aws-blocks/core';
+import { ApiError, clearRouteRegistry, getRegisteredRoutes, RawRoute } from '@aws-blocks/core';
 import { getMockDataDir } from '@aws-blocks/core/bb-utils';
 import { AuthErrors } from './errors.js';
 import { Auth, github, relayOrigin, stubIdp } from './index.mock.js';
@@ -206,6 +206,23 @@ describe('route table', () => {
 				signOutPath: '/aws-blocks/auth/partners2/signout',
 			},
 		});
+
+		// After the route registry is cleared, no stale block is named: here an app route holds the path.
+		clearRouteRegistry();
+		const fresh = unique();
+		new RawRoute(fresh, 'app-callback', {
+			method: 'GET',
+			path: '/aws-blocks/auth/callback',
+			handler: async () => {},
+		});
+		assert.throws(
+			() =>
+				new Auth(fresh, 'vendors', {
+					store: 'blocks',
+					providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
+				}),
+			{ message: /^Auth 'vendors': .* already mounted by another route\./ },
+		);
 	});
 });
 

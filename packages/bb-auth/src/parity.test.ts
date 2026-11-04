@@ -989,7 +989,10 @@ describe('parity: confirmSignUp verifies only the contact the code was sent to (
 			[...codes].reverse().find((c) => c.purpose === purpose)?.code ?? '';
 		const h = makeAwsAuth(options);
 		const autoVerified: Contact[] = [];
-		const signInWith = options.users?.signInWith ?? ['username', 'email'];
+		const signInWith = (options.store === 'blocks' ? undefined : options.users?.signInWith) ?? [
+			'username',
+			'email',
+		];
 		if (signInWith.includes('email')) autoVerified.push('email');
 		if (signInWith.includes('phone')) autoVerified.push('phone_number');
 		cognitoPool(h, autoVerified);

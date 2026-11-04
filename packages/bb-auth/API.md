@@ -641,7 +641,7 @@ export type ERROR_federateVia_replaced_by_store = string & {
 };
 
 // @public
-export type ERROR_needs_store_cognito<K extends string> = string & {
+export type ERROR_needs_store_cognito<K extends string> = {
     readonly __blocksOptionError: `${K} needs store: 'cognito'`;
 };
 

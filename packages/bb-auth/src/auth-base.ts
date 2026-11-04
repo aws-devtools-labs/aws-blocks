@@ -409,7 +409,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		assertKnownAuthOptions(id, options);
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		const layer = layerFor(new.target);
-		const config = resolveOptions(options ?? {});
+		const config = resolveOptions(options ?? {}, id);
 		this.config = config;
 		this.log = config.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.sessionTtlSeconds = config.session?.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;

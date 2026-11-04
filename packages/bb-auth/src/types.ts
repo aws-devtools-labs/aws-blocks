@@ -543,7 +543,7 @@ export interface BlocksAuthOptions extends AuthCommonOptions {
  * A building block of the public option types, exported because they are
  * built from it, and stable like them.
  */
-export type ERROR_needs_store_cognito<K extends string> = string & {
+export type ERROR_needs_store_cognito<K extends string> = {
 	readonly __blocksOptionError: `${K} needs store: 'cognito'`;
 };
 

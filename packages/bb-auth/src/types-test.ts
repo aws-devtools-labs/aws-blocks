@@ -816,7 +816,9 @@ async function satisfiesForms() {
 //      common mistakes:
 //
 //      - `emailPassword` (or `mfa`, `admin`, …) under `store: 'blocks'`:
-//        "Type '{}' is not assignable to type 'ERROR_needs_store_cognito<"emailPassword">'."
+//        "Type '{}' is not assignable to type 'false | ERROR_needs_store_cognito<"emailPassword"> | undefined'."
+//        (an array value, e.g. `users.attributes`: "Property '__blocksOptionError' is missing in type
+//        '{ name: string; }[]' but required in type 'ERROR_needs_store_cognito<"users.attributes">'.")
 //      - a leftover `oidcProviders` (or `socialProviders` / `samlProviders`):
 //        "Type '{ okta: { … } }' is not assignable to type 'ERROR_replaced_by_providers'."
 //      - `type: 'google'` under `store: 'blocks'`:
@@ -852,6 +854,12 @@ function wrongStoreOptions() {
 	new Auth(scope, 'b-hosted-ui', { store: 'blocks', providers: { okta }, hostedUi: { domainPrefix: 'example' } });
 	// @ts-expect-error — ERROR_needs_store_cognito<'users.signInWith'>: only `users.groups` exists here.
 	new Auth(scope, 'b-sign-in-with', { store: 'blocks', providers: { okta }, users: { signInWith: ['email'] } });
+	new Auth(scope, 'b-attributes', {
+		store: 'blocks',
+		providers: { okta },
+		// @ts-expect-error — ERROR_needs_store_cognito<'users.attributes'> (named for an array of objects too)
+		users: { attributes: [{ name: 'department' }] },
+	});
 	// @ts-expect-error — the object form of allowBearerAuth (extra Cognito app clients) needs the Cognito store.
 	new Auth(scope, 'b-bearer', { store: 'blocks', providers: { okta }, allowBearerAuth: { clientIds: ['c'] } });
 

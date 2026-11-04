@@ -130,8 +130,18 @@ type KeysOf<T> = T extends unknown ? keyof T : never;
 /** `T[K]` across every member of `T` that has `K`. */
 type PropOf<T, K> = T extends unknown ? (K extends keyof T ? T[K] : never) : never;
 
-/** Values whose members are not options: references and callbacks. (Branded strings such as `RelayOrigin` are primitives.) */
-type Opaque = AppSettingRef | SecretRef | ExternalUserPoolRef | ChildLogger | ((...args: never[]) => unknown);
+/**
+ * Values whose members are not options: references, callbacks, and the option
+ * error brands (`ERROR_needs_store_cognito<K>`). (Branded strings such as
+ * `RelayOrigin` are primitives.)
+ */
+type Opaque =
+	| AppSettingRef
+	| SecretRef
+	| ExternalUserPoolRef
+	| ChildLogger
+	| ((...args: never[]) => unknown)
+	| { readonly __blocksOptionError: string };
 
 /**
  * `true` (possibly as part of `boolean`) when `V` is, or contains, an options

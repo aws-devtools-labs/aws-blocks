@@ -75,7 +75,7 @@ import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
-import { BLOCKS_NEEDS_A_PROVIDER, type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import { blocksNeedsAProvider, type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -159,7 +159,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			bbName: BB_NAME,
 			vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] },
 		});
-		const opts = resolveOptions(options ?? {});
+		const opts = resolveOptions(options ?? {}, id);
 		const needsPool = requiresUserPool(opts);
 		const mfa = resolveMfa(opts.mfa);
 		const passkeys = opts.passkeys || undefined;
@@ -728,7 +728,7 @@ function validateOptions(
 		if (!opts.userPool && !hasDirectOidc && cognitoFederatedProviderIds(opts).length === 0) {
 			throw new Error(
 				opts.store === 'blocks'
-					? BLOCKS_NEEDS_A_PROVIDER
+					? blocksNeedsAProvider()
 					: 'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
 			);
 		}

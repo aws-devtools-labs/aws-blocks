@@ -63,8 +63,10 @@ import {
 	ApiError,
 	BLOCKS_AUTH_PREFIX,
 	type BlocksContext,
+	getRegisteredRoutes,
 	RawRoute,
 	RawRouteErrors,
+	type RegisteredRoute,
 	type Scope,
 } from '@aws-blocks/core';
 import { bearerAuthEnabled } from './cdk/contract.js';
@@ -459,8 +461,17 @@ function landingWithState(path: string, appState: string | undefined): string {
 
 // ── Mounting ────────────────────────────────────────────────────────────────
 
-/** The id of the `Auth` block that mounted federation routes at each base / sign-out path: named when another collides. */
-const mountedBy = new Map<string, string>();
+/**
+ * The `Auth` block id behind a registered callback / sign-out route handler,
+ * named when another block's routes collide. Keyed by the registry's own
+ * handlers, so clearing the route registry forgets them too.
+ */
+const mountedBy = new WeakMap<RegisteredRoute['handler'], string>();
+
+/** The registered callback / sign-out routes at `paths`. */
+function routesAt(paths: FederationRoutePaths): RegisteredRoute[] {
+	return getRegisteredRoutes().filter((r) => r.path === paths.callback || r.path === paths.signOut);
+}
 
 /**
  * Mount the federation routes on the `Auth` instance. Called by each runtime
@@ -477,16 +488,17 @@ export function mountFederationRoutes(host: FederationRouteHost): void {
 		mountRoutes(host, paths);
 	} catch (e) {
 		if (!(e instanceof Error) || e.name !== RawRouteErrors.DuplicateRoute) throw e;
-		const other = mountedBy.get(paths.base) ?? mountedBy.get(paths.signOut);
+		const other = routesAt(paths)
+			.map((r) => mountedBy.get(r.handler))
+			.find((id) => id !== undefined);
 		throw new Error(
 			`Auth '${host.scope.id}': its sign-in routes (${paths.base}/…, ${paths.signOut}) are already mounted by ` +
-				`${other ? `Auth '${other}'` : 'another block'}. Each Auth block with \`providers\` needs its own ` +
+				`${other ? `Auth '${other}'` : 'another route'}. Each Auth block with \`providers\` needs its own ` +
 				`\`redirects.callbackPath\` and \`redirects.signOutPath\`, e.g. \`redirects: { callbackPath: '${BLOCKS_AUTH_PREFIX}/${host.scope.id}/callback', ` +
 				`signOutPath: '${BLOCKS_AUTH_PREFIX}/${host.scope.id}/signout' }\` (${e.message}).`,
 		);
 	}
-	mountedBy.set(paths.base, host.scope.id);
-	mountedBy.set(paths.signOut, host.scope.id);
+	for (const route of routesAt(paths)) mountedBy.set(route.handler, host.scope.id);
 }
 
 function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): void {

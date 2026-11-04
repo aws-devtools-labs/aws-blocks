@@ -110,9 +110,18 @@ const COGNITO_ONLY_KEYS = [
 	'totpVerification',
 ] as const;
 
+/** The `Auth '<id>':` prefix of every resolver error (`Auth:` without an id). */
+function prefix(id: string | undefined): string {
+	return id === undefined ? 'Auth:' : `Auth '${id}':`;
+}
+
 /** The message for a `store: 'blocks'` block with no provider (every layer refuses it the same way). @internal */
-export const BLOCKS_NEEDS_A_PROVIDER =
-	"Auth: `store: 'blocks'` needs at least one provider in `providers` (`type: 'oidc'`, `github()`, `stubIdp()`, …): its users can sign in no other way.";
+export function blocksNeedsAProvider(id?: string): string {
+	return `${prefix(id)} \`store: 'blocks'\` needs at least one provider in \`providers\` (\`type: 'oidc'\`, \`github()\`, \`stubIdp()\`, …): its users can sign in no other way.`;
+}
+
+/** The provider `type`s only the default (Cognito) store accepts. */
+const COGNITO_TYPES: readonly unknown[] = ['google', 'facebook', 'amazon', 'apple', 'saml'];
 
 /** The keys of `value` among `keys` that are set (not `undefined`). */
 function setKeys(value: object, keys: readonly string[]): string[] {
@@ -155,19 +164,21 @@ function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Un
  *   for a social entry keyed differently from its `type` (so two entries of one
  *   social type cannot both pass). The backstop for configurations the compiler
  *   did not see: plain JavaScript, casts, a `: AuthOptions` variable.
+ * @param blockId - The block id, for the messages (`Auth '<id>': …`, as the option validation's).
  * @internal
  */
-export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
+export function resolveOptions(options: AuthOptions, blockId?: string): ResolvedAuthOptions {
+	const auth = prefix(blockId);
 	const storeValue: unknown = Reflect.get(options, 'store');
 	if (storeValue !== undefined && storeValue !== 'cognito' && storeValue !== 'blocks') {
 		throw new Error(
-			`Auth: \`store\` must be 'cognito' (the default) or 'blocks', got ${JSON.stringify(storeValue)}.`,
+			`${auth} \`store\` must be 'cognito' (the default) or 'blocks', got ${JSON.stringify(storeValue)}.`,
 		);
 	}
 	const replaced = setKeys(options, REPLACED_KEYS);
 	if (replaced.length > 0) {
 		throw new Error(
-			`Auth: ${listKeys(replaced)} ${replaced.length === 1 ? 'was' : 'were'} replaced by \`providers\`: move each entry there, ` +
+			`${auth} ${listKeys(replaced)} ${replaced.length === 1 ? 'was' : 'were'} replaced by \`providers\`: move each entry there, ` +
 				"keyed as before, with its `type` ('google', 'oidc', 'saml', …). Directly federated OIDC providers go in a block with `store: 'blocks'`.",
 		);
 	}
@@ -181,7 +192,7 @@ export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
 		cognitoOnly.push(...userKeys.map((key) => `users.${key}`));
 		if (cognitoOnly.length > 0) {
 			throw new Error(
-				`Auth: ${listKeys(cognitoOnly)} ${cognitoOnly.length === 1 ? 'needs' : 'need'} \`store: 'cognito'\` (the default): ` +
+				`${auth} ${listKeys(cognitoOnly)} ${cognitoOnly.length === 1 ? 'needs' : 'need'} \`store: 'cognito'\` (the default): ` +
 					"a `store: 'blocks'` block has no user pool. Remove it, or drop `store: 'blocks'`.",
 			);
 		}
@@ -206,14 +217,19 @@ export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
 		for (const [id, entry] of Object.entries(providers ?? {})) {
 			if (!entry) continue;
 			if (entry.type !== 'oidc' && entry.type !== 'oauth2' && entry.type !== 'stub') {
+				const type: unknown = Reflect.get(entry, 'type');
+				const accepted =
+					"A `store: 'blocks'` block accepts `type: 'oidc'`, `'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`).";
 				throw new Error(
-					`Auth: providers.${id} has ${describeType(Reflect.get(entry, 'type'))}, which needs \`store: 'cognito'\` (the default). ` +
-						"A `store: 'blocks'` block accepts `type: 'oidc'`, `'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`).",
+					COGNITO_TYPES.includes(type)
+						? `${auth} providers.${id} has ${describeType(type)}, which needs \`store: 'cognito'\` (the default). ${accepted}`
+						: `${auth} providers.${id} has ${describeType(type)}, which is not a provider type. ${accepted} ` +
+								"For GitHub use `github()`; for another OAuth 2.0 provider `customOauth2()`; for an OIDC provider (Okta, Entra ID, …) `type: 'oidc'` with its `issuer`.",
 				);
 			}
 			oidcProviders[id] = { ...untag(entry), federateVia: 'direct' };
 		}
-		if (Object.keys(oidcProviders).length === 0) throw new Error(BLOCKS_NEEDS_A_PROVIDER);
+		if (Object.keys(oidcProviders).length === 0) throw new Error(blocksNeedsAProvider(blockId));
 		return {
 			...rest,
 			...(users ? { users: { groups: users.groups } } : {}),
@@ -234,7 +250,7 @@ export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
 			case 'apple':
 				if (id !== entry.type) {
 					throw new Error(
-						`Auth: providers.${id} has \`type: '${entry.type}'\`, so its key must be \`${entry.type}\`: ` +
+						`${auth} providers.${id} has \`type: '${entry.type}'\`, so its key must be \`${entry.type}\`: ` +
 							'a social provider is keyed by its type (google, facebook, amazon, apple).',
 					);
 				}
@@ -252,7 +268,7 @@ export function resolveOptions(options: AuthOptions): ResolvedAuthOptions {
 				break;
 			default:
 				throw new Error(
-					`Auth: providers.${id} has ${describeType(Reflect.get(entry, 'type'))}, which a Cognito user pool cannot federate. ` +
+					`${auth} providers.${id} has ${describeType(Reflect.get(entry, 'type'))}, which a Cognito user pool cannot federate. ` +
 						"`type: 'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`) need `store: 'blocks'`; " +
 						"the default store accepts `type: 'google'`, `'facebook'`, `'amazon'`, `'apple'`, `'saml'` and `'oidc'`.",
 				);

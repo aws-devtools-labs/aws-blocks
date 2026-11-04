@@ -169,6 +169,24 @@ describe('resolveOptions — store: blocks', () => {
 			);
 		}
 	});
+
+	it('an unknown type is not a provider type, not a store mismatch', () => {
+		for (const type of ['github', 'okta']) {
+			const options: unknown = { store: 'blocks', providers: { p: { type, clientId: 'x' } } };
+			assert.throws(
+				() => resolveOptions(options as AuthOptions),
+				(e: Error) => {
+					assert.match(
+						e.message,
+						new RegExp(`providers\\.p has \`type: '${type}'\`, which is not a provider type`),
+					);
+					assert.match(e.message, /`github\(\)`.*`customOauth2\(\)`.*`type: 'oidc'`/);
+					assert.doesNotMatch(e.message, /needs `store: 'cognito'`/);
+					return true;
+				},
+			);
+		}
+	});
 });
 
 describe('provider helpers set type', () => {
@@ -245,6 +263,17 @@ describe('resolveOptions — backstops for untyped callers', () => {
 			() => resolveOptions({ store: 'blocks', providers: {} }),
 			/`store: 'blocks'` needs at least one provider/,
 		);
+	});
+
+	it("prefixes every error with the block id when given (as the option validation does), else 'Auth:'", () => {
+		assert.throws(() => resolveOptions({ store: 'blocks', providers: {} }, 'sso'), {
+			message: /^Auth 'sso': `store: 'blocks'` needs/,
+		});
+		const untyped: unknown = { store: 'cognit0' };
+		assert.throws(() => resolveOptions(untyped as AuthOptions, 'auth'), {
+			message: /^Auth 'auth': `store` must be/,
+		});
+		assert.throws(() => resolveOptions(untyped as AuthOptions), { message: /^Auth: `store` must be/ });
 	});
 
 	it('drops a leftover federateVia from a provider entry', () => {
