@@ -109,6 +109,12 @@ describe('telemetry CLI', () => {
       assert.ok(result.stdout.includes('--disable does not affect it'));
     });
 
+    it('names the cdk-blocks telemetry command first', () => {
+      const result = runCli(['--help'], { cwd: tmpProject, env: { HOME: tmpHome } });
+      assert.strictEqual(result.exitCode, 0);
+      assert.match(result.stdout, /^Usage: npx --no -- cdk-blocks telemetry \[status\|enable\|disable\] \[--global\]\n/);
+    });
+
     it('-h shows usage', () => {
       const result = runCli(['-h'], { cwd: tmpProject, env: { HOME: tmpHome } });
       assert.strictEqual(result.exitCode, 0);

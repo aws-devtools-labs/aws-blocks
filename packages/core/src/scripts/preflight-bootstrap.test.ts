@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { AwsCredentialIdentity } from '@smithy/types';
-import type { BootstrapTarget, BootstrapVersionReader } from './preflight-bootstrap.js';
+import { type BootstrapTarget, type BootstrapVersionReader, cdkBootstrapFailure } from './preflight-bootstrap.js';
 import { type AssertAwsCredentialsOptions, assertAwsCredentials } from './preflight-credentials.js';
 
 const CREDENTIALS: AwsCredentialIdentity = { accessKeyId: 'AKIAEXAMPLEFIXTURE', secretAccessKey: 'fixture-secret' };
@@ -104,6 +104,13 @@ describe('CDK bootstrap check', () => {
 		});
 	}
 
+	it('names the command the user ran, when the caller passes it', async () => {
+		const message = await failure(reader(NOT_FOUND).read, { invocation: 'cdk-blocks deploy --profile starter' });
+		assert.match(message, /so `cdk-blocks deploy --profile starter` cannot deploy there/);
+		assert.match(message, /Then re-run `cdk-blocks deploy --profile starter`\.$/);
+		assert.doesNotMatch(message, /npm run/);
+	});
+
 	it('checks the qualifier from the cdk.json context and passes the cdk.json profile', async () => {
 		await writeFile(
 			join(directory, 'cdk.json'),
@@ -166,5 +173,19 @@ describe('CDK bootstrap check', () => {
 		const message = await failure(reader(NOT_FOUND).read);
 		assert.match(message, /^ {4}npx cdk bootstrap aws:\/\/123456789012\/<region> --app=$/m);
 		assert.doesNotMatch(message, /touch/);
+	});
+});
+
+describe('cdkBootstrapFailure', () => {
+	it('passes the profile the deploy used to the printed bootstrap command', async () => {
+		const message = await cdkBootstrapFailure({
+			invocation: 'cdk-blocks deploy --profile starter',
+			account: '123456789012',
+			region: 'eu-south-2',
+			profile: 'starter',
+			credentials: CREDENTIALS,
+			read: reader(NOT_FOUND).read,
+		});
+		assert.match(String(message), /^ {4}npx cdk bootstrap aws:\/\/123456789012\/eu-south-2 --app= --profile starter$/m);
 	});
 });

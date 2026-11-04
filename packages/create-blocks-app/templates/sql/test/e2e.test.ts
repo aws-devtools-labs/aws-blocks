@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { createTestClient, getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
@@ -14,7 +15,8 @@ let server: ChildProcess | null = null;
 let app: typeof import('aws-blocks');
 let api: typeof apiType;
 let authApi: typeof authApiType;
-const serverPort = 3001;
+// The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
+const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 /**
@@ -64,13 +66,34 @@ test.before(async () => {
   throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
-test.after(() => {
-  if (server?.pid) {
-    try {
-      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
-      else process.kill(-server.pid, 'SIGTERM');
-    } catch {}
+// Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
+function signalServer(pid: number, signal: NodeJS.Signals | 0) {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+async function waitForServerExit(pid: number, ms: number) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+    if (Date.now() >= deadline) return false;
+  }
+  return true;
+}
+
+// The dev server shuts down gracefully, so wait for it to exit: it can still be
+// writing to the app's directory when this file ends and the caller removes it.
+test.after(async () => {
+  if (!server?.pid) return;
+  if (isWin) {
+    spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  if (!signalServer(server.pid, 'SIGTERM') || await waitForServerExit(server.pid, 15_000)) return;
+  signalServer(server.pid, 'SIGKILL');
+  await waitForServerExit(server.pid, 2_000);
 });
 
 // App-level readiness — independent of the sample API, so it keeps passing

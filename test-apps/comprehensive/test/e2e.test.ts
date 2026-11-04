@@ -38,6 +38,7 @@ import { browserClientTests } from './browser-client.test.js';
 import { authValidateUserTests } from './auth-validate-user.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
+import { databaseBlockTests } from './database-block.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
@@ -330,6 +331,8 @@ databaseTests(() => api);
 
 // DSQL Database tests (separate file)
 dsqlTests(() => api);
+
+databaseBlockTests(() => api);
 
 // AppSetting tests (separate file)
 appSettingTests(() => api);

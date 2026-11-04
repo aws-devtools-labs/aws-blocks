@@ -744,7 +744,7 @@ Ports:
 - **#782 (branded-name e2e), #745, #754, #780, #784, #777:** no auth surface; merged as-is.
 
 ### ✅ ~~R112 — `main` @ `005c095a` merged: #732 (native declarations from each block's `package.json`) (2026-10-14)~~
-`main`'s #732 took D-019 for its native-declarations decision, so the auth decision became **D-020** (since renumbered **D-021**, after `main`'s native-generator decision took D-020); every link to it is updated (`AGENTS.md`, `scaffold-new-bb.md`, both `BB-auth-cognito-admin*` docs, and the two in-file references in `DECISIONS.md`). #732 reads native packages and bindings from each block's `package.json`; `bb-auth` declares none of its own, so nothing else needed porting.
+`main`'s #732 took D-019 for its native-declarations decision, so the auth decision became **D-020** (since renumbered **D-021**, after `main`'s native-generator decision took D-020, then **D-022**, after `main`'s export type-name decision, #1134, took D-021); every link to it is updated (`AGENTS.md`, `scaffold-new-bb.md`, both `BB-auth-cognito-admin*` docs, and the two in-file references in `DECISIONS.md`). #732 reads native packages and bindings from each block's `package.json`; `bb-auth` declares none of its own, so nothing else needed porting.
 - **Flake fixed while gating it:** `core`'s `lambda-code.test.ts` (this branch) created its fixture inside `dist/cdk`, and `main`'s `raw-route.test.ts` copies `dist/` mid-run, so the copy could crash natively (`directory_iterator … No such file or directory`). The fixture now lives at the package root (git-ignored). `core` passed 1,506/0 three runs in a row.
 
 ### ✅ ~~L80 — Custom-resource provider log groups can outlive their stack (from SB-734, 2026-10-14)~~

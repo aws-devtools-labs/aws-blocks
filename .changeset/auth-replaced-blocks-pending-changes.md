@@ -45,13 +45,19 @@ Fixes made to `AuthCognito`, `AuthOIDC` and `AuthBasic` since their last release
 
 - `AuthBasic`'s browser entry gained the `AuthActionInput` type, which its server entry and README already had (#1120). `Auth` does not re-export `@aws-blocks/auth-common`'s types from any entry: import `AuthActionInput` from `@aws-blocks/blocks` (the migrate codemod says so). Every `Auth` entry, the browser one included, exports the same types, including the options-narrowed `AuthActionInputOf<O>`.
 
-**From `main` after those releases (#1085, #1253, #1257)**
+**From `main` after those releases (#1085, #1253, #1257, #1296, #1288, #1203)**
 
 - `AuthBasic` invalidates every outstanding session when a user resets their password (#1085). So does `Auth`, which replaces `AuthBasic`: a completed `confirmResetPassword` signs the user out everywhere, locally and on AWS (see the `bb-auth` changeset on password resets).
 
 - `AuthBasic` reads its session cookie by exact name (#1253): a cookie whose name only ends with the session cookie's name can no longer supply or shadow it, and the scope id is matched literally. `Auth` already reads every cookie this way (anchored to a cookie boundary, name regex-escaped).
 
 - `AuthBasic` and `AuthCognito` no longer let a request header decide whether the session cookie is `Secure` (#1257): on a deployed stack, a request that sent `Origin: http://localhost` got a cookie without `Secure` (and, with `crossDomain: true`, without `Partitioned`). `Auth` decides it the same way, from deploy configuration, for every cookie it sets (see the `bb-auth` changeset on the `Secure` cookie flag).
+
+- `AuthBasic` can emit sign-in metrics you can alarm on (#1296): with a `Metrics` instance as its `metrics` option, every `signIn` emits a `SignInSuccess`, `SignInFailure` or `SignInLocked` count with an `AuthBlock` dimension. This is not yet in `Auth`, which replaces `AuthBasic`: `Auth` has no `metrics` option, and emits no sign-in metrics. `Auth`'s sign-in can take more than one step (an MFA or passkey challenge, `autoSignIn`, a federated callback), and lockout is Amazon Cognito's rather than the block's, so what each metric counts is still to be decided.
+
+- `AuthCognito`'s `DESIGN.md` gave its session cookie as `SameSite=None; Partitioned` (#1288); it is `SameSite=Lax` by default, and `SameSite=None; Partitioned` only with `crossDomain: true`. `Auth`'s `DESIGN.md` already describes its cookie that way (D-007), with the opt-in at `session: { crossDomain: true }`.
+
+- `AuthOIDC`'s docs name the `cdk-blocks secret` CLI (#1203) when they say it does not manage the SSM SecureString behind a `secret: true` `AppSetting`. `Auth`'s README already says how to set each kind of provider secret: `npm run secret` (an alias of `cdk-blocks secret`) for a `Secret`, and `aws ssm put-parameter` for an `AppSetting`.
 
 **Docs (from `AuthOIDC`)**
 

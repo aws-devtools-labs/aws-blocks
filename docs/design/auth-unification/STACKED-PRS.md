@@ -27,7 +27,7 @@ PR #711 held the whole change as one reference commit; it is closed, and this st
 | 09 | #858 | `auth/stack-09-bb-auth-federation` | Tests: direct OIDC, stub IdP, hosted UI, the native relay, bearer tokens (`clientIds`, `fromExisting`), the shared gateway, provider log groups |
 | 10 | #859 | `auth/stack-10-bb-auth-ui-and-migration` | The `migrate` codemod (`npx @aws-blocks/bb-auth migrate`) and its tests, `MIGRATION.md`, the UI guide, the UI tests (the end-to-end migrate test lands in 12, since it type-checks against the umbrella) |
 | 11 | #860 | `auth/stack-11-consumers-on-auth` | Test apps, native e2e suites and examples on `Auth`; the upgrade-in-place harness and workflow; the live-spec fixture check |
-| 12 | #861 | `auth/stack-12-cutover` | `bb-auth` public and in the umbrella; templates and `create-blocks-app`; customer docs; delete `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc`; `requireRole` required; D-021; the `bb-auth` changesets; CI type-checks `comprehensive`; these design docs |
+| 12 | #861 | `auth/stack-12-cutover` | `bb-auth` public and in the umbrella; templates and `create-blocks-app`; customer docs; delete `bb-auth-basic`, `bb-auth-cognito` and `bb-auth-oidc`; `requireRole` required; D-022; the `bb-auth` changesets; CI type-checks `comprehensive`; these design docs |
 | 13 | #862 | `auth/stack-13-browser-sign-in-helper` | `createAuthClient()` for a frontend on another origin (L69) |
 | 14 | #863 | `auth/stack-14-ses-email` | `email: { fromAddress, … }`, an SES sender for the user pool (L75) |
 

@@ -375,6 +375,43 @@ async function spaceRestApiCall(kind: 'create' | 'delete'): Promise<void> {
 }
 
 /**
+ * How long a `destroy` or `sandbox:destroy` whose telemetry a case asserts may
+ * run before the test stops it. A destroy stopped while it is still retrying
+ * never writes its event, and the case fails with "telemetry file not written.
+ * exit=null".
+ *
+ * Both commands retry in core's `runDestroyWithRetries`
+ * (packages/core/src/scripts/sandbox.ts). An attempt that fails on an API
+ * Gateway throttle (DeleteRestApi 429, which other runs in the account can
+ * cause) is retried after a jittered wait of at most 1 min, then 2, then 4,
+ * and a throttled attempt on this app's stack takes about 5 min. So 20 min
+ * covers the first attempt and two throttle retries (5 + 1 + 5 + 2 + 5 min,
+ * plus the retries' own calls); the throttled destroys this app has finished
+ * in CI mostly took well under that. It does not cover every retry core may
+ * make: core schedules no further throttle retry whose wait would end more
+ * than 20 min after the first failure, but the last retry can finish after
+ * that, and core sets no hard limit on the command's total time. The job's
+ * AWS session lasts 1 h, so the suite has to end well within that (see
+ * SUITE_TIMEOUT_MS).
+ *
+ * The cleanup destroys that only remove a case's stack keep a shorter limit.
+ * The job's "Cleanup stacks" step retries any stack they leave, best-effort,
+ * in whatever job time is left.
+ */
+const DESTROY_TIMEOUT_MS = 20 * 60_000;
+
+/**
+ * The suite's timeout: the test runner cancels the cases still running once
+ * it passes. The sandbox group, the longer AWS group, has taken 10–21 min in
+ * CI when it passed; this leaves room for one destroy in it to use its whole
+ * DESTROY_TIMEOUT_MS, and stays below the 1 h AWS session of the
+ * `e2e-telemetry` job in .github/workflows/pr-checks.yml (60 min
+ * `timeout-minutes`). Cancelling a case does not stop the command it spawned
+ * ({@link runCommand} stops it only at its own `timeoutMs`).
+ */
+const SUITE_TIMEOUT_MS = 50 * 60_000;
+
+/**
  * The sandbox group is the longer one, so its first deploy takes the first
  * create slot: the production group's first deploy waits for this, which
  * resolves once that slot is claimed, or when `command: sandbox` ends without
@@ -423,7 +460,7 @@ function prepareCloudGroup(group: CloudGroup, sandboxId: string): void {
 
 // ─── Test Suites ─────────────────────────────────────────────────────────────
 
-describe('Telemetry E2E', { timeout: 2_400_000, concurrency: true }, () => {
+describe('Telemetry E2E', { timeout: SUITE_TIMEOUT_MS, concurrency: true }, () => {
 
   // Seed pinned installation-id in real HOME (no HOME override needed).
   // CI workflow also seeds this, but doing it here ensures local runs work too.
@@ -1411,7 +1448,7 @@ function sandboxLifecycleSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('delete');
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/sandbox-destroy.ts'], {
-        ...inGroup, telemetryFile, timeoutMs: 450_000,
+        ...inGroup, telemetryFile, timeoutMs: DESTROY_TIMEOUT_MS,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);
@@ -1548,7 +1585,7 @@ function productionLifecycleSuites(): void {
       const telemetryFile = uniqueTelemetryFile(tmpHome);
       await spaceRestApiCall('delete');
       const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/destroy.ts'], {
-        ...inGroup, telemetryFile, timeoutMs: 450_000,
+        ...inGroup, telemetryFile, timeoutMs: DESTROY_TIMEOUT_MS,
       });
 
       assert.ok(await waitForFile(telemetryFile, 5_000), `telemetry file not written.\nexit=${result.exitCode}\nstdout(last 500): ${result.stdout.slice(-500)}\nstderr(last 500): ${result.stderr.slice(-500)}`);

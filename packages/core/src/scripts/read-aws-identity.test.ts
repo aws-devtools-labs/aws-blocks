@@ -35,7 +35,7 @@ describe('readAwsIdentity', () => {
 
 	it('returns the verified account, ARN, Region and credentials label', async () => {
 		const identity = await readAwsIdentity({
-			invocation: 'blocks whoami',
+			invocation: 'cdk-blocks whoami',
 			env: { ...env, AWS_PROFILE: 'dev' },
 			projectRoot: directory,
 			probe: async (region, profile) => {
@@ -60,7 +60,7 @@ describe('readAwsIdentity', () => {
 	it('sends no request when no Region is set', async () => {
 		let probed = false;
 		const identity = await readAwsIdentity({
-			invocation: 'blocks whoami',
+			invocation: 'cdk-blocks whoami',
 			env,
 			projectRoot: directory,
 			probe: async () => {
@@ -73,10 +73,22 @@ describe('readAwsIdentity', () => {
 		assert.strictEqual(identity.account, undefined);
 	});
 
+	it('says a selected profile does not exist, even when no Region is set', async () => {
+		await assert.rejects(
+			readAwsIdentity({
+				invocation: 'cdk-blocks whoami --profile zz-nope',
+				env: { ...env, AWS_PROFILE: 'zz-nope' },
+				projectRoot: directory,
+				readAwsCliVersion: async () => 'aws-cli/2.32.0 Python/3.13.4 Linux/6 exe/x86_64',
+			}),
+			/Profile zz-nope is not in your AWS config or credentials file\./,
+		);
+	});
+
 	it('names the invocation in the guidance for missing credentials', async () => {
 		await assert.rejects(
 			readAwsIdentity({
-				invocation: 'blocks whoami',
+				invocation: 'cdk-blocks whoami',
 				env: { ...env, AWS_REGION: 'us-east-1' },
 				projectRoot: directory,
 				probe: async () => {
@@ -86,8 +98,8 @@ describe('readAwsIdentity', () => {
 			}),
 			(error: unknown) => {
 				assert.ok(error instanceof Error);
-				assert.match(error.message, /could not be verified for `blocks whoami` \(CredentialsProviderError\)/);
-				assert.match(error.message, /Then re-run `blocks whoami`\./);
+				assert.match(error.message, /could not be verified for `cdk-blocks whoami` \(CredentialsProviderError\)/);
+				assert.match(error.message, /Then re-run `cdk-blocks whoami`\./);
 				assert.doesNotMatch(error.message, /npm run|123456789012|raw sdk detail/);
 				return true;
 			},
@@ -97,14 +109,14 @@ describe('readAwsIdentity', () => {
 	it('fails on a network error instead of continuing', async () => {
 		await assert.rejects(
 			readAwsIdentity({
-				invocation: 'blocks whoami',
+				invocation: 'cdk-blocks whoami',
 				env: { ...env, AWS_REGION: 'us-east-1' },
 				projectRoot: directory,
 				probe: async () => {
 					throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:443'), { code: 'ECONNREFUSED' });
 				},
 			}),
-			/Could not reach AWS to verify credentials for `blocks whoami` \(ECONNREFUSED\)/,
+			/Could not reach AWS to verify credentials for `cdk-blocks whoami` \(ECONNREFUSED\)/,
 		);
 	});
 });

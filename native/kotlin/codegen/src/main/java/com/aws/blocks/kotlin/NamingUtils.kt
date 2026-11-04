@@ -50,7 +50,7 @@ object NamingUtils {
      * doubled separator, so no value reaching here splits into one.
      */
     fun exportTypeName(export: String): String =
-        export.split('_', '-')
+        export.split('-', '_', '.')
             .joinToString("") { if (it.isEmpty()) "" else it[0].uppercaseChar() + it.substring(1) }
 
     /**

@@ -32,6 +32,10 @@ let maxGenericArity = 1
 /// syntax whatever their arity, and `Any` cannot name a declaration at all.
 let typeNamesIllegalWhenQualified: Set<String> = ["Type", "Protocol", "Any"]
 
+/// `EXPORT_GRAMMAR` in `validate-native-catalogs.ts` verbatim; the alphabet is the producer's.
+/// `upperCamelCase` must split on exactly this set and no wider; D-021 records why.
+let exportGrammar = #"^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$"#
+
 struct DeclaredTransferableBinding {
     let module: String
     /// Module-qualified, as `BlocksRuntime.UnknownTransferable` already is.
@@ -65,8 +69,9 @@ struct ResolvedDeclaredBindings {
 /// A built-in tag is dropped rather than rejected: it keeps the hard-coded path in
 /// `SwiftCodeGenerator`'s `switch blocksType`.
 ///
-/// Six of the rules below coincide with producer checks because Swift needs them
-/// for its own emission, not to re-validate; D-020 records which, and why.
+/// Seven of the rules below coincide with producer checks because Swift needs them
+/// for its own emission, not to re-validate; D-020 records six, D-021 the export
+/// grammar it added.
 func resolveDeclaredTransferableBindings(
     packages: NativePackagesCatalog?,
     bindings: NativeBindingsCatalog?,
@@ -133,9 +138,14 @@ func resolveDeclaredTransferableBindings(
                     + "outside 0...\(maxGenericArity) in schema \(nativeCatalogSchemaVersion)"
             )
         }
+        guard binding.export.range(of: exportGrammar, options: .regularExpression) != nil else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' declares export '\(escapedForDiagnostic(binding.export))', "
+                    + "which is not a -, _ or . joined run of alphanumeric segments starting with a letter"
+            )
+        }
         let typeName = upperCamelCase(binding.export)
-        guard isValidSwiftIdentifier(typeName),
-              !swiftKeywords.contains(typeName),
+        guard !swiftKeywords.contains(typeName),
               !typeNamesIllegalWhenQualified.contains(typeName)
         else {
             throw CodegenError.invalidNativeCatalog(
@@ -290,13 +300,8 @@ func declaredResultTypeName(
 }
 
 func upperCamelCase(_ export: String) -> String {
-    export.split(whereSeparator: { $0 == "_" || $0 == "-" || $0 == "." || $0 == ":" })
-        .map { segment in
-            if segment.allSatisfy({ $0.isUppercase || $0.isNumber }), segment.count > 1 {
-                return segment.prefix(1).uppercased() + segment.dropFirst().lowercased()
-            }
-            return segment.prefix(1).uppercased() + segment.dropFirst()
-        }
+    export.split(whereSeparator: { $0 == "_" || $0 == "-" || $0 == "." })
+        .map { $0.prefix(1).uppercased() + $0.dropFirst() }
         .joined()
 }
 

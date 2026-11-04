@@ -164,6 +164,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 - register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
 - add to the root `workspaces`
 - add an instance + test to `test-apps/comprehensive` (zero casts)
+- needs a step before `cdk deploy` (a guard, host-side migrations)? Declare it in the block's `package.json` as `"aws-blocks": { "predeploy": { "module": "./dist/predeploy.js", "stages": ["production"] } }` and export `predeploy(context)` from that module; core's `deploy` and `sandbox` scripts discover and run it (`context.synth()` gives the templates). Never add block-specific code to `packages/core/src/scripts`.
 - `npx changeset add`.
 
 ---
@@ -207,7 +208,7 @@ When working in an AWS Blocks application (not this monorepo), Building Block do
 |---|---|
 | Linter/formatter | **Biome** (not ESLint/Prettier): tabs (width 4), 120 cols, single quotes, trailing commas everywhere, semicolons always. `biome check` = lint + format + import-sort. |
 | Modules | **ESM everywhere**; relative imports carry the `.js` extension. `strict: true`, ES2022, `moduleResolution: bundler`. |
-| Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth identifiers lead with `Auth` (`Auth`, `AuthOptions`, `AuthErrors`; packages `bb-auth`, `auth-common` — D-004), and there is one auth BB: add a sign-in method as an `Auth` option rather than a new block (D-021). |
+| Naming | BB class `PascalCase`, no "BB" prefix (`KVStore`). pkg `@aws-blocks/bb-{kebab}`. errors `{Class}Errors`. The **`BLOCKS_` env prefix is framework-reserved** — not for example app code. Auth identifiers lead with `Auth` (`Auth`, `AuthOptions`, `AuthErrors`; packages `bb-auth`, `auth-common` — D-004), and there is one auth BB: add a sign-in method as an `Auth` option rather than a new block (D-022). |
 | Schema validation | When a BB accepts a user-provided validation schema, type it as **`StandardSchemaV1`** (Zod/Valibot/ArkType) — don't pull a schema lib into the BB's runtime deps (it's the consumer's choice); if your own tests use `zod`, keep it a `devDependency`. (A BB may take a schema lib as a real `dependency` only for its *own* internal needs, e.g. `bb-agent`.) Validate via `schema['~standard'].validate(value)`, before conditional checks. |
 | Tests | **`node:test` + `node:assert`** (not Jest/Vitest), run on compiled `dist/`. Reset `.bb-data` between tests. Mock tests can't catch AWS-path serialization bugs — serialization/behavior changes also need a sandbox e2e. |
 | Async | `async/await` only; prefer **`Array.fromAsync()`** over `for await` push-loops. |
