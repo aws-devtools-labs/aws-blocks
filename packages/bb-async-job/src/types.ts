@@ -75,10 +75,13 @@ export interface AsyncJobBaseOptions<T> {
  *
  * This is {@link AsyncJobBaseOptions} intersected with a discriminated union on
  * `compute`: a **container** compute carries the container-only
- * `maxConcurrencyPerCPU` knob, while a serverless compute (or none — the app
- * default is serverless) forbids it (`maxConcurrencyPerCPU?: never`), so setting
- * the knob without a container compute is a **compile error** (and is also
- * rejected at synth, as a defense for callers who bypass the types).
+ * `maxConcurrencyPerCPU` knob, while an explicit serverless compute or omitting
+ * `compute` forbids it (`maxConcurrencyPerCPU?: never`). Omitting `compute`
+ * still inherits the scope's compute at synth time; configuring the knob requires
+ * an explicit container compute even when the scope already uses one. Setting
+ * the knob without an explicit container compute is a **compile error**; synth
+ * also rejects it if the resolved compute is not a container, as a defense for
+ * callers who bypass the types.
  *
  * There is intentionally no `C` type parameter: the compute's kind is inferred
  * from the `compute` argument itself, never spelled by hand (its type is
@@ -105,18 +108,21 @@ export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> &
 				 * How many deliveries of this job run at once per instance, expressed
 				 * **per vCPU**. Blocks multiplies by the compute's vCPU count for the
 				 * per-instance concurrency: `max(1, ceil(maxConcurrencyPerCPU × vcpu))`.
-				 * Higher for IO-bound work that mostly awaits; 1 (or omit) for CPU-bound
-				 * work. Container-only — exposed only when the assigned `compute` is a
-				 * container; setting it with a serverless compute (or none) is a compile
-				 * error and is also rejected at synth.
+				 * Higher for IO-bound work that mostly awaits; explicitly set 1 for
+				 * CPU-bound work. When omitted, the poller allows five in-flight deliveries
+				 * per job per instance, regardless of the compute's vCPU count.
+				 * Container-only: exposed only with an explicit container `compute`;
+				 * setting it with a serverless compute (or omitting `compute`) is a compile
+				 * error. Synth also rejects it when the resolved compute is not a container.
 				 */
 				maxConcurrencyPerCPU?: number;
 		  }
 		| {
 				/**
-				 * The compute this job's handler runs on. Omit to run on the app's default
-				 * (serverless) compute, exactly as today. Pass a serverless `Compute` block
-				 * (or any {@link ComputeProvider}) to assign one explicitly.
+				 * The compute this job's handler runs on. When omitted, inherits the nearest
+				 * parent scope's compute, falling back to the backend's default compute
+				 * when none is assigned (normally serverless). Pass a serverless `Compute`
+				 * block (or any {@link ComputeProvider}) to assign one explicitly.
 				 */
 				compute?: ComputeProvider<'serverless'>;
 				/**

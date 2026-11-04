@@ -5,7 +5,7 @@ Design document for CronJob. For usage, see [README.md](./README.md).
 **Package:** `@aws-blocks/bb-cron-job`
 **Re-exported from:** `@aws-blocks/blocks`
 **Type:** Primitive (new infrastructure, no runtime methods)
-**AWS Service:** Amazon EventBridge Scheduler + shared Lambda
+**AWS Services:** Amazon EventBridge Scheduler with a resolved Lambda or an SQS-backed container runner
 
 ## Overview
 
@@ -20,9 +20,11 @@ EventBridge Scheduler (AWS)
     └── CfnSchedule (one per CronJob instance)
          ├── scheduleExpression (cron or rate)
          ├── scheduleExpressionTimezone (IANA timezone)
-         └── target: shared Lambda (via IAM role)
-              └── routes event by { source: 'blocks.cronjob', jobName }
-                   └── invokes registered handler
+         └── target (via the backend's shared Scheduler IAM role)
+              ├── Lambda: resolved compute's function
+              │    └── routes { source: 'blocks.cronjob', jobName } to the handler
+              └── Container: internal AsyncJob runner's SQS queue
+                   └── owner-matched poller → worker thread → CronJob handler
 
 Local Mock
     └── CronJob class (extends Scope)
@@ -39,18 +41,18 @@ Local Mock
 
 **Rationale:**
 - **Conceptual clarity** — a scheduled job IS the schedule + handler. There's no "use the cron job" action in application code.
-- **Simplicity** — no SDK client, no queue URL, no environment variable plumbing. Pure infrastructure declaration.
+- **Simplicity** — no callable job API or customer-managed queue URL. Lambda delivery is direct; the container path composes its queue and runtime configuration internally (D-CJ-7).
 - **Separation from AsyncJob** — AsyncJob is the runtime primitive (submit/submitBatch). CronJob is the infrastructure primitive.
 
-### D-CJ-2: Shared Lambda target (not dedicated per-job Lambda)
+### D-CJ-2: Resolved compute target (no dedicated Lambda per job)
 
-**Decision:** CronJob targets the shared API Lambda (same as API handlers and AsyncJob). No dedicated Lambda per job.
+**Decision:** CronJob uses its explicit `compute`, or inherits the nearest parent scope's compute and ultimately the backend default. On Lambda, Scheduler targets that compute's function directly. On a container, it targets an internal AsyncJob runner's queue (D-CJ-7). Constructing a CronJob does not create a dedicated Lambda per job.
 
 **Rationale:**
-- **Resource efficiency** — one Lambda function handles all routes, async jobs, and cron jobs. No per-job cold starts or idle cost.
-- **Composition** — CronJob handlers can access other Building Blocks (KVStore, FileBucket, etc.) because they share the same Lambda environment with all permissions already granted.
-- **Consistency** — same execution model as AsyncJob. Same timeout (15 min), same memory, same observability.
-- **Trade-off** — per-job timeout and memory cannot be configured independently; all jobs share the handler Lambda's settings.
+- **Resource efficiency** — jobs can share a compute rather than automatically provisioning a separate function or service per job. With no compute assignments, a simple app uses the backend's default Lambda.
+- **Composition** — the executing compute's role receives the Building Block grants needed by its handlers; sharing a Lambda with the API is not required.
+- **Consistency** — both CronJob and AsyncJob resolve their compute from the same scope hierarchy. A Lambda CronJob is invoked directly, while a container CronJob reuses AsyncJob's delivery machinery.
+- **Trade-off** — Lambda jobs share the selected function's memory and timeout; select another compute to change those resources. Container jobs share the selected service's CPU/memory, but `timeoutSeconds` is enforced per tick by the runner's worker.
 
 ### D-CJ-3: EventBridge Scheduler (not EventBridge Rules)
 
@@ -81,23 +83,25 @@ Local Mock
 
 ### D-CJ-5: Shared IAM role across CronJob instances
 
-**Decision:** A single `BlocksSchedulerRole` is created per CloudFormation stack (keyed by a Symbol). All CronJob instances in the stack share this role.
+**Decision:** A single `BlocksSchedulerRole` is created per backend root (keyed by a Symbol). CronJobs in that backend share it; two backends in one CloudFormation stack receive separate roles.
 
 **Rationale:**
-- **Resource efficiency** — avoids creating N IAM roles for N cron jobs. One role with `lambda:InvokeFunction` scoped to the shared Lambda is sufficient.
+- **Resource efficiency** — avoids creating N IAM roles for N cron jobs. One role per backend accumulates grants for its jobs' target functions and queues.
 - **Simplicity** — no per-job role management, no cross-references between jobs.
-- **Security** — the role can only invoke the shared Lambda (least privilege for the scheduler service).
+- **Security** — grants are scoped to each target's ARN: `lambda:InvokeFunction` for Lambda jobs and `sqs:SendMessage` for container jobs. The shared role has the union of those grants, not per-job isolation, and it is not shared across backends.
 - **Trust scoping** — the role's trust policy admits `scheduler.amazonaws.com` only when `aws:SourceAccount` is the stack's account and `aws:SourceArn` matches `arn:<partition>:scheduler:<region>:<account>:schedule-group/*`. Scheduler reports the schedule *group* ARN as the source, so the pattern is group-based rather than per-schedule.
 - **Per-target grants** — each CronJob adds a grant for its own target: `lambda:InvokeFunction` on its compute's function, or `sqs:SendMessage` on its runner queue (D-CJ-7). Jobs on one function share one rendered statement. (Before per-job compute, the role was granted only the first job's function, which was correct while every job shared one function.)
 
 ### D-CJ-6: Event routing via `source` + `jobName`
 
-**Decision:** EventBridge sends `{ source: 'blocks.cronjob', jobName: fullId, scheduledTime, input }` as the Lambda payload. The Lambda handler routes to the correct CronJob handler by matching `jobName`.
+**Decision:** On the Lambda path, EventBridge sends `{ source: 'blocks.cronjob', jobName: fullId, scheduledTime, input }`. The Lambda handler routes to the correct CronJob handler by matching `jobName`. Container delivery uses the internal runner instead (D-CJ-7).
 
 **Rationale:**
-- **Same pattern as AsyncJob** — AsyncJob routes by event source ARN; CronJob routes by `source` field. Consistent dispatch model.
-- **No extra infrastructure** — no SQS queue, no SNS topic. Direct Lambda invocation via EventBridge.
+- **Consistent dispatch** — Lambda AsyncJobs route by event source ARN; Lambda CronJobs route by `source` and `jobName`. Container jobs use their owning compute's poller.
+- **No extra queue on Lambda** — direct invocation via EventBridge needs no SQS queue or SNS topic. Container jobs provision the runner's queue and DLQ.
 - **Debugging** — `jobName` in the payload makes CloudWatch logs self-identifying.
+
+For handler errors, Lambda's [default asynchronous retry policy](https://docs.aws.amazon.com/lambda/latest/dg/invocation-async-error-handling.html) makes two further attempts. Throttling and invocation/system errors have separate retry behavior; three handler attempts is not a bound on every delivery failure.
 
 ### D-CJ-7: Container compute delivers ticks through an internal AsyncJob
 
@@ -112,8 +116,8 @@ Local Mock
 
 **Consequences:**
 - The child shows up as an `AsyncJob` in the block census and telemetry.
-- A failed tick is retried by the queue (3 attempts in total, the AsyncJob default), then moved to the DLQ. The Lambda path's async-invoke policy is also 3 attempts in total.
-- The runtime entry constructs the runner on every compute so its `fullId` matches synth. It stays inert unless synth provisioned its queue.
+- A failed container tick is retried by the queue (3 attempts in total, the AsyncJob default), then moved to the DLQ. The Lambda path defaults to 3 handler attempts for function errors (D-CJ-6).
+- The runtime entry constructs the runner only when synth registered its configuration marker, using the same child id so its `fullId` matches synth. A serverless CronJob constructs no runner, avoiding collisions with a user's own AsyncJob ids.
 - The CDK entry finds the runner's queue by its child id (`queue`); a unit test fails if AsyncJob renames it.
 
 ## Infrastructure (CDK)
@@ -123,14 +127,15 @@ Creates the following resources per CronJob instance:
 - **EventBridge Schedule** — `AWS::Scheduler::Schedule` with the specified cron/rate expression.
 - **Schedule name** — derived from `scope.fullId`, truncated to 64 characters.
 - **Timezone** — passed to `ScheduleExpressionTimezone`. Defaults to UTC.
-- **Input** — JSON payload embedded in `Target.Input` containing `{ source, jobName, scheduledTime, input }`.
+- **Input** — JSON payload embedded in `Target.Input`: `{ source, jobName, scheduledTime, input }` for Lambda, or `{ jobName, scheduledTime, input }` for the container runner.
 - **State** — `ENABLED` or `DISABLED` based on the `enabled` option.
 - **Flexible time window** — `OFF` (exact timing).
-- **Target** — shared Lambda ARN with the shared scheduler IAM role.
+- **Target** — the resolved Lambda function ARN, or the internal runner's queue ARN, with the backend's shared Scheduler IAM role.
+- **Container runner only** — a child AsyncJob with its own main queue and DLQ, consumption grants for the compute, and owner/timeout configuration. No runner queue is created for Lambda jobs.
 
-Per stack (shared):
+Per backend root (shared):
 
-- **IAM Role** — `BlocksSchedulerRole` with `lambda:InvokeFunction` scoped to the shared Lambda ARN.
+- **IAM Role** — `BlocksSchedulerRole` with `lambda:InvokeFunction` on each Lambda target and `sqs:SendMessage` on each container runner's queue. Repeated use of one function is deduplicated.
 
 **Removal policy:** DESTROY (sandbox). Schedules are deleted when the stack is destroyed.
 
@@ -138,8 +143,9 @@ No `fromExisting()` — wrapping an existing EventBridge schedule is not support
 
 ## AWS Runtime
 
-- CronJob registers a Lambda event handler via `registerLambdaEventHandler('blocks.cronjob', fullId, handler)`. Its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design).
+- CronJob registers a Lambda event handler via `registerLambdaEventHandler('blocks.cronjob', fullId, handler)`. For a Lambda target its CDK constructor claims the same key (`this.registerLambdaEventHandler(…)`), so two blocks on one key fail `cdk synth`; `registerConfig()` holds one value per key (`registerSharedConfig()` from `@aws-blocks/core/cdk/internal` is only for keys shared by design).
 - When the Lambda receives an event with `source === 'blocks.cronjob'`, it routes to the handler matching `jobName`.
+- For a container target, the synth marker creates the internal runner; its owner-matched poller dispatches each queued tick to a worker and converts the payload to the same `CronJobEvent<T>`.
 - The handler receives `{ scheduledTime, jobName, input }` — the same `CronJobEvent<T>` shape used in mock.
 - `scheduledTime` is resolved by EventBridge at invocation time via the `<aws.scheduler.scheduled-time>` template variable.
 - Exposes `bbName` and `bbVersion` properties from auto-generated `version.ts` for observability.
@@ -174,10 +180,10 @@ This is a brute-force approach that trades performance for correctness. Acceptab
 |------------|--------|------------|
 | Local cron timing may drift | Schedule fires at slightly different times than EventBridge | No mitigation — timing precision is not critical for correctness |
 | No EventBridge retry in mock | Failed handlers are not retried locally | Mock logs the error with a warning that AWS would retry |
-| Handler runs in-process (not isolated) | Shared memory, no cold start, no timeout enforcement | No mitigation — shared Lambda in AWS is also not isolated per-job |
+| Handler runs in-process (not isolated) | Shared memory, no cold start, no timeout enforcement | Lambda jobs share the selected function's environment; container deliveries use worker threads and enforce configured timeouts. Use a sandbox to exercise those paths. |
 | `compute` and `timeoutSeconds` are ignored | A container job runs in-process and is not stopped at `timeoutSeconds` locally | Same as AsyncJob's mock; deploy to a sandbox to exercise container delivery |
-| No concurrency control | Multiple invocations can overlap locally | No mitigation — same behavior in AWS (no per-job concurrency option) |
-| No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by the shared Lambda's grants |
+| No concurrency control | Multiple invocations can overlap locally | CronJob has no concurrency option. AWS delivery is subject to the selected function's concurrency or the container runner's per-instance poller limit; ticks are not serialized. |
+| No IAM enforcement | Permission errors only surface in AWS | Validate the executing compute's Building Block grants and the backend Scheduler role's per-target grants in a sandbox. |
 | Advanced cron forms (`L`, `W`, `#`, year field) don't fire in the mock | The mock's parser models a subset of AWS cron, so these throw in local dev even though EventBridge (and the CDK synth gate) accept them | Deploy to a sandbox to exercise advanced cron; the synth gate validates only the 6-field shape for cron (see D-CJ-4) so it never blocks a valid schedule |
 
 ## Trade-offs
@@ -185,10 +191,10 @@ This is a brute-force approach that trades performance for correctness. Acceptab
 | Decision | Trade-off |
 |----------|-----------|
 | No runtime methods | Cannot dynamically modify schedule at runtime, but keeps BB conceptually simple |
-| Shared Lambda | Cannot tune per-job memory/timeout, but avoids resource sprawl |
+| Resolved compute | Jobs sharing a compute share its resources. Select another Lambda or container compute for different resource limits; container ticks also support per-delivery `timeoutSeconds`. |
 | EventBridge Scheduler over Rules | Smaller community/docs surface, but better timezone + reliability semantics |
 | Brute-force cron calculation | Slow for far-future schedules in mock, but correct and simple |
-| Shared IAM role per stack | Cannot scope permissions per-job, but one role is sufficient for lambda:InvokeFunction |
+| Shared IAM role per backend | One role has the union of the backend's target-specific invoke/send grants, rather than a separate role per job. Backends in the same stack remain separate. |
 | No `fromExisting()` | Cannot wrap pre-existing schedules, but keeps ownership model clean |
 
 ## Integration with AsyncJob
@@ -201,10 +207,10 @@ CronJob and AsyncJob are complementary primitives:
 | **Runtime methods** | None (infrastructure-only) | `.submit()`, `.submitBatch()` |
 | **AWS service** | EventBridge Scheduler | SQS |
 | **Delivery guarantee** | At-least-once (EventBridge) | At-least-once (SQS) |
-| **Retry mechanism** | Serverless: Lambda async invoke retry (2 retries). Container: SQS redelivery (3 attempts) + DLQ | SQS visibility timeout + DLQ |
-| **Concurrency** | No control (overlapping invocations possible) | SQS-managed (configurable batch size) |
+| **Retry mechanism** | Serverless: Lambda async invoke retry (2 retries for handler errors by default). Container: SQS redelivery (3 attempts) + DLQ | SQS visibility timeout + DLQ |
+| **Concurrency** | No CronJob option; overlapping ticks are bounded by compute/delivery limits | Lambda event-source batching; container per-job/per-instance poller limit |
 | **Payload** | Static `input` set at deploy time | Dynamic payload per `.submit()` call |
-| **Lambda target** | Shared Lambda (same as AsyncJob) | Shared Lambda (same as CronJob) |
+| **Compute target** | Resolved Lambda or container compute | Resolved Lambda or container compute |
 
 Common pattern: CronJob triggers periodic work, which may use AsyncJob for fan-out:
 

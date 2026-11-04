@@ -181,9 +181,9 @@ AsyncJob and CronJob are complementary primitives:
 | **Runtime methods** | `.submit()`, `.submitBatch()`, `.getStatus()`, `.waitUntilComplete()` | None (infrastructure-only) |
 | **AWS service** | SQS | EventBridge Scheduler |
 | **Delivery guarantee** | At-least-once (SQS) | At-least-once (EventBridge) |
-| **Retry mechanism** | SQS redrive + DLQ | Lambda async invoke retry |
+| **Retry mechanism** | SQS redrive + DLQ | Serverless: Lambda async invoke retry (2 retries for handler errors by default). Container: SQS redelivery (3 attempts) + DLQ |
 | **Payload** | Dynamic per `.submit()` call | Static `input` set at deploy time |
-| **Compute target** | Resolved Lambda or container compute | Resolved Lambda compute only |
+| **Compute target** | Resolved Lambda or container compute | Resolved Lambda or container compute |
 
 Common pattern: a CronJob triggers periodic work that uses an AsyncJob for fan-out:
 

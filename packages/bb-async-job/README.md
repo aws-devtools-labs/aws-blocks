@@ -62,14 +62,16 @@ const { jobId } = await emailJob.submit({ to: 'alice@example.com', subject: 'Wel
 | `maxBatchingWindowSeconds` | 5 | Seconds SQS waits to fill a batch before invoking the Lambda |
 | `trackStatus` | `false` | Record every job's state transitions so `getStatus()` / `waitUntilComplete()` can read them |
 | `logger` | — | Optional logger for internal operations; defaults to a Logger at error level |
-| `compute` | app default (serverless) | The `Compute` this job's handler runs on. Assign a container `Compute` for long-running work. |
+| `compute` | the scope's compute | Inherits the nearest parent scope's compute, falling back to the backend default when none is assigned. Assign a container `Compute` explicitly for long-running work. |
 | `timeoutSeconds` | — | Wall-clock limit for one delivery. On a container the runtime terminates the job's worker at the deadline; on serverless it's bounded by the function timeout. |
-| `maxConcurrencyPerCPU` | — | Container-only. In-flight deliveries **per vCPU**; the per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Higher for IO-bound work; 1 for CPU-bound. |
+| `maxConcurrencyPerCPU` | 5 per job per instance when omitted | Container-only. When specified, in-flight deliveries **per vCPU**; the per-instance count is `max(1, ceil(maxConcurrencyPerCPU × vcpu))`. Higher for IO-bound work; explicitly set 1 for CPU-bound. Omitting it uses five deliveries per job per instance, regardless of vCPU count. |
 
 ### Running on a container compute
 
-By default a job runs on the app's serverless compute (Lambda). Assign a
-container `Compute` for work that outgrows it — long-running, or high-memory:
+A job inherits the nearest parent scope's compute unless `compute` is set
+explicitly. With no scope assignment it falls back to the backend's default
+compute, normally Lambda. Assign a container `Compute` explicitly for
+long-running or high-memory work:
 
 ```ts
 import { Compute } from '@aws-blocks/blocks';

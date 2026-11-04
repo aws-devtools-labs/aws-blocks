@@ -296,7 +296,7 @@ Automatically provisions:
 - **Lambda compute (serverless jobs):** Each schedule targets its resolved function. No dedicated Lambda is created per job.
 - **IAM role:** Per-backend EventBridge Scheduler role with access to each job's target: `lambda:InvokeFunction` for Lambda jobs or `sqs:SendMessage` for container jobs. Its trust policy is limited to schedules in the stack's account and region (`aws:SourceAccount` + `aws:SourceArn` matching `schedule-group/*`).
 - **Schedule name:** Derived from the CronJob's `fullId` (truncated to 64 chars)
-- **On a container compute:** The schedule targets an SQS queue and dead-letter queue owned by an internal `AsyncJob` instead of a Lambda function. The scheduler role gets `sqs:SendMessage` on that queue in place of `lambda:InvokeFunction`.
+- **On a container compute:** The schedule targets the main SQS queue of an internal `AsyncJob` instead of a Lambda function. The runner also owns a dead-letter queue, but the schedule does not target it. The scheduler role gets `sqs:SendMessage` on the main queue in place of `lambda:InvokeFunction`.
 
 ## Key Distinction from AsyncJob
 
