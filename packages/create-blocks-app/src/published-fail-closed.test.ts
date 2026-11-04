@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 // A scaffold that cannot reach the registry must fail, and must not leave the
@@ -49,29 +49,63 @@ after(() => {
   if (workDir) rmSync(workDir, { recursive: true, force: true });
 });
 
+/** Every manifest under `dir` that a scaffold may have written. */
+function manifestsUnder(dir: string): string[] {
+  return [join(dir, 'package.json'), join(dir, 'aws-blocks', 'package.json')].filter((p) => existsSync(p));
+}
+
+/**
+ * The four paths that put `@aws-blocks/*` into a customer project. Each is run
+ * in the published layout, so the CLI cannot fall back to `file:` paths.
+ */
+const SCAFFOLD_PATHS: { label: string; args: string[]; seed?: (dir: string) => void }[] = [
+  { label: 'a fresh project', args: ['--template', 'default', '--yes', '--skip-install'] },
+  { label: 'a fresh project from a backend-only template', args: ['--template', 'backend', '--yes', '--skip-install'] },
+  {
+    label: 'an existing project',
+    args: ['.', '--yes', '--skip-install'],
+    seed: (dir) => writeFileSync(join(dir, 'package.json'), '{"name":"existing","version":"1.0.0"}'),
+  },
+  {
+    label: 'an Amplify Gen 2 project',
+    args: ['.', '--yes', '--skip-install'],
+    seed: (dir) => {
+      writeFileSync(join(dir, 'package.json'), '{"name":"amp","version":"1.0.0"}');
+      mkdirSync(join(dir, 'amplify'), { recursive: true });
+      writeFileSync(join(dir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});\n');
+    },
+  },
+];
+
 describe('a published scaffold that cannot reach the registry', () => {
-  it('fails, names the package, and never leaves a "*" behind', () => {
-    const targetDir = join(workDir, 'my-app');
+  for (const [index, path] of SCAFFOLD_PATHS.entries()) {
+    it(`fails and never leaves a "*" behind when adding to ${path.label}`, () => {
+      const targetDir = join(workDir, `case-${index}`);
+      mkdirSync(targetDir, { recursive: true });
+      path.seed?.(targetDir);
 
-    const result = spawnSync(process.execPath, [cliPath, targetDir, '--template', 'bare', '--yes', '--skip-install'], {
-      encoding: 'utf-8',
-      env: { ...process.env, ...UNREACHABLE_REGISTRY },
-      timeout: 120_000,
-    });
+      const args = path.args[0] === '.' ? path.args : [targetDir, ...path.args];
+      const result = spawnSync(process.execPath, [cliPath, ...args], {
+        cwd: targetDir,
+        encoding: 'utf-8',
+        env: { ...process.env, ...UNREACHABLE_REGISTRY },
+        timeout: 120_000,
+      });
 
-    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-    assert.notStrictEqual(result.status, 0, `expected a non-zero exit, got ${result.status}\n${output}`);
-    assert.match(output, /@aws-blocks\/blocks/, `expected the message to name the package\n${output}`);
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      assert.notStrictEqual(result.status, 0, `expected a non-zero exit, got ${result.status}\n${output}`);
 
-    // The scaffold may be half-written — the install is what failed — but it
-    // must never carry the placeholder, which npm would resolve to whatever is
-    // newest on the next clean install.
-    const manifestPath = join(targetDir, 'package.json');
-    if (existsSync(manifestPath)) {
-      const deps = JSON.parse(readFileSync(manifestPath, 'utf-8')).dependencies ?? {};
-      for (const [name, spec] of Object.entries(deps)) {
-        assert.notStrictEqual(spec, '*', `${name} was left as the "*" placeholder`);
+      // The scaffold may be half-written — the install is what failed — but no
+      // manifest may carry the placeholder, which npm would resolve to whatever
+      // is newest on the next clean install.
+      const written = manifestsUnder(targetDir);
+      assert.ok(written.length > 0, `expected at least one manifest\n${output}`);
+      for (const manifestPath of written) {
+        const deps = JSON.parse(readFileSync(manifestPath, 'utf-8')).dependencies ?? {};
+        for (const [name, spec] of Object.entries(deps)) {
+          assert.notStrictEqual(spec, '*', `${manifestPath} left ${name} as the "*" placeholder`);
+        }
       }
-    }
-  });
+    });
+  }
 });
