@@ -72,7 +72,6 @@ import { AuthErrors } from './errors.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import type { FederationRouteHost } from './federation-routes.js';
 import { assertKnownAuthOptions } from './option-validation.js';
-import { providerDisplayName } from './provider-names.js';
 import {
 	handlePreSignUpTrigger,
 	passwordSignUpCandidate,
@@ -80,6 +79,8 @@ import {
 	VALIDATED_MARKER_KEY,
 } from './presignup-trigger.js';
 import { protectNamespace } from './protect.js';
+import { providerDisplayName } from './provider-names.js';
+import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
 import {
 	type ContactVerification,
 	contactVerificationOf,
@@ -180,7 +181,7 @@ const MFA_SETTINGS: readonly MfaSetting[] = ['ENABLED', 'DISABLED', 'PREFERRED',
  *
  * @internal
  */
-export function resolveProviders(options: AuthOptions): ResolvedProvider[] {
+export function resolveProviders(options: ResolvedAuthOptions): ResolvedProvider[] {
 	const out: ResolvedProvider[] = [];
 	const label = (id: string, explicit?: string) => explicit ?? `Sign in with ${providerDisplayName(id)}`;
 	for (const [id, config] of Object.entries(options.socialProviders ?? {})) {
@@ -363,7 +364,7 @@ function layerFor(target: object): AuthLayer {
 export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope implements AuthShape<O> {
 	/**
 	 * Reference an existing Cognito user pool. Returns a reference object to pass
-	 * as {@link AuthOptions.userPool}, not an `Auth`.
+	 * as {@link CognitoAuthOptions.userPool}, not an `Auth`.
 	 */
 	static fromExisting(userPoolId: string, clientId?: string): ExternalUserPoolRef {
 		return makeExternalUserPoolRef(userPoolId, clientId);
@@ -372,7 +373,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	/** Logger for detail that must not reach a client. */
 	protected readonly log: ChildLogger;
 
-	private readonly config: AuthOptions;
+	private readonly config: ResolvedAuthOptions;
 	private readonly sessions: SessionStore;
 	private readonly sessionTtlSeconds: number;
 	private readonly crossDomain: boolean;
@@ -408,7 +409,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		assertKnownAuthOptions(id, options);
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		const layer = layerFor(new.target);
-		const config: AuthOptions = options ?? {};
+		const config = resolveOptions(options ?? {});
 		this.config = config;
 		this.log = config.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.sessionTtlSeconds = config.session?.ttlSeconds ?? DEFAULT_SESSION_TTL_SECONDS;
@@ -445,8 +446,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		for (const provider of resolveProviders(config)) {
 			if (providers.has(provider.id)) {
 				throw new Error(
-					`Auth: provider id '${provider.id}' is configured more than once across socialProviders, ` +
-						'oidcProviders and samlProviders. Provider ids must be unique.',
+					`Auth: provider id '${provider.id}' is configured more than once. Provider ids must be unique.`,
 				);
 			}
 			providers.set(provider.id, { provider, engine: layer.federation(host, provider) });
@@ -777,7 +777,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * `emailPassword.autoSignIn` on (the default), also sets the encrypted
 	 * auto-sign-in bridge cookie (15 minutes). Runs `validateUser` first.
 	 * (On AWS the pool's PreSignUp trigger then recognises the sign-up as already
-	 * validated and does not run it again — see {@link AuthOptions.validateUser}.)
+	 * validated and does not run it again — see {@link AuthCommonOptions.validateUser}.)
 	 *
 	 * @throws {ApiError} 409 `UsernameExistsException` for an existing user (server-side callers are inside the trust boundary).
 	 * @throws {ApiError} 409 `EmailPasswordNotEnabledException` when email + password is disabled (untyped callers).
@@ -2641,7 +2641,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					let user = await this.requireAuth(context);
 					const delta = this.mfaPreferenceDelta(input);
 					// Turning a factor off weakens the account: it needs a recent sign-in.
-					if (Object.values(delta).includes('DISABLED')) user = await this.requireAuth(context, { fresh: true });
+					if (Object.values(delta).includes('DISABLED'))
+						user = await this.requireAuth(context, { fresh: true });
 					await this.wide.updateMfaPreference(context, delta);
 					return await this.mfaSettingsState(user, context);
 				}

@@ -18,7 +18,7 @@
  * @internal
  */
 
-import type { AuthOptions } from '../types.js';
+import type { ResolvedAuthOptions } from '../resolve-options.js';
 
 /**
  * The `registerConfig()` keys the CDK layer writes when a user pool exists —
@@ -77,7 +77,7 @@ export function sessionCookieName(fullId: string): string {
  *
  * @internal
  */
-export function cognitoFederatedProviderIds(options: AuthOptions | undefined): string[] {
+export function cognitoFederatedProviderIds(options: ResolvedAuthOptions | undefined): string[] {
 	const ids: string[] = [];
 	for (const [id, value] of Object.entries(options?.socialProviders ?? {})) {
 		if (value) ids.push(id);
@@ -97,7 +97,7 @@ export function cognitoFederatedProviderIds(options: AuthOptions | undefined): s
  *
  * @internal
  */
-export function emailPasswordEnabled(options: AuthOptions | undefined): boolean {
+export function emailPasswordEnabled(options: ResolvedAuthOptions | undefined): boolean {
 	return options?.emailPassword !== false;
 }
 
@@ -116,7 +116,7 @@ export function emailPasswordEnabled(options: AuthOptions | undefined): boolean 
  *
  * @internal
  */
-export function selfSignUpEnabled(options: AuthOptions | undefined): boolean {
+export function selfSignUpEnabled(options: ResolvedAuthOptions | undefined): boolean {
 	if (!emailPasswordEnabled(options)) return false;
 	const ep = options?.emailPassword;
 	return typeof ep === 'object' ? ep.selfSignUp !== false : true;
@@ -125,7 +125,7 @@ export function selfSignUpEnabled(options: AuthOptions | undefined): boolean {
 /**
  * Whether options need a Cognito user pool (decision Q6).
  *
- * `true` when email + password is enabled (the default), when any provider
+ * Never for `store: 'blocks'`. Otherwise `true` when email + password is enabled (the default), when any provider
  * federates through Cognito (see {@link cognitoFederatedProviderIds}), or when
  * an existing pool is wrapped via `userPool`. `false` only for a configuration
  * whose sign-in methods are all directly federated OIDC providers: the CDK
@@ -140,7 +140,8 @@ export function selfSignUpEnabled(options: AuthOptions | undefined): boolean {
  *
  * @internal
  */
-export function requiresUserPool(options: AuthOptions | undefined): boolean {
+export function requiresUserPool(options: ResolvedAuthOptions | undefined): boolean {
+	if (options?.store === 'blocks') return false;
 	return (
 		options?.userPool !== undefined ||
 		emailPasswordEnabled(options) ||
@@ -163,7 +164,7 @@ export function requiresUserPool(options: AuthOptions | undefined): boolean {
  *
  * @internal
  */
-export function ownsPreSignUpTrigger(options: AuthOptions | undefined): boolean {
+export function ownsPreSignUpTrigger(options: ResolvedAuthOptions | undefined): boolean {
 	return requiresUserPool(options) && options?.validateUser !== undefined && options.userPool === undefined;
 }
 
@@ -234,7 +235,7 @@ export function isLiteralCognitoClientId(value: unknown): value is string {
  *
  * @internal
  */
-export function bearerAuthEnabled(options: AuthOptions | undefined): boolean {
+export function bearerAuthEnabled(options: ResolvedAuthOptions | undefined): boolean {
 	const value = options?.allowBearerAuth;
 	return value === true || (typeof value === 'object' && value !== null);
 }
@@ -251,7 +252,7 @@ export function bearerAuthEnabled(options: AuthOptions | undefined): boolean {
  *
  * @internal
  */
-export function bearerClientIds(options: AuthOptions | undefined): string[] {
+export function bearerClientIds(options: ResolvedAuthOptions | undefined): string[] {
 	if (!bearerAuthEnabled(options)) return [];
 	const value = options?.allowBearerAuth;
 	const listed = typeof value === 'object' && value !== null ? (value.clientIds ?? []) : [];
@@ -276,7 +277,7 @@ const COGNITO_CLIENT_ID = /^[\w+]{1,128}$/;
  *
  * @internal
  */
-export function assertBearerClientIds(fullId: string, options: AuthOptions | undefined): void {
+export function assertBearerClientIds(fullId: string, options: ResolvedAuthOptions | undefined): void {
 	const value = options?.allowBearerAuth;
 	const candidates: { path: string; id: unknown }[] = [];
 	if (typeof value === 'object' && value !== null && value.clientIds !== undefined) {
@@ -328,7 +329,7 @@ export const DEFAULT_SIGNOUT_PATH = `${AUTH_ROUTE_PREFIX}/signout`;
  *
  * @internal
  */
-export function federationRedirectPaths(options: AuthOptions | undefined): {
+export function federationRedirectPaths(options: ResolvedAuthOptions | undefined): {
 	callbackPath: string;
 	signOutPath: string;
 } {
@@ -395,7 +396,7 @@ export function cognitoProviderName(kind: CognitoFederatedKind, id: string): str
  * @internal
  */
 export function cognitoFederatedProviders(
-	options: AuthOptions | undefined,
+	options: ResolvedAuthOptions | undefined,
 ): { id: string; kind: CognitoFederatedKind; providerName: string }[] {
 	const out: { id: string; kind: CognitoFederatedKind; providerName: string }[] = [];
 	for (const [id, value] of Object.entries(options?.socialProviders ?? {})) {

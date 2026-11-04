@@ -41,7 +41,8 @@ import { mountStubIdpRoutes, stubIssuerUrl } from './engines/stub-idp-routes.js'
 import type { EngineHost, FederationEngine, ResolvedProvider } from './engines/types.js';
 import { AuthErrors } from './errors.js';
 import { federationRoutePaths, mountFederationRoutes } from './federation-routes.js';
-import type { AuthOptions, StubOidcProviderOptions } from './types.js';
+import type { StubOidcProviderOptions } from './resolve-options.js';
+import type { AuthOptions } from './types.js';
 
 export type { AuthBase } from './auth-base.js';
 export type { AuthErrorName } from './errors.js';

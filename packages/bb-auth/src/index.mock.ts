@@ -25,8 +25,9 @@ import { MockNativeEngine } from './engines/native-mock.js';
 import { createStubIdp } from './engines/stub-idp.js';
 import { mountStubIdpRoutes, stubIssuerUrl } from './engines/stub-idp-routes.js';
 import { federationRoutePaths, mountFederationRoutes } from './federation-routes.js';
+import type { ResolvedAuthOptions } from './resolve-options.js';
 import { readMockSessionSecret } from './sessions.js';
-import type { AuthMockOptions, AuthOptions } from './types.js';
+import type { AuthMockOptions, CognitoAuthMockOptions } from './types.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
 assertNotMockInDeployedEnv('bb-auth');
@@ -43,7 +44,9 @@ export type * from './types.js';
  * plus the mock-only hooks of {@link AuthMockOptions}, checked at runtime
  * (the backend module is plain JavaScript once compiled).
  */
-function isMockOptions(options: AuthOptions): options is AuthMockOptions {
+function isMockOptions(
+	options: ResolvedAuthOptions,
+): options is ResolvedAuthOptions & Pick<CognitoAuthMockOptions, 'codeDelivery'> {
 	const codeDelivery: unknown = Reflect.get(options, 'codeDelivery');
 	const totpVerification: unknown = Reflect.get(options, 'totpVerification');
 	return (
@@ -52,14 +55,14 @@ function isMockOptions(options: AuthOptions): options is AuthMockOptions {
 	);
 }
 
-/** The values of {@link AuthMockOptions.totpVerification}. */
+/** The values of {@link CognitoAuthMockOptions.totpVerification}. */
 const TOTP_VERIFICATION = ['any', 'rfc6238'] as const;
 
 /**
  * `totpVerification`, checked at construction (the backend module is plain
  * JavaScript once compiled): a typo must not silently keep accepting any code.
  */
-function totpVerificationOf(options: AuthOptions): AuthMockOptions['totpVerification'] {
+function totpVerificationOf(options: ResolvedAuthOptions): CognitoAuthMockOptions['totpVerification'] {
 	const value: unknown = Reflect.get(options, 'totpVerification');
 	if (value === undefined) return undefined;
 	const known = TOTP_VERIFICATION.find((v) => v === value);

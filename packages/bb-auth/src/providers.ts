@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Provider factories for {@link AuthOptions.oidcProviders}: `stubIdp()` (the
- * local stub IdP), `github()` and `customOauth2()` (bare OAuth 2.0, federated
- * directly — Cognito cannot federate OAuth 2.0 without an ID token).
+ * Provider factories for a `store: 'blocks'` block's `providers`: `stubIdp()` (the local stub IdP,
+ * `type: 'stub'`), `github()` and `customOauth2()` (bare OAuth 2.0,
+ * `type: 'oauth2'`, federated directly — Cognito cannot federate OAuth 2.0
+ * without an ID token).
  *
  * A generic OIDC provider needs no factory — write the options object
- * (`{ issuer, clientId }`) directly. These helpers exist where the options
+ * (`{ type: 'oidc', issuer, clientId }`) directly. These helpers exist where the options
  * carry more than a reader would want to type: a stub's user directory, an
  * OAuth 2.0 provider's endpoints and claim mapping.
  *
@@ -18,10 +19,10 @@
 import type {
 	CustomOauth2Options,
 	GitHubOptions,
-	OAuth2ProviderOptions,
+	OAuth2Provider,
 	StubIdpOptions,
 	StubIdpSettings,
-	StubOidcProviderOptions,
+	StubProvider,
 } from './types.js';
 
 const OIDC_DEFAULT_SCOPES = ['openid', 'email', 'profile'] as const;
@@ -47,9 +48,9 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * import { Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
  *
  * const corp = getDeploymentType() === 'production'
- *   ? { issuer: 'https://login.example.com', clientId: 'my-client-id' }
+ *   ? { type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } as const
  *   : stubIdp();
- * const auth = new Auth(scope, 'auth', { emailPassword: false, oidcProviders: { corp } });
+ * const auth = new Auth(scope, 'auth', { store: 'blocks', providers: { corp } });
  * ```
  *
  * What a sandbox stub exposes: it signs users in **without credentials**.
@@ -67,8 +68,8 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * @example
  * ```ts
  * const auth = new Auth(scope, 'auth', {
- *   emailPassword: false,
- *   oidcProviders: {
+ *   store: 'blocks',
+ *   providers: {
  *     corp: stubIdp({
  *       users: [
  *         { sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } },
@@ -80,11 +81,12 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * });
  * ```
  */
-export function stubIdp(options: StubIdpOptions = {}): StubOidcProviderOptions {
+export function stubIdp(options: StubIdpOptions = {}): StubProvider {
 	const stub: StubIdpSettings = {};
 	if (options.users) stub.users = options.users;
 	if (options.onAuthorize) stub.onAuthorize = options.onAuthorize;
 	return {
+		type: 'stub',
 		issuer: 'aws-blocks:stub-idp',
 		clientId: STUB_CLIENT_ID,
 		scopes: options.scopes ?? [...OIDC_DEFAULT_SCOPES],
@@ -105,11 +107,12 @@ export function stubIdp(options: StubIdpOptions = {}): StubOidcProviderOptions {
  * ```ts
  * const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
  * const auth = new Auth(scope, 'auth', {
- *   oidcProviders: { github: github({ clientId: 'Iv1.abc', clientSecret: githubSecret }) },
+ *   store: 'blocks',
+ *   providers: { github: github({ clientId: 'Iv1.abc', clientSecret: githubSecret }) },
  * });
  * ```
  */
-export function github(options: GitHubOptions): OAuth2ProviderOptions {
+export function github(options: GitHubOptions): OAuth2Provider {
 	return customOauth2({
 		name: 'github',
 		clientId: options.clientId,
@@ -141,12 +144,13 @@ export function github(options: GitHubOptions): OAuth2ProviderOptions {
  * — called with the access token — gives the profile, which `mapClaims` turns
  * into a user.
  *
- * Prefer a plain `oidcProviders` entry (`{ issuer, clientId }`) whenever the
+ * Prefer a plain `type: 'oidc'` entry (`{ type: 'oidc', issuer, clientId }`) whenever the
  * provider speaks OIDC: an ID token is verified against the provider's keys,
  * which is stronger than trusting a userinfo response.
  */
-export function customOauth2(options: CustomOauth2Options): OAuth2ProviderOptions {
+export function customOauth2(options: CustomOauth2Options): OAuth2Provider {
 	return {
+		type: 'oauth2',
 		issuer: `oauth2:${options.name}`,
 		clientId: options.clientId,
 		...(options.clientSecret ? { clientSecret: options.clientSecret } : {}),

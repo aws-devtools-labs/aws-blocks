@@ -38,30 +38,31 @@
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type {
 	AdminOptions,
-	AppleCredentials,
+	AmazonProvider,
+	AppleProvider,
 	AppSettingRef,
 	AuthMockOptions,
 	BearerAuthOptions,
-	CognitoOidcProviderOptions,
-	DirectOidcProviderOptions,
+	CognitoOidcProvider,
+	DirectOidcProvider,
 	EmailPasswordOptions,
 	EmailSenderOptions,
 	ExternalUserPoolRef,
+	FacebookProvider,
+	GoogleProvider,
 	HostedUiOptions,
 	MfaOptions,
-	OAuth2ProviderOptions,
-	OAuthCredentials,
+	OAuth2Provider,
 	OidcProviderBase,
 	PasskeyOptions,
 	PasswordPolicy,
 	ProviderCommon,
 	RedirectOptions,
-	SamlProviderOptions,
+	SamlProvider,
 	SecretRef,
 	SessionOptions,
-	SocialProviders,
 	StubIdpSettings,
-	StubOidcProviderOptions,
+	StubProvider,
 	StubUser,
 	UserAttribute,
 	UserPoolOptions,
@@ -86,8 +87,8 @@ import type {
  *   `undefined`): the group's shorthand.
  * - `{ record }` — user-chosen keys (provider ids): each *value* is checked.
  * - `{ array }` — each element is checked.
- * - `{ variants }` — the shape depends on the value (an OIDC provider's
- *   `federateVia` selects its engine and so its accepted keys).
+ * - `{ variants }` — the shape depends on the value (a provider's `type`
+ *   selects its accepted keys).
  */
 type Spec =
 	| 'value'
@@ -102,7 +103,7 @@ interface Shape {
 }
 
 interface Variant {
-	/** Completes "is not accepted …", e.g. "with `federateVia: 'cognito'`". */
+	/** Completes "is not accepted …", e.g. "on a `type: 'saml'` provider". */
 	readonly label: string;
 	readonly shape: Shape;
 }
@@ -175,24 +176,19 @@ const PROVIDER_COMMON = {
 
 const OAUTH_SOCIAL = {
 	...PROVIDER_COMMON,
+	type: 'value',
 	clientId: 'value',
 	clientSecret: 'value',
-} as const satisfies ShapeOf<OAuthCredentials & ProviderCommon>;
+} as const satisfies ShapeOf<GoogleProvider | FacebookProvider | AmazonProvider>;
 
 const APPLE_SOCIAL = {
 	...PROVIDER_COMMON,
+	type: 'value',
 	clientId: 'value',
 	teamId: 'value',
 	keyId: 'value',
 	privateKey: 'value',
-} as const satisfies ShapeOf<AppleCredentials & ProviderCommon>;
-
-const SOCIAL_PROVIDERS = {
-	google: { object: OAUTH_SOCIAL },
-	facebook: { object: OAUTH_SOCIAL },
-	amazon: { object: OAUTH_SOCIAL },
-	apple: { object: APPLE_SOCIAL },
-} as const satisfies ShapeOf<SocialProviders>;
+} as const satisfies ShapeOf<AppleProvider>;
 
 const OIDC_ENDPOINTS = {
 	authorization: 'value',
@@ -212,12 +208,12 @@ const OAUTH2_ENDPOINTS = {
 	authorization: 'value',
 	token: 'value',
 	userInfo: 'value',
-} as const satisfies ShapeOf<OAuth2ProviderOptions['oauth2']['endpoints']>;
+} as const satisfies ShapeOf<OAuth2Provider['oauth2']['endpoints']>;
 
 const OAUTH2 = {
 	endpoints: { object: OAUTH2_ENDPOINTS },
 	mapClaims: 'value',
-} as const satisfies ShapeOf<OAuth2ProviderOptions['oauth2']>;
+} as const satisfies ShapeOf<OAuth2Provider['oauth2']>;
 
 const STUB_USER = {
 	sub: 'value',
@@ -231,42 +227,55 @@ const STUB_IDP = {
 	onAuthorize: 'value',
 } as const satisfies ShapeOf<StubIdpSettings>;
 
-/** A directly federated provider: plain OIDC, `github()` / `customOauth2()`, or `stubIdp()`. */
-const DIRECT_OIDC = {
+/** A `type: 'oidc'` provider: directly federated (`store: 'blocks'`) or through Cognito. */
+const OIDC = {
 	...OIDC_BASE,
-	federateVia: 'value',
+	type: 'value',
+	clientSecret: 'value',
+	groupsClaim: 'value',
+	attributesRequestMethod: 'value',
+} as const satisfies ShapeOf<DirectOidcProvider | CognitoOidcProvider>;
+
+const OAUTH2_PROVIDER = {
+	...OIDC_BASE,
+	type: 'value',
 	clientSecret: 'value',
 	groupsClaim: 'value',
 	oauth2: { object: OAUTH2 },
-	stubIdp: { object: STUB_IDP },
-} as const satisfies ShapeOf<DirectOidcProviderOptions | OAuth2ProviderOptions | StubOidcProviderOptions>;
+} as const satisfies ShapeOf<OAuth2Provider>;
 
-const COGNITO_OIDC = {
+const STUB_PROVIDER = {
 	...OIDC_BASE,
-	federateVia: 'value',
+	type: 'value',
 	clientSecret: 'value',
-	attributesRequestMethod: 'value',
-} as const satisfies ShapeOf<CognitoOidcProviderOptions>;
-
-const OIDC_PROVIDER: Spec = {
-	variants: {
-		select: (value) => (Reflect.get(value, 'federateVia') === 'cognito' ? 'cognito' : 'direct'),
-		cases: {
-			direct: {
-				label: "on a directly federated provider (`federateVia: 'direct'`, the default)",
-				shape: DIRECT_OIDC,
-			},
-			cognito: { label: "with `federateVia: 'cognito'`", shape: COGNITO_OIDC },
-		},
-	},
-};
+	groupsClaim: 'value',
+	stubIdp: { object: STUB_IDP },
+} as const satisfies ShapeOf<StubProvider>;
 
 const SAML_PROVIDER = {
 	...PROVIDER_COMMON,
+	type: 'value',
 	metadataUrl: 'value',
 	metadataFile: 'value',
 	signRequest: 'boolean',
-} as const satisfies ShapeOf<SamlProviderOptions>;
+} as const satisfies ShapeOf<SamlProvider>;
+
+/** One `providers` entry: its `type` selects the accepted keys. An unknown `type` is the resolver's to reject. */
+const PROVIDER: Spec = {
+	variants: {
+		select: (value) => String(Reflect.get(value, 'type')),
+		cases: {
+			google: { label: "on a `type: 'google'` provider", shape: OAUTH_SOCIAL },
+			facebook: { label: "on a `type: 'facebook'` provider", shape: OAUTH_SOCIAL },
+			amazon: { label: "on a `type: 'amazon'` provider", shape: OAUTH_SOCIAL },
+			apple: { label: "on a `type: 'apple'` provider", shape: APPLE_SOCIAL },
+			saml: { label: "on a `type: 'saml'` provider", shape: SAML_PROVIDER },
+			oidc: { label: "on a `type: 'oidc'` provider", shape: OIDC },
+			oauth2: { label: "on a `type: 'oauth2'` provider", shape: OAUTH2_PROVIDER },
+			stub: { label: "on a `type: 'stub'` provider", shape: STUB_PROVIDER },
+		},
+	},
+};
 
 const PASSWORD_POLICY = {
 	minLength: 'value',
@@ -368,14 +377,9 @@ const EMAIL_SENDER = {
  * @internal
  */
 export const AUTH_OPTIONS_SHAPE = {
+	store: 'value',
 	emailPassword: { object: EMAIL_PASSWORD, orBoolean: true },
-	socialProviders: {
-		object: SOCIAL_PROVIDERS,
-		otherwise:
-			'socialProviders supports google, facebook, amazon and apple. Configure any other IdP under `oidcProviders` (`github()` for GitHub).',
-	},
-	oidcProviders: { record: OIDC_PROVIDER },
-	samlProviders: { record: { object: SAML_PROVIDER } },
+	providers: { record: PROVIDER },
 	mfa: { object: MFA },
 	passkeys: { object: PASSKEYS, orBoolean: true },
 	users: { object: USERS },
@@ -403,7 +407,7 @@ export const AUTH_OPTIONS_SHAPE = {
 
 /** One unknown option found in a configuration. */
 export interface UnknownOption {
-	/** Where it was found, e.g. `oidcProviders.okta.clientSecrt`. */
+	/** Where it was found, e.g. `providers.okta.clientSecrt`. */
 	readonly path: string;
 	/** The offending key. */
 	readonly key: string;
@@ -438,7 +442,7 @@ function join(path: string, key: string): string {
 
 /**
  * Where each key name is accepted, as display paths (`users.preferredChallenge`,
- * `oidcProviders.<id>.clientId`, `users.attributes[].name`). Built once from
+ * `providers.<id>.clientId`, `users.attributes[].name`). Built once from
  * the shape tree, for misplaced-option suggestions.
  */
 function indexKnownPaths(): ReadonlyMap<string, readonly string[]> {

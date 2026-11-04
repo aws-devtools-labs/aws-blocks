@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `AuthOptions` provider records → Cognito identity-provider registrations, and
+ * `ResolvedAuthOptions` provider records → Cognito identity-provider registrations, and
  * the synth-time checks for them (D3b).
  *
  * Pure: no `aws-cdk-lib`. `federation.ts` turns each {@link IdpRegistration}
@@ -21,13 +21,8 @@
  * @internal
  */
 
-import type {
-	AuthOptions,
-	CognitoOidcProviderOptions,
-	ProviderCommon,
-	ProviderSecretRef,
-	SamlProviderOptions,
-} from '../types.js';
+import type { CognitoOidcProviderOptions, ResolvedAuthOptions, SamlProviderOptions } from '../resolve-options.js';
+import type { ProviderCommon, ProviderSecretRef } from '../types.js';
 import { AUTH_ROUTE_PREFIX, type CognitoFederatedKind, cognitoFederatedProviders } from './contract.js';
 
 /** Cognito `ProviderType` values `Auth` registers. */
@@ -247,21 +242,21 @@ function requireHttpsUrl(value: unknown, what: string): string {
 }
 
 function validateProviderName(kind: 'saml' | 'oidc', id: string): void {
-	const record = kind === 'saml' ? 'samlProviders' : 'oidcProviders';
+	const record = `providers.${id} (\`type: '${kind}'\`)`;
 	if (id.length < 3 || id.length > 32 || !PROVIDER_NAME_PATTERN.test(id)) {
 		throw new Error(
-			`Auth: ${record} id '${id}' is not a valid Cognito provider name: 3–32 characters, no spaces, and no '_' at the start or after the second character.`,
+			`Auth: ${record}: '${id}' is not a valid Cognito provider name: 3–32 characters, no spaces, and no '_' at the start or after the second character.`,
 		);
 	}
 	if (RESERVED_PROVIDER_NAMES.has(id.toLowerCase())) {
-		throw new Error(`Auth: ${record} id '${id}' is reserved by Cognito. Choose another id.`);
+		throw new Error(`Auth: ${record}: '${id}' is reserved by Cognito. Choose another id.`);
 	}
 }
 
 function socialRegistration(
 	id: string,
 	providerName: string,
-	options: AuthOptions,
+	options: ResolvedAuthOptions,
 	customAttributes: ReadonlySet<string>,
 ): IdpRegistration {
 	const social = options.socialProviders ?? {};
@@ -270,18 +265,18 @@ function socialRegistration(
 		case 'facebook':
 		case 'amazon': {
 			const p = social[id];
-			if (!p) throw new Error(`Auth: socialProviders.${id} is not set.`);
+			if (!p) throw new Error(`Auth: providers.${id} is not set.`);
 			return {
 				id,
 				kind: 'social',
 				providerName,
 				providerType: id === 'google' ? 'Google' : id === 'facebook' ? 'Facebook' : 'LoginWithAmazon',
 				details: {
-					client_id: requireNonEmpty(p.clientId, `socialProviders.${id}.clientId`),
+					client_id: requireNonEmpty(p.clientId, `providers.${id}.clientId`),
 					authorize_scopes: scopesFor(id, id, p.scopes),
 				},
 				...secretMaps({
-					client_secret: providerSecretSource(p.clientSecret, `socialProviders.${id}.clientSecret`),
+					client_secret: providerSecretSource(p.clientSecret, `providers.${id}.clientSecret`),
 				}),
 				attributeMapping: attributeMappingFor(id, DEFAULT_OIDC_MAPPING, p.attributeMapping, customAttributes),
 			};
@@ -291,27 +286,27 @@ function socialRegistration(
 			// the `.p8` key as the secret. (`AuthOIDC` synthesized Apple as `OIDC`
 			// and dropped it when no issuer URL was set.)
 			const p = social.apple;
-			if (!p) throw new Error('Auth: socialProviders.apple is not set.');
+			if (!p) throw new Error('Auth: providers.apple is not set.');
 			return {
 				id,
 				kind: 'social',
 				providerName,
 				providerType: 'SignInWithApple',
 				details: {
-					client_id: requireNonEmpty(p.clientId, 'socialProviders.apple.clientId (the Services ID)'),
-					team_id: requireNonEmpty(p.teamId, 'socialProviders.apple.teamId'),
-					key_id: requireNonEmpty(p.keyId, 'socialProviders.apple.keyId'),
+					client_id: requireNonEmpty(p.clientId, 'providers.apple.clientId (the Services ID)'),
+					team_id: requireNonEmpty(p.teamId, 'providers.apple.teamId'),
+					key_id: requireNonEmpty(p.keyId, 'providers.apple.keyId'),
 					authorize_scopes: scopesFor('apple', id, p.scopes),
 				},
 				...secretMaps({
-					private_key: providerSecretSource(p.privateKey, 'socialProviders.apple.privateKey'),
+					private_key: providerSecretSource(p.privateKey, 'providers.apple.privateKey'),
 				}),
 				attributeMapping: attributeMappingFor(id, DEFAULT_OIDC_MAPPING, p.attributeMapping, customAttributes),
 			};
 		}
 		default:
 			throw new Error(
-				`Auth: unknown socialProviders key '${id}'. Supported: google, facebook, amazon, apple. Use \`oidcProviders\` for any other OIDC IdP.`,
+				`Auth: unknown social provider '${id}'. Supported: google, facebook, amazon, apple. Use \`type: 'oidc'\` for any other OIDC IdP.`,
 			);
 	}
 }
@@ -321,11 +316,11 @@ function samlRegistration(id: string, p: SamlProviderOptions, customAttributes: 
 	const hasUrl = p.metadataUrl !== undefined;
 	const hasFile = p.metadataFile !== undefined;
 	if (hasUrl === hasFile) {
-		throw new Error(`Auth: samlProviders.${id} needs exactly one of \`metadataUrl\` or \`metadataFile\`.`);
+		throw new Error(`Auth: providers.${id} needs exactly one of \`metadataUrl\` or \`metadataFile\`.`);
 	}
 	const details: Record<string, string> = hasUrl
-		? { MetadataURL: requireHttpsUrl(p.metadataUrl, `samlProviders.${id}.metadataUrl`) }
-		: { MetadataFile: requireNonEmpty(p.metadataFile, `samlProviders.${id}.metadataFile`) };
+		? { MetadataURL: requireHttpsUrl(p.metadataUrl, `providers.${id}.metadataUrl`) }
+		: { MetadataFile: requireNonEmpty(p.metadataFile, `providers.${id}.metadataFile`) };
 	details.IDPSignout = 'false';
 	if (p.signRequest) details.RequestSigningAlgorithm = 'rsa-sha256';
 	return {
@@ -348,27 +343,24 @@ function cognitoOidcRegistration(
 	validateProviderName('oidc', id);
 	const method = p.attributesRequestMethod ?? 'GET';
 	if (method !== 'GET' && method !== 'POST') {
-		throw new Error(`Auth: oidcProviders.${id}.attributesRequestMethod must be 'GET' or 'POST'.`);
+		throw new Error(`Auth: providers.${id}.attributesRequestMethod must be 'GET' or 'POST'.`);
 	}
 	if (!p.clientSecret) {
 		throw new Error(
-			`Auth: oidcProviders.${id} sets \`federateVia: 'cognito'\` but no \`clientSecret\`. Cognito is a confidential client and needs one; use \`federateVia: 'direct'\` for a PKCE-only IdP.`,
+			`Auth: providers.${id} is a \`type: 'oidc'\` provider of a Cognito user pool but has no \`clientSecret\`. Cognito is a confidential client and needs one; use a \`store: 'blocks'\` block for a PKCE-only IdP.`,
 		);
 	}
 	const details: Record<string, string> = {
-		client_id: requireNonEmpty(p.clientId, `oidcProviders.${id}.clientId`),
+		client_id: requireNonEmpty(p.clientId, `providers.${id}.clientId`),
 		authorize_scopes: scopesFor('oidc', id, p.scopes),
-		oidc_issuer: requireHttpsUrl(p.issuer, `oidcProviders.${id}.issuer`),
+		oidc_issuer: requireHttpsUrl(p.issuer, `providers.${id}.issuer`),
 		attributes_request_method: method,
 	};
 	if (p.endpoints) {
-		details.authorize_url = requireHttpsUrl(
-			p.endpoints.authorization,
-			`oidcProviders.${id}.endpoints.authorization`,
-		);
-		details.token_url = requireHttpsUrl(p.endpoints.token, `oidcProviders.${id}.endpoints.token`);
-		details.attributes_url = requireHttpsUrl(p.endpoints.userInfo, `oidcProviders.${id}.endpoints.userInfo`);
-		details.jwks_uri = requireHttpsUrl(p.endpoints.jwks, `oidcProviders.${id}.endpoints.jwks`);
+		details.authorize_url = requireHttpsUrl(p.endpoints.authorization, `providers.${id}.endpoints.authorization`);
+		details.token_url = requireHttpsUrl(p.endpoints.token, `providers.${id}.endpoints.token`);
+		details.attributes_url = requireHttpsUrl(p.endpoints.userInfo, `providers.${id}.endpoints.userInfo`);
+		details.jwks_uri = requireHttpsUrl(p.endpoints.jwks, `providers.${id}.endpoints.jwks`);
 	}
 	return {
 		id,
@@ -376,7 +368,7 @@ function cognitoOidcRegistration(
 		providerName: id,
 		providerType: 'OIDC',
 		details,
-		...secretMaps({ client_secret: providerSecretSource(p.clientSecret, `oidcProviders.${id}.clientSecret`) }),
+		...secretMaps({ client_secret: providerSecretSource(p.clientSecret, `providers.${id}.clientSecret`) }),
 		attributeMapping: attributeMappingFor(id, DEFAULT_OIDC_MAPPING, p.attributeMapping, customAttributes),
 	};
 }
@@ -387,17 +379,17 @@ function cognitoOidcRegistration(
  * (missing credentials, an invalid Cognito provider name, both or neither SAML
  * metadata sources, an unmappable attribute, …).
  */
-export function idpRegistrations(options: AuthOptions): IdpRegistration[] {
+export function idpRegistrations(options: ResolvedAuthOptions): IdpRegistration[] {
 	const customAttributes = new Set((options.users?.attributes ?? []).map((a) => a.name));
 	return cognitoFederatedProviders(options).map(({ id, kind, providerName }) => {
 		if (kind === 'social') return socialRegistration(id, providerName, options, customAttributes);
 		if (kind === 'saml') {
 			const p = options.samlProviders?.[id];
-			if (!p) throw new Error(`Auth: samlProviders.${id} is not set.`);
+			if (!p) throw new Error(`Auth: providers.${id} is not set.`);
 			return samlRegistration(id, p, customAttributes);
 		}
 		const p = options.oidcProviders?.[id];
-		if (p?.federateVia !== 'cognito') throw new Error(`Auth: oidcProviders.${id} is not Cognito-federated.`);
+		if (p?.federateVia !== 'cognito') throw new Error(`Auth: providers.${id} is not federated through Cognito.`);
 		return cognitoOidcRegistration(id, p, customAttributes);
 	});
 }
@@ -425,7 +417,7 @@ export function validateDomainPrefix(prefix: unknown, what: string): string {
  * provider: provider ids unique across the three records, redirect paths under
  * the auth subtree, and no hosted-UI federation on a wrapped (`userPool`) pool.
  */
-export function validateFederationOptions(options: AuthOptions): void {
+export function validateFederationOptions(options: ResolvedAuthOptions): void {
 	const seen = new Map<string, string>();
 	const records = [
 		['socialProviders', options.socialProviders],
@@ -463,7 +455,7 @@ export function validateFederationOptions(options: AuthOptions): void {
 
 	if (options.userPool && cognitoFederatedProviders(options).length > 0) {
 		throw new Error(
-			"Auth: social, SAML and `federateVia: 'cognito'` providers cannot be combined with `userPool` (an existing pool) — `Auth` would have to create a domain and identity providers on a pool it does not own. Configure federation on that pool yourself, or let `Auth` create the pool.",
+			'Auth: `providers` cannot be combined with `userPool` (an existing pool) — `Auth` would have to create a domain and identity providers on a pool it does not own. Configure federation on that pool yourself, or let `Auth` create the pool.',
 		);
 	}
 }

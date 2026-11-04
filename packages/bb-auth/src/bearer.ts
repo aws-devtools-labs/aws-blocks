@@ -41,9 +41,9 @@
 
 import { cognitoFederatedProviders } from './cdk/contract.js';
 import type { BearerClientKind } from './engines/types.js';
+import type { ResolvedAuthOptions } from './resolve-options.js';
 import type { SessionIdentity } from './sessions.js';
 import { resolveSignInMode } from './sign-in-mode.js';
-import type { AuthOptions } from './types.js';
 
 /**
  * The token of an `Authorization: Bearer <token>` header (scheme matched
@@ -92,7 +92,7 @@ function numberClaim(claims: Record<string, unknown>, key: string): number {
  *
  * @internal
  */
-export function federatedProviderOfUsername(username: string, options: AuthOptions): string | undefined {
+export function federatedProviderOfUsername(username: string, options: ResolvedAuthOptions): string | undefined {
 	return federatedIdentityOfUsername(username, options)?.providerId;
 }
 
@@ -105,7 +105,7 @@ export function federatedProviderOfUsername(username: string, options: AuthOptio
  */
 export function federatedIdentityOfUsername(
 	username: string,
-	options: AuthOptions,
+	options: ResolvedAuthOptions,
 ): { providerId: string; sub: string } | undefined {
 	const lower = username.toLowerCase();
 	for (const { id, providerName } of cognitoFederatedProviders(options)) {
@@ -130,7 +130,7 @@ export function federatedIdentityOfUsername(
  *
  * @internal
  */
-export function usernameNamesProvider(client: BearerClientKind, options: AuthOptions): boolean {
+export function usernameNamesProvider(client: BearerClientKind, options: ResolvedAuthOptions): boolean {
 	if (client === 'hostedUi') return true;
 	if (client !== 'extra' || options.userPool) return false;
 	return resolveSignInMode(options.users?.signInWith).usernameAttributes.length > 0;
@@ -150,7 +150,7 @@ export function usernameNamesProvider(client: BearerClientKind, options: AuthOpt
 export function poolBearerIdentity(
 	claims: Record<string, unknown>,
 	client: BearerClientKind,
-	options: AuthOptions,
+	options: ResolvedAuthOptions,
 ): SessionIdentity | null {
 	const username = stringClaim(claims, 'username');
 	const userSub = stringClaim(claims, 'sub');

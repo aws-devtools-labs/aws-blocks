@@ -13,7 +13,7 @@
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import type { AdminAction, MfaMode, MfaOptions, PasswordPolicy, UserAttribute } from '../types.js';
 
-/** The second factors {@link AuthOptions.mfa} enables when `types` is omitted (see `MfaOptions.types`). */
+/** The second factors {@link CognitoAuthOptions.mfa} enables when `types` is omitted (see `MfaOptions.types`). */
 const DEFAULT_MFA_TYPES: readonly ('SMS' | 'TOTP' | 'EMAIL')[] = ['SMS', 'TOTP'];
 
 /** `AuthOptions.mfa` normalized: the mode, the resolved second factors, and the types the caller listed. */

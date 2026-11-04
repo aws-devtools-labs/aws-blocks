@@ -39,14 +39,9 @@ import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
 import { createRemoteJWKSet, type JWTPayload, jwtVerify } from 'jose';
 import { AuthErrors } from '../errors.js';
 import { safeRedirectPath, signInRedirectPath } from '../redirect-path.js';
+import type { OAuth2ProviderOptions, OidcProviderOptions, StubOidcProviderOptions } from '../resolve-options.js';
 import type { DirectSessionRecord } from '../sessions.js';
-import type {
-	MappedClaims,
-	OAuth2ProviderOptions,
-	OidcProviderOptions,
-	SignInUrlOptions,
-	StubOidcProviderOptions,
-} from '../types.js';
+import type { MappedClaims, SignInUrlOptions } from '../types.js';
 import { maskIdpCallbackError } from './idp-callback-error.js';
 import { clearPendingAuth, pendingStateMatches, readPendingAuth, writePendingAuth } from './pending-auth.js';
 import type {

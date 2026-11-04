@@ -17,7 +17,8 @@
  */
 
 import * as cognito from 'aws-cdk-lib/aws-cognito';
-import type { AuthOptions, EmailSenderOptions } from '../types.js';
+import type { ResolvedAuthOptions } from '../resolve-options.js';
+import type { EmailSenderOptions } from '../types.js';
 import { isCdkToken } from './contract.js';
 
 const EMAIL_ADDRESS = /^[^\s@]+@[^\s@]+$/;
@@ -33,7 +34,7 @@ function literal(value: unknown): value is string {
  * doesn't create, on a configuration with no pool, or with a malformed field.
  * Fields given as CDK tokens are passed through unchecked.
  */
-export function assertEmailSender(fullId: string, options: AuthOptions, needsPool: boolean): void {
+export function assertEmailSender(fullId: string, options: ResolvedAuthOptions, needsPool: boolean): void {
 	const email: EmailSenderOptions | undefined = options.email;
 	if (email === undefined) return;
 	const fail = (reason: string): never => {

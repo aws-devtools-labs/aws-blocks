@@ -75,6 +75,7 @@ import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
+import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -143,7 +144,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 
 	/**
 	 * Reference an existing Cognito user pool. Returns a reference object to pass
-	 * as {@link AuthOptions.userPool}, not an `Auth`.
+	 * as {@link CognitoAuthOptions.userPool}, not an `Auth`.
 	 */
 	static fromExisting(userPoolId: string, clientId?: string): ExternalUserPoolRef {
 		return makeExternalUserPoolRef(userPoolId, clientId);
@@ -158,7 +159,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			bbName: BB_NAME,
 			vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] },
 		});
-		const opts: AuthOptions = options ?? {};
+		const opts = resolveOptions(options ?? {});
 		const needsPool = requiresUserPool(opts);
 		const mfa = resolveMfa(opts.mfa);
 		const passkeys = opts.passkeys || undefined;
@@ -183,7 +184,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		if (!needsPool && bearerClientIds(opts).length > 0) {
 			throw new Error(
 				`Auth '${this.fullId}': \`allowBearerAuth.clientIds\` names Cognito app clients, but this configuration ` +
-					"has no user pool (no email + password, social, SAML or `federateVia: 'cognito'` provider). " +
+					"has no user pool (`store: 'blocks'`). " +
 					'Remove `clientIds`, or enable a pool-backed sign-in method.',
 			);
 		}
@@ -368,7 +369,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					: `its built-in default user ('${providerId}-user@stub.invalid')`;
 			cdk.Annotations.of(this).addWarningV2(
 				'@aws-blocks/bb-auth:StubIdpDeployed',
-				`Auth '${this.fullId}': oidcProviders.${providerId} is a stubIdp() provider, served by this sandbox ` +
+				`Auth '${this.fullId}': providers.${providerId} is a stubIdp() provider, served by this sandbox ` +
 					'deployment. The stub IdP signs users in WITHOUT CREDENTIALS: anyone who can reach ' +
 					`this sandbox can sign in as the stub's users (${who}), with every claim and group they carry. ` +
 					'Synth refuses it for any deployment that is not a sandbox.',
@@ -379,11 +380,11 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			// request `Host` (FX10): refuse the synth instead. The shared gateway
 			// is built by `create()` after this constructor, so the URL is a lazy
 			// token and the refusal happens when synthesis resolves it.
-			const stubIds = deployedStubs.map((s) => s.id).join(', oidcProviders.');
+			const stubIds = deployedStubs.map((s) => s.id).join(', providers.');
 			const apiUrl = lazyBackendApiUrl(
 				this,
 				() =>
-					`Auth '${this.fullId}': oidcProviders.${stubIds} ` +
+					`Auth '${this.fullId}': providers.${stubIds} ` +
 					'is a stubIdp() provider on a sandbox deployment, but the backend ' +
 					'exposes no API URL. The deployed stub IdP builds its issuer from that URL, so it needs the ' +
 					'API Gateway that `BlocksStack` / `BlocksBackend` creates. Construct the block in a stack with one, or remove ' +
@@ -491,7 +492,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	 * default policy, which the trigger's Lambda depends on (see
 	 * `src/cdk/pre-sign-up.ts`). Same statements, same role, same pool scope.
 	 */
-	private grantCognitoPermissions(poolArn: string, opts: AuthOptions, detached: boolean): void {
+	private grantCognitoPermissions(poolArn: string, opts: ResolvedAuthOptions, detached: boolean): void {
 		const statements = [new iam.PolicyStatement({ actions: [...CLIENT_IAM_ACTIONS], resources: [poolArn] })];
 		// A completed password reset signs the user out everywhere (#912).
 		if (emailPasswordEnabled(opts)) {
@@ -625,7 +626,7 @@ function stubSettingsOf(provider: object): object | undefined {
 }
 
 /** The configured `stubIdp()` providers, with their inline users. */
-function stubProviders(opts: AuthOptions): Array<{ id: string; users: readonly StubUser[] }> {
+function stubProviders(opts: ResolvedAuthOptions): Array<{ id: string; users: readonly StubUser[] }> {
 	const out: Array<{ id: string; users: readonly StubUser[] }> = [];
 	for (const [id, provider] of Object.entries(opts.oidcProviders ?? {})) {
 		const settings = provider ? stubSettingsOf(provider) : undefined;
@@ -659,7 +660,7 @@ function resolveRemovalPolicy(
  * only when a provider federates through Cognito.
  */
 function validateOptions(
-	opts: AuthOptions,
+	opts: ResolvedAuthOptions,
 	ctx: { needsPool: boolean; mfaMode: string; mfaTypes: readonly string[]; emailPassword: boolean; sandbox: boolean },
 ): void {
 	// The stub IdP is a local and sandbox development aid: its account picker
@@ -669,14 +670,14 @@ function validateOptions(
 	// `AuthOIDC`'s stub is sandbox-only too.)
 	const stubIds = stubProviders(opts).map((s) => s.id);
 	if (stubIds.length > 0 && !ctx.sandbox) {
-		const list = stubIds.map((id) => `oidcProviders.${id}`).join(', ');
+		const list = stubIds.map((id) => `providers.${id}`).join(', ');
 		const what =
 			stubIds.length === 1
 				? `${list} is a stubIdp() provider, which is`
 				: `${list} are stubIdp() providers, which are`;
 		throw new Error(
 			`Auth: ${what} only available in local development and sandbox deployments ` +
-				'(run `npm run sandbox`, i.e. CDK context sandboxMode=true). Configure a real `oidcProviders` entry ' +
+				"(run `npm run sandbox`, i.e. CDK context sandboxMode=true). Configure a real `type: 'oidc'` provider " +
 				'for other deployments, or select providers with getDeploymentType() so the stub is used only for ' +
 				'local and sandbox.',
 		);
@@ -726,14 +727,14 @@ function validateOptions(
 		const hasDirectOidc = Object.values(opts.oidcProviders ?? {}).some((p) => p && p.federateVia !== 'cognito');
 		if (!opts.userPool && !hasDirectOidc && cognitoFederatedProviderIds(opts).length === 0) {
 			throw new Error(
-				'Auth: `emailPassword: false` with no `socialProviders`, `oidcProviders` or `samlProviders` leaves no way to sign in. Configure a provider or re-enable email + password.',
+				'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
 			);
 		}
 	}
 
 	if (opts.admin && !ctx.needsPool) {
 		throw new Error(
-			'Auth: `admin` manages Cognito pool users, but this configuration provisions no user pool (its only sign-in methods are directly federated OIDC providers). Remove `admin`, or enable a pool-backed method.',
+			"Auth: `admin` manages Cognito pool users, but this configuration provisions no user pool (`store: 'blocks'`). Remove `admin`, or use the default store.",
 		);
 	}
 }

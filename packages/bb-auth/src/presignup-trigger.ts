@@ -47,9 +47,10 @@ import { cognitoFederatedProviders } from './cdk/contract.js';
 import { deriveKey } from './cookies.js';
 import { INTERNAL_ERROR_MESSAGE, toAuthApiError } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
+import type { ResolvedAuthOptions } from './resolve-options.js';
 import { isInFormatOf, resolveSignInMode, type SignInMode } from './sign-in-mode.js';
 import { encodeTriggerRejection } from './trigger-rejection.js';
-import type { AuthOptions, UserCandidate } from './types.js';
+import type { UserCandidate } from './types.js';
 
 /** The PreSignUp trigger sources the trigger answers. */
 export const PRE_SIGN_UP_TRIGGER_SOURCES = [
@@ -160,7 +161,7 @@ function loginOf(mode: SignInMode, event: PreSignUpEvent): string {
  * the Cognito provider names (`google` → `Google`). An unknown prefix is
  * returned as is.
  */
-function federatedProviderOf(options: AuthOptions, userName: string): string {
+function federatedProviderOf(options: ResolvedAuthOptions, userName: string): string {
 	const lower = userName.toLowerCase();
 	let best: { id: string; length: number } | undefined;
 	for (const { id, providerName } of cognitoFederatedProviders(options)) {
@@ -188,7 +189,7 @@ function federatedProviderOf(options: AuthOptions, userName: string): string {
  *
  * @internal
  */
-export function candidateFromTrigger(options: AuthOptions, event: PreSignUpEvent): UserCandidate {
+export function candidateFromTrigger(options: ResolvedAuthOptions, event: PreSignUpEvent): UserCandidate {
 	if (event.triggerSource === 'PreSignUp_ExternalProvider') {
 		return {
 			provider: federatedProviderOf(options, event.userName),
@@ -271,7 +272,7 @@ export function verifyValidatedMarker(
 
 /** What the trigger handler needs from `AuthBase`. */
 export interface PreSignUpTriggerDeps {
-	options: AuthOptions;
+	options: ResolvedAuthOptions;
 	fullId: string;
 	/** The session secret (the marker key). */
 	sessionSecret(): Promise<string>;

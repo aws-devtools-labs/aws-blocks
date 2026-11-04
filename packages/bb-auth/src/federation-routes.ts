@@ -73,8 +73,9 @@ import { AuthErrors } from './errors.js';
 import { providerDisplayName } from './provider-names.js';
 import { safeRedirectPath } from './redirect-path.js';
 import { validateRelay } from './relay.js';
+import type { ResolvedAuthOptions } from './resolve-options.js';
 import { decodeState, encodeState, relayStateKey, type StatePayload } from './state-envelope.js';
-import type { AuthenticatedUser, AuthOptions, BrowserUser, SignInUrlOptions } from './types.js';
+import type { AuthenticatedUser, BrowserUser, SignInUrlOptions } from './types.js';
 
 const DEFAULT_CALLBACK_PATH = `${BLOCKS_AUTH_PREFIX}/callback`;
 const DEFAULT_SIGN_OUT_PATH = `${BLOCKS_AUTH_PREFIX}/signout`;
@@ -92,7 +93,7 @@ const CSRF_MIN_LENGTH = 32;
 export interface FederationRouteHost {
 	/** The `Auth` instance — the routes' parent scope. */
 	readonly scope: Scope;
-	readonly options: AuthOptions;
+	readonly options: ResolvedAuthOptions;
 	readonly log: ChildLogger;
 	/** Every configured provider and its engine, in declaration order. */
 	readonly providers: readonly { provider: ResolvedProvider; engine: FederationEngine }[];
@@ -139,7 +140,7 @@ export interface FederationRoutePaths {
  * at construction for a path outside `/aws-blocks/auth/` — a deployed
  * CloudFront app only proxies that subtree.
  */
-export function federationRoutePaths(options: AuthOptions): FederationRoutePaths {
+export function federationRoutePaths(options: ResolvedAuthOptions): FederationRoutePaths {
 	const redirects = options.redirects ?? {};
 	for (const [key, value] of [
 		['callbackPath', redirects.callbackPath],

@@ -35,14 +35,14 @@ export function unavailableMessage(provider: ResolvedProvider, reason: Unavailab
 			? 'a social provider, federated through Cognito managed login'
 			: provider.family === 'saml'
 				? 'a SAML provider, federated through Cognito managed login'
-				: "an OIDC provider with federateVia: 'cognito'";
+				: 'an OIDC provider, federated through Cognito managed login';
 	switch (reason) {
 		case 'hosted-ui-local':
 			return (
 				`Sign-in provider '${provider.id}' is ${what}, which is unavailable locally (npm run dev): managed login ` +
 				'needs a deployed Cognito user pool. This is expected, not a configuration error: the provider works ' +
-				'after deploy (npm run sandbox). Use a direct provider (an oidcProviders entry without ' +
-				"federateVia: 'cognito') or the stub IdP (stubIdp()) for local sign-in, or deploy a sandbox to test this provider."
+				"after deploy (npm run sandbox). Use a block with store: 'blocks' (a backend-verified OIDC provider, or the " +
+				'stub IdP, stubIdp()) for local sign-in, or deploy a sandbox to test this provider.'
 			);
 		case 'stub-deployed':
 			return (

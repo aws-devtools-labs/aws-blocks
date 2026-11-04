@@ -74,23 +74,25 @@
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { BlocksContext, Scope } from '@aws-blocks/core';
 import type { FederationRouteHost } from '../federation-routes.js';
+import type {
+	OidcProviderOptions,
+	ResolvedAuthOptions,
+	SamlProviderOptions,
+	SocialProviders,
+} from '../resolve-options.js';
 import type { DirectSessionRecord } from '../sessions.js';
 import type {
 	AdminUserFilter,
-	AuthOptions,
 	CodeDeliveryDetails,
 	ConfirmSignInOptions,
 	DeviceRecord,
 	MfaFactor,
 	MfaSetting,
-	OidcProviderOptions,
 	PasskeyDescription,
 	PreferredChallenge,
 	ResetPasswordResult,
-	SamlProviderOptions,
 	SignInNextStep,
 	SignInUrlOptions,
-	SocialProviders,
 	UpdateAttributeOutcome,
 } from '../types.js';
 
@@ -129,7 +131,7 @@ export interface EngineHost {
 	/** The `Auth` instance's user-agent chain, for `customUserAgent` on SDK clients. */
 	userAgentChain(): [string, string][];
 	/** The options the block was constructed with (`{}` when omitted). */
-	readonly options: AuthOptions;
+	readonly options: ResolvedAuthOptions;
 	/** The block's logger — for detail that must not reach a client. */
 	readonly log: ChildLogger;
 	/** The session-signing secret (cached). Also the HMAC key for `fabricateCodeDelivery`. */

@@ -34,7 +34,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct, IDependable } from 'constructs';
-import type { AuthOptions, ProviderSecretRef } from '../types.js';
+import type { ResolvedAuthOptions } from '../resolve-options.js';
+import type { ProviderSecretRef } from '../types.js';
 import { RPC_PREFIX, resolvedBackendApiUrl } from './api-url.js';
 import { federationConfigKeys, federationRedirectPaths } from './contract.js';
 import {
@@ -91,7 +92,7 @@ export function deriveDomainPrefix(fullId: string): string {
  * The validated `hostedUi.domainPrefix` override, or `undefined`. Checked at
  * runtime too (shape and value), for untyped JavaScript callers.
  */
-function domainPrefixOverride(options: AuthOptions): string | undefined {
+function domainPrefixOverride(options: ResolvedAuthOptions): string | undefined {
 	const hostedUi: unknown = options.hostedUi;
 	if (hostedUi === undefined) return undefined;
 	if (typeof hostedUi !== 'object' || hostedUi === null) {
@@ -102,7 +103,7 @@ function domainPrefixOverride(options: AuthOptions): string | undefined {
 }
 
 /** The prefix to provision: the validated override, else {@link deriveDomainPrefix}. */
-export function resolveDomainPrefix(fullId: string, options: AuthOptions): string {
+export function resolveDomainPrefix(fullId: string, options: ResolvedAuthOptions): string {
 	return domainPrefixOverride(options) ?? deriveDomainPrefix(fullId);
 }
 
@@ -172,7 +173,7 @@ export interface HostedUiFederation {
  * invalid configuration fails with the reason, and also usable without a
  * compute (in-process tests).
  */
-export function validateHostedUiFederation(scope: BuildingBlockScope, options: AuthOptions): IdpRegistration[] {
+export function validateHostedUiFederation(scope: BuildingBlockScope, options: ResolvedAuthOptions): IdpRegistration[] {
 	validateFederationOptions(options);
 	resolveDomainPrefix(scope.fullId, options);
 	// Resolves each provider secret to its SSM name (`secretParameterName`).
@@ -183,16 +184,16 @@ export function validateHostedUiFederation(scope: BuildingBlockScope, options: A
 const SECRET_HAS_INITIAL_VALUE = Symbol.for('blocks:SecretHasInitialValue');
 
 /** Every hosted-UI provider secret in `options`, with the option path that names it. */
-function hostedUiProviderSecrets(options: AuthOptions): { what: string; ref: ProviderSecretRef }[] {
+function hostedUiProviderSecrets(options: ResolvedAuthOptions): { what: string; ref: ProviderSecretRef }[] {
 	const out: { what: string; ref: ProviderSecretRef }[] = [];
 	for (const [id, p] of Object.entries(options.socialProviders ?? {})) {
 		if (!p) continue;
-		if ('privateKey' in p) out.push({ what: `socialProviders.${id}.privateKey`, ref: p.privateKey });
-		if ('clientSecret' in p) out.push({ what: `socialProviders.${id}.clientSecret`, ref: p.clientSecret });
+		if ('privateKey' in p) out.push({ what: `providers.${id}.privateKey`, ref: p.privateKey });
+		if ('clientSecret' in p) out.push({ what: `providers.${id}.clientSecret`, ref: p.clientSecret });
 	}
 	for (const [id, p] of Object.entries(options.oidcProviders ?? {})) {
 		if (p?.federateVia === 'cognito' && p.clientSecret) {
-			out.push({ what: `oidcProviders.${id}.clientSecret`, ref: p.clientSecret });
+			out.push({ what: `providers.${id}.clientSecret`, ref: p.clientSecret });
 		}
 	}
 	return out;
@@ -216,7 +217,7 @@ function managedSecretHasInitialValue(ref: ProviderSecretRef): boolean | undefin
  * creates it, so the first deploy fails — and a retained (named) secret then
  * makes the next deploy fail with "already exists".
  */
-function warnOnValuelessProviderSecrets(scope: BuildingBlockScope, options: AuthOptions): void {
+function warnOnValuelessProviderSecrets(scope: BuildingBlockScope, options: ResolvedAuthOptions): void {
 	for (const { what, ref } of hostedUiProviderSecrets(options)) {
 		if (managedSecretHasInitialValue(ref) !== false) continue;
 		cdk.Annotations.of(scope).addWarningV2(
@@ -241,7 +242,7 @@ function warnOnValuelessProviderSecrets(scope: BuildingBlockScope, options: Auth
 export function provisionHostedUiFederation(
 	scope: BuildingBlockScope,
 	pool: cognito.IUserPool,
-	options: AuthOptions,
+	options: ResolvedAuthOptions,
 ): HostedUiFederation {
 	const registrations = validateHostedUiFederation(scope, options);
 	const stack = cdk.Stack.of(scope);
