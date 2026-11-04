@@ -10,8 +10,67 @@ import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
+import { applyBlocksRanges, blocksDepNames, resolveBlocksRanges, type VersionResolver } from './blocks-deps.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── Blocks dependency versions ──────────────────────────────────────────────
+//
+// Templates declare `@aws-blocks/*` as `"*"`. Inside the monorepo those become
+// `file:` paths to the sibling packages. Outside it, the registry decides: we
+// ask for the current release and record a caret range, so the scaffolded app
+// stays on the line it was created with. See blocks-deps.ts.
+
+const versionCache = new Map<string, string>();
+
+const npmViewVersion: VersionResolver = async (name) => {
+  const cached = versionCache.get(name);
+  if (cached) return cached;
+  const version = execSync(`npm view ${name} version`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  versionCache.set(name, version);
+  return version;
+};
+
+const resolveRanges = (names: string[]) => resolveBlocksRanges(names, npmViewVersion);
+
+/**
+ * The `@aws-blocks/*` deps a manifest on disk declares. A missing or
+ * unparseable file yields none — not every project has a nested workspace.
+ */
+async function blocksDepNamesInFile(path: string): Promise<string[]> {
+  try {
+    return blocksDepNames(JSON.parse(await readFile(path, 'utf-8')));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Writes resolved ranges into a manifest on disk — the nested `aws-blocks`
+ * workspace, which the CLI copies verbatim and so never passes through the
+ * in-memory path.
+ */
+async function applyRangesToFile(path: string, ranges: Record<string, string>): Promise<void> {
+  let pkg: { dependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(await readFile(path, 'utf-8'));
+  } catch {
+    return;
+  }
+  if (blocksDepNames(pkg).length === 0) return;
+  applyBlocksRanges(pkg, ranges);
+  await writeFile(path, JSON.stringify(pkg, null, 2));
+}
+
+/** Every `@aws-blocks/*` dep a project rooted at `dir` declares, nested workspace included. */
+async function blocksDepNamesUnder(dir: string): Promise<string[]> {
+  return [
+    ...new Set([
+      ...(await blocksDepNamesInFile(join(dir, 'package.json'))),
+      ...(await blocksDepNamesInFile(join(dir, 'aws-blocks', 'package.json'))),
+    ]),
+  ];
+}
 
 function generateStackId(name: string): string {
   const sanitized = name
@@ -166,6 +225,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   // Monorepo detection for local dev
   const parentDir = join(__dirname, '../..');
   const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
+  let blocksRanges: Record<string, string> = {};
   if (isLocalMonorepo) {
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d: string) =>
       d.startsWith('@aws-blocks/'),
@@ -175,6 +235,16 @@ async function addBlocksWorkspace(targetDir: string, options: {
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
+  } else {
+    // Resolve the root manifest's placeholders and the nested workspace's in
+    // one go, before anything is written.
+    blocksRanges = await resolveRanges([
+      ...new Set([
+        ...blocksDepNames(pkg),
+        ...(await blocksDepNamesInFile(join(targetDir, 'aws-blocks', 'package.json'))),
+      ]),
+    ]);
+    applyBlocksRanges(pkg, blocksRanges);
   }
 
   // Add scripts
@@ -185,6 +255,12 @@ async function addBlocksWorkspace(targetDir: string, options: {
 
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   console.log('  ✓ Modified package.json');
+
+  // The nested aws-blocks workspace ships its own manifest (the Amplify
+  // template keeps blocks deps there); it is copied verbatim, so fill it too.
+  if (!isLocalMonorepo) {
+    await applyRangesToFile(join(targetDir, 'aws-blocks', 'package.json'), blocksRanges);
+  }
 
   // Modify .gitignore
   const gitignorePath = join(targetDir, '.gitignore');
@@ -342,8 +418,15 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     .replace(/-+/g, '-')
     .replace(/-$/, '') || 'blocks-app';
   
+  // Decide the @aws-blocks/* versions before writing anything. Inside the
+  // monorepo they become file: paths below; outside it the registry decides,
+  // and a scaffold that cannot resolve them must leave no project behind.
+  const parentDir = join(__dirname, '../..');
+  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
+  const blocksRanges = isLocalMonorepo ? {} : await resolveRanges(await blocksDepNamesUnder(templateDir));
+
   console.log(`Creating Blocks app in ${targetDir}...`);
-  
+
   // Copy template
   await mkdir(targetDir, { recursive: true });
   await cp(templateDir, targetDir, { recursive: true });
@@ -364,13 +447,8 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // Record the template version that scaffolded this project
   pkg.blocksTemplateVersion = templatePkg.version;
   
-  // When running from the local monorepo, rewrite @aws-blocks/* deps
-  // to file: paths so they resolve to sibling packages. When running from
-  // the published registry (via npx), the sibling packages won't exist on
-  // disk — leave deps as-is so they resolve from the registry instead.
-  const parentDir = join(__dirname, '../..');
-  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
-
+  // Inside the monorepo, rewrite @aws-blocks/* deps to file: paths so they
+  // resolve to sibling packages. Outside it, record the ranges resolved above.
   if (isLocalMonorepo) {
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d) =>
       d.startsWith('@aws-blocks/'),
@@ -380,10 +458,16 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
+  } else {
+    applyBlocksRanges(pkg, blocksRanges);
   }
-  
+
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
-  
+
+  if (!isLocalMonorepo) {
+    await applyRangesToFile(join(targetDir, 'aws-blocks', 'package.json'), blocksRanges);
+  }
+
   // Generate .blocks/config.json with a unique stackId
   const stackId = generateStackId(appName);
   const blocksConfigDir = join(targetDir, '.blocks');
@@ -839,6 +923,11 @@ if (entryArg) {
     entryUrl = pathToFileURL(entryArg).href;
   }
   if (import.meta.url === entryUrl) {
-    create().catch(console.error);
+    // Exit non-zero on an unhandled failure, so a scaffold that did not
+    // complete is not reported as success to the caller or to CI.
+    create().catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    });
   }
 }
