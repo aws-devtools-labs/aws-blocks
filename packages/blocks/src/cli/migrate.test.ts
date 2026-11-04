@@ -393,6 +393,47 @@ describe('cdk-blocks migrate references', () => {
 		]);
 	});
 
+	it('in a monorepo, reads a quoted cd into this app that holds a command substitution', async () => {
+		const mono = monorepo({
+			'scripts/deploy.sh': '#!/bin/sh\ncd "$(git rev-parse --show-toplevel)/apps/web" && npx tsx aws-blocks/scripts/deploy.ts\n',
+			// From the script's own directory.
+			'scripts/destroy.sh': '#!/bin/sh\ncd "$(dirname "$0")/../apps/web" && npx tsx aws-blocks/scripts/destroy.ts\n',
+			// biome-ignore lint/suspicious/noTemplateCurlyInString: a shell parameter expansion
+			'scripts/typegen.sh': '#!/bin/sh\ncd "${0%/*}/../apps/web"; npx tsx aws-blocks/scripts/typegen.ts --check\n',
+			'scripts/secret.sh': '#!/bin/sh\ncd apps/web && npx tsx aws-blocks/scripts/secret.ts list\n',
+			// The same into the api app does not count for the web app.
+			'scripts/api.sh':
+				'#!/bin/sh\ncd "$(git rev-parse --show-toplevel)/apps/api" && npx tsx aws-blocks/scripts/console.ts\n' +
+				'cd "$(dirname "$0")/../apps/api" && npx tsx aws-blocks/scripts/cleanup.ts\n',
+		}, ['web', 'api']);
+		const root = join(mono, 'apps', 'web');
+		const run = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../scripts/deploy.sh'],
+			['aws-blocks/scripts/destroy.ts', 'generated, but still used by ../../scripts/destroy.sh'],
+			['aws-blocks/scripts/secret.ts', 'generated, but still used by ../../scripts/secret.sh'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by ../../scripts/typegen.sh'],
+		]);
+	});
+
+	it('in a monorepo, reads a quoted cd or working-directory with an escaped quote', {
+		skip: process.platform === 'win32' && 'Windows file names cannot hold a quote',
+	}, async () => {
+		const mono = monorepo({
+			'scripts/release.sh': '#!/bin/sh\ncd "apps/we\\"b" && npx tsx aws-blocks/scripts/deploy.ts\n',
+			'.github/workflows/web.yml':
+				'jobs:\n  web:\n    steps:\n      - run: npx tsx aws-blocks/scripts/typegen.ts --check\n' +
+				'        working-directory: "apps/we\\"b"\n',
+		}, ['we"b']);
+		const run = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: join(mono, 'apps', 'we"b') });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by ../../scripts/release.sh'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by ../../.github/workflows/web.yml'],
+		]);
+	});
+
 	it('keeps a wrapper that a workflow, shell file or script runs from another working directory', async () => {
 		const root = writeApp('default@0ab6b047', (app) => {
 			app.files['.github/workflows/d.yml'] =

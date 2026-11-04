@@ -429,33 +429,44 @@ const WORD_START = `(?<![^\\s'"\`=;&|()])`;
 
 /**
  * A path from a variable that names a checkout's top in CI: `$GITHUB_WORKSPACE/`,
- * `${CI_PROJECT_DIR}/`, `$(pwd)/` or `${{ github.workspace }}/`, of which a
- * word holds only the `}}/` after the space.
+ * `${CI_PROJECT_DIR}/`, `$(pwd)/`, `$(git rev-parse --show-toplevel)/` or
+ * `${{ github.workspace }}/`, of which a word holds only the `}}/` after the space.
  */
-const VARIABLE_ROOT = /^(\$\{\{[^}]*\}\}|\}\}|\$\{\w+\}|\$\([\w ]+\)|\$\w+)\//;
+const VARIABLE_ROOT = /^(\$\{\{[^}]*\}\}|\}\}|\$\{\w+\}|\$\([^()]*\)|\$\w+)\//;
+
+/** A path from the directory of the shell script itself: `$(dirname "$0")/`, `$(dirname "${BASH_SOURCE[0]}")/`, `${0%/*}/`. */
+const SCRIPT_DIR = /^(\$\(\s*dirname\s+("?)(\$0|\$\{0\}|\$\{BASH_SOURCE(\[0\])?\})\2\s*\)|\$\{0%\/\*\})\//;
 
 /**
  * The directories that a file above the project changes into: `working-directory:`
  * (GitHub Actions), `cd` and `pushd` (shell, Makefile, npm script) and `WORKDIR` (Dockerfile).
+ * A double-quoted value can hold escaped quotes (`"apps/we\"b"`) and a command
+ * substitution with quotes of its own (`"$(dirname "$0")/../apps/web"`).
  */
 const ENTERED_DIR =
-	/(?:\bworking-directory:|(?<![\w-])(?:cd|pushd)(?=\s)|^\s*WORKDIR(?=\s))\s*("[^"]*"|'[^']*'|\$\{\{[^}]*\}\}[^\s;&|)]*|[^\s;&|)]+)/gm;
+	/(?:\bworking-directory:|(?<![\w-])(?:cd|pushd)(?=\s)|^\s*WORKDIR(?=\s))\s*("(?:\\.|\$\([^)]*\)|[^"\\])*"|'[^']*'|\$\{\{[^}]*\}\}[^\s;&|)]*|\$\([^)]*\)[^\s;&|)]*|[^\s;&|)]+)/gm;
 
 /**
  * True when `path`, written in the file in directory `dir` of the work tree
  * (whose project sits at `prefix`, `apps/web/`), names the project directory:
  * relative to the top (where CI and root scripts run) or to `dir` (where npm
- * runs a `package.json` script), from a {@link VARIABLE_ROOT}, or as the end of
- * an absolute path (the work tree copied into a container). With `within`, a
- * directory inside the project counts as well (`apps/web/aws-blocks/scripts`).
+ * runs a `package.json` script, or from a shell script's {@link SCRIPT_DIR}),
+ * from a {@link VARIABLE_ROOT}, or as the end of an absolute path (the work
+ * tree copied into a container). With `within`, a directory inside the project
+ * counts as well (`apps/web/aws-blocks/scripts`). A double-quoted `path` is
+ * unescaped as the shell does (`\"`, `\\`, `\$`, `` \` ``), and then any other
+ * backslash is a Windows separator (`cd apps\web`).
  */
 function namesProject(path: string, dir: string, prefix: string, within: boolean): boolean {
 	const project = prefix.replace(/\/$/, '');
-	const unquoted = path.replace(/^(['"])(.*)\1$/, '$2');
+	const quoted = /^(['"])(.*)\1$/s.exec(path);
+	const value = quoted ? (quoted[1] === '"' ? quoted[2].replace(/\\(["\\$`])/g, '$1') : quoted[2]) : path;
+	const unquoted = value.replace(/\\+/g, '/');
 	const matches = (candidate: string): boolean => {
 		const trimmed = candidate.replace(/\/+$/, '');
 		return trimmed === project || (within && trimmed.startsWith(`${project}/`));
 	};
+	if (SCRIPT_DIR.test(unquoted)) return matches(posixPath.join(dir, unquoted.replace(SCRIPT_DIR, '')));
 	if (VARIABLE_ROOT.test(unquoted)) return matches(posixPath.normalize(unquoted.replace(VARIABLE_ROOT, '')));
 	if (posixPath.isAbsolute(unquoted)) {
 		const trimmed = posixPath.normalize(unquoted).replace(/\/+$/, '');
@@ -515,8 +526,9 @@ function refersTo(
 		if (bare && bareWord.test(text)) return true;
 	} else {
 		let entered: boolean | undefined;
+		// On the text as written: the `\` → `/` above would turn the escaped quote in `cd "apps/we\"b"` into `/"`.
 		const enters = (): boolean => {
-			entered ??= entersProject(text, dir, prefix);
+			entered ??= entersProject(written, dir, prefix);
 			return entered;
 		};
 		// The directory before the project path, up to the start of the word.
