@@ -458,10 +458,12 @@ const SCRIPT_DIR = /^(\$\(\s*dirname\s+("?)(\$0|\$\{0\}|\$\{BASH_SOURCE(\[0\])?\
  * The directories that a file above the project changes into: `working-directory:`
  * (GitHub Actions), `cd` and `pushd` (shell, Makefile, npm script) and `WORKDIR` (Dockerfile).
  * A double-quoted value can hold escaped quotes (`"apps/we\"b"`) and a command
- * substitution with quotes of its own (`"$(dirname "$0")/../apps/web"`).
+ * substitution with quotes of its own (`"$(dirname "$0")/../apps/web"`). Each piece
+ * of a double-quoted value matches one way only (an escape, a `$(…)`, a `$` not before
+ * `(`, or another character), so an unclosed value fails in linear time.
  */
 const ENTERED_DIR =
-	/(?:\bworking-directory:|(?<![\w-])(?:cd|pushd)(?=\s)|^\s*WORKDIR(?=\s))\s*("(?:\\.|\$\([^)]*\)|[^"\\])*"|'[^']*'|\$\{\{[^}]*\}\}[^\s;&|)]*|\$\([^)]*\)[^\s;&|)]*|[^\s;&|)]+)/gm;
+	/(?:\bworking-directory:|(?<![\w-])(?:cd|pushd)(?=\s)|^\s*WORKDIR(?=\s))\s*("(?:\\.|\$\([^)]*\)|\$(?!\()|[^"\\$])*"|'[^']*'|\$\{\{[^}]*\}\}[^\s;&|)]*|\$\([^)]*\)[^\s;&|)]*|[^\s;&|)]+)/gm;
 
 /**
  * True when `path`, written in the file in directory `dir` of the work tree

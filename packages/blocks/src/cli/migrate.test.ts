@@ -436,6 +436,24 @@ describe('cdk-blocks migrate references', () => {
 		]);
 	});
 
+	it('in a monorepo, reads an unclosed quoted cd full of $() in linear time', async () => {
+		// Each `$()` matched both as a command substitution and as three characters, so every one
+		// doubled the backtracking of an unclosed value: 30 of them took about 30 s (CodeQL js/redos).
+		const mono = monorepo({
+			'scripts/odd.sh': `#!/bin/sh\ncd "${'$()'.repeat(30)}\nnpx tsx aws-blocks/scripts/deploy.ts\n`,
+			'scripts/secret.sh': '#!/bin/sh\ncd apps/web && npx tsx aws-blocks/scripts/secret.ts list\n',
+		});
+		const started = Date.now();
+		const run = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: join(mono, 'apps', 'web') });
+		const elapsed = Date.now() - started;
+		assert.strictEqual(run.code, 1, run.stderr);
+		// The unclosed value names no directory, so odd.sh does not enter the app.
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/secret.ts', 'generated, but still used by ../../scripts/secret.sh'],
+		]);
+		assert.ok(elapsed < 10_000, `migrate took ${elapsed} ms`);
+	});
+
 	it('keeps a wrapper that a workflow, shell file or script runs from another working directory', async () => {
 		const root = writeApp('default@0ab6b047', (app) => {
 			app.files['.github/workflows/d.yml'] =
