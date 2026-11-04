@@ -110,10 +110,10 @@ export function attach(httpServer: Server) {
 		}
 
 		// versionId is attacker-controlled and is joined into a filesystem path
-		// (versionContentPath). It must match the generated format (`v<n>`);
+		// (versionContentPath). Accept legacy v<n> and new v<n>-<UUID> IDs only;
 		// anything else (e.g. `../../../etc/passwd`) is rejected so it can't be
 		// used for path traversal / arbitrary file read.
-		if (versionId !== undefined && !/^v\d{1,10}$/.test(versionId)) {
+		if (versionId !== undefined && !/^v\d{1,10}(?:-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?$/.test(versionId)) {
 			sendError(res, 400, 'Invalid versionId');
 			return;
 		}
