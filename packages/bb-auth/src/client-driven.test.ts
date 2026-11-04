@@ -24,11 +24,12 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { federatedIdentityOfUsername, poolBearerIdentity, usernameNamesProvider } from './bearer.js';
 import { assertBearerClientIds, bearerAuthEnabled, bearerClientIds } from './cdk/contract.js';
 import { Auth as MockAuth } from './index.mock.js';
+import { resolveOptions } from './resolve-options.js';
 import { cognitoFederatedSubject, identityOf } from './sessions.js';
 import { sameSignInName } from './sign-in-mode.js';
 import { Browser } from './test-support/aws-harness.js';
 import { type CfnResourceJson, synthUnderCdkConditions } from './test-support/cdk-synth.js';
-import type { AuthOptions, CodeDeliveryPurpose } from './types.js';
+import type { CodeDeliveryPurpose, CognitoAuthOptions, GoogleProvider } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -78,7 +79,7 @@ describe('users.caseSensitive — the CDK layer', () => {
 });
 
 describe('users.caseSensitive — the local user pool', () => {
-	function mockAuth(options: AuthOptions) {
+	function mockAuth(options: CognitoAuthOptions) {
 		const codes = new Map<CodeDeliveryPurpose, string>();
 		const auth = new MockAuth(root(), 'auth', {
 			...options,
@@ -153,8 +154,8 @@ describe('allowBearerAuth: { clientIds } — option resolution and synth checks'
 	});
 
 	test('synth refuses an id that cannot be a Cognito client id; a CDK token is accepted', () => {
-		const refuse = (options: AuthOptions, pattern: RegExp) =>
-			assert.throws(() => assertBearerClientIds('app-auth', options), pattern);
+		const refuse = (options: CognitoAuthOptions, pattern: RegExp) =>
+			assert.throws(() => assertBearerClientIds('app-auth', resolveOptions(options)), pattern);
 		refuse({ allowBearerAuth: { clientIds: [''] } }, /clientIds\[0\]` must be a Cognito app-client id/);
 		refuse({ allowBearerAuth: { clientIds: ['has space'] } }, /must be a Cognito app-client id/);
 		refuse({ allowBearerAuth: true, userPool: ref('has space') }, /fromExisting.*must be a Cognito app-client id/);
@@ -211,14 +212,14 @@ describe('allowBearerAuth: { clientIds } — option resolution and synth checks'
 		assert.match(synthError("{ allowBearerAuth: { clientIds: ['bad id'] } }"), /must be a Cognito app-client id/);
 		assert.match(
 			synthError(
-				"{ emailPassword: false, oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['${Token[TOKEN.1]}'] } }",
+				"{ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['${Token[TOKEN.1]}'] } }",
 			),
 			/has no user pool/,
 			'a token on a pool-less configuration is refused too',
 		);
 		assert.match(
 			synthError(
-				"{ emailPassword: false, oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['abc123'] } }",
+				"{ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['abc123'] } }",
 			),
 			/has no user pool/,
 		);
@@ -273,9 +274,11 @@ describe('federatedIdentity — derivation', () => {
 	});
 
 	test('from a username: only a configured Cognito-federated provider’s prefix counts', () => {
-		const options: AuthOptions = {
-			socialProviders: { google: { clientId: 'g', clientSecret: { fullId: 's', get: async () => '' } } },
-		};
+		const options = resolveOptions({
+			providers: {
+				google: { type: 'google', clientId: 'g', clientSecret: { fullId: 's', get: async () => '' } },
+			},
+		});
 		assert.deepStrictEqual(federatedIdentityOfUsername('Google_1234', options), {
 			providerId: 'google',
 			sub: '1234',
@@ -292,37 +295,39 @@ describe('federatedIdentity — derivation', () => {
 describe('federatedIdentity — bearer tokens from an extra client', () => {
 	// (Pure functions: only one federated `Auth` fits in a process, because
 	// the sign-in routes are process-global.)
-	const google = { google: { clientId: 'g', clientSecret: { fullId: 'unused', get: async () => 'unused' } } };
+	const google: GoogleProvider = {
+		type: 'google',
+		clientId: 'g',
+		clientSecret: { fullId: 'unused', get: async () => 'unused' },
+	};
+	/** A pool block with Google, resolved as every layer reads it. */
+	const withGoogle = (options: CognitoAuthOptions = {}) => resolveOptions({ ...options, providers: { google } });
 	const claims = { username: 'Google_1234567890', sub: 'sub-1', exp: 2_000_000_000, iat: 1_000_000_000 };
 	const ref = { __brand: 'ExternalUserPoolRef', userPoolId: 'us-east-1_Pool', clientId: 'c1' } as const;
 
 	test('the username is trusted to name a provider only where no password user can own it', () => {
-		assert.strictEqual(usernameNamesProvider('hostedUi', { socialProviders: google }), true);
-		assert.strictEqual(usernameNamesProvider('native', { socialProviders: google }), false);
-		assert.strictEqual(usernameNamesProvider('extra', { socialProviders: google }), false, 'username pool');
+		assert.strictEqual(usernameNamesProvider('hostedUi', withGoogle()), true);
+		assert.strictEqual(usernameNamesProvider('native', withGoogle()), false);
+		assert.strictEqual(usernameNamesProvider('extra', withGoogle()), false, 'username pool');
 		assert.strictEqual(
-			usernameNamesProvider('extra', { users: { signInWith: ['email'] }, socialProviders: google }),
+			usernameNamesProvider('extra', withGoogle({ users: { signInWith: ['email'] } })),
 			true,
 			'generated usernames',
 		);
 		assert.strictEqual(
-			usernameNamesProvider('extra', {
-				userPool: ref,
-				users: { signInWith: ['email'] },
-				socialProviders: google,
-			}),
+			usernameNamesProvider('extra', withGoogle({ userPool: ref, users: { signInWith: ['email'] } })),
 			false,
 			'imported pool: its sign-in shape is unknown',
 		);
 	});
 
 	test('a password user named `Google_<id>` on a username pool is not reported as that Google user', () => {
-		const spoof = poolBearerIdentity(claims, 'extra', { socialProviders: google });
+		const spoof = poolBearerIdentity(claims, 'extra', withGoogle());
 		assert.ok(spoof);
 		assert.strictEqual(spoof.signInProvider, 'password');
 		assert.strictEqual(spoof.federatedIdentity, undefined);
 
-		const real = poolBearerIdentity(claims, 'extra', { users: { signInWith: ['email'] }, socialProviders: google });
+		const real = poolBearerIdentity(claims, 'extra', withGoogle({ users: { signInWith: ['email'] } }));
 		assert.ok(real);
 		assert.strictEqual(real.signInProvider, 'google');
 		assert.deepStrictEqual(real.federatedIdentity, { providerId: 'google', sub: '1234567890' });

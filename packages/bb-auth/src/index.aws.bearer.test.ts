@@ -89,7 +89,9 @@ function makeBearerAuth(options: { hostedUi?: boolean; allowBearerAuth?: boolean
 	const h = makeAwsAuth({
 		allowBearerAuth: options.allowBearerAuth ?? true,
 		users: { groups: ['admins'] },
-		...(options.hostedUi ? { socialProviders: { google: { clientId: 'g', clientSecret: secretRef() } } } : {}),
+		...(options.hostedUi
+			? { providers: { google: { type: 'google', clientId: 'g', clientSecret: secretRef() } } }
+			: {}),
 	});
 	if (options.hostedUi) process.env[federationConfigKeys(h.fullId).HOSTED_UI_CLIENT_ID] = HOSTED_UI_CLIENT_ID;
 	const poolBearer: unknown = Reflect.get(h.auth, 'poolBearer');
@@ -318,7 +320,7 @@ describe('AWS allowBearerAuth — extra app clients (client-driven frontends on 
 		const h = makeExtraClientAuth({
 			users: { signInWith: ['email'] },
 			allowBearerAuth: { clientIds: [AMPLIFY_CLIENT_ID] },
-			socialProviders: { google: { clientId: 'g', clientSecret: secretRef() } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secretRef() } },
 		});
 		const token = h.idp.sign(accessClaims('Google_1234567890', { client_id: AMPLIFY_CLIENT_ID }));
 		const user = await h.auth.requireAuth(withBearer(new Browser().context(), token));
@@ -374,9 +376,9 @@ describe('AWS allowBearerAuth — direct OIDC (HTTPS issuer, stubbed discovery +
 	let n = 0;
 	function makeDirectAuth() {
 		return new Auth({ id: `d6caws${process.pid}x${++n}` }, 'auth', {
-			emailPassword: false,
+			store: 'blocks',
 			allowBearerAuth: true,
-			oidcProviders: { okta: { issuer: HTTPS_ISSUER, clientId: 'client-1', groupsClaim: 'groups' } },
+			providers: { okta: { type: 'oidc', issuer: HTTPS_ISSUER, clientId: 'client-1', groupsClaim: 'groups' } },
 			users: { groups: ['admins'] },
 		});
 	}

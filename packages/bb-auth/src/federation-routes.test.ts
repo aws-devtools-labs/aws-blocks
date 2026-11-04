@@ -26,7 +26,7 @@ import { decodeState, encodeState, relayStateKey } from './state-envelope.js';
 import { FakeIdp } from './test-support/fake-idp.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
 import { encodeTriggerRejection } from './trigger-rejection.js';
-import type { AppSettingRef, AuthOptions } from './types.js';
+import type { AppSettingRef, BlocksAuthOptions, CognitoAuthOptions } from './types.js';
 
 const secret: AppSettingRef = { fullId: 'provider-secret', get: async () => 's3cret' };
 let counter = 0;
@@ -48,20 +48,35 @@ beforeEach(() => {
 });
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
-/** Every configured kind of provider at once. */
-function mixed(): AuthOptions {
+/**
+ * Every configured kind of provider, in the two blocks an app needs for them:
+ * the user pool's (federated through the hosted UI) on the default route base,
+ * and a `'blocks'` one (federated directly) on its own, `/aws-blocks/auth/sso`.
+ */
+function mixedPool(): CognitoAuthOptions {
 	return {
 		emailPassword: false,
 		allowBearerAuth: true,
-		socialProviders: { google: { clientId: 'g', clientSecret: secret } },
-		oidcProviders: {
-			corp: stubIdp(),
-			okta: { issuer: idp.issuer, clientId: 'okta-client' },
-			gh: github({ clientId: 'gh-client', clientSecret: secret }),
-			entra: { issuer: 'https://login.example.com', clientId: 'e', clientSecret: secret, federateVia: 'cognito' },
-			'my idp': { issuer: idp.issuer, clientId: 'okta-client' },
+		providers: {
+			google: { type: 'google', clientId: 'g', clientSecret: secret },
+			entra: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'e', clientSecret: secret },
+			acme: { type: 'saml', metadataUrl: 'https://acme.example.com/metadata.xml' },
 		},
-		samlProviders: { acme: { metadataUrl: 'https://acme.example.com/metadata.xml' } },
+	};
+}
+
+/** The directly federated half of {@link mixedPool}. */
+function mixedDirect(): BlocksAuthOptions {
+	return {
+		store: 'blocks',
+		allowBearerAuth: true,
+		providers: {
+			corp: stubIdp(),
+			okta: { type: 'oidc', issuer: idp.issuer, clientId: 'okta-client' },
+			gh: github({ clientId: 'gh-client', clientSecret: secret }),
+			'my idp': { type: 'oidc', issuer: idp.issuer, clientId: 'okta-client' },
+		},
+		redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 	};
 }
 
@@ -72,11 +87,23 @@ const table = () =>
 
 describe('route table', () => {
 	test('mock: exactly the AuthOIDC paths per provider, plus the stub IdP; no wildcard, no root', () => {
-		new Auth(unique(), 'auth', mixed());
-		const perProvider = (id: string) => [
-			`GET /aws-blocks/auth/signin/${id}`,
-			`GET /aws-blocks/auth/authorize-params/${id}`,
-			`POST /aws-blocks/auth/authorize-params/${id}`,
+		new Auth(unique(), 'auth', mixedPool());
+		new Auth(unique(), 'sso', mixedDirect());
+		const perProvider = (base: string) => (id: string) => [
+			`GET ${base}/signin/${id}`,
+			`GET ${base}/authorize-params/${id}`,
+			`POST ${base}/authorize-params/${id}`,
+		];
+		const perBlock = (base: string) => [
+			`GET ${base}/callback`,
+			`POST ${base}/signout`,
+			// The sign-out landing: Cognito's /logout returns here with a GET (D6b).
+			`GET ${base}/signout`,
+			`POST ${base}/exchange`,
+			// The browser redirect client's session read (L69).
+			`GET ${base}/session`,
+			`POST ${base}/refresh`,
+			`POST ${base}/exchange/refresh`,
 		];
 		const stub = [
 			'GET /aws-blocks/auth/idp/corp/.well-known/openid-configuration',
@@ -89,16 +116,10 @@ describe('route table', () => {
 			'GET /aws-blocks/auth/idp/corp/logout',
 		];
 		const expected = [
-			'GET /aws-blocks/auth/callback',
-			'POST /aws-blocks/auth/signout',
-			// The sign-out landing: Cognito's /logout returns here with a GET (D6b).
-			'GET /aws-blocks/auth/signout',
-			'POST /aws-blocks/auth/exchange',
-			// The browser redirect client's session read (L69).
-			'GET /aws-blocks/auth/session',
-			'POST /aws-blocks/auth/refresh',
-			'POST /aws-blocks/auth/exchange/refresh',
-			...['google', 'corp', 'okta', 'gh', 'entra', 'my%20idp', 'acme'].flatMap(perProvider),
+			...perBlock('/aws-blocks/auth'),
+			...['google', 'entra', 'acme'].flatMap(perProvider('/aws-blocks/auth')),
+			...perBlock('/aws-blocks/auth/sso'),
+			...['corp', 'okta', 'gh', 'my%20idp'].flatMap(perProvider('/aws-blocks/auth/sso')),
 			...stub,
 		].sort();
 		assert.deepStrictEqual(table(), expected);
@@ -111,15 +132,20 @@ describe('route table', () => {
 
 	test('aws-runtime: the same table without the stub IdP', async () => {
 		const { Auth: AwsAuth } = await import('./index.aws.js');
-		new AwsAuth(unique(), 'auth', mixed());
+		new AwsAuth(unique(), 'auth', mixedPool());
+		new AwsAuth(unique(), 'sso', mixedDirect());
 		const paths = table();
 		assert.ok(!paths.some((p) => p.includes('/aws-blocks/auth/idp/')), 'no stub routes when deployed');
-		assert.ok(paths.includes('GET /aws-blocks/auth/signin/corp'), 'the stub provider still answers (with a 501)');
+		assert.ok(
+			paths.includes('GET /aws-blocks/auth/sso/signin/corp'),
+			'the stub provider still answers (with a 501)',
+		);
 		assert.ok(paths.includes('GET /aws-blocks/auth/callback'));
+		assert.ok(paths.includes('GET /aws-blocks/auth/sso/callback'));
 	});
 
 	test('refresh routes only with allowBearerAuth; no routes at all without a provider', () => {
-		new Auth(unique(), 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });
+		new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
 		assert.ok(!table().some((p) => p.endsWith('/refresh')));
 		clearRouteRegistry();
 		new Auth(unique(), 'auth');
@@ -128,8 +154,8 @@ describe('route table', () => {
 
 	test('a custom callbackPath moves the whole flow; a path outside /aws-blocks/auth/ is refused', () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp() },
+			store: 'blocks',
+			providers: { corp: stubIdp() },
 			redirects: { callbackPath: '/aws-blocks/auth/real/callback', signOutPath: '/aws-blocks/auth/real/signout' },
 		});
 		const paths = table();
@@ -148,8 +174,8 @@ describe('route table', () => {
 		assert.throws(
 			() =>
 				new Auth(unique(), 'auth', {
-					emailPassword: false,
-					oidcProviders: { corp: stubIdp() },
+					store: 'blocks',
+					providers: { corp: stubIdp() },
 					redirects: { callbackPath: '/auth/callback' },
 				}),
 			/must be a path under '\/aws-blocks\/auth\/'/,
@@ -204,10 +230,10 @@ describe('relay state envelope — the native SDKs’ wire format', () => {
 });
 
 describe('callback dispatch — each transport and wire error code', () => {
-	function stubAuth(extra: Partial<AuthOptions> = {}) {
+	function stubAuth(extra: Partial<BlocksAuthOptions> = {}) {
 		const auth = new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp() },
+			store: 'blocks',
+			providers: { corp: stubIdp() },
 			redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] },
 			...extra,
 		});
@@ -388,11 +414,13 @@ describe('callback dispatch — each transport and wire error code', () => {
 	});
 });
 
-describe('per-provider engines — a mixed configuration reaches every provider', () => {
+describe('per-provider engines — a mixed configuration (two blocks) reaches every provider', () => {
 	test('mock: direct, stub and OAuth 2.0 redirect to their IdPs; hosted-UI ones answer 501 "unavailable locally"', async () => {
-		new Auth(unique(), 'auth', mixed());
-		const signIn = (id: string) =>
-			fetch(`${server.origin}/aws-blocks/auth/signin/${encodeURIComponent(id)}`, { redirect: 'manual' });
+		new Auth(unique(), 'auth', mixedPool());
+		new Auth(unique(), 'sso', mixedDirect());
+		const signInAt = (base: string) => (id: string) =>
+			fetch(`${server.origin}${base}/signin/${encodeURIComponent(id)}`, { redirect: 'manual' });
+		const signIn = signInAt('/aws-blocks/auth/sso');
 
 		const okta = await signIn('okta');
 		assert.strictEqual(okta.status, 302);
@@ -411,7 +439,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 		assert.strictEqual(ghUrl.searchParams.get('code_challenge_method'), 'S256');
 
 		for (const id of ['google', 'entra', 'acme']) {
-			const res = await signIn(id);
+			const res = await signInAt('/aws-blocks/auth')(id);
 			assert.strictEqual(res.status, 501, `${id}: never a 404`);
 			const body = await res.json();
 			assert.strictEqual(body.name, AuthErrors.ProviderUnavailable);
@@ -421,7 +449,48 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 	});
 
 	test('the sign-in UI lists every provider, each with its own sign-in URL', async () => {
-		const auth = new Auth(unique(), 'auth', mixed());
+		const actionsOf = async (auth: Auth) => {
+			const state = await authStateOf(auth);
+			return {
+				urls: Object.fromEntries(state.actions.map((a) => [a.name, a.url ?? null])),
+				unavailable: Object.fromEntries(state.actions.map((a) => [a.name, a.unavailable ?? null])),
+			};
+		};
+		const pool = await actionsOf(new Auth(unique(), 'auth', mixedPool()));
+		const direct = await actionsOf(new Auth(unique(), 'sso', mixedDirect()));
+		assert.deepStrictEqual(
+			{ ...pool.urls, ...direct.urls },
+			{
+				'signIn:google': '/aws-blocks/auth/signin/google',
+				'signIn:corp': '/aws-blocks/auth/sso/signin/corp',
+				'signIn:okta': '/aws-blocks/auth/sso/signin/okta',
+				'signIn:gh': '/aws-blocks/auth/sso/signin/gh',
+				'signIn:entra': '/aws-blocks/auth/signin/entra',
+				'signIn:my idp': '/aws-blocks/auth/sso/signin/my%20idp',
+				'signIn:acme': '/aws-blocks/auth/signin/acme',
+			},
+		);
+		assert.deepStrictEqual(Object.keys(pool.urls).sort(), ['signIn:acme', 'signIn:entra', 'signIn:google']);
+
+		// Locally, the hosted-UI providers (social, SAML, Cognito-store OIDC)
+		// are marked unavailable, with the hint the Authenticator shows; the
+		// providers that work offline are not.
+		assert.deepStrictEqual(
+			{ ...pool.unavailable, ...direct.unavailable },
+			{
+				'signIn:google': 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+				'signIn:corp': null,
+				'signIn:okta': null,
+				'signIn:gh': null,
+				'signIn:entra': 'Entra sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+				'signIn:my idp': null,
+				'signIn:acme': 'Acme sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+			},
+		);
+	});
+
+	/** `getAuthState()` of `auth.createApi()`, called through the RPC wrapper. */
+	async function authStateOf(auth: Auth): Promise<AuthState> {
 		const api = auth.createApi();
 		const target: unknown = api;
 		assert.ok(typeof target === 'function');
@@ -441,35 +510,12 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 		assert.ok(typeof handler === 'object' && handler !== null);
 		const getAuthState: unknown = Reflect.get(handler, 'getAuthState');
 		assert.ok(typeof getAuthState === 'function');
-		const state: AuthState = await Reflect.apply(getAuthState, handler, []);
-		const urls = Object.fromEntries(state.actions.map((a) => [a.name, a.url ?? null]));
-		assert.deepStrictEqual(urls, {
-			'signIn:google': '/aws-blocks/auth/signin/google',
-			'signIn:corp': '/aws-blocks/auth/signin/corp',
-			'signIn:okta': '/aws-blocks/auth/signin/okta',
-			'signIn:gh': '/aws-blocks/auth/signin/gh',
-			'signIn:entra': '/aws-blocks/auth/signin/entra',
-			'signIn:my idp': '/aws-blocks/auth/signin/my%20idp',
-			'signIn:acme': '/aws-blocks/auth/signin/acme',
-		});
-
-		// Locally, the hosted-UI providers (social, SAML, `federateVia: 'cognito'`)
-		// are marked unavailable, with the hint the Authenticator shows; the
-		// providers that work offline are not.
-		const unavailable = Object.fromEntries(state.actions.map((a) => [a.name, a.unavailable ?? null]));
-		assert.deepStrictEqual(unavailable, {
-			'signIn:google': 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
-			'signIn:corp': null,
-			'signIn:okta': null,
-			'signIn:gh': null,
-			'signIn:entra': 'Entra sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
-			'signIn:my idp': null,
-			'signIn:acme': 'Acme sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
-		});
-	});
+		return Reflect.apply(getAuthState, handler, []);
+	}
 
 	test('mock: a browser navigating to a hosted-UI sign-in route gets an HTML page, an API client the JSON', async () => {
-		new Auth(unique(), 'auth', mixed());
+		new Auth(unique(), 'auth', mixedPool());
+		new Auth(unique(), 'sso', mixedDirect());
 		const url = `${server.origin}/aws-blocks/auth/signin/google`;
 		// Node's `fetch` replaces `Sec-Fetch-Mode`, so a navigation is sent with `node:http`.
 		const navigate = (headers: Record<string, string>, target = url) =>
@@ -514,7 +560,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 			assert.strictEqual(JSON.parse(asked.body).name, AuthErrors.ProviderUnavailable);
 		}
 		// A provider that works offline still redirects a browser.
-		const okta = await fetch(`${server.origin}/aws-blocks/auth/signin/okta`, {
+		const okta = await fetch(`${server.origin}/aws-blocks/auth/sso/signin/okta`, {
 			redirect: 'manual',
 			headers: { accept: 'text/html' },
 		});
@@ -525,7 +571,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 		const hostile = '<svg/onload=alert(1)>';
 		new Auth(unique(), 'auth', {
 			emailPassword: false,
-			samlProviders: { [hostile]: { metadataUrl: 'https://idp.example.com/metadata.xml' } },
+			providers: { [hostile]: { type: 'saml', metadataUrl: 'https://idp.example.com/metadata.xml' } },
 		});
 		const page = await fetch(`${server.origin}/aws-blocks/auth/signin/${encodeURIComponent(hostile)}`, {
 			redirect: 'manual',
@@ -551,8 +597,9 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 
 	test('aws-runtime: a deployed stub IdP answers an actionable 501; a hosted-UI provider without its config keys refuses clearly', async () => {
 		const { Auth: AwsAuth } = await import('./index.aws.js');
-		new AwsAuth(unique(), 'auth', mixed());
-		const corp = await fetch(`${server.origin}/aws-blocks/auth/signin/corp`, { redirect: 'manual' });
+		new AwsAuth(unique(), 'auth', mixedPool());
+		new AwsAuth(unique(), 'sso', mixedDirect());
+		const corp = await fetch(`${server.origin}/aws-blocks/auth/sso/signin/corp`, { redirect: 'manual' });
 		assert.strictEqual(corp.status, 501);
 		assert.match((await corp.json()).error, /runs only in local development/);
 		// The hosted-UI engine (D6b) is wired; with no deployed domain / client it
@@ -565,7 +612,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 	});
 
 	test('GET session: 401 NotAuthenticatedException without a session (the browser redirect client)', async () => {
-		new Auth(unique(), 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });
+		new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
 		const res = await fetch(`${server.origin}/aws-blocks/auth/session`);
 		assert.strictEqual(res.status, 401);
 		assert.strictEqual(res.headers.get('cache-control'), 'no-store');
@@ -573,7 +620,7 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 	});
 
 	test('POST sign-out: 204 for the native SDKs; `?format=json` answers 200 with the body the browser can read', async () => {
-		new Auth(unique(), 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });
+		new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
 		const json = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
 		const native = await fetch(`${server.origin}/aws-blocks/auth/signout`, { ...json, redirect: 'manual' });
 		assert.strictEqual(native.status, 204, 'the native contract is unchanged');
@@ -584,8 +631,8 @@ describe('per-provider engines — a mixed configuration reaches every provider'
 
 	test('GET on the sign-out path is the sign-out landing: 302 to postSignOutPath, no state change', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp() },
+			store: 'blocks',
+			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/bye' },
 		});
 		const res = await fetch(`${server.origin}/aws-blocks/auth/signout`, { redirect: 'manual' });

@@ -11,10 +11,10 @@
  */
 
 import assert from 'node:assert';
+import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import type { AuthAction, AuthActionInput, AuthState, AuthStateApi } from '@aws-blocks/auth-common';
-import crypto from 'node:crypto';
 import { type BlocksContext, clearRouteRegistry } from '@aws-blocks/core';
 import { federationConfigKeys } from './cdk/contract.js';
 import { type Auth, AuthErrors } from './index.aws.js';
@@ -83,7 +83,11 @@ describe('AWS createApi() — TOTP enrolment actions → Cognito', () => {
 		let enrolled = false;
 		h.on('GetUserCommand', () =>
 			enrolled
-				? { Username: 'alice', UserMFASettingList: ['SOFTWARE_TOKEN_MFA'], PreferredMfaSetting: 'SOFTWARE_TOKEN_MFA' }
+				? {
+						Username: 'alice',
+						UserMFASettingList: ['SOFTWARE_TOKEN_MFA'],
+						PreferredMfaSetting: 'SOFTWARE_TOKEN_MFA',
+					}
 				: { Username: 'alice' },
 		);
 		h.on('SetUserMFAPreferenceCommand', () => {
@@ -141,7 +145,10 @@ describe('AWS createApi() — TOTP enrolment actions → Cognito', () => {
 		assert.deepStrictEqual(h.sent, [
 			{
 				name: 'SetUserMFAPreferenceCommand',
-				input: { AccessToken: tokens.AccessToken, SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false } },
+				input: {
+					AccessToken: tokens.AccessToken,
+					SoftwareTokenMfaSettings: { Enabled: false, PreferredMfa: false },
+				},
 			},
 			{ name: 'GetUserCommand', input: { AccessToken: tokens.AccessToken } },
 		]);
@@ -224,7 +231,15 @@ function makeBearerTotpAuth(hostedUi = false) {
 		...TOTP,
 		allowBearerAuth: true,
 		...(hostedUi
-			? { socialProviders: { google: { clientId: 'g', clientSecret: { fullId: 'totp-unused', get: async () => 'x' } } } }
+			? {
+					providers: {
+						google: {
+							type: 'google',
+							clientId: 'g',
+							clientSecret: { fullId: 'totp-unused', get: async () => 'x' },
+						},
+					},
+				}
 			: {}),
 	});
 	if (hostedUi) process.env[federationConfigKeys(h.fullId).HOSTED_UI_CLIENT_ID] = HOSTED_UI_CLIENT_ID;
@@ -315,7 +330,10 @@ describe('AWS createApi() — replacing or turning off a factor needs a recent s
 		h.on('GetUserCommand', () => ({ Username: 'alice', UserMFASettingList: [] }));
 		h.on('AssociateSoftwareTokenCommand', () => ({ SecretCode: 'JBSWY3DPEHPK3PXP' }));
 		const s = await b.request((ctx) => apiFor(h.auth, ctx).setAuthState({ action: 'setUpTotp' }));
-		assert.ok(s.actions.some((a) => a.name === 'verifyTotpSetup'), JSON.stringify(s));
+		assert.ok(
+			s.actions.some((a) => a.name === 'verifyTotpSetup'),
+			JSON.stringify(s),
+		);
 	});
 
 	test('stale session: DISABLED answers ReauthenticationRequired with no SetUserMFAPreference; ENABLED goes through', async () => {
@@ -344,7 +362,10 @@ describe('AWS createApi() — replacing or turning off a factor needs a recent s
 		h.on('AssociateSoftwareTokenCommand', () => ({ SecretCode: 'JBSWY3DPEHPK3PXP' }));
 		h.on('SetUserMFAPreferenceCommand', () => ({}));
 		const replaced = await b.request((ctx) => apiFor(h.auth, ctx).setAuthState({ action: 'setUpTotp' }));
-		assert.ok(replaced.actions.some((a) => a.name === 'verifyTotpSetup'), JSON.stringify(replaced));
+		assert.ok(
+			replaced.actions.some((a) => a.name === 'verifyTotpSetup'),
+			JSON.stringify(replaced),
+		);
 		const off = await b.request((ctx) =>
 			apiFor(h.auth, ctx).setAuthState({ action: 'updateMfaPreference', totp: 'DISABLED' }),
 		);

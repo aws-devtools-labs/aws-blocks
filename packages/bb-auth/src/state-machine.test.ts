@@ -58,7 +58,10 @@ const names = (s: AuthState) => s.actions.map((a) => a.name);
 
 describe('createApi()', () => {
 	test('exposes exactly getAuthState and setAuthState — no getClient()', () => {
-		const { auth } = makeAuth({ oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } } });
+		const { auth } = makeAuth({
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
 		const api = auth.createApi();
 		assert.strictEqual(typeof api, 'function');
 		assert.strictEqual(Reflect.get(api, Symbol.for('blocks:ApiNamespace')), 'auth');
@@ -245,8 +248,16 @@ describe('signedOut shapes', () => {
 
 	test('federated providers are url-bearing GET actions named signIn:<id>, after the password actions', async () => {
 		const h = makeAuth({
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
-			oidcProviders: { 'my okta': { issuer: 'https://okta.example.com', clientId: 'c', label: 'Okta SSO' } },
+			providers: {
+				google: { type: 'google', clientId: 'g', clientSecret: secret },
+				'my okta': {
+					type: 'oidc',
+					issuer: 'https://okta.example.com',
+					clientId: 'c',
+					clientSecret: secret,
+					label: 'Okta SSO',
+				},
+			},
 		});
 		const s = await rpc(new Browser(), h.auth.createApi(), (a) => a.getAuthState());
 		assert.deepStrictEqual(names(s), ['signIn', 'signUp', 'resetPassword', 'signIn:google', 'signIn:my okta']);
@@ -268,10 +279,10 @@ describe('signedOut shapes', () => {
 		]);
 	});
 
-	test('emailPassword: false → only the provider actions', async () => {
+	test("store: 'blocks' → only the provider actions", async () => {
 		const h = makeAuth({
-			emailPassword: false,
-			oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } },
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		const s = await rpc(new Browser(), h.auth.createApi(), (a) => a.getAuthState());
 		assert.deepStrictEqual(names(s), ['signIn:okta']);
@@ -410,13 +421,16 @@ describe('public names: data-testid contract and log redaction', () => {
 			'setUpTotp Set up authenticator app',
 			'signOut Sign Out',
 		]);
-		assert.deepStrictEqual(names(managingMfa(user, { types: ['TOTP', 'SMS'], enabled: ['TOTP', 'SMS'], preferred: 'SMS' })), [
-			'setUpTotp Replace authenticator app',
-			'updateMfaPreference Use authenticator app by default totp=PREFERRED',
-			'updateMfaPreference Turn off authenticator app totp=DISABLED',
-			'updateMfaPreference Turn off SMS codes sms=DISABLED',
-			'signOut Sign Out',
-		]);
+		assert.deepStrictEqual(
+			names(managingMfa(user, { types: ['TOTP', 'SMS'], enabled: ['TOTP', 'SMS'], preferred: 'SMS' })),
+			[
+				'setUpTotp Replace authenticator app',
+				'updateMfaPreference Use authenticator app by default totp=PREFERRED',
+				'updateMfaPreference Turn off authenticator app totp=DISABLED',
+				'updateMfaPreference Turn off SMS codes sms=DISABLED',
+				'signOut Sign Out',
+			],
+		);
 		// No TOTP in mfa.types: no authenticator setup.
 		assert.deepStrictEqual(names(managingMfa(user, { types: ['EMAIL'], enabled: ['EMAIL'] })), [
 			'updateMfaPreference Use email codes by default email=PREFERRED',

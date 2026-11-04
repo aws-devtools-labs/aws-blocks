@@ -38,22 +38,23 @@ import { Auth } from './dist/index.mock.js';
 declare const scope: ScopeParent;
 declare const context: BlocksContext;
 const okta = { issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' };
+const oktaSecret = { fullId: 'okta-secret', get: async () => 's' };
 export {};
 `;
 
 /** One probe program per case, all type-checked in a single compiler program. */
 const probes = {
 	valid: `
-		const auth = new Auth(scope, 'ok', { oidcProviders: { okta } });
+		const auth = new Auth(scope, 'ok', { providers: { okta: { type: 'oidc', ...okta, clientSecret: oktaSecret } } });
 		void auth.signIn('alice', 'pw', context);
 		void auth.getSignInUrl(context, 'okta');
 	`,
 	passwordOff: `
-		const auth = new Auth(scope, 'off', { emailPassword: false, oidcProviders: { okta } });
+		const auth = new Auth(scope, 'off', { store: 'blocks', providers: { okta: { type: 'oidc', ...okta } } });
 		void auth.signIn('alice', 'pw', context);
 	`,
 	passwordOffNoOptionals: `
-		const auth = new Auth(scope, 'off', { emailPassword: false, oidcProviders: { okta } });
+		const auth = new Auth(scope, 'off', { store: 'blocks', providers: { okta: { type: 'oidc', ...okta } } });
 		void auth.resendSignUpCode('alice');
 	`,
 	federationOff: `

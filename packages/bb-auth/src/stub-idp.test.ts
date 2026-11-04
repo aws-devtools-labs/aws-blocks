@@ -3,7 +3,7 @@
 
 /**
  * The stub IdP end to end on the mock entry, over real HTTP and through the
- * real routes: `emailPassword: false` + a `stubIdp()` provider signs in
+ * real routes: a `store: 'blocks'` block with a `stubIdp()` provider signs in
  * offline (sign-in route → stub `/authorize` → account picker → callback →
  * session → `requireAuth` / `requireRole` → `getAuthState` → sign-out via the
  * IdP's end-session redirect), plus the stub's own protocol checks.
@@ -61,8 +61,8 @@ function bind(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 
 function makeStubAuth() {
 	return new Auth(unique(), 'auth', {
-		emailPassword: false,
-		oidcProviders: { corp: stubIdp({ users: [ALICE, BOB] }) },
+		store: 'blocks',
+		providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 		users: { groups: ['admin'] },
 	});
 }
@@ -100,7 +100,7 @@ async function continueThroughPicker(b: TestBrowser, start: Response, sub: strin
 	return b.fetch(callback);
 }
 
-describe('stub IdP — emailPassword: false, end to end on the mock', () => {
+describe("stub IdP — store: 'blocks', end to end on the mock", () => {
 	test('sign in via the routes → session → requireAuth / requireRole → getAuthState → sign-out', async () => {
 		const auth = makeStubAuth();
 		const api = auth.createApi();
@@ -236,8 +236,8 @@ describe('stub IdP — emailPassword: false, end to end on the mock', () => {
 		// Defense in depth: a cookie signed before the stricter check (or by any
 		// future writer) is re-validated where it becomes a `Location`.
 		const auth = new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp({ users: [ALICE, BOB] }) },
+			store: 'blocks',
+			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 			redirects: { postSignInPath: '/home' },
 		});
 		const b = new TestBrowser();
@@ -269,8 +269,8 @@ describe('stub IdP — emailPassword: false, end to end on the mock', () => {
 	test('onAuthorize picks the user without the picker; a throw denies (access_denied)', async () => {
 		let allow = true;
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: {
+			store: 'blocks',
+			providers: {
 				corp: stubIdp({
 					users: [ALICE, BOB],
 					onAuthorize: (req) => {
@@ -299,7 +299,7 @@ describe('stub IdP — emailPassword: false, end to end on the mock', () => {
 	});
 
 	test('users.json in .bb-data/<fullId>/ is the directory when no inline users are given', async () => {
-		const auth = new Auth(unique(), 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });
+		const auth = new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
 		const dir = join('.bb-data', auth.fullId);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -471,8 +471,8 @@ describe('stub IdP — protocol checks', () => {
 
 	test('/logout redirects only to a registered post_logout_redirect_uri (the app origin + its sign-out paths)', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp() },
+			store: 'blocks',
+			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
 		for (const target of [`${server.origin}/goodbye`, `${server.origin}/aws-blocks/auth/signout`]) {
@@ -484,8 +484,8 @@ describe('stub IdP — protocol checks', () => {
 
 	test('/logout refuses an unregistered post_logout_redirect_uri with 400 and no redirect (RP-Initiated Logout §3)', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp() },
+			store: 'blocks',
+			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
 		const port = new URL(server.origin).port;
@@ -604,8 +604,8 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 	test('a foreign redirect_uri with onAuthorize: 400, and onAuthorize is never asked', async () => {
 		let asked = 0;
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: {
+			store: 'blocks',
+			providers: {
 				corp: stubIdp({
 					users: [ALICE],
 					onAuthorize: (r) => {
@@ -629,8 +629,8 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 
 	test('onAuthorize throwing: access_denied goes only to a registered redirect_uri, a foreign one is a 400', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: {
+			store: 'blocks',
+			providers: {
 				corp: stubIdp({
 					onAuthorize: () => {
 						throw new Error('no');
@@ -656,8 +656,8 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 
 	test('the legitimate flow still works: the app callback gets the code (onAuthorize, and the picker)', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp({ users: [ALICE, BOB], onAuthorize: (r) => r.users[1] }) },
+			store: 'blocks',
+			providers: { corp: stubIdp({ users: [ALICE, BOB], onAuthorize: (r) => r.users[1] }) },
 		});
 		const direct = await getAuthorize(authorizeQuery());
 		assert.strictEqual(direct.status, 302);
@@ -680,8 +680,8 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 
 	test('the registered redirect URI follows redirects.callbackPath (the default path is then refused)', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp({ onAuthorize: (r) => r.users[0] }) },
+			store: 'blocks',
+			providers: { corp: stubIdp({ onAuthorize: (r) => r.users[0] }) },
 			redirects: { callbackPath: '/aws-blocks/auth/extras/callback' },
 		});
 		const custom = `${server.origin}/aws-blocks/auth/extras/callback`;
@@ -696,9 +696,9 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 describe('relay + browser PKCE through the stub (the native / SPA transports)', () => {
 	test('relay: authorize-params → stub → callback 302 to relayTo → /exchange (+ bearer) → /refresh', async () => {
 		const auth = new Auth(unique(), 'auth', {
-			emailPassword: false,
+			store: 'blocks',
 			allowBearerAuth: true,
-			oidcProviders: { corp: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
+			providers: { corp: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
 		});
 		const csrf = 'c'.repeat(40);
 		const relayTo = 'http://127.0.0.1:53682/callback';
@@ -780,8 +780,8 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 
 	test('browser PKCE: GET authorize-params → client PKCE → stub → POST /exchange (no tokens without allowBearerAuth)', async () => {
 		const auth = new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp({ users: [BOB], onAuthorize: (r) => r.users[0] }) },
+			store: 'blocks',
+			providers: { corp: stubIdp({ users: [BOB], onAuthorize: (r) => r.users[0] }) },
 		});
 		const params = await (await fetch(`${server.origin}/aws-blocks/auth/authorize-params/corp`)).json();
 		assert.deepStrictEqual(Object.keys(params).sort(), ['authorizeUrl', 'clientId', 'kind', 'scopes']);
@@ -868,7 +868,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 	});
 });
 
-describe('email + password and a stub IdP on the same Auth (mock)', () => {
+describe('email + password and a stub IdP side by side: two Auth blocks (mock)', () => {
 	/** Call the RPC namespace for one request from `b`, applying its Set-Cookie lines. */
 	async function rpc(b: TestBrowser, api: AuthStateApi, fn: (a: AuthStateApi) => Promise<AuthState>) {
 		const ctx = b.context(server.origin);
@@ -888,18 +888,27 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 
 	test('a password user and a stub-IdP user both reach requireAuth; each signOut behaves correctly', async () => {
 		const codes: string[] = [];
-		const auth = new Auth(unique(), 'auth', {
+		const root = unique();
+		const auth = new Auth(root, 'auth', {
 			codeDelivery: async (_username, code) => {
 				codes.push(code);
 			},
-			oidcProviders: { corp: stubIdp({ users: [ALICE, BOB] }) },
+		});
+		// A stub IdP federates directly: its own `store: 'blocks'` block.
+		const sso = new Auth(root, 'sso', {
+			store: 'blocks',
+			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
 		const api = auth.createApi();
+		const ssoApi = sso.createApi();
 
 		const signedOut = await rpc(new TestBrowser(), api, (a) => a.getAuthState());
 		const names = signedOut.actions.map((a) => a.name);
-		assert.ok(names.includes('signIn') && names.includes('signUp') && names.includes('signIn:corp'), names.join());
+		assert.ok(names.includes('signIn') && names.includes('signUp'), names.join());
+		const ssoSignedOut = await rpc(new TestBrowser(), ssoApi, (a) => a.getAuthState());
+		const ssoNames = ssoSignedOut.actions.map((a) => a.name);
+		assert.deepStrictEqual(ssoNames, ['signIn:corp']);
 
 		// ── The password user: sign-up → code → confirm → auto sign-in ──
 		const pw = new TestBrowser();
@@ -927,7 +936,12 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 		assert.strictEqual(pwUser.username, 'pat');
 		assert.strictEqual(pwUser.signInProvider, 'password');
 		assert.strictEqual(pwUser.claims, undefined, 'a user-pool user has no claims (RLS keeps seeing userId)');
-		const fedUser = await auth.requireAuth(fed.context(server.origin));
+		await assert.rejects(
+			auth.requireAuth(fed.context(server.origin)),
+			{ status: 401 },
+			'each block its own session',
+		);
+		const fedUser = await sso.requireAuth(fed.context(server.origin));
 		assert.strictEqual(fedUser.signInProvider, 'corp');
 		assert.strictEqual(fedUser.claims?.sub, 'u-1');
 		assert.strictEqual(fedUser.userId, `${server.origin}/aws-blocks/auth/idp/corp:u-1`);
@@ -935,14 +949,14 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 		// A password session signs out over RPC (no url); a federated one through the route.
 		const pwState = await rpc(pw, api, (a) => a.getAuthState());
 		assert.strictEqual(pwState.actions.find((x) => x.name === 'signOut')?.url, undefined);
-		const fedState = await rpc(fed, api, (a) => a.getAuthState());
+		const fedState = await rpc(fed, ssoApi, (a) => a.getAuthState());
 		assert.strictEqual(fedState.actions.find((x) => x.name === 'signOut')?.url, '/aws-blocks/auth/signout');
 
 		const pwOut = await rpc(pw, api, (a) => a.setAuthState({ action: 'signOut' }));
 		assert.strictEqual(pwOut.state, 'signedOut');
 		await assert.rejects(auth.requireAuth(pw.context(server.origin)), { status: 401 });
 		assert.strictEqual(
-			(await auth.requireAuth(fed.context(server.origin))).userId,
+			(await sso.requireAuth(fed.context(server.origin))).userId,
 			fedUser.userId,
 			'signing the password user out leaves the federated session alone',
 		);
@@ -957,7 +971,7 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 		assert.strictEqual(logout.searchParams.get('post_logout_redirect_uri'), `${server.origin}/goodbye`);
 		const back = await fed.fetch(logout.toString());
 		assert.strictEqual(back.headers.get('location'), `${server.origin}/goodbye`, 'postSignOutPath');
-		await assert.rejects(auth.requireAuth(fed.context(server.origin)), { status: 401 });
+		await assert.rejects(sso.requireAuth(fed.context(server.origin)), { status: 401 });
 
 		// Signing out with no session still lands on postSignOutPath.
 		const again = await fed.fetch(`${server.origin}/aws-blocks/auth/signout`, {
@@ -973,8 +987,8 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 		assert.throws(
 			() =>
 				new Auth(unique(), 'auth', {
-					emailPassword: false,
-					oidcProviders: { corp: stubIdp() },
+					store: 'blocks',
+					providers: { corp: stubIdp() },
 					redirects: { postSignOutPath: 'https://evil.example.com' },
 				}),
 			/postSignOutPath must be an absolute path/,
@@ -997,8 +1011,8 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 				assert.throws(
 					() =>
 						new Auth(unique(), 'auth', {
-							emailPassword: false,
-							oidcProviders: { corp: stubIdp() },
+							store: 'blocks',
+							providers: { corp: stubIdp() },
 							redirects: { [key]: bad },
 						}),
 					new RegExp(`redirects\\.${key} must be an absolute path`),
@@ -1010,8 +1024,8 @@ describe('email + password and a stub IdP on the same Auth (mock)', () => {
 
 	test('postSignInPath / postSignOutPath are emitted re-serialised', async () => {
 		new Auth(unique(), 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp({ users: [ALICE, BOB] }) },
+			store: 'blocks',
+			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 			redirects: { postSignInPath: '/welcome page?x=1#top', postSignOutPath: '/bye now' },
 		});
 		const landing = await signInThroughPicker(new TestBrowser(), 'u-1');

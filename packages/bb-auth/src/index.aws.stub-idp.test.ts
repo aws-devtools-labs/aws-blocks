@@ -71,8 +71,8 @@ afterEach(() => {
 function lambdaInstance() {
 	clearRouteRegistry();
 	return new Auth({ id: rootId }, 'auth', {
-		emailPassword: false,
-		oidcProviders: { corp: stubIdp({ users: [ALICE, BOB] }) },
+		store: 'blocks',
+		providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 		users: { groups: ['admin'] },
 	});
 }

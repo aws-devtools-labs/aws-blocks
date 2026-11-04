@@ -171,9 +171,9 @@ async function nativeSignIn(): Promise<{ accessToken: string; refreshToken: stri
 
 function makeStubAuth(allowBearerAuth: boolean, root: ScopeParent = unique()) {
 	return new Auth(root, 'auth', {
-		emailPassword: false,
+		store: 'blocks',
 		allowBearerAuth,
-		oidcProviders: { corp: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
+		providers: { corp: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
 		users: { groups: ['admin'] },
 	});
 }
@@ -263,9 +263,9 @@ describe('allowBearerAuth — direct OIDC (stub IdP, real ES256) on the mock', (
 		clearRouteRegistry();
 		const BOB: StubUser = { sub: 'u-2', email: 'bob@example.com', name: 'Bob' };
 		const both = new Auth(root, 'auth', {
-			emailPassword: false,
+			store: 'blocks',
 			allowBearerAuth: true,
-			oidcProviders: { corp: stubIdp({ users: [BOB], onAuthorize: (r) => r.users[0] }) },
+			providers: { corp: stubIdp({ users: [BOB], onAuthorize: (r) => r.users[0] }) },
 			users: { groups: ['admin'] },
 		});
 		const b = new TestBrowser();
@@ -302,9 +302,9 @@ describe('allowBearerAuth — direct OIDC rejections (fake IdP) on the mock', ()
 
 	function makeOktaAuth() {
 		return new Auth(unique(), 'auth', {
-			emailPassword: false,
+			store: 'blocks',
 			allowBearerAuth: true,
-			oidcProviders: { okta: { issuer: idp.issuer, clientId: 'client-1', groupsClaim: 'groups' } },
+			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'client-1', groupsClaim: 'groups' } },
 			users: { groups: ['admin'] },
 		});
 	}
@@ -425,7 +425,7 @@ describe('allowBearerAuth — the local user pool', () => {
 			emailPassword: false,
 			allowBearerAuth: true,
 			// A hosted-UI provider keeps the user pool (direct OIDC alone has none).
-			samlProviders: { partner: { metadataUrl: 'https://partner.example.com/saml' } },
+			providers: { partner: { type: 'saml', metadataUrl: 'https://partner.example.com/saml' } },
 		});
 		const cookieUser = await b.request((ctx) => after.requireAuth(ctx));
 		assert.strictEqual(cookieUser.signInProvider, 'password');

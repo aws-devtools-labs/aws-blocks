@@ -23,6 +23,7 @@ import { cognitoConfigKeys, ownsPreSignUpTrigger, preSignUpTriggerConfigKey } fr
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.aws.js';
 import { signValidatedMarker, VALIDATED_MARKER_KEY } from './presignup-trigger.js';
+import { resolveOptions } from './resolve-options.js';
 import {
 	Browser,
 	cognitoError,
@@ -242,7 +243,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 		process.env[keys.CLIENT_ID] = 'r21-client';
 		process.env[keys.REGION] = TEST_REGION;
 		const flag = preSignUpTriggerConfigKey(fullId);
-		if (ownsPreSignUpTrigger(options)) process.env[flag] = 'true';
+		if (ownsPreSignUpTrigger(resolveOptions(options))) process.env[flag] = 'true';
 		else delete process.env[flag];
 		return options;
 	}

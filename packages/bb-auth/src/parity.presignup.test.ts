@@ -10,7 +10,7 @@
  * |---|---|
  * | `PreSignUp_SignUp` | `auth.signUp` (in-process) |
  * | `PreSignUp_AdminCreateUser` | `auth.admin.createUser` (in-process) |
- * | `PreSignUp_ExternalProvider` | none — Cognito-federated providers (social, SAML, `federateVia: 'cognito'`) are unavailable locally; directly federated ones, the stub IdP included, never create a pool user on either runtime, so they only ever see `phase: 'signIn'` |
+ * | `PreSignUp_ExternalProvider` | none — Cognito-federated providers (social, SAML, OIDC on the Cognito store) are unavailable locally; directly federated ones, the stub IdP included, never create a pool user on either runtime, so they only ever see `phase: 'signIn'` |
  *
  * The AWS side runs the **trigger** (Cognito played by
  * `test-support/cognito-trigger.ts`, with no marker delivered, so the trigger
@@ -27,7 +27,7 @@ import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
 import { makeAwsAuth, wireView } from './test-support/aws-harness.js';
 import { cognitoWithTrigger } from './test-support/cognito-trigger.js';
-import type { AuthOptions, UserCandidate } from './types.js';
+import type { CognitoAuthOptions, UserCandidate } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -54,7 +54,12 @@ async function caught(p: Promise<unknown>): Promise<unknown> {
 	);
 }
 
-const SCENARIOS: { name: string; users?: AuthOptions['users']; login: string; attributes: Record<string, string> }[] = [
+const SCENARIOS: {
+	name: string;
+	users?: CognitoAuthOptions['users'];
+	login: string;
+	attributes: Record<string, string>;
+}[] = [
 	{ name: 'default pool (username + email alias)', login: 'ada', attributes: { email: 'ada@example.com' } },
 	{
 		name: 'email-only pool (Cognito stores a UUID username)',
