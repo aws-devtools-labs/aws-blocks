@@ -13,6 +13,10 @@ import { Scope, registerSdkIdentifiers } from '@aws-blocks/core';
 import { mountDashboardRoute } from './routes.js';
 import type { DashboardOptions } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-dashboard');
 
 export { DashboardErrors } from './errors.js';
 export type {

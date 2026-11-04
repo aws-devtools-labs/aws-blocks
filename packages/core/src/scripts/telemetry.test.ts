@@ -104,6 +104,15 @@ describe('telemetry CLI', () => {
       assert.ok(result.stdout.includes('A disable from any other mechanism still wins'));
       assert.ok(result.stdout.includes('BLOCKS_TELEMETRY_ENDPOINT=<url>'));
       assert.ok(result.stdout.includes('Send failures are ignored'));
+      assert.ok(result.stdout.includes('AWS_BLOCKS_DISABLE_TEMPLATE_METADATA=1|true|yes'));
+      assert.ok(result.stdout.includes('-c blocks:template-metadata=false or cdk --no-version-reporting'));
+      assert.ok(result.stdout.includes('--disable does not affect it'));
+    });
+
+    it('names the cdk-blocks telemetry command first', () => {
+      const result = runCli(['--help'], { cwd: tmpProject, env: { HOME: tmpHome } });
+      assert.strictEqual(result.exitCode, 0);
+      assert.match(result.stdout, /^Usage: npx --no -- cdk-blocks telemetry \[status\|enable\|disable\] \[--global\]\n/);
     });
 
     it('-h shows usage', () => {

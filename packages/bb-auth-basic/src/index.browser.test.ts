@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { AuthBasicErrors } from './index.browser.js';
+import type { AuthActionInput } from './index.browser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -17,5 +18,11 @@ describe('AuthBasic browser entry', () => {
 		const browserEntry = readFileSync(join(__dirname, 'index.browser.js'), 'utf8');
 		assert.ok(!browserEntry.includes("from './index.js'"), browserEntry);
 		assert.ok(!browserEntry.includes('from "./index.js"'), browserEntry);
+	});
+
+	test('re-exports AuthActionInput for browser-condition type-checks', () => {
+		// Type-only export: this file stops compiling if the browser entry drops it.
+		const input: AuthActionInput = { action: 'signIn', username: 'a', password: 'b' };
+		assert.strictEqual(input.action, 'signIn');
 	});
 });

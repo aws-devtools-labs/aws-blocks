@@ -132,6 +132,23 @@ void describe('patchNitroHandlerForApiGateway', () => {
     );
   });
 
+  void it('falls back to the top-level event.httpMethod (an ALB Lambda-target event)', () => {
+    // An ALB event carries its method at the top level; neither
+    // `requestContext.http.method` (payload 2.0) nor
+    // `requestContext.httpMethod` (REST) is set.
+    const bundle = path.join(tmp, 'chunks', 'nitro', 'nitro.mjs');
+    writeFile(bundle, `const method = ${METHOD_PATTERN} || "get";\n`);
+    patchNitroHandlerForApiGateway(tmp);
+    const out = fs.readFileSync(bundle, 'utf-8');
+    const method = new Function('event', `${out.replace('const method =', 'return')}`);
+    assert.strictEqual(method({ httpMethod: 'POST', requestContext: { elb: {} } }), 'POST');
+    assert.strictEqual(method({ requestContext: { httpMethod: 'PUT' } }), 'PUT');
+    assert.strictEqual(method({ requestContext: { http: { method: 'PATCH' } } }), 'PATCH');
+    // Idempotent with the extra fallback too.
+    patchNitroHandlerForApiGateway(tmp);
+    assert.strictEqual(fs.readFileSync(bundle, 'utf-8'), out);
+  });
+
   void it('is idempotent — running twice does not double-patch', () => {
     const bundle = path.join(tmp, 'chunks', 'nitro', 'nitro.mjs');
     writeFile(bundle, `${RAW_PATH_PATTERN};\n${METHOD_PATTERN};\n`);

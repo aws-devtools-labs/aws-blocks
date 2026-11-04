@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
-import { chromium } from '/opt/verifier/node_modules/playwright/index.mjs';
+import { chromium } from '/opt/playwright/index.mjs';
 
 const phase = Number(process.env.BENCH_PHASE);
 const mode = process.argv[2];
@@ -24,10 +24,23 @@ async function check(id, action) {
 	diagnostic.checks.push(id);
 }
 const row = (title) => page.getByTestId('todo-item').filter({ hasText: title });
+// Contract controls are form fields. Matching only those keeps another element with the same
+// accessible name (a label list named "Labels", say) from making a locator ambiguous.
+const control = (scope, name) => scope.getByLabel(name, { exact: true })
+	.and(scope.locator('input, textarea, select, [role="checkbox"], [role="textbox"]'));
 async function saved(title) {
 	await row(title).waitFor({ state: 'visible' });
 	assert.equal(await row(title).count(), 1);
 	return row(title);
+}
+// Tags a failed comparison of a seeded record with its public reason.
+async function prior(reason, action) {
+	try {
+		await action();
+	} catch (error) {
+		error.reason ??= reason;
+		throw error;
+	}
 }
 async function mutate(action) {
 	const [response] = await Promise.all([
@@ -38,17 +51,28 @@ async function mutate(action) {
 	assert.ok(response.ok(), 'backend mutation did not return a successful HTTP status');
 }
 async function add(title) {
-	await page.getByLabel('Todo title', { exact: true }).fill(title);
+	await control(page, 'Todo title').fill(title);
 	await mutate(() => page.getByRole('button', { name: 'Add todo', exact: true }).click());
 	return saved(title);
 }
 async function checkAll() {
 	for (const expected of state.items) {
+		try {
+			await row(expected.title).waitFor({ state: 'visible' });
+		} catch (error) {
+			// Seeded titles end in a UUID: a row that still shows it was renamed, not lost.
+			const id = expected.title.slice(expected.title.indexOf('-') + 1);
+			error.reason ??= await row(id).count() ? 'prior_title' : 'prior_missing';
+			throw error;
+		}
 		const todo = await saved(expected.title);
-		assert.equal(await todo.getByLabel('Completed', { exact: true }).isChecked(), expected.completed);
-		if (phase >= 2) assert.equal(await todo.getByLabel('Due date', { exact: true }).inputValue(), expected.due ?? '');
+		await prior('prior_completed', async () => assert.equal(await control(todo, 'Completed').isChecked(), expected.completed));
+		if (phase >= 2) {
+			await prior('prior_due', async () => assert.equal(await control(todo, 'Due date').inputValue(), expected.due ?? ''));
+		}
 		if (phase >= 3) {
-			assert.deepEqual((await todo.getByTestId('todo-label').allTextContents()).map(s => s.trim()).sort(), expected.labels ?? []);
+			await prior('prior_labels', async () => assert.deepEqual(
+				(await todo.getByTestId('todo-label').allTextContents()).map(s => s.trim()).sort(), expected.labels ?? []));
 		}
 	}
 }
@@ -68,43 +92,43 @@ try {
 		let todo;
 		await check('create_todo', async () => { todo = await add(title); });
 		await check('complete_todo', async () => {
-			await mutate(() => todo.getByLabel('Completed', { exact: true }).click());
+			await mutate(() => control(todo, 'Completed').click());
 			await page.reload({ waitUntil: 'networkidle' });
 			todo = await saved(title);
-			assert.equal(await todo.getByLabel('Completed', { exact: true }).isChecked(), true);
+			assert.equal(await control(todo, 'Completed').isChecked(), true);
 		});
 		await check('edit_todo', async () => {
-			await mutate(() => todo.getByLabel('Completed', { exact: true }).click());
-			await todo.getByLabel('Edit title', { exact: true }).fill(`${title}-edited`);
+			await mutate(() => control(todo, 'Completed').click());
+			await control(todo, 'Edit title').fill(`${title}-edited`);
 			await mutate(() => todo.getByRole('button', { name: 'Save todo', exact: true }).click());
 			todo = await saved(`${title}-edited`);
 		});
 		if (phase >= 2) {
 			await check('set_due_date', async () => {
-				await todo.getByLabel('Due date', { exact: true }).fill('2031-04-05');
+				await control(todo, 'Due date').fill('2031-04-05');
 				await mutate(() => todo.getByRole('button', { name: 'Save todo', exact: true }).click());
 				await page.reload({ waitUntil: 'networkidle' });
 				todo = await saved(`${title}-edited`);
-				assert.equal(await todo.getByLabel('Due date', { exact: true }).inputValue(), '2031-04-05');
+				assert.equal(await control(todo, 'Due date').inputValue(), '2031-04-05');
 			});
 			await check('clear_due_date', async () => {
-				await todo.getByLabel('Due date', { exact: true }).fill('');
+				await control(todo, 'Due date').fill('');
 				await mutate(() => todo.getByRole('button', { name: 'Save todo', exact: true }).click());
 				await page.reload({ waitUntil: 'networkidle' });
 				todo = await saved(`${title}-edited`);
-				assert.equal(await todo.getByLabel('Due date', { exact: true }).inputValue(), '');
+				assert.equal(await control(todo, 'Due date').inputValue(), '');
 			});
 		}
 		if (phase >= 3) {
 			await check('normalize_labels', async () => {
-				await todo.getByLabel('Labels', { exact: true }).fill('work, urgent, work, , ');
+				await control(todo, 'Labels').fill('work, urgent, work, , ');
 				await mutate(() => todo.getByRole('button', { name: 'Save todo', exact: true }).click());
 				await page.reload({ waitUntil: 'networkidle' });
 				todo = await saved(`${title}-edited`);
 				assert.deepEqual((await todo.getByTestId('todo-label').allTextContents()).map(s => s.trim()).sort(), ['urgent', 'work']);
 			});
 			await check('clear_labels', async () => {
-				await todo.getByLabel('Labels', { exact: true }).fill('');
+				await control(todo, 'Labels').fill('');
 				await mutate(() => todo.getByRole('button', { name: 'Save todo', exact: true }).click());
 				await page.reload({ waitUntil: 'networkidle' });
 				todo = await saved(`${title}-edited`);
@@ -114,8 +138,8 @@ try {
 		await check('preserve_fields', async () => {
 			await page.reload({ waitUntil: 'networkidle' });
 			todo = await saved(`${title}-edited`);
-			assert.equal(await todo.getByLabel('Completed', { exact: true }).isChecked(), false);
-			if (phase >= 2) assert.equal(await todo.getByLabel('Due date', { exact: true }).inputValue(), '');
+			assert.equal(await control(todo, 'Completed').isChecked(), false);
+			if (phase >= 2) assert.equal(await control(todo, 'Due date').inputValue(), '');
 			if (phase >= 3) assert.equal(await todo.getByTestId('todo-label').count(), 0);
 		});
 		await check('delete_todo', async () => {
@@ -127,14 +151,14 @@ try {
 		await check('seed_survival', async () => {
 			const expected = { title: `survival-${randomUUID()}`, completed: true, due: '', labels: [] };
 			todo = await add(expected.title);
-			await mutate(() => todo.getByLabel('Completed', { exact: true }).click());
+			await mutate(() => control(todo, 'Completed').click());
 			if (phase >= 2) {
 				expected.due = '2032-06-07';
-				await todo.getByLabel('Due date', { exact: true }).fill(expected.due);
+				await control(todo, 'Due date').fill(expected.due);
 			}
 			if (phase >= 3) {
 				expected.labels = ['home', 'later'];
-				await todo.getByLabel('Labels', { exact: true }).fill(expected.labels.join(', '));
+				await control(todo, 'Labels').fill(expected.labels.join(', '));
 			}
 			if (phase >= 2) await mutate(() => todo.getByRole('button', { name: 'Save todo', exact: true }).click());
 			state.items.push(expected);
@@ -149,6 +173,8 @@ try {
 } catch (error) {
 	diagnostic.status = 'failed';
 	diagnostic.failure = { check: activeCheck, kind: error.name === 'TimeoutError' ? 'timeout' : error.code === 'ERR_ASSERTION' ? 'assertion' : 'runtime' };
+	const reason = /strict mode violation/.test(String(error?.message)) ? 'locator_ambiguous' : error?.reason;
+	if (reason) diagnostic.failure.reason = reason;
 	// Preserve details only in the private runner log. Public JSON carries fixed identifiers.
 	console.error(error);
 	process.exitCode = 1;

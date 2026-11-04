@@ -46,11 +46,14 @@ export function distributedTableSecureDefaultsTests(getApi: () => typeof apiType
 			await api.secureTablePut({ pk, sk: 'y', data: 'second', timestamp: 200 });
 			// Query the byTimestamp GSI provisioned alongside PITR — proves the GSI
 			// custom resource's UpdateTable and the durability configuration
-			// deployed together and left the index usable.
-			const rows = await api.secureTableQuery({
-				index: 'byTimestamp',
-				where: { pk: { equals: pk } },
-			});
+			// deployed together and left the index usable. GSI reads are eventually
+			// consistent, so poll briefly for both writes to reach the index.
+			const query = () => api.secureTableQuery({ index: 'byTimestamp', where: { pk: { equals: pk } } });
+			let rows = await query();
+			for (let attempt = 0; rows.length < 2 && attempt < 20; attempt++) {
+				await new Promise((resolve) => setTimeout(resolve, 500));
+				rows = await query();
+			}
 			assert.strictEqual(rows.length, 2);
 			assert.deepStrictEqual(rows.map((r) => r.data).sort(), ['first', 'second']);
 		});

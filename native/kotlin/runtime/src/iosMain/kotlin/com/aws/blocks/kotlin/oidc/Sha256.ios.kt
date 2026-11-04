@@ -10,6 +10,7 @@ import kotlinx.cinterop.usePinned
 import platform.CoreCrypto.CC_SHA256
 import platform.CoreCrypto.CC_SHA256_DIGEST_LENGTH
 import platform.Security.SecRandomCopyBytes
+import platform.Security.errSecSuccess
 import platform.Security.kSecRandomDefault
 import platform.darwin.UInt8Var
 
@@ -25,6 +26,8 @@ internal actual fun sha256(input: ByteArray): ByteArray = memScoped {
 @OptIn(ExperimentalForeignApi::class)
 internal actual fun secureRandomBytes(size: Int): ByteArray = memScoped {
     val ptr = allocArray<UInt8Var>(size)
-    SecRandomCopyBytes(kSecRandomDefault, size.toULong(), ptr)
+    val status = SecRandomCopyBytes(kSecRandomDefault, size.toULong(), ptr)
+    // Fail closed: never return the unfilled buffer when the system RNG call fails.
+    check(status == errSecSuccess) { "SecRandomCopyBytes failed with OSStatus $status" }
     ptr.readBytes(size)
 }

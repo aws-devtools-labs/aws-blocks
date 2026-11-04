@@ -15,7 +15,7 @@ export {
 	secret,
 	type ValueKind,
 } from '@aws-blocks/hosting';
-export { type ApiHandler, ApiNamespace, type BlocksContext } from './api.js';
+export { type ApiHandler, ApiNamespace, type ApiNamespaceOptions, type BlocksContext } from './api.js';
 export {
 	type ComputeOptions,
 	type ComputeType,
@@ -27,7 +27,15 @@ export {
 	type ScalingSignal,
 	type ServerlessComputeOptions,
 } from './common/compute-capabilities.js';
-export { _resetConfigCache, getConfig, getConfigSync, loadConfigToProcessEnv, preloadConfig } from './common/config.js';
+export {
+	_resetConfigCache,
+	getCachedConfigValue,
+	getConfig,
+	getConfigSync,
+	loadConfigToProcessEnv,
+	preloadConfig,
+} from './common/config.js';
+export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
 export {
 	type BuildingBlockMeta,
 	buildingBlockParent,

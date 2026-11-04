@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
+import {
+	existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, copyFileSync, utimesSync, rmSync,
+} from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { assertContainedPath } from './mock-utils.js';
 import {
@@ -13,18 +15,21 @@ import {
 	deleteMarkerPath, isVersionEntry,
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
-import { validateBucketName } from './bucket-name.js';
-import { validateFileBucketOptions, assertValidKey } from './validation.js';
+import { deriveBucketName, validateBucketName } from './bucket-name.js';
+import { validateFileBucketOptions, assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, ExternalBucketRef,
+	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
 } from './types.js';
 
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-file-bucket');
+
 export type {
 	FileBucketOptions, PutOptions, GetUrlOptions, PutUrlOptions, ScanOptions,
-	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef,
+	FileContent, FileInfo, CorsRule, LifecycleRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectLockOptions,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
@@ -79,6 +84,8 @@ function getDevBaseUrl(): string {
 export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends Scope {
 	private dataDir: string;
 	private versioned: boolean;
+	/** Mirrors the AWS runtime: presigned uploads are rejected on an `objectLock` bucket. */
+	private readonly objectLocked: boolean;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -86,10 +93,13 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	constructor(scope: ScopeParent, id: string, options?: O) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		// Validate the derived bucket name against S3's naming rules so local
-		// dev fails the same way a deploy would. Validate `fullId` (the real
-		// deployed bucket name), not the `mock-` prefixed local name, to keep
-		// parity with the CDK path.
-		if (!options?.bucket) validateBucketName(this.fullId);
+		// dev fails the same way a deploy would. Validate the real deployed
+		// bucket name (`deriveBucketName(fullId)`: `fullId` itself when it fits
+		// 63 characters, else shortened), not the `mock-` prefixed local name,
+		// to keep parity with the CDK path.
+		const bucketName = deriveBucketName(this.fullId);
+		if (!options?.bucket) validateBucketName(bucketName);
+		this.objectLocked = !options?.bucket && options?.objectLock !== undefined;
 		// Run the CDK's synth-time option guards locally too, via the shared
 		// validation.ts, so a local/unit run rejects exactly what `cdk synth`
 		// would. Gated on `!options?.bucket` alongside validateBucketName: the
@@ -101,7 +111,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.versioned = options?.versioned ?? true;
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
 		this.registerDevAttachment('@aws-blocks/bb-file-bucket/file-server');
-		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${this.fullId}` });
+		registerSdkIdentifiers(this.fullId, { bucketName: `mock-${bucketName}` });
 		// Register in global registry so the file-server can delegate PUT to bucket.put()
 		const g = globalThis as any;
 		g.__BLOCKS_FILE_BUCKET_REGISTRY__ ??= new Map();
@@ -197,6 +207,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 * On non-versioned buckets, permanently removes the file.
 	 * On versioned buckets without `versionId`, places a delete marker (file appears deleted
 	 * but previous versions are preserved). With `versionId`, permanently removes that version.
+	 * Deleting the newest stored data version promotes the next stored data version, if any,
+	 * without creating a new version. An active local delete marker continues to hide the key.
 	 *
 	 * No-op if the file does not exist (matches S3 behavior).
 	 *
@@ -212,9 +224,28 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		this.validateKey(path);
 		const versionId = (options as any)?.versionId as string | undefined;
 		if (this.versioned && versionId) {
-			// Permanently delete a specific version
-			try { unlinkSync(versionContentPath(this.dataDir, path, versionId)); } catch {}
-			try { unlinkSync(versionMetaPath(this.dataDir, path, versionId)); } catch {}
+			const versions = this.readVersions(path);
+			if (!versions.some(version => version.versionId === versionId)) return;
+			if (versions[0].versionId === versionId) {
+				// The current copy is also read by scan() and the dev file-server.
+				// Promote without put(), which would create a version and clear the marker.
+				// Keep the target version until reconciliation succeeds so failures are retryable.
+				const next = versions[1];
+				if (next) {
+					const filePath = contentPath(this.dataDir, path);
+					const source = versionContentPath(this.dataDir, path, next.versionId);
+					const stat = statSync(source);
+					mkdirSync(dirname(filePath), { recursive: true });
+					copyFileSync(source, filePath);
+					utimesSync(filePath, stat.atime, stat.mtime);
+					this.writeMeta(path, this.readVersionMeta(path, next.versionId));
+				} else {
+					rmSync(contentPath(this.dataDir, path), { force: true });
+					rmSync(metaPath(this.dataDir, path), { force: true });
+				}
+			}
+			rmSync(versionMetaPath(this.dataDir, path, versionId), { force: true });
+			unlinkSync(versionContentPath(this.dataDir, path, versionId));
 			return;
 		}
 		if (this.versioned) {
@@ -293,6 +324,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
 		this.validateKey(path);
+		this.assertPresignedUploadSupported();
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -364,6 +396,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async createUploadHandle(path: string, options?: PutUrlOptions): Promise<FileUploadClient> {
 		this.validateKey(path);
+		this.assertPresignedUploadSupported();
 		const expiresIn = options?.expiresIn ?? 3600;
 		const token = mintFileToken(this.fullId, path, 'PUT', expiresIn, LOCAL_FILE_SECRET, options?.contentType);
 		const encodedPath = path.split('/').map(s => encodeURIComponent(s)).join('/');
@@ -429,30 +462,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 */
 	async listVersions(path: string): Promise<FileVersionInfo[]> {
 		this.validateKey(path);
-		const versionsDir = versionsDirFor(this.dataDir, path);
-		if (!existsSync(versionsDir)) return [];
-		const entries = readdirSync(versionsDir).filter(isVersionEntry);
-		if (entries.length === 0) return [];
-
-		const hasDeleteMarker = existsSync(deleteMarkerPath(this.dataDir, path));
-		const versions: FileVersionInfo[] = entries.map(versionId => {
-			const vPath = versionContentPath(this.dataDir, path, versionId);
-			const stat = statSync(vPath);
-			return { versionId, lastModified: stat.mtime, size: stat.size, isCurrent: false };
-		});
-		// Sort newest first; break ties by version number (descending) for deterministic ordering
-		versions.sort((a, b) => {
-			const timeDiff = b.lastModified.getTime() - a.lastModified.getTime();
-			if (timeDiff !== 0) return timeDiff;
-			const aNum = parseInt(a.versionId.slice(1), 10);
-			const bNum = parseInt(b.versionId.slice(1), 10);
-			return bNum - aNum;
-		});
-		// Mark the newest as current (unless there's a delete marker)
-		if (versions.length > 0 && !hasDeleteMarker) {
-			versions[0].isCurrent = true;
-		}
-		return versions;
+		return this.readVersions(path);
 	}
 
 	/**
@@ -490,7 +500,53 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		return { __brand: 'ExternalBucketRef' as const, bucketName };
 	}
 
+	/**
+	 * Reference an existing customer-managed KMS key by ARN, to pass as the
+	 * `encryption` option. Encryption is applied at deploy time; the
+	 * mock ignores it.
+	 *
+	 * @param keyArn - The ARN of the existing KMS key.
+	 */
+	static fromKmsKey(keyArn: string): ExternalKmsKeyRef {
+		return { __brand: 'ExternalKmsKeyRef' as const, keyArn };
+	}
+
 	// ── Internal helpers ──────────────────────────────────────────────────
+
+	private readVersions(path: string): FileVersionInfo[] {
+		const versionsDir = versionsDirFor(this.dataDir, path);
+		if (!existsSync(versionsDir)) return [];
+		const entries = readdirSync(versionsDir, { withFileTypes: true })
+			.filter(entry => entry.isFile() && isVersionEntry(entry.name))
+			.map(entry => entry.name);
+		if (entries.length === 0) return [];
+
+		const hasDeleteMarker = existsSync(deleteMarkerPath(this.dataDir, path));
+		const versions: FileVersionInfo[] = entries.map(versionId => {
+			const vPath = versionContentPath(this.dataDir, path, versionId);
+			const stat = statSync(vPath);
+			return { versionId, lastModified: stat.mtime, size: stat.size, isCurrent: false };
+		});
+		// Sort newest first; break ties by version number (descending) for deterministic ordering
+		versions.sort((a, b) => {
+			const timeDiff = b.lastModified.getTime() - a.lastModified.getTime();
+			if (timeDiff !== 0) return timeDiff;
+			const aNum = parseInt(a.versionId.slice(1), 10);
+			const bNum = parseInt(b.versionId.slice(1), 10);
+			return bNum - aNum;
+		});
+		// Mark the newest as current (unless there's a delete marker)
+		if (versions.length > 0 && !hasDeleteMarker) {
+			versions[0].isCurrent = true;
+		}
+		return versions;
+	}
+
+	private assertPresignedUploadSupported(): void {
+		if (this.objectLocked) {
+			throw blocksError(FileBucketErrors.PresignedUploadUnsupported, presignedUploadUnsupportedMessage(this.fullId));
+		}
+	}
 
 	private validateKey(key: string): void {
 		// Portable, filesystem-independent key rules shared with the AWS runtime,

@@ -4,13 +4,13 @@
 // Comprehensive test backend covering all Building Blocks
 // This is NOT a user-facing template - it's designed for maximum test coverage
 
-import { ApiNamespace, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
+import { ApiNamespace, Compute, Scope, KVStore, AuthBasic, AuthCognito, AuthOIDC, google, stubIdp, getDeploymentType, relayOrigin, DistributedTable, Realtime, Database, CronJob, FileBucket, KnowledgeBase, sql, RawRoute, EmailClient } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import type { EmailMessage } from '@aws-blocks/blocks';
 import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blocks/bb-kv-store';
 import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Secret } from '@aws-blocks/bb-secret';
@@ -19,6 +19,8 @@ import { Tracer } from '@aws-blocks/bb-tracer';
 import { Logger } from '@aws-blocks/bb-logger';
 import { createKyselyAdapter, DatabaseErrors } from '@aws-blocks/bb-data';
 import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
+import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
+import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
 
 
@@ -109,10 +111,20 @@ async function readDeliveredCode<T extends DeliveredCode>(channel: string, usern
   return parseStoredRecord<T>(key, await store.get(key));
 }
 
-async function purgeDeliveredCodes(): Promise<number> {
+/** Every channel that records delivered codes (the `recordDeliveredCode` callers below). */
+const CODE_CHANNELS = ['auth', 'authC', 'authCMfa'] as const;
+
+async function purgeDeliveredCodes(username?: string): Promise<number> {
   const keys: string[] = [];
-  for await (const entry of store.scan()) {
-    if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+  if (username === undefined) {
+    for await (const entry of store.scan()) {
+      if (entry.key.startsWith(`${CODE_KEY_PREFIX}:`)) keys.push(entry.key);
+    }
+  } else {
+    for (const channel of CODE_CHANNELS) {
+      const key = codeKey(channel, username);
+      if ((await store.get(key)) !== null) keys.push(key);
+    }
   }
   for (const key of keys) await store.delete(key);
   return keys.length;
@@ -188,7 +200,7 @@ const authCMfa = new AuthCognito(scope, 'authCMfa', {
 });
 
 // AuthOIDC - OIDC sign-in gate
-// Uses the stub IdP in mock runtime — no real IdP needed for local tests.
+// Uses the stub IdP in local and sandbox — no real IdP needed for tests.
 //
 // ── Sign-in records (e2e read-back) ─────────────────────────────────────────
 //
@@ -221,10 +233,24 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
   return parseStoredRecord<SignInRecord>(key, await oidcProfiles.get(key));
 }
 
-const oidcProviders = [
-  stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
-  stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
-] as const;
+// The stub IdP is sandbox-only: AuthOIDC rejects stub providers at synth for
+// production deployments and never mounts their routes there. Choose providers
+// by deployment type so the production e2e still deploys every AuthOIDC
+// instance. `getDeploymentType()` is set from the CDK context at synth and
+// delivered to compute via the BB config, so synth and runtime agree. The
+// production branch uses a placeholder real provider (AuthOIDC needs at least
+// one); the e2e only asserts its route surface, never a real Google sign-in.
+const stubsAllowed = getDeploymentType() !== 'production';
+
+/** Placeholder real provider for production deployments (never signed in to). */
+const placeholderGoogle = () => google({ clientId: 'e2e-placeholder', clientSecret: 'e2e-placeholder' });
+
+const oidcProviders = stubsAllowed
+  ? [
+      stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] }),
+      stubIdp({ name: 'corporate', onAuthorize: (req) => req.users[0] }),
+    ] as const
+  : [placeholderGoogle()] as const;
 
 const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
   providers: oidcProviders,
@@ -237,9 +263,9 @@ const oidcAuth = new AuthOIDC(scope, 'oidc-auth', {
 // upsert pattern and bearer-token auth for native clients. Uses custom paths
 // to avoid colliding with the first instance.
 const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
-  providers: [
-    stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] }),
-  ],
+  providers: stubsAllowed
+    ? [stubIdp({ name: 'google-extras', onAuthorize: (req) => req.users[0] })]
+    : [placeholderGoogle()],
   callbackPath: '/aws-blocks/auth/extras/callback',
   signOutPath: '/aws-blocks/auth/extras/signout',
   // Bearer-token auth is enabled on this instance so e2e tests can exercise
@@ -263,9 +289,9 @@ const oidcAuthExtras = new AuthOIDC(scope, 'oidc-auth-extras', {
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
 const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
-  providers: [
-    stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] }),
-  ],
+  providers: stubsAllowed
+    ? [stubIdp({ name: 'google-relay', onAuthorize: (req) => req.users[0] })]
+    : [placeholderGoogle()],
   callbackPath: '/aws-blocks/auth/relay/callback',
   signOutPath: '/aws-blocks/auth/relay/signout',
   allowBearerAuth: true,
@@ -359,6 +385,19 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
   migrationsPath: './aws-blocks/dsql-migrations',
   removalPolicy: 'destroy',
 });
+
+// bb-database: one Database block, running on a cluster.
+// `dbx` owns an Aurora DSQL cluster; its migrations default to
+// ./aws-blocks/migrations/dbx and are written in DSQL, as AWS documents it.
+const dbx = new SqlDatabase(scope, 'dbx');
+// A result schema: the row type derives from this value, and every row is validated against it.
+const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
+// `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
+// Both migrations create a table named `items`; dbxb's adds a foreign key, a
+// check constraint, an index and a view in the DSQL forms (NOT VALID + ASYNC validation, ASYNC index).
+const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
+const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
+const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -589,6 +628,14 @@ const numberSetting = new AppSetting<number>(scope, 'number-setting', {
 
 const secretSetting = new AppSetting(scope, 'secret-setting', {
   name: `${ssmPrefix}/api-key`,
+  secret: true,
+});
+
+// The Agent suite's API-key resolver test writes and reads its own secret: it
+// runs in a background process at the same time as the AppSetting suite, which
+// writes and restores `secretSetting` (test/background-suites.ts).
+const agentApiKeySetting = new AppSetting(scope, 'agent-api-key-setting', {
+  name: `${ssmPrefix}/agent-api-key`,
   secret: true,
 });
 
@@ -1166,9 +1213,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    * Codes are one small record per test user and CI destroys the table at
    * teardown, so this is for the cases where it does not: sweeping .bb-data/ in
    * local dev, or a sandbox kept alive with BLOCKS_SANDBOX_KEEP.
+   *
+   * Pass `username` to delete only that user's records (every channel). The
+   * e2e sweeps everything once, before its suites start running at the same
+   * time (test/background-suites.ts), and passes `username` after that: a full
+   * purge then could delete a code another suite is still waiting to read.
    */
-  async authPurgeDeliveredCodes() {
-    return { deleted: await purgeDeliveredCodes() };
+  async authPurgeDeliveredCodes(username?: string) {
+    return { deleted: await purgeDeliveredCodes(username) };
   },
 
   // Cookie-attribute convergence (D-007): sign up + sign in so the e2e can
@@ -1535,6 +1587,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     context.response.headers.set('set-cookie', `${name}=${value}; HttpOnly; Secure; SameSite=None`);
     return { success: true };
   },
+
+  // Sets two cookies in one response — `set` then `append`, the same pattern
+  // Auth uses for its session + auto-sign-in cookies. Every value must
+  // reach the browser on AWS too (API Gateway REST needs multiValueHeaders).
+  async setTwoCookies(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-a=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-b=2; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    return { success: true };
+  },
+
+  // Clears a cookie and then throws 401 — the `requireAuth`-on-a-dead-session
+  // shape. The client must receive both the error and the clearing cookie.
+  async clearCookieThenThrow(name: string) {
+    context.response.headers.set('set-cookie', `${name}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+  },
+
+  // Sets a live cookie AND clears another, then throws — a method that changes
+  // cookies and then fails. Only the deletion may reach the client, with the
+  // error envelope (code, message, name) unchanged.
+  async setLiveAndClearCookieThenThrow(prefix: string) {
+    context.response.headers.set('set-cookie', `${prefix}-live=1; Path=/; HttpOnly; Secure; SameSite=Lax`);
+    context.response.headers.append('set-cookie', `${prefix}-gone=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`);
+    throw new ApiError('rejected after changing cookies', 409, { name: 'CookieTestRejected' });
+  },
   
   async getCookie(name: string) {
     const cookies = context.request.headers.get('cookie') || '';
@@ -1570,6 +1647,32 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
   },
   
+  // A publish from the same invocation as a server-side subscriber must reach
+  // its handler once. On AWS the handler is reachable both in-process and over
+  // the subscriber's own WebSocket, so this counts the calls for one publish.
+  async realtimeChannelSubscribeOnePublishCount(subChannel: string) {
+    const ch = await realtime.getChannel('cursors', subChannel);
+    let calls = 0;
+    const sub = ch.subscribe(() => { calls++; });
+    await sub.established;
+    await realtime.publish('cursors', subChannel, { userId: 'once', x: 1, y: 1, color: 'blue' });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    sub.unsubscribe();
+    return { calls };
+  },
+
+  // Same check through rt.subscribe(), which returns only an unsubscribe
+  // function, so give its socket time to subscribe before publishing.
+  async realtimeSubscribeOnePublishCount(subChannel: string) {
+    let calls = 0;
+    const unsubscribe = realtime.subscribe('cursors', subChannel, () => { calls++; });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await realtime.publish('cursors', subChannel, { userId: 'once', x: 1, y: 1, color: 'blue' });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    unsubscribe();
+    return { calls };
+  },
+
   async realtimeGetCursorChannel() {
     return realtime.getChannel('cursors', 'default');
   },
@@ -1673,6 +1776,235 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // ------------------------------------------------------------------------
+  // bb-database Tests (Database + DatabaseCluster)
+  // ------------------------------------------------------------------------
+
+  async dbxInfo() {
+    return {
+      dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
+      dbxa: { cluster: dbxa.cluster, schemaName: dbxa.schemaName },
+      dbxb: { cluster: dbxb.cluster, schemaName: dbxb.schemaName },
+    };
+  },
+
+  async dbxInsert(id: string, name: string, value: number) {
+    const { rowCount } = await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${name}, ${value})`);
+    return { rowCount };
+  },
+
+  async dbxGet(id: string) {
+    return await dbx.queryOne<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items WHERE id = ${id}`,
+    );
+  },
+
+  async dbxList() {
+    return await dbx.query<{ id: string; name: string; value: number; category: string }>(
+      sql`SELECT * FROM dbx_items ORDER BY id`,
+    );
+  },
+
+  async dbxDelete(id: string) {
+    const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
+    return { rowCount };
+  },
+
+  // A read-modify-write with no side effects: safe to re-run on a conflict.
+  async dbxTransfer(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(
+      async (tx) => {
+        const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+        if (!sender || sender.value < amount) throw new Error('Insufficient balance');
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true, maxRetries: 3 },
+    );
+    return { success: true };
+  },
+
+  // A 404 thrown inside the callback must reach the client as a 404, not as TransactionFailed.
+  async dbxTransferStrict(fromId: string, toId: string, amount: number) {
+    await dbx.transaction(async (tx) => {
+      const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
+      if (!sender) throw new ApiError('no such sender', 404);
+      await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+      await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+    });
+    return { success: true };
+  },
+
+  // The result type comes from the schema, not from a type argument.
+  async dbxGetValidated(id: string) {
+    return await dbx.queryOne(sql`SELECT id, name, value, category FROM dbx_items WHERE id = ${id}`, { schema: DbxItem });
+  },
+
+  async dbxSchemaMismatch(id: string) {
+    try {
+      await dbx.queryOne(sql`SELECT id, name, value FROM dbx_items WHERE id = ${id}`, {
+        schema: z.object({ id: z.string(), name: z.string(), value: z.string() }),
+      });
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // Local mode only: simulateConflict() (from the testing entry) throws in the
+  // Lambda runtime, so the handler reports that nothing was simulated and the test skips.
+  async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
+    try {
+      simulateConflict(dbx);
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbx.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE dbx_items SET value = value - ${amount} WHERE id = ${fromId}`);
+        await tx.execute(sql`UPDATE dbx_items SET value = value + ${amount} WHERE id = ${toId}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
+  },
+
+  async dbxDuplicateInsert(id: string) {
+    try {
+      await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // DDL on the app connection of a distributed cluster: the mock's guard
+  // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
+  async dbxRejectDdl() {
+    try {
+      await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxRejectTruncate() {
+    try {
+      await dbx.execute(sql`TRUNCATE dbx_items`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // More than 3,000 rows in one transaction: TransactionRowLimitExceeded, from
+  // the mock locally and from DSQL's SQLSTATE 54000 when deployed. Nothing is kept.
+  async dbxRowLimit() {
+    const prefix = `limit-${Date.now().toString(36)}-`;
+    let error: string | null = null;
+    try {
+      await dbx.transaction(async (tx) => {
+        await tx.execute(
+          sql`INSERT INTO dbx_items (id, name, value) SELECT ${prefix} || g, 'bulk', g FROM generate_series(1, 3001) g`,
+        );
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.name : String(e);
+    }
+    const kept = await dbx.queryOne<{ n: number }>(
+      sql`SELECT count(*)::int AS n FROM dbx_items WHERE id LIKE ${`${prefix}%`}`,
+    );
+    return { error, kept: kept?.n ?? 0 };
+  },
+
+  // A block-level execute() inside the callback runs in the transaction: when the callback throws, nothing
+  // is kept, locally and on DSQL (where the statement would otherwise auto-commit on another connection).
+  async dbxBlockWriteInAbortedTransaction(id: string) {
+    let aborted = false;
+    try {
+      await dbx.transaction(async () => {
+        await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'aborted'}, ${1})`);
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbx.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM dbx_items WHERE id = ${id}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A block-level query() inside the callback sees the callback's own uncommitted write.
+  async dbxBlockReadInTransaction(id: string) {
+    const seenInside = await dbx.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'inside'}, ${1})`);
+      const row = await dbx.queryOne<{ id: string }>(sql`SELECT id FROM dbx_items WHERE id = ${id}`);
+      return row !== null;
+    });
+    const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
+    return { seenInside, committed: rowCount === 1 };
+  },
+
+  // Shared distributed cluster: two blocks, two schemas, one table name.
+  async dbxaAdd(sku: string, qty: number) {
+    // BIGINT identity: a number locally and on DSQL alike; the schema checks it in both.
+    return await dbxa.queryOne(sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`, {
+      schema: z.object({ id: z.number(), sku: z.string(), qty: z.number() }),
+    });
+  },
+
+  async dbxaDelete(sku: string) {
+    const { rowCount } = await dbxa.execute(sql`DELETE FROM items WHERE sku = ${sku}`);
+    return { rowCount };
+  },
+
+  async dbxbAdd(accountId: string, owner: string, amount: number) {
+    await dbxb.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${owner}) ON CONFLICT (id) DO NOTHING`);
+      await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${amount})`);
+    });
+    return await dbxb.queryOne<{ account_id: string; total: number }>(
+      sql`SELECT account_id, total::int AS total FROM account_totals WHERE account_id = ${accountId}`,
+    );
+  },
+
+  // The validated foreign key refuses an orphan; the check constraint refuses a negative amount.
+  async dbxbRejectOrphan(accountId: string) {
+    const outcome = async (fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+        return null;
+      } catch (e) {
+        return e instanceof Error ? e.name : String(e);
+      }
+    };
+    return {
+      orphan: await outcome(() => dbxb.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${1})`)),
+      negative: await outcome(() =>
+        dbxb.transaction(async (tx) => {
+          await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${'x'}) ON CONFLICT (id) DO NOTHING`);
+          await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${-1})`);
+        }),
+      ),
+    };
+  },
+
+  // ON DELETE CASCADE on DSQL: the cascaded rows count toward the row limit, but a handful is fine.
+  async dbxbDeleteAccount(accountId: string) {
+    await dbxb.execute(sql`DELETE FROM accounts WHERE id = ${accountId}`);
+    const row = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items WHERE account_id = ${accountId}`);
+    return { remainingItems: row?.n ?? 0 };
+  },
+
+  async sharedClusterCounts() {
+    const a = await dbxa.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    const b = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
+    return { dbxa: a?.n ?? 0, dbxb: b?.n ?? 0 };
+  },
+
+  // ------------------------------------------------------------------------
   // Database Tests
   // ------------------------------------------------------------------------
 
@@ -1742,6 +2074,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } catch (e: any) {
       return { error: e.name };
     }
+  },
+
+  // Request errors: each statement is rejected by Postgres for something the
+  // caller did (a constraint, a foreign key, a row-level-security policy or a
+  // missing grant), and must reach the client as a named 4xx, not a 500.
+  async dbCheckViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'u1'}, ${''})`);
+  },
+
+  async dbNotNullViolation(id: string) {
+    await db.execute(sql`INSERT INTO test_notes (id, owner_id) VALUES (${id}, ${'u1'})`);
+  },
+
+  async dbForeignKeyViolation(id: string) {
+    await db.execute(
+      sql`INSERT INTO test_notes (id, owner_id, item_id, body) VALUES (${id}, ${'u1'}, ${'no-such-item'}, ${'x'})`
+    );
+  },
+
+  // Positive control for the two RLS cases below: withRLS() must actually reach
+  // the 'authenticated' role, so their 403 comes from the policy or the grant
+  // and not from a refused role switch.
+  async dbRlsCurrentRole() {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    return (await scoped.queryOne<{ r: string }>(sql`SELECT current_user AS r`))?.r ?? null;
+  },
+
+  async dbRlsViolation(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-b'}, ${'not mine'})`);
+  },
+
+  async dbMissingGrant(id: string) {
+    const scoped = await db.withRLS({ userId: 'user-a' });
+    await scoped.execute(sql`UPDATE test_items SET value = 0 WHERE id = ${id}`);
   },
 
   // Kysely transaction atomicity on the real (pooled / Data API) engine.
@@ -2011,7 +2378,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentGetChannel(channelId: string) {
-    return { channel: await agent.getChannel(channelId) };
+    const user = await auth.getCurrentUser(context);
+    return { channel: await agent.getChannel(channelId, { userId: user?.userId ?? 'anonymous' }) };
   },
 
   async agentGetRawDescriptor(channelId: string) {
@@ -2019,12 +2387,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // removed so client middleware does NOT hydrate it into a channel client. useChat's
     // `refresh` callback needs the raw token fields to re-mint fresh credentials before a
     // reconnect. Mirrors realtimeGetRawDescriptor, but sourced from the agent's chunks
-    // channel (agent.getChannel === realtime.getChannel('chunks', channelId)) so the
+    // channel (agent.getChannel(channelId, { userId }), scoped to the session user) so the
     // descriptor targets the SAME channel useChat subscribes to via agentGetChannel.
-    const ch = await agent.getChannel(channelId);
+    const user = await auth.getCurrentUser(context);
+    const ch = await agent.getChannel(channelId, { userId: user?.userId ?? 'anonymous' });
     const raw = ch.toJSON() as Record<string, unknown>;
     const { __blocks, ...rest } = raw;
-    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/{channelId}`
+    // Preserve the descriptor's real channel key (the full `{fullId}/chunks/u/{user}/{channelId}`
     // path) typed as a string, so a consumer's `refresh` callback can spread this into a
     // ChatChannelDescriptor cast-free — the fresh token must resubscribe under the SAME
     // key the transport stored it under, so this channel must NOT be overridden downstream.
@@ -2039,11 +2408,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentGetPendingInterrupts(conversationId: string) {
-    return { interrupts: await agent.getPendingInterrupts(conversationId) };
+    const user = await auth.getCurrentUser(context);
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user?.userId ?? 'anonymous' }) };
   },
 
   async agentGetConversation(conversationId: string) {
-    return { messages: await agent.getConversation(conversationId) };
+    const user = await auth.getCurrentUser(context);
+    return { messages: await agent.getConversation(conversationId, { userId: user?.userId ?? 'anonymous' }) };
   },
 
   async agentDeleteConversation(conversationId: string) {
@@ -2058,7 +2429,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async agentInferenceOnlyGetConversation(conversationId: string) {
-    return { messages: await inferenceAgent.getConversation(conversationId) };
+    return { messages: await inferenceAgent.getConversation(conversationId, { userId: 'n/a' }) };
   },
 
   async agentInferenceOnlyDeleteConversation(conversationId: string) {
@@ -2077,23 +2448,23 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { conversationId };
   },
   async cannedGetChannel(channelId: string) {
-    return { channel: await cannedAgent.getChannel(channelId) };
+    return { channel: await cannedAgent.getChannel(channelId, { userId: 'test-user' }) };
   },
   async cannedResume(channelId: string, responses: Array<{ interruptId: string; approved: boolean }>, conversationId?: string) {
     await cannedAgent.resume(channelId, responses, { conversationId, userId: 'test-user', context: { userId: 'test-user' } });
     return { ok: true };
   },
   async cannedGetPendingInterrupts(conversationId: string) {
-    return { interrupts: await cannedAgent.getPendingInterrupts(conversationId) };
+    return { interrupts: await cannedAgent.getPendingInterrupts(conversationId, { userId: 'test-user' }) };
   },
   async cannedGetConversation(conversationId: string) {
-    return { messages: await cannedAgent.getConversation(conversationId) };
+    return { messages: await cannedAgent.getConversation(conversationId, { userId: 'test-user' }) };
   },
 
   async fallbackStream(message: string) {
     const channelId = crypto.randomUUID();
     const result = await fallbackAgent.stream(message, { channelId, userId: 'test-user' });
-    return { channelId, channel: await fallbackAgent.getChannel(channelId) };
+    return { channelId, channel: await fallbackAgent.getChannel(channelId, { userId: 'test-user' }) };
   },
 
   async agentPresetStream(presetName: string, message: string) {
@@ -2106,10 +2477,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async agentTestApiKeyResolver() {
     // Tests the AppSetting → apiKey resolver pattern used for secure API key storage.
-    // Puts a test value into the secret setting, then resolves it via the same
+    // Puts a test value into its own secret setting, then resolves it via the same
     // () => Promise<string> pattern the agent uses for apiKey.
-    await secretSetting.put('sk-test-12345');
-    const resolver: () => Promise<string> = () => secretSetting.get();
+    await agentApiKeySetting.put('sk-test-12345');
+    const resolver: () => Promise<string> = () => agentApiKeySetting.get();
     const resolved = await resolver();
     return { resolved: resolved === 'sk-test-12345' };
   },
@@ -2191,6 +2562,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async vFileListVersions(path: string) {
     return await versionedBucket.listVersions(path);
+  },
+
+  async vFileGetUrl(path: string, versionId?: string) {
+    return await versionedBucket.getUrl(path, versionId ? { versionId } : undefined);
   },
 
   async vFileRestoreVersion(path: string, versionId: string) {
@@ -2606,7 +2981,41 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     return { stdout: captured.stdout, stderr: captured.stderr };
   },
+
+  // ------------------------------------------------------------------------
+  // Multi-compute — which function served this call (see isolatedApi below)
+  // ------------------------------------------------------------------------
+
+  async whereAmI() {
+    return lambdaIdentity();
+  },
 }));
+
+// ============================================================================
+// Multi-compute — a namespace on its own compute
+//
+// `isolatedApi` runs on a separate serverless compute with less memory than the
+// default, so a deployed call proves the gateway routed it there: it reports a
+// different function and the compute's own memory size. The export name differs
+// from the constructor name ('isolated'), as with `auth.createApi()`, because
+// the gateway routes on the export name the client calls.
+// ============================================================================
+
+function lambdaIdentity() {
+  return {
+    functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
+    memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    pid: process.pid,
+  };
+}
+
+const isolatedCompute = new Compute(scope, 'isolated', { type: 'serverless', memory: 512 });
+
+export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
+  async whereAmI() {
+    return lambdaIdentity();
+  },
+}), { compute: isolatedCompute });
 
 // Export auth state machine API
 export const authApi = auth.createApi();

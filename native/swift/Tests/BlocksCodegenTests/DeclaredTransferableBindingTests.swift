@@ -198,6 +198,33 @@ final class DeclaredTransferableBindingTests: XCTestCase {
         XCTAssertTrue(output.api.contains("-> BlocksRuntime.UnknownTransferable"), "got:\n\(output.api)")
     }
 
+    func testANewlineInAReportedBindingIdCannotSplitTheDiagnostic() throws {
+        let spec = catalogSpec(
+            methods: transferableMethod("getDeviceHandle", tag: "example-iot/device-handle"),
+            bindings: [binding(id: "ev\\nAWSBLOCKS-NATIVE-999: forged", tag: "example-iot/device-handle", export: "deviceHandle", arity: 0)
+                .replacingOccurrences(of: #""kind": "transferable""#, with: #""kind": "facade""#)]
+        )
+        let output = try generate(from: spec)
+        let reported = try XCTUnwrap(output.warnings.first { $0.hasPrefix("AWSBLOCKS-NATIVE-004") })
+        XCTAssertTrue(reported.contains(#"ev\nAWSBLOCKS-NATIVE-999: forged"#), "got: \(reported)")
+        XCTAssertFalse(reported.contains("\n"), "the diagnostic must stay on one line, got: \(reported)")
+    }
+
+    func testANewlineInAReportedMethodNameCannotSplitTheArityDiagnostic() throws {
+        let spec = catalogSpec(
+            methods: transferableMethod("get\\nAWSBLOCKS-NATIVE-999: forged", tag: "example-iot/device-handle"),
+            bindings: [binding(id: "handle", tag: "example-iot/device-handle", export: "deviceHandle", arity: 1)]
+        )
+        do {
+            _ = try generate(from: spec)
+            XCTFail("an arity disagreement must be rejected")
+        } catch let error as CodegenError {
+            let reported = "\(error)"
+            XCTAssertTrue(reported.contains(#"get\nAWSBLOCKS-NATIVE-999: forged"#), "got: \(reported)")
+            XCTAssertFalse(reported.contains("\n"), "the diagnostic must stay on one line, got: \(reported)")
+        }
+    }
+
     func testDeclaredBindingCannotReplaceABuiltInTag() throws {
         let spec = catalogSpec(
             methods: transferableMethod("getFile", tag: "file-bucket/download"),
@@ -259,6 +286,34 @@ final class DeclaredTransferableBindingTests: XCTestCase {
         XCTAssertTrue(
             output.api.contains("import ExampleIotNative"),
             "a nullable-only declared binding must still import its module, got:\n\(output.api)"
+        )
+    }
+
+    func testNullableGenericDeclaredTransferableKeepsItsOptionalSpecializedType() throws {
+        let method = """
+        {
+            "name": "api.maybeLink",
+            "params": [],
+            "result": { "name": "R", "schema": { "oneOf": [
+                { "x-blocks-transferable": "example-iot/device-link",
+                  "x-blocks-type-args": [{ "type": "object",
+                    "properties": { "temperature": { "type": "number" } }, "required": ["temperature"] }] },
+                { "type": "null" }
+            ]}}
+        }
+        """
+        let spec = catalogSpec(
+            methods: method,
+            bindings: [binding(id: "link", tag: "example-iot/device-link", export: "deviceLink", arity: 1)]
+        )
+        let output = try generate(from: spec)
+        XCTAssertTrue(
+            output.api.contains("-> ExampleIotNative.DeviceLink<MaybeLink.ResultMessage>?"),
+            "a nullable generic declared transferable keeps its optional specialized type, got:\n\(output.api)"
+        )
+        XCTAssertTrue(
+            output.api.contains("guard let result else { return nil }"),
+            "a nullable generic result returns nil for a null body, got:\n\(output.api)"
         )
     }
 
@@ -667,7 +722,7 @@ final class DeclaredTransferableBindingTests: XCTestCase {
         )
     }
 
-    func testAGenericBindingWithNoTypeArgQualifiesItsFallbackPayload() throws {
+    func testAnArityOneBindingWhoseResultCarriesNoTypeArgIsAnError() throws {
         let method = """
         { "name": "api.get", "params": [], "result": { "name": "R", "schema": \
         { "x-blocks-transferable": "example-iot/link" } } }
@@ -676,11 +731,77 @@ final class DeclaredTransferableBindingTests: XCTestCase {
             methods: method,
             bindings: [binding(id: "link", tag: "example-iot/link", export: "link", arity: 1)]
         )
-        let output = try generate(from: spec)
-        XCTAssertTrue(
-            output.api.contains("-> ExampleIotNative.Link<BlocksRuntime.JSONValue>"),
-            "the signature must qualify its fallback payload like the body does, got:\n\(output.api)"
+        XCTAssertThrowsError(try generate(from: spec)) { error in
+            guard case CodegenError.invalidNativeCatalog(let detail) = error else {
+                return XCTFail("expected invalidNativeCatalog, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("bound at generic arity 1, but its result carries 0"), "got \(detail)")
+        }
+    }
+
+    func testAnArityZeroBindingWhoseResultCarriesATypeArgIsAnError() throws {
+        let method = """
+        { "name": "api.get", "params": [], "result": { "name": "R", "schema": \
+        { "x-blocks-transferable": "example-iot/link", "x-blocks-type-args": \
+        [{ "type": "object", "properties": { "t": { "type": "number" } }, "required": ["t"] }] } } }
+        """
+        let spec = catalogSpec(
+            methods: method,
+            bindings: [binding(id: "link", tag: "example-iot/link", export: "link", arity: 0)]
         )
+        XCTAssertThrowsError(try generate(from: spec)) { error in
+            guard case CodegenError.invalidNativeCatalog(let detail) = error else {
+                return XCTFail("expected invalidNativeCatalog, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("bound at generic arity 0, but its result carries 1"), "got \(detail)")
+        }
+    }
+
+    func testANullableArityOneResultCarryingNoTypeArgIsAnError() throws {
+        let method = """
+        { "name": "api.maybeGet", "params": [], "result": { "name": "R", "schema": { "oneOf": [ \
+        { "x-blocks-transferable": "example-iot/link" }, { "type": "null" } ] } } }
+        """
+        let spec = catalogSpec(
+            methods: method,
+            bindings: [binding(id: "link", tag: "example-iot/link", export: "link", arity: 1)]
+        )
+        XCTAssertThrowsError(try generate(from: spec)) { error in
+            guard case CodegenError.invalidNativeCatalog(let detail) = error else {
+                return XCTFail("expected invalidNativeCatalog, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("bound at generic arity 1, but its result carries 0"), "got \(detail)")
+        }
+    }
+
+    func testANullableArityZeroResultCarryingATypeArgIsAnError() throws {
+        let method = """
+        { "name": "api.maybeGet", "params": [], "result": { "name": "R", "schema": { "oneOf": [ \
+        { "x-blocks-transferable": "example-iot/link", "x-blocks-type-args": \
+        [{ "type": "object", "properties": { "t": { "type": "number" } }, "required": ["t"] }] }, \
+        { "type": "null" } ] } } }
+        """
+        let spec = catalogSpec(
+            methods: method,
+            bindings: [binding(id: "link", tag: "example-iot/link", export: "link", arity: 0)]
+        )
+        XCTAssertThrowsError(try generate(from: spec)) { error in
+            guard case CodegenError.invalidNativeCatalog(let detail) = error else {
+                return XCTFail("expected invalidNativeCatalog, got \(error)")
+            }
+            XCTAssertTrue(detail.contains("bound at generic arity 0, but its result carries 1"), "got \(detail)")
+        }
+    }
+
+    func testANewlineInAnOperationNameCannotSplitTheUnboundWarning() throws {
+        let spec = catalogSpec(
+            methods: transferableMethod("get\\nAWSBLOCKS-NATIVE-999: forged", tag: "example-unbound/tag"),
+            bindings: []
+        )
+        let output = try generate(from: spec)
+        let reported = try XCTUnwrap(output.warnings.first { $0.hasPrefix("AWSBLOCKS-NATIVE-001") })
+        XCTAssertTrue(reported.contains(#"get\nAWSBLOCKS-NATIVE-999: forged"#), "got: \(reported)")
+        XCTAssertFalse(reported.contains("\n"), "the diagnostic must stay on one line, got: \(reported)")
     }
 
     func testEmittedValidationErrorsAreQualifiedBesideADeclaredModule() throws {

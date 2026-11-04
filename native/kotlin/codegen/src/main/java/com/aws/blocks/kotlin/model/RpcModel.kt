@@ -130,7 +130,10 @@ data class NativeTransferableBinding(
     val export: String,
     val genericArity: Int,
     val kotlinPackage: String?,
+    val id: String,
 )
+
+data class DeclaredBinding(val id: String, val kind: String)
 
 data class NativeCatalogs(
     val bindings: List<NativeTransferableBinding> = emptyList(),
@@ -138,6 +141,8 @@ data class NativeCatalogs(
     val unreferencedPackages: Set<String> = emptySet(),
     /** Every identity the packages catalog declares, whether or not a binding names it. */
     val declaredPackages: Set<String> = emptySet(),
+    /** Every entry the bindings catalog declared, in declaration order, whatever its kind. */
+    val declaredBindings: List<DeclaredBinding> = emptyList(),
 ) {
     companion object {
         val EMPTY = NativeCatalogs()

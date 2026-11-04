@@ -1,3 +1,7 @@
+// EncryptedSharedPreferences and MasterKey are deprecated upstream. They stay in use so that
+// values already stored by this store keep their on-disk format and remain readable.
+@file:Suppress("DEPRECATION")
+
 package com.aws.blocks.kotlin
 
 import android.content.SharedPreferences

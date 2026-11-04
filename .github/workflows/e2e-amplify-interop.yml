@@ -3,6 +3,10 @@ name: E2E Amplify Interop
 # Runs Amplify interop tests on PRs as a required, blocking check.
 # A failure here fails the PR — Blocks must stay compatible with the
 # Amplify Gen2 integration path.
+#
+# Jobs check out the PR's merge commit (actions/checkout's default), the
+# commit GitHub reads this file from, so a step added on main finds its script
+# even when the PR branch predates it.
 
 on:
   pull_request:
@@ -30,7 +34,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - id: e2e-slot
         uses: ./.github/actions/e2e-slot
@@ -44,7 +47,8 @@ jobs:
 
   e2e-amplify-interop-smoke:
     name: E2E Amplify Interop (Smoke)
-    timeout-minutes: 30
+    # 30 minutes to deploy and test, plus up to 10 for the sandbox teardown's retries.
+    timeout-minutes: 40
     needs: [detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -52,7 +56,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -139,15 +142,17 @@ jobs:
           cd /tmp/amplify-interop-test
           node $GITHUB_WORKSPACE/scripts/smoke-test-amplify-interop.mjs
 
+      # Retries a delete that fails because CloudFormation gave up on a throttled
+      # REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
       - name: Cleanup sandbox
         if: always()
-        run: |
-          cd /tmp/amplify-interop-test
-          npm run sandbox:delete -- --identifier int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT} || true
+        timeout-minutes: 12
+        run: node scripts/ci/amplify-sandbox-teardown.mjs /tmp/amplify-interop-test int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   e2e-amplify-interop:
     name: E2E Amplify Interop (Browser)
-    timeout-minutes: 30
+    # 30 minutes to deploy and test, plus up to 10 for the sandbox teardown's retries.
+    timeout-minutes: 40
     needs: [detect-changes]
     if: needs.detect-changes.outputs.source-changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -157,7 +162,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -179,8 +183,14 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Bounded: an apt mirror can stall silently (once for 57 min, until the job
+      # timeout). The wrapper retries an attempt that prints nothing for 8 min and
+      # gives up after 17 min in all, leaving this 30-min job time to deploy, test
+      # and clean up; timeout-minutes is the backstop.
+      # See scripts/ci/install-playwright.mjs.
       - name: Install Playwright
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 19
+        run: node scripts/ci/install-playwright.mjs --deadline-minutes 17 chromium
 
       - name: Deploy sandbox
         run: |
@@ -194,21 +204,27 @@ jobs:
 
       - name: Cleanup sandbox
         if: always()
-        run: |
-          cd test-apps/amplify-gen2
-          npm run sandbox:delete -- --identifier amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT} || true
+        timeout-minutes: 12
+        run: node scripts/ci/amplify-sandbox-teardown.mjs test-apps/amplify-gen2 amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. It always runs (even when the e2e jobs are skipped for
-  # unrelated PRs or forks) and only fails if a job that actually ran failed.
+  # unrelated PRs or forks) and only fails if a job that actually ran failed,
+  # or if detect-changes didn't succeed: that skips both e2e jobs, and a
+  # skipped job would read as passing here.
   e2e-amplify-interop-required:
     name: E2E Amplify Interop (Required)
     if: always()
-    needs: [e2e-amplify-interop-smoke, e2e-amplify-interop]
+    needs: [detect-changes, e2e-amplify-interop-smoke, e2e-amplify-interop]
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
+          detect='${{ needs.detect-changes.result }}'
+          if [ "$detect" != "success" ]; then
+            echo "::error::Detect Changes ended $detect, so this run can't tell whether the Amplify interop jobs should run. Re-run the failed jobs."
+            exit 1
+          fi
           smoke='${{ needs.e2e-amplify-interop-smoke.result }}'
           browser='${{ needs.e2e-amplify-interop.result }}'
           echo "smoke=$smoke browser=$browser"

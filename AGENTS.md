@@ -159,11 +159,12 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 **Checklist for a new BB:**
 - conditional exports across all entry points + `prebuild` version script
 - `types.ts` types-only
-- every named runtime export in `index.mock.ts` exists in the `cdk` and `aws-runtime` entries, and so does every public method of each exported class; under `cdk` each runtime-only method must throw via `synthGuard` (all enforced by `conditional-exports.test.ts` in `packages/blocks`; a method that must work at synth goes in its `SYNTH_SAFE_METHODS`); `browser` entries are intentionally narrower and are outside this full-export parity check
+- every named runtime export in `index.mock.ts` exists in the `cdk` and `aws-runtime` entries, and so does every public method of each exported class; under `cdk` each runtime-only method must throw via `synthGuard` (all enforced by `conditional-exports.test.ts` in `packages/blocks`; a method that must work at synth goes in its `SYNTH_SAFE_METHODS`); `browser` entries are intentionally narrower and are outside this full-export parity check, but every BB with `*Errors` constants needs one that re-exports them from `errors.js` (same values; also enforced by `conditional-exports.test.ts`)
 - ship `README.md` + `DESIGN.md` via `package.json` `"files"`
 - register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
 - add to the root `workspaces`
 - add an instance + test to `test-apps/comprehensive` (zero casts)
+- needs a step before `cdk deploy` (a guard, host-side migrations)? Declare it in the block's `package.json` as `"aws-blocks": { "predeploy": { "module": "./dist/predeploy.js", "stages": ["production"] } }` and export `predeploy(context)` from that module; core's `deploy` and `sandbox` scripts discover and run it (`context.synth()` gives the templates). Never add block-specific code to `packages/core/src/scripts`.
 - `npx changeset add`.
 
 ---
@@ -175,7 +176,8 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 1. Read `docs/design/API-DESIGN.md` for API guidelines (G1–G18)
 2. Study an existing BB (e.g., `packages/bb-kv-store/`) for the file pattern
 3. Read `docs/reference/building-block-structure.md` for conventions
-4. Follow the **"Authoring a NEW Building Block"** section above
+4. Read `docs/reference/error-model.md` for how to name, brand and throw errors
+5. Follow the **"Authoring a NEW Building Block"** section above
 
 ### Fixing a Bug
 **Always repro before you fix.** Write a failing test that demonstrates the bug — this is your red. Then make it green. Never fix a bug without a test that would have caught it.

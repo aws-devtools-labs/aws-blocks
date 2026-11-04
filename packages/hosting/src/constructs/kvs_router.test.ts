@@ -1007,6 +1007,9 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
         { source: '/old-page', destination: '/new-page', statusCode: 308 },
         { source: '/legacy/*', destination: '/modern/*', statusCode: 301 },
         { source: '/temp', destination: '/home', statusCode: 302 },
+        { source: '/go/*', destination: '/*', statusCode: 301 },
+        { source: '/any/*', destination: '*', statusCode: 301 },
+        { source: '/ext/*', destination: 'https://example.org/*', statusCode: 301 },
       ],
     }),
     buildId: 'b1',
@@ -1037,6 +1040,34 @@ void describe('request fn — G3 redirects (exact + wildcard tail splice)', () =
       !output.headers.location.value.includes('*'),
       'Location must not contain a literal asterisk',
     );
+  });
+
+  // A tail spliced onto a root destination keeps one leading slash: `//host`
+  // (or `/\host`) in Location is protocol-relative and leaves the site.
+  void it('never answers a protocol-relative Location (open redirect)', async () => {
+    for (const uri of ['/go//evil.example', '/go/\\evil.example', '/go///evil.example/x']) {
+      const { output } = await runRequestFn(reqCode, entries, req(uri));
+      assert.equal(output.statusCode, 301);
+      assert.match(output.headers.location.value, /^\/evil\.example/, uri);
+    }
+    const { output } = await runRequestFn(reqCode, entries, req('/go/docs/a'));
+    assert.equal(output.headers.location.value, '/docs/a');
+  });
+
+  // Browsers drop tab, CR and LF while parsing a URL, so `/\t/evil.example`
+  // would be followed as `//evil.example`; and a bare `*` destination must not
+  // turn the tail into an absolute URL.
+  void it('collapses whitespace too, and keeps a bare-* splice on the site; an absolute destination splices as written', async () => {
+    for (const uri of ['/go/\t/evil.example', '/go/\r\n//evil.example', '/go/ /evil.example']) {
+      const { output } = await runRequestFn(reqCode, entries, req(uri));
+      assert.match(output.headers.location.value, /^\/evil\.example/, JSON.stringify(uri));
+    }
+    const bare = await runRequestFn(reqCode, entries, req('/any/https://evil.example'));
+    assert.equal(bare.output.headers.location.value, '/https://evil.example');
+    const plain = await runRequestFn(reqCode, entries, req('/any/docs'));
+    assert.equal(plain.output.headers.location.value, 'docs');
+    const ext = await runRequestFn(reqCode, entries, req('/ext/a/b'));
+    assert.equal(ext.output.headers.location.value, 'https://example.org/a/b');
   });
 
   void it('splices a single-segment tail after the wildcard prefix', async () => {
@@ -1340,6 +1371,32 @@ void describe('response fn — G14 per-pattern headers (exact + multi + lowercas
       cookies: {},
     });
     assert.equal(out.headers['x-api'].value, 'yes');
+  });
+  // The viewer-response function sees the URI the request function rewrote
+  // (`/builds/<id>/…`); it matches the rules on the viewer's URI, which the
+  // request function recorded, as the regional doors' proxies do.
+  void it('matches the rules on the viewer URI the request function recorded, not the rewritten one', async () => {
+    const { output: rewritten } = await runRequestFn(reqCode, entries, req('/api/users'));
+    assert.equal(rewritten.headers['x-blocks-viewer-uri'].value, '/api/users');
+    assert.match(rewritten.uri, /^\/builds\/b1\//);
+    const out = await runResponseFn(respCode, entries, rewritten, { statusCode: 200, headers: {}, cookies: {} });
+    assert.equal(out.headers['x-api'].value, 'yes');
+  });
+  void it('ignores a client-sent viewer-URI header on a URI the request function did not rewrite', async () => {
+    const out = await runResponseFn(
+      respCode,
+      entries,
+      { uri: '/other', headers: { 'x-blocks-viewer-uri': { value: '/secure-headers' } } },
+      { statusCode: 200, headers: {}, cookies: {} },
+    );
+    assert.ok(!out.headers['x-frame-options']);
+    // A direct /builds/ fetch drops a client-sent one before the response function runs.
+    const { output } = await runRequestFn(
+      reqCode,
+      entries,
+      req('/builds/b1/x.html', { headers: { 'x-blocks-viewer-uri': { value: '/secure-headers' } } }),
+    );
+    assert.equal(output.headers['x-blocks-viewer-uri'], undefined);
   });
   void it('does NOT apply header rules to a non-matching path', async () => {
     const out = await runResponseFn(respCode, entries, { uri: '/other' }, {

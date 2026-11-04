@@ -15,6 +15,11 @@ import { BB_NAME } from './version.js';
 export { SecretErrors } from './errors.js';
 export type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 
+// Name parity with the runtime entries. The cdk `Secret` is a construct without
+// a typed `get`/`put`, so these can only alias it.
+export type WritableSecret<_T = string> = Secret;
+export type SecretConstructor = typeof Secret;
+
 /**
  * CDK construct for a single application secret backed by AWS Secrets Manager.
  *

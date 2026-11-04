@@ -41,6 +41,39 @@ void describe('HostingError', () => {
     });
 
     assert.strictEqual(error.cause, undefined);
+    assert.strictEqual(Object.hasOwn(error, 'cause'), false);
+  });
+
+  void it('defines cause as a non-enumerable own property', () => {
+    const cause = new Error('original error');
+    const error = new HostingError(
+      'WrappedError',
+      { message: 'Wrapper', resolution: 'Fix it' },
+      cause,
+    );
+
+    const descriptor = Object.getOwnPropertyDescriptor(error, 'cause');
+    assert.ok(descriptor);
+    assert.strictEqual(descriptor.enumerable, false);
+    assert.strictEqual(descriptor.value, cause);
+    assert.ok(!Object.keys(error).includes('cause'));
+  });
+
+  void it('does not serialize the wrapped cause', () => {
+    const cause = Object.assign(new Error('sdk failure'), {
+      $metadata: { requestId: 'SENTINEL_REQUEST_ID' },
+    });
+    const error = new HostingError(
+      'WrappedError',
+      { message: 'Wrapper', resolution: 'Fix it' },
+      cause,
+    );
+
+    const json = JSON.stringify(error);
+    assert.ok(!json.includes('SENTINEL_REQUEST_ID'), json);
+    assert.ok(!('cause' in { ...error }));
+    assert.strictEqual(error.code, 'WrappedError');
+    assert.strictEqual(error.resolution, 'Fix it');
   });
 
   void it('has name "HostingError" when code is HostingError', () => {

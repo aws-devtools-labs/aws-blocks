@@ -119,8 +119,33 @@ export interface BlocksDefaults {
 	 * has no account/region-level singleton like the API Gateway CloudWatch role, so
 	 * always-on carries no multi-stack hazard there. See `ensureConfigBucket` in
 	 * `config-registry.ts`.
+	 *
+	 * `FileBucket` also falls back to this field for its S3 server access logs
+	 * when {@link storageAccessLogging} is unset; set that field to control the
+	 * two independently.
 	 */
 	accessLogging: boolean;
+
+	/**
+	 * Whether every Blocks-provisioned `FileBucket` ships S3 server access logs to
+	 * a dedicated, locked-down log bucket (expired after {@link logRetention}). A
+	 * per-block `accessLogging` option always wins.
+	 *
+	 * Optional and **unset in both presets**: when omitted, `FileBucket` falls
+	 * back to {@link accessLogging}, so existing stacks keep their behaviour. Set
+	 * it to turn S3 access logging on (or off) stack-wide without touching API
+	 * Gateway access logging — S3 server access logging has no
+	 * account/region-level singleton, so enabling it carries none of the
+	 * multi-stack hazard described on {@link accessLogging}:
+	 *
+	 * ```ts
+	 * defaults: { ...BlocksPresets.production, storageAccessLogging: true }
+	 * ```
+	 *
+	 * Each logged bucket adds one log bucket (S3 storage for the logs; no
+	 * per-request logging charge).
+	 */
+	storageAccessLogging?: boolean;
 
 	/**
 	 * Place the app's compute and VPC-resident resources in a VPC. Pass a

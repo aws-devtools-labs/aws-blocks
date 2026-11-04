@@ -5,6 +5,7 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import {
 	getConfig,
+	getCachedConfigValue,
 	getConfigSync,
 	loadConfigToProcessEnv,
 	preloadConfig,
@@ -133,6 +134,20 @@ describe('config — S3 load success', () => {
 		await loadConfigToProcessEnv(); // the second load sees the values the first one set
 		assert.strictEqual(warn.mock.callCount(), 0);
 		delete process.env.RELOADED_KEY;
+	});
+
+	it('getCachedConfigValue reads the loaded config, not a same-named env var', async () => {
+		process.env.BLOCKS_CONFIG_BUCKET = 'test-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+		process.env.CACHED_ONLY_KEY = 'from-env';
+		_setS3Fetcher(async () => JSON.stringify({ CACHED_ONLY_KEY: 'from-s3' }));
+
+		assert.strictEqual(getCachedConfigValue('CACHED_ONLY_KEY'), undefined, 'undefined before the config is loaded');
+		await preloadConfig();
+		assert.strictEqual(getCachedConfigValue('CACHED_ONLY_KEY'), 'from-s3');
+		assert.strictEqual(getCachedConfigValue('MISSING_KEY'), undefined);
+		assert.strictEqual(getCachedConfigValue('constructor'), undefined, 'prototype keys are not config entries');
+		delete process.env.CACHED_ONLY_KEY;
 	});
 
 	it('getConfigSync returns cached value after load', async () => {

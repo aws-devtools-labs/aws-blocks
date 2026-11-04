@@ -3,6 +3,7 @@ import 'model.dart';
 
 const _packagesExtension = 'x-blocks-native-packages';
 const _transferableKind = 'transferable';
+const _catalogSchemaVersion = 1;
 final _exportGrammar = RegExp(r'^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$');
 
 /// A declared binding cannot replace one of these.
@@ -534,9 +535,13 @@ class CodegenModelBuilder {
       TransferableRef(blocksType: final kt, typeArgs: final args) =>
         TransferableType(
           blocksType: kt,
-          typeArgs: args
-              .map((a) => _resolveTypeArgWithDedup(a, hint, path))
-              .toList(),
+          // An oidc/client's type argument names its providers, which the
+          // generated client doesn't use yet.
+          typeArgs: kt == 'oidc/client'
+              ? const []
+              : args
+                    .map((a) => _resolveTypeArgWithDedup(a, hint, path))
+                    .toList(),
           binding: _bindings[kt],
         ),
       MapRef(valueType: final vt) => MapType(
@@ -894,7 +899,7 @@ class CodegenModelBuilder {
       typeArgClause = 'type arguments ${models.join(', ')}';
     }
     final safeTag = escapeForDiagnostic(transferable.blocksType);
-    return 'AWSBLOCKS-NATIVE-001: $operation returns unbound transferable '
+    return 'AWSBLOCKS-NATIVE-001: ${escapeForDiagnostic(operation)} returns unbound transferable '
         "'$safeTag' on dart; generated UnknownTransferable "
         'with $typeArgClause.';
   }
@@ -931,7 +936,7 @@ class CodegenModelBuilder {
     final messageLabel = transferable.typeArgs.isEmpty
         ? 'dynamic'
         : _messageTypeLabel(transferable.typeArgs.first);
-    return 'AWSBLOCKS-NATIVE-002: $operation returns realtime/channel with a '
+    return 'AWSBLOCKS-NATIVE-002: ${escapeForDiagnostic(operation)} returns realtime/channel with a '
         "non-hydratable message type '$messageLabel' on dart; the value is "
         'returned un-hydrated (not supported yet).';
   }
@@ -1111,7 +1116,8 @@ class CodegenModelBuilder {
 
   void _resolveBindings(RpcModel rpc) {
     final referenced = <String>{};
-    final claimed = <String, ({String package, String export})>{};
+    final claimed =
+        <String, ({String package, String export, int genericArity})>{};
     for (final binding in rpc.nativeBindings) {
       if (!rpc.nativePackages.containsKey(binding.package)) {
         throw FormatException(
@@ -1121,14 +1127,25 @@ class CodegenModelBuilder {
         );
       }
       referenced.add(binding.package);
-      if (binding.kind != _transferableKind) continue;
+      if (binding.kind != _transferableKind) {
+        _warnings.add(
+          "AWSBLOCKS-NATIVE-004: binding '${escapeForDiagnostic(binding.id)}' "
+          "declares kind '${escapeForDiagnostic(binding.kind)}', which schema "
+          '$_catalogSchemaVersion does not define; ignored on dart.',
+        );
+        continue;
+      }
       if (knownTransferableTags.contains(binding.tag)) continue;
       if (optedOutPackages.contains(binding.package)) continue;
       final package = rpc.nativePackages[binding.package];
       if (package == null) continue;
       final typeName = _exportTypeName(binding.export);
       _checkTypeNameUnclaimed(binding, typeName, claimed);
-      claimed[typeName] = (package: binding.package, export: binding.export);
+      claimed[typeName] = (
+        package: binding.package,
+        export: binding.export,
+        genericArity: binding.genericArity,
+      );
       _bindings[binding.tag] = TransferableBinding(
         typeName: typeName,
         packageName: package.name,
@@ -1146,11 +1163,12 @@ class CodegenModelBuilder {
     }
   }
 
-  /// Two tags may share one export, but two exports cannot share a type name.
+  /// Two tags may share one export at one arity, but two exports cannot share
+  /// a type name.
   void _checkTypeNameUnclaimed(
     NativeBinding binding,
     String typeName,
-    Map<String, ({String package, String export})> claimed,
+    Map<String, ({String package, String export, int genericArity})> claimed,
   ) {
     final String? occupant;
     if (dartCoreTypeNames.contains(typeName)) {
@@ -1158,10 +1176,16 @@ class CodegenModelBuilder {
     } else if (blocksRuntimeTypeNames.contains(typeName)) {
       occupant = 'package:blocks_runtime/blocks_runtime.dart';
     } else if (claimed[typeName] case final prior?
-        when prior != (package: binding.package, export: binding.export)) {
+        when prior !=
+            (
+              package: binding.package,
+              export: binding.export,
+              genericArity: binding.genericArity,
+            )) {
       occupant =
           "export '${escapeForDiagnostic(prior.export)}' in package "
-          "'${escapeForDiagnostic(prior.package)}'";
+          "'${escapeForDiagnostic(prior.package)}' at generic arity "
+          '${prior.genericArity}';
     } else {
       occupant = null;
     }
@@ -1178,8 +1202,9 @@ class CodegenModelBuilder {
   String _exportTypeName(String export) {
     if (!_exportGrammar.hasMatch(export)) {
       throw FormatException(
-        "Binding export '${escapeForDiagnostic(export)}' does not name a "
-        'public Dart type',
+        "Binding export '${escapeForDiagnostic(export)}' is not a -, _ or . "
+        'joined run of alphanumeric segments starting with a letter, so it '
+        'cannot name a public Dart type',
       );
     }
     return export.split(RegExp(r'[-_.]+')).map(_capitalize).join();
@@ -1190,7 +1215,7 @@ class CodegenModelBuilder {
     if (binding == null) return;
     if (type.typeArgs.length != binding.genericArity) {
       throw FormatException(
-        '$operation declares ${type.typeArgs.length} x-blocks-type-args for '
+        '${escapeForDiagnostic(operation)} declares ${type.typeArgs.length} x-blocks-type-args for '
         "tag '${escapeForDiagnostic(type.blocksType)}', but its binding "
         'declares generic arity ${binding.genericArity}',
       );

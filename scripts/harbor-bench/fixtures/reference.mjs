@@ -6,13 +6,14 @@ import fs from 'node:fs';
 let items=[];
 try { items=JSON.parse(fs.readFileSync('/tmp/fixture-data.json')); } catch {}
 const html=`<!doctype html><label>Todo title<input id="title"></label><button id="add">Add todo</button><main></main><script>
-let items=[];
+let items=[];const labelList=${process.env.BUG==='label-list'};
 async function rpc(op,data={}){const r=await fetch('/aws-blocks/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op,...data})});items=await r.json();render();}
 function render(){const m=document.querySelector('main');m.replaceChildren();for(const x of items){const row=document.createElement('div');row.dataset.testid='todo-item';const text=document.createElement('span');text.textContent=x.title;row.append(text);
 const input=(label,value,type='text')=>{const l=document.createElement('label');l.textContent=label;const i=document.createElement('input');i.type=type;i.value=value||'';l.append(i);row.append(l);return i;};
 const completed=input('Completed','','checkbox');completed.checked=x.completed;completed.onclick=(event)=>{event.preventDefault();setTimeout(()=>rpc('update',{id:x.id,patch:{completed:!x.completed}}),100);};
 const title=input('Edit title',x.title),due=input('Due date',x.due,'date'),labels=input('Labels',(x.labels||[]).join(', '));
-for(const value of x.labels||[]){const s=document.createElement('span');s.dataset.testid='todo-label';s.textContent=value;row.append(s);}
+const list=labelList&&x.labels?.length?document.createElement('ul'):row;if(list!==row){list.setAttribute('aria-label','Labels');row.append(list);}
+for(const value of x.labels||[]){const s=document.createElement(list===row?'span':'li');s.dataset.testid='todo-label';s.textContent=value;list.append(s);}
 const save=document.createElement('button');save.textContent='Save todo';save.onclick=()=>rpc('update',{id:x.id,patch:{title:title.value,due:due.value,labels:labels.value.split(',').map(s=>s.trim()).filter(Boolean)}});row.append(save);
 const del=document.createElement('button');del.textContent='Delete todo';del.onclick=()=>rpc('delete',{id:x.id});row.append(del);m.append(row);}}
 document.querySelector('#add').onclick=async()=>{await rpc('add',{title:document.querySelector('#title').value});document.querySelector('#title').value='';};rpc('list');

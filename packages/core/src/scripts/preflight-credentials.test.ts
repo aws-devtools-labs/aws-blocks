@@ -23,6 +23,8 @@ describe('assertAwsCredentials', () => {
 	let env: NodeJS.ProcessEnv;
 
 	beforeEach(async () => {
+		// The check prints the deployment target on success; keep the runner's stdout protocol clean.
+		mock.method(console, 'log', () => {});
 		directory = await mkdtemp(join(tmpdir(), 'blocks-preflight-'));
 		env = {
 			HOME: directory,
@@ -34,6 +36,7 @@ describe('assertAwsCredentials', () => {
 	});
 
 	afterEach(async () => {
+		mock.restoreAll();
 		await rm(directory, { recursive: true, force: true });
 	});
 
@@ -46,6 +49,7 @@ describe('assertAwsCredentials', () => {
 			projectRoot: directory,
 			probe: async (region) => {
 				regions.push(region);
+				return undefined;
 			},
 		});
 		return regions;
@@ -168,6 +172,7 @@ describe('assertAwsCredentials', () => {
 		await assert.doesNotReject(() =>
 			check(async (region) => {
 				calledRegion = region;
+				return undefined;
 			}, 'sandbox'),
 		);
 		assert.strictEqual(calledRegion, 'us-east-1');
@@ -276,7 +281,7 @@ describe('assertAwsCredentials', () => {
 			command: 'deploy',
 			env: { ...env, AWS_REGION: 'us-east-1' },
 			projectRoot: directory,
-			probe: async () => {},
+			probe: async () => undefined,
 			readAwsCliVersion: async () => {
 				cliChecks++;
 				throw Object.assign(new Error('spawn aws ENOENT'), { code: 'ENOENT' });
@@ -364,9 +369,19 @@ describe('assertAwsCredentials', () => {
 		assert.doesNotMatch(message, /ASIAEXAMPLE|profile default|aws login/);
 	});
 
-	it('uses the selected profile, not environment keys, as the SDK does', async () => {
+	it('uses environment keys over AWS_PROFILE, as CDK deploys with them', async () => {
 		await writeFile(join(directory, 'config'), '[profile dev]\nsso_session = corp\n');
 		env.AWS_PROFILE = 'dev';
+		env.AWS_ACCESS_KEY_ID = 'AKIAEXAMPLE';
+		env.AWS_SECRET_ACCESS_KEY = 'secret';
+		const { message } = await failure('InvalidClientTokenId');
+		assert.match(message, /AWS did not accept the access key in AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY/);
+		assert.doesNotMatch(message, /AKIAEXAMPLE|aws sso login/);
+	});
+
+	it('uses the cdk.json profile over environment keys, as CDK does', async () => {
+		await writeFile(join(directory, 'cdk.json'), '{"profile":"dev"}');
+		await writeFile(join(directory, 'config'), '[profile dev]\nsso_session = corp\n');
 		env.AWS_ACCESS_KEY_ID = 'AKIAEXAMPLE';
 		env.AWS_SECRET_ACCESS_KEY = 'secret';
 		const { message } = await failure('CredentialsProviderError');
@@ -516,5 +531,42 @@ describe('assertAwsCredentials', () => {
 		} finally {
 			warn.mock.restore();
 		}
+	});
+
+	it('names the command the user ran in every message, when the caller passes it', async () => {
+		const invocation = 'cdk-blocks deploy --profile prod';
+		const warn = mock.method(console, 'warn', () => {});
+		try {
+			await assertAwsCredentials({ command: 'deploy', invocation, env, projectRoot: directory, probe: async () => undefined });
+			for (const error of [namedError('ThrottlingException'), namedError('TimeoutError')]) {
+				await assertAwsCredentials({
+					command: 'deploy',
+					invocation,
+					env: { ...env, AWS_REGION: 'us-east-1' },
+					projectRoot: directory,
+					probe: async () => Promise.reject(error),
+				});
+			}
+			const messages = warn.mock.calls.map((call) => String(call.arguments[0]));
+			assert.match(messages[0], /Skipping the AWS credential pre-check for `cdk-blocks deploy --profile prod`: no Region/);
+			assert.match(messages[1], /Could not verify AWS credentials for `cdk-blocks deploy --profile prod`/);
+			assert.match(messages[2], /Could not reach AWS to verify credentials for `cdk-blocks deploy --profile prod`/);
+		} finally {
+			warn.mock.restore();
+		}
+		const rejected = await assertAwsCredentials({
+			command: 'deploy',
+			invocation,
+			env: { ...env, AWS_REGION: 'us-east-1' },
+			projectRoot: directory,
+			probe: async () => Promise.reject(namedError('ExpiredToken')),
+			readAwsCliVersion: async () => CLI_WITH_LOGIN,
+		}).then(
+			() => assert.fail('expected a credential failure'),
+			(error: Error) => error.message,
+		);
+		assert.match(rejected, /^AWS credentials could not be verified for `cdk-blocks deploy --profile prod`/);
+		assert.match(rejected, /Then re-run `cdk-blocks deploy --profile prod`\.$/);
+		assert.doesNotMatch(rejected, /npm run/);
 	});
 });

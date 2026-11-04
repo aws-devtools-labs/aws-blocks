@@ -57,6 +57,25 @@ test('ApiNamespace does not resolve the compute at construction', () => {
   assert.strictEqual(reads, 1, 'read when resolved');
 });
 
+test("ApiNamespace's own compute option wins over its scope's compute", () => {
+  const scopeCompute = { id: 'scope-compute' };
+  const ownCompute = { id: 'own-compute' };
+  const provider = { resolve: () => ownCompute };
+  const handler = new ApiNamespace({ id: 'app', compute: scopeCompute } as never, 'own', () => ({ ping: () => 'ok' }), {
+    compute: provider as never,
+  });
+  assert.strictEqual((handler as any)[API_NAMESPACE_COMPUTE](), ownCompute);
+});
+
+test('ApiNamespace resolves its compute option lazily, like the scope fallback', () => {
+  let resolved = 0;
+  const provider = { resolve: () => { resolved += 1; return { id: 'c' }; } };
+  const handler = new ApiNamespace({ id: 'app' } as never, 'lazy', () => ({ ping: () => 'ok' }), { compute: provider as never });
+  assert.strictEqual(resolved, 0, 'not resolved at construction');
+  (handler as any)[API_NAMESPACE_COMPUTE]();
+  assert.strictEqual(resolved, 1, 'resolved when the gateway asks');
+});
+
 test('ApiNamespace is still tagged and returned unchanged in the mock/runtime Scope', () => {
   const handler = new ApiNamespace(new Scope('no-compute'), 'plainapi', () => ({ x: () => 1 }));
   assert.strictEqual((handler as any)[API_NAMESPACE_MARKER], 'plainapi');

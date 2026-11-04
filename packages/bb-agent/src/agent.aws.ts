@@ -1,8 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { createHash } from 'node:crypto';
-import { getConfig, installClientUserAgent } from '@aws-blocks/core';
+import { createHash, randomUUID } from 'node:crypto';
+import { getConfig, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { FileBucket } from '@aws-blocks/bb-file-bucket';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -19,10 +19,23 @@ import { BedrockModels } from './models.js';
  * AgentCore requires a `runtimeSessionId` of at least 33 characters. Conversation/channel ids
  * are UUIDs (36 chars) in the normal path and pass through unchanged; anything shorter is hashed
  * to a stable 64-char hex id — stable per input, so a conversation keeps routing to one warm
- * microVM across turns/resumes.
+ * microVM across turns/resumes. Only conversation ids are passed to it: a turn without a
+ * conversation gets a fresh session instead (see {@link runtimeSessionIdFor}).
  */
 function toRuntimeSessionId(base: string): string {
 	return base.length >= 33 ? base : createHash('sha256').update(base).digest('hex');
+}
+
+/**
+ * The AgentCore session for a turn. A conversation routes to its own session (its id). A turn
+ * without a conversation has no state to keep, so it gets a fresh session of its own
+ * (`turn-<uuid>`, 41 characters, never a UUID) instead of the bare channelId: the channelId is
+ * caller-chosen, so it could otherwise equal another user's conversation id and land the turn
+ * in that user's session.
+ */
+function runtimeSessionIdFor(payload: { conversationId?: string }): string {
+	if (payload.conversationId) return toRuntimeSessionId(payload.conversationId);
+	return `turn-${randomUUID()}`;
 }
 
 /**
@@ -30,6 +43,11 @@ function toRuntimeSessionId(base: string): string {
  * execution region (`AWS_REGION`) so non-us-east-1 deploys use the correct regional
  * endpoint (#120). `S3StorageImpl` is injectable so tests can assert the resulting
  * config without depending on S3Storage/AWS SDK internals; production uses the real one.
+ *
+ * The bucket is addressed by the name the FileBucket registered (`getSdkIdentifiers`),
+ * which is the physical name CDK provisions — not by its `fullId`. The two differ when
+ * the `fullId` is over S3's 63 characters (e.g. a long production stack name): FileBucket
+ * then shortens it (`deriveBucketName`), and the raw `fullId` names no bucket.
  *
  * The read paths are delegated to S3Storage UNCHANGED: a genuinely missing object
  * (the first-turn case) already comes back as `NoSuchKey`/`NoSuchBucket` → `null`
@@ -56,7 +74,7 @@ export function createDeployedSnapshotStorage(
 	_log: ChildLogger,
 	S3StorageImpl: new (config: S3StorageConfig) => SnapshotStorage = S3Storage,
 ): SnapshotStorage {
-	return new S3StorageImpl({ bucket: bucket.fullId, region: process.env.AWS_REGION });
+	return new S3StorageImpl({ bucket: getSdkIdentifiers(bucket).bucketName, region: process.env.AWS_REGION });
 }
 
 export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
@@ -74,7 +92,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	 * and responds immediately, so this `InvokeAgentRuntime` call does NOT hold the connection for
 	 * the turn's duration — the loop keeps running server-side for up to the 8h session lifetime.
 	 * `runtimeSessionId` is keyed by conversationId so a conversation's turns/resumes reuse one
-	 * warm microVM.
+	 * warm microVM; a turn without a conversation gets its own session (see runtimeSessionIdFor).
 	 *
 	 * @internal Internal compute seam; not customer API.
 	 */
@@ -104,7 +122,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 		await this._agentCore.send(
 			new InvokeAgentRuntimeCommand({
 				agentRuntimeArn: runtimeArn,
-				runtimeSessionId: toRuntimeSessionId(payload.conversationId ?? payload.channelId),
+				runtimeSessionId: runtimeSessionIdFor(payload),
 				contentType: 'application/json',
 				accept: 'application/json',
 				payload: new TextEncoder().encode(JSON.stringify(body)),

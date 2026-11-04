@@ -21,12 +21,17 @@
  * blob records the chunk counts so the function reads a known, small number of
  * keys per request.
  */
-import type { DeployManifest, Redirect } from '../manifest/types.js';
-import {
-  prependBasePath,
-  normalizeBasePath,
-} from '../adapters/shared/basepath.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
+import { buildHostingPlan } from '../plan/hosting-plan.js';
+import { toTerseRows } from '../plan/route-table.js';
+import type { HostingPlan } from '../plan/types.js';
+
+// The pure routing helpers moved to the service-agnostic plan layer (so every
+// front-door adapter shares one implementation). Re-export them here for
+// back-compat with existing imports/tests that reference them from this module
+// (e.g. cdn_construct's edge-behavior ordering, the coalesceRoutes unit tests).
+export { coalesceRoutes, routeSpecificity } from '../plan/route-table.js';
 
 /** Stable origin ids the router selects between (set on the distribution). */
 export const ORIGIN_ID = {
@@ -137,222 +142,46 @@ const chunkRows = (rows: unknown[]): string[] => {
   return chunks;
 };
 
-/** Normalize a route pattern to the CloudFront form the function matches. */
-const normalizePattern = (pattern: string, basePath?: string): string => {
-  const p = pattern.startsWith('/') ? pattern : `/${pattern}`;
-  return prependBasePath(basePath, p);
-};
-
 /**
- * The viewer-request CloudFront Function scans the route table SEQUENTIALLY per
- * request — for an unmatched/catch-all path (the worst case: the site root) it
- * reads + `JSON.parse`s every `r{n}` chunk before falling through to the
- * default origin. CloudFront Functions cap per-invocation compute, so a table
- * with many rows (→ many chunks → many parses) trips `RangeError: Instruction
- * limit exceeded` and the distribution 503s on EVERY route (the function runs
- * before any origin). SSG sites are the trigger: a framework emits one static
- * route per prerendered page (`/blog/post-1`, `/blog/post-2`, … hundreds), and
- * Nuxt additionally emits a `/<page>/*` subtree route per page — so 100 pages
- * became 200 rows / 7 chunks and tipped the limit.
- *
- * Coalesce sibling routes that share a parent directory AND a single kind into
- * one `parent/*` wildcard, collapsing those hundreds of rows to one. The scan
- * mirrors CloudFront's first-match-on-specificity ordering, so this preserves
- * matching for every EXISTING path: a request that hit `/blog/post-5` (exact)
- * now hits `/blog/*` with the same kind; a deeper, differently-kinded route
- * (e.g. `/blog/post-5/admin` = compute) keeps its own row and still sorts
- * BEFORE the broader wildcard (more literal segments), so it matches first.
- *
- * Semantic note (intentional, documented): for a compute-backed deploy where
- * the unmatched default is the SSR origin, a request to a NON-existent child of
- * a coalesced STATIC group (e.g. `/blog/never-generated`) routes to S3 (→
- * 404/403 from the bucket) instead of the SSR Lambda. This is SAFE for FROZEN
- * prerendered content (Nuxt prerender / Astro `prerender = true`): those pages
- * are baked at build time with no on-demand render, so a non-built child
- * genuinely does not exist and S3-404 is the correct outcome.
- *
- * It would be UNSAFE only for true on-demand fallback — Next ISR
- * `fallback: 'blocking'`/`true`, where a non-prerendered child is supposed to
- * render at the SSR Lambda, not 404. That combination is NOT reachable here,
- * verified live (2026-06-30): OpenNext does not emit one static route per
- * prerendered page — it routes `/products/*`, `/blog/*` etc. through the
- * catch-all to the SSR origin (the live KVS route table carries zero per-page
- * static rows for them). So an ISR child like `/app/products/99999` hits
- * compute and renders on demand (HTTP 200), never the coalesced wildcard. The
- * per-page static-row fan-out that coalescing bounds is a Nuxt/Astro trait, and
- * those frameworks have no on-demand fallback — see the regression test
- * `coalesceRoutes — preserves a dynamic sibling under a coalesced static parent`.
- *
- * (This is why coalescing is NOT gated on `!hasServer`: the confirmed live
- * instruction-limit 503 was a Nuxt deploy, which IS `hasServer` — gating it off
- * for compute deploys would re-open that 503 for the exact case it fixed.)
- *
- * Coalescing a COMPUTE group, or any group in a static-only deploy, is a pure
- * no-op (the wildcard kind equals the default), so this only affects static
- * routes in a compute deploy — exactly the SSG fan-out we need to bound.
- */
-export const coalesceRoutes = (
-  rows: [string, RouteKind][],
-  options: { isrActive?: boolean } = {},
-): [string, RouteKind][] => {
-  // When ISR/SWR is active on a compute deploy (`manifest.cache` set), a
-  // non-prebuilt child of a coalesced STATIC group must render on-demand at the
-  // SSR Lambda — not 404 from S3 (issue #7). Nitro/Nuxt DOES support on-demand
-  // ISR (`routeRules` `isr`/`swr` → `manifest.cache = nitro-s3`), so the
-  // "frozen prerender only" assumption does NOT hold for that subtree.
-  //
-  // A naive fix (don't coalesce static groups under ISR) keeps them as N
-  // individual rows — which EXPLODES the route table for a large SSG+ISR site
-  // (hundreds of rows → many KVS chunks → the per-request edge scan, DOUBLED
-  // for a trailing-slash URI, trips the CloudFront Function compute limit →
-  // FunctionExecutionError 503). So instead we STILL coalesce the fan-out into
-  // ONE `parent/*` row (table stays bounded), but under ISR we flip that
-  // wildcard's kind from static→COMPUTE. The SSR Lambda then serves the whole
-  // subtree: prebuilt children from its ISR cache, non-prebuilt children
-  // on-demand — never a hard S3 404. (Deploy-wide `isrActive` is the only
-  // signal available here; sending genuinely-frozen prerendered pages through
-  // the Lambda's cache is a minor efficiency tradeoff, not a correctness one.)
-  const isrActive = options.isrActive === true;
-  // Group by parent directory: strip a trailing '/*', then take everything up
-  // to the last '/'. Both `/blog/p` and `/blog/p/*` → parent `/blog`.
-  const groups = new Map<string, [string, RouteKind][]>();
-  const order: string[] = [];
-  for (const r of rows) {
-    let p = r[0];
-    if (p.endsWith('/*')) p = p.slice(0, -2);
-    const slash = p.lastIndexOf('/');
-    const parent = slash > 0 ? p.substring(0, slash) : '';
-    if (!groups.has(parent)) {
-      groups.set(parent, []);
-      order.push(parent);
-    }
-    groups.get(parent)!.push(r);
-  }
-  const out: [string, RouteKind][] = [];
-  for (const parent of order) {
-    const members = groups.get(parent)!;
-    const uniformKind = members.every((m) => m[1] === members[0][1]);
-    // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
-    // A non-empty parent guarantees the wildcard is scoped to a subtree and
-    // never becomes a bare `/*` that would swallow the whole site.
-    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0;
-    if (coalesceThis) {
-      // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
-      // note above) so non-prebuilt children render on-demand instead of
-      // 404ing from S3. Compute/image groups keep their kind.
-      const kind: RouteKind =
-        isrActive && members[0][1] === 's' ? 'c' : members[0][1];
-      out.push([`${parent}/*`, kind]);
-    } else {
-      out.push(...members);
-    }
-  }
-  // Dedupe identical [pattern, kind] rows. Frameworks that emit BOTH a bare
-  // `/<page>` and a `/<page>/*` subtree per page (Nuxt) coalesce each form to
-  // the SAME `<parent>/*` wildcard, producing duplicate rows; collapse them so
-  // the table stays minimal.
-  const seen = new Set<string>();
-  return out.filter(([p, k]) => {
-    const key = `${p} ${k}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-};
-
-/**
- * Build the KVS key/value map for a deploy. Keys:
+ * Render the KVS key/value map for a deploy from a service-agnostic
+ * {@link HostingPlan}. This is the CloudFront RENDERER: it takes the neutral
+ * plan (origins + route table + policies + release) the core produced and
+ * projects it onto CloudFront's KeyValueStore encoding. Keys:
  *   - `meta`  : metadata blob (buildId, basePath, spaFallback, image prefix,
  *               origin ids, chunk counts).
  *   - `r{n}`  : route-table chunks — JSON `[[pattern, kind], ...]`.
  *   - `d{n}`  : redirect chunks    — JSON `[[source, dest, status], ...]`.
  *   - `h{n}`  : header chunks      — JSON `[[pattern, {name:value}], ...]`.
+ *
+ * @param opts.maxChunksPerTable Override the per-table chunk budget (a
+ *   CloudFront-specific concern sourced from the `quotas.maxRouteChunks` prop),
+ *   NOT part of the neutral plan.
+ * @param opts.cacheKeyCookies Cache-key cookie names (`cdn.cacheKeyCookies`) the
+ *   router strips on static + image routes so shared assets keep a shared cache
+ *   key; compute routes keep them. CloudFront-specific, NOT part of the plan.
+ * @param opts.cacheKeyHeaders Cache-key header names (`cdn.cacheKeyHeaders`),
+ *   stripped the same way (lowercased + de-duped). CloudFront-specific.
  */
-export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> => {
-  const { manifest, buildId, hasServer, hasImage } = input;
-  const edgeTargets = input.edgeTargets ?? new Set<string>();
-  const basePath = manifest.basePath
-    ? normalizeBasePath(manifest.basePath)
-    : undefined;
-  const imagePrefix = hasImage ? manifest.imageOptimization?.baseURL : undefined;
+export const renderKvsEntries = (
+  plan: HostingPlan,
+  opts: { maxChunksPerTable?: number; cacheKeyCookies?: string[]; cacheKeyHeaders?: string[] } = {},
+): Record<string, string> => {
+  const { policies, routes, release } = plan;
 
-  // ---- route table ----
-  // Each static/compute/image route becomes one [pattern, kind] row. Image-opt
-  // and server routes are recorded so the function can pick their origin; every
-  // other path falls through to: server (if hasServer) else S3.
-  //
-  // IMPORTANT — patterns are kept basePath-RELATIVE through coalescing, then
-  // basePath is prepended ONCE afterwards. Coalescing groups routes by parent
-  // directory and a non-root parent (`parent.length > 0`) of one kind collapses
-  // to `parent/*`. If basePath were prepended FIRST, root-level routes like
-  // `/_next/*`, `/blocks-logo.png`, `/BUILD_ID` (parent `''`, never coalesced)
-  // would instead become `/app/_next/*`, `/app/blocks-logo.png` (parent `/app`)
-  // and collapse into a single `/app/*` STATIC wildcard — which shadows EVERY
-  // dynamic SSR route under basePath (`/app/api/echo` → S3 → 404). Coalescing
-  // relative keeps the root parent at `''` so the behavior is identical to the
-  // no-basePath case, just shifted under the prefix.
-  const rows: [string, RouteKind][] = [];
-  for (const route of manifest.routes) {
-    if (route.pattern === '/*' || route.pattern === '*') continue; // catch-all is implicit
-    // Lambda@Edge route functions get a dedicated CloudFront behavior that
-    // takes precedence over the default behavior — exclude them from the KVS
-    // table so the router never (mis)classifies them as default-server compute.
-    if (edgeTargets.has(route.target)) continue;
-    // basePath-RELATIVE pattern (no prefix yet — see note above).
-    const rel = normalizePattern(route.pattern);
-    const isStatic = route.target === 'static' || route.target === 's3';
-    // A route is image-opt when it targets the image origin (Next emits
-    // target 'image-optimization' for `/_next/image*`) OR when it matches the
-    // configured IPX prefix (Nuxt's `/_ipx/*`). Gate only on `hasImage` (the
-    // origin must exist) — NOT on `imagePrefix`, which Next never sets.
-    // Compare against the RELATIVE image prefix (imagePrefix is itself stored
-    // basePath-relative), matching the relative `rel` pattern above.
-    const isImage =
-      hasImage &&
-      (route.target === 'image-optimization' ||
-        (imagePrefix !== undefined &&
-          rel === normalizePattern(`${imagePrefix}/*`)));
-    const kind: RouteKind = isImage ? 'i' : isStatic ? 's' : 'c';
-    rows.push([rel, kind]);
-  }
-  // Coalesce SSG fan-out (many sibling pages under one parent, one kind) into a
-  // single `parent/*` wildcard so the per-request edge scan stays bounded and
-  // never trips the CloudFront Function instruction limit. See coalesceRoutes.
-  // Runs on RELATIVE patterns (see note above); basePath is prepended next.
-  //
-  // When ISR/SWR is active (manifest.cache set) on a compute deploy, static
-  // groups are NOT coalesced so a non-prebuilt on-demand child falls through to
-  // the SSR Lambda instead of hitting the coalesced S3 wildcard → 404 (#7).
-  const isrActive = hasServer && manifest.cache !== undefined;
-  const coalescedRel = coalesceRoutes(rows, { isrActive });
+  // Render the neutral route table into the terse `[pattern, code]` rows the KVS
+  // chunker packs (`static→'s'`, `server→'c'`, `image→'i'`). Classification,
+  // coalescing, basePath-prefixing, and ordering already happened in the plan
+  // layer (shared by every front-door adapter); redirects/headers arrive
+  // basePath-resolved.
+  const coalesced: [string, RouteKind][] = toTerseRows(routes.entries);
 
-  // Prepend basePath ONCE, after coalescing. prependBasePath is idempotent, so
-  // a pattern that somehow already carries the prefix is left intact.
-  const coalesced: [string, RouteKind][] = coalescedRel.map(([p, k]) => [
-    prependBasePath(basePath, p),
-    k,
-  ]);
-
-  // Sort by descending specificity (literal segments, then length) so the
-  // function's first-match scan mirrors CloudFront's old behavior ordering. A
-  // coalesced `/blog/*` (1 literal seg) sorts AFTER any retained deeper route
-  // (e.g. `/blog/x/admin`, 3 segs), preserving first-match correctness.
-  coalesced.sort((a, b) => specificity(b[0]) - specificity(a[0]));
-
-  // ---- redirects (basePath-prefixed, unbounded — no 100 cap) ----
-  const redirects = manifest.redirects ?? [];
-  const redirectRows: [string, string, number][] = redirects.map(
-    (r: Redirect) => [
-      prependBasePath(basePath, r.source),
-      prependBasePath(basePath, r.destination),
-      r.statusCode,
-    ],
+  const redirectRows: [string, string, number][] = routes.redirects.map(
+    (r): [string, string, number] => [r.source, r.destination, r.statusCode],
   );
 
-  // ---- per-pattern response headers ----
-  const headerRows: [string, Record<string, string>][] = (
-    manifest.headers ?? []
-  ).map((h) => [normalizePattern(h.source, basePath), h.headers]);
+  const headerRows: [string, Record<string, string>][] = routes.headers.map(
+    (h): [string, Record<string, string>] => [h.pattern, h.headers],
+  );
 
   const routeChunks = chunkRows(coalesced);
   const redirectChunks = chunkRows(redirectRows);
@@ -364,29 +193,32 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // static + image branches so shared assets keep a shared key (compute routes
   // keep them). Omitted from meta when nothing is configured, so existing apps'
   // meta blob is unchanged.
-  const ck = (input.cacheKeyCookies ?? []).filter((c) => c.length > 0);
+  const ck = (opts.cacheKeyCookies ?? []).filter((c) => c.length > 0);
   // Header names are case-INsensitive per HTTP; lowercase + de-dupe so the
   // strip loop matches CloudFront's own casing and never double-lists a name.
   const hh = [
-    ...new Set((input.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
+    ...new Set((opts.cacheKeyHeaders ?? []).map((h) => h.toLowerCase())),
   ].filter((h) => h.length > 0);
 
   const meta = {
-    b: buildId,
-    bp: basePath ?? '',
-    spa: manifest.staticAssets.spaFallback ? 1 : 0,
-    img: imagePrefix ?? '',
-    srv: hasServer ? 1 : 0,
+    b: release.buildId,
+    bp: policies.basePath ?? '',
+    spa: policies.spaFallback ? 1 : 0,
+    img: policies.imagePrefix ?? '',
+    srv: policies.hasServer ? 1 : 0,
     // assetPrefix (Next.js): the router strips this prefix from a static URI
     // before the build-id rewrite so prefixed asset URLs resolve to the same
     // S3 objects as unprefixed ones. Empty string = no prefix.
-    aP: manifest.assetPrefix ?? '',
+    aP: policies.assetPrefix ?? '',
     // www↔apex canonical redirect mode ('' = none).
-    ww: input.wwwRedirect && input.wwwRedirect !== 'none' ? input.wwwRedirect : '',
+    ww:
+      policies.wwwRedirect && policies.wwwRedirect !== 'none'
+        ? policies.wwwRedirect
+        : '',
     // skew protection on? When 0 the router ignores any `__dpl` build-pin
     // cookie (a stale cookie from a previously-enabled deploy must not pin a
     // visitor to a now-deleted build).
-    sk: input.skewEnabled ? 1 : 0,
+    sk: policies.skewEnabled ? 1 : 0,
     oS3: ORIGIN_ID.s3,
     oSrv: ORIGIN_ID.server,
     oImg: ORIGIN_ID.image,
@@ -419,9 +251,9 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
   // a positive integer — a fractional value (e.g. 0.5) is a caller mistake and
   // falls back to the default rather than silently capping between chunk counts.
   const maxChunksPerTable =
-    Number.isInteger(input.maxChunksPerTable) &&
-    (input.maxChunksPerTable ?? 0) > 0
-      ? input.maxChunksPerTable!
+    Number.isInteger(opts.maxChunksPerTable) &&
+    (opts.maxChunksPerTable ?? 0) > 0
+      ? opts.maxChunksPerTable!
       : KVS_BUDGET.maxChunksPerTable;
   if (tooManyChunks > maxChunksPerTable) {
     // Identify which table hit the cap for a targeted error message.
@@ -486,21 +318,31 @@ export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
 };
 
 /**
- * Specificity score for a route/behavior pattern. Higher = more specific =
- * should match first. Literal path segments dominate, then raw length. Used to
- * order the KVS route-table scan AND (exported) to order CloudFront edge-route
- * behaviors, which are first-match-wins with no longest-prefix preference — so
- * a literal `/api/edge/special` must sort before a wildcard `/api/edge/*`.
+ * Build the KVS key/value map directly from a manifest (+ deploy flags).
+ *
+ * Thin wrapper over the service-agnostic core: it builds a {@link HostingPlan}
+ * and renders it with {@link renderKvsEntries}. Retained as the historical entry
+ * point so existing callers/tests are unchanged; new CloudFront code builds the
+ * plan explicitly and calls `renderKvsEntries` (so the plan is the single source
+ * of routing truth every front-door adapter shares).
  */
-export const routeSpecificity = (pattern: string): number => {
-  const literalSegments = pattern
-    .split('/')
-    .filter((s) => s !== '' && s !== '*').length;
-  return literalSegments * 1000 + pattern.length;
-};
-
-/** @deprecated internal alias — use {@link routeSpecificity}. */
-const specificity = routeSpecificity;
+export const buildKvsEntries = (input: BuildKvsInput): Record<string, string> =>
+  renderKvsEntries(
+    buildHostingPlan({
+      manifest: input.manifest,
+      buildId: input.buildId,
+      hasServer: input.hasServer,
+      hasImage: input.hasImage,
+      wwwRedirect: input.wwwRedirect,
+      skewEnabled: input.skewEnabled,
+      edgeTargets: input.edgeTargets,
+    }),
+    {
+      maxChunksPerTable: input.maxChunksPerTable,
+      cacheKeyCookies: input.cacheKeyCookies,
+      cacheKeyHeaders: input.cacheKeyHeaders,
+    },
+  );
 
 /**
  * Shared CloudFront-Function helper source, concatenated VERBATIM into BOTH the
@@ -527,11 +369,19 @@ const specificity = routeSpecificity;
  * `${}` (no interpolation needed). Requires `cf` to be in scope (each generated
  * function declares `import cf from 'cloudfront';` first).
  */
-const SHARED_CF_HELPERS = `var KVS = cf.kvs();
+const CF_KVS_HELPERS = `var KVS = cf.kvs();
 async function getJson(key, dflt) {
   try { var raw = await KVS.get(key); return JSON.parse(raw); } catch (e) { return dflt; }
-}
-function matchPattern(uri, pattern) {
+}`;
+
+/**
+ * The pattern matcher and basePath strip of {@link SHARED_CF_HELPERS}, without
+ * the KVS reader — also shipped by the `cf.redirects` / `cf.headers` functions
+ * of a bring-your-own door, so both match a pattern the same way.
+ *
+ * @internal Framework-only.
+ */
+export const CF_MATCH_HELPERS = `function matchPattern(uri, pattern) {
   // Fast path: no wildcard → exact match.
   if (pattern.indexOf('*') === -1) {
     return uri === pattern ? { tail: '' } : null;
@@ -576,6 +426,95 @@ function stripBasePath(uri, bp) {
   }
   return uri;
 }`;
+
+const SHARED_CF_HELPERS = `${CF_KVS_HELPERS}
+${CF_MATCH_HELPERS}`;
+
+/**
+ * The request header the viewer-request functions record the viewer's URI in
+ * before they rewrite it to the build prefix (`/builds/<buildId>/…`). The
+ * viewer-response function sees the rewritten URI, so it matches the app's
+ * header rules on this one instead, as the regional doors' proxies match the
+ * path the viewer asked for. It is trusted only on a rewritten URI.
+ *
+ * @internal Framework-only.
+ */
+export const VIEWER_URI_HEADER = 'x-blocks-viewer-uri';
+
+/**
+ * JS 2.0 source: `var uri` = the viewer's URI in a viewer-response function
+ * (see {@link VIEWER_URI_HEADER}).
+ *
+ * @internal Framework-only.
+ */
+export const VIEWER_URI_JS = `var vu = request.uri.indexOf('/builds/') === 0 && request.headers['${VIEWER_URI_HEADER}'];
+  var uri = vu ? vu.value : request.uri;`;
+
+/**
+ * The first-match redirect over a `[[source, destination, status], …]` rows
+ * array (JS 2.0 source): returns the redirect response from the enclosing
+ * function. Shared by the edge router (per KVS chunk) and `cf.redirects`.
+ *
+ * A wildcard destination (trailing `*`) gets the captured tail spliced in.
+ * The guard is on the DESTINATION shape, not on the tail being truthy: an
+ * exact hit on a wildcard prefix (request `/old/` against source `/old/*`)
+ * yields tail `''`, and a truthiness guard would skip the splice and leak the
+ * literal `*` into `Location` (`/new/*`). The emitted code carries no
+ * comments: it ships inside the CloudFront Function, under its 10 KB limit.
+ *
+ * A spliced destination that isn't absolute stays on the site: leading
+ * slashes, backslashes and whitespace (browsers drop tab, CR and LF) collapse
+ * to one slash, so the captured tail of `/old//evil.example` (or
+ * `/old/\\evil.example`, `/old/%09/evil.example` once decoded) never yields a
+ * protocol-relative `Location: //evil.example`, which a browser follows
+ * off-site; and a bare `*` destination never turns a tail such as
+ * `https://evil.example` into an absolute URL (it becomes
+ * `/https://evil.example`). An absolute destination (`https://example.org/*`)
+ * is spliced as written. Every door emits the same rows code, so a
+ * redirect gives the same `Location` on each.
+ *
+ * @param rows the JS expression holding the rows.
+ * @param indent the indentation of the emitted lines.
+ * @internal Framework-only.
+ */
+export const redirectRowsJs = (rows: string, indent: string): string =>
+  [
+    `for (var j = 0; j < ${rows}.length; j++) {`,
+    `  var m = matchPattern(uri, ${rows}[j][0]);`,
+    '  if (m) {',
+    `    var dest = ${rows}[j][1];`,
+    "    if (dest.charAt(dest.length - 1) === '*') {",
+    "      var abs = /^[a-z][a-z0-9+.-]*:/i.test(dest);",
+    "      dest = dest.substring(0, dest.length - 1) + (m.tail || '');",
+    "      if (!abs) { var t = dest.replace(/^[\\/\\\\\\s]+/, ''); if (t !== dest || /^[a-z][a-z0-9+.-]*:/i.test(t)) dest = '/' + t; }",
+    '    }',
+    `    return { statusCode: ${rows}[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };`,
+    '  }',
+    '}',
+  ]
+    .map((line) => indent + line)
+    .join('\n');
+
+/**
+ * Apply every matching `[[pattern, { name: value }], …]` header rule to
+ * `response` (JS 2.0 source). Shared by the edge router (per KVS chunk) and
+ * `cf.headers`.
+ *
+ * @param rows the JS expression holding the rows.
+ * @param indent the indentation of the emitted lines.
+ * @internal Framework-only.
+ */
+export const headerRowsJs = (rows: string, indent: string): string =>
+  [
+    `for (var j = 0; j < ${rows}.length; j++) {`,
+    `  if (matchPattern(uri, ${rows}[j][0])) {`,
+    `    var hdrs = ${rows}[j][1];`,
+    '    for (var name in hdrs) { response.headers[name.toLowerCase()] = { value: hdrs[name] }; }',
+    '  }',
+    '}',
+  ]
+    .map((line) => indent + line)
+    .join('\n');
 
 /**
  * Viewer-request CloudFront Function (JS 2.0). Reads the route table + metadata
@@ -642,10 +581,12 @@ async function handler(event) {
   // re-request /builds/<id>/<page> through this same behavior). Send straight
   // to S3 with no re-prefix / no redirect / no rewrite.
   if (uri.indexOf('/builds/') === 0) {
+    delete request.headers['x-blocks-viewer-uri'];
     stripCred(request, meta);
     cf.selectRequestOriginById(meta.oS3);
     return request;
   }
+  if (meta.hc) request.headers['x-blocks-viewer-uri'] = { value: uri };
 
   // 0b. www <-> apex canonical 301 (runs before everything else).
   if (meta.ww) {
@@ -662,22 +603,7 @@ async function handler(event) {
   // 1. redirects (chunked, first match wins)
   for (var di = 0; di < meta.dc; di++) {
     var drows = await getJson('d' + di, []);
-    for (var j = 0; j < drows.length; j++) {
-      var m = matchPattern(uri, drows[j][0]);
-      if (m) {
-        var dest = drows[j][1];
-        // Splice the captured tail into a wildcard destination. Guard on the
-        // DESTINATION shape (trailing '*'), NOT on m.tail being truthy: an exact
-        // hit on a wildcard prefix (e.g. request '/old/' against source '/old/*')
-        // yields tail '' , and a truthiness guard would skip the splice and leak
-        // the literal '*' into Location (-> '/new/*'). Always strip the trailing
-        // '*' and append the tail (empty string included).
-        if (dest.charAt(dest.length - 1) === '*') {
-          dest = dest.substring(0, dest.length - 1) + (m.tail || '');
-        }
-        return { statusCode: drows[j][2], statusDescription: 'Redirect', headers: { location: { value: dest } } };
-      }
-    }
+${redirectRowsJs('drows', '    ')}
   }
 
   var bp = meta.bp;
@@ -856,19 +782,14 @@ ${SHARED_CF_HELPERS}
 async function handler(event) {
   var request = event.request;
   var response = event.response;
-  var uri = request.uri;
+  ${VIEWER_URI_JS}
   var meta = await getJson('meta', null);
   if (!meta) { return response; }
 
   // per-pattern headers
   for (var hi = 0; hi < meta.hc; hi++) {
     var hrows = await getJson('h' + hi, []);
-    for (var j = 0; j < hrows.length; j++) {
-      if (matchPattern(uri, hrows[j][0])) {
-        var hdrs = hrows[j][1];
-        for (var name in hdrs) { response.headers[name.toLowerCase()] = { value: hdrs[name] }; }
-      }
-    }
+${headerRowsJs('hrows', '    ')}
   }
 
   // skew-protection cookie (status-gated, HTML only)

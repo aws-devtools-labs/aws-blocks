@@ -10,6 +10,9 @@
  *   npx hosting-config set <KEY> [<value>] [--value-stdin] [--stage <name>] [--prefix <path>]
  *   npx hosting-config list [--stage <name>] [--prefix <path>]
  *   npx hosting-config remove <KEY> [--stage <name>] [--prefix <path>]
+ *
+ * Config removes are always immediate (SSM has no recovery window), so `--force`
+ * changes nothing here and needs no `--yes`.
  */
 
 import { runValueCli } from './secret-cli.js';
