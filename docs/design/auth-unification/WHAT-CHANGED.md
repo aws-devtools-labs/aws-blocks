@@ -1,5 +1,7 @@
 # What changed: the auth unification, in plain words
 
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+
 **For:** the project lead. **Branch:** `refactor/auth-blocks` (local only, not pushed). **Compared with:** `origin/main` (merge-base `b58f2487`).
 
 This note says what changed, what app developers and their end users will notice, and what still needs a decision. Every claim comes from the code, the `bb-auth` docs (`README.md`, `DESIGN.md`, `MIGRATION.md`), the changesets on the branch, or the design docs in this folder. Words in *italics* the first time are explained in the [Glossary](#9-glossary).
@@ -101,6 +103,8 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
+> **Superseded:** now `providers: { google: { type: 'google', clientId: 'your-google-client-id', clientSecret: googleSecret } }`, keyed by its type ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)).
+
 - Supported: `google`, `apple`, `facebook`, `amazon`. Email + password stays on next to it unless you set `emailPassword: false`.
 - `clientId` is a plain string. `clientSecret` must be an `AppSetting` created with `secret: true`, never a string.
 - The CDK layer creates the Cognito domain, a hosted-UI app client and the IdP registration. In the IdP's console you register `https://<cognito domain>/oauth2/idpresponse`.
@@ -112,6 +116,8 @@ const auth = new Auth(scope, 'auth', {
 ### 3.3 Add a generic OIDC provider (Okta, Entra ID, Auth0, GitHub, …)
 
 An `oidcProviders` entry can be federated two ways. You choose per provider with `federateVia`.
+
+> **Superseded:** the choice is now per block, with `store` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). A `type: 'oidc'` entry on the default store federates through Cognito (`clientSecret` required); on a `store: 'blocks'` block it is verified by your backend, next to `github()`, `customOauth2()` and `stubIdp()`. The table below still describes the two paths: read `federateVia: 'direct'` as `store: 'blocks'` and `federateVia: 'cognito'` as the default store.
 
 ```ts
 // Before (AuthOIDC)
@@ -165,6 +171,8 @@ const auth = new Auth(scope, 'auth', {
   samlProviders: { corp: { metadataUrl: 'https://idp.example.com/saml/metadata' } },
 });
 ```
+
+> **Superseded:** now `providers: { corp: { type: 'saml', metadataUrl: '…' } }` on the default store ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)).
 
 It always goes through Cognito: same 50-free-users meter as `federateVia: 'cognito'`, a `501` locally, and the IdP registers `https://<cognito domain>/saml2/idpresponse`. `metadataFile` and `signRequest` are the other options. Use it only for an IdP that doesn't speak OIDC.
 
@@ -495,7 +503,7 @@ The changesets mark these as minor releases (the repo forbids majors while on 0.
 **Options**
 - [ ] Options are grouped: `emailPassword.*`, `users.*`, `session.*`, `mfa: { mode, types }`, `passkeys: { relyingPartyId, … }`, `redirects.*`. Full table in `MIGRATION.md`.
 - [ ] `signInWith` is an array; `authFlowType` → `users.authFlow`; `sessionTtlSeconds` / `sessionDuration` → `session.ttlSeconds`; `crossDomain` → `session.crossDomain`; `requireSpecialChars` → `requireSymbols`.
-- [ ] `AuthOIDC`'s `providers` array → `oidcProviders` / `socialProviders` records; `customOauth2()` takes `endpoints: { authorization, token, userInfo }`; `stubIdp()` takes no `name`.
+- [ ] `AuthOIDC`'s `providers` array → `oidcProviders` / `socialProviders` records (superseded: one `providers` map tagged with `type`, plus `store: 'blocks'` for direct providers; see [D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)); `customOauth2()` takes `endpoints: { authorization, token, userInfo }`; `stubIdp()` takes no `name`.
 - [ ] Provider secrets must be `AppSetting` references, not strings or functions; `clientId` is a plain string.
 - [ ] `passkeys.userVerification: 'discouraged'` is rejected.
 - [ ] Unknown options and non-boolean values for boolean options throw at construction.

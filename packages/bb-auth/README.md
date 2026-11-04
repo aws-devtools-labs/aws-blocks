@@ -4,6 +4,8 @@
 
 Import it from `@aws-blocks/blocks` (or `@aws-blocks/bb-auth`), and its UI helpers from `@aws-blocks/blocks/ui` (or `@aws-blocks/bb-auth/ui`).
 
+> **First choice: where do your users live?** In a Cognito user pool (the default), or at their identity provider with `store: 'blocks'`. See [Where do your users live?](#where-do-your-users-live).
+
 > **Coming from `AuthBasic`, `AuthCognito` or `AuthOIDC`?** `Auth` replaces all three. See [MIGRATION.md](./MIGRATION.md) for before → after code, what happens to deployed user pools, users and sessions, and the codemod.
 
 ## Recipes
@@ -228,9 +230,10 @@ const facebookSecret = AppSetting.fromExisting(scope, 'facebook-secret', {
 });
 
 const auth = new Auth(scope, 'auth', {
-  socialProviders: {
-    google: { clientId: 'your-client-id.apps.googleusercontent.com', clientSecret: googleSecret },
-    facebook: { clientId: 'your-facebook-app-id', clientSecret: facebookSecret },
+  providers: {
+    // A social entry is keyed by its type.
+    google: { type: 'google', clientId: 'your-client-id.apps.googleusercontent.com', clientSecret: googleSecret },
+    facebook: { type: 'facebook', clientId: 'your-facebook-app-id', clientSecret: facebookSecret },
   },
   hostedUi: { domainPrefix: 'my-app-auth' }, // fixes the callback URL before the first deploy
 });
@@ -241,7 +244,7 @@ export const authApi = auth.createApi();
    - **`Secret`:** deploy once — it creates `my-app/GOOGLE_CLIENT_SECRET` with the `generate: true` placeholder — then run `npm run secret -- set GOOGLE_CLIENT_SECRET --prefix my-app` (it prompts for the value; `--value-stdin` reads it from a pipe; add `--region <region>` if your shell's default Region differs) and deploy again. Without `generate: true` the first deploy fails, because the secret has no value yet; synth warns about it (`@aws-blocks/bb-auth:ProviderSecretWithoutValue`). If that deploy already failed and the retained secret now makes the next one fail with "already exists", set its value with `npm run secret` and wrap it with `Secret.fromExisting('<secret ARN>')`, or delete it (`aws secretsmanager delete-secret --secret-id my-app/GOOGLE_CLIENT_SECRET --force-delete-without-recovery`) and deploy again with `generate: true`. Without an explicit `name`, the secret is named after the block's `fullId`; set it with `aws secretsmanager put-secret-value` instead. For a secret that already exists, wrap it: `new Secret(scope, 'google-client-secret', { secret: Secret.fromExisting('<secret ARN>') })`. The deploy-time provider registration is granted read access to exactly this secret (`secretsmanager:GetSecretValue` on its ARN, plus `kms:Decrypt` via Secrets Manager). Like every `Secret` your app declares, it is also readable by the app's execution role, so your API code could read it too.
    - **`AppSetting`:** before the first deploy, `aws ssm put-parameter --name /my-app/facebook-client-secret --type SecureString --value '<client secret>'`; to rotate, run it again with `--overwrite`. With `new AppSetting(scope, 'facebook-secret', { secret: true })` instead, the deploy creates the parameter, at `/<fullId>`, with a random value you then overwrite the same way.
 2. **Register the callback URL** with the provider. Google calls it an *authorized redirect URI*: `https://my-app-auth.auth.<region>.amazoncognito.com/oauth2/idpresponse` (`/saml2/idpresponse` for SAML). Without `hostedUi.domainPrefix` the prefix is derived from the block's `fullId`; read it from the `UserPoolDomain` resource in the synthesized template. `hostedUi.domainPrefix` is create-only: choose it before the first deploy.
-3. **Test on a sandbox** (`npm run sandbox`). Cognito managed login needs a deployed user pool, so locally (`npm run dev`) the `Authenticator` shows the Google button disabled, with the hint "Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally." (`getAuthState()` marks the action `unavailable`). The sign-in route itself answers `501`: an explanatory page for a browser, the `ProviderUnavailableException` JSON error for an API client. For an offline sign-in flow, use `stubIdp()`.
+3. **Test on a sandbox** (`npm run sandbox`). Cognito managed login needs a deployed user pool, so locally (`npm run dev`) the `Authenticator` shows the Google button disabled, with the hint "Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally." (`getAuthState()` marks the action `unavailable`). The sign-in route itself answers `501`: an explanatory page for a browser, the `ProviderUnavailableException` JSON error for an API client. For an offline federated sign-in flow, use `stubIdp()` in a `store: 'blocks'` block ([below](#usage)).
 
 ### End-to-end tests: emailed codes and two users at once
 
@@ -301,21 +304,74 @@ test('each user reads only their own note', async () => {
 
 ## Which option and why
 
-Every sign-in method is a key on the same options object, and you can combine them in one block. They differ in what they cost, where they run, and which `Auth` features their users get:
+### Where do your users live?
+
+Choose this first, once per block, with `store`. It decides which sign-in methods the block can offer:
+
+- **`store: 'cognito'`** (the default, so usually omitted): users are records in an Amazon Cognito user pool. Email + password, MFA, passkeys, social sign-in, SAML and OIDC federated through Cognito. Cognito groups, `auth.admin` and Cognito-issued tokens work for every user.
+- **`store: 'blocks'`**: no user pool. Users live at their identity provider, your backend verifies each sign-in itself, and the block keeps only its sessions. No Cognito charge, offline sign-in with `stubIdp()`, and public (PKCE-only) clients.
+
+| | `store: 'cognito'` (default) | `store: 'blocks'` |
+|---|---|---|
+| Email + password, `mfa`, `passkeys`, `email` (SES sender), `codeDelivery` | Yes | No |
+| `providers` entry `type: 'google' \| 'facebook' \| 'amazon' \| 'apple'` | Yes, keyed by its type (one per type) | No |
+| `type: 'saml'` | Yes | No |
+| `type: 'oidc'` | Yes, federated through Cognito; `clientSecret` required | Yes, verified by your backend; `clientSecret` optional, `groupsClaim` for roles |
+| `type: 'oauth2'` (`github()`, `customOauth2()`) and `type: 'stub'` (`stubIdp()`) | No | Yes |
+| `users` | The full user-pool shape (`signInWith`, `attributes`, `groups`, …) | `users.groups` only |
+| `userPool` (wrap an existing pool), `admin`, `hostedUi`, `featurePlan` | Yes | No |
+| `allowBearerAuth` | `true` (Cognito access tokens) or `{ clientIds }` (other app clients of the pool) | `true` (the provider's access token) |
+| `validateUser` | Sign-up and sign-in | Sign-in only (no user is ever created) |
+| `session`, `redirects`, `onSignIn` / `onSignOut`, `removalPolicy`, `deletionProtection` | Yes | Yes |
+| What is provisioned | A user pool (or the one you wrap), plus a Cognito domain and hosted-UI client once a `providers` entry needs them; the session table and secret | The session table and secret only |
+
+Every sign-in provider goes in one `providers` map, keyed by the provider id you use on the client (`getSignInUrl(context, '<id>')`, the `signIn:<id>` UI action), and tagged with its `type`.
+
+**One block holds one kind of user.** A block cannot mix email + password users with backend-verified OIDC users. An app that wants both uses two `Auth` blocks, each with its own session cookie and its own `createApi()`, and the frontend picks one per sign-in. The same person signing in both ways was always two users (there is no account linking), so nothing is lost:
+
+```typescript
+// aws-blocks/index.ts
+import { Auth, Scope, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+
+// Customers: email + password, in the Cognito user pool.
+const auth = new Auth(scope, 'auth');
+export const authApi = auth.createApi();
+
+// Staff: Okta, verified by the backend; the stub IdP outside production.
+const sso = new Auth(scope, 'sso', {
+  store: 'blocks',
+  providers: {
+    okta:
+      getDeploymentType() === 'production'
+        ? { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id', groupsClaim: 'groups' }
+        : stubIdp({ users: [{ sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['staff'] } }] }),
+  },
+  users: { groups: ['staff'] },
+});
+export const ssoApi = sso.createApi();
+```
+
+**What is checked when.** The compiler checks the combinations: with `store: 'blocks'`, `emailPassword`, `mfa`, `passkeys`, `admin`, `userPool`, `users.signInWith` and the other user-pool options are compile errors whose type names the fix (`ERROR_needs_store_cognito<'emailPassword'>`), and so is a `type: 'google'` or `type: 'saml'` entry; on the default store, `stubIdp()`, `github()` and a `type: 'oidc'` entry without `clientSecret` are compile errors; a leftover `socialProviders`, `oidcProviders`, `samlProviders` or `federateVia` is one too (`ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`). Autocomplete for `type:` lists only the chosen store's types. The constructor checks the same rules again at runtime (in `npm run dev`, at synth and in Lambda) with a readable message, and also what the compiler cannot see: options from a variable annotated `: AuthOptions`, built from JSON or env, or cast; a social entry keyed differently from its `type` (`providers: { gmail: { type: 'google', … } }`); and a `store: 'blocks'` block with no provider.
+
+### The sign-in methods
+
+The methods differ in what they cost, where they run, and which `Auth` features their users get:
 
 | Option | Configure with | What it's for | Cognito pricing | Works offline in `npm run dev` | Cognito groups / `auth.admin` | MFA | PKCE-only IdPs |
 |---|---|---|---|---|---|---|---|
-| **Email + password** | `emailPassword` (on by default) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes — a local user pool in `.bb-data/` | Yes | Yes — Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | — |
-| **Social** | `socialProviders` (`google`, `apple`, `facebook`, `amazon`) | Consumer "Sign in with Google / Apple / Facebook / Amazon" | Same free tier and rate as email + password | No — sign-in answers an actionable `501` locally; deploy a sandbox to test it | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — |
-| **Generic OIDC, `federateVia: 'direct'`** (the default) | `oidcProviders` (plus `github()`, `customOauth2()`, `stubIdp()`) | Okta, Entra ID, Auth0, GitHub or any other OIDC / OAuth 2.0 provider, verified by your own backend | No Cognito charge — these users never touch Cognito | Yes — with `stubIdp()`, a real OIDC provider served by the dev server | No pool record: `requireRole()` reads groups from the provider's `groupsClaim`; `auth.admin` does not apply | The provider's | Yes — omit `clientSecret` |
-| **Generic OIDC, `federateVia: 'cognito'`** | `oidcProviders` entry with `federateVia: 'cognito'` | The same providers, when you need their users in your Cognito user pool | Separate federated meter: 50 free MAUs, then $0.015 per MAU on every feature plan | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | No — Cognito requires a client secret |
-| **SAML** | `samlProviders` | Enterprise IdPs that only speak SAML 2.0 | Same separate meter as `federateVia: 'cognito'`: 50 free MAUs, then $0.015 per MAU | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — (SAML has no PKCE) |
+| **Email + password** | `emailPassword` (on by default; default store) | Your own user directory: sign-up with an emailed code, password reset, passkeys | 10,000 free MAUs (none on `'plus'`), then the user pool's feature-plan rate | Yes — a local user pool in `.bb-data/` | Yes | Yes — Cognito MFA through `mfa` (TOTP or SMS; email MFA once `email` sends through SES) | — |
+| **Social** | `providers` entry with `type: 'google'`, `'apple'`, `'facebook'` or `'amazon'` (default store) | Consumer "Sign in with Google / Apple / Facebook / Amazon" | Same free tier and rate as email + password | No — sign-in answers an actionable `501` locally; deploy a sandbox to test it | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — |
+| **Generic OIDC, verified by your backend** | `store: 'blocks'` with `type: 'oidc'` entries (plus `github()`, `customOauth2()`, `stubIdp()`) | Okta, Entra ID, Auth0, GitHub or any other OIDC / OAuth 2.0 provider, verified by your own backend | No Cognito charge — these users never touch Cognito | Yes — with `stubIdp()`, a real OIDC provider served by the dev server | No pool record: `requireRole()` reads groups from the provider's `groupsClaim`; `auth.admin` does not apply | The provider's | Yes — omit `clientSecret` |
+| **Generic OIDC, through Cognito** | `type: 'oidc'` entry on the default store | The same providers, when you need their users in your Cognito user pool | Separate federated meter: 50 free MAUs, then $0.015 per MAU on every feature plan | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | No — Cognito requires a client secret |
+| **SAML** | `type: 'saml'` entry (default store) | Enterprise IdPs that only speak SAML 2.0 | Same separate meter as OIDC through Cognito: 50 free MAUs, then $0.015 per MAU | No — `501` locally, like social | Yes — the user becomes a user-pool user | The provider's — Cognito never challenges a federated user | — (SAML has no PKCE) |
 
-MAU = monthly active user. Prices are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026; check it before you ship. The feature-plan rate depends on `featurePlan`: `'essentials'` (the default) is $0.015 per MAU above the 10,000-MAU free tier, `'lite'` is $0.0055 but cannot run passkeys, passwordless sign-in or email MFA, and `'plus'` is $0.020 per MAU with no free tier. Users who sign in through SAML or OIDC federation are metered separately on every plan, Plus included: 50 free MAUs, then $0.015 per MAU. Every option also stores sessions in the block's DynamoDB table. A configuration whose only sign-in methods are `federateVia: 'direct'` providers creates no Cognito resources at all.
+MAU = monthly active user. Prices are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026; check it before you ship. The feature-plan rate depends on `featurePlan`: `'essentials'` (the default) is $0.015 per MAU above the 10,000-MAU free tier, `'lite'` is $0.0055 but cannot run passkeys, passwordless sign-in or email MFA, and `'plus'` is $0.020 per MAU with no free tier. Users who sign in through SAML or OIDC federation are metered separately on every plan, Plus included: 50 free MAUs, then $0.015 per MAU. Every option also stores sessions in the block's DynamoDB table. A `store: 'blocks'` block creates no Cognito resources at all.
 
-**How to choose.** Start with email + password: it is the default, needs no identity-provider account, runs fully offline, and is the only option where `Auth` itself enforces MFA and passkeys. Add `socialProviders` for consumer sign-in — those users cost the same as password users, but their sign-in only works on a deployed stack. For a workforce IdP or any other OIDC provider, keep the default `federateVia: 'direct'`: there is no Cognito charge, `stubIdp()` lets you test offline, and public PKCE-only clients work. Switch a provider to `federateVia: 'cognito'` only when you need its users in your user pool — Cognito groups, `auth.admin` or Cognito-issued tokens for them — and accept the 50-free-MAU meter and the client-secret requirement; it adds no MFA, device tracking or adaptive authentication, because Cognito leaves all authentication of federated users to their IdP. Use `samlProviders` only for an IdP that does not speak OIDC. If a frontend may later sign in with the Amplify client libraries against the same pool, read [Planning to use Amplify client libraries?](#planning-to-use-amplify-client-libraries) before the first deploy: some of those choices are permanent.
+**How to choose.** Start with email + password: it is the default, needs no identity-provider account, runs fully offline, and is the only option where `Auth` itself enforces MFA and passkeys. Add social `providers` entries for consumer sign-in — those users cost the same as password users, but their sign-in only works on a deployed stack. For a workforce IdP or any other OIDC provider, prefer a `store: 'blocks'` block: there is no Cognito charge, `stubIdp()` lets you test offline, and public PKCE-only clients work. Put a `type: 'oidc'` entry on the default store instead only when you need its users in your user pool — next to password users, or for Cognito groups, `auth.admin` or Cognito-issued tokens — and accept the 50-free-MAU meter and the client-secret requirement; it adds no MFA, device tracking or adaptive authentication, because Cognito leaves all authentication of federated users to their IdP. Use `type: 'saml'` only for an IdP that does not speak OIDC. If a frontend may later sign in with the Amplify client libraries against the same pool, read [Planning to use Amplify client libraries?](#planning-to-use-amplify-client-libraries) before the first deploy: some of those choices are permanent.
 
-All five in one block (provider secrets are `AppSetting` or `Secret` references, never strings):
+All five, in the two blocks they need (provider secrets are `AppSetting` or `Secret` references, never strings):
 
 ```typescript
 import { AppSetting, Auth, Scope } from '@aws-blocks/blocks';
@@ -324,21 +380,26 @@ const scope = new Scope('my-app');
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
 const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
 
+// The default store: every user is a user-pool user.
 const auth = new Auth(scope, 'auth', {
   // Email + password is on unless you set `emailPassword: false`.
-  socialProviders: { google: { clientId: 'your-google-client-id', clientSecret: googleSecret } },
-  oidcProviders: {
-    // Direct (the default): your backend verifies the IdP's tokens. No client secret needed.
-    okta: { issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' },
-    // Through Cognito: the user lands in your user pool. A client secret is required.
+  providers: {
+    google: { type: 'google', clientId: 'your-google-client-id', clientSecret: googleSecret },
+    // OIDC through Cognito: the user lands in your user pool. A client secret is required.
     entra: {
-      federateVia: 'cognito',
+      type: 'oidc',
       issuer: 'https://login.microsoftonline.com/your-tenant-id/v2.0',
       clientId: 'your-entra-client-id',
       clientSecret: entraSecret,
     },
+    corp: { type: 'saml', metadataUrl: 'https://idp.example.com/saml/metadata' },
   },
-  samlProviders: { corp: { metadataUrl: 'https://idp.example.com/saml/metadata' } },
+});
+
+// No user pool: your backend verifies Okta's tokens. No client secret needed.
+const sso = new Auth(scope, 'sso', {
+  store: 'blocks',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
 });
 ```
 
@@ -350,20 +411,20 @@ const auth = new Auth(scope, 'auth', {
 - **A password reset signs the user out everywhere.** Once `confirmResetPassword` (or the `createApi()` action of that name) succeeds, every session the user had is rejected from the next request on, with 401 `NotAuthenticatedException` and the cookie cleared, locally and on AWS. On AWS their Cognito refresh tokens are also revoked, so an Amplify or native client using bearer tokens can't refresh; an access token it already holds stays valid until it expires (an hour by default). The user signs in again with the new password. If the password changed but ending the sessions failed, `confirmResetPassword` throws a 5xx: reset again. Not covered: `updatePassword` (a signed-in password change) and `auth.admin.setUserPassword` leave other sessions signed in; after an admin password set, call `auth.admin.revokeUserSessions(username)` if they should end.
 - **Locally** (`npm run dev`, tests), email + password works end to end with no AWS account: sign-up with an emailed code, sign-in and its challenges, password reset, MFA (TOTP / SMS / email), devices, user attributes, `deleteUser`, passkeys, and the opt-in `auth.admin` surface. The local user pool lives in `.bb-data/<fullId>/state.json` — the same file `AuthCognito`'s mock writes, so local users survive the switch.
 - On AWS, email + password runs against Amazon Cognito: sign-up and confirmation (with automatic sign-in after the emailed code), sign-in with every challenge `AuthCognito` supports (MFA, new-password-required, `USER_AUTH` choice-based and passwordless sign-in, passkey sign-in), password reset and change, token refresh, live group reads for `requireRole`, global sign-out and passkey management, user attributes, `deleteUser`, authenticator-app (TOTP) setup and MFA preferences, devices, and the opt-in `auth.admin` surface. `rememberDevice` throws a `501` on AWS, as it did in `AuthCognito` ([why](./DESIGN.md#known-gaps-documented-not-built)).
-- Directly federated sign-in works, locally and deployed: any `oidcProviders` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives `emailPassword: false` apps an offline sign-in.
-- On AWS, social, SAML and `federateVia: 'cognito'` providers sign in through Cognito managed login: the sign-in button goes straight to the provider (PKCE, Cognito-issued tokens verified against your user pool), and the user becomes an ordinary user-pool user — `requireRole()` reads their Cognito groups and `auth.admin` manages them like email + password users. Sign-out also ends the managed-login session, so the next sign-in asks the provider again. MFA for these users is the provider's: Cognito never challenges a federated user, so enforce MFA at your IdP. Locally (`npm run dev`) these providers answer sign-in with an actionable `501` — managed login needs a deployed user pool; use a direct provider or `stubIdp()` for offline sign-in. `getAuthState()` marks their `signIn:<id>` actions `unavailable` there, so the `Authenticator` renders those buttons disabled with that hint, and a browser that reaches the sign-in route gets an explanatory page.
-- Native and CLI clients can authenticate with `Authorization: Bearer <access token>` when `allowBearerAuth: true`, as with `AuthOIDC`: the guards accept a directly federated provider's access token (the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews) or a user-pool user's Cognito access token. With `allowBearerAuth: { clientIds }`, access tokens from other app clients of the same pool are accepted too — for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)). The session cookie wins when both are sent, and a bearer token stays valid after `signOut()` until it expires. See [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth-d6c--bearerts).
-- The CDK layer provisions the same resources as `AuthCognito` (same construct ids, so an `AuthCognito` app that switches keeps its user pool and sessions), creates no Cognito resources for a direct-OIDC-only configuration, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For social, SAML and `federateVia: 'cognito'` providers it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM or Secrets Manager and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
+- Directly federated sign-in (a `store: 'blocks'` block) works, locally and deployed: any `type: 'oidc'` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives a block with no password users an offline sign-in.
+- On AWS, the `providers` of a default-store block (social, SAML and `type: 'oidc'`) sign in through Cognito managed login: the sign-in button goes straight to the provider (PKCE, Cognito-issued tokens verified against your user pool), and the user becomes an ordinary user-pool user — `requireRole()` reads their Cognito groups and `auth.admin` manages them like email + password users. Sign-out also ends the managed-login session, so the next sign-in asks the provider again. MFA for these users is the provider's: Cognito never challenges a federated user, so enforce MFA at your IdP. Locally (`npm run dev`) these providers answer sign-in with an actionable `501` — managed login needs a deployed user pool; use a `store: 'blocks'` block (a direct OIDC provider or `stubIdp()`) for offline sign-in. `getAuthState()` marks their `signIn:<id>` actions `unavailable` there, so the `Authenticator` renders those buttons disabled with that hint, and a browser that reaches the sign-in route gets an explanatory page.
+- Native and CLI clients can authenticate with `Authorization: Bearer <access token>` when `allowBearerAuth: true`, as with `AuthOIDC`: on a `store: 'blocks'` block the guards accept the provider's access token (the one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/exchange/refresh` renews), and on the default store a user-pool user's Cognito access token. With `allowBearerAuth: { clientIds }` (default store only), access tokens from other app clients of the same pool are accepted too — for a frontend that signs in with an Amplify client library ([below](#planning-to-use-amplify-client-libraries)). The session cookie wins when both are sent, and a bearer token stays valid after `signOut()` until it expires. See [DESIGN.md](./DESIGN.md#bearer-tokens-allowbearerauth-d6c--bearerts).
+- The CDK layer provisions the same resources as `AuthCognito` (same construct ids, so an `AuthCognito` app that switches keeps its user pool and sessions), creates no Cognito resources for a `store: 'blocks'` block, and follows the stack's `removalPolicy` / `deletionProtection` defaults. For `providers` entries of a default-store block (social, SAML, `type: 'oidc'`) it also provisions a Cognito domain, a separate hosted-UI app client and one identity-provider registration per provider (provider secrets stay in SSM or Secrets Manager and never enter the template); see `DESIGN.md` → *Hosted-UI federation* and *The hosted-UI engine*.
 - The CDK layer refuses user-pool changes Cognito cannot apply to an existing pool (sign-in attributes, username case sensitivity, required attributes, changing or removing a custom attribute): at synth, against a baseline file it writes to `aws-blocks/baselines/` (commit that file), and again at deploy, before the pool is updated. The synth check also refuses a change that would remove the pool — including renaming or deleting the `Auth` block, which would make CloudFormation delete the pool and every user in it ([details](./DESIGN.md#renaming-or-removing-an-auth-block)) — once a committed baseline records the pool. A block's first synth has nothing to compare against: if it records no pool, synth only warns. Moving from `AuthCognito`? Deploy the codemod's output unchanged first ([MIGRATION.md](./MIGRATION.md#before-every-deploy-the-checklist)). Re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<block fullId>`. The baseline advances when you synthesize, not when you deploy, so reverting a change you synthesized but never deployed is refused too; the error then gives the re-baseline command for that case. See [DESIGN.md](./DESIGN.md#immutability-guard-q5).
 
 ## Usage
 
-You configure mechanisms as sibling keys of one options object. Providers are keyed records, and the record key is the provider id on both the server and the client:
+You pick the block's `store` ([Where do your users live?](#where-do-your-users-live)), then configure mechanisms as keys of one options object. Every sign-in provider is an entry of one `providers` record, tagged with its `type`, and the record key is the provider id on both the server and the client:
 
 - `new Auth(scope, 'auth')` — email + password, the zero-config default.
-- `new Auth(scope, 'auth', { oidcProviders: { okta: { issuer, clientId } } })` — email + password plus Okta, federated directly by your backend.
-- `new Auth(scope, 'auth', { emailPassword: false, oidcProviders: { okta: { issuer, clientId } } })` — Okta only. No Cognito user pool is created.
-- `new Auth(scope, 'auth', { socialProviders: { google: { clientId, clientSecret } } })` — Google, federated through Cognito.
+- `new Auth(scope, 'auth', { providers: { google: { type: 'google', clientId, clientSecret } } })` — email + password plus Google, federated through Cognito.
+- `new Auth(scope, 'auth', { providers: { okta: { type: 'oidc', issuer, clientId, clientSecret } } })` — email + password plus Okta, federated through Cognito (a client secret is required).
+- `new Auth(scope, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer, clientId } } })` — Okta only, federated directly by your backend. No Cognito user pool is created. For password users as well, add a second block ([below](#where-do-your-users-live)).
 
 For local development without an identity provider account, use the stub IdP — a real OIDC provider served by the dev server, with an account picker:
 
@@ -371,8 +432,8 @@ For local development without an identity provider account, use the stub IdP —
 import { Auth, stubIdp } from '@aws-blocks/bb-auth';
 
 const auth = new Auth(scope, 'auth', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     corp: stubIdp({
       users: [
         { sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } },
@@ -393,25 +454,25 @@ The stub runs in `npm run dev` and on sandbox deployments (`npm run sandbox`) on
 import { Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
 
 const auth = new Auth(scope, 'auth', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     corp:
       getDeploymentType() === 'production'
-        ? { issuer: 'https://login.example.com', clientId: 'my-client-id' }
+        ? { type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' }
         : stubIdp({ users: [{ sub: 'u-1', email: 'alice@example.com', name: 'Alice' }] }),
   },
 });
 ```
 
-You may not need the stub at all: email + password already runs offline, and a direct OIDC provider works in `npm run dev` too if you register `http://localhost:<port>/aws-blocks/auth/callback` as a redirect URI with it.
+You may not need the stub at all: email + password already runs offline, and a `type: 'oidc'` entry of a `store: 'blocks'` block works in `npm run dev` too if you register `http://localhost:<port>/aws-blocks/auth/callback` as a redirect URI with it.
 
 **The stub on a sandbox.** A sandbox serves the stub from the deployed backend, so an end-to-end test needs no external IdP. The stub signs users in without credentials: **anyone who can reach the sandbox can sign in as any of the stub's users**, with their claims and groups. Synth succeeds with a `@aws-blocks/bb-auth:StubIdpDeployed` warning. Deployed, the stub's issuer is the API Gateway URL (`https://<api-id>.execute-api.<region>.amazonaws.com/<stage>/aws-blocks/auth/idp/<id>`) and its signing keys are derived from the block's session secret, so every Lambda instance serves the same keys. The Lambda serves the stub only when its deployed config says the deployment is a sandbox; after upgrading, restart `npm run sandbox` once, because a `cdk watch` hotswap alone does not write that config.
 
-A directly federated user's `userId` is `` `${issuer}:${sub}` `` (the same as `AuthOIDC`), and `requireRole()` reads their groups from the provider's `groupsClaim`. Register `<your origin>/aws-blocks/auth/callback` as the redirect URI with the IdP, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
+A `store: 'blocks'` user's `userId` is `` `${issuer}:${sub}` `` (the same as `AuthOIDC`), and `requireRole()` reads their groups from the provider's `groupsClaim`. Register `<your origin>/aws-blocks/auth/callback` as the redirect URI with the IdP, and `<your origin>/` (or `<your origin><redirects.postSignOutPath>`) as the post-logout redirect URI when the IdP supports sign-out.
 
-For a provider federated through Cognito (social, SAML, `federateVia: 'cognito'`) the CDK layer registers the callback and sign-out URLs on the Cognito app client for you; in the IdP's console, register the Cognito domain's `https://<domain>/oauth2/idpresponse` (`/saml2/idpresponse` for SAML) instead.
+For a provider federated through Cognito (any `providers` entry of a default-store block: social, SAML, `type: 'oidc'`) the CDK layer registers the callback and sign-out URLs on the Cognito app client for you; in the IdP's console, register the Cognito domain's `https://<domain>/oauth2/idpresponse` (`/saml2/idpresponse` for SAML) instead.
 
-Provider secrets are `AppSetting` references created with `secret: true` (at the default name, with an explicit `name`, or via `AppSetting.fromExisting`), or string-valued `Secret` references (Secrets Manager, set with `npm run secret`; see [the social sign-in recipe](#social-sign-in-the-client-secret-and-the-callback-url)), never strings. The RPC surface stays the two methods the sign-in UI uses (`getAuthState` / `setAuthState`), via `auth.createApi()`. Its `setAuthState` input is typed by the block's options (`AuthActionInputOf<O>`), so a frontend call to an action the options turn off, such as `signIn` on `emailPassword: false`, is a compile error.
+Provider secrets are `AppSetting` references created with `secret: true` (at the default name, with an explicit `name`, or via `AppSetting.fromExisting`), or string-valued `Secret` references (Secrets Manager, set with `npm run secret`; see [the social sign-in recipe](#social-sign-in-the-client-secret-and-the-callback-url)), never strings. The RPC surface stays the two methods the sign-in UI uses (`getAuthState` / `setAuthState`), via `auth.createApi()`. Its `setAuthState` input is typed by the block's options (`AuthActionInputOf<O>`), so a frontend call to an action the options turn off, such as `signIn` on `emailPassword: false` or `store: 'blocks'`, is a compile error.
 
 The option groups and the method surface are documented in the JSDoc of the exported `AuthOptions` and `AuthShape` types.
 
@@ -453,8 +514,8 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-- `phase: 'signUp'` runs before a user-pool user is created: in `auth.signUp()` and `auth.admin.createUser()`, in your request. On AWS, setting the option also attaches a Cognito **PreSignUp trigger** to the pool (only then), which runs the same callback in your backend Lambda for users the app did not create itself: a `SignUp` sent straight to Cognito with the app client id, an `AdminCreateUser` from the console or CLI, and the first sign-in of a social, SAML or `federateVia: 'cognito'` user. A sign-up made through `auth.signUp()` is checked once, not twice. The trigger never confirms or verifies a user.
-- `phase: 'signIn'` runs on every sign-in, so a federated user's first sign-in sees both phases. Directly federated providers (including `stubIdp()`) create no pool user and only see `signIn`.
+- `phase: 'signUp'` runs before a user-pool user is created: in `auth.signUp()` and `auth.admin.createUser()`, in your request. On AWS, setting the option also attaches a Cognito **PreSignUp trigger** to the pool (only then), which runs the same callback in your backend Lambda for users the app did not create itself: a `SignUp` sent straight to Cognito with the app client id, an `AdminCreateUser` from the console or CLI, and the first sign-in of a user of a `providers` entry (social, SAML or `type: 'oidc'`). A sign-up made through `auth.signUp()` is checked once, not twice. The trigger never confirms or verifies a user.
+- `phase: 'signIn'` runs on every sign-in, so a Cognito-federated user's first sign-in sees both phases. A `store: 'blocks'` block creates no user, so its `validateUser` only ever sees `phase: 'signIn'` (no trigger is provisioned for it): reject there to prevent the session.
 - Keep it fast: Cognito waits at most 5 seconds for the trigger, and a cold start of your Lambda counts. If it does not answer in time the sign-up fails (no user is created). Avoid slow network calls in `validateUser` (cache any allowlist you fetch); if cold starts alone come close to the limit, configure provisioned concurrency on the backend Lambda.
 - A pool you wrap with `userPool: Auth.fromExisting(...)` gets no trigger (its triggers are yours to manage); synth warns, and the in-process checks still run. Wrapping a pool another `Auth` in the same app creates (e.g. a second block for `admin`) is fine: the trigger stays with the block that created the pool and keeps running its `validateUser`. Details: [DESIGN.md](./DESIGN.md#validateuser-and-the-presignup-trigger-q10).
 
@@ -462,7 +523,7 @@ const auth = new Auth(scope, 'auth', {
 
 The compiler knows which methods a configuration supports:
 
-- With `emailPassword: false`, the email + password methods (`signUp`, `signIn`, `resetPassword`, …) are compile errors, and the error names the cause: `ERROR_emailPassword_is_disabled_on_this_Auth_instance`.
+- With `emailPassword: false`, or on a `store: 'blocks'` block, the email + password methods (`signUp`, `signIn`, `resetPassword`, …) are compile errors, and the error names the cause: `ERROR_emailPassword_is_disabled_on_this_Auth_instance`.
 - With no federated provider configured, `getSignInUrl` is a compile error (`ERROR_no_federated_provider_is_configured`), and its `provider` argument only accepts configured provider ids.
 - When the options set `mfa` to anything but `'optional'` / `'required'` (or omit it), the MFA methods (`setUpTotp`, `verifyTotpSetup`, `updateMfaPreference`, `getMfaPreference`) are compile errors (`ERROR_mfa_is_off_on_this_Auth_instance`); when they configure no `passkeys` options object, so are the passkey methods (`ERROR_passkeys_are_not_enabled_on_this_Auth_instance`). With `mfa.types` listed inline, `updateMfaPreference` rejects a factor it leaves out (`ERROR_SMS_is_not_in_mfa_types`, and the same for `TOTP` / `EMAIL`).
 - `auth.admin` is unusable unless the options include `admin: {}`: its methods are compile errors (`ERROR_admin_is_not_enabled__construct_Auth_with_admin_options`). With `admin: { actions: ['groups'] }`, the lifecycle methods are compile errors (`ERROR_admin_action_not_granted`), and vice versa.
@@ -492,15 +553,15 @@ Pass options inline, or keep them in a variable declared `as const satisfies Aut
 import { Auth, type AuthOptions } from '@aws-blocks/bb-auth';
 
 const options = {
-  emailPassword: false,
-  oidcProviders: { corp: { issuer: 'https://login.example.com', clientId: 'my-client-id' } },
+  store: 'blocks',
+  providers: { corp: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } },
   users: { groups: ['admins', 'readers'] },
 } as const satisfies AuthOptions;
 const auth = new Auth(scope, 'auth', options);
 // user.groups: ('admins' | 'readers')[]
 ```
 
-`mfa` (other than `'off'`), `passkeys` and `users.deviceTracking` apply only to email + password users, so combining any of them with `emailPassword: false` is an error at construction (in `npm run dev`, at synth and in Lambda) that names both options; federated users get MFA and passkeys from their identity provider.
+`mfa` (other than `'off'`), `passkeys` and `users.deviceTracking` apply only to email + password users, so combining any of them with `emailPassword: false` is an error at construction (in `npm run dev`, at synth and in Lambda) that names both options (with `store: 'blocks'` they are compile errors too, see [Where do your users live?](#where-do-your-users-live)); federated users get MFA and passkeys from their identity provider.
 
 An option `Auth` does not recognise is an error at construction, in `npm run dev`, at synth and in Lambda alike, so a misspelled or misplaced setting can't be silently ignored. The error names each unknown option's path with a suggestion (`` `preferredChallenge`: it is not an option here; did you mean `users.preferredChallenge`? ``). The compiler alone doesn't catch these: TypeScript does no excess-property check on the inferred options type ([why](./DESIGN.md#unknown-options-d1b)). A boolean option must be `true` or `false` (or left out): a value such as `selfSignUp: 0` or `passkeys: 'false'` from untyped code is an error too, rather than turning the setting on or off by accident.
 
@@ -545,8 +606,8 @@ import { Auth, type AuthOptions, type FederatedActionNameOf, Scope } from '@aws-
 
 const scope = new Scope('app');
 const authOptions = {
-  emailPassword: false,
-  oidcProviders: { okta: { issuer: 'https://dev-12345.okta.com', clientId: 'my-client-id' } },
+  store: 'blocks',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: 'my-client-id' } },
 } as const satisfies AuthOptions;
 const auth = new Auth(scope, 'auth', authOptions);
 
@@ -653,7 +714,8 @@ On the backend, allow the frontend's origin in three places:
 
 ```typescript
 new Auth(scope, 'auth', {
-  oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+  store: 'blocks',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
   redirects: { allowedRelayOrigins: [relayOrigin('https://app.example.com')] }, // where sign-in may return
   session: { crossDomain: true }, // only when the two are on different registrable domains
 });
@@ -662,7 +724,7 @@ new Auth(scope, 'auth', {
 
 - **What it does.** `signInWithRedirect()` gets a signed `state` from the block, bound to a fresh CSRF value and to `redirectUri`, then sends the browser to the provider with PKCE. The provider returns to the block's callback, which re-checks `redirectUri` against `allowedRelayOrigins` and forwards only the one-time code. `handleSignInRedirect()` checks the response belongs to the sign-in this tab started and exchanges the code; the session is the block's usual `HttpOnly` cookie. No token is ever stored in JavaScript or put in a URL. The provider's `redirect_uri` is `<baseUrl><callbackPath>`, so `baseUrl` must be the origin your providers have registered (for providers federated through Cognito, the app origin the block registers on its managed-login client).
 - **Local development.** A frontend at `http://127.0.0.1:<port>` is always allowed, and the dev server's CORS already admits it. Open both the frontend and the dev server at `127.0.0.1` (not `localhost`), so they are the same site and the session cookie needs no `crossDomain`.
-- **Which providers.** Every provider that signs in by redirect: `oidcProviders` (including `stubIdp()` locally), `socialProviders` and `samlProviders`. Email and password sign-in keeps using `authApi` (`getAuthState` / `setAuthState`), which works across origins with the same CORS and cookie settings.
+- **Which providers.** Every `providers` entry, on either store, since each signs in by redirect: `type: 'oidc'`, `github()` / `customOauth2()` and `stubIdp()` (locally) on a `store: 'blocks'` block; social, SAML and `type: 'oidc'` on the default store. Email and password sign-in keeps using `authApi` (`getAuthState` / `setAuthState`), which works across origins with the same CORS and cookie settings.
 - **Sign-out.** `signOut()` ends the block's session. When the provider keeps its own session (Cognito managed login, or an OIDC provider with an `end_session_endpoint`), it also returns `logoutUrl`; `endProviderSession: true` navigates there. The provider then returns the browser to `redirects.postSignOutPath` on the API's origin.
 - **Names.** The methods follow Amplify JS v6 (`signInWithRedirect`, `fetchAuthSession`, `getCurrentUser`, `signOut`); the user and the errors are the block's own (`isAuthError(e, AuthErrors.InvalidRelay)`, …). Note that `user.userId` is the block's id; Amplify's `getCurrentUser().userId` is the Cognito `sub`, which is `user.userSub` here.
 
@@ -679,7 +741,7 @@ new Auth(scope, 'auth', {
   ```
 
   Unset, `users.signInWith` is `['username', 'email']` and `users.caseSensitive` is Cognito's default, case-sensitive — the shape `AuthCognito` created, kept so existing pools are untouched.
-- **Federate OIDC providers through Cognito if Amplify clients will sign in with them.** Amplify signs users in only through Cognito. A provider with `federateVia: 'direct'` (the default) creates no Cognito user, so moving it to `federateVia: 'cognito'` later gives each of its users a new `userSub`. Pick `'cognito'` from the start, or key your data on `user.federatedIdentity` (`{ providerId, sub }`), which is the same under both. On bearer requests from an extra client, `federatedIdentity` is filled only on an email or phone pool (as the templates create); on a username pool a password user could choose a `Google_…` username, so it's left out there.
+- **Federate OIDC providers through Cognito if Amplify clients will sign in with them.** Amplify signs users in only through Cognito. A `type: 'oidc'` entry of a `store: 'blocks'` block creates no Cognito user, so moving that provider to a default-store block later gives each of its users a new `userId` and `userSub`. Put it on the default store from the start, or key your data on `user.federatedIdentity` (`{ providerId, sub }`), which is the same under both. On bearer requests from an extra client, `federatedIdentity` is filled only on an email or phone pool (as the templates create); on a username pool a password user could choose a `Google_…` username, so it's left out there.
 - **Share `userSub`, not `userId`.** For a user-pool user, `user.userSub` is the Cognito `sub` — what Amplify's `getCurrentUser()` returns as `userId`. This block's `userId` is the Cognito username (Amplify's `username`).
 - **Give the Amplify app its own app client, and accept its tokens.** Don't widen the block's own `client`: Amplify's default sign-in flow (SRP) is off on it by design. Give the Amplify app its own public client and list it in `allowBearerAuth.clientIds`, so the guards accept the **access** tokens it sends as `Authorization: Bearer`. (ID tokens are never accepted. With Amplify JS, send `(await fetchAuthSession()).tokens?.accessToken.toString()`.)
 

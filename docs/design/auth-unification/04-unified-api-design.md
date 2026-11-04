@@ -1,5 +1,7 @@
 # Unified Auth Building Block — API Design Proposal
 
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+
 > **Status:** proposal for maintainer review. Planning only — no source files were modified.
 > **Scope:** replace `bb-auth-basic` + `bb-auth-cognito` + `bb-auth-oidc` + `auth-common` with **one**
 > Cognito-backed Building Block in which Cognito-native auth and generic OIDC/SAML federation are
@@ -192,6 +194,8 @@ const auth = new Auth(scope, 'auth', {
 export const authApi = auth.createApi();
 ```
 
+> **Superseded:** these cases use the pre-release keys. With `store` + `providers` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)), (b), (d) and (e) put every provider in `providers` with a `type` (`okta: { type: 'oidc', issuer, clientId, clientSecret }` federates through Cognito there, so `clientSecret` is required), SAML is `partner: { type: 'saml', metadataUrl }`, and (c) becomes `new Auth(scope, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer, clientId } } })`. (e) can no longer combine password users with backend-verified IdP users in one block; that takes two blocks.
+
 ### 2.2 Why three provider keys, keyed records, and what that buys
 
 **Keyed records, not an array.** The repo's current `AuthOIDC` takes `providers: readonly ProviderConfig[]`
@@ -218,6 +222,8 @@ cliff that falls exactly along the `socialProviders` / `oidcProviders` boundary.
 Okta in one undifferentiated record would hide a 200× pricing difference behind two adjacent lines of
 config. Keeping them in separate, separately-documented groups makes the expensive choice *visible at
 the call site* — the same instinct as **G18**, applied to dollars instead of latency.
+
+> **Superseded:** the shipped design took the "mandatory `type` on every entry" route rejected above, because a `type` discriminant per store's union is what lets the compiler accept only the providers that store supports. The pricing cliff is now visible through `store` and `type` instead of through the key name ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)).
 
 ### 2.2a What this promotes from the existing blocks vs. what it replaces
 
@@ -597,7 +603,7 @@ export interface OidcProviderOptions extends OAuthCredentials, ProviderCommon {
 	 * @default see OPEN DECISION 0 — this default is the single most consequential
 	 * choice in the design and is not yet settled.
 	 */
-	federateVia?: 'direct' | 'cognito';
+	federateVia?: 'direct' | 'cognito'; // Superseded: replaced by the block-level `store` (D-023 in docs/DECISIONS.md)
 	/**
 	 * Claim to read group membership from, so `requireRole()` works for users of
 	 * this provider. Only meaningful with `federateVia: 'direct'`, where the user
@@ -925,6 +931,7 @@ export type ProviderIdOf<O extends AuthOptions> =
 	| (keyof NonNullable<O['socialProviders']> & string)
 	| (keyof NonNullable<O['oidcProviders']> & string)
 	| (keyof NonNullable<O['samlProviders']> & string);
+// Superseded: with one `providers` map this is `keyof O['providers'] & string` (D-023 in docs/DECISIONS.md).
 ```
 Layers: M A C B. `handleCallback` is **not public** — it is reached only through the callback
 RawRoute (§4.3), which removes a footgun that exists today.
@@ -1664,6 +1671,8 @@ repo and agree with its substance, with one correction: it undercounts **unified
 **Recommendation: (c), with `federateVia` defaulting to `'direct'` for `oidcProviders`;
 `socialProviders` and `samlProviders` always federate via Cognito.**
 
+> **Superseded:** both engines still ship, but the choice moved from the provider to the block: `store: 'blocks'` (direct) or the default `store: 'cognito'` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). Mixing the two kinds of user in one block is a non-goal; an app that needs both uses two `Auth` blocks.
+
 Reasoning:
 1. **(b) is not actually simpler than (c).** SAML has no direct implementation in this repo and social
    providers are *cheap* via Cognito (they share the 10,000-MAU tier) **and** get pool records — so
@@ -1718,6 +1727,8 @@ under the key `google` is redundant. (c) One record without a discriminant — *
 key with a social shape typechecks. (d) `providers: [google({…}), oidc({ id: 'okta', … })]`, an
 Auth.js-style factory array — fully type-safe and most extensible, but least declarative.
 **Recommendation: (a).**
+
+> **Superseded:** (b) shipped, one `providers` record with a required `type`, typed per `store` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). One namespace also removed the cross-record id-collision check.
 
 **4. Bare OAuth 2.0 (GitHub and any `customOauth2` provider).** *Subsumed by OPEN DECISION 0 for the
 generic-OIDC case; this is the residue.* GitHub speaks OAuth 2.0 without an ID token, so **no** Cognito

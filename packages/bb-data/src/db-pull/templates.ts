@@ -192,10 +192,11 @@ import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { supabaseCrud } from './supabase.js';
 
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true, name: 'google-client-secret' });
+// store: 'blocks' — your backend verifies the provider's tokens; no Cognito user pool.
 const auth = new Auth(scope, 'auth', {
-  emailPassword: false,
-  oidcProviders: {
-    google: { issuer: 'https://accounts.google.com', clientId: 'your-google-client-id', clientSecret: googleSecret },
+  store: 'blocks',
+  providers: {
+    google: { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'your-google-client-id', clientSecret: googleSecret },
   },
 });
 
@@ -204,9 +205,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 \`\`\`
 
-\`Auth\` also supports email + password (its default), Auth0, Clerk and any other OIDC
-provider, social sign-in and SAML. See "Which option and why" in the @aws-blocks/bb-auth
-package README for which to pick and how to set each one up.
+\`Auth\` also supports Auth0, Clerk and any other OIDC provider here, and, in a block on
+the default \`store\` (a Cognito user pool), email + password, social sign-in and SAML.
+See "Which option and why" in the @aws-blocks/bb-auth package README for which to pick
+and how to set each one up.
 
 **Migration-specific note:** ensure the \`userId\` your OIDC provider returns matches
 the format already stored in your Supabase database (e.g. the \`sub\` claim in your
@@ -218,12 +220,12 @@ The \`userId\` from your auth BB is passed to \`withRLS()\`, which sets
 \`current_setting('request.jwt.claims', true)::jsonb->>'sub'\` work
 with any auth provider that returns a stable userId.
 
-**Key rule:** for a user who signs in through an \`oidcProviders\` entry (Auth0, Clerk,
-Okta… with the default \`federateVia: 'direct'\`), \`Auth\`'s user carries the provider's
+**Key rule:** for a user who signs in through a \`providers\` entry of a \`store: 'blocks'\`
+block (Auth0, Clerk, Okta… as \`type: 'oidc'\`), \`Auth\`'s user carries the provider's
 verified \`claims\`, and \`supabaseCrud()\` passes them on: \`claims.sub\` (the raw provider
 \`sub\`) is what reaches RLS — not the iss-prefixed \`userId\`. Existing rows keyed on the
 raw sub keep matching automatically. A user of a Cognito user pool (email + password,
-social, SAML, or \`federateVia: 'cognito'\`) has no \`claims\`, so RLS sees their \`userId\`:
+social, SAML, or \`type: 'oidc'\` on the default store) has no \`claims\`, so RLS sees their \`userId\`:
 re-key rows for those users to it.
 
 ## Verify It Works
@@ -476,6 +478,6 @@ Your migrated tables store the raw provider \`sub\` as the user identifier
 by default, which is iss-prefixed (e.g., \`https://tenant.auth0.com/:auth0|abc123\`).
 
 When JOINing migrated tables with new tables, use \`user.claims?.sub\` (the raw sub,
-on users who signed in through an \`oidcProviders\` entry directly) as the foreign key
+on users of a \`store: 'blocks'\` block) as the foreign key
 in new tables for consistency.
 `;

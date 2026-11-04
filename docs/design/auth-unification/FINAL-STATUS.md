@@ -1,5 +1,7 @@
 # Auth unification — final status (2026-10-06)
 
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+
 **Branch:** `refactor/auth-blocks`, published for reference as one squashed draft PR (#711). It includes `origin/main` @ `c20cbfd2` (sixth merge, R111; the earlier ones were `12c0ace9` R94, `da6d4c7d` R98, `440ecce7` R99, `60616b1e` and `30fc4c2b` R107). **Gates last ran after that merge** (below). The AWS table predates the merges except R106 (the client-driven options, 24/24 at `18731478`). Later merges of `main` (R117, R123, R125, R126, R128; the latest is `3535c2ab`) are recorded in `LATER-DISCUSSION.md` with their gates.
 
 ## Verdict
