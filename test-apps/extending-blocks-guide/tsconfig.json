@@ -1,4 +1,10 @@
 {
+  // `npm run typecheck` here does NOT depend on the generated-types layout.
+  // This harness has no frontend: the include below roots aws-blocks/ source
+  // directly, and nothing imports the bare `aws-blocks` package, so tsc never
+  // resolves exports["."].types and a missing (gitignored) aws-blocks/.types/
+  // is irrelevant. There is deliberately no `prepare`/`prebuild` hook, unlike a
+  // scaffolded app. Verified: removing .types/ still typechecks clean.
   "compilerOptions": {
     "target": "ES2022",
     "module": "NodeNext",

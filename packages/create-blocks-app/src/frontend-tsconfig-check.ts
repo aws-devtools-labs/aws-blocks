@@ -64,11 +64,22 @@ export function checkFrontendTsconfig(file: string): TsconfigFinding | undefined
   // An explicit exclude of the backend settles it, whatever include says.
   if (Array.isArray(config.exclude) && config.exclude.some((e) => e === ENTRY || e === `${ENTRY}/`)) return undefined;
 
+  // A local include is authoritative, so `extends` need not be consulted here:
+  // an inheriting config *replaces* the base's `files`/`include`/`exclude`
+  // rather than merging with them (unlike `compilerOptions`), so a base cannot
+  // re-broaden the roots. That is why `extends` matters only below, where there
+  // is no local include to replace it.
   if (Array.isArray(config.include)) {
     return config.include.some(patternCoversBackend) ? { file, kind: 'covers-backend' } : undefined;
   }
   // No local include: `files` alone limits the program, and a base config may
   // supply one — otherwise everything, including the backend, is a root.
+  //
+  // Known gap, accepted: a config with `files` *and* `extends` is treated as
+  // fine, though a base `include` would survive (the child overrode only
+  // `files`) and could root the backend. Reporting it would mean flagging every
+  // `files`-based config that extends anything, and the cost of a miss is only
+  // a hint we don't print — the next typecheck still fails loudly.
   if (config.include === undefined && config.files === undefined) {
     return config.extends === undefined ? { file, kind: 'covers-backend' } : { file, kind: 'unknown-extends' };
   }
