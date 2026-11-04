@@ -15,8 +15,9 @@ import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import { requiresUserPool } from './cdk/contract.js';
 import { Auth, stubIdp } from './index.cdk.js';
+import { resolveOptions } from './resolve-options.js';
 import { synthIdentity } from './test-support/identity.js';
-import type { AuthOptions, AuthShape } from './types.js';
+import type { AuthOptions, AuthShape, DirectOidcProvider, SamlProvider } from './types.js';
 
 /**
  * Every runtime method of {@link AuthShape} (`createApi` and `protect` have their own CDK stand-ins).
@@ -82,7 +83,12 @@ function untyped(options: unknown): AuthOptions {
 	return options as AuthOptions;
 }
 
-const OKTA = { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } };
+/** A directly federated OIDC provider, for a `store: 'blocks'` block. */
+const OKTA: Record<string, DirectOidcProvider> = {
+	okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' },
+};
+/** A pool-backed provider that needs no secret, for a Cognito block with `emailPassword: false`. */
+const CORP: Record<string, SamlProvider> = { corp: { type: 'saml', metadataUrl: 'https://idp.example.com/m' } };
 
 describe('Auth (CDK) — synthGuard stubs', () => {
 	test('the stub list covers every AuthShape runtime method (compile-time)', () => {
@@ -151,17 +157,17 @@ describe('Auth (CDK) — requiresUserPool (Q6)', () => {
 		['zero-config (email + password default)', undefined, true],
 		['emailPassword: true', { emailPassword: true }, true],
 		['emailPassword options object', { emailPassword: { selfSignUp: false } }, true],
-		['direct OIDC only', { emailPassword: false, oidcProviders: OKTA }, false],
+		["store: 'blocks' (direct OIDC only)", { store: 'blocks', providers: OKTA }, false],
 		[
-			"OIDC with federateVia: 'cognito'",
+			"type: 'oidc' on the Cognito store",
 			{
 				emailPassword: false,
-				oidcProviders: {
+				providers: {
 					okta: {
+						type: 'oidc',
 						issuer: 'https://dev-1.okta.com',
 						clientId: '0oa1',
 						clientSecret: secret,
-						federateVia: 'cognito',
 					},
 				},
 			},
@@ -169,20 +175,27 @@ describe('Auth (CDK) — requiresUserPool (Q6)', () => {
 		],
 		[
 			'social',
-			{ emailPassword: false, socialProviders: { google: { clientId: 'g', clientSecret: secret } } },
+			{ emailPassword: false, providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } } },
 			true,
 		],
-		['SAML', { emailPassword: false, samlProviders: { corp: { metadataUrl: 'https://idp.example.com/m' } } }, true],
+		['SAML', { emailPassword: false, providers: CORP }, true],
 		['wrapped existing pool', { emailPassword: false, userPool: Auth.fromExisting('us-east-1_x') }, true],
-		[
-			'an unset social entry does not count',
-			{ emailPassword: false, oidcProviders: OKTA, socialProviders: {} },
-			false,
-		],
 	];
 	for (const [name, options, expected] of cases) {
-		test(`${name} → ${expected}`, () => assert.strictEqual(requiresUserPool(options), expected));
+		// The CDK layer reads the resolved options, exactly as the constructor resolves them.
+		test(`${name} → ${expected}`, () =>
+			assert.strictEqual(requiresUserPool(resolveOptions(options ?? {})), expected));
 	}
+	test('an unset social entry does not count (resolved shape)', () => {
+		assert.strictEqual(
+			requiresUserPool({
+				emailPassword: false,
+				oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+				socialProviders: {},
+			}),
+			false,
+		);
+	});
 });
 
 describe('Auth (CDK) — synth-time option checks', () => {
@@ -258,8 +271,8 @@ describe('Auth (CDK) — synth-time option checks', () => {
 			assert.match(message, /Auth\.fromExisting/);
 		});
 
-		test('refused when the configuration creates no pool (direct OIDC only)', () => {
-			const message = constructError({ email: sender, emailPassword: false, oidcProviders: OKTA });
+		test("refused when the configuration creates no pool (store: 'blocks')", () => {
+			const message = constructError(untyped({ email: sender, store: 'blocks', providers: OKTA }));
 			assert.match(message, /`email` .* no user pool/);
 		});
 
@@ -328,18 +341,18 @@ describe('Auth (CDK) — synth-time option checks', () => {
 
 	test('emailPassword: false with mfa, passkeys or deviceTracking throws (email + password only)', () => {
 		assert.match(
-			constructError({ emailPassword: false, oidcProviders: OKTA, mfa: 'optional' }),
+			constructError({ emailPassword: false, providers: CORP, mfa: 'optional' }),
 			/^Auth 'auth': `mfa: 'optional'` needs email \+ password sign-in, which `emailPassword: false` disables\./,
 		);
 		assert.match(
-			constructError({ emailPassword: false, oidcProviders: OKTA, users: { deviceTracking: {} } }),
+			constructError({ emailPassword: false, providers: CORP, users: { deviceTracking: {} } }),
 			/`users\.deviceTracking` needs email \+ password sign-in/,
 		);
 	});
 
 	test('a real synth of emailPassword: false with mfa or passkeys fails, naming both options', () => {
 		// A child process under `--conditions=cdk`, as `cdk synth` runs the app.
-		const okta = "oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }";
+		const okta = "providers: { corp: { type: 'saml', metadataUrl: 'https://idp.example.com/m' } }";
 		assert.throws(
 			() => synthIdentity(`new Auth(stack, 'auth', { emailPassword: false, ${okta}, mfa: 'required' })`),
 			/`mfa: 'required'` needs email \+ password sign-in, which `emailPassword: false` disables/,
@@ -357,14 +370,17 @@ describe('Auth (CDK) — synth-time option checks', () => {
 
 	test('a stubIdp() provider throws at synth outside a sandbox: the stub IdP is local and sandbox only', () => {
 		const configs: AuthOptions[] = [
-			{ emailPassword: false, oidcProviders: { corp: stubIdp() } },
-			{ oidcProviders: { ...OKTA, corp: stubIdp({ users: [{ sub: 'u', email: 'u@example.com', name: 'U' }] }) } },
+			{ store: 'blocks', providers: { corp: stubIdp() } },
+			{
+				store: 'blocks',
+				providers: { ...OKTA, corp: stubIdp({ users: [{ sub: 'u', email: 'u@example.com', name: 'U' }] }) },
+			},
 		];
 		for (const options of configs) {
 			const message = constructError(options);
 			assert.match(
 				message,
-				/oidcProviders\.corp is a stubIdp\(\) provider, which is only available in local development and sandbox deployments/,
+				/providers\.corp is a stubIdp\(\) provider, which is only available in local development and sandbox deployments/,
 			);
 			// …and says how to keep the stub for local and sandbox only.
 			assert.match(message, /sandboxMode=true/);
@@ -376,15 +392,15 @@ describe('Auth (CDK) — synth-time option checks', () => {
 		assert.match(constructError({ emailPassword: false }), /leaves no way to sign in/);
 	});
 
-	test('admin on a pool-less (direct-only) configuration throws', () => {
+	test("admin on a pool-less (store: 'blocks') configuration throws", () => {
 		assert.match(
-			constructError({ emailPassword: false, oidcProviders: OKTA, admin: {} }),
-			/provisions no user pool/,
+			constructError(untyped({ store: 'blocks', providers: OKTA, admin: {} })),
+			/`admin` needs `store: 'cognito'`/,
 		);
 	});
 
 	test('a fullId over 128 chars throws even when no pool is provisioned', () => {
 		const longId = 'a'.repeat(130);
-		assert.match(constructError({ emailPassword: false, oidcProviders: OKTA }, longId), /Cognito's limit is 128/);
+		assert.match(constructError({ store: 'blocks', providers: OKTA }, longId), /Cognito's limit is 128/);
 	});
 });

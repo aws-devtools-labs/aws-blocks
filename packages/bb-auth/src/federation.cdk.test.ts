@@ -3,8 +3,9 @@
 
 /**
  * Hosted-UI federation infrastructure (D3b): what `Auth` provisions for social,
- * SAML and `federateVia: 'cognito'` providers, and — just as important — that
- * it provisions nothing new otherwise.
+ * SAML and Cognito-federated OIDC providers (`type: 'oidc'` on the default
+ * `store: 'cognito'`), and — just as important — that it provisions nothing new
+ * otherwise (including for a `store: 'blocks'` block).
  *
  * Template tests synth under `--conditions=cdk` (see `test-support/cdk-synth.ts`);
  * the synth-time checks run in process, like `index.cdk.test.ts`.
@@ -51,25 +52,26 @@ const oktaSecret = new AppSetting(stack, 'okta-secret', { secret: true });
 `;
 
 const P = {
-	google: "google: { clientId: 'g-client', clientSecret: googleSecret }",
-	facebook: "facebook: { clientId: 'fb-app', clientSecret: facebookSecret }",
-	amazon: "amazon: { clientId: 'amzn1.application-oa2-client.x', clientSecret: amazonSecret }",
-	apple: "apple: { clientId: 'com.example.web', teamId: 'TEAM123', keyId: 'KEY456', privateKey: appleKey }",
-	oktaDirect: "okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' }",
-	oktaCognito:
-		"okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: oktaSecret, federateVia: 'cognito' }",
-	corpUrl: "corp: { metadataUrl: 'https://idp.example.com/metadata' }",
+	google: "google: { type: 'google', clientId: 'g-client', clientSecret: googleSecret }",
+	facebook: "facebook: { type: 'facebook', clientId: 'fb-app', clientSecret: facebookSecret }",
+	amazon: "amazon: { type: 'amazon', clientId: 'amzn1.application-oa2-client.x', clientSecret: amazonSecret }",
+	apple: "apple: { type: 'apple', clientId: 'com.example.web', teamId: 'TEAM123', keyId: 'KEY456', privateKey: appleKey }",
+	oktaDirect: "okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' }",
+	oktaCognito: "okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: oktaSecret }",
+	corpUrl: "corp: { type: 'saml', metadataUrl: 'https://idp.example.com/metadata' }",
 } as const;
 
 const CONFIGS = {
 	default: "new Auth(stack, 'auth')",
-	directOnly: `new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { ${P.oktaDirect} } })`,
-	socialOnly: `new Auth(stack, 'auth', { emailPassword: false, socialProviders: { ${P.google} } })`,
-	samlOnly: `new Auth(stack, 'auth', { emailPassword: false, samlProviders: { ${P.corpUrl} } })`,
-	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { ${P.oktaCognito} } })`,
-	mixed: `new Auth(stack, 'auth', { oidcProviders: { ${P.oktaDirect} }, socialProviders: { ${P.google}, ${P.apple} }, samlProviders: { ${P.corpUrl} } })`,
-	allSocial: `new Auth(stack, 'auth', { socialProviders: { ${P.google}, ${P.facebook}, ${P.amazon}, ${P.apple} } })`,
-	defaultPlusGoogle: `new Auth(stack, 'auth', { socialProviders: { ${P.google} } })`,
+	directOnly: `new Auth(stack, 'auth', { store: 'blocks', providers: { ${P.oktaDirect} } })`,
+	socialOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.google} } })`,
+	samlOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.corpUrl} } })`,
+	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.oktaCognito} } })`,
+	// Password + social + SAML in `auth`; the directly federated okta can no longer share it, so it gets its own
+	// `store: 'blocks'` block, built first (the comma expression keeps `auth` the block under test).
+	mixed: `(new Auth(stack, 'sso', { store: 'blocks', providers: { ${P.oktaDirect} } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
+	allSocial: `new Auth(stack, 'auth', { providers: { ${P.google}, ${P.facebook}, ${P.amazon}, ${P.apple} } })`,
+	defaultPlusGoogle: `new Auth(stack, 'auth', { providers: { ${P.google} } })`,
 } as const;
 
 interface SynthOptions {
@@ -275,10 +277,18 @@ describe('Auth federation — provisioning matrix', () => {
 		});
 	}
 
-	test('directOnly within mixed is not registered with Cognito (D0: direct by default)', () => {
+	test("mixed's directly federated okta (its own `store: 'blocks'` block) is not registered with Cognito", () => {
 		const { template } = synth(CONFIGS.mixed);
 		assert.strictEqual(byPath(template, 'idp-okta/Default'), undefined);
 		assert.ok(!(props(hostedUiClient(template)).SupportedIdentityProviders as string[]).includes('okta'));
+		const ssoPaths = Object.values(template.Resources)
+			.map((r) => String(r.Metadata?.['aws:cdk:path'] ?? ''))
+			.filter((p) => p.startsWith('TestStack/sso/'));
+		assert.ok(ssoPaths.length > 0, 'the sso block is in the stack');
+		assert.deepStrictEqual(
+			ssoPaths.filter((p) => /^TestStack\/sso\/(pool|client|domain|hosted-ui-client|idp-|saml-)/.test(p)),
+			[],
+		);
 	});
 
 	test('adding a social provider to the default config is additive: every default resource is unchanged', () => {
@@ -397,7 +407,7 @@ describe('Auth federation — callback and logout URLs are the real front doors'
 		const p = props(
 			hostedUiClient(
 				synth(
-					`new Auth(stack, 'auth', { socialProviders: { ${P.google} }, redirects: { callbackPath: '/aws-blocks/auth/cb', signOutPath: '/aws-blocks/auth/bye' } })`,
+					`new Auth(stack, 'auth', { providers: { ${P.google} }, redirects: { callbackPath: '/aws-blocks/auth/cb', signOutPath: '/aws-blocks/auth/bye' } })`,
 				).template,
 			),
 		);
@@ -462,7 +472,7 @@ describe('Auth federation — identity-provider registration', () => {
 
 	test('Cognito-federated OIDC: issuer, attributes_request_method, endpoints, client secret by name', () => {
 		const { template } = synth(
-			`new Auth(stack, 'auth', { oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: oktaSecret, federateVia: 'cognito', attributesRequestMethod: 'POST', scopes: ['openid', 'email'], endpoints: { authorization: 'https://dev-1.okta.com/a', token: 'https://dev-1.okta.com/t', userInfo: 'https://dev-1.okta.com/u', jwks: 'https://dev-1.okta.com/k' }, attributeMapping: { given_name: 'given_name' } } } })`,
+			`new Auth(stack, 'auth', { providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: oktaSecret, attributesRequestMethod: 'POST', scopes: ['openid', 'email'], endpoints: { authorization: 'https://dev-1.okta.com/a', token: 'https://dev-1.okta.com/t', userInfo: 'https://dev-1.okta.com/u', jwks: 'https://dev-1.okta.com/k' }, attributeMapping: { given_name: 'given_name' } } } })`,
 		);
 		const p = idpRegistration(template, 'okta');
 		assert.strictEqual(p.ProviderName, 'okta');
@@ -501,7 +511,7 @@ describe('Auth federation — identity-provider registration', () => {
 		const p = props(
 			mustByPath(
 				synth(
-					"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }] }, samlProviders: { entra: { metadataFile: '<EntityDescriptor/>', signRequest: true, attributeMapping: { tenant: 'http://schemas.microsoft.com/identity/claims/tenantid' } } } })",
+					"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }] }, providers: { entra: { type: 'saml', metadataFile: '<EntityDescriptor/>', signRequest: true, attributeMapping: { tenant: 'http://schemas.microsoft.com/identity/claims/tenantid' } } } })",
 				).template,
 				'saml-entra',
 			),
@@ -515,6 +525,69 @@ describe('Auth federation — identity-provider registration', () => {
 			email: 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
 			'custom:tenant': 'http://schemas.microsoft.com/identity/claims/tenantid',
 		});
+	});
+
+	test('every Cognito-store provider type registers the same IdP resources as the replaced provider maps did', () => {
+		// Logical ids, types and provider names recorded from a synth of the equivalent
+		// `socialProviders` / `samlProviders` / `oidcProviders` (`federateVia: 'cognito'`) config.
+		const { template } = synth(
+			`new Auth(stack, 'auth', { providers: { ${P.google}, ${P.facebook}, ${P.amazon}, ${P.apple}, ${P.corpUrl}, ${P.oktaCognito} } })`,
+		);
+		const expected: [
+			path: string,
+			logicalId: string,
+			type: string,
+			providerName?: string,
+			providerType?: string,
+		][] = [
+			['domain/Resource', 'authdomain7342FA14', 'AWS::Cognito::UserPoolDomain'],
+			['hosted-ui-client/Resource', 'authhosteduiclient8CF4B242', 'AWS::Cognito::UserPoolClient'],
+			['idp-google/Default', 'authidpgoogleA22FC3F1', 'Custom::BlocksAuthIdentityProvider', 'Google', 'Google'],
+			[
+				'idp-facebook/Default',
+				'authidpfacebookF90C4C7D',
+				'Custom::BlocksAuthIdentityProvider',
+				'Facebook',
+				'Facebook',
+			],
+			[
+				'idp-amazon/Default',
+				'authidpamazonF48463D5',
+				'Custom::BlocksAuthIdentityProvider',
+				'LoginWithAmazon',
+				'LoginWithAmazon',
+			],
+			[
+				'idp-apple/Default',
+				'authidpappleB8B67C23',
+				'Custom::BlocksAuthIdentityProvider',
+				'SignInWithApple',
+				'SignInWithApple',
+			],
+			['saml-corp', 'authsamlcorp39928492', 'AWS::Cognito::UserPoolIdentityProvider', 'corp', 'SAML'],
+			['idp-okta/Default', 'authidpoktaB71894C8', 'Custom::BlocksAuthIdentityProvider', 'okta', 'OIDC'],
+		];
+		for (const [path, logicalId, type, providerName, providerType] of expected) {
+			const [id, resource] = mustByPath(template, path);
+			assert.strictEqual(id, logicalId, path);
+			assert.strictEqual(resource.Type, type, path);
+			if (providerName) {
+				assert.strictEqual(props([id, resource]).ProviderName, providerName, path);
+				assert.strictEqual(props([id, resource]).ProviderType, providerType, path);
+			}
+		}
+		assert.deepStrictEqual(
+			federationResources(template).filter((p) => !p.includes('/idp-registration')),
+			expected.map(([path]) => `TestStack/auth/${path}`).sort(),
+		);
+		assert.deepStrictEqual(props(hostedUiClient(template)).SupportedIdentityProviders, [
+			'Google',
+			'Facebook',
+			'LoginWithAmazon',
+			'SignInWithApple',
+			'corp',
+			'okta',
+		]);
 	});
 
 	test('no secret value or ssm-secure reference ever reaches the template', () => {
@@ -564,7 +637,7 @@ describe('Auth federation — identity-provider registration', () => {
 
 describe('Auth federation — a provider secret resolves to its AppSetting parameterName', () => {
 	const withSecret = (secretExpr: string) =>
-		`new Auth(stack, 'auth', { socialProviders: { google: { clientId: 'g', clientSecret: ${secretExpr} } } })`;
+		`new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g', clientSecret: ${secretExpr} } } })`;
 
 	/** The `client_secret` SSM name registered for google, and the SSM ARNs the registration Lambda may read. */
 	function registered(template: CfnTemplateJson): { name: unknown; ssmResources: string } {
@@ -612,7 +685,7 @@ describe('Auth federation — a provider secret resolves to its AppSetting param
 	test('a non-secret AppSetting is refused (a plaintext provider secret)', () => {
 		assert.throws(
 			() => synth(withSecret("new AppSetting(stack, 'plain', { value: 'x' })")),
-			/socialProviders\.google\.clientSecret \('TestStack-plain', SSM parameter '\/TestStack-plain'\) must be an AppSetting with `secret: true`/,
+			/providers\.google\.clientSecret \('TestStack-plain', SSM parameter '\/TestStack-plain'\) must be an AppSetting with `secret: true`/,
 		);
 		assert.throws(
 			() => synth(withSecret("AppSetting.fromExisting(stack, 'ext-plain', { name: '/shared/plain' })")),
@@ -623,7 +696,7 @@ describe('Auth federation — a provider secret resolves to its AppSetting param
 	test('a hand-made { fullId, get } object is refused: it has no parameter name', () => {
 		assert.throws(
 			() => synth(withSecret("{ fullId: 'TestStack-nowhere', get: async () => 'x' }")),
-			/socialProviders\.google\.clientSecret \('TestStack-nowhere'\) is not an AppSetting — it has no SSM parameter name/,
+			/providers\.google\.clientSecret \('TestStack-nowhere'\) is not an AppSetting — it has no SSM parameter name/,
 		);
 	});
 });
@@ -632,7 +705,7 @@ describe('Auth federation — a provider secret resolves to its AppSetting param
 
 describe('Auth federation — a provider secret given as a Secret', () => {
 	const withSecret = (secretExpr: string) =>
-		`new Auth(stack, 'auth', { socialProviders: { google: { clientId: 'g', clientSecret: ${secretExpr} } } })`;
+		`new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g', clientSecret: ${secretExpr} } } })`;
 
 	/** Every statement of the registration Lambda's policy. */
 	function registrationStatements(template: CfnTemplateJson): Record<string, unknown>[] {
@@ -691,7 +764,7 @@ describe('Auth federation — a provider secret given as a Secret', () => {
 
 	test('Apple private key and a cognito-federated OIDC secret accept a Secret too; AppSettings keep SSM', () => {
 		const { template } = synth(
-			`new Auth(stack, 'auth', { socialProviders: { ${P.google}, apple: { clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: new Secret(stack, 'apple-sm') } }, oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: new Secret(stack, 'okta-sm'), federateVia: 'cognito' } } })`,
+			`new Auth(stack, 'auth', { providers: { ${P.google}, apple: { type: 'apple', clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: new Secret(stack, 'apple-sm') }, okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: new Secret(stack, 'okta-sm') } } })`,
 		);
 		const apple = idpRegistration(template, 'apple');
 		assert.deepStrictEqual(apple.SecretDetails, {});
@@ -711,7 +784,7 @@ describe('Auth federation — a provider secret given as a Secret', () => {
 			synth(construct).warnings.filter((w) => /ProviderSecretWithoutValue|creates with no value/.test(w.message));
 		const valueless = warningsFor(withSecret("new Secret(stack, 'google-sm')"));
 		assert.strictEqual(valueless.length, 1);
-		assert.match(valueless[0].message, /socialProviders\.google\.clientSecret is the Secret 'TestStack-google-sm'/);
+		assert.match(valueless[0].message, /providers\.google\.clientSecret is the Secret 'TestStack-google-sm'/);
 		assert.match(valueless[0].message, /generate: true/);
 		assert.match(valueless[0].message, /npm run secret -- set/);
 		assert.match(valueless[0].message, /already exists/);
@@ -729,10 +802,10 @@ describe('Auth federation — a provider secret given as a Secret', () => {
 		);
 		assert.deepStrictEqual(warningsFor(CONFIGS.socialOnly), [], 'an AppSetting is seeded by the deploy');
 		const apple = warningsFor(
-			`new Auth(stack, 'auth', { socialProviders: { apple: { clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: new Secret(stack, 'apple-sm') } } })`,
+			`new Auth(stack, 'auth', { providers: { apple: { type: 'apple', clientId: 'com.example.web', teamId: 'T', keyId: 'K', privateKey: new Secret(stack, 'apple-sm') } } })`,
 		);
 		assert.strictEqual(apple.length, 1);
-		assert.match(apple[0].message, /socialProviders\.apple\.privateKey/);
+		assert.match(apple[0].message, /providers\.apple\.privateKey/);
 	});
 
 	test('an AppSetting-only configuration adds no Secrets Manager property or grant', () => {
@@ -788,7 +861,7 @@ describe('Auth federation — the hosted-UI domain prefix', () => {
 		const domain = props(
 			mustByPath(
 				synth(
-					`new Auth(stack, 'auth', { socialProviders: { ${P.google} }, hostedUi: { domainPrefix: 'my-shop-login' } })`,
+					`new Auth(stack, 'auth', { providers: { ${P.google} }, hostedUi: { domainPrefix: 'my-shop-login' } })`,
 				).template,
 				'domain/Resource',
 			),
@@ -825,7 +898,7 @@ describe('Auth federation — emailPassword: false leaves no password flow on `c
 	test("with users.authFlow: 'USER_AUTH' too: refresh-token only (no ALLOW_USER_AUTH)", () => {
 		const p = props(
 			clientOf(
-				`new Auth(stack, 'auth', { emailPassword: false, users: { authFlow: 'USER_AUTH' }, socialProviders: { ${P.google} } })`,
+				`new Auth(stack, 'auth', { emailPassword: false, users: { authFlow: 'USER_AUTH' }, providers: { ${P.google} } })`,
 			),
 		);
 		assert.deepStrictEqual(p.ExplicitAuthFlows, ['ALLOW_REFRESH_TOKEN_AUTH']);
@@ -852,53 +925,47 @@ function constructError(options: unknown): string {
 
 /** Stands in for an `AppSetting` (CDK layer): `parameterName` and `secret` are what `Auth` reads. */
 const secret = { fullId: 'TestStack-s', get: async () => 'x', parameterName: '/TestStack-s', secret: true };
-const google = { clientId: 'g', clientSecret: secret };
+const google = { type: 'google', clientId: 'g', clientSecret: secret };
 
 describe('Auth federation — synth-time checks', () => {
-	test('a provider id used in two records', () => {
+	test('one entry per social type: a social entry must be keyed by its type', () => {
+		// One `providers` map cannot repeat an id; what remains is two entries of one social type.
 		assert.match(
-			constructError({
-				socialProviders: { google },
-				oidcProviders: { google: { issuer: 'https://accounts.google.com', clientId: 'x' } },
-			}),
-			/'google' is configured in both `socialProviders` and `oidcProviders`/,
-		);
-		assert.match(
-			constructError({
-				oidcProviders: { corp: { issuer: 'https://idp.example.com', clientId: 'x' } },
-				samlProviders: { corp: { metadataUrl: 'https://idp.example.com/m' } },
-			}),
-			/'corp' is configured in both `oidcProviders` and `samlProviders`/,
+			constructError({ providers: { google, gmail: { ...google } } }),
+			/providers\.gmail has `type: 'google'`, so its key must be `google`/,
 		);
 	});
 
 	test('SAML needs exactly one metadata source, and an https URL', () => {
-		assert.match(constructError({ samlProviders: { corp: {} } }), /exactly one of `metadataUrl` or `metadataFile`/);
 		assert.match(
-			constructError({ samlProviders: { corp: { metadataUrl: 'https://x/m', metadataFile: '<x/>' } } }),
+			constructError({ providers: { corp: { type: 'saml' } } }),
+			/exactly one of `metadataUrl` or `metadataFile`/,
+		);
+		assert.match(
+			constructError({ providers: { corp: { type: 'saml', metadataUrl: 'https://x/m', metadataFile: '<x/>' } } }),
 			/exactly one of/,
 		);
 		assert.match(
-			constructError({ samlProviders: { corp: { metadataUrl: 'http://idp.example.com/m' } } }),
+			constructError({ providers: { corp: { type: 'saml', metadataUrl: 'http://idp.example.com/m' } } }),
 			/must use https/,
 		);
 	});
 
 	test('Apple needs a team id and key id; social secrets must be AppSetting references', () => {
 		assert.match(
-			constructError({ socialProviders: { apple: { clientId: 'c', keyId: 'k', privateKey: secret } } }),
-			/socialProviders\.apple\.teamId is required/,
+			constructError({ providers: { apple: { type: 'apple', clientId: 'c', keyId: 'k', privateKey: secret } } }),
+			/providers\.apple\.teamId is required/,
 		);
 		assert.match(
-			constructError({ socialProviders: { google: { clientId: 'g', clientSecret: 'plain-text' } } }),
+			constructError({ providers: { google: { ...google, clientSecret: 'plain-text' } } }),
 			/clientSecret must be an AppSetting reference/,
 		);
 	});
 
-	test("federateVia: 'cognito' OIDC without a client secret", () => {
+	test("a `type: 'oidc'` provider of the Cognito store without a client secret", () => {
 		assert.match(
 			constructError({
-				oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: 'x', federateVia: 'cognito' } },
+				providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: 'x' } },
 			}),
 			/Cognito is a confidential client/,
 		);
@@ -906,45 +973,45 @@ describe('Auth federation — synth-time checks', () => {
 
 	test('OIDC / SAML ids must be valid, unreserved Cognito provider names', () => {
 		assert.match(
-			constructError({ samlProviders: { ab: { metadataUrl: 'https://x/m' } } }),
+			constructError({ providers: { ab: { type: 'saml', metadataUrl: 'https://x/m' } } }),
 			/not a valid Cognito provider name/,
 		);
 		assert.match(
-			constructError({ samlProviders: { 'my corp': { metadataUrl: 'https://x/m' } } }),
+			constructError({ providers: { 'my corp': { type: 'saml', metadataUrl: 'https://x/m' } } }),
 			/not a valid Cognito provider name/,
 		);
 		assert.match(
-			constructError({ samlProviders: { Google: { metadataUrl: 'https://x/m' } } }),
+			constructError({ providers: { Google: { type: 'saml', metadataUrl: 'https://x/m' } } }),
 			/reserved by Cognito/,
 		);
 	});
 
-	test('an unknown social provider key (untyped callers)', () => {
-		// Rejected by the shared unknown-option check (D1b), before the CDK layer's own.
+	test('an unknown provider type (untyped callers)', () => {
+		// Rejected by the options resolver, before the CDK layer's own checks.
 		assert.match(
-			constructError({ socialProviders: { github: google } }),
-			/`socialProviders\.github`: socialProviders supports google, facebook, amazon and apple\. Configure any other IdP under `oidcProviders`/,
+			constructError({ providers: { github: { ...google, type: 'github' } } }),
+			/providers\.github has `type: 'github'`, which a Cognito user pool cannot federate/,
 		);
 	});
 
 	test('attribute mappings: identity keys and unknown attributes are rejected', () => {
 		assert.match(
-			constructError({ socialProviders: { google: { ...google, attributeMapping: { sub: 'sub' } } } }),
+			constructError({ providers: { google: { ...google, attributeMapping: { sub: 'sub' } } } }),
 			/identity attributes are not mappable/,
 		);
 		assert.match(
-			constructError({ socialProviders: { google: { ...google, attributeMapping: { tier: 'tier' } } } }),
+			constructError({ providers: { google: { ...google, attributeMapping: { tier: 'tier' } } } }),
 			/neither a Cognito standard attribute nor a declared/,
 		);
 	});
 
 	test('redirect paths must be explicit paths under /aws-blocks/auth/', () => {
 		assert.match(
-			constructError({ socialProviders: { google }, redirects: { callbackPath: '/callback' } }),
+			constructError({ providers: { google }, redirects: { callbackPath: '/callback' } }),
 			/redirects\.callbackPath must be an explicit path under '\/aws-blocks\/auth\/'/,
 		);
 		assert.match(
-			constructError({ socialProviders: { google }, redirects: { signOutPath: '/aws-blocks/auth/*' } }),
+			constructError({ providers: { google }, redirects: { signOutPath: '/aws-blocks/auth/*' } }),
 			/redirects\.signOutPath/,
 		);
 	});
@@ -952,20 +1019,20 @@ describe('Auth federation — synth-time checks', () => {
 	test('hostedUi.domainPrefix must be a valid, unreserved Cognito prefix', () => {
 		for (const bad of ['Upper', '-edge', 'edge-', 'has_underscore', 'a'.repeat(64), '']) {
 			assert.match(
-				constructError({ socialProviders: { google }, hostedUi: { domainPrefix: bad } }),
+				constructError({ providers: { google }, hostedUi: { domainPrefix: bad } }),
 				/not a valid/,
 				bad,
 			);
 		}
 		assert.match(
-			constructError({ socialProviders: { google }, hostedUi: { domainPrefix: 'my-aws-login' } }),
+			constructError({ providers: { google }, hostedUi: { domainPrefix: 'my-aws-login' } }),
 			/contains 'aws', which Cognito reserves/,
 		);
 	});
 
 	test('hosted-UI federation on a wrapped existing pool is refused', () => {
 		assert.match(
-			constructError({ userPool: Auth.fromExisting('us-east-1_x'), socialProviders: { google } }),
+			constructError({ userPool: Auth.fromExisting('us-east-1_x'), providers: { google } }),
 			/cannot be combined with `userPool`/,
 		);
 	});

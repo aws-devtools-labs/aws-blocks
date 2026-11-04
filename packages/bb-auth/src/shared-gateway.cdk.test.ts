@@ -36,7 +36,7 @@ describe('Auth on the shared stack-level REST API', () => {
 		dirs.push(appDir);
 		const result = synthBlocksApp({
 			appDir,
-			build: `new Auth(stack, 'auth', { socialProviders: { google: { clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } } });`,
+			build: `new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } } });`,
 		});
 		assert.ok(result.ok, result.stderr);
 		assert.ok(result.template);
@@ -66,7 +66,7 @@ describe('Auth on the shared stack-level REST API', () => {
 		dirs.push(appDir);
 		const result = synthBlocksApp({
 			appDir,
-			build: `new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });`,
+			build: `new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } });`,
 			context: { sandboxMode: 'true' },
 		});
 		assert.ok(result.ok, result.stderr);
@@ -83,7 +83,7 @@ describe('Auth on the shared stack-level REST API', () => {
 		return { CallbackURLs: JSON.stringify(props.CallbackURLs), LogoutURLs: JSON.stringify(props.LogoutURLs) };
 	}
 
-	const GOOGLE = `new Auth(stack, 'auth', { socialProviders: { google: { clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } } });`;
+	const GOOGLE = `new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } } });`;
 
 	test("apiFrontDoor: 'cloudfront' — the callback and logout URLs also name the CloudFront front door", () => {
 		const appDir = freshAppDir();
@@ -121,7 +121,7 @@ describe('Auth on the shared stack-level REST API', () => {
 		dirs.push(appDir);
 		const result = synthBlocksApp({
 			appDir,
-			build: `new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } });`,
+			build: `new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } });`,
 			context: { sandboxMode: 'true' },
 			createOptions: "apiFrontDoor: 'cloudfront',",
 		});

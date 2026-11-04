@@ -220,7 +220,7 @@ describe('IAM coverage — password reset (#912)', () => {
 
 	test('without email + password, neither reset action is granted', () => {
 		const grants = granted(
-			"new Auth(stack, 'auth', { emailPassword: false, samlProviders: { corp: { metadataUrl: 'https://idp.example.com/metadata' } } })",
+			"new Auth(stack, 'auth', { emailPassword: false, providers: { corp: { type: 'saml', metadataUrl: 'https://idp.example.com/metadata' } } })",
 		);
 		assert.ok(grants.has('cognito-idp:InitiateAuth'), 'the pool is provisioned and granted');
 		for (const a of PASSWORD_RESET_IAM_ACTIONS) assert.ok(!grants.has(a), `${a} must not be granted`);
