@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Shared sign-in-record poller for the OIDC (`Auth` with `oidcProviders`) e2e suites.
+ * Shared sign-in-record poller for the OIDC (`Auth` with `store: 'blocks'`) e2e suites.
  *
  * `onSignIn` fires while the OIDC callback is being served, and the test reads
  * the record back over a later, separate request. Two ways to get that wrong:

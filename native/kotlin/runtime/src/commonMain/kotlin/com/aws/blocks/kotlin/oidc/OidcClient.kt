@@ -385,7 +385,7 @@ class OidcClient<P : OidcProvider> internal constructor(
          *
          * @param blocksClient the client whose server and HTTP session to use: the
          *   [com.aws.blocks.kotlin.Blocks.client] of the app's `Blocks` instance.
-         * @param providers the provider ids configured in the backend's `oidcProviders` (the record
+         * @param providers the provider ids configured in the backend's `providers` (the record
          *   keys). [signIn] rejects any other id.
          * @param relayTo the custom-scheme URL the backend relays the sign-in result to. It must be
          *   listed in the backend's `redirects.allowedRelayOrigins` and registered with the platform

@@ -154,7 +154,7 @@ new Auth(scope, 'auth');
 const oktaSecret = new AppSetting(scope, 'okta-secret', { secret: true });
 new Auth(scope, 'auth-federated', {
   emailPassword: false,
-  oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: oktaSecret, federateVia: 'cognito' } },
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: oktaSecret } },
 });
 `,
     );

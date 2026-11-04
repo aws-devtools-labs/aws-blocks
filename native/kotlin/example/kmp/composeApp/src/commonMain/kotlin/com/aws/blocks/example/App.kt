@@ -26,7 +26,7 @@ import blocks.testapp.api
 import blocks.testapp.authApi
 import blocks.testapp.invoke
 
-/** Provider ids from the backend's `oidcProviders` (`aws-blocks/index.ts`). */
+/** Provider ids from the backend's `providers` (`aws-blocks/index.ts`). */
 private val providers = listOf("google")
 
 /**

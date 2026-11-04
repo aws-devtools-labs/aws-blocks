@@ -42,20 +42,20 @@ npm test             # typecheck + test:e2e; starts its own dev server, so stop 
 
 ## Configuring OIDC
 
-`aws-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
+`aws-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'blocks'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
 
 ```typescript
 const GOOGLE_CLIENT_ID = 'replace-me.apps.googleusercontent.com';
 const googleClientSecret = new AppSetting(scope, 'google-client-secret', { secret: true });
 
 const auth = new Auth(scope, 'auth', {
-  emailPassword: false,
-  oidcProviders: {
+  store: 'blocks',
+  providers: {
     google: {
+      type: 'oidc',
       issuer: 'https://accounts.google.com',
       clientId: GOOGLE_CLIENT_ID,
       clientSecret: googleClientSecret,
-      federateVia: 'direct',
     },
   },
   allowBearerAuth: true,
@@ -141,8 +141,8 @@ To exercise sign-in without any Google setup, swap the provider for the stub IdP
 import { Auth, stubIdp, relayOrigin } from '@aws-blocks/blocks';
 
 const auth = new Auth(scope, 'auth', {
-  emailPassword: false,
-  oidcProviders: { google: stubIdp() },
+  store: 'blocks',
+  providers: { google: stubIdp() },
   allowBearerAuth: true,
   redirects: {
     allowedRelayOrigins: [relayOrigin('blocks.testapp://oidcRedirect')],
@@ -158,7 +158,7 @@ It is a real OIDC provider served by the dev server, with an account picker; it 
 |---|---|
 | Google shows `invalid_client` or `The OAuth client was not found` | `GOOGLE_CLIENT_ID` in `aws-blocks/index.ts` is still the placeholder, or the backend wasn't restarted after you changed it. |
 | Sign-in returns to the app but the exchange fails | The client secret is still a placeholder, or the parameter/settings key is missing. |
-| `ProviderNotConfiguredException` | The app asked for a provider id that isn't a key of `oidcProviders`. |
+| `ProviderNotConfiguredException` | The app asked for a provider id that isn't a key of `providers`. |
 | Google shows `redirect_uri_mismatch` | The registered URI doesn't match the server the app is pointed at — check the `Servers` entry in the generated code against the table above. |
 | Google shows `Access blocked` for an account that isn't yours | An External + Testing app only admits the project's own owners plus the accounts listed under **Test users**. |
 | Sign-in completes at Google but the app never returns | The `relayTo` scheme isn't registered with the OS. See the app READMEs. |
