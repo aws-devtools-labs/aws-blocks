@@ -66,6 +66,18 @@ describe('WebSocket server: subscribe authorization', () => {
 		ws.close();
 	});
 
+	it('rejects a subscribe whose channel is not a channel path', async () => {
+		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
+		for (const channel of [42, '__connection__', 'my-app-rt/chat']) {
+			const { ws, reply } = await subscribe({ channel, token });
+			try {
+				assert.deepStrictEqual(reply, { type: 'error', message: 'Invalid channel' });
+			} finally {
+				ws.close();
+			}
+		}
+	});
+
 	it('accepts a subscribe with a valid token', async () => {
 		const token = mintChannelToken(CHANNEL, LOCAL_TOKEN_SECRET);
 		const { ws, reply } = await subscribe({ channel: CHANNEL, token });
@@ -338,6 +350,12 @@ describe('isAllowedUpgradeOrigin — BLOCKS_DEV_HOST opt-in', () => {
 	it('a WILDCARD opt-in (0.0.0.0 / ::) admits a same-origin page reached by IP address', () => {
 		assert.strictEqual(isAllowedUpgradeOrigin('http://192.168.1.10:3000', '0.0.0.0', '192.168.1.10:3000'), true);
 		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '::', '[fd00::1]:3000'), true);
+	});
+
+	it('a specific IPv6 opt-in matches its bracketed Origin, with or without brackets', () => {
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', 'fd00::1'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::1]:3000', '[FD00::1]'), true);
+		assert.strictEqual(isAllowedUpgradeOrigin('http://[fd00::2]:3000', 'fd00::1'), false);
 	});
 
 	it('a wildcard opt-in rejects a DNS-name Origin even when it matches Host (DNS rebinding)', () => {

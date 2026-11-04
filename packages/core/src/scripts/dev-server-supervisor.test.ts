@@ -18,6 +18,7 @@ import {
   windowsTreeKill,
   terminateProcessTree,
   isProcessGroupAlive,
+  waitForProcessGroupExit,
   KILL_GRACE_MS,
   type KillableProcess,
   type AwaitableChild,
@@ -262,6 +263,30 @@ describe('isProcessGroupAlive — group-liveness probe (signal 0)', () => {
     const alive = isProcessGroupAlive(4242, 'win32', () => { probed = true; });
     assert.strictEqual(alive, true);
     assert.strictEqual(probed, false); // never probes on Windows
+  });
+});
+
+// ── waitForProcessGroupExit (unit, injected probe + sleep) ──────────────────
+// The frontend's shell or `npx` can exit before the dev server under it, so the
+// dev server waits for the whole group before it exits itself.
+describe('waitForProcessGroupExit — bounded wait for a group to drain', () => {
+  it('resolves true once the group drains, polling while a member is alive', async () => {
+    let probes = 0;
+    const sleeps: number[] = [];
+    const drained = await waitForProcessGroupExit(4242, 10_000, 'linux', () => ++probes < 3, async (ms) => { sleeps.push(ms); });
+    assert.strictEqual(drained, true);
+    assert.strictEqual(probes, 3);
+    assert.deepStrictEqual(sleeps, [50, 50]);
+  });
+
+  it('resolves false when a member is still alive at the deadline', async () => {
+    assert.strictEqual(await waitForProcessGroupExit(4242, 0, 'linux', () => true, async () => {}), false);
+  });
+
+  it('does not wait on Windows, which has no process groups', async () => {
+    let probed = false;
+    assert.strictEqual(await waitForProcessGroupExit(4242, 10_000, 'win32', () => { probed = true; return true; }), true);
+    assert.strictEqual(probed, false);
   });
 });
 

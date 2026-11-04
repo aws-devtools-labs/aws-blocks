@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 import { parseEnv } from 'node:util';
-import type { DbPullOptions, TableInfo } from './types.js';
+import type { DbPullOptions } from './types.js';
 import { introspect } from './introspect.js';
 import {
   generateIndexFile,
@@ -21,8 +21,13 @@ import {
   generateMigrationGuide,
   readExistingSingulars,
   selectEligibleTables,
+  ineligibleReason,
+  publicTableSql,
+  rlsDisabledWarning,
+  tablesWithoutRls,
   writeTypesAndMeta,
 } from './generate.js';
+import type { IneligibleReason } from './generate.js';
 import { generateBaseline } from '../migrations/baseline.js';
 import { prepareEnvFileUpsert, upsertEnvFile } from './env-file.js';
 import { SUPABASE, SUPABASE_AUTH, SUPABASE_CONN_GUIDANCE, SUPABASE_MESSAGING, detectSupabase, extractProjectRef } from './supabase.js';
@@ -69,12 +74,17 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
   }
 
   // ── Eligibility criteria ──────────────────────────────────────────────
-  // A table is eligible if: (1) has a primary key, (2) does not use Supabase Auth
-  const hasNoPk = (t: TableInfo) => Array.isArray(t.primaryKey) && t.primaryKey.length === 0;
-
-  const eligibleTables = selectEligibleTables({ tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims });
+  // A table is eligible if it (1) does not use Supabase Auth, (2) has a primary
+  // key and (3) has row-level security enabled — see ineligibleReason().
+  const intro = { tables: allTables, tablesUsingSupabaseAuth, nonStandardClaims };
+  const eligibleTables = selectEligibleTables(intro);
   const eligibleSet = new Set(eligibleTables);
   const skippedTables = allTables.filter(t => !eligibleSet.has(t));
+  const ineligibleLabels: Record<IneligibleReason, string> = {
+    'supabase-auth': SUPABASE_MESSAGING.authIneligibleReason,
+    'no-primary-key': 'No — no primary key',
+    'rls-disabled': 'No — RLS disabled',
+  };
 
   // ── Table eligibility ────────────────────────────────────────────────
   const nameWidth = Math.max(...allTables.map(t => t.name.length), 5);
@@ -93,45 +103,46 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
     const authCol = tablesUsingSupabaseAuth.has(t.name)
       ? SUPABASE_MESSAGING.authEligibilityLabel
       : t.hasRls ? 'OIDC' : '—';
-    let eligibleCol: string;
-    if (tablesUsingSupabaseAuth.has(t.name)) {
-      eligibleCol = SUPABASE_MESSAGING.authIneligibleReason;
-    } else if (hasNoPk(t)) {
-      eligibleCol = 'No — no primary key';
-    } else {
-      eligibleCol = 'Yes';
-    }
+    const reason = ineligibleReason(t, intro);
+    const eligibleCol = reason ? ineligibleLabels[reason] : 'Yes';
     console.log(`  ${t.name.padEnd(nameWidth)}  ${pkCol.padEnd(pkWidth)}  ${authCol.padEnd(14)}  ${eligibleCol}`);
   }
   console.log(`\n  ${eligibleTables.length} table(s) eligible, ${skippedTables.length} will be skipped.\n`);
 
+  const skippedForRls = tablesWithoutRls(intro);
+  for (const line of rlsDisabledWarning(skippedForRls)) console.warn(line);
+  if (skippedForRls.length > 0) console.warn('');
+
   // ── Readiness criteria ───────────────────────────────────────────────
   // Eligible tables may still need actions before they work at runtime:
-  // grants (authenticated role), non-standard JWT claims
+  // grants (authenticated role), RLS policies, non-standard JWT claims.
+  // RLS on with no policies is eligible but denies every row (Postgres's default).
+  const hasNoPolicies = (t: (typeof eligibleTables)[number]) => t.policyCount === 0;
   if (eligibleTables.length > 0) {
     console.log(`  Eligible table readiness:\n`);
     const claimsWidth = Math.max(...eligibleTables.map(t => {
       const c = nonStandardClaims.get(t.name);
       return c ? c.join(', ').length : 1;
     }), 6);
-    console.log(`  ${'Table'.padEnd(nameWidth)}  RLS   Grants   ${'Claims'.padEnd(claimsWidth)}  Status`);
-    console.log(`  ${'─'.repeat(nameWidth)}  ${'─'.repeat(4)}  ${'─'.repeat(7)}  ${'─'.repeat(claimsWidth)}  ${'─'.repeat(15)}`);
+    console.log(`  ${'Table'.padEnd(nameWidth)}  Grants   Policies  ${'Claims'.padEnd(claimsWidth)}  Status`);
+    console.log(`  ${'─'.repeat(nameWidth)}  ${'─'.repeat(7)}  ${'─'.repeat(8)}  ${'─'.repeat(claimsWidth)}  ${'─'.repeat(15)}`);
     for (const t of eligibleTables) {
-      const rlsCol = t.hasRls ? 'yes' : 'no';
       const grantsCol = t.missingGrants ? 'MISSING' : 'ok';
+      const policiesCol = hasNoPolicies(t) ? 'NONE' : 'ok';
       const claims = nonStandardClaims.get(t.name);
       const claimsCol = claims ? claims.join(', ') : '—';
-      const status = (t.missingGrants || claims) ? 'Action required' : 'Ready';
-      console.log(`  ${t.name.padEnd(nameWidth)}  ${rlsCol.padEnd(4)}  ${grantsCol.padEnd(7)}  ${claimsCol.padEnd(claimsWidth)}  ${status}`);
+      const status = (t.missingGrants || hasNoPolicies(t) || claims) ? 'Action required' : 'Ready';
+      console.log(`  ${t.name.padEnd(nameWidth)}  ${grantsCol.padEnd(7)}  ${policiesCol.padEnd(8)}  ${claimsCol.padEnd(claimsWidth)}  ${status}`);
     }
     console.log('');
   }
 
   // ── Actions Required ─────────────────────────────────────────────────
   const tablesWithMissingGrants = eligibleTables.filter(t => t.missingGrants);
+  const tablesWithNoPolicies = eligibleTables.filter(hasNoPolicies);
   const eligibleNames = new Set(eligibleTables.map(t => t.name));
   const migratedClaims = [...nonStandardClaims].filter(([t]) => eligibleNames.has(t));
-  const hasActions = tablesWithMissingGrants.length > 0 || migratedClaims.length > 0;
+  const hasActions = tablesWithMissingGrants.length > 0 || tablesWithNoPolicies.length > 0 || migratedClaims.length > 0;
 
   if (hasActions) {
     console.log(`  Actions required:\n`);
@@ -142,6 +153,17 @@ export async function dbPull(opts: DbPullOptions): Promise<void> {
       for (const t of tablesWithMissingGrants) {
         console.log(`     ${grantStatement(t.name)}`);
       }
+      console.log('');
+      actionNum++;
+    }
+
+    if (tablesWithNoPolicies.length > 0) {
+      console.log(`  ${actionNum}. Add RLS policies. No policies: every row is denied, so generated CRUD returns nothing:\n`);
+      for (const t of tablesWithNoPolicies) {
+        console.log(`     ${t.name}`);
+      }
+      console.log(`\n     For example, to share a table with every signed-in user on purpose:`);
+      console.log(`     CREATE POLICY "shared" ON ${publicTableSql(tablesWithNoPolicies[0].name)} FOR ALL TO authenticated USING (true) WITH CHECK (true);`);
       console.log('');
       actionNum++;
     }

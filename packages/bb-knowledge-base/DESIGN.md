@@ -118,7 +118,7 @@ Creates the following resources:
 ## Mock Implementation
 
 - Documents read from the local folder specified in `options.source` (must be a relative path within the project).
-- Text files chunked by paragraph (split on double newlines, minimum 20 characters per chunk).
+- Text files chunked per the configured strategy: `'fixed'` uses overlapping word windows (`chunkSize` words, `chunkOverlap` percent overlap), `'none'` keeps each document whole, and `'semantic'`/`'hierarchical'` split on blank-line paragraphs. Chunks under 20 characters are dropped (except the final `'fixed'` window).
 - Relevance scoring via TF-IDF (term frequency–inverse document frequency) — not real embeddings. Algorithm: tokenize → normalized TF → smoothed IDF (`log((N+1)/(df+1)) + 1`) → scores normalized to [0, 1].
 - Chunks cached to `.bb-data/{fullId}/chunks.json` via `getMockDataDir()` from core. Data persists across dev server restarts. Wipe with `rm -rf .bb-data`.
 - Folder metadata derived from directory structure (top-level subfolder name). Customer-provided `.metadata.json` sidecar files take precedence.
@@ -132,7 +132,7 @@ Creates the following resources:
 |------------|--------|------------|
 | TF-IDF scoring vs Bedrock embeddings | Relevance ranking differs — keyword-based vs semantic | Scores are relative within each environment. API contract is identical. Recommend sandbox testing for retrieval quality tuning |
 | No PDF/DOCX support in mock | Documents in binary formats are skipped locally | Document the gap; these formats work on AWS where Bedrock handles parsing |
-| Paragraph chunking vs Bedrock strategies | Chunk boundaries differ between mock and production | No mitigation — chunking configuration only affects the CDK/Bedrock path. Mock uses simple paragraph splitting for all strategies |
+| Paragraph chunking vs Bedrock strategies | Chunk boundaries differ between mock and production | Partial — the mock honors `'fixed'` (word windows from `chunkSize`/`chunkOverlap`) and `'none'`, but approximates `'semantic'` and `'hierarchical'` with blank-line paragraph splitting (`breakpointPercentile` is ignored) |
 | No ingestion pipeline | Documents are indexed synchronously on first `retrieve()` | No mitigation — the mock doesn't need async ingestion. First call may be slower due to indexing |
 | No IAM enforcement | Permission errors only surface in AWS | No mitigation — IAM is handled by CDK grants automatically |
 | Immediate consistency | New documents appear instantly vs async ingestion in AWS | No mitigation — eventual consistency in AWS is inherent to the Bedrock ingestion pipeline |

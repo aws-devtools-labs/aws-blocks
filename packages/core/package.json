@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/core",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "keywords": [
     "aws-blocks",
     "framework",
@@ -87,7 +87,7 @@
     "unctx": "^2.5.0"
   },
   "dependencies": {
-    "@aws-blocks/hosting": "^0.4.1",
+    "@aws-blocks/hosting": "^0.5.0",
     "@aws-blocks/pipeline": "*",
     "@aws-sdk/client-account": "^3.1156.0",
     "@aws-sdk/client-cloudformation": "^3.1156.0",

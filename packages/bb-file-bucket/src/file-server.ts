@@ -129,11 +129,8 @@ export function attach(httpServer: Server) {
 			let readPath = contentPath(dataDir, path);
 			let metaFilePath = metaPath(dataDir, path);
 			if (versionId) {
-				const vPath = versionContentPath(dataDir, path, versionId);
-				if (existsSync(vPath)) {
-					readPath = vPath;
-					metaFilePath = versionMetaPath(dataDir, path, versionId);
-				}
+				readPath = versionContentPath(dataDir, path, versionId);
+				metaFilePath = versionMetaPath(dataDir, path, versionId);
 			}
 
 			if (!existsSync(readPath)) {

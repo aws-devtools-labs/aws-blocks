@@ -452,6 +452,53 @@ Switching `frontDoor` on a deployed app replaces the front door: the URL changes
 The top-level `domain`, `waf`, `logging`, `monitoring`, `skewProtection`, `contentSecurityPolicy`, `priceClass`, `geoRestriction`, `quotas`, `ssrDefaultTtl`, `cacheKeyCookies` and `cacheKeyHeaders` props are deprecated aliases: they keep working, merged into `frontDoor.features` at construction, and an app that sets them with no `frontDoor` synthesizes the same template as before. To migrate, move each one into `frontDoor.features` under the same name. Setting one both ways fails synth (`FrontDoorSettingConflictError`), and so does a top-level prop the chosen kind doesn't implement (`UnsupportedFrontDoorSettingError`; the stacked door takes its settings per layer only). See the `@aws-blocks/hosting` README for each door and for writing your own.
 
 
+#### Preview mode and `HostingPresets`
+
+`HostingPresets` are the hosting counterpart of `BlocksPresets`: plain bundles of `Hosting` props. `HostingPresets.preview` is a fast, cheap, disposable shape for ephemeral environments (pull-request previews, per-branch sandboxes); `HostingPresets.production` is the full shape (it sets nothing). Spread one first and override settings after it:
+
+```typescript
+import { Hosting, HostingPresets } from '@aws-blocks/core/cdk';
+
+new Hosting(stack, 'Web', {
+  ...(process.env.DEPLOY_ENV === 'preview' ? HostingPresets.preview : HostingPresets.production),
+  root: join(__dirname, '..'),
+  api: blocksStack,
+});
+
+// a preview that keeps image optimization
+new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, root, api: blocksStack });
+```
+
+`HostingPresets.preview` sets:
+
+| Prop | Value | Effect |
+|---|---|---|
+| `frontDoor` | `{ kind: 'apiGateway' }` | The API Gateway HTTP API door: no CloudFront; buffered server responses, about 6 MB each |
+| `imageOptimization` | `false` | No image function; the image endpoints serve the source image (a remote one is redirected only when its host is in the app's image allowlist, else 404) |
+| `incrementalRegeneration` | `false` | Next.js builds without the tag cache and revalidation queue; prerendered pages come from the build's snapshot |
+| `edgeRoutes` | `'regional'` | Next.js `runtime: 'edge'` routes run as regional Lambda functions, not Lambda@Edge |
+| `buildId` | `'fixed'` | A build id keyed on the build's content: an unchanged build keeps it, so a re-deploy skips the asset upload and can hotswap; a changed build gets a new prefix (deleted files stop being served). The door's asset proxy is created alongside the asset uploads, so there is no atomic switch-over |
+
+Each prop also works on its own. `incrementalRegeneration: false` works behind every door. `imageOptimization: false` and `edgeRoutes: 'regional'` need the API Gateway HTTP API door (where `edgeRoutes` defaults to `'regional'`, since that door can't invoke Lambda@Edge), and `buildId: 'fixed'` needs a door without an edge cache (not CloudFront or the stacked door). Any other combination fails synth with `UnsupportedHostingSettingError`.
+
+From the command line, `npm run sandbox:preview` (in a `create-blocks-app` app) deploys a preview sandbox: the disposable sandbox backend plus the app with `HostingPresets.preview`, and prints its URL. It runs `startSandbox({ preview: true, deployOnly: true })`, which sets `--context previewMode=true` next to `sandboxMode=true` (the key is exported as `PREVIEW_MODE_CONTEXT` from `@aws-blocks/core/scripts`). On a re-deploy, a backend-only change is hotswapped; a changed frontend build or an infrastructure change does a full deploy. The app decides what the signal does; the templates add `Hosting` for it, so a plain `npm run sandbox` stays backend-only. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy one stack: a plain sandbox deploy removes the preview (it warns first), and running `sandbox:preview` again adds it back at a new URL:
+
+```typescript
+const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+const previewMode = app.node.tryGetContext('previewMode') === 'true';
+
+if (!sandboxMode || previewMode) {
+  new Hosting(blocksStack, 'Hosting', {
+    ...(previewMode ? HostingPresets.preview : HostingPresets.production),
+    root: join(__dirname, '..'),
+    api: blocksStack,
+  });
+}
+```
+
+Tear a preview sandbox down with `npm run sandbox:destroy`.
+
+
 ## Building Blocks
 
 Import Building Blocks from their specific packages (or from the `@aws-blocks/blocks` umbrella):
@@ -490,12 +537,34 @@ The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so no
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
-You can also pass `host` to `startDevServer({ host })` in `aws-blocks/scripts/server.ts`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host you opted into:
+You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the `cdk-blocks` CLI then also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
 
 - With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Same-origin pages reached by IP are accepted; DNS names are not, because a same-origin check against a name can be defeated by DNS rebinding.
 - To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
+
+## Script output (`BLOCKS_LOG_LEVEL`)
+
+The lifecycle scripts in `@aws-blocks/core/scripts` (`deploy`, `destroy`, `startSandbox`, `destroySandbox`, `startDevServer`, which the generated `npm run deploy` / `sandbox` / `sandbox:destroy` / `destroy` / `dev` scripts call) read the `BLOCKS_LOG_LEVEL` environment variable to decide how much to print:
+
+| `BLOCKS_LOG_LEVEL` | What prints |
+|---|---|
+| unset (or any other value) | Everything, exactly as before this variable existed. |
+| `quiet` | Errors and final results only. CDK output is hidden while it runs. |
+| `normal` | Short progress steps and results. CDK output is condensed into a few lines (`Synthesizing app...`, a resource count); failure and rollback lines still print as they happen. |
+| `verbose` | The same lines as unset: every progress step plus the raw CDK output (the dev server leaves out RPC error stack traces, see below). |
+| `debug` | `verbose` plus stack traces for errors the scripts catch and report as warnings. |
+
+```bash
+BLOCKS_LOG_LEVEL=normal npm run deploy
+```
+
+No level hides the lines other tools read: the deployment-target summary, the `API URL` / `Frontend URL` lines, the early `🌐 Frontend deploying to:` line, the `BLOCKS_DEPLOYED …` line, and error messages.
+
+At `quiet` and `normal` the scripts keep the last 500 lines of the hidden CDK output (`cdk synth`, `cdk deploy`, `cdk destroy`, `cdk watch`). If the deploy or destroy fails, they print those lines to stderr under a `──── cdk deploy output (…) ────` header before the error, so you don't need to run it again to see why it failed. `cdk watch` prints them when a watch deploy fails or `cdk watch` exits with an error.
+
+In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-call]` / `[rpc-ok]` lines but keep the `[rpc-err]` and `RawRoute Error:` lines (name, message and `cause`); the stack trace prints when `BLOCKS_LOG_LEVEL` is unset or `debug`. `BLOCKS_DEV_QUIET=1` still hides all of those lines at every level.
 
 ## CORS Configuration
 

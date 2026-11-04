@@ -41,6 +41,13 @@ dependencies {
     testImplementation(libs.plugins.kotlin.multiplatform.get().let {
         "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
     })
+
+    // The functional test drives a real Gradle build, which needs TestKit and the
+    // serialization plugin the codegen plugin requires of its consumer.
+    testImplementation(gradleTestKit())
+    testImplementation(libs.plugins.kotlinx.serialization.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
 }
 
 tasks.withType<Test> {

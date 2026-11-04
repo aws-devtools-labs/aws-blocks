@@ -96,6 +96,10 @@ work and live on the job; `size`/`scaling` are properties of the machine and liv
 on the `Compute`. In local dev the assignment is transparent — handlers run
 in-process. See `@aws-blocks/bb-compute`.
 
+A deploy that changes your code replaces the container's tasks. A delivery still
+running about 2 minutes later is stopped and redelivered from the start, and the
+redelivery counts toward `maxRetries`.
+
 ### Batching and handler requirements
 
 The queue is a standard SQS queue, so delivery is at-least-once and a handler must

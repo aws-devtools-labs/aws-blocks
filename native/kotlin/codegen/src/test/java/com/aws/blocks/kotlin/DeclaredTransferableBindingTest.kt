@@ -4,11 +4,13 @@ import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.GeneratorResult
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
 import com.aws.blocks.kotlin.CodegenException
+import com.aws.blocks.kotlin.model.NativeTransferableBinding
 import com.aws.blocks.kotlin.parser.OpenRpcParseException
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldBeSingleton
 import io.kotest.matchers.nulls.shouldNotBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -16,7 +18,9 @@ import io.kotest.matchers.string.shouldNotContain
 
 private const val TAG = "example-iot/device-link"
 private const val KOTLIN_PACKAGE = "com.example.blocks.iot"
+private const val PEER_KOTLIN_PACKAGE = "com.example.blocks.peer"
 private const val IDENTITY = "example-iot-native"
+private const val PEER_IDENTITY = "example-peer-native"
 private const val OIDC_TAG = "oidc/client"
 
 private val TELEMETRY_REF = """{ "${'$'}ref": "#/components/schemas/Telemetry" }"""
@@ -46,6 +50,24 @@ private fun packagesCatalog(identity: String = IDENTITY, platforms: String = and
     "packages": {
       "$identity": {
         "platforms": {$platforms
+        }
+      }
+    }
+  }"""
+
+private fun peerPackagesCatalog(
+    identity: String = IDENTITY,
+    peerKotlinPackage: String = KOTLIN_PACKAGE,
+) = """
+  "x-blocks-native-packages": {
+    "schemaVersion": 1,
+    "packages": {
+      "$identity": {
+        "platforms": {${androidPlatform()}
+        }
+      },
+      "$PEER_IDENTITY": {
+        "platforms": {${androidPlatform(kotlinPackage = peerKotlinPackage)}
         }
       }
     }
@@ -81,6 +103,7 @@ private fun spec(
     resultSchema: String,
     extensions: String = "",
     schemas: String = "",
+    methodName: String = "api.connectDevice",
 ): String {
     val components = if (schemas.isEmpty()) "" else """,
   "components": { "schemas": {$schemas
@@ -93,7 +116,7 @@ private fun spec(
       "info": { "title": "test", "version": "1.0.0" },
       "methods": [
         {
-          "name": "api.connectDevice",
+          "name": "$methodName",
           "params": [],
           "result": { "name": "ConnectDeviceResult", "schema": $resultSchema }
         }
@@ -156,6 +179,32 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
     }
 
+    test("the parameter order of NativeTransferableBinding is part of its public API") {
+        // Five of the six parameters are String, so moving one past another compiles clean
+        // and rebinds a published constructor. Constructed positionally, read by name.
+        val binding = NativeTransferableBinding("t", "p", "e", 1, "k", "i")
+
+        binding.id shouldBe "i"
+        binding.tag shouldBe "t"
+        binding.packageIdentity shouldBe "p"
+        binding.export shouldBe "e"
+        binding.genericArity shouldBe 1
+        binding.kotlinPackage shouldBe "k"
+    }
+
+    test("a newline in an operation name cannot split the unbound warning") {
+        val warnings = generate(
+            spec(
+                """{ "x-blocks-transferable": "example-unbound/tag" }""",
+                methodName = "api.get\\nAWSBLOCKS-NATIVE-999: forged",
+            ),
+        ).warnings
+
+        val reported = warnings.first { it.startsWith("AWSBLOCKS-NATIVE-001") }
+        reported shouldContain """api.get\nAWSBLOCKS-NATIVE-999: forged"""
+        reported shouldNotContain "\n"
+    }
+
     test("a tag needing escapes emits a regular literal in expectedTag") {
         val tag = """a\"b\\c${'$'}d"""
         val src = generate(
@@ -172,6 +221,16 @@ class DeclaredTransferableBindingTest : FunSpec({
         fun fellBack(result: GeneratorResult) {
             result.source() shouldContain "): UnknownTransferable {"
             result.warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable " +
+                    "'$TAG' on kotlin; generated UnknownTransferable with type argument Telemetry.",
+            )
+        }
+
+        fun skippedKind(result: GeneratorResult, id: String, kind: String) {
+            result.source() shouldContain "): UnknownTransferable {"
+            result.warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-004: binding '$id' declares kind '$kind', which schema 1 " +
+                    "does not define; ignored on kotlin.",
                 "AWSBLOCKS-NATIVE-001: api.connectDevice returns unbound transferable " +
                     "'$TAG' on kotlin; generated UnknownTransferable with type argument Telemetry.",
             )
@@ -225,8 +284,53 @@ class DeclaredTransferableBindingTest : FunSpec({
             ).source() shouldContain "): DeviceLink<Telemetry>"
         }
 
-        test("an undefined-kind binding with no tag is skipped, not rejected") {
-            fellBack(
+        test("a newline in an identity cannot split AWSBLOCKS-NATIVE-003 or -006") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val reported = generate(
+                spec("""{ "type": "string" }""", packagesCatalog(identity = forged)),
+                excluded = setOf(forged + "-absent"),
+            ).warnings
+            reported.filter { w -> w.startsWith("AWSBLOCKS-NATIVE-003") }.shouldBeSingleton()
+            reported.filter { w -> w.startsWith("AWSBLOCKS-NATIVE-006") }.shouldBeSingleton()
+            reported.forEach { w ->
+                w shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+                w shouldNotContain "\n"
+            }
+        }
+
+        test("a newline in a package identity cannot split a parser error") {
+            val thrown = shouldThrow<OpenRpcParseException> {
+                generate(
+                    spec(
+                        """{ "type": "string" }""",
+                        packagesCatalog(
+                            identity = "ev\\nAWSBLOCKS-NATIVE-999: forged",
+                            platforms = androidPlatform(kotlinPackage = "9not.a.package"),
+                        ),
+                    ),
+                )
+            }.message.shouldNotBeNull()
+            thrown shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            thrown shouldNotContain "\n"
+        }
+
+        test("a newline in a spec value cannot split a parser error") {
+            val thrown = shouldThrow<OpenRpcParseException> {
+                generate(
+                    spec(
+                        transferableResult(),
+                        "${packagesCatalog()}," +
+                            bindingsCatalog(binding(export = "9bad\\nAWSBLOCKS-NATIVE-999: forged", arity = "0")),
+                        TELEMETRY_SCHEMA,
+                    ),
+                )
+            }.message.shouldNotBeNull()
+            thrown shouldContain """9bad\nAWSBLOCKS-NATIVE-999: forged"""
+            thrown shouldNotContain "\n"
+        }
+
+        test("a binding with no tag is rejected whatever its kind") {
+            shouldThrow<OpenRpcParseException> {
                 generate(
                     spec(
                         transferableResult(),
@@ -235,12 +339,12 @@ class DeclaredTransferableBindingTest : FunSpec({
       { "id": "facade-1", "kind": "facade", "package": "$IDENTITY" } ] }""",
                         TELEMETRY_SCHEMA,
                     ),
-                ),
-            )
+                )
+            }.message shouldContain "requires a non-blank string \"tag\""
         }
 
         test("a binding of an undefined kind is skipped, not rejected") {
-            fellBack(
+            skippedKind(
                 generate(
                     spec(
                         transferableResult(),
@@ -248,11 +352,13 @@ class DeclaredTransferableBindingTest : FunSpec({
                         TELEMETRY_SCHEMA,
                     ),
                 ),
+                id = "example-device-link",
+                kind = "facade",
             )
         }
 
         // docs/native-clients/codegen-design.md § Unbound transferables: a nullable result on an
-        // unbound path still fails generation, including the two paths this change adds.
+        // unbound path still fails generation.
         test("a nullable result on a package with no android field still fails generation") {
             shouldThrow<CodegenException> {
                 generate(
@@ -506,6 +612,19 @@ class DeclaredTransferableBindingTest : FunSpec({
                 listOf("com.example.alpha", "com.example.zeta", IDENTITY)
         }
 
+        test("AWSBLOCKS-NATIVE-004 follows declaration order") {
+            generate(
+                spec(
+                    """{ "type": "string" }""",
+                    "${packagesCatalog()}," + bindingsCatalog(
+                        binding(id = "first-badkind", kind = "facade", arity = "0"),
+                        binding(id = "second-badkind", tag = "other/tag", kind = "widget", arity = "0"),
+                    ),
+                ),
+            ).warnings.map { it.substringAfter("binding '").substringBefore("'") } shouldBe
+                listOf("first-badkind", "second-badkind")
+        }
+
         test("a package named only by a non-transferable binding is declared, not undeclared") {
             generate(
                 spec(
@@ -513,7 +632,10 @@ class DeclaredTransferableBindingTest : FunSpec({
                     "${packagesCatalog()},${bindingsCatalog(binding(kind = "widget"))}",
                 ),
                 excluded = setOf(IDENTITY),
-            ).warnings shouldBe emptyList()
+            ).warnings shouldBe listOf(
+                "AWSBLOCKS-NATIVE-004: binding 'example-device-link' declares kind 'widget', " +
+                    "which schema 1 does not define; ignored on kotlin.",
+            )
         }
 
         test("a referenced package reports nothing") {
@@ -526,7 +648,7 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
     }
 
-    context("malformed present metadata is a generation error") {
+    context("present metadata is validated at generation") {
         fun rejected(extensions: String, resultSchema: String = transferableResult(typeArgs = null)): String =
             shouldThrow<OpenRpcParseException> { generate(spec(resultSchema, extensions)) }
                 .message.shouldNotBeNull()
@@ -660,12 +782,178 @@ class DeclaredTransferableBindingTest : FunSpec({
         }
 
         // One per rejecting clause: leading non-letter, illegal character, dangling separator.
-        listOf("9link", "iot.deviceLink", "link-").forEach { bad ->
+        listOf("9link", "iot:deviceLink", "link-").forEach { bad ->
             test("an export of \"$bad\" is rejected") {
                 rejected(
                     "${packagesCatalog()}," + bindingsCatalog(binding(export = bad, arity = "0")),
-                ) shouldContain "\"export\" is not an identifier: \"$bad\""
+                ) shouldContain
+                    "\"export\" is not a -, _ or . joined run of " +
+                    "alphanumeric segments starting with a letter: \"$bad\""
             }
+        }
+
+        // This input overflows the grammar's backtracking, so it passes only while the length
+        // check runs first.
+        test("an export over the cap is rejected by length before the grammar regex runs") {
+            val oversized = "a" + "_a".repeat(4000)
+            rejected(
+                "${packagesCatalog()}," + bindingsCatalog(binding(export = oversized, arity = "0")),
+            ) shouldContain "\"export\" exceeds 64 characters: ${oversized.length}"
+        }
+
+        test("an export at exactly the maximum length is accepted") {
+            val atCap = "d".repeat(64)
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()},${bindingsCatalog(binding(export = atCap, arity = "0"))}",
+                ),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.D${"d".repeat(63)}\n"
+        }
+
+        test("an export one character over the maximum length is rejected") {
+            val overCap = "d".repeat(65)
+            rejected(
+                "${packagesCatalog()}," + bindingsCatalog(binding(export = overCap, arity = "0")),
+            ) shouldContain "\"export\" exceeds 64 characters: 65"
+        }
+
+        test("a newline in an id cannot split the export cap rejection") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val message = rejected(
+                "${packagesCatalog()}," +
+                    bindingsCatalog(binding(export = "d".repeat(65), arity = "0", id = forged)),
+            )
+            message shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            message shouldNotContain "\n"
+        }
+
+        test("a dot-separated export resolves like any other separator") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()},${bindingsCatalog(binding(export = "device.link", arity = "0"))}",
+                ),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+        }
+
+        fun collided(extensions: String): String =
+            shouldThrow<CodegenException> {
+                generate(spec(transferableResult(typeArgs = null), extensions))
+            }.message.shouldNotBeNull()
+
+        test("two exports in one package resolving to one type name are rejected") {
+            collided(
+                "${packagesCatalog()}," + bindingsCatalog(
+                    binding(export = "device_link", arity = "0"),
+                    binding(tag = "example-iot/other", id = "other", export = "device-link", arity = "0"),
+                ),
+            ) shouldContain
+                "x-blocks-native-bindings binds tag \"example-iot/other\" to " +
+                "$KOTLIN_PACKAGE.DeviceLink, already resolved by export \"device_link\" " +
+                "in package \"$IDENTITY\" at generic arity 0"
+        }
+
+        test("two exports resolving to one simple name under two kotlinPackages are accepted") {
+            val src = generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${peerPackagesCatalog(peerKotlinPackage = PEER_KOTLIN_PACKAGE)}," + bindingsCatalog(
+                        binding(export = "device_link", arity = "0"),
+                        binding(
+                            tag = "example-iot/other",
+                            id = "other",
+                            pkg = PEER_IDENTITY,
+                            export = "device-link",
+                            arity = "0",
+                        ),
+                    ),
+                ),
+            ).source()
+            src shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+            src shouldNotContain "UnknownTransferable"
+        }
+
+        test("a newline in a tag cannot split the collision rejection") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val message = collided(
+                "${packagesCatalog()}," + bindingsCatalog(
+                    binding(export = "device_link", arity = "0"),
+                    binding(tag = forged, id = "other", export = "device-link", arity = "0"),
+                ),
+            )
+            message shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            message shouldNotContain "\n"
+        }
+
+        test("a newline in the prior package identity cannot split the collision rejection") {
+            val forged = "ev\\nAWSBLOCKS-NATIVE-999: forged"
+            val message = collided(
+                "${peerPackagesCatalog(identity = forged)}," + bindingsCatalog(
+                    binding(pkg = forged, export = "device_link", arity = "0"),
+                    binding(
+                        tag = "example-iot/other",
+                        id = "other",
+                        pkg = PEER_IDENTITY,
+                        export = "device-link",
+                        arity = "0",
+                    ),
+                ),
+            )
+            message shouldContain """ev\nAWSBLOCKS-NATIVE-999: forged"""
+            message shouldNotContain "\n"
+        }
+
+        test("one export declared at two generic arities is rejected") {
+            collided(
+                "${packagesCatalog()}," + bindingsCatalog(
+                    binding(export = "deviceLink", arity = "0"),
+                    binding(tag = "example-iot/other", id = "other", export = "deviceLink", arity = "1"),
+                ),
+            ) shouldContain
+                "x-blocks-native-bindings binds tag \"example-iot/other\" to " +
+                "$KOTLIN_PACKAGE.DeviceLink, already resolved by export \"deviceLink\" " +
+                "in package \"$IDENTITY\" at generic arity 0"
+        }
+
+        test("two tags declaring one export in one package at one arity share its type name") {
+            val src = generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()}," + bindingsCatalog(
+                        binding(export = "device-link", arity = "0"),
+                        binding(tag = "example-iot/other", id = "other", export = "device-link", arity = "0"),
+                    ),
+                ),
+            ).source()
+            src shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+            src shouldContain "): DeviceLink {"
+            src shouldNotContain "UnknownTransferable"
+        }
+
+        test("a built-in tag's export claims no type name, so an emitted export may resolve to it") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${packagesCatalog()}," + bindingsCatalog(
+                        binding(tag = OIDC_TAG, id = "oidc", export = "device_link", arity = "0"),
+                        binding(export = "device-link", arity = "0"),
+                    ),
+                ),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
+        }
+
+        test("an opted-out package's export claims no type name") {
+            generate(
+                spec(
+                    transferableResult(typeArgs = null),
+                    "${peerPackagesCatalog()}," + bindingsCatalog(
+                        binding(tag = "example-iot/other", id = "other", export = "device_link", arity = "0"),
+                        binding(pkg = PEER_IDENTITY, export = "device-link", arity = "0"),
+                    ),
+                ),
+                excluded = setOf(IDENTITY),
+            ).source() shouldContain "import $KOTLIN_PACKAGE.DeviceLink\n"
         }
 
         test("an all-caps export keeps its case, so the import names what the package exports") {

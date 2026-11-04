@@ -1,8 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from "node:child_process";
-import { writeFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
@@ -14,9 +13,12 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
-import { runSync, spawnCommand } from './run-command.js';
+import type { DeployedStack } from './deploy.js';
+import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
+import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
+import { log } from './log.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -27,6 +29,44 @@ export interface SandboxOptions {
   deployOnly?: boolean;
   /** Custom dev server command. Defaults to 'npx vite'. For Next.js use 'npx next dev'. */
   devCommand?: string;
+  /**
+   * Deploy a preview sandbox: a sandbox that includes hosting in preview
+   * shape (`npm run sandbox:preview`). Synth and deploy get
+   * `--context previewMode=true` (see {@link PREVIEW_MODE_CONTEXT}) next to
+   * `sandboxMode=true`; the app reads it to add `Hosting` with
+   * `HostingPresets.preview`. A plain sandbox stays backend-only.
+   *
+   * A preview sandbox is deploy-only (as with {@link SandboxOptions.deployOnly}):
+   * it deploys once and exits, with no `cdk watch` and no local dev server.
+   * Run it again to re-deploy.
+   *
+   * Only a preview RE-deploy uses `--hotswap-fallback`: a code-only change is
+   * applied straight to the Lambda functions in seconds, falling back to a
+   * CloudFormation deploy (direct, no change set) for anything that can't be
+   * hotswapped. Hotswap leaves the stack drifted from its template, which is
+   * acceptable for a throwaway preview only, so every other sandbox keeps the
+   * CloudFormation deploy.
+   *
+   * A deploy counts as a re-deploy when `<outDir>/outputs.json` exists in the
+   * current working directory (the previous deploy wrote it); the stack itself
+   * is not queried. So a re-deploy from another directory, or after deleting
+   * that file, runs a full deploy (slower, but correct). A stale file left
+   * after the stack was deleted makes `--hotswap-fallback` find no stack, and
+   * it falls back to a full deploy.
+   */
+  preview?: boolean;
+  /** How the user runs this command, in the guidance (for example `cdk-blocks sandbox`). Default: `npm run sandbox`. */
+  invocation?: string;
+  /** How the user destroys the sandbox, in the guidance (for example `cdk-blocks sandbox destroy`). Default: `npm run sandbox:destroy`. */
+  destroyInvocation?: string;
+  /** How the user deploys a hosted preview, in the guidance (for example `cdk-blocks sandbox preview`). Default: `npm run sandbox:preview`. */
+  previewInvocation?: string;
+  /**
+   * Called with the deployed sandbox stack's outputs after the first deploy, in
+   * both modes: in watch mode before `cdk watch` starts, since `startSandbox`
+   * then never returns. Awaited.
+   */
+  onDeployed?: (deployed: DeployedStack) => void | Promise<void>;
 }
 
 /**
@@ -37,6 +77,67 @@ export interface SandboxOptions {
  */
 export function buildDevServerSpawn(devCommand: string | undefined): { command: string; args: string[] } {
   return { command: devCommand || 'npx tsx watch aws-blocks/scripts/server.ts', args: [] };
+}
+
+/**
+ * The CDK context key a preview sandbox sets (`--context previewMode=true`),
+ * next to `sandboxMode=true`. The app reads it to add `Hosting` in preview
+ * shape to the sandbox, which otherwise deploys the backend only:
+ *
+ * ```ts
+ * const previewMode = app.node.tryGetContext('previewMode') === 'true';
+ * if (!sandboxMode || previewMode) {
+ *   new Hosting(stack, 'Hosting', { ...(previewMode ? HostingPresets.preview : HostingPresets.production), root, api });
+ * }
+ * ```
+ */
+export const PREVIEW_MODE_CONTEXT = "previewMode";
+
+/**
+ * The site URL from a stack's outputs: the `Hosting` construct's `HostingUrl`
+ * output, whose key CDK prefixes with the construct path and suffixes with a
+ * hash (e.g. `HostingHostingUrl4F2C…`).
+ *
+ * @param stackOutputs one stack's outputs from `outputs.json`.
+ * @returns the URL with a scheme, or `undefined` when the stack has no hosting.
+ */
+export function findHostingUrl(stackOutputs: Record<string, string>): string | undefined {
+  const key = Object.keys(stackOutputs).find((k) => /HostingUrl/.test(k));
+  const url = key ? stackOutputs[key] : undefined;
+  if (!url) return undefined;
+  return /^https?:\/\//.test(url) ? url : `https://${url}`;
+}
+
+/**
+ * The warning a plain (backend-only) sandbox deploy prints when the stack has
+ * a hosted preview. `sandbox`, `sandbox:deploy` and `sandbox:preview` deploy
+ * one stack, and only a preview synth includes `Hosting`, so a plain deploy
+ * removes the preview; the next `sandbox:preview` recreates it at a new URL.
+ *
+ * @param outputsFile the previous deploy's `outputs.json`.
+ * @param preview whether this deploy is a preview.
+ * @param previewInvocation the command that deploys a preview, named in the warning.
+ * @returns the warning, or `undefined` for a preview deploy, a stack with no
+ *   hosting, or no (or an unreadable) outputs file.
+ */
+export function previewRemovalWarning(
+  outputsFile: string,
+  preview: boolean,
+  previewInvocation = "npm run sandbox:preview",
+): string | undefined {
+  if (preview || !existsSync(outputsFile)) return undefined;
+  let groups: Record<string, string>[];
+  try {
+    groups = Object.values(JSON.parse(readFileSync(outputsFile, "utf-8")) ?? {}) as Record<string, string>[];
+  } catch {
+    return undefined;
+  }
+  const hostingUrl = groups.map((group) => findHostingUrl(group ?? {})).find(Boolean);
+  if (!hostingUrl) return undefined;
+  return (
+    `⚠️  This stack has a hosted preview at ${hostingUrl}. A plain sandbox deploy is backend-only and removes it.\n` +
+    `   Run ${previewInvocation} to keep it (re-adding it later gives a new URL).`
+  );
 }
 
 export interface SandboxDeployArgsOptions {
@@ -59,6 +160,18 @@ export interface SandboxDeployArgsOptions {
    * the framework build runs only once.
    */
   assemblyDir?: string;
+  /**
+   * Add `--hotswap-fallback` (next to `--method direct`, which its fallback
+   * CloudFormation deploy uses). `startSandbox` sets it only for a preview
+   * re-deploy (see {@link SandboxOptions.preview}).
+   */
+  hotswap?: boolean;
+  /**
+   * Synthesize and deploy a preview sandbox: adds `--context previewMode=true`
+   * (see {@link PREVIEW_MODE_CONTEXT}). `startSandbox` sets it from
+   * {@link SandboxOptions.preview}.
+   */
+  preview?: boolean;
 }
 
 /**
@@ -66,14 +179,15 @@ export interface SandboxDeployArgsOptions {
  * once into `<outDir>/cdk.out`, inspect the templates (see
  * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
  */
-export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "synth",
     "--quiet",
     "--output", `${outDir}/cdk.out`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", `npm exec tsx -- -C cdk ${backendPath}`,
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -90,6 +204,32 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
     ...getCdkTelemetryEnv('sandbox'),
     ...getFrameworkSinkEnv(frameworkSink),
   };
+}
+
+/**
+ * Build the `npx cdk watch …` argv the sandbox runs after its first deploy.
+ * Only a plain sandbox watches: a preview sandbox is deploy-only (see
+ * {@link sandboxIsDeployOnly}).
+ */
+export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: SandboxDeployArgsOptions): string[] {
+  return [
+    "cdk", "watch",
+    "--outputs-file", `${outDir}/outputs.json`,
+    "--context", `projectRoot=${projectRoot}`,
+    "--context", "sandboxMode=true",
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+  ];
+}
+
+/**
+ * Whether the sandbox stops after its deploy (no `cdk watch`, no local dev
+ * server): with `deployOnly`, and always for a preview. A watch would
+ * re-deploy the hosted preview, with a full framework build, on every save.
+ *
+ * @internal
+ */
+export function sandboxIsDeployOnly({ deployOnly = false, preview = false }: Pick<SandboxOptions, "deployOnly" | "preview">): boolean {
+  return deployOnly || preview;
 }
 
 /**
@@ -122,6 +262,16 @@ export function buildSandboxCdkEnv(frameworkSink: string | undefined): NodeJS.Pr
  *   `express: false` drops it (still `--method direct`, with rollback) for a
  *   sandbox whose deployed stack Express Mode can't update — currently a Lambda
  *   Web Function endpoint (`compute.type: 'web-function'`).
+ * - `--hotswap-fallback` (`hotswap`, a preview re-deploy only): next to
+ *   `--method direct`, apply a code-only change straight to the Lambda
+ *   functions and S3 assets, falling back to a CloudFormation deploy (still
+ *   direct and in Express Mode) for a change that can't be hotswapped. The
+ *   CDK CLI deploys the fallback with the `--method` given; without one, the
+ *   fallback creates and executes a change set, which adds its own wait
+ *   (about 13 s on a preview stack). A true hotswap
+ *   needs a deterministic template: a tag or name whose value changes per
+ *   synth (a date, a git SHA, a per-deploy build id) forces the fallback
+ *   every time. Preview mode pins its build id for this reason.
  */
 export function buildSandboxDeployArgs({
   outDir,
@@ -129,17 +279,21 @@ export function buildSandboxDeployArgs({
   backendPath,
   express = true,
   assemblyDir,
+  hotswap = false,
+  preview = false,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
     "--all",
+    ...(hotswap ? ["--hotswap-fallback"] : []),
     "--method", "direct",
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
     "--outputs-file", `${outDir}/outputs.json`,
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${backendPath}`,
+    ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
 }
 
@@ -157,14 +311,18 @@ export function buildSandboxDeployArgs({
  *
  * Kept pure so it can be asserted in a unit test.
  */
-export function sandboxFailureRecoveryHint(): string {
+export function sandboxFailureRecoveryHint(
+  invocation = "npm run sandbox",
+  destroyInvocation = "npm run sandbox:destroy",
+): string {
+  const width = Math.max(invocation.length, destroyInvocation.length);
   return [
     "",
     "ℹ️  Express Mode leaves failed sandbox stacks in place (automatic rollback is off).",
-    "   If the next `npm run sandbox` reports the stack cannot be updated, recover with:",
+    `   If the next \`${invocation}\` reports the stack cannot be updated, recover with:`,
     "",
-    "     npm run sandbox:destroy   # tears the failed stack down (handles ROLLBACK_COMPLETE)",
-    "     npm run sandbox           # redeploy from a clean slate",
+    `     ${destroyInvocation.padEnd(width)}   # tears the failed stack down (handles ROLLBACK_COMPLETE)`,
+    `     ${invocation.padEnd(width)}   # redeploy from a clean slate`,
     "",
     "   If destroy reports UPDATE_ROLLBACK_FAILED, first run:",
     "     aws cloudformation continue-update-rollback --stack-name <your-sandbox-stack>",
@@ -172,7 +330,18 @@ export function sandboxFailureRecoveryHint(): string {
 }
 
 export async function startSandbox(options: SandboxOptions) {
-  const { backendPath, outDir = ".blocks-sandbox", clientPort = 3000, deployOnly = false, devCommand } = options;
+  const {
+    backendPath,
+    outDir = ".blocks-sandbox",
+    clientPort = 3000,
+    devCommand,
+    preview = false,
+    invocation = "npm run sandbox",
+    destroyInvocation = "npm run sandbox:destroy",
+    previewInvocation = "npm run sandbox:preview",
+    onDeployed,
+  } = options;
+  const deployOnly = sandboxIsDeployOnly(options);
   const sandboxStartTime = Date.now();
 
   // Load .env.local so CDK can read secret ARNs and other config.
@@ -188,7 +357,7 @@ export async function startSandbox(options: SandboxOptions) {
   // FAIL event manually (mirroring the CDK-deploy failure path below) before
   // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', projectRoot: process.cwd(), checkBootstrap: true });
+    await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
@@ -205,10 +374,10 @@ export async function startSandbox(options: SandboxOptions) {
   // projectRoot below — so the written name matches the name resolved at synth.
   const secrets = await ensureSecrets('sandbox', process.cwd());
   if (secrets.created.length > 0) {
-    console.log(`🔐 Created secrets: ${secrets.created.join(', ')}`);
+    log.progress(`🔐 Created secrets: ${secrets.created.join(', ')}`);
   }
   if (secrets.updated.length > 0) {
-    console.log(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
+    log.progress(`🔐 Updated secrets: ${secrets.updated.join(', ')}`);
   }
 
   // Apply external-database migrations to the sandbox database before
@@ -224,7 +393,7 @@ export async function startSandbox(options: SandboxOptions) {
   // in-process import of `index.ts` would load every block's local mock.
   const backendDefPath = resolve(join(dirname(resolve(backendPath)), 'index.ts'));
   const clientPath = join(dirname(backendDefPath), 'client.js');
-  console.log('📝 Generating client code...');
+  log.progress('📝 Generating client code...');
   try {
     await generateDeployClient(backendDefPath, clientPath);
   } catch (error) {
@@ -241,11 +410,29 @@ export async function startSandbox(options: SandboxOptions) {
   // Framework resolves in the cdk synth child; it writes the value here so the
   // parent can attach it to the sandbox telemetry event.
   const frameworkSink = createFrameworkSink();
-  console.log("🚀 Deploying to AWS...");
-  console.log("   (This may take a few minutes on first deploy)");
+
+  // A preview re-deploy hotswaps (see SandboxOptions.preview). A previous
+  // deploy wrote `<outDir>/outputs.json`, so the stack exists; if it was
+  // destroyed since, `--hotswap-fallback` falls back to a full deploy.
+  const previousOutputs = join(process.cwd(), outDir, "outputs.json");
+  const hotswap = preview && existsSync(previousOutputs);
+
+  const removalWarning = previewRemovalWarning(previousOutputs, preview, previewInvocation);
+  if (removalWarning) console.warn(removalWarning);
+
+  log.progress("🚀 Deploying to AWS...");
+  log.detail(
+    hotswap
+      ? "   (preview re-deploy: a backend-only change is hotswapped; a changed frontend build or infra change does a full deploy)"
+      : "   (This may take a few minutes on first deploy)",
+  );
+
+  // At BLOCKS_LOG_LEVEL=quiet|normal the synth + deploy output is condensed and
+  // retained; the failure path below prints it.
+  const cdkOutput = createCdkOutput({ label: 'cdk synth + deploy', verb: 'deploy' });
 
   const cdkEnv = buildSandboxCdkEnv(frameworkSink);
-  const argOptions = { outDir, projectRoot: process.cwd(), backendPath };
+  const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
   try {
@@ -253,25 +440,25 @@ export async function startSandbox(options: SandboxOptions) {
     // deployed (not on local state that may be missing — a fresh clone, a
     // cleaned .blocks-sandbox, another machine). The deploy below reuses this
     // assembly, so the framework build still runs only once.
-    runSync("npm", buildSandboxSynthArgs(argOptions), { stdio: "inherit", env: cdkEnv });
+    await cdkOutput.run("npm", buildSandboxSynthArgs(argOptions), { env: cdkEnv });
 
     // Express Mode can't UPDATE some resources (see EXPRESS_UNSAFE_RESOURCE_TYPES);
     // creating them is fine. Fall back to a full deploy when a stack about to be
     // deployed has one and already exists — or can't be inspected (fail closed).
     const expressUnsafe = await findExpressUnsafeStacks(stacksWithExpressUnsafeResources(assemblyDir));
     if (expressUnsafe.length > 0) {
-      console.log(
+      log.progress(
         `ℹ️  Express Mode off for this deploy: ${expressUnsafe.join(', ')} has a Lambda Web Function endpoint, ` +
           "which Express Mode can't update. Deploying with full stabilization + rollback instead.",
       );
     }
 
-    runSync(
+    await cdkOutput.run(
       "npm",
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
-      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir }),
-      { stdio: "inherit", env: cdkEnv },
+      buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir, hotswap }),
+      { env: cdkEnv },
     );
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
@@ -281,8 +468,9 @@ export async function startSandbox(options: SandboxOptions) {
       duration: Date.now() - sandboxStartTime,
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
+    cdkOutput.printRetained();
     console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint());
+    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
     throw error;
   }
 
@@ -293,8 +481,8 @@ export async function startSandbox(options: SandboxOptions) {
   // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
   // on the outputs file's write order; fall back to the first group so a
   // single-stack app is unchanged.
-  const stackGroups = Object.values(outputs) as Record<string, string>[];
-  const stackOutputs = (stackGroups.find((group) => group?.ApiUrl) ?? stackGroups[0] ?? {});
+  const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
+  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
 
   const apiUrl = stackOutputs.ApiUrl;
   if (!apiUrl) {
@@ -303,6 +491,8 @@ export async function startSandbox(options: SandboxOptions) {
 
   console.log("\n✅ Sandbox deployed!");
   console.log(`📡 API URL: ${apiUrl}`);
+  const hostingUrl = findHostingUrl(stackOutputs);
+  if (hostingUrl) console.log(`🌐 ${preview ? 'Preview' : 'Hosting'} URL: ${hostingUrl}`);
 
   buildAndSendEvent({
     command: 'sandbox',
@@ -318,28 +508,26 @@ export async function startSandbox(options: SandboxOptions) {
 
   // Same machine-readable completion line as `npm run deploy`, so a caller can
   // grep one stable line after a sandbox deploy instead of parsing streamed
-  // output. Sandbox serves the frontend locally (no CloudFront), so there is no
-  // hosting URL — the signal is backend-only (`BLOCKS_DEPLOYED api=…`). Emitted
+  // output. A plain sandbox serves the frontend locally, so its signal is
+  // backend-only (`BLOCKS_DEPLOYED api=…`); a preview adds the hosted site's
+  // `url=…`. Emitted
   // AFTER config.json is written (matching `deploy()`), so the signal always
   // implies the on-disk artifacts a consumer reads next are already present;
   // printed before the deploy-only return below so both paths emit it.
-  console.log(`\n${formatDeploySignal(apiUrl)}`);
+  console.log(`\n${formatDeploySignal(apiUrl, hostingUrl)}`);
+
+  // Before watch mode starts, which never returns: a launcher records the deploy here.
+  await onDeployed?.({ stack, apiUrl, hostingUrl });
 
   if (deployOnly) {
     return apiUrl;
   }
 
-  console.log("\n👀 Starting CDK watch mode...");
-  console.log("🌐 Starting local dev server (proxying to AWS)...");
+  log.progress("\n👀 Starting CDK watch mode...");
+  log.progress("🌐 Starting local dev server (proxying to AWS)...");
   console.log(`\n   Open http://localhost:${clientPort}\n`);
 
-  const cdkWatch = spawnCommand("npx", [
-    "cdk", "watch",
-    `--outputs-file`, `${outDir}/outputs.json`,
-    `--context`, `projectRoot=${process.cwd()}`,
-    `--context`, `sandboxMode=true`,
-    `--app`, `npm exec tsx -- -C cdk ${backendPath}`
-  ], {
+  const cdkWatch = spawnCommand("npx", buildSandboxWatchArgs(argOptions), {
     stdio: ["ignore", "pipe", "pipe"],
     // Own process group on POSIX so cleanup can reap the whole `cdk watch` tree
     // (npx → cdk → node) via terminateProcessTree, not just the npx shell — a
@@ -350,15 +538,9 @@ export async function startSandbox(options: SandboxOptions) {
     env: { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') },
   });
 
-  cdkWatch.stdout?.on("data", (data) => {
-    const str = data.toString().trim();
-    if (!str.match(/\[(START|END|REPORT|INIT_START)\s+RequestId:/)) {
-      console.log(`[CDK Watch] ${str}`);
-    }
-  });
-  cdkWatch.stderr?.on("data", (data) => {
-    console.error(`[CDK Watch] ${data.toString().trim()}`);
-  });
+  // Unchanged relay at the default level; condensed and retained (printed when
+  // a watch deploy fails) at BLOCKS_LOG_LEVEL=quiet|normal.
+  attachCdkWatchOutput(cdkWatch, { stopping: () => cleaningUp });
 
   const devServerSpawn = buildDevServerSpawn(devCommand);
 
@@ -382,9 +564,9 @@ export async function startSandbox(options: SandboxOptions) {
   const cleanup = async () => {
     if (cleaningUp) return; // idempotent — a second signal must not re-enter
     cleaningUp = true;
-    console.log("\n\n🛑 Stopping local processes...");
-    console.log("   (AWS resources are still running)");
-    console.log("\n   To destroy AWS resources, run: npm run sandbox:destroy\n");
+    log.progress("\n\n🛑 Stopping local processes...");
+    log.progress("   (AWS resources are still running)");
+    log.progress(`\n   To destroy AWS resources, run: ${destroyInvocation}\n`);
     // Reap BOTH child trees the way the dev server reaps Vite — a process-group
     // SIGTERM→SIGKILL via the shared terminateProcessTree — instead of a bare
     // kill() that signals only the npx/shell parent and orphans the real
@@ -576,7 +758,7 @@ export async function emptyBucket(s3: S3Client, bucket: string): Promise<void> {
 			// resolved by hand. Log loudly with the first error code — this is the
 			// kind of silent skip that leaks a stack, so make it visible in CI output.
 			const first = res.Errors[0];
-			console.warn(
+			log.warn(
 				`  ⚠️  ${bucket}: ${res.Errors.length} object(s) could NOT be deleted ` +
 					`(e.g. ${first.Key}: ${first.Code}). This bucket will block stack teardown ` +
 					`until cleared manually.`,
@@ -662,13 +844,26 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
 				try {
 					await emptyBucket(s3, b);
 				} catch (e) {
-					console.warn(`  ⚠️  could not empty ${b}: ${(e as Error).message}`);
+					log.warn(`  ⚠️  could not empty ${b}: ${(e as Error).message}`);
+					log.debugError(e);
 				}
 			}
 		}
 	} catch (e) {
-		console.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
+		log.warn(`  ⚠️  bucket-emptying step skipped: ${(e as Error).message}`);
+		log.debugError(e);
 	}
+}
+
+/**
+ * Quote `backendPath` for the `--app` command string. CDK runs that string
+ * through a shell, so an unquoted path containing a space would split. cmd.exe
+ * (Windows) does not treat single quotes as quoting and would keep them in the
+ * path, so Windows gets double quotes; POSIX shells get single quotes.
+ */
+export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
+	if (platform === 'win32') return `"${backendPath}"`;
+	return `'${backendPath.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
@@ -680,7 +875,7 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
 export function listDestroyedStacks(assemblyDir: string): AssemblyStack[] {
 	const stacks = topLevelStacks(assemblyDir);
 	if (stacks.length === 0) {
-		console.warn(
+		log.warn(
 			`  ⚠️  could not read the synthesized stacks in ${assemblyDir}; skipping bucket-emptying and the throttle and ` +
 				'Lambda@Edge checks',
 		);
@@ -871,8 +1066,14 @@ export async function edgeStacksBlockedByReplicas(
  * `destroySandbox`, fakes in tests so the retry/empty-before-retry wiring (the
  * sev2 fix) is exercised without spawning cdk. */
 export interface DestroyRetryDeps {
-	/** Run one `cdk destroy` attempt; throws on failure. */
-	runDestroy: () => void;
+	/** Run one `cdk destroy` attempt; throws (or rejects) on failure. */
+	runDestroy: () => void | Promise<void>;
+	/**
+	 * Print the CDK output retained while it was hidden by `BLOCKS_LOG_LEVEL`
+	 * (see `cdk-output.ts`). Called once, just before the destroy finally fails.
+	 * Default: nothing to print.
+	 */
+	printRetainedOutput?: () => void;
 	/** Resolve the app's stacks, by stack name and Region (for bucket enumeration). */
 	listStacks: () => AssemblyStack[];
 	/** Empty the given stacks' versioned S3 buckets. */
@@ -959,7 +1160,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 	for (let attempt = 0; ; attempt++) {
 		const attemptStartedAt = now();
 		try {
-			deps.runDestroy();
+			await deps.runDestroy();
 			console.log(attempt === 0 ? `\n✅ ${label} destroyed!` : `\n✅ ${label} destroyed on retry!`);
 			return;
 		} catch (error) {
@@ -969,6 +1170,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			if (!stacks?.length) stacks = deps.listStacks();
 			const edgeBlocked = await edgeStacksBlocked(deps, stacks, attemptStartedAt);
 			if (edgeBlocked.length > 0) {
+				deps.printRetainedOutput?.();
 				console.error(
 					`\n❌ ${edgeBlocked.join(', ')} can't be deleted yet: CloudFront still holds replicas of its Lambda@Edge ` +
 						'function, which take a few hours to clear after the distribution is deleted, so retrying now cannot ' +
@@ -981,9 +1183,10 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 			try {
 				throttled = await isThrottled(stacks, attemptStartedAt, previousFailureAt);
 			} catch (e) {
-				console.warn(
+				log.warn(
 					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
 				);
+				log.debugError(e);
 			}
 			let delayMs: number | undefined;
 			const throttleBudgetSpent = throttleRetries > 0 && now() - firstFailureAt > budgetMs;
@@ -994,6 +1197,7 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				delayMs = retryDelays[ordinaryRetries];
 			}
 			if (delayMs === undefined) {
+				deps.printRetainedOutput?.();
 				console.error('\n❌ Destroy failed after retries.');
 				if (throttled) {
 					console.error(
@@ -1010,19 +1214,19 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				throw error;
 			}
 			if (stacks.length > 0) {
-				console.log('\n🧹 Emptying versioned S3 buckets before retry...');
+				log.progress('\n🧹 Emptying versioned S3 buckets before retry...');
 				await deps.emptyBuckets(stacks);
 			}
 			const delaySec = Math.round(delayMs / 1000);
 			if (throttled) {
 				throttleRetries++;
-				console.log(
+				log.progress(
 					`\n⏳ Stack deletion was throttled by AWS (API rate limit). Retrying in ${delaySec}s ` +
 						`(throttle retry ${throttleRetries}; backing off for up to ${Math.round(budgetMs / 60_000)} min)...`,
 				);
 			} else {
 				ordinaryRetries++;
-				console.log(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
+				log.progress(`\n⏳ Stack deletion failed. Retrying in ${delaySec}s (waiting for resource cleanup)...`);
 			}
 			await deps.sleep(delayMs);
 		}
@@ -1046,15 +1250,16 @@ async function edgeStacksBlocked(deps: DestroyRetryDeps, stacks: AssemblyStack[]
  */
 const SANDBOX_DESTROY_ASSEMBLY_DIR = '.blocks-sandbox/sandbox-destroy.out';
 
-export async function destroySandbox(backendPath: string) {
+export async function destroySandbox(backendPath: string, options: { invocation?: string } = {}) {
+  const invocation = options.invocation ?? 'npm run sandbox:destroy';
   return trackCommand('sandbox:destroy', async () => {
-    console.log("🗑️  Destroying sandbox...");
+    log.progress("🗑️  Destroying sandbox...");
 
     // Fail fast on a missing/expired credential BEFORE the retry loop: a
     // credential error is deterministic and retrying only burns the backoff.
     // Mirrors the `sandbox` deploy pre-flight; the retry is for transient
     // teardown blockers, not auth.
-    await assertAwsCredentials({ command: 'sandbox:destroy', projectRoot: process.cwd(), accountDetails: false });
+    await assertAwsCredentials({ command: 'sandbox:destroy', invocation, projectRoot: process.cwd(), accountDetails: false });
 
     // Load .env.local so CDK synth can read project refs and other config.
     try { loadEnvFile('.env.local'); } catch (e: any) {
@@ -1067,7 +1272,7 @@ export async function destroySandbox(backendPath: string) {
     rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
     const cdkEnv = { ...process.env, NODE_OPTIONS: "--conditions=cdk", ...getCdkTelemetryEnv('sandbox') };
     const clients = await destroyRetryClients(process.cwd());
-    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv, clients));
+    await runDestroyWithRetries(sandboxDestroyDeps(backendPath, cdkEnv, clients, invocation));
     rmSync(SANDBOX_DESTROY_ASSEMBLY_DIR, { recursive: true, force: true });
   });
 }
@@ -1082,6 +1287,7 @@ export function sandboxDestroyDeps(
   backendPath: string,
   cdkEnv: NodeJS.ProcessEnv,
   clients: Required<EmptyBucketsClients>,
+  rerunCommand?: string,
 ): DestroyRetryDeps {
   const cdkArgs = [
     "exec", "cdk", "--", "destroy",
@@ -1098,16 +1304,22 @@ export function sandboxDestroyDeps(
     // resolve the same stack names.
     "--context", "sandboxMode=true",
     "--context", `projectRoot=${process.cwd()}`,
-    // Single-quote backendPath: CDK re-runs the --app string through a shell,
-    // so an unquoted path containing a space would split.
-    "--app", `npm exec tsx -- -C cdk '${backendPath}'`,
+    // Quote backendPath: CDK re-runs the --app string through a shell, so an
+    // unquoted path containing a space would split. quoteCdkAppPath picks the
+    // quoting that shell understands — cmd.exe keeps a literal single quote.
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
   ];
+  // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
+  // the retry loop prints it once the destroy finally fails.
+  const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
   return {
-    runDestroy: () => runSync('npm', cdkArgs, { stdio: 'inherit', env: cdkEnv }),
+    runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: cdkEnv }),
+    printRetainedOutput: () => cdkOutput.printRetained(),
     listStacks: () => listDestroyedStacks(SANDBOX_DESTROY_ASSEMBLY_DIR),
     emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
     isThrottled: (stacks, since, previous) => destroyWasThrottled(stacks, since, previous, clients.cfnFor),
     edgeReplicaBlocked: (stacks, since) => edgeStacksBlockedByReplicas(stacks, since, clients.cfnFor),
+    rerunCommand,
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   };
 }

@@ -627,15 +627,25 @@ describe('Scope-level compute', () => {
 		);
 	});
 
-	test('a container scope fails synth for a CronJob, naming the compute', async () => {
-		await assert.rejects(
-			BlocksStack.create(new cdk.App(), 'ContainerScopeCronStack', {
-				backendHandlerPath: handlerPath,
-				backendCDKPath: containerScopeCronBackendPath,
-				defaults: BlocksPresets.production,
-			}),
-			/CronJob "ContainerScopeCronStack-app-jobs-nightly" runs only on a serverless compute, but resolves to container compute 'ContainerScopeCronStack\/app\/worker\/backing'/,
+	test('a container scope places a CronJob on the container, through its runner queue', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ContainerScopeCronStack', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: containerScopeCronBackendPath,
+			defaults: BlocksPresets.production,
+		});
+		const resources = Template.fromStack(stack).toJSON().Resources as Record<
+			string,
+			{ Type: string; Properties: Record<string, unknown> }
+		>;
+		const queueId = Object.keys(resources).find(
+			(k) =>
+				resources[k].Type === 'AWS::SQS::Queue' &&
+				resources[k].Properties.QueueName === 'ContainerScopeCronStack-app-jobs-nightly-runner',
 		);
+		assert.ok(queueId, "the CronJob's runner queue exists");
+		const schedule = Object.values(resources).find((r) => r.Type === 'AWS::Scheduler::Schedule');
+		assert.ok(schedule, 'a schedule exists');
+		assert.deepStrictEqual((schedule.Properties.Target as { Arn: unknown }).Arn, { 'Fn::GetAtt': [queueId, 'Arn'] });
 	});
 });
 
@@ -709,16 +719,15 @@ describe('a compute bound to another backend fails synth (multi-backend)', () =>
 	});
 });
 
-// Compile-time only (never called): a scope takes either kind of compute; a
-// CronJob's own `compute` takes only a serverless one.
+// Compile-time only (never called): a scope, and a CronJob's own `compute`,
+// take either kind of compute.
 function _scopeAndCronComputeTypeChecks(scope: InstanceType<typeof Scope>) {
 	const serverless = new Compute(scope, 'serverless', { type: 'serverless' });
 	const container = new Compute(scope, 'container', { type: 'container' });
 	new Scope('a', { parent: scope, compute: serverless });
 	new Scope('b', { parent: scope, compute: container });
 	new CronJob(scope, 'ok', { schedule: 'rate(1 hour)', compute: serverless, handler: async () => {} });
-	// @ts-expect-error — only a serverless compute can run a CronJob
-	new CronJob(scope, 'notYet', { schedule: 'rate(1 hour)', compute: container, handler: async () => {} });
+	new CronJob(scope, 'onContainer', { schedule: 'rate(1 hour)', compute: container, handler: async () => {} });
 }
 void _scopeAndCronComputeTypeChecks;
 

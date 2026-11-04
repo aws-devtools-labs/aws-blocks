@@ -13,21 +13,28 @@
   "scripts": {
     "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
-    "spec": "blocks-generate-spec",
-    "prebuild": "blocks-generate-client",
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
-    "dev:stop": "tsx aws-blocks/scripts/stop.ts",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "secret": "tsx aws-blocks/scripts/secret.ts",
-    "typegen": "tsx aws-blocks/scripts/typegen.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
-    "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "vendorize": "blocks-vendorize"
+    "spec": "cdk-blocks generate spec",
+    "prebuild": "cdk-blocks generate client",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "deploy": "cdk-blocks deploy",
+    "secret": "cdk-blocks secret",
+    "config": "cdk-blocks config",
+    "typegen": "cdk-blocks generate types",
+    "destroy": "cdk-blocks destroy",
+    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
+    "vendorize": "cdk-blocks vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "port": 3001,
+      "frontend": false
+    }
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
@@ -38,8 +45,8 @@
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
     "esbuild": "^0.28.2",
-    "aws-cdk": "^2.1145.0",
-    "aws-cdk-lib": "2.274.0",
+    "aws-cdk": "^2.1147.0",
+    "aws-cdk-lib": "2.275.0",
     "constructs": "^10.8.1"
   }
 }
