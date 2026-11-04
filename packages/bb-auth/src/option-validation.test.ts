@@ -14,6 +14,10 @@
  * `types.ts` gains or loses an option without the validator being updated, or
  * when an options group is declared `'value'` instead of being walked.
  * `types-test.ts` case 18 pins the top-level key set explicitly as well.
+ *
+ * A provider entry's keys also depend on the block's `store`: a key the same
+ * `type` accepts on the other store is a store conflict naming the store it
+ * needs. A `type` the store does not accept is `resolveOptions()`'s to reject.
  */
 
 import assert from 'node:assert';
@@ -30,6 +34,7 @@ import {
 	assertKnownAuthOptions,
 	findInvalidAuthOptions,
 	findPasswordOnlyOptions,
+	findStoreConflicts,
 	findUnknownAuthOptions,
 } from './option-validation.js';
 import type { AppSettingRef, AuthMockOptions } from './types.js';
@@ -69,11 +74,32 @@ describe('unknown options — top level', () => {
 		assert.deepStrictEqual(only({ zzzzzzzz: 1 }), ['zzzzzzzz', undefined]);
 	});
 
-	test('an unsupported social provider points at oidcProviders', () => {
+	test('a removed provider map is unknown, and the hint names what replaced it', () => {
 		assert.deepStrictEqual(only({ socialProviders: { github: { clientId: 'g', clientSecret: secret } } }), [
-			'socialProviders.github',
-			'socialProviders supports google, facebook, amazon and apple. Configure any other IdP under `oidcProviders` (`github()` for GitHub).',
+			'socialProviders',
+			"replaced by `providers`: move each entry there, keyed as before, with its `type` (`'google'`, `'facebook'`, `'amazon'`, `'apple'`).",
 		]);
+		assert.deepStrictEqual(only({ oidcProviders: { okta: { issuer: 'https://o', clientId: 'c' } } }), [
+			'oidcProviders',
+			"replaced by `providers`: move each entry there, keyed as before, with `type: 'oidc'`. A directly federated provider, `github()`, `customOauth2()` and `stubIdp()` go in a block with `store: 'blocks'`.",
+		]);
+		assert.deepStrictEqual(only({ samlProviders: { partner: { metadataUrl: 'https://p' } } }), [
+			'samlProviders',
+			"replaced by `providers`: move each entry there, keyed as before, with `type: 'saml'`.",
+		]);
+	});
+
+	test("a provider's leftover federateVia is unknown, and the hint names the store", () => {
+		const okta = { type: 'oidc', issuer: 'https://o', clientId: 'c', clientSecret: secret };
+		for (const [store, federateVia] of [
+			[undefined, 'cognito'],
+			['blocks', 'direct'],
+		]) {
+			assert.deepStrictEqual(only({ store, providers: { okta: { ...okta, federateVia } } }), [
+				'providers.okta.federateVia',
+				"replaced by the block's `store`: remove it. `'cognito'` (the default) federates through Cognito; `store: 'blocks'` federates directly.",
+			]);
+		}
 	});
 
 	test('every unknown key is reported, in order', () => {
@@ -110,8 +136,12 @@ describe('misplaced options', () => {
 	});
 
 	test('a key valid in many places lists a few of them', () => {
-		const [, hint] = only({ scopes: ['openid'] });
-		assert.match(hint ?? '', /one of `socialProviders\.google\.scopes`, .*…/);
+		const [, hint] = only({ name: 'x' });
+		assert.match(
+			hint ?? '',
+			/^it is not an option here; did you mean one of `[^`]+\.name`, `[^`]+\.name`, `[^`]+\.name`\?$/,
+		);
+		assert.match(only({ scopes: ['openid'] })[1] ?? '', /did you mean `providers\.<id>\.scopes`\?/);
 	});
 });
 
@@ -130,9 +160,9 @@ describe('nested typos rank the keys under the same parent first', () => {
 			'did you mean `allowBearerAuth.clientIds`?',
 		],
 		[
-			{ socialProviders: { google: { clientIds: 'g', clientSecret: secret } } },
-			'socialProviders.google.clientIds',
-			'did you mean `socialProviders.google.clientId`?',
+			{ providers: { google: { type: 'google', clientIds: 'g', clientSecret: secret } } },
+			'providers.google.clientIds',
+			'did you mean `providers.google.clientId`?',
 		],
 	];
 	for (const [options, path, hint] of cases) {
@@ -195,22 +225,16 @@ describe('unknown options — nested groups', () => {
 		['hostedUi', { hostedUi: { domainPrefx: 'x' } }, 'hostedUi.domainPrefx', /hostedUi\.domainPrefix/],
 		['email', { email: { fromAdress: 'no-reply@example.com' } }, 'email.fromAdress', /email\.fromAddress/],
 		[
-			'socialProviders (closed set)',
-			{ socialProviders: { gogle: {} } },
-			'socialProviders.gogle',
-			/socialProviders\.google/,
+			"providers (type: 'google')",
+			{ providers: { google: { type: 'google', clientId: 'g', clientSecrt: secret } } },
+			'providers.google.clientSecrt',
+			/providers\.google\.clientSecret/,
 		],
 		[
-			'socialProviders.google',
-			{ socialProviders: { google: { clientId: 'g', clientSecrt: secret } } },
-			'socialProviders.google.clientSecrt',
-			/socialProviders\.google\.clientSecret/,
-		],
-		[
-			'socialProviders.apple',
-			{ socialProviders: { apple: { clientId: 'a', teamID: 't', keyId: 'k', privateKey: secret } } },
-			'socialProviders.apple.teamID',
-			/socialProviders\.apple\.teamId/,
+			"providers (type: 'apple')",
+			{ providers: { apple: { type: 'apple', clientId: 'a', teamID: 't', keyId: 'k', privateKey: secret } } },
+			'providers.apple.teamID',
+			/providers\.apple\.teamId/,
 		],
 	];
 	for (const [group, options, path, hint] of cases) {
@@ -226,8 +250,22 @@ describe('provider records — values are checked, user-chosen ids are not', () 
 	test('any provider id is accepted', () => {
 		assert.deepStrictEqual(
 			issues({
-				oidcProviders: { 'my-corp_IdP.1': { issuer: 'https://idp.example.com', clientId: 'c' } },
-				samlProviders: { emailPasword: { metadataUrl: 'https://p.example.com/saml' } },
+				providers: {
+					'my-corp_IdP.1': {
+						type: 'oidc',
+						issuer: 'https://idp.example.com',
+						clientId: 'c',
+						clientSecret: secret,
+					},
+					emailPasword: { type: 'saml', metadataUrl: 'https://p.example.com/saml' },
+				},
+			}),
+			[],
+		);
+		assert.deepStrictEqual(
+			issues({
+				store: 'blocks',
+				providers: { 'my-corp_IdP.1': { type: 'oidc', issuer: 'https://idp.example.com', clientId: 'c' } },
 			}),
 			[],
 		);
@@ -235,97 +273,257 @@ describe('provider records — values are checked, user-chosen ids are not', () 
 
 	test('an unknown key inside an OIDC provider entry', () => {
 		assert.deepStrictEqual(
-			only({ oidcProviders: { okta: { issuer: 'https://o', clientId: 'c', clientSecrt: secret } } }),
-			['oidcProviders.okta.clientSecrt', 'did you mean `oidcProviders.okta.clientSecret`?'],
+			only({
+				store: 'blocks',
+				providers: { okta: { type: 'oidc', issuer: 'https://o', clientId: 'c', clientSecrt: secret } },
+			}),
+			['providers.okta.clientSecrt', 'did you mean `providers.okta.clientSecret`?'],
 		);
 		assert.deepStrictEqual(
 			only({
-				oidcProviders: { okta: { issuer: 'https://o', clientId: 'c', endpoints: { jwk: 'https://o/jwks' } } },
+				store: 'blocks',
+				providers: {
+					okta: { type: 'oidc', issuer: 'https://o', clientId: 'c', endpoints: { jwk: 'https://o/jwks' } },
+				},
 			})[0],
-			'oidcProviders.okta.endpoints.jwk',
+			'providers.okta.endpoints.jwk',
 		);
 	});
 
 	test('stubIdp.unsafeAllowDeployed is not an option: a stub is local and sandbox only', () => {
 		assert.strictEqual(
-			only({ oidcProviders: { corp: { ...stubIdp(), stubIdp: { unsafeAllowDeployed: true } } } })[0],
-			'oidcProviders.corp.stubIdp.unsafeAllowDeployed',
+			only({ store: 'blocks', providers: { corp: { ...stubIdp(), stubIdp: { unsafeAllowDeployed: true } } } })[0],
+			'providers.corp.stubIdp.unsafeAllowDeployed',
 		);
 	});
 
 	test('a provider id that is not an identifier is quoted in the path', () => {
 		assert.strictEqual(
-			only({ oidcProviders: { 'google-extras': { issuer: 'i', clientId: 'c', lable: 'x' } } })[0],
-			'oidcProviders["google-extras"].lable',
+			only({
+				store: 'blocks',
+				providers: { 'google-extras': { type: 'oidc', issuer: 'i', clientId: 'c', lable: 'x' } },
+			})[0],
+			'providers["google-extras"].lable',
 		);
 	});
 
 	test('an unknown key inside a SAML provider entry', () => {
-		assert.deepStrictEqual(only({ samlProviders: { partner: { metadataURL: 'https://p' } } }), [
-			'samlProviders.partner.metadataURL',
-			'did you mean `samlProviders.partner.metadataUrl`?',
+		assert.deepStrictEqual(only({ providers: { partner: { type: 'saml', metadataURL: 'https://p' } } }), [
+			'providers.partner.metadataURL',
+			'did you mean `providers.partner.metadataUrl`?',
 		]);
 	});
 
-	test('federateVia selects the engine: an option of the other engine names the engine it needs', () => {
+	test('a key another provider type accepts names the type it is not accepted on', () => {
 		assert.deepStrictEqual(
 			only({
-				oidcProviders: {
-					entra: {
-						issuer: 'https://e',
-						clientId: 'c',
-						federateVia: 'cognito',
-						clientSecret: secret,
-						groupsClaim: 'groups',
-					},
-				},
+				store: 'blocks',
+				providers: { okta: { type: 'oidc', issuer: 'https://o', clientId: 'c', metadataUrl: 'https://m' } },
 			}),
-			['oidcProviders.entra.groupsClaim', "`groupsClaim` is not accepted with `federateVia: 'cognito'`"],
+			['providers.okta.metadataUrl', "`metadataUrl` is not accepted on a `type: 'oidc'` provider"],
 		);
-		assert.match(
-			only({
-				oidcProviders: { okta: { issuer: 'https://o', clientId: 'c', attributesRequestMethod: 'POST' } },
-			})[1] ?? '',
-			/`attributesRequestMethod` is not accepted on a directly federated provider/,
+		assert.deepStrictEqual(
+			only({ providers: { partner: { type: 'saml', metadataUrl: 'https://m', clientId: 'c' } } }),
+			['providers.partner.clientId', "`clientId` is not accepted on a `type: 'saml'` provider"],
 		);
+		assert.deepStrictEqual(only({ store: 'blocks', providers: { corp: { ...stubIdp(), oauth2: {} } } }), [
+			'providers.corp.oauth2',
+			"`oauth2` is not accepted on a `type: 'stub'` provider",
+		]);
 	});
 
 	test('factory-built providers and their nested settings', () => {
 		const users = [{ sub: 'u-1', email: 'a@example.com', name: 'A', extra: { groups: ['admin'], anything: 1 } }];
 		assert.deepStrictEqual(
-			issues({ oidcProviders: { corp: stubIdp({ users, onAuthorize: () => undefined }) } }),
+			issues({ store: 'blocks', providers: { corp: stubIdp({ users, onAuthorize: () => undefined }) } }),
 			[],
 		);
 		assert.deepStrictEqual(
 			only({
-				oidcProviders: {
+				store: 'blocks',
+				providers: {
 					corp: { ...stubIdp(), stubIdp: { users: [{ sub: 's', email: 'e', name: 'n', emial: 'x' }] } },
 				},
 			})[0],
-			'oidcProviders.corp.stubIdp.users[0].emial',
+			'providers.corp.stubIdp.users[0].emial',
 		);
 		const gh = github({ clientId: 'Iv1', clientSecret: secret });
-		assert.deepStrictEqual(issues({ oidcProviders: { github: gh } }), []);
+		assert.deepStrictEqual(issues({ store: 'blocks', providers: { github: gh } }), []);
 		assert.deepStrictEqual(
 			only({
-				oidcProviders: {
+				store: 'blocks',
+				providers: {
 					github: { ...gh, oauth2: { ...gh.oauth2, endpoints: { ...gh.oauth2.endpoints, userinfo: 'x' } } },
 				},
 			}),
 			[
-				'oidcProviders.github.oauth2.endpoints.userinfo',
-				'did you mean `oidcProviders.github.oauth2.endpoints.userInfo`?',
+				'providers.github.oauth2.endpoints.userinfo',
+				'did you mean `providers.github.oauth2.endpoints.userInfo`?',
 			],
 		);
 	});
 });
 
+/** The `[path, message]` pairs the validator reports as store conflicts in `options`. */
+function conflicts(options: Record<string, unknown>): [string, string][] {
+	return findStoreConflicts(options).map((c) => [c.path, c.message]);
+}
+
+describe('the store selects which provider options apply', () => {
+	const okta = { type: 'oidc', issuer: 'https://o', clientId: 'c' };
+	const needsBlocks =
+		"needs `store: 'blocks'` (a directly federated provider). Remove it, or move the provider to a `store: 'blocks'` block.";
+	const needsCognito =
+		"needs `store: 'cognito'`, the default (a provider federated through Cognito). Remove it, or move the provider to a block without `store: 'blocks'`.";
+
+	test("groupsClaim on a 'cognito' block's oidc provider needs store: 'blocks'", () => {
+		for (const store of [undefined, 'cognito']) {
+			const options = { store, providers: { okta: { ...okta, clientSecret: secret, groupsClaim: 'groups' } } };
+			assert.deepStrictEqual(issues(options), []);
+			assert.deepStrictEqual(conflicts(options), [['providers.okta.groupsClaim', needsBlocks]]);
+		}
+		assert.deepStrictEqual(
+			conflicts({ store: 'blocks', providers: { okta: { ...okta, groupsClaim: 'groups' } } }),
+			[],
+		);
+	});
+
+	test("attributesRequestMethod on a 'blocks' block's oidc provider needs store: 'cognito'", () => {
+		const options = { store: 'blocks', providers: { okta: { ...okta, attributesRequestMethod: 'POST' } } };
+		assert.deepStrictEqual(issues(options), []);
+		assert.deepStrictEqual(conflicts(options), [['providers.okta.attributesRequestMethod', needsCognito]]);
+		assert.deepStrictEqual(
+			conflicts({ providers: { okta: { ...okta, clientSecret: secret, attributesRequestMethod: 'POST' } } }),
+			[],
+		);
+	});
+
+	test("a 'cognito' block's oidc provider needs a clientSecret; a 'blocks' one does not", () => {
+		const message =
+			"is required with `store: 'cognito'` (the default): Cognito federates OIDC as a confidential client. " +
+			"Add one, or move the provider to a `store: 'blocks'` block for a public (PKCE-only) client.";
+		assert.deepStrictEqual(conflicts({ providers: { okta } }), [['providers.okta.clientSecret', message]]);
+		assert.deepStrictEqual(
+			conflicts({ store: 'cognito', providers: { 'my-idp': { ...okta, clientSecret: undefined } } }),
+			[['providers["my-idp"].clientSecret', message]],
+		);
+		assert.deepStrictEqual(conflicts({ providers: { okta: { ...okta, clientSecret: secret } } }), []);
+		assert.deepStrictEqual(conflicts({ store: 'blocks', providers: { okta } }), []);
+	});
+
+	test("allowBearerAuth as an object needs store: 'cognito'; a boolean is fine on both", () => {
+		const providers = { okta };
+		assert.deepStrictEqual(conflicts({ store: 'blocks', providers, allowBearerAuth: { clientIds: ['c'] } }), [
+			[
+				'allowBearerAuth',
+				"as an object (extra Cognito app clients) needs `store: 'cognito'`. A `store: 'blocks'` block takes `true` or `false`.",
+			],
+		]);
+		assert.deepStrictEqual(conflicts({ store: 'blocks', providers, allowBearerAuth: true }), []);
+		assert.deepStrictEqual(conflicts({ allowBearerAuth: { clientIds: ['c'] } }), []);
+	});
+
+	test('the message names each conflict with its path, the store and why', () => {
+		let text = '';
+		try {
+			assertKnownAuthOptions('auth', {
+				providers: { okta: { ...okta, groupsClaim: 'groups' } },
+			});
+		} catch (e) {
+			text = e instanceof Error ? e.message : String(e);
+		}
+		assert.strictEqual(
+			text,
+			"Auth 'auth': options conflict with `store: 'cognito'`:\n" +
+				`  - \`providers.okta.groupsClaim\` ${needsBlocks}\n` +
+				"  - `providers.okta.clientSecret` is required with `store: 'cognito'` (the default): Cognito federates OIDC as a confidential client. Add one, or move the provider to a `store: 'blocks'` block for a public (PKCE-only) client.\n" +
+				"A `'cognito'` block (the default) federates through a Cognito user pool and a `store: 'blocks'` block verifies its providers itself, so each accepts different provider options. See AuthOptions for the supported options.",
+		);
+		assert.throws(
+			() =>
+				new Auth(
+					root(),
+					'auth',
+					untyped({ store: 'blocks', providers: { okta: { ...okta, attributesRequestMethod: 'GET' } } }),
+				),
+			/^Error: Auth 'auth': option conflicts with `store: 'blocks'`:\n {2}- `providers\.okta\.attributesRequestMethod` needs `store: 'cognito'`/,
+		);
+	});
+
+	test('unknown options are listed before store conflicts', () => {
+		assert.throws(
+			() => assertKnownAuthOptions('auth', { sesion: {}, providers: { okta } }),
+			/^Error: Auth 'auth': unknown option:\n.*\noption conflicts with `store: 'cognito'`:\n/s,
+		);
+	});
+});
+
+describe('the resolver owns the store value and the type a store accepts', () => {
+	// The validator walks no entry whose `type` its store does not accept, so the
+	// resolver (called right after it in every constructor) reports the real cause.
+	function message(options: unknown): string {
+		assert.deepStrictEqual(findUnknownAuthOptions(options), [], JSON.stringify(options));
+		assert.deepStrictEqual(findStoreConflicts(options), [], JSON.stringify(options));
+		try {
+			new Auth(root(), 'auth', untyped(options));
+		} catch (e) {
+			return e instanceof Error ? e.message : String(e);
+		}
+		assert.fail('expected the constructor to throw');
+	}
+
+	test("a social or SAML type on store: 'blocks' needs store: 'cognito'", () => {
+		assert.match(
+			message({
+				store: 'blocks',
+				providers: { google: { type: 'google', clientId: 'g', clientSecret: secret, typo: 1 } },
+			}),
+			/providers\.google has `type: 'google'`, which needs `store: 'cognito'`/,
+		);
+		assert.match(
+			message({ store: 'blocks', providers: { partner: { type: 'saml', metadataURL: 'https://p' } } }),
+			/providers\.partner has `type: 'saml'`, which needs `store: 'cognito'`/,
+		);
+	});
+
+	test("stubIdp() / github() on the default store need store: 'blocks'", () => {
+		assert.match(
+			message({ providers: { corp: stubIdp() } }),
+			/providers\.corp has `type: 'stub'`.*need `store: 'blocks'`/,
+		);
+		assert.match(
+			message({ providers: { github: github({ clientId: 'Iv1', clientSecret: secret }) } }),
+			/providers\.github has `type: 'oauth2'`/,
+		);
+	});
+
+	test('an unknown or missing type, or a social provider keyed differently from its type', () => {
+		assert.match(
+			message({ providers: { github: { type: 'github', clientId: 'g', clientSecret: secret } } }),
+			/providers\.github has `type: 'github'`, which a Cognito user pool cannot federate/,
+		);
+		assert.match(message({ providers: { okta: { issuer: 'https://o' } } }), /providers\.okta has no `type`/);
+		assert.match(
+			message({ providers: { gogle: { type: 'google', clientId: 'g', clientSecret: secret } } }),
+			/its key must be `google`/,
+		);
+	});
+
+	test('an unknown store value: provider entries are not walked, the resolver names the store', () => {
+		assert.match(
+			message({ store: 'direct', providers: { okta: { type: 'oidc', issuer: 'https://o', clientId: 'c' } } }),
+			/`store` must be 'cognito' \(the default\) or 'blocks', got "direct"/,
+		);
+	});
+});
+
 describe('valid configurations pass', () => {
-	test('a full configuration using every option, with real reference objects', () => {
+	test("a full 'cognito' configuration using every option, with real reference objects", () => {
 		const scope = root();
 		const appSecret = new AppSetting(scope, 'idp-secret', { secret: true });
 		const logger = new Logger(scope, 'logger', { level: 'error' });
 		const full = {
+			store: 'cognito',
 			emailPassword: {
 				selfSignUp: true,
 				passwordPolicy: {
@@ -338,48 +536,31 @@ describe('valid configurations pass', () => {
 				autoSignIn: true,
 				revealExistingUsers: false,
 			},
-			socialProviders: {
+			providers: {
 				google: {
+					type: 'google',
 					clientId: 'g',
 					clientSecret: appSecret,
 					scopes: ['email'],
 					attributeMapping: { email: 'email' },
 					label: 'G',
 				},
-				facebook: { clientId: 'f', clientSecret: secret },
-				amazon: { clientId: 'a', clientSecret: secret },
-				apple: { clientId: 'a', teamId: 't', keyId: 'k', privateKey: appSecret },
-			},
-			oidcProviders: {
-				okta: {
-					issuer: 'https://okta.example.com',
-					clientId: 'o',
-					clientSecret: appSecret,
-					federateVia: 'direct',
-					groupsClaim: 'groups',
+				facebook: { type: 'facebook', clientId: 'f', clientSecret: secret },
+				amazon: { type: 'amazon', clientId: 'a', clientSecret: secret },
+				apple: { type: 'apple', clientId: 'a', teamId: 't', keyId: 'k', privateKey: appSecret },
+				entra: {
+					type: 'oidc',
+					issuer: 'https://login.example.com',
+					clientId: 'e',
+					clientSecret: secret,
+					attributesRequestMethod: 'POST',
 					scopes: ['openid'],
-					label: 'Okta',
+					label: 'Entra',
 					attributeMapping: { name: 'name' },
 					endpoints: { authorization: 'a', token: 't', userInfo: 'u', jwks: 'j' },
 				},
-				entra: {
-					issuer: 'https://login.example.com',
-					clientId: 'e',
-					federateVia: 'cognito',
-					clientSecret: secret,
-					attributesRequestMethod: 'POST',
-				},
-				github: github({ clientId: 'Iv1', clientSecret: secret }),
-				custom: customOauth2({
-					name: 'custom',
-					clientId: 'c',
-					endpoints: { authorization: 'a', token: 't', userInfo: 'u' },
-					scopes: ['read'],
-					mapClaims: () => ({ providerSub: 's', email: null, name: null }),
-				}),
-				stub: stubIdp({ users: [{ sub: 's', email: 'e', name: 'n' }], groupsClaim: 'groups', label: 'Stub' }),
+				partner: { type: 'saml', metadataUrl: 'https://p.example.com', signRequest: true, label: 'P' },
 			},
-			samlProviders: { partner: { metadataUrl: 'https://p.example.com', signRequest: true, label: 'P' } },
 			mfa: { mode: 'optional', types: ['TOTP'] },
 			passkeys: {
 				relyingPartyId: 'example.com',
@@ -405,7 +586,7 @@ describe('valid configurations pass', () => {
 			},
 			hostedUi: { domainPrefix: 'my-app' },
 			admin: { actions: ['groups', 'lifecycle'] },
-			allowBearerAuth: true,
+			allowBearerAuth: { clientIds: ['native'] },
 			email: {
 				fromAddress: 'no-reply@example.com',
 				fromName: 'Example',
@@ -424,6 +605,55 @@ describe('valid configurations pass', () => {
 			codeDelivery: async () => {},
 		} satisfies AuthMockOptions;
 		assert.deepStrictEqual(issues(full), []);
+		assert.deepStrictEqual(conflicts(full), []);
+		assert.doesNotThrow(() => assertKnownAuthOptions('auth', full));
+	});
+
+	test("a full store: 'blocks' configuration using every option it accepts", () => {
+		const scope = root();
+		const appSecret = new AppSetting(scope, 'idp-secret', { secret: true });
+		const logger = new Logger(scope, 'logger', { level: 'error' });
+		const full = {
+			store: 'blocks',
+			providers: {
+				okta: {
+					type: 'oidc',
+					issuer: 'https://okta.example.com',
+					clientId: 'o',
+					clientSecret: appSecret,
+					groupsClaim: 'groups',
+					scopes: ['openid'],
+					label: 'Okta',
+					attributeMapping: { name: 'name' },
+					endpoints: { authorization: 'a', token: 't', userInfo: 'u', jwks: 'j' },
+				},
+				public: { type: 'oidc', issuer: 'https://pkce.example.com', clientId: 'p' },
+				github: github({ clientId: 'Iv1', clientSecret: secret }),
+				custom: customOauth2({
+					name: 'custom',
+					clientId: 'c',
+					endpoints: { authorization: 'a', token: 't', userInfo: 'u' },
+					scopes: ['read'],
+					mapClaims: () => ({ providerSub: 's', email: null, name: null }),
+				}),
+				stub: stubIdp({ users: [{ sub: 's', email: 'e', name: 'n' }], groupsClaim: 'groups', label: 'Stub' }),
+			},
+			users: { groups: ['admins'] },
+			validateUser: async () => {},
+			session: { ttlSeconds: 60, crossDomain: false, freshAgeSeconds: 30 },
+			redirects: {
+				callbackPath: '/aws-blocks/auth/callback',
+				allowedRelayOrigins: [relayOrigin('myapp://auth')],
+			},
+			allowBearerAuth: true,
+			onSignIn: async () => {},
+			onSignOut: async () => {},
+			removalPolicy: 'retain',
+			deletionProtection: true,
+			logger,
+		} satisfies AuthMockOptions;
+		assert.deepStrictEqual(issues(full), []);
+		assert.deepStrictEqual(conflicts(full), []);
 		assert.doesNotThrow(() => assertKnownAuthOptions('auth', full));
 	});
 
@@ -446,8 +676,10 @@ describe('valid configurations pass', () => {
 		assert.deepStrictEqual(
 			issues({
 				userPool: CdkAuth.fromExisting('us-east-1_abc'),
-				socialProviders: { google: { clientId: 'g', clientSecret: appSecret } },
-				oidcProviders: { okta: { issuer: 'https://o', clientId: 'c', clientSecret: { ...secret, extra: 1 } } },
+				providers: {
+					google: { type: 'google', clientId: 'g', clientSecret: appSecret },
+					okta: { type: 'oidc', issuer: 'https://o', clientId: 'c', clientSecret: { ...secret, extra: 1 } },
+				},
 			}),
 			[],
 		);
@@ -483,7 +715,7 @@ describe('boolean options are type-checked, not only key-checked', () => {
 			'emailPassword.passwordPolicy.requireSymbols',
 			(v) => ({ emailPassword: { passwordPolicy: { requireSymbols: v } } }),
 		],
-		['samlProviders.partner.signRequest', (v) => ({ samlProviders: { partner: { signRequest: v } } })],
+		['providers.partner.signRequest', (v) => ({ providers: { partner: { type: 'saml', signRequest: v } } })],
 		['users.attributes[0].mutable', (v) => ({ users: { attributes: [{ name: 'dept', mutable: v }] } })],
 		['users.attributes[0].required', (v) => ({ users: { attributes: [{ name: 'dept', required: v }] } })],
 		[
@@ -645,7 +877,7 @@ describe('every entry rejects unknown options at construction', () => {
 });
 
 describe('emailPassword: false with an email + password only option is rejected at construction', () => {
-	const okta = { issuer: 'https://dev-1.okta.com', clientId: '0oa1' };
+	const okta = { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: secret };
 	const passkeys = { relyingPartyId: 'example.com', origins: ['https://example.com'] };
 
 	function message(construct: () => unknown): string {
@@ -675,7 +907,7 @@ describe('emailPassword: false with an email + password only option is rejected 
 
 	test('the message names both options and the fix', () => {
 		const text = message(() =>
-			assertKnownAuthOptions('auth', { emailPassword: false, oidcProviders: { okta }, mfa: 'required' }),
+			assertKnownAuthOptions('auth', { emailPassword: false, providers: { okta }, mfa: 'required' }),
 		);
 		assert.strictEqual(
 			text,
@@ -684,14 +916,14 @@ describe('emailPassword: false with an email + password only option is rejected 
 				'Remove the option, or re-enable email + password.',
 		);
 		assert.match(
-			message(() => assertKnownAuthOptions('auth', { emailPassword: false, oidcProviders: { okta }, passkeys })),
+			message(() => assertKnownAuthOptions('auth', { emailPassword: false, providers: { okta }, passkeys })),
 			/^Auth 'auth': `passkeys` needs email \+ password sign-in, which `emailPassword: false` disables\./,
 		);
 		assert.match(
 			message(() =>
 				assertKnownAuthOptions('auth', {
 					emailPassword: false,
-					oidcProviders: { okta },
+					providers: { okta },
 					mfa: 'optional',
 					passkeys,
 				}),
@@ -702,12 +934,12 @@ describe('emailPassword: false with an email + password only option is rejected 
 
 	test('combinations that are not contradictions pass', () => {
 		for (const options of [
-			{ emailPassword: false, oidcProviders: { okta } },
-			{ emailPassword: false, oidcProviders: { okta }, mfa: 'off' },
-			{ emailPassword: false, oidcProviders: { okta }, mfa: { types: ['TOTP'] } },
-			{ emailPassword: false, oidcProviders: { okta }, mfa: { mode: 'off', types: ['TOTP'] } },
-			{ emailPassword: false, oidcProviders: { okta }, passkeys: false },
-			{ emailPassword: false, oidcProviders: { okta }, users: { groups: ['admins'] } },
+			{ emailPassword: false, providers: { okta } },
+			{ emailPassword: false, providers: { okta }, mfa: 'off' },
+			{ emailPassword: false, providers: { okta }, mfa: { types: ['TOTP'] } },
+			{ emailPassword: false, providers: { okta }, mfa: { mode: 'off', types: ['TOTP'] } },
+			{ emailPassword: false, providers: { okta }, passkeys: false },
+			{ emailPassword: false, providers: { okta }, users: { groups: ['admins'] } },
 			{ mfa: 'required' },
 			{ emailPassword: true, mfa: 'optional', users: { authFlow: 'USER_AUTH' }, passkeys },
 			{ emailPassword: {}, mfa: { mode: 'required', types: ['TOTP'] } },
@@ -735,7 +967,7 @@ describe('emailPassword: false with an email + password only option is rejected 
 		);
 	});
 
-	const conflicting = untyped({ emailPassword: false, oidcProviders: { okta }, mfa: 'required' });
+	const conflicting = untyped({ emailPassword: false, providers: { okta }, mfa: 'required' });
 	const expected =
 		/^Auth 'auth': `mfa: 'required'` needs email \+ password sign-in, which `emailPassword: false` disables/;
 

@@ -30,6 +30,17 @@
  * key added to or removed from `types.ts` without the same change here fails
  * the build (missing key → TS1360, stray key → TS1360 / excess property).
  *
+ * **Per-store rules.** A provider entry's accepted keys depend on its `type`
+ * *and* the block's `store`: a `type: 'oidc'` entry takes `groupsClaim` only
+ * with `store: 'blocks'`, `attributesRequestMethod` only on the default
+ * Cognito store, and needs a `clientSecret` there. A key the same `type`
+ * accepts on the other store is reported as a store conflict naming the store
+ * it needs. The store value itself, a `type` the store does not accept, the
+ * user-pool options a `'blocks'` block refuses and leftover provider maps are
+ * `resolveOptions()`'s to reject (it runs right after this check, in every
+ * layer); the walk skips an entry whose `type` its store does not accept, so
+ * the resolver's message is the one reported.
+ *
  * Pure and dependency-free.
  *
  * @internal
@@ -42,8 +53,11 @@ import type {
 	AppleProvider,
 	AppSettingRef,
 	AuthMockOptions,
+	AuthStore,
 	BearerAuthOptions,
+	BlocksProvider,
 	CognitoOidcProvider,
+	CognitoProvider,
 	DirectOidcProvider,
 	EmailPasswordOptions,
 	EmailSenderOptions,
@@ -87,8 +101,9 @@ import type {
  *   `undefined`): the group's shorthand.
  * - `{ record }` — user-chosen keys (provider ids): each *value* is checked.
  * - `{ array }` — each element is checked.
- * - `{ variants }` — the shape depends on the value (a provider's `type`
- *   selects its accepted keys).
+ * - `{ variants }` — the shape depends on the value: a provider's `type`,
+ *   on the block's `store`, selects its accepted keys. An entry whose `type`
+ *   the store does not accept is not walked (the resolver rejects it).
  */
 type Spec =
 	| 'value'
@@ -96,21 +111,15 @@ type Spec =
 	| { readonly object: Shape; readonly otherwise?: string; readonly orBoolean?: true }
 	| { readonly record: Spec }
 	| { readonly array: Spec }
-	| { readonly variants: Variants };
+	| { readonly variants: { readonly [S in AuthStore]: ShapesByType } };
 
 interface Shape {
 	readonly [key: string]: Spec;
 }
 
-interface Variant {
-	/** Completes "is not accepted …", e.g. "on a `type: 'saml'` provider". */
-	readonly label: string;
-	readonly shape: Shape;
-}
-
-interface Variants {
-	readonly select: (value: object) => string;
-	readonly cases: { readonly [name: string]: Variant };
+/** The accepted keys of each provider `type` one store accepts. */
+interface ShapesByType {
+	readonly [type: string]: Shape;
 }
 
 /** Every key of every member of `T`. */
@@ -237,14 +246,21 @@ const STUB_IDP = {
 	onAuthorize: 'value',
 } as const satisfies ShapeOf<StubIdpSettings>;
 
-/** A `type: 'oidc'` provider: directly federated (`store: 'blocks'`) or through Cognito. */
-const OIDC = {
+/** A `type: 'oidc'` provider of a `'cognito'` block: federated through the user pool. */
+const COGNITO_OIDC = {
+	...OIDC_BASE,
+	type: 'value',
+	clientSecret: 'value',
+	attributesRequestMethod: 'value',
+} as const satisfies ShapeOf<CognitoOidcProvider>;
+
+/** A `type: 'oidc'` provider of a `store: 'blocks'` block: federated directly. */
+const DIRECT_OIDC = {
 	...OIDC_BASE,
 	type: 'value',
 	clientSecret: 'value',
 	groupsClaim: 'value',
-	attributesRequestMethod: 'value',
-} as const satisfies ShapeOf<DirectOidcProvider | CognitoOidcProvider>;
+} as const satisfies ShapeOf<DirectOidcProvider>;
 
 const OAUTH2_PROVIDER = {
 	...OIDC_BASE,
@@ -270,20 +286,26 @@ const SAML_PROVIDER = {
 	signRequest: 'boolean',
 } as const satisfies ShapeOf<SamlProvider>;
 
-/** One `providers` entry: its `type` selects the accepted keys. An unknown `type` is the resolver's to reject. */
+/**
+ * One `providers` entry: its `type`, on the block's store, selects the accepted
+ * keys. Each store's map lists exactly the `type`s that store accepts; a `type`
+ * it does not (or an unknown one) is the resolver's to reject.
+ */
 const PROVIDER: Spec = {
 	variants: {
-		select: (value) => String(Reflect.get(value, 'type')),
-		cases: {
-			google: { label: "on a `type: 'google'` provider", shape: OAUTH_SOCIAL },
-			facebook: { label: "on a `type: 'facebook'` provider", shape: OAUTH_SOCIAL },
-			amazon: { label: "on a `type: 'amazon'` provider", shape: OAUTH_SOCIAL },
-			apple: { label: "on a `type: 'apple'` provider", shape: APPLE_SOCIAL },
-			saml: { label: "on a `type: 'saml'` provider", shape: SAML_PROVIDER },
-			oidc: { label: "on a `type: 'oidc'` provider", shape: OIDC },
-			oauth2: { label: "on a `type: 'oauth2'` provider", shape: OAUTH2_PROVIDER },
-			stub: { label: "on a `type: 'stub'` provider", shape: STUB_PROVIDER },
-		},
+		cognito: {
+			google: OAUTH_SOCIAL,
+			facebook: OAUTH_SOCIAL,
+			amazon: OAUTH_SOCIAL,
+			apple: APPLE_SOCIAL,
+			saml: SAML_PROVIDER,
+			oidc: COGNITO_OIDC,
+		} satisfies { readonly [T in CognitoProvider['type']]: Shape },
+		blocks: {
+			oidc: DIRECT_OIDC,
+			oauth2: OAUTH2_PROVIDER,
+			stub: STUB_PROVIDER,
+		} satisfies { readonly [T in BlocksProvider['type']]: Shape },
 	},
 };
 
@@ -433,10 +455,21 @@ export interface InvalidOption {
 	readonly message: string;
 }
 
+/** One option the block's `store` does not allow (or requires): a provider key the other store accepts, a missing `clientSecret`. */
+export interface StoreConflict {
+	/** Where it was found, e.g. `providers.okta.groupsClaim`. */
+	readonly path: string;
+	/** What is wrong and the fix, e.g. ``needs `store: 'blocks'` …``. */
+	readonly message: string;
+}
+
 /** Everything one walk finds. */
 interface Findings {
+	/** The block's store; `undefined` for a value the resolver rejects (provider entries are then not walked). */
+	readonly store: AuthStore | undefined;
 	readonly unknown: UnknownOption[];
 	readonly invalid: InvalidOption[];
+	readonly conflicts: StoreConflict[];
 }
 
 function isPlainObject(value: unknown): value is object {
@@ -467,7 +500,9 @@ function indexKnownPaths(): ReadonlyMap<string, readonly string[]> {
 		if ('object' in spec) visitShape(spec.object, path);
 		else if ('record' in spec) visitSpec(spec.record, `${path}.<id>`);
 		else if ('array' in spec) visitSpec(spec.array, `${path}[]`);
-		else for (const variant of Object.values(spec.variants.cases)) visitShape(variant.shape, path);
+		else
+			for (const shapes of Object.values(spec.variants))
+				for (const shape of Object.values(shapes)) visitShape(shape, path);
 	};
 	const visitShape = (shape: Shape, path: string): void => {
 		for (const [key, spec] of Object.entries(shape)) {
@@ -535,6 +570,20 @@ function formatPaths(paths: readonly string[]): string {
 }
 
 /**
+ * The hint for a removed option (typed only as an option error in `types.ts`,
+ * so the shape leaves it out and the walk reports it as unknown): what replaced it.
+ */
+const REPLACED_OPTIONS: { readonly [key: string]: string } = {
+	socialProviders:
+		"replaced by `providers`: move each entry there, keyed as before, with its `type` (`'google'`, `'facebook'`, `'amazon'`, `'apple'`).",
+	oidcProviders:
+		"replaced by `providers`: move each entry there, keyed as before, with `type: 'oidc'`. A directly federated provider, `github()`, `customOauth2()` and `stubIdp()` go in a block with `store: 'blocks'`.",
+	samlProviders: "replaced by `providers`: move each entry there, keyed as before, with `type: 'saml'`.",
+	federateVia:
+		"replaced by the block's `store`: remove it. `'cognito'` (the default) federates through Cognito; `store: 'blocks'` federates directly.",
+};
+
+/**
  * The hint for `key`, unknown under `parentPath` (whose known keys are `shape`'s).
  *
  * Order: a case-only or separator-only typo of a sibling; then a close sibling
@@ -545,6 +594,7 @@ function formatPaths(paths: readonly string[]): string {
  * `users.attributes[].type`.
  */
 function hintFor(key: string, parentPath: string, shape: Shape): string | undefined {
+	if (Object.hasOwn(REPLACED_OPTIONS, key)) return REPLACED_OPTIONS[key];
 	const siblingPath = (sibling: string) => join(parentPath, sibling);
 	const siblings = Object.keys(shape);
 	const sameButCase = siblings.find((s) => normalize(s) === normalize(key));
@@ -610,20 +660,36 @@ function walkSpec(spec: Spec, value: unknown, path: string, out: Findings): void
 		for (const [i, entry] of value.entries()) walkSpec(spec.array, entry, `${path}[${i}]`, out);
 		return;
 	}
-	if (!isPlainObject(value)) return;
-	const { select, cases } = spec.variants;
-	const selected = cases[select(value)];
-	if (!selected) return;
+	if (!isPlainObject(value) || out.store === undefined) return;
+	const type = String(Reflect.get(value, 'type'));
+	const shapes = spec.variants[out.store];
+	const shape = Object.hasOwn(shapes, type) ? shapes[type] : undefined;
+	if (!shape) return;
 	const before = out.unknown.length;
-	walkShape(selected.shape, value, path, out);
-	// A key another variant accepts is not a typo: say which variant it needs.
-	for (let i = before; i < out.unknown.length; i++) {
-		const issue = out.unknown[i];
-		if (issue.path !== join(path, issue.key)) continue;
-		const other = Object.values(cases).some((c) => c !== selected && Object.hasOwn(c.shape, issue.key));
-		if (other) out.unknown[i] = { ...issue, hint: `\`${issue.key}\` is not accepted ${selected.label}` };
+	walkShape(shape, value, path, out);
+	const otherStore: AuthStore = out.store === 'cognito' ? 'blocks' : 'cognito';
+	const twin = Object.hasOwn(spec.variants[otherStore], type) ? spec.variants[otherStore][type] : undefined;
+	const all = [...Object.values(shapes), ...Object.values(spec.variants[otherStore])];
+	const found = out.unknown.splice(before);
+	for (const issue of found) {
+		if (issue.path !== join(path, issue.key)) out.unknown.push(issue);
+		// A key the same `type` accepts on the other store: name the store it needs.
+		else if (twin && Object.hasOwn(twin, issue.key)) {
+			out.conflicts.push({ path: issue.path, message: NEEDS_STORE[otherStore] });
+		}
+		// A key another `type` accepts is not a typo: say which `type` it is not accepted on.
+		else if (all.some((s) => s !== shape && Object.hasOwn(s, issue.key))) {
+			out.unknown.push({ ...issue, hint: `\`${issue.key}\` is not accepted on a \`type: '${type}'\` provider` });
+		} else out.unknown.push(issue);
 	}
 }
+
+/** The message for a provider key only the other store accepts. */
+const NEEDS_STORE: { readonly [S in AuthStore]: string } = {
+	blocks: "needs `store: 'blocks'` (a directly federated provider). Remove it, or move the provider to a `store: 'blocks'` block.",
+	cognito:
+		"needs `store: 'cognito'`, the default (a provider federated through Cognito). Remove it, or move the provider to a block without `store: 'blocks'`.",
+};
 
 function walkShape(shape: Shape, value: object, path: string, out: Findings, otherwise?: string): void {
 	for (const [key, entry] of Object.entries(value)) {
@@ -661,9 +727,51 @@ export function findInvalidAuthOptions(options: unknown): InvalidOption[] {
 	return findAll(options).invalid;
 }
 
+/**
+ * Every option the block's `store` does not allow or requires, in walk order:
+ * a provider key only the same `type` on the other store accepts
+ * (`groupsClaim` on a `'cognito'` block's `type: 'oidc'` entry,
+ * `attributesRequestMethod` on a `'blocks'` one), a `'cognito'` block's
+ * `type: 'oidc'` entry without `clientSecret`, and `allowBearerAuth` as an
+ * object on a `'blocks'` block. Empty for a `store` value the resolver rejects.
+ *
+ * @internal
+ */
+export function findStoreConflicts(options: unknown): StoreConflict[] {
+	return findAll(options).conflicts;
+}
+
 function findAll(options: unknown): Findings {
-	const out: Findings = { unknown: [], invalid: [] };
-	if (isPlainObject(options)) walkShape(AUTH_OPTIONS_SHAPE, options, '', out);
+	const storeValue = field(options, 'store');
+	const store =
+		storeValue === undefined
+			? 'cognito'
+			: storeValue === 'cognito' || storeValue === 'blocks'
+				? storeValue
+				: undefined;
+	const out: Findings = { store, unknown: [], invalid: [], conflicts: [] };
+	if (!isPlainObject(options)) return out;
+	walkShape(AUTH_OPTIONS_SHAPE, options, '', out);
+	// The store rules the shapes cannot express: a key the store requires, a form it does not take.
+	const providers = field(options, 'providers');
+	if (store === 'cognito' && isPlainObject(providers)) {
+		for (const [id, entry] of Object.entries(providers)) {
+			if (field(entry, 'type') === 'oidc' && field(entry, 'clientSecret') === undefined) {
+				out.conflicts.push({
+					path: join(join('providers', id), 'clientSecret'),
+					message:
+						"is required with `store: 'cognito'` (the default): Cognito federates OIDC as a confidential client. " +
+						"Add one, or move the provider to a `store: 'blocks'` block for a public (PKCE-only) client.",
+				});
+			}
+		}
+	} else if (store === 'blocks' && isPlainObject(field(options, 'allowBearerAuth'))) {
+		out.conflicts.push({
+			path: 'allowBearerAuth',
+			message:
+				"as an object (extra Cognito app clients) needs `store: 'cognito'`. A `store: 'blocks'` block takes `true` or `false`.",
+		});
+	}
 	return out;
 }
 
@@ -678,7 +786,8 @@ function findAll(options: unknown): Findings {
  * @param id - The block id, for the message.
  * @throws Error listing each unknown option with its path and, where one is
  *   close, a "did you mean …?" suggestion, then each wrong-typed value with
- *   its path and what it must be.
+ *   its path and what it must be, then each option the block's `store` does
+ *   not allow or requires (see {@link findStoreConflicts}).
  * @throws Error naming `emailPassword: false` and each option that needs
  *   email + password (`mfa` other than `'off'`, `passkeys`,
  *   `users.deviceTracking`).
@@ -691,8 +800,8 @@ export function assertKnownAuthOptions(id: string, options: unknown): void {
 			`Auth '${id}': options must be an object, got ${Array.isArray(options) ? 'an array' : typeof options}.`,
 		);
 	}
-	const { unknown, invalid } = findAll(options);
-	if (unknown.length === 0 && invalid.length === 0) {
+	const { unknown, invalid, conflicts, store } = findAll(options);
+	if (unknown.length === 0 && invalid.length === 0 && conflicts.length === 0) {
 		assertConsistentOptions(id, options);
 		return;
 	}
@@ -710,6 +819,15 @@ export function assertKnownAuthOptions(id: string, options: unknown): void {
 		sections.push(`invalid option value${invalid.length === 1 ? '' : 's'}:\n${lines.join('\n')}`);
 		reasons.push(
 			"Auth checks the type of each boolean option, so a value such as `0` or `'false'` cannot silently turn a setting on or off.",
+		);
+	}
+	if (conflicts.length > 0) {
+		const lines = conflicts.map((c) => `  - \`${c.path}\` ${c.message}`);
+		sections.push(
+			`${conflicts.length === 1 ? 'option conflicts' : 'options conflict'} with \`store: '${store}'\`:\n${lines.join('\n')}`,
+		);
+		reasons.push(
+			"A `'cognito'` block (the default) federates through a Cognito user pool and a `store: 'blocks'` block verifies its providers itself, so each accepts different provider options.",
 		);
 	}
 	throw new Error(
