@@ -31,7 +31,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, normalize, resolve } from 'node:path';
 
@@ -43,14 +43,17 @@ export type BackendTypesResult =
 	| { status: 'written'; outFile: string; durationMs: number }
 	/** `tsc --build` found the output newer than every input, so it rebuilt nothing. */
 	| { status: 'up-to-date'; outFile: string; durationMs: number }
-	/** `mode: 'check'` only: the output is missing or older than an input. */
-	| { status: 'stale'; outFile: string }
-	/** `mode: 'clean'` only: the declarations and build state were removed. */
-	| { status: 'cleaned' }
 	/** The run was aborted (e.g. the dev server restarted). */
 	| { status: 'skipped'; reason: string }
 	/** `tsc` reported errors; nothing was written, so the previous output (if any) is kept. */
 	| { status: 'failed'; message: string; diagnostics: string };
+
+/**
+ * How long `tsc` may run before it is killed. A cold build of a large backend
+ * takes a few seconds, so this is generous; it exists so a wedged compiler
+ * fails the `prebuild` hook with a message instead of hanging it forever.
+ */
+export const BACKEND_TYPES_TIMEOUT_MS = 120_000;
 
 /** How to bring a workspace predating generated types onto the supported layout. */
 const MIGRATION = [
@@ -99,16 +102,32 @@ function resolveTsc(awsBlocksDir: string): string | undefined {
 	}
 }
 
+/** The output's modification time in milliseconds, or `undefined` if it is absent. */
+function outputMtimeMs(outFile: string): number | undefined {
+	try {
+		return statSync(outFile).mtimeMs;
+	} catch {
+		return undefined;
+	}
+}
+
 /**
  * Write `aws-blocks/.types/` from the backend source by running the app's
  * `tsc --build aws-blocks/tsconfig.types.json`.
  *
  * `--build` rather than `-p` so `tsc` keeps its own incremental state (a
  * `tsbuildinfo` beside the declarations, inside the gitignored `.types/`) and
- * skips the work when every output is newer than every input. It compares
- * against the real outputs, not just that state, so deleting `.types/` is
- * correctly seen as out of date — which is what makes `mode: 'check'` a usable
- * freshness gate rather than a guess.
+ * skips the work when every output is newer than every input. Deciding that is
+ * `tsc`'s job, not ours: it compares against the real outputs, so deleting
+ * `.types/` is correctly seen as out of date. Nothing here second-guesses it,
+ * and there is deliberately no "is it stale?" mode — the hooks that matter
+ * (`prepare`, `pretypecheck`, `prebuild`, the dev server) all just run this, and
+ * a regenerate is both the check and the fix.
+ *
+ * Whether `tsc` actually compiled is read from the output file's modification
+ * time, not from its console output: `--verbose`/`--dry` report that in prose
+ * that is timestamped and localized (`--locale`), so matching on it would be a
+ * guess dressed up as a fact. The two `stat` calls cost nothing and are exact.
  *
  * Never throws: the result says whether the types were written, were already
  * current, skipped, or failed. On failure nothing is written (`noEmitOnError`),
@@ -117,15 +136,12 @@ function resolveTsc(awsBlocksDir: string): string | undefined {
  *
  * @param awsBlocksDir - The backend workspace directory (the folder holding `index.ts`).
  * @param options.signal - Aborts the `tsc` child process, e.g. when the dev server restarts.
- * @param options.mode - `'build'` (default) writes them; `'check'` reports
- *   `up-to-date` or `stale` without writing (`--dry`); `'clean'` removes the
- *   declarations and the build state (`--clean`).
+ * @param options.timeoutMs - Kill `tsc` after this long. Default {@link BACKEND_TYPES_TIMEOUT_MS}.
  */
 export async function generateBackendTypes(
 	awsBlocksDir: string,
-	options: { signal?: AbortSignal; mode?: 'build' | 'check' | 'clean' } = {},
+	options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<BackendTypesResult> {
-	const mode = options.mode ?? 'build';
 	const target = backendTypesTarget(awsBlocksDir);
 	if ('error' in target) {
 		return { status: 'failed', message: target.error, diagnostics: '' };
@@ -140,22 +156,24 @@ export async function generateBackendTypes(
 		};
 	}
 
+	const timeoutMs = options.timeoutMs ?? BACKEND_TYPES_TIMEOUT_MS;
 	const started = Date.now();
+	const mtimeBefore = outputMtimeMs(outFile);
 	const tsconfig = join(awsBlocksDir, BACKEND_TYPES_TSCONFIG);
-	const { code, output } = await new Promise<{ code: number | null; output: string }>((done) => {
+	const { code, signal, output } = await new Promise<{
+		code: number | null;
+		signal: NodeJS.Signals | null;
+		output: string;
+	}>((done) => {
 		let output = '';
-		// `--build` must come first. `--verbose` is what makes the up-to-date
-		// decision observable: a plain `--build` prints nothing when it skips.
-		// It cannot be combined with `--clean` (TS6370), which needs no such
-		// reporting anyway.
-		const buildArgs = ['--build', tsconfig, '--pretty', 'false'];
-		if (mode === 'clean') buildArgs.push('--clean');
-		else buildArgs.push('--verbose');
-		if (mode === 'check') buildArgs.push('--dry');
-
-		const child = spawn(process.execPath, [tsc, ...buildArgs], {
+		// `--build` must come first. No `--verbose`/`--dry`: the outcome is read
+		// from the output file, so the only thing we want on the console is
+		// diagnostics for a failure.
+		const child = spawn(process.execPath, [tsc, '--build', tsconfig, '--pretty', 'false'], {
 			cwd: awsBlocksDir,
 			signal: options.signal,
+			// Node's own spawn timeout, rather than a timer of ours racing the exit.
+			timeout: timeoutMs,
 			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 		child.stdout.on('data', (chunk) => {
@@ -164,36 +182,40 @@ export async function generateBackendTypes(
 		child.stderr.on('data', (chunk) => {
 			output += chunk;
 		});
-		child.on('error', (error) => done({ code: null, output: output + error.message }));
-		child.on('close', (code) => done({ code, output }));
+		child.on('error', (error) => done({ code: null, signal: null, output: output + error.message }));
+		child.on('close', (code, signal) => done({ code, signal, output }));
 	});
 
+	// The caller's abort and the timeout both kill the child; only the caller's
+	// is a non-event. Check it first so a dev-server restart is never reported
+	// as a type failure.
 	if (options.signal?.aborted) return { status: 'skipped', reason: 'aborted' };
-
-	if (code === 0 && mode === 'clean') return { status: 'cleaned' };
-
-	if (code === 0 && mode === 'check') {
-		// `--dry` says either "is up to date" or "A non-dry build would build project".
-		return /would build project/i.test(output)
-			? { status: 'stale', outFile }
-			: { status: 'up-to-date', outFile, durationMs: Date.now() - started };
+	if (code === null) {
+		return {
+			status: 'failed',
+			message: signal
+				? `tsc did not finish within ${timeoutMs} ms (killed with ${signal}); ${outFile} was not updated`
+				: `could not run tsc; ${outFile} was not updated`,
+			diagnostics: output.trim(),
+		};
 	}
 
-	if (code === 0 && existsSync(outFile)) {
-		// `--verbose` logs "Building project" only when it actually compiled.
-		const status = /building project/i.test(output) ? 'written' : 'up-to-date';
-		return { status, outFile, durationMs: Date.now() - started };
+	if (code !== 0) {
+		return {
+			status: 'failed',
+			message: `type errors in the backend; ${outFile} was not updated`,
+			diagnostics: output.trim(),
+		};
 	}
-	if (code === 0) {
+
+	const mtimeAfter = outputMtimeMs(outFile);
+	if (mtimeAfter === undefined) {
 		return {
 			status: 'failed',
 			message: `tsc succeeded but did not write ${outFile}; check that outDir in ${BACKEND_TYPES_TSCONFIG} matches exports["."].types`,
 			diagnostics: output.trim(),
 		};
 	}
-	return {
-		status: 'failed',
-		message: `type errors in the backend; ${outFile} was not updated`,
-		diagnostics: output.trim(),
-	};
+	const status = mtimeBefore === undefined || mtimeAfter !== mtimeBefore ? 'written' : 'up-to-date';
+	return { status, outFile, durationMs: Date.now() - started };
 }

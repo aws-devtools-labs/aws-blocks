@@ -31,7 +31,9 @@
  * After `client.js`, it also writes the backend's declaration files
  * (`aws-blocks/.types/`) when the workspace's `exports["."].types` points at
  * them, using the app's own `typescript`. Type errors in the backend fail the
- * command so a build never continues with stale types.
+ * command so a build never continues with stale types. That makes this the
+ * authoritative freshness gate; `blocks-generate-types`, wired as `prepare`,
+ * only ensures the declarations exist and never fails an install.
  */
 
 import { spawn } from 'node:child_process';

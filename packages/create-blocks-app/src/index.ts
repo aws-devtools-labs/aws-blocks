@@ -246,28 +246,6 @@ function reportFrontendTsconfigs(targetDir: string): void {
 }
 
 /**
- * Writes `aws-blocks/.types/` once, right after install, so the generated
- * declarations exist before anything first resolves `aws-blocks`.
- *
- * Without this the directory is absent until the first `npm run dev` or
- * `npm run build`, and `exports["."].types` pointing at a missing file does not
- * fail loudly — TypeScript falls through to the `default` condition and
- * typechecks the backend *source* with the frontend's tsconfig, which is the
- * problem the generated types exist to avoid. An editor opened straight after
- * scaffolding, or a bare `tsc --noEmit`, would see that silent fallback.
- *
- * Non-fatal: the app is already usable, `pretypecheck`/`prebuild` regenerate,
- * and the fallback above means a miss degrades rather than breaks.
- */
-function generateBackendTypesOnce(targetDir: string): void {
-  try {
-    execSync('npx --no-install blocks-generate-client', { cwd: targetDir, stdio: 'pipe' });
-  } catch {
-    console.log('  ⚠ Could not pre-generate aws-blocks/.types/ — `npm run dev` will write it.');
-  }
-}
-
-/**
  * Adds the aws-blocks workspace to an existing project's package.json.
  * Shared between `integrateWithExistingProject()` and `integrateWithAmplify()`.
  *
@@ -553,8 +531,10 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
   if (!skipInstall) {
+    // Writes aws-blocks/.types/ on the way out, via the template's `prepare`
+    // hook (`blocks-generate-types`) — so does the `npm install` the user runs
+    // themselves with --skip-install, and so does a later clone of this app.
     installDependencies(targetDir, workspaceRoot);
-    generateBackendTypesOnce(targetDir);
   }
 
   // The local server port the template's `cdk-blocks dev` listens on: 3001 for the backend-only templates.
@@ -670,6 +650,9 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       'esbuild': '^0.27.1',
       '@types/node': '^20.0.0',
       'cross-env': '^7.0.3',
+      // Required by `prepare`/`prebuild`: the generated declarations are built
+      // by the app's own `tsc` (see `generateBackendTypes`).
+      'typescript': '^5.9.3',
     },
     scripts: {
       'sandbox': 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox',
@@ -679,6 +662,14 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // The CLI's `cdk-blocks generate client` has no Amplify preamble (auth middleware and
       // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
+      // See `blocks-generate-types`: `prepare` makes aws-blocks/.types/ exist
+      // after install, the pre-hooks keep it from going stale before a
+      // typecheck or build. Existing scripts of the same name are never
+      // replaced, so an app that already has one keeps it and only gets
+      // `prepare`'s coverage.
+      'prepare': 'blocks-generate-types',
+      'prebuild': 'npm run blocks:generate-client',
+      'pretypecheck': 'npm run blocks:generate-client',
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
@@ -862,6 +853,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'tsx': tplDevDeps['tsx'] || '^4.7.0',
       'esbuild': tplDevDeps['esbuild'] || '^0.27.1',
       '@types/node': tplDevDeps['@types/node'] || '^20.0.0',
+      // Required by `prepare`/`prebuild`: the generated declarations are built
+      // by the app's own `tsc` (see `generateBackendTypes`).
+      'typescript': tplDevDeps['typescript'] || '^5.9.3',
     },
     scripts: {
       'sandbox': 'cdk-blocks sandbox',
@@ -871,6 +865,14 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'destroy': 'cdk-blocks destroy',
       'dev:server': 'cdk-blocks dev',
       'dev:stop': 'cdk-blocks dev stop',
+      // See `blocks-generate-types`: `prepare` makes aws-blocks/.types/ exist
+      // after install, the pre-hooks keep it from going stale before a
+      // typecheck or build. Existing scripts of the same name are never
+      // replaced, so an app that already has one keeps it and only gets
+      // `prepare`'s coverage.
+      'prepare': 'blocks-generate-types',
+      'prebuild': 'cdk-blocks generate client',
+      'pretypecheck': 'cdk-blocks generate client',
     },
     blocksConfig: backendDevConfig(templatePkg.blocks),
     gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/.types/', 'aws-blocks/blocks.spec.json', '.bb-data/'],

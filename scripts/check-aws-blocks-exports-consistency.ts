@@ -241,6 +241,67 @@ function checkTemplateTypesTsconfigs(): string[] {
   return errors;
 }
 
+/**
+ * Every template that uses the generated declarations must run
+ * `blocks-generate-types` as its `prepare` script.
+ *
+ * `aws-blocks/.types/` is gitignored, so without `prepare` it does not exist
+ * after `git clone && npm install` — and `exports["."].types` pointing at a
+ * missing file is not an error. TypeScript falls through to the `default`
+ * condition and typechecks the backend source with the frontend's tsconfig,
+ * which is precisely the bug generated types exist to prevent. The failure is
+ * silent, so only a check like this one catches a new template that forgets it.
+ *
+ * Overlay templates (`blocksTemplateOverlayOnly`) are exempt: they have no
+ * scripts of their own, and `create-blocks-app` adds the hook to the host app's
+ * package.json instead.
+ */
+function checkTemplatePrepareHooks(): string[] {
+  const errors: string[] = [];
+  const templatesDir = join(ROOT, "packages/create-blocks-app/templates");
+  const PREPARE = "blocks-generate-types";
+
+  let templates: string[];
+  try {
+    templates = readdirSync(templatesDir, { withFileTypes: true })
+      .filter((t) => t.isDirectory())
+      .map((t) => t.name)
+      .sort();
+  } catch {
+    return errors;
+  }
+
+  for (const name of templates) {
+    const base = join("packages/create-blocks-app/templates", name);
+    let usesGeneratedTypes = false;
+    try {
+      const backend = JSON.parse(readFileSync(resolve(ROOT, base, "aws-blocks/package.json"), "utf-8"));
+      usesGeneratedTypes = backend?.exports?.["."]?.types === GENERATED_TYPES;
+    } catch {
+      continue; // no aws-blocks workspace in this template
+    }
+    if (!usesGeneratedTypes) continue;
+
+    let pkg: { blocksTemplateOverlayOnly?: boolean; scripts?: Record<string, string> };
+    try {
+      pkg = JSON.parse(readFileSync(resolve(ROOT, base, "package.json"), "utf-8"));
+    } catch {
+      errors.push(`${base}/package.json: missing or invalid JSON`);
+      continue;
+    }
+    if (pkg.blocksTemplateOverlayOnly) continue;
+
+    if (pkg.scripts?.prepare !== PREPARE) {
+      errors.push(
+        `${base}/package.json: "prepare" is ${JSON.stringify(pkg.scripts?.prepare)}, must be "${PREPARE}" so ` +
+          `aws-blocks/.types/ exists after a clone and install`
+      );
+    }
+  }
+
+  return errors;
+}
+
 function main() {
   const files = findAwsBlocksPackageJsons();
 
@@ -271,6 +332,14 @@ function main() {
   } else {
     console.log(`  ✗ template ${TYPES_TSCONFIG} files`);
     allErrors.push(...tsconfigErrors);
+  }
+
+  const prepareErrors = checkTemplatePrepareHooks();
+  if (prepareErrors.length === 0) {
+    console.log(`  ✓ templates generate .types/ on install`);
+  } else {
+    console.log(`  ✗ templates generate .types/ on install`);
+    allErrors.push(...prepareErrors);
   }
 
   console.log();

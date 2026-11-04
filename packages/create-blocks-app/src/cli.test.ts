@@ -865,6 +865,61 @@ describe('create-blocks-app auto-detection', () => {
     }
   });
 
+  // `aws-blocks/.types/` is gitignored, so an existing project that gets no
+  // hook to generate it never has it — and a missing `exports["."].types`
+  // target is not an error: TypeScript falls through to `default` and
+  // typechecks the backend source with the frontend's tsconfig, which is the
+  // bug generated types exist to prevent. Templates get `prepare` from their
+  // own package.json; these two paths only get it from the scaffolder.
+  for (const { name, args, fixture, client } of [
+    { name: 'an existing project', args: ['.', '-y', '--skip-install'], fixture: {}, client: 'blocks-generate-client' },
+    {
+      name: 'an Amplify Gen 2 project',
+      args: ['-y', '--skip-install'],
+      fixture: { 'amplify/backend.ts': 'export const backend = defineBackend({});' },
+      client: 'npm run blocks:generate-client',
+    },
+  ]) {
+    it(`wires type generation into ${name}`, () => {
+      const tmpDir = join(__dirname, `../.test-types-wiring-${args.length}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'host-app', version: '1.0.0' }));
+      for (const [rel, content] of Object.entries(fixture)) {
+        mkdirSync(dirname(join(tmpDir, rel)), { recursive: true });
+        writeFileSync(join(tmpDir, rel), content);
+      }
+      try {
+        assert.strictEqual(run(args, tmpDir).exitCode, 0);
+        const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+        assert.strictEqual(pkg.scripts.prepare, 'blocks-generate-types', 'prepare makes .types/ exist after install');
+        assert.strictEqual(pkg.scripts.prebuild, client, 'prebuild keeps .types/ from going stale before a build');
+        assert.strictEqual(pkg.scripts.pretypecheck, client, 'pretypecheck does the same before a typecheck');
+        // The generated declarations are built by the app's own tsc.
+        assert.ok(pkg.devDependencies.typescript, 'typescript is required by prepare/prebuild');
+        assert.match(readFileSync(join(tmpDir, '.gitignore'), 'utf-8'), /^aws-blocks\/\.types\/$/m);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
+
+  it('never replaces a script the host project already defines', () => {
+    const tmpDir = join(__dirname, '../.test-keeps-host-scripts');
+    mkdirSync(tmpDir, { recursive: true });
+    const mine = { prepare: 'husky install', prebuild: 'rimraf dist' };
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'host-app', version: '1.0.0', scripts: mine }));
+    try {
+      assert.strictEqual(run(['.', '-y', '--skip-install'], tmpDir).exitCode, 0);
+      const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.scripts.prepare, mine.prepare);
+      assert.strictEqual(pkg.scripts.prebuild, mine.prebuild);
+      // Still gets the one it had no opinion about.
+      assert.strictEqual(pkg.scripts.pretypecheck, 'blocks-generate-client');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
   it('every deployable template ships the standard `vendorize` script', () => {
     // Regression guard: the auth-cognito template was missing `vendorize`
     // (all other deployable templates had it), so `npm run vendorize` didn't

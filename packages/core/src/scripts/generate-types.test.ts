@@ -132,25 +132,20 @@ describe('generateBackendTypes', () => {
 		assert.ok(existsSync(join(dir, '.types', 'index.d.ts')));
 	});
 
-	it('mode check reports staleness without writing anything', async () => {
+	it('fails rather than hanging when tsc outlives the timeout', async () => {
 		workspace({ source: 'export const x = 1;\n' });
-		const missing = await generateBackendTypes(dir, { mode: 'check' });
-		assert.strictEqual(missing.status, 'stale');
-		assert.ok(!existsSync(join(dir, '.types', 'index.d.ts')), 'check never writes');
-
-		assert.strictEqual((await generateBackendTypes(dir)).status, 'written');
-		assert.strictEqual((await generateBackendTypes(dir, { mode: 'check' })).status, 'up-to-date');
-
-		writeFileSync(join(dir, 'index.ts'), 'export const x = 2;\n');
-		assert.strictEqual((await generateBackendTypes(dir, { mode: 'check' })).status, 'stale');
+		// 1 ms cannot outlast process startup, so the child is always killed.
+		const result = await generateBackendTypes(dir, { timeoutMs: 1 });
+		assert.strictEqual(result.status, 'failed');
+		assert.ok(result.status === 'failed' && /did not finish within 1 ms/.test(result.message), result.status);
 	});
 
-	it('mode clean removes the declarations', async () => {
+	it('reports an aborted run as skipped, not as a type failure', async () => {
 		workspace({ source: 'export const x = 1;\n' });
-		assert.strictEqual((await generateBackendTypes(dir)).status, 'written');
-
-		assert.strictEqual((await generateBackendTypes(dir, { mode: 'clean' })).status, 'cleaned');
-		assert.ok(!existsSync(join(dir, '.types', 'index.d.ts')));
+		const controller = new AbortController();
+		const pending = generateBackendTypes(dir, { signal: controller.signal });
+		controller.abort();
+		assert.deepStrictEqual(await pending, { status: 'skipped', reason: 'aborted' });
 	});
 
 	it('fails when the tsconfig writes somewhere other than exports["."].types', async () => {
