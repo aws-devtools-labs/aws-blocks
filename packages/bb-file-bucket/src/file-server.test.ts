@@ -8,13 +8,15 @@
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { rmSync, existsSync, readdirSync } from 'node:fs';
+import { rmSync, existsSync, readdirSync, renameSync } from 'node:fs';
+import { join } from 'node:path';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { Scope } from '@aws-blocks/core';
 import { FileBucket } from './index.mock.js';
 import { attach } from './file-server.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
+import { versionContentPath, versionMetaPath } from './paths.js';
 
 const scope = new Scope('fsrv');
 
@@ -414,6 +416,57 @@ describe('file-server: versioning', () => {
 		assert.strictEqual(res.status, 200);
 		assert.strictEqual(await res.text(), 'v1');
 	});
+
+	test('legacy v<n> URLs still download existing versions after new uploads', async () => {
+		const bucket = new FileBucket(scope, 'fs-legacy-version');
+		await bucket.put('doc.txt', 'legacy', { contentType: 'text/csv' });
+		const [old] = await bucket.listVersions('doc.txt');
+		const dataDir = join(process.cwd(), '.bb-data', bucket.fullId);
+		renameSync(versionContentPath(dataDir, 'doc.txt', old.versionId), versionContentPath(dataDir, 'doc.txt', 'v1'));
+		renameSync(versionMetaPath(dataDir, 'doc.txt', old.versionId), versionMetaPath(dataDir, 'doc.txt', 'v1'));
+		await bucket.put('doc.txt', 'current');
+		const url = (await bucket.getUrl('doc.txt', { versionId: 'v1' }))
+			.replace(/localhost:\d+/, `localhost:${port}`);
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 200);
+		assert.strictEqual(res.headers.get('content-type'), 'text/csv');
+		assert.strictEqual(await res.text(), 'legacy');
+	});
+
+	test('a deleted version URL stays missing after re-upload', async () => {
+		const bucket = new FileBucket(scope, 'fs-version-identity');
+		await bucket.put('doc.txt', 'deleted');
+		const [old] = await bucket.listVersions('doc.txt');
+		const url = (await bucket.getUrl('doc.txt', { versionId: old.versionId }))
+			.replace(/localhost:\d+/, `localhost:${port}`);
+		await bucket.delete('doc.txt', { versionId: old.versionId });
+		await bucket.put('doc.txt', 'replacement', { contentType: 'text/plain' });
+		const res = await fetch(url);
+		assert.strictEqual(res.status, 404);
+		await res.text();
+		const [current] = await bucket.listVersions('doc.txt');
+		const replacement = await fetch((await bucket.getUrl('doc.txt', { versionId: current.versionId }))
+			.replace(/localhost:\d+/, `localhost:${port}`));
+		assert.strictEqual(replacement.status, 200);
+		assert.strictEqual(replacement.headers.get('content-type'), 'text/plain');
+		assert.strictEqual(await replacement.text(), 'replacement');
+	});
+
+	for (const versionId of [
+		'v1-not-a-uuid',
+		'v1-12345678-1234-4234-8234-123456789abc/../v1',
+		'v1-12345678-1234-4234-8234-123456789abc.extra',
+	]) {
+		test(`rejects malformed new-format versionId: ${versionId}`, async () => {
+			const bucket = new FileBucket(scope, 'fs-invalid-version');
+			await bucket.put('doc.txt', 'current');
+			const url = new URL((await bucket.getUrl('doc.txt')).replace(/localhost:\d+/, `localhost:${port}`));
+			url.searchParams.set('versionId', versionId);
+			const res = await fetch(url);
+			assert.strictEqual(res.status, 400);
+			await res.text();
+		});
+	}
 
 	test('GET with an unknown versionId returns 404 instead of the current file', async () => {
 		const bucket = new FileBucket(scope, 'fs-ver-missing');

@@ -336,9 +336,10 @@ test('versioned: listVersions returns newest first', async () => {
 	await bucket.put('file.txt', 'v2');
 	await bucket.put('file.txt', 'v3');
 	const versions = await bucket.listVersions('file.txt');
-	assert.strictEqual(versions[0].versionId, 'v3');
-	assert.strictEqual(versions[1].versionId, 'v2');
-	assert.strictEqual(versions[2].versionId, 'v1');
+	const bodies = await Promise.all(versions.map(async version =>
+		(await bucket.get('file.txt', { versionId: version.versionId }))?.body.toString(),
+	));
+	assert.deepStrictEqual(bodies, ['v3', 'v2', 'v1']);
 });
 
 // ── Static type checks: conditional version types ───────────────────────────
