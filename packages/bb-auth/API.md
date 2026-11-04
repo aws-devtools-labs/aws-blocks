@@ -49,8 +49,29 @@ export type AdminDisabled = {
 };
 
 // @public
-export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O ? AdminSurface<O> | AdminDisabled : O extends {
+export type AdminDisabledOnBlocks = {
+    readonly __adminNotEnabled: "auth.admin needs store: 'cognito'";
+    addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    removeUserFromGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    setUserPassword(username: string, password: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+};
+
+// @public
+export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O ? AdminSurface<O> | AdminDisabled | AdminDisabledOnBlocks : O extends {
+    store: 'blocks';
+} ? AdminDisabledOnBlocks : O extends {
     admin: object;
+    store?: 'cognito';
 } ? AdminSurface<O> : AdminDisabled;
 
 // @public
@@ -62,6 +83,9 @@ export type AdminGrants<O extends AuthOptions, A extends AdminAction> = O extend
 
 // @public
 export type AdminOff = [ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: never];
+
+// @public
+export type AdminOffOnBlocks = [ERROR_auth_admin_needs_store_cognito: never];
 
 // @public
 export interface AdminOptions {
@@ -89,6 +113,11 @@ export interface AdminUserFilter {
     attribute: string;
     match: 'startsWith' | 'equals';
     value: string;
+}
+
+// @public
+export interface AmazonProvider extends OAuthCredentials, ProviderCommon {
+    type: 'amazon';
 }
 
 // @public
@@ -157,6 +186,11 @@ export interface AppleCredentials {
     keyId: string;
     privateKey: ProviderSecretRef;
     teamId: string;
+}
+
+// @public
+export interface AppleProvider extends AppleCredentials, ProviderCommon {
+    type: 'apple';
 }
 
 // @public
@@ -275,12 +309,32 @@ export interface AuthClientOptions {
 }
 
 // @public
+export interface AuthCommonOptions {
+    deletionProtection?: boolean;
+    logger?: ChildLogger;
+    // @deprecated (undocumented)
+    oidcProviders?: ERROR_replaced_by_providers;
+    onSignIn?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+    onSignOut?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+    redirects?: RedirectOptions;
+    removalPolicy?: 'destroy' | 'retain';
+    // @deprecated (undocumented)
+    samlProviders?: ERROR_replaced_by_providers;
+    session?: SessionOptions;
+    // @deprecated (undocumented)
+    socialProviders?: ERROR_replaced_by_providers;
+    validateUser?: (candidate: UserCandidate) => Promise<void>;
+}
+
+// @public
 export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends Omit<AuthUser, 'displayName'> {
     attributes: Partial<Record<ReadAttrOf<O>, string>>;
     claims?: Readonly<Record<string, unknown>>;
     federatedIdentity?: FederatedIdentity;
     groups: GroupOf<O>[];
-    signInProvider: 'password' | ProviderIdOf<O>;
+    signInProvider: O extends {
+        store: 'blocks';
+    } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
     userSub: string;
 }
 
@@ -296,35 +350,10 @@ export type AuthFlowOf<O extends AuthOptions> = O extends {
 } ? F extends 'USER_PASSWORD_AUTH' | 'USER_AUTH' ? F : 'USER_PASSWORD_AUTH' : 'USER_PASSWORD_AUTH' : 'USER_PASSWORD_AUTH';
 
 // @public
-export interface AuthMockOptions extends AuthOptions {
-    codeDelivery?: CodeDeliveryFn;
-    totpVerification?: 'any' | 'rfc6238';
-}
+export type AuthMockOptions = BlocksAuthMockOptions | CognitoAuthMockOptions;
 
 // @public
-export interface AuthOptions {
-    admin?: AdminOptions;
-    allowBearerAuth?: boolean | BearerAuthOptions;
-    deletionProtection?: boolean;
-    email?: EmailSenderOptions;
-    emailPassword?: boolean | EmailPasswordOptions;
-    featurePlan?: 'lite' | 'essentials' | 'plus';
-    hostedUi?: HostedUiOptions;
-    logger?: ChildLogger;
-    mfa?: MfaMode | MfaOptions;
-    oidcProviders?: Record<string, OidcProviderOptions>;
-    onSignIn?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
-    onSignOut?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
-    passkeys?: false | PasskeyOptions;
-    redirects?: RedirectOptions;
-    removalPolicy?: 'destroy' | 'retain';
-    samlProviders?: Record<string, SamlProviderOptions>;
-    session?: SessionOptions;
-    socialProviders?: SocialProviders;
-    userPool?: ExternalUserPoolRef;
-    users?: UserPoolOptions;
-    validateUser?: (candidate: UserCandidate) => Promise<void>;
-}
+export type AuthOptions = BlocksAuthOptions | CognitoAuthOptions;
 
 // @public
 export interface AuthSession {
@@ -389,14 +418,49 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
     attributes: Partial<Record<ReadAttrOf<O>, string>>;
     displayName: string;
     groups: GroupOf<O>[];
-    signInProvider: 'password' | ProviderIdOf<O>;
+    signInProvider: O extends {
+        store: 'blocks';
+    } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
     userSub: string;
 }
+
+// @public
+export type AuthStore = 'cognito' | 'blocks';
 
 // @public
 export interface BearerAuthOptions {
     clientIds?: readonly string[];
 }
+
+// @public
+export interface BlocksAuthMockOptions extends BlocksAuthOptions {
+    codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
+    totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
+}
+
+// @public
+export interface BlocksAuthOptions extends AuthCommonOptions {
+    admin?: ERROR_needs_store_cognito<'admin'>;
+    allowBearerAuth?: boolean;
+    email?: ERROR_needs_store_cognito<'email'>;
+    emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
+    featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
+    hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
+    mfa?: ERROR_needs_store_cognito<'mfa'>;
+    passkeys?: ERROR_needs_store_cognito<'passkeys'>;
+    providers: Record<string, BlocksProvider>;
+    store: 'blocks';
+    userPool?: ERROR_needs_store_cognito<'userPool'>;
+    users?: BlocksUserOptions;
+}
+
+// @public
+export type BlocksProvider = DirectOidcProvider | OAuth2Provider | StubProvider;
+
+// @public
+export type BlocksUserOptions = Pick<UserPoolOptions, 'groups'> & {
+    [K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
+};
 
 // @public
 export type BrowserAuthSession = {
@@ -428,11 +492,36 @@ export type CodeDeliveryFn = (username: string, code: string, purpose: CodeDeliv
 export type CodeDeliveryPurpose = 'signUp' | 'resetPassword' | 'mfa' | 'attribute';
 
 // @public
-export interface CognitoOidcProviderOptions extends OidcProviderBase {
+export interface CognitoAuthMockOptions extends CognitoAuthOptions {
+    codeDelivery?: CodeDeliveryFn;
+    totpVerification?: 'any' | 'rfc6238';
+}
+
+// @public
+export interface CognitoAuthOptions extends AuthCommonOptions {
+    admin?: AdminOptions;
+    allowBearerAuth?: boolean | BearerAuthOptions;
+    email?: EmailSenderOptions;
+    emailPassword?: boolean | EmailPasswordOptions;
+    featurePlan?: 'lite' | 'essentials' | 'plus';
+    hostedUi?: HostedUiOptions;
+    mfa?: MfaMode | MfaOptions;
+    passkeys?: false | PasskeyOptions;
+    providers?: Record<string, CognitoProvider>;
+    store?: 'cognito';
+    userPool?: ExternalUserPoolRef;
+    users?: UserPoolOptions;
+}
+
+// @public
+export interface CognitoOidcProvider extends OidcProviderBase {
     attributesRequestMethod?: 'GET' | 'POST';
     clientSecret: ProviderSecretRef;
-    federateVia: 'cognito';
+    type: 'oidc';
 }
+
+// @public
+export type CognitoProvider = SocialProvider | SamlProvider | CognitoOidcProvider;
 
 // @public
 export interface CompletePasskeyRegistrationResult {
@@ -480,13 +569,13 @@ export type CustomAttrNames<O extends AuthOptions> = O extends {
 } ? N : never : never;
 
 // @public
-export function customOauth2(options: CustomOauth2Options): OAuth2ProviderOptions;
+export function customOauth2(options: CustomOauth2Options): OAuth2Provider;
 
 // @public
 export interface CustomOauth2Options {
     clientId: string;
     clientSecret?: ProviderSecretRef;
-    endpoints: OAuth2ProviderOptions['oauth2']['endpoints'];
+    endpoints: OAuth2Provider['oauth2']['endpoints'];
     label?: string;
     mapClaims: (raw: unknown) => MappedClaims;
     name: string;
@@ -510,14 +599,16 @@ export interface DeviceRecord {
 }
 
 // @public
-export interface DirectOidcProviderOptions extends OidcProviderBase {
+export interface DirectOidcProvider extends OidcProviderBase {
     clientSecret?: ProviderSecretRef;
-    federateVia?: 'direct';
     groupsClaim?: string;
+    type: 'oidc';
 }
 
 // @public
 export type EmailPasswordEnabled<O extends AuthOptions> = O extends {
+    store: 'blocks';
+} ? false : O extends {
     emailPassword: false;
 } ? false : 'emailPassword' extends keyof O ? false extends O['emailPassword'] ? boolean : true : true;
 
@@ -545,6 +636,21 @@ export type ERROR_EMAIL_is_not_in_mfa_types = MfaSetting & {
 };
 
 // @public
+export type ERROR_federateVia_replaced_by_store = string & {
+    readonly __blocksOptionError: "replaced by the block's store";
+};
+
+// @public
+export type ERROR_needs_store_cognito<K extends string> = string & {
+    readonly __blocksOptionError: `${K} needs store: 'cognito'`;
+};
+
+// @public
+export type ERROR_replaced_by_providers = string & {
+    readonly __blocksOptionError: 'replaced by providers (each entry tagged with its type)';
+};
+
+// @public
 export type ERROR_SMS_is_not_in_mfa_types = MfaSetting & {
     readonly __factorNotInMfaTypes: 'SMS';
 };
@@ -561,6 +667,11 @@ export interface ExternalUserPoolRef {
     readonly clientId?: string;
     // (undocumented)
     readonly userPoolId: string;
+}
+
+// @public
+export interface FacebookProvider extends OAuthCredentials, ProviderCommon {
+    type: 'facebook';
 }
 
 // @public
@@ -581,7 +692,7 @@ export interface GetAuthSessionOptions {
 }
 
 // @public
-export function github(options: GitHubOptions): OAuth2ProviderOptions;
+export function github(options: GitHubOptions): OAuth2Provider;
 
 // @public
 export interface GitHubOptions {
@@ -589,6 +700,11 @@ export interface GitHubOptions {
     clientSecret: ProviderSecretRef;
     label?: string;
     scopes?: readonly string[];
+}
+
+// @public
+export interface GoogleProvider extends OAuthCredentials, ProviderCommon {
+    type: 'google';
 }
 
 // @public
@@ -720,7 +836,7 @@ export type NoSharedMethodNames<P extends ApiMethods, M extends ApiMethods> = {
 };
 
 // @public
-export interface OAuth2ProviderOptions extends DirectOidcProviderOptions {
+export interface OAuth2Provider extends Omit<DirectOidcProvider, 'type'> {
     issuer: `oauth2:${string}`;
     oauth2: {
         endpoints: {
@@ -730,6 +846,7 @@ export interface OAuth2ProviderOptions extends DirectOidcProviderOptions {
         };
         mapClaims: (raw: unknown) => MappedClaims;
     };
+    type: 'oauth2';
 }
 
 // @public
@@ -747,11 +864,10 @@ export interface OidcProviderBase extends ProviderCommon {
         userInfo: string;
         jwks: string;
     };
+    // @deprecated (undocumented)
+    federateVia?: ERROR_federateVia_replaced_by_store;
     issuer: string;
 }
-
-// @public
-export type OidcProviderOptions = DirectOidcProviderOptions | CognitoOidcProviderOptions;
 
 // @public
 export type OnStubAuthorize = (req: StubAuthorizeRequest) => StubUser | undefined | Promise<StubUser | undefined>;
@@ -830,13 +946,9 @@ export interface ProviderCommon {
 }
 
 // @public
-export type ProviderIdOf<O extends AuthOptions> = (O extends {
-    socialProviders?: infer S;
-} ? [S] extends [undefined] ? never : keyof NonNullable<S> & string : never) | (O extends {
-    oidcProviders?: infer S;
-} ? [S] extends [undefined] ? never : keyof NonNullable<S> & string : never) | (O extends {
-    samlProviders?: infer S;
-} ? [S] extends [undefined] ? never : keyof NonNullable<S> & string : never);
+export type ProviderIdOf<O extends AuthOptions> = O extends {
+    providers?: infer P;
+} ? [P] extends [undefined] ? never : keyof NonNullable<P> & string : never;
 
 // @public
 export type ProviderSecretRef = AppSettingRef | SecretRef;
@@ -882,10 +994,11 @@ export interface ResetPasswordResult {
 }
 
 // @public
-export interface SamlProviderOptions extends ProviderCommon {
+export interface SamlProvider extends ProviderCommon {
     metadataFile?: string;
     metadataUrl?: string;
     signRequest?: boolean;
+    type: 'saml';
 }
 
 // @public
@@ -980,15 +1093,10 @@ export interface SignUpResult {
 }
 
 // @public
-export type SocialProviderId = 'google' | 'apple' | 'facebook' | 'amazon';
+export type SocialProvider = GoogleProvider | FacebookProvider | AmazonProvider | AppleProvider;
 
 // @public
-export interface SocialProviders {
-    amazon?: OAuthCredentials & ProviderCommon;
-    apple?: AppleCredentials & ProviderCommon;
-    facebook?: OAuthCredentials & ProviderCommon;
-    google?: OAuthCredentials & ProviderCommon;
-}
+export type SocialProviderId = 'google' | 'apple' | 'facebook' | 'amazon';
 
 // @public
 export type StandardUserAttributeKey = 'address' | 'birthdate' | 'email' | 'email_verified' | 'family_name' | 'gender' | 'given_name' | 'locale' | 'middle_name' | 'name' | 'nickname' | 'phone_number' | 'phone_number_verified' | 'picture' | 'preferred_username' | 'profile' | 'sub' | 'updated_at' | 'website' | 'zoneinfo';
@@ -1010,7 +1118,7 @@ export interface StubAuthorizeRequest {
 }
 
 // @public
-export function stubIdp(options?: StubIdpOptions): StubOidcProviderOptions;
+export function stubIdp(options?: StubIdpOptions): StubProvider;
 
 // @public
 export interface StubIdpOptions extends StubIdpSettings {
@@ -1027,9 +1135,10 @@ export interface StubIdpSettings {
 }
 
 // @public
-export interface StubOidcProviderOptions extends DirectOidcProviderOptions {
+export interface StubProvider extends Omit<DirectOidcProvider, 'type'> {
     issuer: 'aws-blocks:stub-idp';
     stubIdp: StubIdpSettings;
+    type: 'stub';
 }
 
 // @public
