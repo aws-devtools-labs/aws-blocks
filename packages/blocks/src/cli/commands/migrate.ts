@@ -676,6 +676,13 @@ function filesAbove(top: string, prefix: string): string[] {
 	];
 }
 
+/** A planned migration: the result, the rewritten `package.json`, and the `package.json` text it was planned from. */
+export interface MigrationPlan {
+	result: MigrateResult;
+	pkg: PackageJson;
+	pkgText: string;
+}
+
 /**
  * Plan the migration of `root`, reading `files` (from {@link gitFiles}), or
  * every file under `root` when `files` is `null`, and the `repos` files above
@@ -685,12 +692,14 @@ export function planMigration(
 	root: string,
 	files: readonly string[] | null,
 	repos: readonly RepoFiles[] = [],
-): { result: MigrateResult; pkg: PackageJson } {
+): MigrationPlan {
 	const pkgPath = join(root, 'package.json');
+	let pkgText: string;
 	let parsed: unknown;
 	try {
+		pkgText = readFileSync(pkgPath, 'utf-8');
 		// JSON.parse rejects the byte order mark that some Windows editors write; writePackageJson keeps it.
-		parsed = JSON.parse(readFileSync(pkgPath, 'utf-8').replace(/^\uFEFF/, ''));
+		parsed = JSON.parse(pkgText.replace(/^\uFEFF/, ''));
 	} catch (error) {
 		throw new CliError(`cannot read ${pkgPath}: ${error instanceof Error ? error.message : String(error)}`);
 	}
@@ -833,12 +842,12 @@ export function planMigration(
 	result.removed = wrappers.filter((w) => candidates.has(w.path)).map((w) => w.path);
 	if (Object.keys(result.scriptsRewritten).length > 0 || result.devConfig) result.changed.push('package.json');
 	if (pkg.scripts) pkg.scripts = scripts;
-	return { result, pkg };
+	return { result, pkg, pkgText };
 }
 
-function writePackageJson(root: string, pkg: PackageJson, devConfig: MigratedDevConfig | null): void {
+/** Write `pkg` over `original`, the unchanged `package.json` text it was parsed from, in that text's style. */
+function writePackageJson(root: string, pkg: PackageJson, original: string, devConfig: MigratedDevConfig | null): void {
 	const path = join(root, 'package.json');
-	const original = readFileSync(path, 'utf-8');
 	const indent = /^([ \t]+)"/m.exec(original)?.[1] ?? '  ';
 	if (devConfig) pkg.blocks = { ...pkg.blocks, dev: devConfig };
 	const text = `${original.startsWith('\uFEFF') ? '\uFEFF' : ''}${JSON.stringify(pkg, null, indent)}`;
@@ -941,6 +950,44 @@ function checkGit(root: string, dryRun: boolean, force: boolean): GitView {
 	return git;
 }
 
+/**
+ * Write `plan`: the `package.json` rewrite, then the deletions. Refuses, and
+ * writes nothing, when `package.json` is no longer the text the plan was made
+ * from (the user or another run changed it meanwhile): the rewrite would
+ * overwrite that change, and the deletions were decided from the old scripts.
+ * Another run (or the user) may have deleted a wrapper since the plan was
+ * made: the result is the same.
+ *
+ * @throws {CliError} The refusal.
+ */
+export function applyMigration(root: string, plan: MigrationPlan): void {
+	const { result, pkg, pkgText } = plan;
+	if (result.changed.length === 0 && result.removed.length === 0) return;
+	if (unlessGone(() => readFileSync(join(root, 'package.json'), 'utf-8')) !== pkgText) {
+		throw new CliError('package.json changed while cdk-blocks migrate ran; nothing was written.', {
+			where: [`project: ${root}`],
+			hint: '"cdk-blocks migrate" again, to plan from the current package.json',
+		});
+	}
+	if (result.changed.includes('package.json')) writePackageJson(root, pkg, pkgText, result.devConfig);
+	for (const file of result.removed) rmSync(join(root, file), { force: true });
+	if (result.removed.length > 0) removeIfEmpty(join(root, SCRIPTS_DIR));
+}
+
+/**
+ * `error`, after printing it as `{"error": {"message", "hint"}}` under
+ * `--output json` when it is a refusal: a JSON consumer tells a refusal
+ * (nothing written) from kept items (also exit 1) by this document. `--query`
+ * prints one field of the result, which a refusal does not have: the error
+ * goes to stderr only.
+ */
+function refusal(ctx: Context, error: unknown): unknown {
+	if (error instanceof CliError && ctx.globals.output === 'json' && ctx.globals.query === undefined) {
+		ctx.out.text(JSON.stringify({ error: { message: error.message, hint: error.hint ?? null } }, null, 2));
+	}
+	return error;
+}
+
 export async function migrate(ctx: Context, input: CommandInput): Promise<number> {
 	const root = ctx.requireRoot();
 	const dryRun = input.flags['dry-run'] === true;
@@ -948,24 +995,16 @@ export async function migrate(ctx: Context, input: CommandInput): Promise<number
 	try {
 		git = checkGit(root, dryRun, input.flags.force === true);
 	} catch (error) {
-		// A JSON consumer tells a refusal (nothing written) from kept items (also exit 1) by this document.
-		// `--query` prints one field of the result, which a refusal does not have: the error goes to stderr only.
-		if (error instanceof CliError && ctx.globals.output === 'json' && ctx.globals.query === undefined) {
-			ctx.out.text(JSON.stringify({ error: { message: error.message, hint: error.hint ?? null } }, null, 2));
-		}
-		throw error;
+		throw refusal(ctx, error);
 	}
-	const { result, pkg } = planMigration(
-		root,
-		git.kind === 'listed' ? git.files : null,
-		git.kind === 'listed' ? git.repos : [],
-	);
+	const plan = planMigration(root, git.kind === 'listed' ? git.files : null, git.kind === 'listed' ? git.repos : []);
 	if (!dryRun) {
-		if (result.changed.includes('package.json')) writePackageJson(root, pkg, result.devConfig);
-		// Another run (or the user) may have deleted a file since the plan was made: the result is the same.
-		for (const file of result.removed) rmSync(join(root, file), { force: true });
-		if (result.removed.length > 0) removeIfEmpty(join(root, SCRIPTS_DIR));
+		try {
+			applyMigration(root, plan);
+		} catch (error) {
+			throw refusal(ctx, error);
+		}
 	}
-	ctx.out.result(result, describe(result, dryRun));
-	return result.kept.length > 0 ? ExitCode.Failure : ExitCode.Ok;
+	ctx.out.result(plan.result, describe(plan.result, dryRun));
+	return plan.result.kept.length > 0 ? ExitCode.Failure : ExitCode.Ok;
 }

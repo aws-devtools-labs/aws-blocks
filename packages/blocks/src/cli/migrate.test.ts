@@ -20,7 +20,9 @@ import { dirname, join } from 'node:path';
 import { after, describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+	applyMigration,
 	GENERATED_WRAPPERS,
+	planMigration,
 	removeIfEmpty,
 	SCRIPT_REWRITES,
 	SERVER_DEV_OPTIONS,
@@ -1037,13 +1039,45 @@ describe('cdk-blocks migrate', () => {
 				),
 			);
 			for (const run of runs) {
-				// The later run either migrates too (the deletes are idempotent) or refuses the tree the other one changed.
-				if (run.code !== 0) assert.match(run.stderr, /^Error: the git working tree has uncommitted changes/, run.stderr);
+				// The later run either migrates too (the deletes are idempotent), or refuses the tree or the
+				// package.json that the other one changed, and writes nothing.
+				if (run.code !== 0) {
+					assert.match(
+						run.stderr,
+						/^Error: (the git working tree has uncommitted changes|package\.json changed while cdk-blocks migrate ran; nothing was written)/,
+						run.stderr,
+					);
+				}
 				assert.doesNotMatch(run.stderr, /ENOENT/);
 			}
 			assert.deepStrictEqual(scriptsDir(root), []);
 			assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
 		}
+	});
+
+	it('refuses to write a package.json that changed after the plan, and writes nothing', async () => {
+		const root = writeApp('api-only@0ab6b047');
+		const plan = planMigration(root, null);
+		assert.ok(plan.result.changed.includes('package.json') && plan.result.removed.length > 0);
+		// A script added while migrate scanned the app, which runs a wrapper the plan would delete.
+		const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
+		pkg.scripts['deploy:verbose'] = 'tsx aws-blocks/scripts/deploy.ts --verbose';
+		writeFileSync(join(root, 'package.json'), `${JSON.stringify(pkg, null, 2)}\n`);
+		const before = snapshot(root);
+		assert.throws(
+			() => applyMigration(root, plan),
+			(error: Error & { hint?: string }) => {
+				assert.strictEqual(error.message, 'package.json changed while cdk-blocks migrate ran; nothing was written.');
+				assert.match(error.hint ?? '', /"cdk-blocks migrate" again/);
+				return true;
+			},
+		);
+		assert.deepStrictEqual(snapshot(root), before);
+
+		// Planned again, it keeps that script's wrapper.
+		applyMigration(root, planMigration(root, null));
+		assert.strictEqual(readPkg(root).scripts['deploy:verbose'], 'tsx aws-blocks/scripts/deploy.ts --verbose');
+		assert.ok(scriptsDir(root).includes('deploy.ts'));
 	});
 
 	it('on Windows, retries a scripts directory that a concurrent run holds, then leaves it to that run', () => {
