@@ -55,7 +55,7 @@ The Lambda handler receives env vars `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_{USER_P
 
 **Trust model.** The browser sends `{username, password}` to the customer's Lambda over TLS; the Lambda forwards it to Cognito. The customer's Lambda is inside the user's trust boundary by design — the same as every server-mediated auth library (NextAuth, Devise, Spring Security, `AuthBasic`).
 
-**Cookie.** `auth_<fullId>=<hmac_signed_session_id>`, `HttpOnly; SameSite=Lax; Path=/`, plus `Secure` over HTTPS; with `crossDomain: true`, `HttpOnly; Secure; SameSite=None; Partitioned; Path=/` (attributes from the shared `@aws-blocks/auth-common/cookies` helper). `Max-Age` defaults to 400 days (the modern cross-browser upper bound — Chrome / Firefox / Safari all cap cookie lifetimes at ~400 days regardless of what the server requests). The cookie is a **pure pointer**: the server is the source of truth on session validity.
+**Cookie.** `auth_<fullId>=<hmac_signed_session_id>`, `HttpOnly; SameSite=Lax; Path=/`, plus `Secure` over HTTPS; with `crossDomain: true`, `HttpOnly; Secure; SameSite=None; Partitioned; Path=/`, without `Partitioned` on localhost (attributes from the shared `@aws-blocks/auth-common/cookies` helper). `Max-Age` defaults to 400 days (the modern cross-browser upper bound — Chrome / Firefox / Safari all cap cookie lifetimes at ~400 days regardless of what the server requests). The cookie is a **pure pointer**: the server is the source of truth on session validity.
 
 **Session record.** Stored in the nested `KVStore` as the minimum tuple of tokens:
 
