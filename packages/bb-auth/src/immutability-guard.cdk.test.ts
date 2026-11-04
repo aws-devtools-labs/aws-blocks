@@ -51,7 +51,7 @@ const PERMITTED: Record<string, string> = {
 	'token validities (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('AccessTokenValidity', 30); ${L1_CLIENT}.addPropertyOverride('IdTokenValidity', 30); ${L1_CLIENT}.addPropertyOverride('RefreshTokenValidity', 7); ${L1_CLIENT}.addPropertyOverride('TokenValidityUnits', { AccessToken: 'minutes', IdToken: 'minutes', RefreshToken: 'days' });`,
 	'callback URLs (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('CallbackURLs', ['https://app.example.com/aws-blocks/auth/callback']); ${L1_CLIENT}.addPropertyOverride('LogoutURLs', ['https://app.example.com/']);`,
 	'SupportedIdentityProviders (client)': `const auth = ${BASE}; ${L1_CLIENT}.addPropertyOverride('SupportedIdentityProviders', ['COGNITO', 'Google']);`,
-	'adding a social provider': `new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, socialProviders: { google: { clientId: 'g-client', clientSecret: ${SECRET} } } })`,
+	'adding a social provider': `new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } } })`,
 	'adding a custom attribute':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }, { name: 'plan', type: 'Number' }], groups: ['admins'] } })",
 	'adding a group':
@@ -106,8 +106,8 @@ const GUARDED: Record<string, { build: string; property: string; message: RegExp
 };
 
 const POOL_REMOVED: Record<string, string> = {
-	'last pool-backed method removed (direct OIDC only)':
-		"new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } } })",
+	"last pool-backed method removed (store: 'blocks', direct OIDC only)":
+		"new Auth(stack, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } } })",
 	'owned pool swapped for a wrapped one (userPool)':
 		"new Auth(stack, 'auth', { userPool: Auth.fromExisting('us-east-1_existing') })",
 };
@@ -329,7 +329,7 @@ describe('permitted changes pass both layers', () => {
 	test('adding a pool to a pool-less config is permitted (and the guard then sees no pool yet)', async () => {
 		const dir = appDir();
 		const poolless = synthGuarded({
-			build: `const auth = ${POOL_REMOVED['last pool-backed method removed (direct OIDC only)']};`,
+			build: `const auth = ${POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]};`,
 			appDir: dir,
 		});
 		assert.ok(poolless.ok, poolless.stderr);
@@ -460,9 +460,29 @@ describe('pool removal is refused at synth (layer 1)', () => {
 		});
 	}
 
+	test("flipping a deployed block from the Cognito store to store: 'blocks' is a pool removal, with the two-block remedy", () => {
+		const result = synthGuarded({
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
+			appDir: deployedAppDir(),
+		});
+		assert.strictEqual(result.ok, false, 'synth must fail');
+		// The `poolRemoved` violation, and its own remedy (not the generic "Revert the change").
+		assert.match(result.stderr, /This removes the user pool\./);
+		assert.match(result.stderr, /the user pool would be removed from the stack/);
+		assert.match(
+			result.stderr,
+			/If the pool was deployed — Remedy: keep a pool-backed sign-in method \(email \+ password, or a social, SAML or `type: 'oidc'` provider on the default `store: 'cognito'`\)/,
+		);
+		assert.match(
+			result.stderr,
+			/A `store: 'blocks'` block has no user pool: keep this block on the Cognito store and put the `store: 'blocks'` providers in a second `Auth` block\./,
+		);
+		assert.doesNotMatch(result.stderr, /federateVia/);
+	});
+
 	test('…and deliberately allowed with the escape hatch', () => {
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED['last pool-backed method removed (direct OIDC only)']),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 			env: { BLOCKS_AUTH_REBASELINE: 'TestStack-auth' },
 		});
@@ -535,7 +555,7 @@ describe('reverting a change that was synthesized but never deployed', () => {
 	test('a pool removal: refused, leading with the danger and the stack check before the re-baseline hint', () => {
 		// No deploy-time backstop for a removal: the danger comes first.
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED['last pool-backed method removed (direct OIDC only)']),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 		});
 		assert.strictEqual(result.ok, false);
@@ -663,7 +683,7 @@ describe('the baseline file', () => {
 
 	test('a deliberate re-baseline to a pool-less config does not repeat the first-synth warning', () => {
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED['last pool-backed method removed (direct OIDC only)']),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 			env: { BLOCKS_AUTH_REBASELINE: 'TestStack-auth' },
 		});

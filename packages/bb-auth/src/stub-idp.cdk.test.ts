@@ -25,14 +25,14 @@ function synth(construct: string, apiUrl?: string | null, context: Record<string
 describe('stubIdp() at synth on a sandbox deployment', () => {
 	test('synthesizes, warns that anyone can sign in as the stub users, and registers the gateway URL', () => {
 		const { template, config, report, warnings } = synth(
-			`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp({ users: [${ALICE}] }) } })`,
+			`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp({ users: [${ALICE}] }) } })`,
 		);
 		const fullId = String(report.fullId);
 		const stubWarnings = warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:StubIdpDeployed'));
 		assert.strictEqual(stubWarnings.length, 1, JSON.stringify(warnings));
 		const [warning] = stubWarnings;
 		assert.strictEqual(warning?.path, '/TestStack/auth');
-		assert.match(warning?.message ?? '', /oidcProviders\.corp/);
+		assert.match(warning?.message ?? '', /providers\.corp/);
 		assert.match(
 			warning?.message ?? '',
 			/WITHOUT CREDENTIALS: anyone who can reach this sandbox can sign in as the stub's users/,
@@ -41,22 +41,20 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 		assert.match(warning?.message ?? '', /Synth refuses it for any deployment that is not a sandbox/);
 
 		assert.strictEqual(config[stubIdpConfigKeys(fullId).API_URL], HARNESS_API_URL);
-		// Direct federation only: no user pool, as for any `emailPassword: false` + direct provider (Q6).
+		// Direct federation only: no user pool, as for any `store: 'blocks'` block (Q6).
 		assert.ok(!Object.values(template.Resources).some((r) => r.Type === 'AWS::Cognito::UserPool'));
 	});
 
 	test('the warning names the built-in default user when the stub has no users', () => {
-		const { warnings } = synth(
-			`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } })`,
-		);
+		const { warnings } = synth(`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } })`);
 		const warning = warnings.find((w) => w.message.includes('StubIdpDeployed'));
 		assert.match(warning?.message ?? '', /its built-in default user \('corp-user@stub\.invalid'\)/);
 	});
 
 	test('no compute API URL fails the synth (the deployed issuer would otherwise come from the request Host)', () => {
-		const construct = `new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } })`;
+		const construct = `new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } })`;
 		const expected =
-			/Auth '[^']+': oidcProviders\.corp is a stubIdp\(\) provider on a sandbox deployment, but the backend exposes no API URL/;
+			/Auth '[^']+': providers\.corp is a stubIdp\(\) provider on a sandbox deployment, but the backend exposes no API URL/;
 		// No stack compute at all …
 		assert.throws(() => synth(construct, null), expected);
 		// … and a compute that has no `apiUrl`.
@@ -74,7 +72,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 
 	test('a deployed stack without a stub needs no compute API URL', () => {
 		const { config, report } = synth(
-			`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: { issuer: 'https://idp.example.com', clientId: 'c' } } })`,
+			`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: { type: 'oidc', issuer: 'https://idp.example.com', clientId: 'c' } } })`,
 			null,
 		);
 		assert.ok(!(stubIdpConfigKeys(String(report.fullId)).API_URL in config));
@@ -82,7 +80,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 
 	test('a sandbox synth with no stub needs no compute API URL either', () => {
 		const { config, report } = synth(
-			`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: { issuer: 'https://idp.example.com', clientId: 'c' } } })`,
+			`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: { type: 'oidc', issuer: 'https://idp.example.com', clientId: 'c' } } })`,
 			null,
 		);
 		assert.ok(!(stubIdpConfigKeys(String(report.fullId)).API_URL in config));
@@ -91,16 +89,11 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 
 describe('stubIdp() at synth outside a sandbox', () => {
 	const expected =
-		/Auth: oidcProviders\.corp is a stubIdp\(\) provider, which is only available in local development and sandbox deployments[\s\S]*getDeploymentType\(\)/;
+		/Auth: providers\.corp is a stubIdp\(\) provider, which is only available in local development and sandbox deployments[\s\S]*getDeploymentType\(\)/;
 
 	test('no sandboxMode context: refused before anything is provisioned', () => {
 		assert.throws(
-			() =>
-				synth(
-					`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } })`,
-					undefined,
-					{},
-				),
+			() => synth(`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } })`, undefined, {}),
 			expected,
 		);
 	});
@@ -109,11 +102,9 @@ describe('stubIdp() at synth outside a sandbox', () => {
 		for (const sandboxMode of ['false', false, 'yes', 1]) {
 			assert.throws(
 				() =>
-					synth(
-						`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } })`,
-						undefined,
-						{ sandboxMode },
-					),
+					synth(`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } })`, undefined, {
+						sandboxMode,
+					}),
 				expected,
 				String(sandboxMode),
 			);
@@ -122,7 +113,7 @@ describe('stubIdp() at synth outside a sandbox', () => {
 
 	test('a boolean `sandboxMode: true` context (cdk.json, setContext) counts as a sandbox', () => {
 		const { warnings } = synth(
-			`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: stubIdp() } })`,
+			`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } })`,
 			undefined,
 			{ sandboxMode: true },
 		);
@@ -133,17 +124,17 @@ describe('stubIdp() at synth outside a sandbox', () => {
 		assert.throws(
 			() =>
 				synth(
-					`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { a: stubIdp(), okta: { issuer: 'https://o.example.com', clientId: 'c' }, b: stubIdp() } })`,
+					`new Auth(stack, 'auth', { store: 'blocks', providers: { a: stubIdp(), okta: { type: 'oidc', issuer: 'https://o.example.com', clientId: 'c' }, b: stubIdp() } })`,
 					undefined,
 					{},
 				),
-			/Auth: oidcProviders\.a, oidcProviders\.b are stubIdp\(\) providers, which are only available/,
+			/Auth: providers\.a, providers\.b are stubIdp\(\) providers, which are only available/,
 		);
 	});
 
 	test('a deployed stack without a stub synthesizes as before', () => {
 		const { config, report } = synth(
-			`new Auth(stack, 'auth', { emailPassword: false, oidcProviders: { corp: { issuer: 'https://idp.example.com', clientId: 'c' } } })`,
+			`new Auth(stack, 'auth', { store: 'blocks', providers: { corp: { type: 'oidc', issuer: 'https://idp.example.com', clientId: 'c' } } })`,
 			null,
 			{},
 		);

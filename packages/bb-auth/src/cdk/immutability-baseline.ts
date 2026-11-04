@@ -235,9 +235,10 @@ function rejection(fullId: string, file: string, violations: Violation[]): strin
 				'synthesize, not when you deploy, so it can record a pool that never reached AWS.',
 			...listed,
 			'',
-			'If the pool was deployed — Remedy: keep a pool-backed sign-in method (email + password, a social or SAML ' +
-				"provider, or an OIDC provider with `federateVia: 'cognito'`), and keep owning the pool rather than wrapping " +
-				'one via `userPool`.',
+			'If the pool was deployed — Remedy: keep a pool-backed sign-in method (email + password, or a social, SAML ' +
+				"or `type: 'oidc'` provider on the default `store: 'cognito'`), and keep owning the pool rather than " +
+				"wrapping one via `userPool`. A `store: 'blocks'` block has no user pool: keep this block on the Cognito " +
+				"store and put the `store: 'blocks'` providers in a second `Auth` block.",
 			`Baseline: ${display(file)}.`,
 			`If removing the pool is deliberate, re-baseline: ${rebaseline}, then commit the file.`,
 		].join('\n');

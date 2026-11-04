@@ -70,7 +70,7 @@ describe("Auth's deploy-time Lambdas never create their own log groups (L80)", (
 		dirs.push(appDir);
 		const result = synthBlocksApp({
 			appDir,
-			build: `new Auth(stack, 'auth', { socialProviders: { google: { clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } } });`,
+			build: `new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g', clientSecret: new AppSetting(stack, 'g-secret', { secret: true }) } } });`,
 		});
 		assert.ok(result.ok, result.stderr);
 		const template = result.template;
