@@ -209,6 +209,21 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
 // ─── Shared workspace helper ─────────────────────────────────────────────────
 
 /**
+ * Secret and key-material patterns every Blocks app git-ignores. The templates
+ * ship them in their `gitignore`; adding Blocks to an existing project appends
+ * any that are missing, whatever the caller passes. Keep in step with the
+ * template gitignores — `templates-security-defaults.test.ts` checks both.
+ */
+const SECRET_GITIGNORE_ENTRIES = ['.env', '.env.*', '*.pem', '*.key', '*.p12', 'credentials', '.aws/'];
+
+/**
+ * What {@link SECRET_GITIGNORE_ENTRIES} would catch but apps commit: the example
+ * env file and a `credentials/` code directory. Git applies the last matching
+ * line, so these always follow the patterns they carve out of.
+ */
+const SECRET_GITIGNORE_EXCEPTIONS = ['!.env.example', '!credentials/'];
+
+/**
  * Adds the aws-blocks workspace to an existing project's package.json.
  * Shared between `integrateWithExistingProject()` and `integrateWithAmplify()`.
  *
@@ -217,7 +232,7 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
  * - Adding devDependencies and dependencies
  * - Adding scripts to package.json
  * - Adding the `cdk-blocks` CLI settings (`package.json#blocks`) when the project has none
- * - Patching .gitignore
+ * - Patching .gitignore: the caller's entries plus {@link SECRET_GITIGNORE_ENTRIES}
  * - Monorepo detection and file: path rewriting
  * - Running npm install
  */
@@ -296,9 +311,16 @@ async function addBlocksWorkspace(targetDir: string, options: {
   if (await exists(gitignorePath)) {
     gitignore = await readFile(gitignorePath, 'utf-8');
   }
-  const toAdd = gitignoreEntries.filter(entry => !gitignore.includes(entry));
-  if (toAdd.length > 0) {
-    gitignore += `\n# AWS Blocks\n${toAdd.join('\n')}\n`;
+  // Compare whole lines: a substring check takes an existing `.env.local` for `.env`.
+  const present = new Set(gitignore.split(/\r?\n/).map(line => line.trim()));
+  const toAdd = gitignoreEntries.filter(entry => !present.has(entry));
+  const secretsToAdd = SECRET_GITIGNORE_ENTRIES.filter(entry => !present.has(entry));
+  if (toAdd.length > 0 || secretsToAdd.length > 0) {
+    if (toAdd.length > 0) gitignore += `\n# AWS Blocks\n${toAdd.join('\n')}\n`;
+    if (secretsToAdd.length > 0) {
+      const lines = [...secretsToAdd, ...SECRET_GITIGNORE_EXCEPTIONS];
+      gitignore += `\n# Secrets and key material — never commit\n${lines.join('\n')}\n`;
+    }
     await writeFile(gitignorePath, gitignore);
     console.log('  ✓ Modified .gitignore');
   }

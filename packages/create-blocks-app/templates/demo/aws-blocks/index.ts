@@ -189,10 +189,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return (await apiKey.listVersions()).length;
   },
 
-  // ── Public — KnowledgeBase (semantic doc search) demo ────────────────
+  // ── Protected (requireAuth) — KnowledgeBase (semantic doc search) demo ─
   // Retrieve the most relevant chunks for a query from the ./knowledge corpus.
-  // Returns text + relevance score + source path for each hit.
+  // Returns text + relevance score + source path for each hit. Gated because
+  // on deploy every query is a billed Bedrock retrieval.
   async searchDocs(query: string, maxResults: number = 3) {
+    await auth.requireAuth(context);
     const results = await docs.retrieve(query, { maxResults });
     return results.map((r) => ({ text: r.text, score: r.score, source: r.source }));
   },
@@ -294,20 +296,27 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // ── DistributedDatabase (SQL) demo — atomic money transfer ───────────
-  // Create an account with a starting balance.
+  // ── Protected (requireAuth) — DistributedDatabase (SQL) demo: atomic money transfer ─
+  // Accounts belong to the signed-in user (the `owner` column) and every
+  // statement filters on it, so a caller can only open, read, and move money
+  // between their own accounts.
+  //
+  // Create an account with a starting balance. In a real app the balance comes
+  // from a payment, never from the caller.
   async openAccount(name: string, balance: number) {
+    const user = await auth.requireAuth(context);
     await ledger.execute(
-      sql`INSERT INTO accounts (name, balance) VALUES (${name}, ${balance})
-          ON CONFLICT (name) DO UPDATE SET balance = ${balance}`,
+      sql`INSERT INTO accounts (owner, name, balance) VALUES (${user.username}, ${name}, ${balance})
+          ON CONFLICT (owner, name) DO UPDATE SET balance = ${balance}`,
     );
     return { name, balance };
   },
 
-  // Read one account's balance.
+  // Read one of the caller's account balances.
   async balanceOf(name: string) {
+    const user = await auth.requireAuth(context);
     const row = await ledger.queryOne<{ balance: number }>(
-      sql`SELECT balance FROM accounts WHERE name = ${name}`,
+      sql`SELECT balance FROM accounts WHERE owner = ${user.username} AND name = ${name}`,
     );
     return { name, balance: row ? Number(row.balance) : null };
   },
@@ -319,11 +328,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // matches zero rows; throwing an ApiError then aborts the transaction and the
   // credit is rolled back too, making the atomic-abort path observable. ApiError
   // (not a plain Error) is wire-safe, so the 'TransferDeclined' name and message
-  // reach the client instead of being scrubbed to a generic 500.
+  // reach the client instead of being scrubbed to a generic 500. A non-positive
+  // amount is declined up front: a negative one would pass the guard and move
+  // money the other way, out of an account whose balance was never checked.
   async transfer(from: string, to: string, amount: number) {
+    const user = await auth.requireAuth(context);
+    if (!(amount > 0)) {
+      throw new ApiError('transfer declined: amount must be positive', 400, { name: 'TransferDeclined' });
+    }
     await ledger.transaction(async (tx) => {
       const { rowCount: debited } = await tx.execute(
-        sql`UPDATE accounts SET balance = balance - ${amount} WHERE name = ${from} AND balance >= ${amount}`,
+        sql`UPDATE accounts SET balance = balance - ${amount}
+            WHERE owner = ${user.username} AND name = ${from} AND balance >= ${amount}`,
       );
       if (debited === 0) {
         throw new ApiError(`transfer declined: '${from}' is missing or has less than ${amount}`, 400, {
@@ -331,7 +347,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
         });
       }
       const { rowCount: credited } = await tx.execute(
-        sql`UPDATE accounts SET balance = balance + ${amount} WHERE name = ${to}`,
+        sql`UPDATE accounts SET balance = balance + ${amount} WHERE owner = ${user.username} AND name = ${to}`,
       );
       if (credited === 0) {
         throw new ApiError(`transfer declined: recipient '${to}' does not exist`, 400, {

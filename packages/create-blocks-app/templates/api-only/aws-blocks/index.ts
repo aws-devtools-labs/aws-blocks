@@ -5,7 +5,8 @@
  * are building a backend for a mobile app, a CLI, or a third-party client.
  *
  * It ships a public health check plus an auth-gated CRUD resource (items) over a
- * DistributedTable, with per-user isolation and optimistic locking. Point any
+ * DistributedTable, with per-user isolation and optimistic locking, and
+ * auth-gated presigned file URLs scoped to each user's own files. Point any
  * client at the RPC endpoint; there is no web UI to serve.
  *
  * ─── IMPORTANT ───────────────────────────────────────────────────────────────
@@ -49,6 +50,9 @@ const items = new DistributedTable(scope, 'items', {
 // presigned URLs: ask the API for a URL, then PUT/GET the bytes directly.
 const files = new FileBucket(scope, 'files', { versioned: false });
 
+/** FileBucket path under the signed-in user's own prefix (`/` in a username is encoded). */
+const userPath = (username: string, path: string) => `users/${encodeURIComponent(username)}/${path}`;
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
@@ -58,17 +62,21 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   /**
-   * Public — mint a presigned URL to upload a file. The client PUTs the bytes
-   * directly to the returned URL with the same Content-Type. No bytes pass
-   * through the API itself.
+   * Mint a presigned URL to upload a file under the caller's own prefix. The
+   * client PUTs the bytes directly to the returned URL with the same
+   * Content-Type. No bytes pass through the API itself. A presigned URL is a
+   * bearer credential for that one object, so only a signed-in caller gets one,
+   * and only for their own files.
    */
   async createUploadUrl(path: string, contentType: string) {
-    return { url: await files.putUrl(path, { contentType }) };
+    const user = await auth.requireAuth(context);
+    return { url: await files.putUrl(userPath(user.username, path), { contentType }) };
   },
 
-  /** Public — mint a presigned URL to download a file. The client GETs the bytes directly. */
+  /** Mint a presigned URL to download one of the caller's files. The client GETs the bytes directly. */
   async createDownloadUrl(path: string) {
-    return { url: await files.getUrl(path) };
+    const user = await auth.requireAuth(context);
+    return { url: await files.getUrl(userPath(user.username, path)) };
   },
 
   /** Create an item owned by the caller. */

@@ -117,6 +117,10 @@ test('Protected methods reject signed-out callers', async () => {
   await assert.rejects(api.apiKeyVersionCount(), { status: 401 });
   await assert.rejects(api.sendWelcome('user@example.com'), { status: 401 });
   await assert.rejects(api.runGreetingJob('signed-out'), { status: 401 });
+  await assert.rejects(api.searchDocs('refund'), { status: 401 });
+  await assert.rejects(api.openAccount('signed-out', 100), { status: 401 });
+  await assert.rejects(api.balanceOf('signed-out'), { status: 401 });
+  await assert.rejects(api.transfer('signed-out', 'other', 1), { status: 401 });
 });
 
 test('KV Store - set and get (signed in, keys isolated per user)', async () => {
@@ -218,6 +222,7 @@ test('Secret - rotate keeps the previous value readable', async () => {
 // query a billing question and assert the top hit comes from billing.md, not
 // the unrelated shipping doc, with a positive relevance score.
 test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
+  await signUp(`docs-${uniqueSuffix()}`);
   const results = await api.searchDocs('how do I get a refund for a payment');
   assert.ok(results.length > 0, 'expected at least one retrieval result');
   // endsWith (not strictEqual): the mock returns `source` relative to the corpus
@@ -265,6 +270,7 @@ test('EmailClient - send returns a message id', async () => {
 // bb-distributed-data unit suite; forcing a real 40001 race here would be
 // non-deterministic, so the canary asserts the atomic-commit behavior instead.
 test('DistributedDatabase - a transfer moves both balances atomically', async () => {
+  await signUp(`ledger-${uniqueSuffix()}`);
   await api.openAccount('alice', 100);
   await api.openAccount('bob', 0);
 
@@ -289,6 +295,7 @@ test('DistributedDatabase - a transfer moves both balances atomically', async ()
 test('DistributedDatabase - a declined transfer rolls back atomically', async () => {
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
 
+  await signUp(`ledger-${uniqueSuffix()}`);
   await api.openAccount('carol', 50);
   await api.openAccount('dave', 0);
 
@@ -302,4 +309,31 @@ test('DistributedDatabase - a declined transfer rolls back atomically', async ()
   const dave = await api.balanceOf('dave');
   assert.strictEqual(carol.balance, 50, 'carol not debited — transaction aborted');
   assert.strictEqual(dave.balance, 0, 'dave not credited — the whole transfer rolled back');
+
+  // A negative amount would pass the overdraft guard and pull money from dave.
+  await assert.rejects(
+    () => api.transfer('carol', 'dave', -10),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    'a negative transfer should be declined',
+  );
+  assert.strictEqual((await api.balanceOf('dave')).balance, 0, 'dave not debited by a negative transfer');
+});
+
+// Accounts belong to the user who opened them: another user neither sees them
+// nor can move money out of them, even using the same account names.
+test("DistributedDatabase - a user cannot read or debit another user's accounts", async () => {
+  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+
+  await signUp(`ledger-owner-${uniqueSuffix()}`);
+  await api.openAccount('savings', 100);
+
+  await signUp(`ledger-other-${uniqueSuffix()}`);
+  assert.strictEqual((await api.balanceOf('savings')).balance, null, "another user's account is not visible");
+  await api.openAccount('checking', 0);
+  await assert.rejects(
+    () => api.transfer('savings', 'checking', 50),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    "debiting another user's account should be declined",
+  );
+  assert.strictEqual((await api.balanceOf('checking')).balance, 0, 'nothing was credited');
 });

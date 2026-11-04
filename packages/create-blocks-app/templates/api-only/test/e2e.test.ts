@@ -92,12 +92,26 @@ test('health: public liveness check', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
+// A presigned URL is a bearer credential, so only a signed-in caller gets one.
+test('files: signed-out callers cannot mint presigned URLs', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.createUploadUrl('reports/data.txt', 'text/plain'), { status: 401 });
+  await assert.rejects(api.createDownloadUrl('reports/data.txt'), { status: 401 });
+});
+
 // FileBucket via presigned URLs — the headless-client path. Ask the API for an
 // upload URL, PUT the bytes directly (no bytes through the API), then ask for a
 // download URL and GET them back. Backed by the dev server's local file server,
 // so it runs with no AWS. The Content-Type on the PUT must match the one the
 // upload URL was signed with (presigned-URL parity with S3).
 test('files: presigned upload/download round-trips', async () => {
+  const state = await authApi.setAuthState({
+    action: 'signUp',
+    username: `files-${Date.now().toString(36)}`,
+    password: 'password123',
+  });
+  assert.strictEqual(state.state, 'signedIn');
+
   const path = 'reports/data.txt';
   const contentType = 'text/plain';
   const payload = 'headless client via presigned url';
@@ -114,6 +128,13 @@ test('files: presigned upload/download round-trips', async () => {
   const getRes = await fetch(downloadUrl);
   assert.strictEqual(getRes.status, 200, 'presigned GET should succeed');
   assert.strictEqual(await getRes.text(), payload);
+
+  // Paths are scoped per user: another user asking for the same path gets
+  // their own (empty) object, not this one.
+  await authApi.setAuthState({ action: 'signUp', username: `other-${Date.now().toString(36)}`, password: 'password123' });
+  const { url: otherUrl } = await api.createDownloadUrl(path);
+  const otherRes = await fetch(otherUrl);
+  assert.notStrictEqual(otherRes.status, 200, "another user must not read this user's file");
 });
 
 // Runs against the sample CRUD API the template ships with, so a freshly
