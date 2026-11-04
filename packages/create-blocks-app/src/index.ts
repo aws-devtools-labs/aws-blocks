@@ -6,7 +6,7 @@ import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs
 import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
@@ -40,26 +40,29 @@ async function takePlaceholdersInFile(path: string): Promise<string[]> {
 }
 
 /**
- * Installs the blocks packages by name, so npm resolves the current release and
- * records the range: it honours the user's `save-prefix`/`save-exact` config,
- * writes the lockfile, and leaves the manifest untouched if the registry cannot
- * answer. `lockOnly` writes the manifest and lockfile without populating
- * node_modules, which is what --skip-install needs.
+ * Records a range for each blocks package by asking npm to add it, so npm
+ * resolves the current release and writes the range itself: it honours the
+ * user's `save-prefix`/`save-exact` config, writes the lockfile, and leaves the
+ * manifest untouched if the registry cannot answer.
+ *
+ * `--package-lock-only` writes the manifest and lockfile without building
+ * node_modules; the caller's single `npm install` populates it once from the
+ * lockfile. That keeps the scaffold to one install either way, and is all
+ * --skip-install needs.
  */
-function installBlocksPackages(
-  cwd: string,
-  names: string[],
-  options: { workspace?: string; lockOnly?: boolean } = {},
-): void {
+function recordBlocksRanges(cwd: string, names: string[], options: { workspace?: string } = {}): void {
   if (names.length === 0) return;
-  const flags = [
-    options.lockOnly ? '--package-lock-only' : '',
-    options.workspace ? `-w ${options.workspace}` : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
-  const command = `npm install ${flags} ${names.join(' ')}`.replace(/\s+/g, ' ').trim();
-  execSync(command, { cwd, stdio: 'inherit' });
+  const args = ['install', '--package-lock-only'];
+  if (options.workspace) args.push('-w', options.workspace);
+  // argv array (no interpolation), with a shell only on Windows, where `npm` is
+  // an `npm.cmd` shim that execFileSync can't spawn without one. Safe because
+  // every name is a validated @aws-blocks/* package name (see blocks-deps.ts),
+  // so it carries no shell-significant characters.
+  execFileSync('npm', [...args, ...names], {
+    cwd,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
 }
 
 function generateStackId(name: string): string {
@@ -258,10 +261,10 @@ async function addBlocksWorkspace(targetDir: string, options: {
     console.log('  ✓ Modified .gitignore');
   }
 
-  // Install dependencies. npm resolves the blocks releases and records their
-  // ranges; with --skip-install it writes the manifest and lockfile only.
-  installBlocksPackages(targetDir, blocksToInstall, { lockOnly: skipInstall });
-  installBlocksPackages(targetDir, nestedToInstall, { workspace: 'aws-blocks', lockOnly: skipInstall });
+  // npm records the ranges in the manifest and lockfile; the install below
+  // populates node_modules once from them.
+  recordBlocksRanges(targetDir, blocksToInstall);
+  recordBlocksRanges(targetDir, nestedToInstall, { workspace: 'aws-blocks' });
 
   if (!skipInstall) {
     console.log('\nInstalling dependencies...');
@@ -459,10 +462,10 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
-  // npm resolves the release and records the range. With --skip-install it
-  // writes the manifest and lockfile without populating node_modules.
-  installBlocksPackages(targetDir, blocksToInstall, { lockOnly: skipInstall });
-  installBlocksPackages(targetDir, nestedToInstall, { workspace: 'aws-blocks', lockOnly: skipInstall });
+  // npm records the ranges in the manifest and lockfile; the install below
+  // populates node_modules once from them.
+  recordBlocksRanges(targetDir, blocksToInstall);
+  recordBlocksRanges(targetDir, nestedToInstall, { workspace: 'aws-blocks' });
 
   if (!skipInstall) {
     console.log('Installing dependencies...');

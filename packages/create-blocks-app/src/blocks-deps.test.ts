@@ -40,6 +40,32 @@ describe('takePlaceholderBlocksDeps', () => {
     assert.deepStrictEqual(pkg.dependencies, { '@aws-blocks/blocks': '~0.8.0' });
   });
 
+  // On the add-to-existing paths these names come from the user's own
+  // package.json, and they end up as arguments to npm. Only well-formed npm
+  // package names are taken; anything else is left exactly as it was found.
+  it('ignores a key that is not a well-formed package name', () => {
+    const pkg = {
+      dependencies: {
+        '@aws-blocks/x; echo pwned': '*',
+        '@aws-blocks/': '*',
+        '@aws-blocks/Capitalised': '*',
+        '@aws-blocks/blocks': '*',
+      },
+    };
+    assert.deepStrictEqual(takePlaceholderBlocksDeps(pkg), ['@aws-blocks/blocks']);
+    assert.deepStrictEqual(pkg.dependencies, {
+      '@aws-blocks/x; echo pwned': '*',
+      '@aws-blocks/': '*',
+      '@aws-blocks/Capitalised': '*',
+    });
+  });
+
+  it('takes the punctuation npm package names really allow', () => {
+    const pkg = { dependencies: { '@aws-blocks/bb-kv-store': '*', '@aws-blocks/a.b_c-1': '*' } };
+    assert.deepStrictEqual(takePlaceholderBlocksDeps(pkg), ['@aws-blocks/bb-kv-store', '@aws-blocks/a.b_c-1']);
+    assert.deepStrictEqual(pkg.dependencies, {});
+  });
+
   it('is a no-op for a manifest with no placeholders', () => {
     const pkg = { dependencies: { 'lit-html': '^3.3.3' } };
     assert.deepStrictEqual(takePlaceholderBlocksDeps(pkg), []);
