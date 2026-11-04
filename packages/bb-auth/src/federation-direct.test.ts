@@ -18,10 +18,11 @@ import { idpRefusedMessage } from './engines/idp-callback-error.js';
 import type { EngineHost, FederatedIdentity } from './engines/types.js';
 import { AuthErrors } from './errors.js';
 import { customOauth2 } from './providers.js';
+import { resolveOptions } from './resolve-options.js';
 import type { DirectSessionRecord } from './sessions.js';
 import { captureLogger, TEST_SECRET } from './test-helpers.js';
 import { FakeIdp } from './test-support/fake-idp.js';
-import type { AuthOptions } from './types.js';
+import type { BlocksAuthOptions } from './types.js';
 
 const APP = 'http://127.0.0.1:3999';
 
@@ -46,7 +47,8 @@ function pendingCookie(ctx: BlocksContext): string {
 
 let counter = 0;
 
-function makeEngine(options: AuthOptions, opts: { allowInsecure?: boolean } = {}) {
+function makeEngine(blockOptions: BlocksAuthOptions, opts: { allowInsecure?: boolean } = {}) {
+	const options = resolveOptions(blockOptions);
 	const { logger, entries } = captureLogger();
 	const scope = new Scope('auth', { parent: { id: `fed${process.pid}x${++counter}` } });
 	const host: EngineHost = {
@@ -108,9 +110,11 @@ describe('DirectFederationEngine', () => {
 		idp.revoked.length = 0;
 	});
 
-	const okta = (extra: Record<string, unknown> = {}): AuthOptions => ({
-		emailPassword: false,
-		oidcProviders: { okta: { issuer: idp.issuer, clientId: 'client-1', groupsClaim: 'groups', ...extra } },
+	const okta = (extra: Record<string, unknown> = {}): BlocksAuthOptions => ({
+		store: 'blocks',
+		providers: {
+			okta: { type: 'oidc', issuer: idp.issuer, clientId: 'client-1', groupsClaim: 'groups', ...extra },
+		},
 	});
 
 	test('a public (PKCE-only) client: discovery, PKCE S256, verified ID token, Q1 identity, groupsClaim', async () => {
@@ -618,8 +622,8 @@ describe('DirectFederationEngine', () => {
 	test('bare OAuth 2.0 (customOauth2): userinfo + mapClaims, Q1 identity oauth2:<name>:<sub>', async () => {
 		idp.userInfoClaims = { id: 4242, login: 'ada', email: 'ada@example.com', name: 'Ada' };
 		const { engine } = makeEngine({
-			emailPassword: false,
-			oidcProviders: {
+			store: 'blocks',
+			providers: {
 				gh: customOauth2({
 					name: 'gh',
 					clientId: 'client-1',

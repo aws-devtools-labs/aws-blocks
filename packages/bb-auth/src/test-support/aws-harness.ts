@@ -45,6 +45,7 @@ import { EventSourceMapping } from '@aws-blocks/core/bb-utils';
 import { cognitoConfigKeys, ownsPreSignUpTrigger, preSignUpTriggerConfigKey } from '../cdk/contract.js';
 import type { NativeEngine } from '../engines/types.js';
 import { Auth } from '../index.aws.js';
+import { resolveOptions } from '../resolve-options.js';
 import type { AuthOptions } from '../types.js';
 
 export const TEST_REGION = 'us-east-1';
@@ -320,7 +321,7 @@ export function freeTriggerSlot(poolId: string): void {
  */
 export function simulateTriggerConfig(fullId: string, options: AuthOptions | undefined, poolId: string): void {
 	const key = preSignUpTriggerConfigKey(fullId);
-	if (ownsPreSignUpTrigger(options)) process.env[key] = 'true';
+	if (ownsPreSignUpTrigger(resolveOptions(options ?? {}))) process.env[key] = 'true';
 	else delete process.env[key];
 	freeTriggerSlot(poolId);
 }

@@ -782,8 +782,8 @@ describe('AWS engine construction contract', () => {
 		process.env[keys.CLIENT_ID] = TEST_CLIENT_ID;
 		try {
 			const auth = new Auth(root, id, {
-				emailPassword: false,
-				oidcProviders: { okta: { issuer: 'https://example.okta.com', clientId: 'okta-client' } },
+				store: 'blocks',
+				providers: { okta: { type: 'oidc', issuer: 'https://example.okta.com', clientId: 'okta-client' } },
 			});
 			assert.strictEqual(auth.fullId, `q6-${id}`);
 			assert.strictEqual(Reflect.get(auth, 'native'), undefined);

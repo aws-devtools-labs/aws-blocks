@@ -21,7 +21,7 @@ import { Auth, stubIdp } from './index.mock.js';
 import { displayNameOf } from './state-machine.js';
 import { Browser } from './test-helpers.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
-import type { StubUser } from './types.js';
+import type { CognitoAuthOptions, StubUser } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -46,7 +46,7 @@ function bind(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 let apps = 0;
 
 /** A fresh block (own local pool) and browser driving `auth.createApi()`, with the delivered codes. */
-function app(options: ConstructorParameters<typeof Auth>[2]) {
+function app(options: CognitoAuthOptions) {
 	const codes: string[] = [];
 	const auth = new Auth({ id: `dn${process.pid}-${++apps}` }, 'auth', {
 		...options,
@@ -266,8 +266,8 @@ describe('AuthState.user.displayName for a directly federated OIDC user (FX31)',
 	/** Sign `user` in through the stub IdP over real HTTP; the signed-in `getAuthState`. */
 	async function directSignIn(user: StubUser): Promise<AuthState> {
 		const auth = new Auth({ id: `dn${process.pid}-${++apps}` }, 'auth', {
-			emailPassword: false,
-			oidcProviders: { corp: stubIdp({ users: [user], onAuthorize: (r) => r.users[0] }) },
+			store: 'blocks',
+			providers: { corp: stubIdp({ users: [user], onAuthorize: (r) => r.users[0] }) },
 		});
 		const b = new TestBrowser();
 		const start = await b.fetch(`${server.origin}/aws-blocks/auth/signin/corp`);

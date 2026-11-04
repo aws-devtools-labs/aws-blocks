@@ -24,7 +24,7 @@ import { AuthErrors } from './errors.js';
 import { Auth as AwsAuth } from './index.aws.js';
 import { Auth as MockAuth } from './index.mock.js';
 import { cognitoError, makeAwsAuth, wireView } from './test-support/aws-harness.js';
-import type { AuthOptions, CodeDeliveryPurpose, PasswordPolicy } from './types.js';
+import type { CodeDeliveryPurpose, CognitoAuthOptions, PasswordPolicy } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -42,7 +42,7 @@ const failure = (p: Promise<unknown>) =>
 	);
 
 /** A local `Auth` that records the codes it delivers. */
-function localAuth(options: AuthOptions) {
+function localAuth(options: CognitoAuthOptions) {
 	const codes: { purpose: CodeDeliveryPurpose; code: string }[] = [];
 	const auth: MockAuth = new MockAuth(root(), 'auth', {
 		...options,
@@ -61,7 +61,7 @@ const POLICIES: { label: string; policy: PasswordPolicy | undefined }[] = [
 
 describe('parity: a weak password gets the message for the block’s own policy (L71)', () => {
 	for (const { label, policy } of POLICIES) {
-		const options: AuthOptions = policy ? { emailPassword: { passwordPolicy: policy } } : {};
+		const options: CognitoAuthOptions = policy ? { emailPassword: { passwordPolicy: policy } } : {};
 		const expected = passwordPolicyMessage(policy);
 
 		test(`signUp, ${label}`, async () => {

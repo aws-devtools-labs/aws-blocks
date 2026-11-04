@@ -16,6 +16,7 @@ import { requiresUserPool } from './cdk/contract.js';
 import { encryptAutoSignInPayload, signSessionId } from './cookies.js';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
+import { resolveOptions } from './resolve-options.js';
 import { SessionStore } from './sessions.js';
 import {
 	Browser,
@@ -28,7 +29,7 @@ import {
 	TEST_SECRET,
 } from './test-helpers.js';
 import { mockStateCapture } from './test-support/legacy-fixtures.js';
-import type { AppSettingRef } from './types.js';
+import type { AppSettingRef, AuthOptions } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -361,9 +362,9 @@ describe('requireRole', () => {
 
 	test('a direct-federated session uses its groupsClaim snapshot, narrowed', async () => {
 		const h = makeAuth({
-			emailPassword: false,
+			store: 'blocks',
 			users: { groups: ['admins'] },
-			oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } },
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		assert.strictEqual(h.nativeBuilt, false, 'no pool → no native engine (Q6)');
 		const okta = h.federation.get('okta');
@@ -389,7 +390,10 @@ describe('requireRole', () => {
 
 describe('federated sessions in the same table', () => {
 	test('a direct session is a discriminated row; it refreshes and signs out through its provider engine', async () => {
-		const h = makeAuth({ oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } } });
+		const h = makeAuth({
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
 		const okta = h.federation.get('okta');
 		assert.ok(okta);
 		okta.identity = {
@@ -419,7 +423,7 @@ describe('federated sessions in the same table', () => {
 
 	test('a hosted-UI (pool) session records its provider and refreshes through that provider', async () => {
 		const h = makeAuth({
-			socialProviders: { google: { clientId: 'g', clientSecret: oktaSecret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: oktaSecret } },
 		});
 		const google = h.federation.get('google');
 		assert.ok(google);
@@ -433,7 +437,10 @@ describe('federated sessions in the same table', () => {
 	});
 
 	test('a session whose provider was removed from the config → signed out', async () => {
-		const h = makeAuth({ oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } } });
+		const h = makeAuth({
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
 		const okta = h.federation.get('okta');
 		assert.ok(okta);
 		okta.identity = {
@@ -455,8 +462,8 @@ describe('federated sessions in the same table', () => {
 describe('runtime mode gates (backstop for untyped callers)', () => {
 	test('email + password disabled → 409 EmailPasswordNotEnabled on every password method; no engine call', async () => {
 		const h = makeAuth({
-			emailPassword: false,
-			oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } },
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		// An untyped JavaScript caller, simulated through the wide type.
 		const wide: MockAuth = h.auth;
@@ -487,7 +494,10 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 			name: AuthErrors.NoFederatedProvider,
 			status: 409,
 		});
-		const some = makeAuth({ oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } } });
+		const some = makeAuth({
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
 		assert.match(await some.auth.getSignInUrl(makeContext(), 'okta'), /^https:\/\/idp\.example\.com\//);
 		await assert.rejects(Reflect.apply(some.auth.getSignInUrl, some.auth, [makeContext(), 'github']), {
 			name: AuthErrors.ProviderNotConfigured,
@@ -496,62 +506,70 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 	});
 
 	test('requiresUserPool follows Q6; provider resolution is per provider', () => {
-		assert.strictEqual(requiresUserPool({}), true);
+		const pool = (options: AuthOptions) => requiresUserPool(resolveOptions(options));
+		assert.strictEqual(pool({}), true);
 		assert.strictEqual(
-			requiresUserPool({ emailPassword: false, oidcProviders: { okta: { issuer: 'i', clientId: 'c' } } }),
+			pool({ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c' } } }),
 			false,
 		);
 		assert.strictEqual(
-			requiresUserPool({
+			pool({
 				emailPassword: false,
-				oidcProviders: {
-					okta: { issuer: 'i', clientId: 'c', federateVia: 'cognito', clientSecret: oktaSecret },
-				},
+				providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c', clientSecret: oktaSecret } },
 			}),
 			true,
 		);
 		assert.strictEqual(
-			requiresUserPool({
+			pool({
 				emailPassword: false,
-				socialProviders: { google: { clientId: 'g', clientSecret: oktaSecret } },
+				providers: { google: { type: 'google', clientId: 'g', clientSecret: oktaSecret } },
 			}),
 			true,
 		);
 		assert.strictEqual(
-			requiresUserPool({ emailPassword: false, samlProviders: { corp: { metadataUrl: 'u' } } }),
+			pool({ emailPassword: false, providers: { corp: { type: 'saml', metadataUrl: 'u' } } }),
 			true,
 		);
-		const resolved = resolveProviders({
-			socialProviders: { google: { clientId: 'g', clientSecret: oktaSecret } },
-			oidcProviders: {
-				okta: { issuer: 'i', clientId: 'c' },
-				entra: {
-					issuer: 'i',
-					clientId: 'c',
-					federateVia: 'cognito',
-					clientSecret: oktaSecret,
-					label: 'Work account',
+		const hosted = resolveProviders(
+			resolveOptions({
+				providers: {
+					google: { type: 'google', clientId: 'g', clientSecret: oktaSecret },
+					entra: {
+						type: 'oidc',
+						issuer: 'i',
+						clientId: 'c',
+						clientSecret: oktaSecret,
+						label: 'Work account',
+					},
 				},
-			},
-		});
+			}),
+		);
 		assert.deepStrictEqual(
-			resolved.map((p) => [p.id, p.transport, p.label]),
+			hosted.map((p) => [p.id, p.transport, p.label]),
 			[
 				['google', 'hosted-ui', 'Sign in with Google'],
-				['okta', 'direct', 'Sign in with Okta'],
 				['entra', 'hosted-ui', 'Work account'],
 			],
 		);
+		const direct = resolveProviders(
+			resolveOptions({ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c' } } }),
+		);
+		assert.deepStrictEqual(
+			direct.map((p) => [p.id, p.transport, p.label]),
+			[['okta', 'direct', 'Sign in with Okta']],
+		);
 	});
 
-	test('duplicate provider ids across records fail at construction', () => {
+	test('two entries of one social type fail at construction (a social provider is keyed by its type)', () => {
 		assert.throws(
 			() =>
 				makeAuth({
-					socialProviders: { google: { clientId: 'g', clientSecret: oktaSecret } },
-					oidcProviders: { google: { issuer: 'i', clientId: 'c' } },
+					providers: {
+						google: { type: 'google', clientId: 'g', clientSecret: oktaSecret },
+						gmail: { type: 'google', clientId: 'g2', clientSecret: oktaSecret },
+					},
 				}),
-			/configured more than once/,
+			/providers\.gmail has `type: 'google'`, so its key must be `google`/,
 		);
 	});
 });
@@ -708,19 +726,15 @@ describe('email + password flows through AuthBase', () => {
 	});
 
 	test('updatePassword on a federated session is a 400, not a call to the pool', async () => {
-		const h = makeAuth({ oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'c' } } });
-		const okta = h.federation.get('okta');
-		assert.ok(okta);
-		okta.identity = {
-			kind: 'direct',
-			issuer: 'i',
-			subject: 's',
-			claims: {},
-			groups: [],
-			expiresAt: Date.now() + 60_000,
-		};
+		// A password block's federated users come through the hosted UI (a `'blocks'` block has no updatePassword).
+		const h = makeAuth({
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: oktaSecret } },
+		});
+		const google = h.federation.get('google');
+		assert.ok(google);
+		google.identity = { kind: 'pool', tokens: poolTokens('google_123') };
 		const b = new Browser();
-		await b.request((ctx) => h.auth.completeFederated(ctx, 'okta'));
+		await b.request((ctx) => h.auth.completeFederated(ctx, 'google'));
 		await assert.rejects(
 			b.request((ctx) => h.auth.updatePassword(ctx, 'a', 'b')),
 			{
@@ -774,11 +788,11 @@ describe('the real entry points construct AuthBase with their engines', () => {
 		// federation-hosted-ui.test.ts; direct providers in federation-direct.test.ts.
 		const secret = { fullId: 'okta-secret', get: async () => 's' };
 		const fed = new AwsAuth({ id: 'aws-placeholder-app' }, 'fed', {
-			oidcProviders: {
+			providers: {
 				okta: {
+					type: 'oidc',
 					issuer: 'https://okta.example.com',
 					clientId: 'c',
-					federateVia: 'cognito',
 					clientSecret: secret,
 				},
 			},

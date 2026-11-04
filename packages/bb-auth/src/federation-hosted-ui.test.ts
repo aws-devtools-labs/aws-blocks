@@ -49,6 +49,7 @@ import { idpRefusedMessage } from './engines/idp-callback-error.js';
 import type { EngineHost, FederatedIdentity, FederationEngine, ResolvedProvider } from './engines/types.js';
 import { AuthErrors } from './errors.js';
 import { Auth as AwsAuth } from './index.aws.js';
+import { resolveOptions } from './resolve-options.js';
 import { captureLogger, TEST_SECRET } from './test-helpers.js';
 import { simulateTriggerConfig } from './test-support/aws-harness.js';
 import {
@@ -63,7 +64,7 @@ import {
 import { FakeIdp } from './test-support/fake-idp.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
 import { encodeTriggerRejection } from './trigger-rejection.js';
-import type { AppSettingRef, AuthOptions, UserCandidate } from './types.js';
+import type { AppSettingRef, AuthOptions, CognitoAuthOptions, UserCandidate } from './types.js';
 
 const secret: AppSettingRef = { fullId: 'provider-secret', get: async () => 's3cret' };
 const cognito = new FakeCognito();
@@ -152,20 +153,25 @@ const APP = 'http://127.0.0.1:3998';
 const ATTACKER_TEXT = 'Your account is suspended. Call +1-555-0100 to restore it.';
 const FORGED_REJECTION = encodeTriggerRejection(new ApiError(ATTACKER_TEXT, 451, { name: 'AccountSuspended' }));
 
-const providersConfig = (): AuthOptions => ({
-	socialProviders: {
-		google: { clientId: 'g', clientSecret: secret },
-		apple: { clientId: 'com.example.web', teamId: 'TEAM123456', keyId: 'KEY1234567', privateKey: secret },
+/** Every provider type a user pool federates through managed login. */
+const providersConfig = (): CognitoAuthOptions => ({
+	providers: {
+		google: { type: 'google', clientId: 'g', clientSecret: secret },
+		apple: {
+			type: 'apple',
+			clientId: 'com.example.web',
+			teamId: 'TEAM123456',
+			keyId: 'KEY1234567',
+			privateKey: secret,
+		},
+		entra: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'e', clientSecret: secret },
+		acme: { type: 'saml', metadataUrl: 'https://acme.example.com/metadata.xml' },
 	},
-	oidcProviders: {
-		entra: { issuer: 'https://login.example.com', clientId: 'e', clientSecret: secret, federateVia: 'cognito' },
-		okta: { issuer: 'https://okta.example.com', clientId: 'o' },
-	},
-	samlProviders: { acme: { metadataUrl: 'https://acme.example.com/metadata.xml' } },
 });
 
 /** A hosted-UI engine over a bare scope (engine-level tests). */
-function makeEngine(providerId: string, options: AuthOptions = providersConfig(), keys = true) {
+function makeEngine(providerId: string, blockOptions: CognitoAuthOptions = providersConfig(), keys = true) {
+	const options = resolveOptions(blockOptions);
 	const { logger, entries } = captureLogger();
 	const scope = new Scope('auth', { parent: { id: `hui${process.pid}x${++counter}` } });
 	setConfigKeys(scope.fullId, { hostedUi: keys });
@@ -243,31 +249,37 @@ describe('HostedUiFederationEngine — the authorize URL', () => {
 		}
 	});
 
-	test('the AWS entry builds a hosted-UI engine per hosted provider and a direct one for the rest', () => {
+	test('the AWS entry builds a hosted-UI engine per Cognito-store provider and a direct one per blocks-store provider', () => {
+		const kindsOf = (auth: object) => {
+			const providers: Map<string, { provider: ResolvedProvider; engine: FederationEngine }> = Reflect.get(
+				auth,
+				'providers',
+			);
+			return Object.fromEntries(
+				[...providers].map(([id, { engine }]) => [
+					id,
+					engine instanceof HostedUiFederationEngine
+						? `hosted-ui:${engine.providerName}`
+						: engine instanceof DirectFederationEngine
+							? 'direct'
+							: 'other',
+				]),
+			);
+		};
 		const scope = { id: `sel${process.pid}x${++counter}` };
 		setConfigKeys(`${scope.id}-auth`);
-		const auth = new AwsAuth(scope, 'auth', providersConfig());
-		const providers: Map<string, { provider: ResolvedProvider; engine: FederationEngine }> = Reflect.get(
-			auth,
-			'providers',
-		);
-		const kinds = Object.fromEntries(
-			[...providers].map(([id, { engine }]) => [
-				id,
-				engine instanceof HostedUiFederationEngine
-					? `hosted-ui:${engine.providerName}`
-					: engine instanceof DirectFederationEngine
-						? 'direct'
-						: 'other',
-			]),
-		);
-		assert.deepStrictEqual(kinds, {
+		assert.deepStrictEqual(kindsOf(new AwsAuth(scope, 'auth', providersConfig())), {
 			google: 'hosted-ui:Google',
 			apple: 'hosted-ui:SignInWithApple',
 			entra: 'hosted-ui:entra',
-			okta: 'direct',
 			acme: 'hosted-ui:acme',
 		});
+		clearRouteRegistry();
+		const sso = new AwsAuth({ id: `sel${process.pid}x${++counter}` }, 'sso', {
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'o' } },
+		});
+		assert.deepStrictEqual(kindsOf(sso), { okta: 'direct' });
 	});
 
 	test('a redirectPath must be same-origin', async () => {
@@ -346,7 +358,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 			rejectsWith(AuthErrors.InvalidCallback),
 		);
 		// Another provider of the same block (same pending cookie name).
-		const appleProvider = resolveProviders(providersConfig()).find((p) => p.id === 'apple');
+		const appleProvider = resolveProviders(resolveOptions(providersConfig())).find((p) => p.id === 'apple');
 		assert.ok(appleProvider);
 		const apple = new HostedUiFederationEngine(Reflect.get(engine, 'host'), appleProvider);
 		await assert.rejects(
@@ -610,7 +622,10 @@ describe('HostedUiFederationEngine — pool-less safety', () => {
 
 	test('the engine refuses a provider that does not federate through Cognito', () => {
 		const scope = new Scope('auth', { parent: { id: `hui-direct${++counter}` } });
-		const options: AuthOptions = { oidcProviders: { okta: { issuer: 'https://okta.example.com', clientId: 'o' } } };
+		const options = resolveOptions({
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'o' } },
+		});
 		const [provider] = resolveProviders(options);
 		const { logger } = captureLogger();
 		assert.throws(
@@ -687,8 +702,8 @@ async function hostedSignIn(browser: TestBrowser, providerId: string) {
 }
 
 /** POST the sign-out form (the `<Authenticator>`'s federated sign-out). */
-function signOutForm(browser: TestBrowser) {
-	return browser.fetch(`${server.origin}/aws-blocks/auth/signout`, {
+function signOutForm(browser: TestBrowser, path = '/aws-blocks/auth/signout') {
+	return browser.fetch(`${server.origin}${path}`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/x-www-form-urlencoded' },
 		body: '',
@@ -700,7 +715,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 
 	test('sign-in → pool session → requireAuth / requireRole → sign-out 303 to /logout → GET landing', async () => {
 		const h = awsAuth({
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 			users: { groups: ['admin', 'staff'] },
 			mfa: 'optional',
 			redirects: { postSignOutPath: '/goodbye' },
@@ -774,7 +789,10 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 	});
 
 	test('without /logout the managed-login cookie would re-authenticate silently (why the 303 matters)', async () => {
-		awsAuth({ emailPassword: false, socialProviders: { google: { clientId: 'g', clientSecret: secret } } });
+		awsAuth({
+			emailPassword: false,
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
+		});
 		const browser = new TestBrowser();
 		await hostedSignIn(browser, 'google');
 		// A local-only sign-out (an API client that ignores the Location header).
@@ -793,7 +811,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 	test('an expired session refreshes through /oauth2/token; a rejected refresh signs out', async () => {
 		const h = awsAuth({
 			emailPassword: false,
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 		});
 		const browser = new TestBrowser();
 		await hostedSignIn(browser, 'google');
@@ -811,7 +829,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 	test('a tampered ID token on the callback is refused and issues no session', async () => {
 		const h = awsAuth({
 			emailPassword: false,
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 		});
 		cognito.overrides = { tamper: true };
 		const browser = new TestBrowser();
@@ -824,17 +842,16 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 	test('Apple, SAML and cognito-OIDC sign in through the routes with their own identity_provider', async () => {
 		const h = awsAuth({
 			emailPassword: false,
-			socialProviders: {
-				apple: { clientId: 'com.example.web', teamId: 'TEAM123456', keyId: 'KEY1234567', privateKey: secret },
-			},
-			samlProviders: { acme: { metadataUrl: 'https://acme.example.com/metadata.xml' } },
-			oidcProviders: {
-				entra: {
-					issuer: 'https://login.example.com',
-					clientId: 'e',
-					clientSecret: secret,
-					federateVia: 'cognito',
+			providers: {
+				apple: {
+					type: 'apple',
+					clientId: 'com.example.web',
+					teamId: 'TEAM123456',
+					keyId: 'KEY1234567',
+					privateKey: secret,
 				},
+				acme: { type: 'saml', metadataUrl: 'https://acme.example.com/metadata.xml' },
+				entra: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'e', clientSecret: secret },
 			},
 		});
 		for (const [id, name] of [
@@ -859,7 +876,7 @@ describe('hosted-UI sign-in through the real routes (aws-runtime)', () => {
 	});
 });
 
-describe('a mixed configuration — password + direct OIDC + hosted-UI social (aws-runtime)', () => {
+describe('password + hosted-UI social in one block, direct OIDC in a second block (aws-runtime)', () => {
 	const idp = new FakeIdp();
 	before(async () => {
 		await idp.start();
@@ -870,21 +887,28 @@ describe('a mixed configuration — password + direct OIDC + hosted-UI social (a
 	beforeEach(scriptUsers);
 
 	test('all three are reachable, and each signs out correctly', async () => {
-		const h = awsAuth({
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
-			oidcProviders: { okta: { issuer: idp.issuer, clientId: 'okta-client' } },
+		const h = awsAuth({ providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } } });
+		// Direct OIDC needs `store: 'blocks'`: a second block, on its own route base.
+		const sso = new AwsAuth({ id: `huisso${process.pid}x${++counter}` }, 'sso', {
+			store: 'blocks',
+			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'okta-client' } },
+			redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 		});
 		// The AWS layer refuses `http:` issuers (HTTPS only); the fake IdP is plain
 		// HTTP, so swap in the same direct engine class with `allowInsecure` —
 		// everything else (routes, sessions, the hosted-UI engine) is the AWS layer.
-		const okta = h.providers.get('okta');
+		const ssoProviders: Map<string, { provider: ResolvedProvider; engine: FederationEngine }> = Reflect.get(
+			sso,
+			'providers',
+		);
+		const okta = ssoProviders.get('okta');
 		assert.ok(okta && okta.engine instanceof DirectFederationEngine, 'okta is federated directly on AWS');
-		const resolveSecret: () => Promise<string> = Reflect.get(h.auth, 'resolveSecret');
+		const resolveSecret: () => Promise<string> = Reflect.get(sso, 'resolveSecret');
 		okta.engine = new DirectFederationEngine(
 			{
-				scope: h.auth,
+				scope: sso,
 				userAgentChain: () => [],
-				options: Reflect.get(h.auth, 'config'),
+				options: Reflect.get(sso, 'config'),
 				log: captureLogger().logger,
 				sessionSecret: resolveSecret,
 			},
@@ -911,19 +935,24 @@ describe('a mixed configuration — password + direct OIDC + hosted-UI social (a
 
 		// 2. Direct OIDC: the IdP's own authorize → callback → session; sign-out to its end_session_endpoint.
 		const direct = new TestBrowser();
-		const start = await direct.fetch(`${server.origin}/aws-blocks/auth/signin/okta`);
+		const start = await direct.fetch(`${server.origin}/aws-blocks/auth/sso/signin/okta`);
 		assert.strictEqual(start.status, 302);
 		const authorizeUrl = location(start, server.origin);
 		assert.ok(authorizeUrl.startsWith(`${idp.issuer}/authorize?`));
 		const code = idp.authorize(authorizeUrl, 'okta-user', { email: 'oz@example.com' });
 		const state = new URL(authorizeUrl).searchParams.get('state') ?? '';
 		const cb = await direct.fetch(
-			`${server.origin}/aws-blocks/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
+			`${server.origin}/aws-blocks/auth/sso/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
 		);
 		assert.strictEqual(cb.status, 302);
-		const oz = await h.auth.requireAuth(direct.context(server.origin));
+		const oz = await sso.requireAuth(direct.context(server.origin));
 		assert.strictEqual(oz.userId, `${idp.issuer}:okta-user`);
-		const directOut = await signOutForm(direct);
+		assert.strictEqual(
+			await h.auth.getCurrentUser(direct.context(server.origin)),
+			null,
+			'each block its own session',
+		);
+		const directOut = await signOutForm(direct, '/aws-blocks/auth/sso/signout');
 		assert.strictEqual(directOut.status, 303);
 		assert.ok(location(directOut, server.origin).startsWith(`${idp.origin}`), 'to the IdP’s end_session_endpoint');
 
@@ -938,9 +967,10 @@ describe('a mixed configuration — password + direct OIDC + hosted-UI social (a
 		assert.strictEqual(cognito.revoked.length, 1);
 
 		// Each session ended on its own.
-		for (const b of [password, direct, social]) {
+		for (const b of [password, social]) {
 			await assert.rejects(h.auth.requireAuth(b.context(server.origin)), { status: 401 });
 		}
+		await assert.rejects(sso.requireAuth(direct.context(server.origin)), { status: 401 });
 	});
 });
 
@@ -964,7 +994,7 @@ describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigg
 		const seen: UserCandidate[] = [];
 		const h = awsAuth({
 			emailPassword: false,
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 			validateUser: async (c) => {
 				seen.push(c);
 				if (!c.email?.endsWith('@corp.example')) {
@@ -997,7 +1027,7 @@ describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigg
 	test('R2-2: a crafted callback during a pending sign-in cannot choose the error the app answers with', async () => {
 		awsAuth({
 			emailPassword: false,
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 			validateUser: async () => {},
 		});
 		const description = encodeURIComponent(`PreSignUp failed with error ${FORGED_REJECTION}. `);
@@ -1021,7 +1051,7 @@ describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigg
 	test('FX60: a genuine error callback answers the browser with the fixed message, none of Cognito’s text', async () => {
 		awsAuth({
 			emailPassword: false,
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 		});
 		const RAW =
 			'Google refused: client 1234567890.apps.googleusercontent.com is not authorized for ada@example.com';
@@ -1048,7 +1078,7 @@ describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigg
 		const phases: string[] = [];
 		awsAuth({
 			emailPassword: false,
-			socialProviders: { google: { clientId: 'g', clientSecret: secret } },
+			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
 			validateUser: async (c) => {
 				phases.push(`${c.phase}:${c.provider}`);
 			},

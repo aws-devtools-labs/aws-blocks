@@ -27,7 +27,7 @@ import { clientMessageFor } from './error-mapping.js';
 import { AuthErrors } from './errors.js';
 import { Auth as MockAuth } from './index.mock.js';
 import { type AwsAuthHarness, Browser, cognitoError, makeAwsAuth, wireView } from './test-support/aws-harness.js';
-import type { AuthOptions, CodeDeliveryPurpose } from './types.js';
+import type { CodeDeliveryPurpose, CognitoAuthOptions } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -106,7 +106,7 @@ interface PoolUser {
  * account with this email address or phone already exists"), which the
  * stand-in takes (inferred: to confirm in a sandbox, L2).
  */
-function cognitoPool(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, signInWith: SignInWith) {
+function cognitoPool(h: Pick<AwsAuthHarness<CognitoAuthOptions>, 'on' | 'idp'>, signInWith: SignInWith) {
 	const contacts: Contact[] = [];
 	if (signInWith.includes('email')) contacts.push('email');
 	if (signInWith.includes('phone')) contacts.push('phone_number');
@@ -313,7 +313,7 @@ function cognitoPool(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, signInW
  * delivers, by purpose and sign-in name) and the AWS one against
  * {@link cognitoPool}.
  */
-function bothRuntimes<const O extends AuthOptions>(options: O) {
+function bothRuntimes<const O extends CognitoAuthOptions>(options: O) {
 	const codes = new Map<string, string>();
 	const mock = new MockAuth(root(), 'auth', {
 		...options,

@@ -28,10 +28,11 @@ import {
 	VALIDATED_MARKER_KEY,
 	verifyValidatedMarker,
 } from './presignup-trigger.js';
+import { resolveOptions } from './resolve-options.js';
 import { resolveSignInMode } from './sign-in-mode.js';
 import { captureLogger } from './test-helpers.js';
 import { decodeTriggerRejection, encodeTriggerRejection } from './trigger-rejection.js';
-import type { AppSettingRef, AuthOptions, UserCandidate } from './types.js';
+import type { AppSettingRef, CognitoAuthOptions, UserCandidate } from './types.js';
 
 const SECRET = 'presignup-test-secret-0123456789';
 const FULL_ID = 'app-auth';
@@ -64,17 +65,17 @@ function parsed(event: ReturnType<typeof cognitoEvent>): PreSignUpEvent {
 }
 
 /** Run the trigger with a recording `validateUser`; return what it saw and the outcome. */
-async function runTrigger(event: unknown, options: AuthOptions & { reject?: unknown } = {}) {
+async function runTrigger(event: unknown, options: CognitoAuthOptions & { reject?: unknown } = {}) {
 	const seen: UserCandidate[] = [];
 	const { reject, ...rest } = options;
 	const { logger, entries } = captureLogger();
-	const opts: AuthOptions = {
+	const opts = resolveOptions({
 		validateUser: async (c) => {
 			seen.push(c);
 			if (reject !== undefined) throw reject;
 		},
 		...rest,
-	};
+	});
 	let error: unknown;
 	try {
 		await handlePreSignUpTrigger(event, {
@@ -106,7 +107,7 @@ describe('Q10 trigger: each trigger source maps to the UserCandidate validateUse
 	});
 
 	test("PreSignUp_SignUp on an email-only pool: Cognito's userName is a UUID; the login is the email", () => {
-		const opts: AuthOptions = { users: { signInWith: ['email'] } };
+		const opts = resolveOptions({ users: { signInWith: ['email'] } });
 		const uuid = '0d6e9c36-7f9e-4e1c-9bd0-9a8f2b3c4d5e';
 		const c = candidateFromTrigger(
 			opts,
@@ -138,21 +139,25 @@ describe('Q10 trigger: each trigger source maps to the UserCandidate validateUse
 	});
 
 	test('PreSignUp_ExternalProvider: provider is the configured id behind the userName prefix', () => {
-		const options: AuthOptions = {
-			socialProviders: {
-				google: { clientId: 'g', clientSecret: PROVIDER_SECRET },
-				apple: { clientId: 'a', teamId: 'TEAM123456', keyId: 'KEY1234567', privateKey: PROVIDER_SECRET },
-			},
-			samlProviders: { corp: { metadataUrl: 'https://idp.example.com/metadata' } },
-			oidcProviders: {
+		const options = resolveOptions({
+			providers: {
+				google: { type: 'google', clientId: 'g', clientSecret: PROVIDER_SECRET },
+				apple: {
+					type: 'apple',
+					clientId: 'a',
+					teamId: 'TEAM123456',
+					keyId: 'KEY1234567',
+					privateKey: PROVIDER_SECRET,
+				},
+				corp: { type: 'saml', metadataUrl: 'https://idp.example.com/metadata' },
 				okta: {
+					type: 'oidc',
 					issuer: 'https://dev-1.okta.com',
 					clientId: '0oa1',
 					clientSecret: PROVIDER_SECRET,
-					federateVia: 'cognito',
 				},
 			},
-		};
+		});
 		const cases: [string, string][] = [
 			['Google_1234567890', 'google'],
 			['google_1234567890', 'google'],
@@ -268,7 +273,7 @@ describe('Q10 trigger: accept / reject', () => {
 		const reject = new ApiError('Corporate accounts only', 403, { name: AuthErrors.NotAuthorized });
 		const { seen, error } = await runTrigger(
 			cognitoEvent('PreSignUp_ExternalProvider', 'Google_1', { email: 'x@gmail.com' }),
-			{ reject, socialProviders: { google: { clientId: 'g', clientSecret: PROVIDER_SECRET } } },
+			{ reject, providers: { google: { type: 'google', clientId: 'g', clientSecret: PROVIDER_SECRET } } },
 		);
 		assert.strictEqual(seen[0]?.provider, 'google');
 		assert.strictEqual(seen[0]?.phase, 'signUp');

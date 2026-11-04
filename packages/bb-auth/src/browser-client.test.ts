@@ -22,7 +22,7 @@ import { AuthErrors } from './errors.js';
 import { Auth, relayOrigin, stubIdp } from './index.mock.js';
 import { type FakeGateway, installFakeGateway } from './test-support/gateway.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
-import type { AuthClientEnvironment, AuthOptions, StubUser } from './types.js';
+import type { AuthClientEnvironment, AuthOptions, BlocksAuthOptions, StubUser } from './types.js';
 
 const { Auth: AwsAuth } = await import('./index.aws.js');
 
@@ -94,8 +94,8 @@ function browserClientSuite(runtime: Runtime): void {
 	const provider = (extra: Parameters<typeof stubIdp>[0] = {}) =>
 		stubIdp({ users: [ALICE], onAuthorize: (req) => req.users[0], ...extra });
 
-	function setup(options: Partial<AuthOptions> = {}): { page: FakePage; client: AuthClient<'corp'> } {
-		runtime.make({ emailPassword: false, oidcProviders: { corp: provider() }, ...options });
+	function setup(options: Partial<BlocksAuthOptions> = {}): { page: FakePage; client: AuthClient<'corp'> } {
+		runtime.make({ store: 'blocks', providers: { corp: provider() }, ...options });
 		const page = new FakePage(new TestBrowser());
 		const client = createAuthClient<'corp'>({
 			baseUrl: runtime.base(),
@@ -187,8 +187,8 @@ function browserClientSuite(runtime: Runtime): void {
 
 	test('an allow-listed HTTPS origin is accepted', async () => {
 		runtime.make({
-			emailPassword: false,
-			oidcProviders: { corp: provider() },
+			store: 'blocks',
+			providers: { corp: provider() },
 			redirects: { allowedRelayOrigins: [relayOrigin('https://app.example.com')] },
 		});
 		const page = new FakePage(new TestBrowser());
@@ -224,8 +224,8 @@ function browserClientSuite(runtime: Runtime): void {
 
 	test('a provider refusal surfaces as IdpErrorException, without the provider text', async () => {
 		runtime.make({
-			emailPassword: false,
-			oidcProviders: {
+			store: 'blocks',
+			providers: {
 				corp: stubIdp({
 					users: [ALICE],
 					onAuthorize: () => {

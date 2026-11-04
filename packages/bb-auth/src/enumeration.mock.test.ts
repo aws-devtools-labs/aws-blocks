@@ -20,7 +20,7 @@ import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import { clientMessageFor } from './error-mapping.js';
 import { Auth, AuthErrors } from './index.mock.js';
 import { Browser, wireView } from './test-support/aws-harness.js';
-import type { AuthOptions, CodeDeliveryPurpose, SignInNextStep } from './types.js';
+import type { CodeDeliveryPurpose, CognitoAuthOptions, SignInNextStep } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => {
@@ -47,7 +47,7 @@ interface Delivered {
  * A local `Auth` (email is the sign-in name) with one confirmed and one
  * unconfirmed user; every delivered code is captured.
  */
-async function setup<const O extends AuthOptions>(options?: O) {
+async function setup<const O extends CognitoAuthOptions>(options?: O) {
 	const delivered: Delivered[] = [];
 	const auth = new Auth(root(), 'auth', {
 		...options,

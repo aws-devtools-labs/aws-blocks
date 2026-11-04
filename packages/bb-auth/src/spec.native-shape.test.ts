@@ -4,8 +4,8 @@
 /**
  * What the OpenRPC spec — and so every native client — gets from `Auth`
  * blocks configured differently (password only, TOTP required, SMS, passkeys
- * with `USER_AUTH`, `emailPassword: false` with an OIDC provider, password
- * plus a provider, declared groups and attributes):
+ * with `USER_AUTH`, a `store: 'blocks'` block with an OIDC provider, password
+ * plus a Cognito-federated provider, declared groups and attributes):
  *
  * - The types `Auth` narrows by its mode options for TypeScript callers only
  *   (`@blocksCodegenDefaultTypeArgs`: `createApi()`'s `setAuthState` input
@@ -33,6 +33,8 @@ import { Auth } from './index.mock.js';
 import type { AuthOptions } from './types.js';
 
 const okta = { issuer: 'https://okta.example.com', clientId: 'c' };
+/** Through Cognito, an OIDC provider needs a client secret. */
+const oktaSecret = `{ fullId: 'okta-secret', get: async () => 's' }`;
 const passkeys = { relyingPartyId: 'example.com', origins: ['https://example.com'] };
 /** The second block with a provider mounts its routes apart from the first's. */
 const mixedRedirects = {
@@ -46,8 +48,8 @@ const BLOCKS = {
 	totp: `{ mfa: { mode: 'required', types: ['TOTP'] } }`,
 	sms: `{ mfa: { mode: 'optional', types: ['SMS'] } }`,
 	passkey: `{ users: { authFlow: 'USER_AUTH' }, passkeys: ${JSON.stringify(passkeys)}, featurePlan: 'essentials' }`,
-	federated: `{ emailPassword: false, oidcProviders: { okta: ${JSON.stringify(okta)} } }`,
-	mixed: `{ oidcProviders: { okta: ${JSON.stringify(okta)} }, redirects: ${JSON.stringify(mixedRedirects)} }`,
+	federated: `{ store: 'blocks', providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)} } } }`,
+	mixed: `{ providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)}, clientSecret: ${oktaSecret} } }, redirects: ${JSON.stringify(mixedRedirects)} }`,
 	attributes: `{ users: { groups: ['admins'], attributes: [{ name: 'department' }] } }`,
 } as const;
 type Block = keyof typeof BLOCKS;
@@ -61,8 +63,11 @@ const OPTIONS: Record<Block, AuthOptions> = {
 	totp: { mfa: { mode: 'required', types: ['TOTP'] } },
 	sms: { mfa: { mode: 'optional', types: ['SMS'] } },
 	passkey: { users: { authFlow: 'USER_AUTH' }, passkeys, featurePlan: 'essentials' },
-	federated: { emailPassword: false, oidcProviders: { okta } },
-	mixed: { oidcProviders: { okta }, redirects: mixedRedirects },
+	federated: { store: 'blocks', providers: { okta: { type: 'oidc', ...okta } } },
+	mixed: {
+		providers: { okta: { type: 'oidc', ...okta, clientSecret: { fullId: 'okta-secret', get: async () => 's' } } },
+		redirects: mixedRedirects,
+	},
 	attributes: { users: { groups: ['admins'], attributes: [{ name: 'department' }] } },
 };
 
@@ -154,7 +159,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		}
 		const actions = json(method('federatedApi.setAuthState').params[0]?.schema);
 		for (const action of ['signIn', 'signInWithPasskey', 'listPasskeys', 'confirmSignIn', 'signOut']) {
-			assert.ok(actions.includes(`"${action}"`), `the emailPassword: false block still lists ${action}`);
+			assert.ok(actions.includes(`"${action}"`), `the store: 'blocks' block still lists ${action}`);
 		}
 		for (const challenge of ['code', 'mfaType', 'totpSetup', 'email', 'password', 'firstFactor', 'webauthn']) {
 			assert.ok(actions.includes(`"${challenge}"`), `confirmSignIn keeps the ${challenge} challenge`);

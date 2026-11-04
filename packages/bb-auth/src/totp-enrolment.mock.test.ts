@@ -18,7 +18,7 @@ import { generateTotpSecret, totpCode, verifyTotpCode } from './engines/totp.js'
 import { AuthErrors } from './errors.js';
 import { Auth } from './index.mock.js';
 import { Browser } from './test-helpers.js';
-import type { AuthMockOptions, CodeDeliveryPurpose } from './types.js';
+import type { CodeDeliveryPurpose, CognitoAuthMockOptions } from './types.js';
 
 beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
@@ -43,7 +43,7 @@ function bind(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 }
 
 /** A signed-up, confirmed `username` on a fresh block, plus a browser and the state API. */
-async function setup(options: AuthMockOptions, username = 'tess', parent: ScopeParent = root()) {
+async function setup(options: CognitoAuthMockOptions, username = 'tess', parent: ScopeParent = root()) {
 	const sent: { code: string; purpose: CodeDeliveryPurpose }[] = [];
 	const auth = new Auth(parent, 'auth', {
 		...options,
@@ -98,7 +98,8 @@ describe('RFC 6238 verifier (mock)', () => {
 
 	test('accepts the current step and one step either side, nothing further', () => {
 		const now = 1_234_567_890_000;
-		for (const d of [-1, 0, 1]) assert.ok(verifyTotpCode(seed, totpCode(seed, now + d * 30_000) ?? '', now), `${d}`);
+		for (const d of [-1, 0, 1])
+			assert.ok(verifyTotpCode(seed, totpCode(seed, now + d * 30_000) ?? '', now), `${d}`);
 		for (const d of [-2, 2]) assert.ok(!verifyTotpCode(seed, totpCode(seed, now + d * 30_000) ?? '', now), `${d}`);
 		assert.ok(!verifyTotpCode(seed, '12345', now));
 		assert.ok(!verifyTotpCode('not base32!', '123456', now));
@@ -142,7 +143,9 @@ describe("mock totpVerification: 'rfc6238' — codes are checked against the sha
 			b2.request((ctx) => auth.confirmSignIn(session, wrong, ctx)),
 			(e: Error) => e.name === AuthErrors.CodeMismatch,
 		);
-		const done = await b2.request((ctx) => auth.confirmSignIn(session, totpCode(sharedSecret, Date.now()) ?? '', ctx));
+		const done = await b2.request((ctx) =>
+			auth.confirmSignIn(session, totpCode(sharedSecret, Date.now()) ?? '', ctx),
+		);
 		assert.strictEqual(done.status, 'signedIn');
 	});
 
@@ -275,7 +278,10 @@ describe('createApi() — TOTP enrolment actions', () => {
 			enabled: [],
 			preferred: 'NOMFA',
 		});
-		assert.strictEqual((await new Browser().request((ctx) => auth.signIn(username, PASSWORD, ctx))).status, 'signedIn');
+		assert.strictEqual(
+			(await new Browser().request((ctx) => auth.signIn(username, PASSWORD, ctx))).status,
+			'signedIn',
+		);
 
 		const on = await call({ action: 'updateMfaPreference', totp: 'ENABLED' });
 		assert.deepStrictEqual(preferenceActions(on), ['totp=PREFERRED', 'totp=DISABLED']);
@@ -374,7 +380,10 @@ describe('createApi() — replacing or turning off a factor needs a recent sign-
 		const replace = await call({ action: 'setUpTotp' });
 		assert.strictEqual(replace.errorName, AuthErrors.ReauthenticationRequired, JSON.stringify(replace));
 		assert.strictEqual(replace.state, 'signedOut');
-		assert.ok(replace.actions.some((a) => a.name === 'signIn'), 'the sign-in form, to re-authenticate');
+		assert.ok(
+			replace.actions.some((a) => a.name === 'signIn'),
+			'the sign-in form, to re-authenticate',
+		);
 		const off = await call({ action: 'updateMfaPreference', totp: 'DISABLED' });
 		assert.strictEqual(off.errorName, AuthErrors.ReauthenticationRequired);
 		assert.deepStrictEqual((await b.request((ctx) => auth.getMfaPreference(ctx))).enabled, ['TOTP'], 'unchanged');
@@ -388,7 +397,10 @@ describe('createApi() — replacing or turning off a factor needs a recent sign-
 		await call({ action: 'signIn', username, password: PASSWORD });
 		t.mock.timers.tick(16 * 60 * 1000);
 		const started = await call({ action: 'setUpTotp' });
-		assert.ok(started.actions.some((a) => a.name === 'verifyTotpSetup'), JSON.stringify(started));
+		assert.ok(
+			started.actions.some((a) => a.name === 'verifyTotpSetup'),
+			JSON.stringify(started),
+		);
 	});
 
 	test('fresh again after signing in: replacing and turning off go through', async (t) => {
@@ -403,7 +415,10 @@ describe('createApi() — replacing or turning off a factor needs a recent sign-
 			code: totpCode(sharedSecret, Date.now()) ?? '',
 		});
 		const replace = await call({ action: 'setUpTotp' });
-		assert.ok(replace.actions.some((a) => a.name === 'verifyTotpSetup'), JSON.stringify(replace));
+		assert.ok(
+			replace.actions.some((a) => a.name === 'verifyTotpSetup'),
+			JSON.stringify(replace),
+		);
 		const off = await call({ action: 'updateMfaPreference', totp: 'DISABLED' });
 		assert.strictEqual(off.state, 'signedIn', JSON.stringify(off));
 	});
