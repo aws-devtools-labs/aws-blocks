@@ -873,14 +873,24 @@ export function removeIfEmpty(
 }
 
 /**
- * What git knows about `root`, after refusing (unless `force` or `dryRun`) a
- * repository git fails to read, an app git does not track, or a dirty tree.
+ * What git knows about `root`, after refusing (unless `force` or `dryRun`) an
+ * app outside git (or without git), a repository git fails to read, an app git
+ * does not track, or a dirty tree, so that git can undo what migrate writes.
  *
  * @throws {CliError} The refusal, or a git command that failed; nothing was written.
  */
 function checkGit(root: string, dryRun: boolean, force: boolean): GitView {
 	const git = gitView(root);
 	if (dryRun || force) return git;
+	if (git.kind === 'outside') {
+		throw new CliError(
+			'this app is not in a git work tree (or git is not installed), so its changes could not be undone with git.',
+			{
+				where: [`project: ${root}`],
+				hint: '"cdk-blocks migrate --dry-run" to see the plan, then "cdk-blocks migrate --force" to migrate without git',
+			},
+		);
+	}
 	if (git.kind === 'refused') {
 		throw new CliError(`git failed in ${root}: ${git.message}`, {
 			hint: 'fix what git reports, or "cdk-blocks migrate --force" to migrate without git',

@@ -544,9 +544,10 @@ export const COMMANDS: readonly CommandSpec[] = [
 			'(apps/web/aws-blocks/scripts/deploy.ts), or in a file that changes into the app\n' +
 			'(working-directory: apps/web, cd apps/web). In CI, shell and Docker files and in scripts, a bare\n' +
 			'scripts/deploy.ts or deploy.ts counts as a use too.\n' +
-			'Unless you pass --force, it refuses a git working tree with uncommitted changes, an app that git\n' +
-			'does not track (a parent repository ignores its directory), since git could not undo the\n' +
-			'changes, and a repository that git fails to read.\n' +
+			'Unless you pass --force, it refuses an app outside git (or without git installed), a git working\n' +
+			'tree with uncommitted changes, an app that git does not track (a parent repository ignores its\n' +
+			'directory), since git could not undo the changes, and a repository that git fails to read. Run\n' +
+			'--dry-run first to see the plan.\n' +
 			'Exit codes:\n' +
 			'  0  fully migrated, or nothing to do\n' +
 			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
@@ -558,7 +559,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 			{
 				name: 'force',
 				type: 'boolean',
-				description: 'Run even with uncommitted changes, or where git does not track the app or fails to read it',
+				description:
+					'Run outside git, with uncommitted changes, or where git does not track the app or fails to read it',
 			},
 		],
 		json: {

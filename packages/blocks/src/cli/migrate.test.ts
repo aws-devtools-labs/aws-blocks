@@ -159,7 +159,7 @@ describe('cdk-blocks migrate references', () => {
 				"export const deploy = () => import('../aws-blocks/scripts/deploy');\n";
 			app.files['aws-blocks/tools/stop.mjs'] = 'const stop = require(`../scripts/stop.ts`);\n';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
 		assert.deepStrictEqual(kept.map((k) => [k.file, k.reason]).sort(), [
@@ -178,7 +178,7 @@ describe('cdk-blocks migrate references', () => {
 			app.files['aws-blocks/main.ts'] = "import './other/server.js';\nimport './scripts/sandbox-helpers.js';\n";
 			app.files['aws-blocks/scripts/sandbox-helpers.ts'] = 'export {};\n';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
 		assert.deepStrictEqual(scriptsDir(root), ['sandbox-helpers.ts']);
 	});
@@ -192,7 +192,7 @@ describe('cdk-blocks migrate references', () => {
 			app.files['.vscode/launch.json'] = '{ "program": "aws-blocks/scripts/typegen.ts" }\n';
 			app.files['.gitlab-ci.yml'] = 'console:\n  script: npx tsx aws-blocks/scripts/console.ts\n';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
 		assert.deepStrictEqual(kept.map((k) => [k.file, k.reason]).sort(), [
@@ -212,7 +212,7 @@ describe('cdk-blocks migrate references', () => {
 			app.files['tools/console.bat'] = 'cd aws-blocks && npx tsx scripts\\console.ts\r\n';
 			app.packageJson.scripts['typegen:win'] = 'tsx aws-blocks\\scripts\\typegen.ts';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		assert.deepStrictEqual(keptReasons(run.stdout), [
 			['aws-blocks/scripts/console.ts', 'generated, but still used by tools/console.bat'],
@@ -243,7 +243,7 @@ describe('cdk-blocks migrate references', () => {
 		});
 		writeFileSync(join(root, 'image.bin'), Buffer.concat([Buffer.from(mention), Buffer.from([0, 1, 2])]));
 		writeFileSync(join(root, 'huge.log'), `${mention}${'x'.repeat(2 * 1024 * 1024)}`);
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
@@ -255,7 +255,7 @@ describe('cdk-blocks migrate references', () => {
 			app.files['docs/deploy.mdx'] = 'Run `npx tsx aws-blocks/scripts/deploy.ts`.\n';
 			app.files['.cursor/rules/x.mdc'] = 'Destroy with `npx tsx aws-blocks/scripts/destroy.ts`.\n';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
@@ -492,7 +492,7 @@ describe('cdk-blocks migrate references', () => {
 		symlinkSync(outside, join(root, 'linked-dir'));
 		symlinkSync(join(root, 'missing'), join(root, 'dangling'));
 		symlinkSync('.', join(root, 'loop'));
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(scriptsDir(root), []);
 	});
@@ -502,7 +502,7 @@ describe('cdk-blocks migrate', () => {
 	it('migrates a pristine app from the last template version before the CLI', async () => {
 		const root = writeApp('default@0ab6b047');
 		const before = readPkg(root).scripts;
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const result = JSON.parse(run.stdout);
 		assert.deepStrictEqual(result.kept, []);
@@ -537,7 +537,7 @@ describe('cdk-blocks migrate', () => {
 
 	it('migrates a create-blocks-app 0.4.0 app, whose sandbox:preview becomes cdk-blocks sandbox preview', async () => {
 		const root = writeApp('default@d79a0bda');
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const result = JSON.parse(run.stdout);
 		assert.deepStrictEqual(result.kept, []);
@@ -558,7 +558,7 @@ describe('cdk-blocks migrate', () => {
 			delete pkg.dependencies?.vite;
 			delete pkg.devDependencies?.vite;
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(readPkg(root).blocks, {
 			dev: { frontendCommand: 'npx vite --port 3100 --strictPort', frontendPort: 3100 },
@@ -572,7 +572,7 @@ describe('cdk-blocks migrate', () => {
 			['api-only', 'api-only@0ab6b047'],
 		] as const) {
 			const root = writeApp(fixture);
-			const run = await runCli(['migrate'], { cwd: root });
+			const run = await runCli(['migrate', '--force'], { cwd: root });
 			assert.strictEqual(run.code, 0, run.stderr);
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
 			const migrated = readPkg(root);
@@ -600,7 +600,7 @@ describe('cdk-blocks migrate', () => {
 			]),
 		);
 		writeFileSync(join(root, 'package.json'), JSON.stringify(pkg, null, 2));
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(readPkg(root).scripts, current.scripts);
 	});
@@ -609,7 +609,7 @@ describe('cdk-blocks migrate', () => {
 		// It predates .blocks/config.json, which cdk-blocks deploy and cdk-blocks destroy need for the
 		// stack name: deploy and destroy stay on their wrappers and are reported; the rest migrates.
 		const backend = writeApp('backend@1aeebe50');
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: backend });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: backend });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
 		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
@@ -635,7 +635,7 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(scriptsDir(backend), ['deploy.ts', 'destroy.ts', 'sandbox-id.ts']);
 
 		const nextjs = writeApp('nextjs@0ac38793');
-		const next = await runCli(['migrate'], { cwd: nextjs });
+		const next = await runCli(['migrate', '--force'], { cwd: nextjs });
 		assert.strictEqual(next.code, 0, next.stderr);
 		assert.deepStrictEqual(readPkg(nextjs).blocks, {
 			dev: { frontendCommand: 'npx next dev --port 3100', frontendPort: 3100 },
@@ -647,7 +647,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['.blocks/config.json'] = '{}\n';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const result = JSON.parse(run.stdout);
 		assert.deepStrictEqual(result.kept.map((k: { file: string }) => k.file).sort(), [
@@ -664,7 +664,7 @@ describe('cdk-blocks migrate', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'destroy.ts']);
 
 		writeFileSync(join(root, '.blocks', 'config.json'), '{ "stackId": "my-app-a1b2c3" }\n');
-		const again = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const again = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(again.code, 0, again.stdout);
 		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
 		assert.strictEqual(readPkg(root).scripts.destroy, 'cdk-blocks destroy');
@@ -673,7 +673,7 @@ describe('cdk-blocks migrate', () => {
 
 	it('migrates the amplify overlay and keeps its client generator', async () => {
 		const root = writeApp('amplify@0ab6b047');
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const pkg = readPkg(root);
 		assert.strictEqual(pkg.scripts['blocks:dev'], 'cdk-blocks dev');
@@ -689,7 +689,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('amplify@0ab6b047', (app) => {
 			app.files['aws-blocks/scripts/server.ts'] += "\nconsole.log('custom middleware');\n";
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const result = JSON.parse(run.stdout);
 		assert.deepStrictEqual(result.scriptsRewritten, {});
@@ -714,7 +714,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['aws-blocks/scripts/deploy.ts'] += "\nconsole.log('notify the team');\n";
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1);
 		assert.doesNotMatch(run.stderr, /Error:/, 'remaining manual work is a report, not a crash');
 		const result = JSON.parse(run.stdout);
@@ -734,7 +734,7 @@ describe('cdk-blocks migrate', () => {
 		assert.strictEqual(pkg.scripts.destroy, 'cdk-blocks destroy');
 		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts']);
 
-		const text = await runCli(['migrate'], { cwd: root });
+		const text = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(text.code, 1);
 		assert.match(text.stdout, /finish by hand/);
 		assert.match(text.stdout, /aws-blocks\/scripts\/deploy\.ts: unrecognised version/);
@@ -749,7 +749,7 @@ describe('cdk-blocks migrate', () => {
 				app.files['aws-blocks/scripts/server.ts'] += "\nconsole.log('custom middleware');\n";
 			});
 			const before = readPkg(root).scripts;
-			const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+			const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 			assert.strictEqual(run.code, 1, run.stderr);
 			const result = JSON.parse(run.stdout);
 			const pkg = readPkg(root);
@@ -782,7 +782,7 @@ describe('cdk-blocks migrate', () => {
 				"devCommand: 'npx tsx watch aws-blocks/scripts/server.ts', clientPort: 4000,",
 			);
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1);
 		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
 		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
@@ -808,7 +808,7 @@ describe('cdk-blocks migrate', () => {
 				"deployOnly: process.argv.includes('--deploy-only'), clientPort: 4000,",
 			);
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const result = JSON.parse(run.stdout);
 		const server = result.kept.find((k: { file: string }) => k.file === 'aws-blocks/scripts/server.ts');
@@ -822,7 +822,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.packageJson.scripts['sandbox:ci'] = 'CI=1 tsx aws-blocks/scripts/sandbox.ts';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 1, run.stderr);
 		const kept = JSON.parse(run.stdout).kept as { file: string; reason: string }[];
 		assert.deepStrictEqual(kept.map((k) => k.file).sort(), [
@@ -920,6 +920,37 @@ describe('cdk-blocks migrate', () => {
 		git(root, 'commit', '-q', '-m', 'init');
 		const run = await runCli(['migrate'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
+	});
+
+	it('refuses an app outside git unless --force, and writes nothing', async () => {
+		const root = writeApp('api-only@0ab6b047');
+		const before = snapshot(root);
+		const run = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(run.code, 1);
+		assert.match(run.stderr, /^Error: this app is not in a git work tree \(or git is not installed\)/);
+		assert.match(run.stderr, /\nTry: "cdk-blocks migrate --dry-run" to see the plan, then "cdk-blocks migrate --force"/);
+		assert.deepStrictEqual(snapshot(root), before);
+
+		const json = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		assert.strictEqual(json.code, 1);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			error: {
+				message:
+					'this app is not in a git work tree (or git is not installed), so its changes could not be undone with git.',
+				hint: '"cdk-blocks migrate --dry-run" to see the plan, then "cdk-blocks migrate --force" to migrate without git',
+			},
+		});
+		assert.deepStrictEqual(snapshot(root), before);
+
+		const dryRun = await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root });
+		assert.strictEqual(dryRun.code, 0, dryRun.stderr);
+		assert.ok(JSON.parse(dryRun.stdout).removed.length > 0);
+		assert.deepStrictEqual(snapshot(root), before);
+
+		const forced = await runCli(['migrate', '--force'], { cwd: root });
+		assert.strictEqual(forced.code, 0, forced.stderr);
+		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.deepStrictEqual(scriptsDir(root), []);
 	});
 
 	it('two concurrent runs do not crash on a file the other one deleted', async () => {
@@ -1050,7 +1081,7 @@ describe('cdk-blocks migrate', () => {
 			app.files['aws-blocks/scripts/seed.ts'] = "console.log('seed');\n";
 		});
 		const before = readPkg(root).scripts;
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		const result = JSON.parse(run.stdout);
 		const after = readPkg(root).scripts;
 		for (const name of [
@@ -1077,9 +1108,9 @@ describe('cdk-blocks migrate', () => {
 
 	it('is idempotent', async () => {
 		const root = writeApp('default@0ab6b047');
-		assert.strictEqual((await runCli(['migrate'], { cwd: root })).code, 0);
+		assert.strictEqual((await runCli(['migrate', '--force'], { cwd: root })).code, 0);
 		const once = snapshot(root);
-		const again = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const again = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(again.code, 0, again.stderr);
 		assert.deepStrictEqual(JSON.parse(again.stdout), {
 			changed: [],
@@ -1097,7 +1128,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('default@0ab6b047', (app) => {
 			app.packageJson.blocks = { dev: { port: 4000 } };
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.strictEqual(JSON.parse(run.stdout).devConfig, null);
 		assert.deepStrictEqual(readPkg(root).blocks, { dev: { port: 4000 } });
@@ -1107,7 +1138,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047');
 		const path = join(root, 'package.json');
 		writeFileSync(path, readFileSync(path, 'utf-8').replace(/\n/g, '\r\n'));
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const text = readFileSync(path, 'utf-8');
 		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
@@ -1119,7 +1150,7 @@ describe('cdk-blocks migrate', () => {
 		const root = writeApp('api-only@0ab6b047');
 		const path = join(root, 'package.json');
 		writeFileSync(path, `\uFEFF${readFileSync(path, 'utf-8')}`);
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const text = readFileSync(path, 'utf-8');
 		assert.ok(text.startsWith('\uFEFF{'), 'the BOM is kept');
@@ -1150,7 +1181,7 @@ describe('cdk-blocks migrate', () => {
 			const path = join(root, 'package.json');
 			writeFileSync(path, `${text}\n`);
 			const wrappers = scriptsDir(root);
-			for (const args of [['migrate', '--dry-run'], ['migrate']]) {
+			for (const args of [['migrate', '--dry-run'], ['migrate', '--force']]) {
 				const run = await runCli(args, { cwd: root });
 				assert.strictEqual(run.code, 1, `${text} ${args.join(' ')}`);
 				assert.strictEqual(run.stdout, '');
@@ -1166,7 +1197,7 @@ describe('cdk-blocks migrate', () => {
 			app.packageJson.scripts.a = 'toString';
 			app.packageJson.scripts.b = 'constructor';
 		});
-		const run = await runCli(['migrate', '--output', 'json'], { cwd: root });
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stderr);
 		const result = JSON.parse(run.stdout);
 		assert.strictEqual(result.scriptsRewritten.a, undefined);
@@ -1197,7 +1228,7 @@ describe('cdk-blocks migrate', () => {
 				.replace(/\n/g, '\r\n')
 				.replace(/ {2}/g, '\t');
 		});
-		const run = await runCli(['migrate'], { cwd: root });
+		const run = await runCli(['migrate', '--force'], { cwd: root });
 		assert.strictEqual(run.code, 0, run.stdout);
 		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
 	});
