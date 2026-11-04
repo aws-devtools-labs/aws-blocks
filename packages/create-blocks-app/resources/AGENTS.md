@@ -30,7 +30,7 @@ A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.
 
 ### Auth on the frontend
 
-There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures every sign-in method: email + password (on by default), `socialProviders`, `oidcProviders` and `samlProviders`. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
+There is one auth block, `Auth`, imported from `@aws-blocks/blocks`. One options object configures it: `store` picks where users live — a Cognito user pool (the default: email + password, on by default, plus `providers` entries of `type: 'google'`, `'apple'`, `'facebook'`, `'amazon'`, `'saml'` or `'oidc'`), or `store: 'blocks'` (no user pool: `type: 'oidc'` entries, `github()` and `stubIdp()`, verified by your backend). One block holds one kind of user; password users and backend-verified IdP users need two `Auth` blocks. Full docs: `bb-auth/README.md` in the docs folder (also `node_modules/@aws-blocks/bb-auth/README.md`).
 
 ```ts
 // aws-blocks/index.ts

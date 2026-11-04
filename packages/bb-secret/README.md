@@ -195,7 +195,7 @@ With a `name` made of a prefix and an upper-case key, `npm run secret` sets the 
 
 ### As an `Auth` provider secret
 
-A string-valued `Secret` can be the `clientSecret` (or Sign in with Apple's `privateKey`) of an `Auth` provider. For a social provider, or an OIDC provider with `federateVia: 'cognito'`, the deploy reads the value and registers it with the user pool, so set the value and **deploy again** for a new value to take effect — and give the secret `generate: true`, so the first deploy has a placeholder value to register. See the `Auth` README's social sign-in recipe (`@aws-blocks/bb-auth`).
+A string-valued `Secret` can be the `clientSecret` (or Sign in with Apple's `privateKey`) of an `Auth` provider. For a provider that federates through Cognito (a social or `type: 'oidc'` entry on `Auth`'s default store), the deploy reads the value and registers it with the user pool, so set the value and **deploy again** for a new value to take effect — and give the secret `generate: true`, so the first deploy has a placeholder value to register. See the `Auth` README's social sign-in recipe (`@aws-blocks/bb-auth`).
 
 ### Rotating & removing
 

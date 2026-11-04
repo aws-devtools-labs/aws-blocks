@@ -11,4 +11,4 @@ Auth 'auth': unknown options:
   - `preferredChallenge`: it is not an option here; did you mean `users.preferredChallenge`?
 ```
 
-Provider ids in `oidcProviders` and `samlProviders` are yours to choose and are never checked; the settings inside each provider are.
+Provider ids (the keys of `providers`) are yours to choose and are never checked; the settings inside each provider are.

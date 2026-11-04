@@ -1,5 +1,7 @@
 # Auth unification — synthesis & decision log
 
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+
 > **Status:** planning complete, awaiting maintainer decisions. No source code changed.
 > **Branch:** `refactor/auth-blocks`. **Goal:** collapse `bb-auth-basic`, `bb-auth-cognito`, `bb-auth-oidc` (+ `auth-common`) into one auth Building Block, Cognito-backed, with OIDC configurable through the same block. Inspiration: [better-auth](https://better-auth.com/docs/authentication).
 > **Problem being solved:** users cannot tell which of the three blocks to pick, or why.
@@ -35,6 +37,8 @@ new Auth(scope, 'auth', { socialProviders: { google: { clientId, clientSecret: g
 
 Three keyed records (`oidcProviders` / `socialProviders` / `samlProviders`), not one record and not an array: the record key *is* the provider id on both server and client (avoiding Amplify's `externalProviders.google` → `signInWithRedirect({provider:'Google'})` mismatch), and the split makes the 200× pricing cliff visible at the call site. Secrets are `AppSettingRef`, never strings.
 
+> **Superseded:** the shipped shape is `store` + one `providers` map tagged with `type` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)): `new Auth(scope, 'auth', { providers: { google: { type: 'google', clientId, clientSecret } } })`, and an OIDC-only block is `new Auth(scope, 'sso', { store: 'blocks', providers: { okta: { type: 'oidc', issuer, clientId } } })`. The record key is still the provider id on server and client.
+
 Client UI unifies via a form model: an `AuthAction` carries either `fields` (RPC) or a `url` (browser form submit). Zero client branching, RPC surface stays two methods, `getClient()` goes away. The native/federation method split is enforced as a **compile error** using the rest-tuple parameter gate the repo already ships for `auth.admin`.
 
 ## Decisions needed from maintainers
@@ -48,6 +52,7 @@ Central decision; everything else is downstream.
 - Why: (b) isn't actually simpler — SAML has no direct implementation and social is *cheap* through Cognito, so both engines ship either way. Per-provider selection also fixes a live bug where one `cognitoFederated()` entry silently disables co-declared providers.
 - Evidence against routing generic OIDC through Cognito: **200× cost** (50 free MAU vs 10,000 for direct *and* social); **no PKCE toward the IdP**, client secret mandatory, `client_secret_basic` unsupported → PKCE-only IdPs cannot federate at all; **federation is unmockable locally** (grade F; today's mock throws `cognitoUnavailableLocally()`), forfeiting offline iteration — the one differentiator no competitor in the prior art has.
 - Cost of (c): direct-federated users get no Cognito pool groups. Mitigated by `groupsClaim`.
+- **Superseded:** the engine is now chosen per block, not per provider: `store: 'blocks'` federates every provider directly, and the default `store: 'cognito'` federates every provider through Cognito ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)).
 - **If the "solely Cognito" line is held anyway, a mock hosted-UI shim becomes mandatory, not optional.**
 
 ### D1 — Unify the error vocabulary (breaking; AGENTS.md rule 6)

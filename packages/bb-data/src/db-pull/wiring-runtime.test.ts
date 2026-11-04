@@ -113,8 +113,8 @@ describe('generated resolveDbSsl() runtime behavior', () => {
 
 /**
  * What `Auth.requireAuth()` returns (`AuthenticatedUser` in `@aws-blocks/bb-auth`)
- * for the two kinds of user, field for field: a user who signed in through an
- * `oidcProviders` entry directly (userId `${iss}:${sub}`, the provider's verified
+ * for the two kinds of user, field for field: a user of a `store: 'blocks'` block
+ * (userId `${iss}:${sub}`, the provider's verified
  * `claims`), and a Cognito user-pool user (no `claims`).
  */
 const ISSUER = 'https://tenant.auth0.com/';
@@ -205,5 +205,8 @@ describe('generated supabaseCrud(): the subject Postgres RLS sees', () => {
     // AuthenticatedUser.claims is optional (direct federation only): the guide never reads it unguarded.
     assert.doesNotMatch(guide, /user\.claims\.sub/);
     assert.match(guide, /user\.claims\?\.sub/);
+    // The Auth snippet uses the current options shape (`store` + tagged `providers`).
+    assert.match(guide, /store: 'blocks',\s+providers: \{\s+google: \{ type: 'oidc'/);
+    assert.doesNotMatch(guide, /socialProviders|oidcProviders|samlProviders|federateVia/);
   });
 });

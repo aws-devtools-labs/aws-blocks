@@ -138,7 +138,7 @@ describe('generateIndexFile', () => {
   });
 
   test('supabaseCrud hands the auth user\'s claims to RLS (raw provider sub for direct OIDC users)', () => {
-    // AuthenticatedUser.claims (bb-auth) is set for users of a direct oidcProviders entry only.
+    // AuthenticatedUser.claims (bb-auth) is set for users of a `store: 'blocks'` block only.
     assert.ok(output.includes('claims?: Readonly<Record<string, unknown>>'));
     assert.ok(output.includes('rawSub ? { userId: rawSub, claims: { ...user.claims } } : { userId: user.userId }'));
   });

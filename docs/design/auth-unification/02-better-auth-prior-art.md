@@ -1,5 +1,7 @@
 # better-auth as prior art for a unified AWS Blocks auth Building Block
 
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). better-auth's own `socialProviders` key, described below, is unaffected; only the conclusions drawn for `Auth`'s shape are superseded.
+
 > **Status:** research / planning input. No source changes.
 > **Scope:** what better-auth's DX gets right, expressed as decisions we can copy, adapt, or explicitly reject for a single AWS Blocks auth Building Block backed by Cognito.
 > **Sources:** `https://better-auth.com/docs/*` (v1.7 docs line, fetched as the `.md` variants the site publishes) and the `better-auth/better-auth` repo at `main` for the type definitions the docs render as components. Adjacent references: AWS Amplify Gen2 `defineAuth`, Auth.js v5, Clerk — read from their docs repos and library source, since none of those three serves a `.md` variant. §8.0 is a survey of `packages/bb-auth-{basic,cognito,oidc}` and `packages/auth-common` at HEAD.

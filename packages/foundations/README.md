@@ -19,12 +19,18 @@ import { AppSetting, Auth } from '@aws-blocks/blocks';
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
 
 // Email + password is on by default (sign-up confirms the email with a code);
-// every other sign-in method is a sibling key on the same options object.
+// every other sign-in method is a `providers` entry tagged with its `type`.
 const auth = new Auth(scope, 'auth', {
-  socialProviders: { google: { clientId: 'your-google-client-id', clientSecret: googleSecret } }, // via Cognito
-  oidcProviders: { okta: { issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } }, // direct
+  providers: { google: { type: 'google', clientId: 'your-google-client-id', clientSecret: googleSecret } }, // via Cognito
 });
 export const authApi = auth.createApi();
+
+// An IdP your backend verifies itself (no Cognito user pool) is a second block:
+const sso = new Auth(scope, 'sso', {
+  store: 'blocks',
+  providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
+});
+export const ssoApi = sso.createApi();
 
 // Inside a request handler:
 const user = await auth.requireAuth(ctx);

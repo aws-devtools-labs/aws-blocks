@@ -919,6 +919,8 @@ AWS Blocks shipped three auth Building Blocks — `bb-auth-basic`, `bb-auth-cogn
 ### Decision
 Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured through one options object whose sign-in methods are sibling keys: `emailPassword`, `socialProviders`, `oidcProviders` and `samlProviders`.
 
+> **Superseded in part by [D-023](#d-023-auth-options-store--providers-option-d):** the options shape below (`socialProviders`, `oidcProviders`, `samlProviders` and a per-provider `federateVia`) was replaced by a block-level `store` and one `providers` map tagged with `type`. The rest of this decision stands.
+
 - **Two federation engines, chosen per provider.** `oidcProviders` entries default to `federateVia: 'direct'` (your backend verifies the IdP's tokens); `federateVia: 'cognito'` is opt-in. Social and SAML providers always federate through Cognito.
 - **No Cognito resources unless something needs them.** A configuration whose only sign-in methods are direct OIDC providers creates no user pool. Adding a pool-backed method later adds the pool rather than replacing anything.
 - **`AuthBasic` is removed with no upgrade path.** Cognito cannot import its bcrypt hashes, so its users must sign up again.
@@ -943,3 +945,50 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 - Design: [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md)
 - Research and plan: [`docs/design/auth-unification/`](./design/auth-unification/) (Cognito pricing and federation facts: [`03-cognito-capabilities.md`](./design/auth-unification/03-cognito-capabilities.md))
 - Supersedes the three-block naming in [D-004](#d-004-auth-first-naming-convention-for-auth-building-blocks)
+
+## D-023: Auth options: `store` + `providers` (option D)
+
+**Date**: 2026-11-04
+**Authors:** Harshdeep Singh
+
+### Context
+D-022 gave `Auth` one options object whose sign-in methods were sibling keys: `emailPassword`, `socialProviders`, `oidcProviders` (with a per-provider `federateVia: 'direct' | 'cognito'`) and `samlProviders`. That hid the decision that matters most, where a block's users live, behind protocol-named keys and a per-provider default. Whether a user had a Cognito pool record (groups, `auth.admin`, Cognito-issued tokens, the 50-free-MAU federated meter) or was verified by the backend alone (no Cognito charge, offline `stubIdp()`, PKCE-only clients) depended on which key, and which `federateVia`, an entry used. One block could also hold both kinds of user, each with different features and no account linking between them.
+
+### Decision
+Every `Auth` block has one `store`, and all of its sign-in providers go in one `providers` map whose entries carry a `type`:
+
+- **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` is unchanged): users live in a Cognito user pool. It allows email + password, `mfa`, `passkeys`, `admin` and `userPool`, plus `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. `oidc` federates through Cognito and requires `clientSecret`.
+- **`store: 'blocks'`**: there is no user pool. The backend verifies each provider itself, and the only storage is the session table. It allows `providers` of `type: 'oidc' | 'oauth2' | 'stub'` (`github()` / `customOauth2()` and `stubIdp()` set the latter two), `users.groups` and `allowBearerAuth: true`. `validateUser` runs at sign-in only.
+- **Removed:** `socialProviders`, `oidcProviders`, `samlProviders` and `federateVia`.
+- **One block holds one kind of user.** An app that wants password users and backend-verified IdP users uses two `Auth` blocks, with two session cookies and two `createApi()`s.
+- **Compile time first, runtime as a backstop.** `AuthOptions` is a union discriminated on `store`. Each arm declares the other arm's keys with named error types (`ERROR_needs_store_cognito<'emailPassword'>`, `ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`), because `Auth` captures its options as a `const` generic, where TypeScript does no excess-property check. The constructor rejects the same combinations with readable messages, and also what the compiler can't see: options built from JSON or env, casts, and a social entry keyed differently from its `type`.
+- **Internals unchanged.** One internal resolver (`resolveOptions()`) maps the public shape onto the previous internal one at the constructor. The CDK, runtime and mock layers and the engines keep reading per-family maps with a per-provider `federateVia`.
+
+### Rationale
+1. **The store is visible at the call site.** "Where do my users live?" is one explicit key with a safe default, not a consequence of which provider keys and `federateVia` values a block uses.
+2. **The strongest compile-time guard.** Each store accepts only its own options and provider types, and autocomplete for `type:` lists only the chosen store's types.
+3. **Mixing stores in one block was ruled a non-goal.** A block's users never shared identities across the two kinds (no account linking), and features differed per user (`auth.admin` and pool groups for one kind, `groupsClaim` for the other). Two blocks make that split explicit. Without mixing as a goal, the main advantage of grouping options by store (C) over one store per block (D) went away.
+4. **Upgrade-safe.** Provider keys pass through the resolver unchanged, and construct ids are derived from them, so no deployed pool, identity provider or session moves.
+5. **Leaves room for later.** A future store, or an injectable engine construct created at the existing `<authId>/pool` path, would fit behind `store` without reshaping `providers`.
+
+### Alternatives Considered
+- **A. Docs only.** Add a decision tree to the README with no API change. This keeps every capability but leaves the store implicit.
+- **B. Split OIDC by engine.** Drop `federateVia` and add a `directOidcProviders` key. One key fewer to get wrong, but the store stays implicit and the provider keys multiply.
+- **C. Group options by store** (`{ cognito: { emailPassword, social, saml, oidc }, direct: { oidc } }`). Explicit and extensible, and it kept mixing in one block. It scored highest until mixing was ruled a non-goal. It also nests every option one level deeper.
+- **D. One store per block** (chosen, refined). An `Auth`-level switch, with only that store's options valid. The refinements are the name `store` instead of `engine`, and one `type`-tagged `providers` map instead of per-protocol maps.
+- **E. An injectable engine construct** (`engine: new CognitoAuthEngine(…)`). Consistent with blocks that take a `compute:` or `cluster:` construct, but it moves the pool's construct path unless the default engine is pinned to `<authId>/pool`. It is a possible later step behind `store`.
+- **F. Cognito only.** Remove direct federation. This loses PKCE-only clients, `github()`, offline `stubIdp()` and the no-Cognito-charge path.
+- **G. Compose per-method handler blocks** into `Auth`. Flexible, but it adds the most constructs, the most decisions and the most effort.
+- **H. Cognito by default, with direct OIDC as a separate plugin block.** Close to D in effect, but it adds a second block type and a plugin seam to keep stable.
+
+### Locked
+These don't change with the option names: construct ids (`<authId>/pool`, `client`, `sessions`, `session-secret`, `saml-<id>`, `idp-<id>`); user ids (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'blocks'` users); the session row format, including its internal `kind: 'direct'` discriminator; the default store (`'cognito'`); and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`).
+
+### Provisional
+`store`, its values (`'cognito'`, `'blocks'`) and the `type` names are working names until `@aws-blocks/bb-auth` is released. They appear only in the types, the resolver, the validation messages and the docs, and no resource, user id or stored row depends on them. Renaming them before release is a find-and-replace.
+
+### References
+- User doc: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#where-do-your-users-live)
+- Design (the resolver and the store → engine mapping): [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md#options-store-providers-and-the-resolved-shape)
+- Migration from the earlier options: [`packages/bb-auth/MIGRATION.md`](../packages/bb-auth/MIGRATION.md#from-the-earlier-auth-options-store--providers)
+- Amends [D-022](#d-022-one-auth-building-block-auth-replaces-authbasic-authcognito-and-authoidc)

@@ -1,5 +1,7 @@
 # Later discussion — auth unification
 
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+
 Items that need the maintainer's eyes, plus the assumptions the work is proceeding under. Obvious items get worked and **struck through when done**; nothing here blocks progress unless it says so.
 
 Legend: 🔴 needs your decision before the affected task can finish · 🟡 assumption made, work continuing — confirm or override · ✅ resolved (kept briefly for the record)
@@ -299,6 +301,7 @@ Decided: **broadcast on the resulting state** (#208's behaviour). It is idempote
 
 ### ✅ ~~R4 — Is `federateVia: 'cognito'` still worth offering for generic OIDC? (from A2)~~
 With the false "MFA on social sign-in" claim gone, the remaining reasons to route generic OIDC through Cognito are compliance scope, no OIDC code running in the app's Lambda, Cognito-issued tokens, and Cognito groups / `auth.admin` for those users. Locked decision D0 already answers this: `'direct'` is the default and `'cognito'` is opt-in. No change needed. E4's "which option and why" table must state these trade-offs accurately and must **not** list MFA, device tracking or adaptive auth as benefits.
+*Superseded:* `federateVia` was later replaced by the block-level `store` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)); the trade-offs above still describe `store: 'cognito'` vs `store: 'blocks'`.
 
 ### ✅ ~~R5 — B1 follow-ups~~
 - *Pin `DeletionPolicy` in the identity fixture?* No. It isn't identity, and Q4 deliberately changes it (the pool will honour the stack preset). D3's property-level snapshot covers it, with `DeletionPolicy` on an explicit allowlist.
