@@ -617,10 +617,11 @@ interface ObjectCreatedRecord {
 const inboxEvents = new KVStore<ObjectCreatedRecord>(scope, 'inbox-events');
 const plainInboxEvents = new KVStore<ObjectCreatedRecord>(scope, 'plain-inbox-events');
 
+// Filters with characters S3 only matches once URL-encoded (space, `=`, parentheses, `!`).
 const inbox = new FileBucket(scope, 'inbox', {
   removalPolicy: 'destroy',
   onObjectCreated: {
-    prefix: 'incoming/',
+    prefix: 'in box=1 (new)/',
     handler: async (event, ctx) => {
       // Read the notified version, not whatever is current now; key the record
       // per upload so a duplicate delivery rewrites the same entry.
@@ -634,11 +635,12 @@ const inbox = new FileBucket(scope, 'inbox', {
   },
 });
 
-const plainInbox = new FileBucket(scope, 'plain-inbox', {
+// A dotted id: its notification queues need names SQS accepts (no `.`).
+const plainInbox = new FileBucket(scope, 'plain.inbox', {
   versioned: false,
   removalPolicy: 'destroy',
   onObjectCreated: {
-    suffix: '.txt',
+    suffix: ' done!.txt',
     handler: async (event, ctx) => {
       const file = await plainInbox.get(event.path);
       await plainInboxEvents.put(event.path, {

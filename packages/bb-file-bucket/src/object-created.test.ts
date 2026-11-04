@@ -8,7 +8,7 @@ import { rmSync, existsSync, readdirSync } from 'node:fs';
 import { Scope } from '@aws-blocks/core';
 import { FileBucket } from './index.mock.js';
 import type { ObjectCreatedContext, ObjectCreatedEvent } from './index.mock.js';
-import { toObjectCreatedEvents } from './object-created.js';
+import { encodeS3NotificationKey, toObjectCreatedEvents } from './object-created.js';
 
 const scope = new Scope('ooc');
 
@@ -123,6 +123,21 @@ test('a failing handler is retried, up to 3 attempts in total', async () => {
 	assert.deepStrictEqual(receiveCounts, [1, 2, 3]);
 });
 
+test('a permanently deleted version id is never reissued, so its event still reads that version', async () => {
+	const r = recorder();
+	const bucket = new FileBucket(scope, 'reissue', { onObjectCreated: { handler: r.handler } });
+	await bucket.put('a.txt', 'old');
+	await r.waitFor(1);
+	const old = r.calls[0].event;
+	await bucket.delete('a.txt', { versionId: old.versionId });
+	await bucket.put('a.txt', 'replacement!');
+	await r.waitFor(2);
+	const replacement = r.calls[1].event;
+	assert.notStrictEqual(replacement.versionId, old.versionId);
+	assert.strictEqual(await bucket.get('a.txt', { versionId: old.versionId }), null);
+	assert.deepStrictEqual((await bucket.listVersions('a.txt')).map((v) => v.versionId), [replacement.versionId]);
+});
+
 test('rejects onObjectCreated on a bucket wrapped with fromExisting, like synth', () => {
 	assert.throws(
 		() =>
@@ -159,6 +174,19 @@ test('decodes S3 notification keys, keeps a versionId and drops a null one', () 
 		{ path: 'big.bin', size: 10 },
 		{ path: 'plain.txt', size: 1 },
 	]);
+});
+
+test('encodes keys exactly as S3 does in notifications and filter matching', () => {
+	// Uploaded to real S3 with an `obs/` prefix rule; this is the key S3 notified with.
+	assert.strictEqual(
+		encodeS3NotificationKey("obs/a b+c=d(e)*f!g'h~i,j;k:l@m$n&o\u00e9/.txt"),
+		'obs/a+b%2Bc%3Dd%28e%29*f%21g%27h%7Ei%2Cj%3Bk%3Al%40m%24n%26o%C3%A9/.txt',
+	);
+	const path = "in box/a+b=(1)!'~ caf\u00e9.txt";
+	assert.deepStrictEqual(
+		toObjectCreatedEvents({ Records: [{ eventName: 'ObjectCreated:Put', s3: { object: { key: encodeS3NotificationKey(path), size: 1 } } }] }),
+		[{ path, size: 1 }],
+	);
 });
 
 test('ignores the s3:TestEvent message and non-create records', () => {

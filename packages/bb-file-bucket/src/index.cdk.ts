@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import { SqsDestination } from 'aws-cdk-lib/aws-s3-notifications';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as kms from 'aws-cdk-lib/aws-kms';
-import { Annotations, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { Annotations, Duration, RemovalPolicy, Stack } from 'aws-cdk-lib';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import { resolveKmsEncryption } from '@aws-blocks/core/cdk/internal';
@@ -15,7 +15,9 @@ import { AsyncJob } from '@aws-blocks/bb-async-job';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { FileBucketOptions, CorsRule, ExternalBucketRef, ExternalKmsKeyRef, ObjectCreatedOptions } from './types.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
-import { OBJECT_CREATED_JOB_ID, objectCreatedJobHandler, validateObjectCreatedOptions } from './object-created.js';
+import {
+	OBJECT_CREATED_JOB_ID, encodeS3NotificationKey, objectCreatedJobHandler, validateObjectCreatedOptions,
+} from './object-created.js';
 import type { S3NotificationMessage } from './object-created.js';
 import { DEFAULT_NONCURRENT_VERSION_EXPIRATION_DAYS, validateFileBucketOptions } from './validation.js';
 import { BB_NAME } from './version.js';
@@ -283,11 +285,36 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			throw new Error(`FileBucket "${this.fullId}": internal onObjectCreated AsyncJob has no queue.`);
 		}
 		// An empty prefix/suffix means "no filter"; S3 rejects a filter rule with
-		// neither set, so pass a filter only when one has a value.
+		// neither set, so pass a filter only when one has a value. S3 matches filter
+		// values against the encoded key it notifies with, so encode them the same way.
 		const { prefix, suffix } = onObjectCreated;
-		const filters: s3.NotificationKeyFilter[] =
-			prefix || suffix ? [{ ...(prefix ? { prefix } : {}), ...(suffix ? { suffix } : {}) }] : [];
-		bucket.addEventNotification(s3.EventType.OBJECT_CREATED, new SqsDestination(queue), ...filters);
+		const filter: s3.NotificationKeyFilter = {
+			...(prefix ? { prefix: encodeS3NotificationKey(prefix) } : {}),
+			...(suffix ? { suffix: encodeS3NotificationKey(suffix) } : {}),
+		};
+		// Not `SqsDestination`: its grant checks only `aws:SourceArn`, and a bucket
+		// ARN has no account, so another account that took over this bucket name
+		// could send to the queue. Resource-policy Allows add up, so the account
+		// check must sit in the one Allow statement rather than a second one.
+		const destination: s3.IBucketNotificationDestination = {
+			bind: () => {
+				const { policyDependable } = queue.addToResourcePolicy(new iam.PolicyStatement({
+					principals: [new iam.ServicePrincipal('s3.amazonaws.com')],
+					actions: ['sqs:SendMessage', 'sqs:GetQueueAttributes', 'sqs:GetQueueUrl'],
+					resources: [queue.queueArn],
+					conditions: {
+						ArnLike: { 'aws:SourceArn': bucket.bucketArn },
+						StringEquals: { 'aws:SourceAccount': Stack.of(this).account },
+					},
+				}));
+				return {
+					type: s3.BucketNotificationDestinationType.QUEUE,
+					arn: queue.queueArn,
+					dependencies: policyDependable ? [policyDependable] : [],
+				};
+			},
+		};
+		bucket.addEventNotification(s3.EventType.OBJECT_CREATED, destination, ...(prefix || suffix ? [filter] : []));
 	}
 
 	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).

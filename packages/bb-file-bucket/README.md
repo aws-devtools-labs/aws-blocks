@@ -377,7 +377,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 - **At least once, unordered.** The handler can run twice for one upload, and two uploads to the same key can be handled in either order. Make it idempotent, and key its outputs by path and `versionId` as above rather than by path alone.
 - **Retries.** A handler that throws is retried, up to 3 attempts in total. On AWS the event then moves to a dead-letter queue kept for 14 days.
-- **On AWS**, S3 sends an `ObjectCreated` notification to a dedicated SQS queue (named after the bucket's scope id, with `-on-object-created`, plus a `-dlq`), which your backend's compute consumes like an `AsyncJob`. Expect a few seconds between the upload and the handler.
+- **On AWS**, S3 sends an `ObjectCreated` notification to a dedicated SQS queue, which your backend's compute consumes like an `AsyncJob`, plus a dead-letter queue. Expect a few seconds between the upload and the handler. Only this bucket, in this account, can send to the queue.
+- **Filters** can contain any characters, including spaces: FileBucket URL-encodes `prefix` and `suffix` the way S3 encodes keys, which is the form S3 matches them against.
+- **Queue names** are the bucket's scope id plus `-on-object-created` (and `-dlq`), capped at 80 characters; characters SQS doesn't allow, such as `.`, are replaced and a short hash is appended. If two buckets' names (scope id plus `-on-object-created`) agree on their first 80 characters, they get the same queue name and `cdk synth` fails, naming the queue; shorten one of the ids.
 - **Locally**, every matching write through the mock (`put()`, `restoreVersion()`, and uploads to the dev server's presigned URLs) runs the handler asynchronously, with the same retry count.
 - `onObjectCreated` can't be combined with `bucket` (a wrapped existing bucket). S3 keeps one notification configuration per bucket, which its owner may already manage; configure the notification there instead.
 - Deletes don't run the handler.

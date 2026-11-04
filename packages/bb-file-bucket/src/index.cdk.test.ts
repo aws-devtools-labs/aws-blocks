@@ -708,7 +708,7 @@ describe('CDK: onObjectCreated', () => {
   test('routes ObjectCreated notifications, filtered, to a queue the compute consumes', async () => {
     const stack = await makeStack('fbooc');
     const bucket = new FileBucket(stack, 'inbox', {
-      onObjectCreated: { prefix: 'incoming/', suffix: '.csv', handler: async () => {} },
+      onObjectCreated: { prefix: 'in box=1 (new)/', suffix: '.csv', handler: async () => {} },
     });
     const template = Template.fromStack(stack);
 
@@ -718,28 +718,31 @@ describe('CDK: onObjectCreated', () => {
     assert.ok(queueId, `queue named ${queueName}`);
     template.hasResourceProperties('AWS::SQS::Queue', { QueueName: `${queueName}-dlq` });
 
+    // S3 matches filters against its encoded key, so the values are encoded the same way.
     template.hasResourceProperties('Custom::S3BucketNotifications', {
       NotificationConfiguration: {
         QueueConfigurations: [{
           Events: ['s3:ObjectCreated:*'],
-          Filter: { Key: { FilterRules: [{ Name: 'suffix', Value: '.csv' }, { Name: 'prefix', Value: 'incoming/' }] } },
+          Filter: {
+            Key: { FilterRules: [{ Name: 'suffix', Value: '.csv' }, { Name: 'prefix', Value: 'in+box%3D1+%28new%29/' }] },
+          },
           QueueArn: { 'Fn::GetAtt': [queueId, 'Arn'] },
         }],
       },
     });
 
-    // S3 may send only on behalf of this bucket.
-    template.hasResourceProperties('AWS::SQS::QueuePolicy', {
-      Queues: [{ Ref: queueId }],
-      PolicyDocument: {
-        Statement: Match.arrayWith([Match.objectLike({
-          Effect: 'Allow',
-          Principal: { Service: 's3.amazonaws.com' },
-          Action: Match.arrayWith(['sqs:SendMessage']),
-          Condition: { ArnLike: { 'aws:SourceArn': Match.anyValue() } },
-        })]),
-      },
-    });
+    // S3 may send only for this bucket in this account: every Allow for the S3
+    // principal must carry both conditions (Allows add up, so one without the
+    // account check would make the other moot).
+    const policies = Object.values(template.findResources('AWS::SQS::QueuePolicy', { Properties: { Queues: [{ Ref: queueId }] } }));
+    const s3Allows = policies
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .filter((s: { Effect: string; Principal?: { Service?: string } }) => s.Effect === 'Allow' && s.Principal?.Service === 's3.amazonaws.com');
+    assert.strictEqual(s3Allows.length, 1, JSON.stringify(policies));
+    assert.deepStrictEqual(Object.keys(s3Allows[0].Condition).sort(), ['ArnLike', 'StringEquals']);
+    assert.ok(s3Allows[0].Condition.ArnLike['aws:SourceArn']);
+    assert.deepStrictEqual(s3Allows[0].Condition.StringEquals, { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } });
+    assert.ok([s3Allows[0].Action].flat().includes('sqs:SendMessage'));
 
     const compute = stack._defaultCompute as LambdaCompute;
     template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
@@ -777,5 +780,14 @@ describe('CDK: onObjectCreated', () => {
       }),
       /onObjectCreated is not supported on a bucket wrapped with FileBucket\.fromExisting/,
     );
+  });
+
+  test('a dotted FileBucket id gets queue names SQS accepts', async () => {
+    const stack = await makeStack('fboocdotted');
+    new FileBucket(stack, 'incoming.files', { onObjectCreated: { handler: async () => {} } });
+    const template = Template.fromStack(stack);
+    const names = Object.values(template.findResources('AWS::SQS::Queue')).map((q) => q.Properties.QueueName);
+    assert.strictEqual(names.length, 2);
+    for (const name of names) assert.match(name, /^[A-Za-z0-9_-]{1,80}$/);
   });
 });

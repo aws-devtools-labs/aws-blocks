@@ -8,8 +8,22 @@ import { isBlocksError } from '@aws-blocks/core';
 import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 import type { api as apiType } from 'aws-blocks';
 
+const isDeployed = process.env.BLOCKS_TEST_ENV === 'sandbox' || process.env.BLOCKS_TEST_ENV === 'production';
+
 /** Deployed delivery pays for S3 → SQS, the 5s SQS batching window and a possible Lambda cold start. */
-const EVENT_POLL_BUDGET_MS = process.env.BLOCKS_TEST_ENV === 'sandbox' || process.env.BLOCKS_TEST_ENV === 'production' ? 90_000 : 15_000;
+const EVENT_POLL_BUDGET_MS = isDeployed ? 90_000 : 15_000;
+
+/**
+ * After a filter-matching sentinel's event has arrived, how long a non-matching
+ * key must stay un-notified. Delivery is unordered, so a stray event can trail
+ * the sentinel; this real-time window (deliberately not fake timers: the wait is
+ * for AWS) gives it a chance to show up.
+ */
+const ABSENCE_WINDOW_MS = isDeployed ? 20_000 : 1_000;
+
+/** The comprehensive app's `inbox` prefix and `plain-inbox` suffix: characters S3 only matches URL-encoded. */
+const INBOX_PREFIX = 'in box=1 (new)/';
+const PLAIN_SUFFIX = ' done!.txt';
 
 /** Poll until `fetch` returns a non-null value or the budget expires; returns the last value. */
 async function pollFor<T>(fetch: () => Promise<T | null>): Promise<T | null> {
@@ -20,6 +34,15 @@ async function pollFor<T>(fetch: () => Promise<T | null>): Promise<T | null> {
     result = await fetch();
   }
   return result;
+}
+
+/** Assert `fetch` keeps returning null for the whole {@link ABSENCE_WINDOW_MS}. */
+async function assertStaysNull<T>(fetch: () => Promise<T | null>, message: string): Promise<void> {
+  const deadline = Date.now() + ABSENCE_WINDOW_MS;
+  do {
+    assert.strictEqual(await fetch(), null, message);
+    await setTimeout(500);
+  } while (Date.now() < deadline);
 }
 
 const uid = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
@@ -430,21 +453,22 @@ export function fileBucketTests(getApi: () => typeof apiType) {
     describe('onObjectCreated', () => {
       test('put() runs the handler with the path, size and created version', async () => {
         const api = getApi();
-        // A space and a plus sign: S3 URL-encodes notification keys.
-        const path = `incoming/${uid()} a+b.txt`;
+        // A space and a plus sign in the key itself, under a prefix S3 only matches encoded.
+        const path = `${INBOX_PREFIX}${uid()} a+b.txt`;
         const { versionId } = await api.inboxPut(path, 'hello');
         const event = await pollFor(() => api.inboxEvent(path, versionId));
         assert.ok(event, 'handler should have recorded the event');
         assert.strictEqual(event.path, path);
         assert.strictEqual(event.size, 5);
         assert.strictEqual(event.versionId, versionId);
-        assert.strictEqual(event.receiveCount, 1);
+        // At least once: a redelivery rewrites the record with a higher count.
+        assert.ok(event.receiveCount >= 1, `receiveCount ${event.receiveCount}`);
         assert.strictEqual(event.body, 'hello');
       });
 
       test('each upload to one key is notified with its own version', async () => {
         const api = getApi();
-        const path = `incoming/${uid()}.txt`;
+        const path = `${INBOX_PREFIX}${uid()}.txt`;
         const first = await api.inboxPut(path, 'first');
         const second = await api.inboxPut(path, 'second');
         const [a, b] = await Promise.all([
@@ -457,7 +481,7 @@ export function fileBucketTests(getApi: () => typeof apiType) {
 
       test('a direct presigned upload runs the handler', async () => {
         const api = getApi();
-        const path = `incoming/${uid()}-direct.txt`;
+        const path = `${INBOX_PREFIX}${uid()}-direct.txt`;
         const url = await api.inboxPutUrl(path);
         const res = await fetch(url, { method: 'PUT', body: 'uploaded directly' });
         assert.strictEqual(res.status, 200);
@@ -470,22 +494,28 @@ export function fileBucketTests(getApi: () => typeof apiType) {
       test('keys outside the prefix do not run the handler', async () => {
         const api = getApi();
         const id = uid();
-        const outside = await api.inboxPut(`outside/${id}.txt`, 'x');
-        const inside = await api.inboxPut(`incoming/${id}.txt`, 'x');
-        assert.ok(await pollFor(() => api.inboxEvent(`incoming/${id}.txt`, inside.versionId)));
-        assert.strictEqual(await api.inboxEvent(`outside/${id}.txt`, outside.versionId), null);
+        // Near misses: no prefix at all, and the prefix without its trailing slash.
+        const misses = [`outside/${id}.txt`, `${INBOX_PREFIX.slice(0, -1)}${id}.txt`];
+        const missVersions = await Promise.all(misses.map((p) => api.inboxPut(p, 'x')));
+        // Written after the misses: once its event lands, theirs would be due too.
+        const sentinel = `${INBOX_PREFIX}${id}.txt`;
+        const { versionId } = await api.inboxPut(sentinel, 'x');
+        assert.ok(await pollFor(() => api.inboxEvent(sentinel, versionId)), 'sentinel notified');
+        await Promise.all(misses.map((p, i) =>
+          assertStaysNull(() => api.inboxEvent(p, missVersions[i].versionId), `${p} must not be notified`)));
       });
 
       test('an unversioned bucket notifies without a versionId, honoring the suffix', async () => {
         const api = getApi();
         const id = uid();
-        await api.plainInboxPut(`${id}.csv`, 'skip');
-        await api.plainInboxPut(`${id}.txt`, 'plain');
-        const event = await pollFor(() => api.plainInboxEvent(`${id}.txt`));
+        await api.plainInboxPut(`${id}.txt`, 'skip');
+        const sentinel = `${id}${PLAIN_SUFFIX}`;
+        await api.plainInboxPut(sentinel, 'plain');
+        const event = await pollFor(() => api.plainInboxEvent(sentinel));
         assert.ok(event);
         assert.strictEqual(event.body, 'plain');
         assert.ok(!('versionId' in event), 'no versionId on an unversioned bucket');
-        assert.strictEqual(await api.plainInboxEvent(`${id}.csv`), null);
+        await assertStaysNull(() => api.plainInboxEvent(`${id}.txt`), `${id}.txt must not be notified`);
       });
     });
   });

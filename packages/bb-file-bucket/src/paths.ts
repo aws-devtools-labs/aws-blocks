@@ -13,6 +13,7 @@
  * .bb-data/{fullId}/versions/{key}/{versionId}       version body
  * .bb-data/{fullId}/versions/{key}/{versionId}.json  version metadata
  * .bb-data/{fullId}/versions/{key}/__deleted__       delete marker (sentinel)
+ * .bb-data/{fullId}/versions/{key}/__last-version__  highest version number issued
  * ```
  *
  * Because user content lives only under `content/`, `scan()` can yield every
@@ -34,6 +35,8 @@ export const META_DIR = 'meta';
 export const VERSIONS_DIR = 'versions';
 /** Sentinel filename marking a versioned key as deleted. */
 export const DELETE_MARKER = '__deleted__';
+/** Sentinel file recording the highest version number issued for a key, so ids never repeat. */
+const LAST_VERSION = '__last-version__';
 /** Suffix for version metadata sidecars (internal namespace only). */
 const VERSION_META_SUFFIX = '.json';
 
@@ -72,7 +75,12 @@ export function deleteMarkerPath(root: string, key: string): string {
 	return join(root, VERSIONS_DIR, key, DELETE_MARKER);
 }
 
+/** Absolute path to a key's highest-issued-version sentinel. */
+export function lastVersionPath(root: string, key: string): string {
+	return join(root, VERSIONS_DIR, key, LAST_VERSION);
+}
+
 /** True if a versions-directory entry is a real version body (not metadata or a sentinel). */
 export function isVersionEntry(entry: string): boolean {
-	return entry !== DELETE_MARKER && !entry.endsWith(VERSION_META_SUFFIX);
+	return entry !== DELETE_MARKER && entry !== LAST_VERSION && !entry.endsWith(VERSION_META_SUFFIX);
 }

@@ -12,7 +12,7 @@ import { assertContainedPath } from './mock-utils.js';
 import {
 	contentRoot, contentPath, metaPath,
 	versionsDirFor, versionContentPath, versionMetaPath,
-	deleteMarkerPath, isVersionEntry,
+	deleteMarkerPath, isVersionEntry, lastVersionPath,
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
@@ -176,9 +176,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 		let versionId: string | undefined;
 		if (this.versioned) {
-			versionId = this.nextVersionId(path);
-			const versionsDir = versionsDirFor(this.dataDir, path);
-			mkdirSync(versionsDir, { recursive: true });
+			versionId = this.issueVersionId(path);
 			writeFileSync(versionContentPath(this.dataDir, path, versionId), buf);
 			writeFileSync(versionMetaPath(this.dataDir, path, versionId), JSON.stringify(meta));
 			// Remove any delete marker
@@ -631,13 +629,24 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		return results;
 	}
 
-	private nextVersionId(path: string): string {
+	/**
+	 * Issue the next version id for a key and record it, like S3, which never
+	 * reuses a version id. Counting only the versions still on disk would hand a
+	 * permanently deleted version's id to the next upload, so a queued
+	 * `onObjectCreated` event (or anything keyed by path and version) would read
+	 * the replacement instead. Data written before the sentinel existed resumes
+	 * from its highest stored version.
+	 */
+	private issueVersionId(path: string): string {
 		const dir = versionsDirFor(this.dataDir, path);
-		if (!existsSync(dir)) return 'v1';
-		const existing = readdirSync(dir)
+		mkdirSync(dir, { recursive: true });
+		const counter = lastVersionPath(this.dataDir, path);
+		const issued = readdirSync(dir)
 			.filter(f => f.startsWith('v') && !f.includes('.'))
-			.map(f => parseInt(f.slice(1), 10))
-			.filter(n => !isNaN(n));
-		return `v${(existing.length > 0 ? Math.max(...existing) : 0) + 1}`;
+			.map(f => parseInt(f.slice(1), 10));
+		if (existsSync(counter)) issued.push(parseInt(readFileSync(counter, 'utf8'), 10));
+		const next = Math.max(0, ...issued.filter(n => !Number.isNaN(n))) + 1;
+		writeFileSync(counter, String(next));
+		return `v${next}`;
 	}
 }

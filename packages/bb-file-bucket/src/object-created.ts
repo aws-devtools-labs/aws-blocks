@@ -35,9 +35,19 @@ function decodeS3EventKey(key: string): string {
 	return decodeURIComponent(key.replace(/\+/g, ' '));
 }
 
-/** Encode a key the way S3 does in event notifications (the mock's inverse of {@link decodeS3EventKey}). */
-function encodeS3EventKey(path: string): string {
-	return encodeURIComponent(path).replace(/%20/g, '+');
+/**
+ * Encode a key the way S3 writes it in event notifications, which is also the
+ * form S3 matches notification `prefix`/`suffix` filter values against (a raw
+ * `=` or space in a filter silently matches nothing). Verified against S3:
+ * a space is `+`; letters, digits, `-`, `_`, `.`, `*` and `/` are kept; every
+ * other character is percent-encoded as UTF-8 with uppercase hex — including
+ * `! ' ( ) ~`, which `encodeURIComponent` leaves alone.
+ */
+export function encodeS3NotificationKey(path: string): string {
+	return encodeURIComponent(path)
+		.replace(/%20/g, '+')
+		.replace(/%2F/g, '/')
+		.replace(/[!'()~]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 /** Extract the object-created events from one S3 notification message. */
@@ -55,14 +65,18 @@ export function toObjectCreatedEvents(message: S3NotificationMessage): ObjectCre
 /** Build the S3 notification message the mock submits for one created object. */
 export function toS3NotificationMessage(event: ObjectCreatedEvent): S3NotificationMessage {
 	const object = {
-		key: encodeS3EventKey(event.path),
+		key: encodeS3NotificationKey(event.path),
 		size: event.size,
 		...(event.versionId !== undefined ? { versionId: event.versionId } : {}),
 	};
 	return { Records: [{ eventName: 'ObjectCreated:Put', s3: { object } }] };
 }
 
-/** The mock's equivalent of the S3 notification filter: both `prefix` and `suffix` must match when set. */
+/**
+ * The mock's equivalent of the S3 notification filter: both `prefix` and
+ * `suffix` must match when set. Comparing raw strings is equivalent to S3
+ * comparing encoded ones, because the encoding maps each character on its own.
+ */
 export function matchesObjectCreatedFilter(path: string, options: ObjectCreatedOptions): boolean {
 	return (!options.prefix || path.startsWith(options.prefix)) && (!options.suffix || path.endsWith(options.suffix));
 }
