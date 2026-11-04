@@ -10,8 +10,57 @@ import { execSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { trackCommand } from './telemetry.js';
+import { takePlaceholderBlocksDeps } from './blocks-deps.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// ─── Blocks dependency versions ──────────────────────────────────────────────
+//
+// Templates declare `@aws-blocks/*` as `"*"`. Inside the monorepo those become
+// `file:` paths to the sibling packages. Outside it, the registry decides: we
+// ask for the current release and record a caret range, so the scaffolded app
+// stays on the line it was created with. See blocks-deps.ts.
+
+/**
+ * Removes a manifest-on-disk's `@aws-blocks/*` placeholders and returns the
+ * names to install. Used for the nested `aws-blocks` workspace, which the CLI
+ * copies verbatim and so never passes through the in-memory path. A missing or
+ * unparseable file yields none — not every project has one.
+ */
+async function takePlaceholdersInFile(path: string): Promise<string[]> {
+  let pkg: { dependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(await readFile(path, 'utf-8'));
+  } catch {
+    return [];
+  }
+  const names = takePlaceholderBlocksDeps(pkg);
+  if (names.length > 0) await writeFile(path, JSON.stringify(pkg, null, 2));
+  return names;
+}
+
+/**
+ * Installs the blocks packages by name, so npm resolves the current release and
+ * records the range: it honours the user's `save-prefix`/`save-exact` config,
+ * writes the lockfile, and leaves the manifest untouched if the registry cannot
+ * answer. `lockOnly` writes the manifest and lockfile without populating
+ * node_modules, which is what --skip-install needs.
+ */
+function installBlocksPackages(
+  cwd: string,
+  names: string[],
+  options: { workspace?: string; lockOnly?: boolean } = {},
+): void {
+  if (names.length === 0) return;
+  const flags = [
+    options.lockOnly ? '--package-lock-only' : '',
+    options.workspace ? `-w ${options.workspace}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  const command = `npm install ${flags} ${names.join(' ')}`.replace(/\s+/g, ' ').trim();
+  execSync(command, { cwd, stdio: 'inherit' });
+}
 
 function generateStackId(name: string): string {
   const sanitized = name
@@ -166,6 +215,7 @@ async function addBlocksWorkspace(targetDir: string, options: {
   // Monorepo detection for local dev
   const parentDir = join(__dirname, '../..');
   const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
+  let blocksToInstall: string[] = [];
   if (isLocalMonorepo) {
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d: string) =>
       d.startsWith('@aws-blocks/'),
@@ -175,6 +225,8 @@ async function addBlocksWorkspace(targetDir: string, options: {
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
+  } else {
+    blocksToInstall = takePlaceholderBlocksDeps(pkg);
   }
 
   // Add scripts
@@ -185,6 +237,13 @@ async function addBlocksWorkspace(targetDir: string, options: {
 
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
   console.log('  ✓ Modified package.json');
+
+  // The nested aws-blocks workspace ships its own manifest (the Amplify
+  // template keeps blocks deps there); it is copied verbatim, so take its
+  // placeholders too.
+  const nestedToInstall = isLocalMonorepo
+    ? []
+    : await takePlaceholdersInFile(join(targetDir, 'aws-blocks', 'package.json'));
 
   // Modify .gitignore
   const gitignorePath = join(targetDir, '.gitignore');
@@ -199,7 +258,11 @@ async function addBlocksWorkspace(targetDir: string, options: {
     console.log('  ✓ Modified .gitignore');
   }
 
-  // Install dependencies
+  // Install dependencies. npm resolves the blocks releases and records their
+  // ranges; with --skip-install it writes the manifest and lockfile only.
+  installBlocksPackages(targetDir, blocksToInstall, { lockOnly: skipInstall });
+  installBlocksPackages(targetDir, nestedToInstall, { workspace: 'aws-blocks', lockOnly: skipInstall });
+
   if (!skipInstall) {
     console.log('\nInstalling dependencies...');
     execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
@@ -342,8 +405,11 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     .replace(/-+/g, '-')
     .replace(/-$/, '') || 'blocks-app';
   
+  const parentDir = join(__dirname, '../..');
+  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
+
   console.log(`Creating Blocks app in ${targetDir}...`);
-  
+
   // Copy template
   await mkdir(targetDir, { recursive: true });
   await cp(templateDir, targetDir, { recursive: true });
@@ -364,13 +430,10 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   // Record the template version that scaffolded this project
   pkg.blocksTemplateVersion = templatePkg.version;
   
-  // When running from the local monorepo, rewrite @aws-blocks/* deps
-  // to file: paths so they resolve to sibling packages. When running from
-  // the published registry (via npx), the sibling packages won't exist on
-  // disk — leave deps as-is so they resolve from the registry instead.
-  const parentDir = join(__dirname, '../..');
-  const isLocalMonorepo = await access(join(parentDir, 'core', 'package.json')).then(() => true, () => false);
-
+  // Inside the monorepo, rewrite @aws-blocks/* deps to file: paths so they
+  // resolve to sibling packages. Outside it, drop the placeholders and let
+  // `npm install` add the packages back with a resolved range.
+  let blocksToInstall: string[] = [];
   if (isLocalMonorepo) {
     const seed = Object.keys(pkg.dependencies ?? {}).filter((d) =>
       d.startsWith('@aws-blocks/'),
@@ -380,21 +443,32 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
       const pkgName = dep.replace('@aws-blocks/', '');
       pkg.dependencies[dep] = `file:${parentDir}/${pkgName}`;
     }
+  } else {
+    blocksToInstall = takePlaceholderBlocksDeps(pkg);
   }
-  
+
   await writeFile(pkgPath, JSON.stringify(pkg, null, 2));
-  
+
+  const nestedToInstall = isLocalMonorepo
+    ? []
+    : await takePlaceholdersInFile(join(targetDir, 'aws-blocks', 'package.json'));
+
   // Generate .blocks/config.json with a unique stackId
   const stackId = generateStackId(appName);
   const blocksConfigDir = join(targetDir, '.blocks');
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
+  // npm resolves the release and records the range. With --skip-install it
+  // writes the manifest and lockfile without populating node_modules.
+  installBlocksPackages(targetDir, blocksToInstall, { lockOnly: skipInstall });
+  installBlocksPackages(targetDir, nestedToInstall, { workspace: 'aws-blocks', lockOnly: skipInstall });
+
   if (!skipInstall) {
     console.log('Installing dependencies...');
     execSync('npm install', { cwd: targetDir, stdio: 'inherit' });
   }
-  
+
   console.log('\n✓ Blocks app created!');
   console.log(`\nNext steps:`);
   console.log(`  cd ${targetDir}`);
@@ -839,6 +913,11 @@ if (entryArg) {
     entryUrl = pathToFileURL(entryArg).href;
   }
   if (import.meta.url === entryUrl) {
-    create().catch(console.error);
+    // Exit non-zero on an unhandled failure, so a scaffold that did not
+    // complete is not reported as success to the caller or to CI.
+    create().catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = 1;
+    });
   }
 }

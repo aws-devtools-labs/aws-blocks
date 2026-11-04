@@ -67,6 +67,17 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 └── package.json          # Updated with Blocks scripts
 ```
 
+### Blocks Dependency Versions
+
+The CLI installs each `@aws-blocks/*` package by name, so npm records the range
+for the release that was current when you created the app (for example
+`"@aws-blocks/blocks": "^0.9.0"`), following your npm config — `save-prefix` and
+`save-exact` are honoured. A clean reinstall stays on that release line and picks
+up later releases on it; moving to a new (pre-1.0: breaking) line is your choice.
+Creating an app therefore needs registry access, including with
+`--skip-install`, which writes the manifest and lockfile without installing.
+A range your existing project already declares is kept.
+
 ### Backend Structure
 
 **aws-blocks/index.ts**
