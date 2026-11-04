@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
+    "svelte": "^5.57.3",
     "vite": "^6.4.5"
   }
 }
