@@ -3,7 +3,7 @@ import * as blocks from '@aws-blocks/blocks';
 const scope = new blocks.Scope('app');
 
 export const auth = new blocks.Auth(scope, 'umbrella-auth', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: {
 		dev: blocks.stubIdp({
 			scopes: ['openid'],

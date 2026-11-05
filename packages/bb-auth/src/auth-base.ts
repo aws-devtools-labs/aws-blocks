@@ -1442,7 +1442,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 */
 	get admin(): AdminGetterOf<O> {
 		const admin = this.config.admin;
-		if (this.config.store === 'blocks') throw new Error("admin not available: auth.admin needs store: 'cognito'");
+		if (this.config.store === 'builtin') throw new Error("admin not available: auth.admin needs store: 'cognito'");
 		if (!admin) throw new Error('admin not enabled: construct Auth with { admin: {} }');
 		this.adminSurface ??= buildAdminSurface<O>({
 			actions: admin.actions,
@@ -1604,7 +1604,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	private nativeFor(method: string): NativeEngine {
 		if (!this.passwordEnabled) {
 			throw new ApiError(
-				`Auth.${method}() needs email + password sign-in, which is disabled on this Auth instance (${this.config.store === 'blocks' ? "store: 'blocks'" : 'emailPassword: false'}).`,
+				`Auth.${method}() needs email + password sign-in, which is disabled on this Auth instance (${this.config.store === 'builtin' ? "store: 'builtin'" : 'emailPassword: false'}).`,
 				409,
 				{ name: AuthErrors.EmailPasswordNotEnabled },
 			);
@@ -2129,11 +2129,13 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 
 	private toUser(identity: SessionIdentity): AuthenticatedUser<O> {
 		const stored = identity.signInProvider;
-		// A configured provider id, else 'password'. A `'blocks'` block has no password users, so there a
+		// A configured provider id, else 'password'. A `'builtin'` block has no password users, so there a
 		// provider since removed from `providers` (an older session's) stays as stored. The cast: TypeScript
 		// cannot resolve `signInProvider`'s store-conditional type for a generic `O`.
 		const provider = (
-			stored !== 'password' && (this.config.store === 'blocks' || this.isProviderId(stored)) ? stored : 'password'
+			stored !== 'password' && (this.config.store === 'builtin' || this.isProviderId(stored))
+				? stored
+				: 'password'
 		) as AuthenticatedUser<O>['signInProvider'];
 		const user: AuthenticatedUser<O> = {
 			userId: identity.userId,

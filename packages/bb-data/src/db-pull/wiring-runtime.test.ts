@@ -113,7 +113,7 @@ describe('generated resolveDbSsl() runtime behavior', () => {
 
 /**
  * What `Auth.requireAuth()` returns (`AuthenticatedUser` in `@aws-blocks/bb-auth`)
- * for the two kinds of user, field for field: a user of a `store: 'blocks'` block
+ * for the two kinds of user, field for field: a user of a `store: 'builtin'` block
  * (userId `${iss}:${sub}`, the provider's verified
  * `claims`), and a Cognito user-pool user (no `claims`).
  */
@@ -206,7 +206,7 @@ describe('generated supabaseCrud(): the subject Postgres RLS sees', () => {
     assert.doesNotMatch(guide, /user\.claims\.sub/);
     assert.match(guide, /user\.claims\?\.sub/);
     // The Auth snippet uses the current options shape (`store` + tagged `providers`).
-    assert.match(guide, /store: 'blocks',\s+providers: \{\s+google: \{ type: 'oidc'/);
+    assert.match(guide, /store: 'builtin',\s+providers: \{\s+google: \{ type: 'oidc'/);
     assert.doesNotMatch(guide, /socialProviders|oidcProviders|samlProviders|federateVia/);
   });
 });

@@ -108,7 +108,7 @@ const e2eIdpClientId = process.env.NATIVE_E2E_OIDC_CLIENT_ID;
 let lastOidcSignIn: { userId: string; email: string | null; provider: string } | null = null;
 
 const oidcAuth = new Auth(scope, 'auth-oidc', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     google:
       e2eIdpIssuer && e2eIdpClientId

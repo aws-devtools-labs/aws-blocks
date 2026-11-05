@@ -12,7 +12,7 @@ import type { ConditionalWriteOptions, ConditionalDeleteOptions } from '@aws-blo
 import type { PutOptions, DeleteOptions } from '@aws-blocks/bb-distributed-table';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import { ApiError, isBlocksError, type BlocksContext } from '@aws-blocks/core';
-import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BlocksProvider, type UserCandidate } from '@aws-blocks/bb-auth';
+import { Auth, AuthErrors, relayOrigin, stubIdp, type AuthOptions, type BuiltinProvider, type UserCandidate } from '@aws-blocks/bb-auth';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Secret } from '@aws-blocks/bb-secret';
@@ -333,7 +333,7 @@ async function readSignIn(instance: string, userId: string): Promise<SignInRecor
 const stubsAllowed = getDeploymentType() !== 'production';
 
 /** The OIDC provider of every e2e instance: the stub IdP, or a placeholder real provider in production. */
-function e2eOidcProvider(): BlocksProvider {
+function e2eOidcProvider(): BuiltinProvider {
   return stubsAllowed
     ? stubIdp({ onAuthorize: (req) => req.users[0] })
     : { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' };
@@ -350,7 +350,7 @@ function isOidcProvider(id: string): id is keyof typeof oidcAuthProviders {
 }
 
 const oidcAuth = new Auth(scope, 'oidc-auth', {
-  store: 'blocks',
+  store: 'builtin',
   providers: oidcAuthProviders,
   onSignIn: async (user) => {
     await recordSignIn('oidc-auth', { userId: user.userId, email: user.attributes.email ?? null, provider: user.signInProvider });
@@ -361,7 +361,7 @@ const oidcAuth = new Auth(scope, 'oidc-auth', {
 // pattern and bearer-token auth for native clients. Uses custom paths to avoid
 // colliding with the first instance.
 const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     'google-extras': e2eOidcProvider(),
   },
@@ -391,7 +391,7 @@ const oidcAuthExtras = new Auth(scope, 'oidc-auth-extras', {
 // Uses custom paths to avoid colliding with the other instances.
 // allowedRelayOrigins declares which custom-scheme URIs the relay may redirect to.
 const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     'google-relay': e2eOidcProvider(),
   },
@@ -410,7 +410,7 @@ const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
 // frontend's HTTPS origin would go in `allowedRelayOrigins`. Custom paths keep its
 // routes apart from the other OIDC instances.
 const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     'web-idp': e2eOidcProvider(),
   },
@@ -433,7 +433,7 @@ const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
 // - `auth-gated` (Cognito): email + password, so both phases run. On AWS the
 //   pool also gets a Cognito PreSignUp trigger, so a `SignUp` sent straight to
 //   Cognito is held to the same policy.
-// - `auth-gated-idp` (`store: 'blocks'`): the stub IdP, sign-in phase only. The
+// - `auth-gated-idp` (`store: 'builtin'`): the stub IdP, sign-in phase only. The
 //   stub IdP's only user is outside the policy, so its sign-in is rejected.
 //   Custom paths keep its routes apart from the other OIDC instances.
 const GATED_POLICY_MESSAGE = 'Only @allowed.example accounts may join';
@@ -454,7 +454,7 @@ const authGated = new Auth(scope, 'auth-gated', {
   },
 });
 new Auth(scope, 'auth-gated-idp', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     // The stub IdP in local and sandbox (see e2eOidcProvider); a placeholder
     // real provider in production, where the gated suite skips the stub flow.
@@ -3539,7 +3539,7 @@ async function _authTypeChecks(context: BlocksContext) {
   // @ts-expect-error — ERROR_mfa_is_off_on_this_Auth_instance
   await authC.updateMfaPreference(context, {});
 
-  // The OIDC instances keep no user pool (`store: 'blocks'`): the password methods are gated.
+  // The OIDC instances keep no user pool (`store: 'builtin'`): the password methods are gated.
   // @ts-expect-error — ERROR_emailPassword_is_disabled_on_this_Auth_instance
   await oidcAuth.signIn('user', 'password', context);
 

@@ -266,7 +266,7 @@ describe('AuthState.user.displayName for a directly federated OIDC user (FX31)',
 	/** Sign `user` in through the stub IdP over real HTTP; the signed-in `getAuthState`. */
 	async function directSignIn(user: StubUser): Promise<AuthState> {
 		const auth = new Auth({ id: `dn${process.pid}-${++apps}` }, 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ users: [user], onAuthorize: (r) => r.users[0] }) },
 		});
 		const b = new TestBrowser();

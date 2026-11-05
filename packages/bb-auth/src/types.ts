@@ -34,7 +34,7 @@ import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-block
  *   `'facebook'`, `'amazon'`, `'apple'`), SAML (`type: 'saml'`) and OIDC
  *   federated through Cognito (`type: 'oidc'`). Cognito groups, `auth.admin`
  *   and Cognito-issued tokens work for every user.
- * - `store: 'blocks'` ({@link BlocksAuthOptions}). No user pool: your backend
+ * - `store: 'builtin'` ({@link BuiltinAuthOptions}). No user pool: your backend
  *   federates each provider itself — OIDC (`type: 'oidc'`), bare OAuth 2.0
  *   (`github()`, `customOauth2()`) and the local stub IdP (`stubIdp()`) — and
  *   keeps only the session. No Cognito charge, works offline in `npm run dev`,
@@ -45,7 +45,7 @@ import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-block
  * you use in `getSignInUrl(context, '<id>')` and in the `signIn:<id>` UI
  * action, and tagged with its `type`. The compiler accepts only the options
  * and provider types the chosen store supports: `emailPassword` or
- * `type: 'google'` with `store: 'blocks'` is a compile error, and so is
+ * `type: 'google'` with `store: 'builtin'` is a compile error, and so is
  * `stubIdp()` without it.
  *
  * One block holds one kind of user. An app that wants both password users and
@@ -62,7 +62,7 @@ import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-block
  *
  * **What gets provisioned.** A `'cognito'` block creates a Cognito user pool
  * (or wraps an existing one, `userPool`), plus a hosted-UI domain and client
- * once a `providers` entry federates through it. A `'blocks'` block
+ * once a `providers` entry federates through it. A `'builtin'` block
  * provisions **no** Cognito resources — only the session table and the
  * session-signing secret. Adding a provider later adds its resources; it never
  * replaces anything.
@@ -100,13 +100,13 @@ import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-block
  * @example Okta only, no Cognito pool
  * ```ts
  * const auth = new Auth(scope, 'auth', {
- *   store: 'blocks',
+ *   store: 'builtin',
  *   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa…' } },
  * });
  * ```
  */
 // Cognito last: with no `store` in a literal, TypeScript reports errors against the last best-matching member.
-export type AuthOptions = BlocksAuthOptions | CognitoAuthOptions;
+export type AuthOptions = BuiltinAuthOptions | CognitoAuthOptions;
 
 /**
  * Where an `Auth` block's users live. Chosen once per block with the `store`
@@ -114,14 +114,14 @@ export type AuthOptions = BlocksAuthOptions | CognitoAuthOptions;
  *
  * - `'cognito'` (the default) — an Amazon Cognito user pool
  *   ({@link CognitoAuthOptions}).
- * - `'blocks'` — no user pool: identity providers your backend verifies
- *   itself, and this block's own sessions ({@link BlocksAuthOptions}).
+ * - `'builtin'` — no user pool: identity providers your backend verifies
+ *   itself, and this block's own sessions ({@link BuiltinAuthOptions}).
  */
-export type AuthStore = 'cognito' | 'blocks';
+export type AuthStore = 'cognito' | 'builtin';
 
 /**
  * The options every store accepts — the shared part of
- * {@link CognitoAuthOptions} and {@link BlocksAuthOptions}.
+ * {@link CognitoAuthOptions} and {@link BuiltinAuthOptions}.
  */
 export interface AuthCommonOptions {
 	/**
@@ -160,7 +160,7 @@ export interface AuthCommonOptions {
 	 *   phase. Its tokens still reach the guards with
 	 *   {@link CognitoAuthOptions.allowBearerAuth}, so gate per request there.
 	 *
-	 * **By store.** A `'cognito'` block runs both phases. A `store: 'blocks'`
+	 * **By store.** A `'cognito'` block runs both phases. A `store: 'builtin'`
 	 * block's providers (OIDC, OAuth 2.0 and `stubIdp()`) create no pool user, so
 	 * its `validateUser` only ever sees `phase: 'signIn'`, and no trigger is
 	 * provisioned for it. A pool
@@ -252,7 +252,7 @@ export interface AuthCommonOptions {
 	 * @deprecated Replaced by `providers`: move each entry there, keyed as
 	 * before, with `type: 'oidc'`. A `federateVia: 'cognito'` entry stays on the
 	 * default store; a directly federated one (the old default), `github()`,
-	 * `customOauth2()` and `stubIdp()` move to a block with `store: 'blocks'`.
+	 * `customOauth2()` and `stubIdp()` move to a block with `store: 'builtin'`.
 	 * See {@link ERROR_replaced_by_providers}.
 	 */
 	oidcProviders?: ERROR_replaced_by_providers;
@@ -310,7 +310,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	 *
 	 * For an IdP your backend should verify itself — no Cognito charge, offline
 	 * sign-in with `stubIdp()`, public (PKCE-only) clients, `github()` — use a
-	 * separate block with `store: 'blocks'` ({@link BlocksAuthOptions}).
+	 * separate block with `store: 'builtin'` ({@link BuiltinAuthOptions}).
 	 */
 	providers?: Record<string, CognitoProvider>;
 
@@ -450,7 +450,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 }
 
 /**
- * Options of a block that keeps no user pool — `store: 'blocks'`. Every user
+ * Options of a block that keeps no user pool — `store: 'builtin'`. Every user
  * signs in through a `providers` entry that your backend federates itself.
  *
  * Your backend performs OIDC discovery, PKCE and JWKS verification itself.
@@ -466,7 +466,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
  * ```ts
  * const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
  * const auth = new Auth(scope, 'auth', {
- *   store: 'blocks',
+ *   store: 'builtin',
  *   providers: {
  *     okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa…', groupsClaim: 'groups' },
  *     github: github({ clientId: 'Iv1.abc', clientSecret: githubSecret }),
@@ -475,9 +475,9 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
  * });
  * ```
  */
-export interface BlocksAuthOptions extends AuthCommonOptions {
+export interface BuiltinAuthOptions extends AuthCommonOptions {
 	/** Where this block's users live: at their identity providers, verified by your backend; no user pool. See {@link AuthStore}. */
-	store: 'blocks';
+	store: 'builtin';
 
 	/**
 	 * Sign-in providers, keyed by provider id — the id you use in
@@ -491,10 +491,10 @@ export interface BlocksAuthOptions extends AuthCommonOptions {
 	 * - `'stub'` — the local stub IdP, built with `stubIdp()`
 	 *   ({@link StubProvider}).
 	 */
-	providers: Record<string, BlocksProvider>;
+	providers: Record<string, BuiltinProvider>;
 
-	/** The groups `requireRole()` accepts. Only `groups`: there is no user pool to shape. See {@link BlocksUserOptions}. */
-	users?: BlocksUserOptions;
+	/** The groups `requireRole()` accepts. Only `groups`: there is no user pool to shape. See {@link BuiltinUserOptions}. */
+	users?: BuiltinUserOptions;
 
 	/**
 	 * Accept `Authorization: Bearer <access token>` in addition to the session
@@ -510,34 +510,34 @@ export interface BlocksAuthOptions extends AuthCommonOptions {
 	allowBearerAuth?: boolean;
 
 	/**
-	 * Email + password needs `store: 'cognito'`: a `'blocks'` block has no user pool.
+	 * Email + password needs `store: 'cognito'`: a `'builtin'` block has no user pool.
 	 * `false` (what the block is anyway) is accepted, so options shared between
 	 * blocks can spell it out.
 	 */
 	// `false & {}`, not `false`: with a bare literal here, TypeScript reports a default-store block's
 	// unrelated option errors against this arm ("Property 'store' is missing").
 	emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
-	/** MFA needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** MFA needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	mfa?: ERROR_needs_store_cognito<'mfa'>;
-	/** Passkeys needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** Passkeys needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	passkeys?: ERROR_needs_store_cognito<'passkeys'>;
-	/** The Cognito hosted UI needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** The Cognito hosted UI needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
-	/** `auth.admin` needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** `auth.admin` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	admin?: ERROR_needs_store_cognito<'admin'>;
-	/** Wrapping an existing user pool needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** Wrapping an existing user pool needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	userPool?: ERROR_needs_store_cognito<'userPool'>;
-	/** A Cognito feature plan needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** A Cognito feature plan needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
-	/** An SES email sender needs `store: 'cognito'`: a `'blocks'` block has no user pool. */
+	/** An SES email sender needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	email?: ERROR_needs_store_cognito<'email'>;
 }
 
 /**
- * The type of an option that a `store: 'blocks'` block does not have (it has
+ * The type of an option that a `store: 'builtin'` block does not have (it has
  * no user pool). No value has this type, so setting the option is a compile
  * error whose message names the option and the fix: `K` needs
- * `store: 'cognito'` — the default, so drop `store: 'blocks'`, or move the
+ * `store: 'cognito'` — the default, so drop `store: 'builtin'`, or move the
  * option to a separate `'cognito'` block.
  *
  * A building block of the public option types, exported because they are
@@ -552,7 +552,7 @@ export type ERROR_needs_store_cognito<K extends string> = {
  * options `providers` replaced. No value has this type, so a leftover key is
  * a compile error. Move each entry into `providers`, keyed as before, with its
  * `type` (`'google'`, `'oidc'`, `'saml'`, …); a `federateVia: 'direct'` OIDC
- * provider moves to a block with `store: 'blocks'`.
+ * provider moves to a block with `store: 'builtin'`.
  *
  * A building block of the public option types, exported because they are
  * built from it, and stable like them.
@@ -564,7 +564,7 @@ export type ERROR_replaced_by_providers = string & {
 /**
  * The type of an OIDC provider's former `federateVia`. No value has this type,
  * so a leftover key is a compile error: the block's `store` decides it now —
- * `'cognito'` (the default) federates through Cognito, `'blocks'` directly.
+ * `'cognito'` (the default) federates through Cognito, `'builtin'` directly.
  *
  * A building block of the public option types, exported because they are
  * built from it, and stable like them.
@@ -574,11 +574,11 @@ export type ERROR_federateVia_replaced_by_store = string & {
 };
 
 /**
- * Settings for {@link BlocksAuthOptions.users}: only `groups`. The other
- * {@link UserPoolOptions} describe a user pool, which a `'blocks'` block does
+ * Settings for {@link BuiltinAuthOptions.users}: only `groups`. The other
+ * {@link UserPoolOptions} describe a user pool, which a `'builtin'` block does
  * not have, so they are compile errors there.
  */
-export type BlocksUserOptions = Pick<UserPoolOptions, 'groups'> & {
+export type BuiltinUserOptions = Pick<UserPoolOptions, 'groups'> & {
 	[K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
 };
 
@@ -769,7 +769,7 @@ export type SocialProviderId = 'google' | 'apple' | 'facebook' | 'amazon';
  * straight to the provider) and becomes a user-pool user: Cognito groups,
  * `requireRole()` and `auth.admin` work as for email + password users.
  * Locally (`npm run dev`) managed login is unavailable — sign-in answers an
- * actionable `501`; use a `store: 'blocks'` block with `stubIdp()` offline.
+ * actionable `501`; use a `store: 'builtin'` block with `stubIdp()` offline.
  * MFA is the provider's: Cognito never challenges a federated user, so
  * enforce MFA at your IdP.
  *
@@ -809,8 +809,8 @@ export interface AppleProvider extends AppleCredentials, ProviderCommon {
 /** A `providers` entry of a `'cognito'` block ({@link CognitoAuthOptions.providers}). */
 export type CognitoProvider = SocialProvider | SamlProvider | CognitoOidcProvider;
 
-/** A `providers` entry of a `'blocks'` block ({@link BlocksAuthOptions.providers}). */
-export type BlocksProvider = DirectOidcProvider | OAuth2Provider | StubProvider;
+/** A `providers` entry of a `'builtin'` block ({@link BuiltinAuthOptions.providers}). */
+export type BuiltinProvider = DirectOidcProvider | OAuth2Provider | StubProvider;
 
 /** Client credentials for an OAuth 2.0 / OIDC provider. */
 export interface OAuthCredentials {
@@ -922,7 +922,7 @@ export interface OidcProviderBase extends ProviderCommon {
 	};
 	/**
 	 * @deprecated Replaced by the block's `store`: `'cognito'` (the default)
-	 * federates every `type: 'oidc'` entry through Cognito, `'blocks'` directly.
+	 * federates every `type: 'oidc'` entry through Cognito, `'builtin'` directly.
 	 * See {@link ERROR_federateVia_replaced_by_store}.
 	 */
 	federateVia?: ERROR_federateVia_replaced_by_store;
@@ -930,7 +930,7 @@ export interface OidcProviderBase extends ProviderCommon {
 
 /**
  * An OIDC provider federated directly by your backend: a `type: 'oidc'` entry
- * of a `store: 'blocks'` block ({@link BlocksAuthOptions.providers}).
+ * of a `store: 'builtin'` block ({@link BuiltinAuthOptions.providers}).
  *
  * Your backend performs OIDC discovery, PKCE and JWKS verification itself. No
  * Cognito resources are involved, it works fully offline in `npm run dev`
@@ -996,7 +996,7 @@ export interface MappedClaims {
 /**
  * A bare OAuth 2.0 provider (no ID token — e.g. GitHub), federated directly.
  * Build one with `github()` or `customOauth2()` and put it in a
- * `store: 'blocks'` block's `providers`; Cognito cannot federate bare OAuth 2.0.
+ * `store: 'builtin'` block's `providers`; Cognito cannot federate bare OAuth 2.0.
  *
  * There is no ID token to verify, so the identity comes from the provider's
  * userinfo endpoint, called with the access token over TLS, and `mapClaims`
@@ -1082,7 +1082,7 @@ export interface StubIdpSettings {
  * A provider served by the built-in **stub IdP** — a real, local OIDC
  * provider (ES256-signed ID tokens, discovery, JWKS, PKCE S256) mounted on the
  * dev server under `/aws-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
- * and put it in a `store: 'blocks'` block's `providers`.
+ * and put it in a `store: 'builtin'` block's `providers`.
  *
  * Local development and sandbox deployments only: in `npm run dev` it gives
  * `emailPassword: false` apps an offline sign-in, and a sandbox (`npm run
@@ -1612,14 +1612,14 @@ export type ReadAttrOf<O extends AuthOptions> = O extends { users: { attributes:
  * Whether email + password sign-in is enabled for options `O`.
  *
  * - `false` — the options literal says `emailPassword: false`, or
- *   `store: 'blocks'` (no user pool, so no password users).
+ *   `store: 'builtin'` (no user pool, so no password users).
  * - `true` — `emailPassword` is omitted, `true`, or an options object, on a
  *   `'cognito'` block.
  * - `boolean` — unknown at compile time: the wide `AuthOptions`, or a
  *   `boolean`-typed value. Gated methods stay callable (a runtime check backs
  *   them) and every configured instance stays assignable to the wide type.
  */
-export type EmailPasswordEnabled<O extends AuthOptions> = O extends { store: 'blocks' }
+export type EmailPasswordEnabled<O extends AuthOptions> = O extends { store: 'builtin' }
 	? false
 	: O extends { emailPassword: false }
 		? false
@@ -1635,7 +1635,7 @@ export type EmailPasswordEnabled<O extends AuthOptions> = O extends { store: 'bl
  *
  * Resolves to `T` when email + password is enabled, and to
  * `[ERROR_emailPassword_is_disabled_on_this_Auth_instance: never]` when it is
- * disabled (`emailPassword: false`, or `store: 'blocks'`). When unknown at compile time it accepts
+ * disabled (`emailPassword: false`, or `store: 'builtin'`). When unknown at compile time it accepts
  * both, so calls compile and a runtime `EmailPasswordNotEnabledException`
  * backs the check.
  */
@@ -1871,12 +1871,12 @@ export type ConfirmSignInInputOf<O extends AuthOptions> =
  *
  * @example
  * ```ts
- * const auth = new Auth(scope, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer, clientId } } });
+ * const auth = new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } });
  * export const authApi = auth.createApi();
  *
  * // frontend
  * await authApi.setAuthState({ action: 'signOut' });
- * // @ts-expect-error — a 'blocks' block has no email + password
+ * // @ts-expect-error — a 'builtin' block has no email + password
  * await authApi.setAuthState({ action: 'signIn', username, password });
  * ```
  */
@@ -1933,7 +1933,7 @@ export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O
  *
  * @example
  * ```ts
- * const authOptions = { store: 'blocks', providers: { okta: { type: 'oidc', issuer, clientId } } } as const satisfies AuthOptions;
+ * const authOptions = { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } } as const satisfies AuthOptions;
  * const auth = new Auth(scope, 'auth', authOptions);
  *
  * const okta: FederatedActionNameOf<typeof authOptions> = 'signIn:okta'; // a typo is a compile error
@@ -1969,8 +1969,8 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
 	groups: GroupOf<O>[];
 	/** The user's attributes, keyed by the declared ones (see {@link AuthenticatedUser.attributes}). */
 	attributes: Partial<Record<ReadAttrOf<O>, string>>;
-	/** `'password'` for email + password sign-in, otherwise the federated provider id (only the latter on a `store: 'blocks'` block). */
-	signInProvider: O extends { store: 'blocks' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
+	/** `'password'` for email + password sign-in, otherwise the federated provider id (only the latter on a `store: 'builtin'` block). */
+	signInProvider: O extends { store: 'builtin' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
 	/** The name the sign-in UI shows ("Signed in as …"): see `AuthUser.displayName`. */
 	displayName: string;
 }
@@ -1994,7 +1994,7 @@ export type AuthStateApiOf<O extends AuthOptions> = AuthStateApi<AuthActionInput
  * | Signed in with | `userId` | `userSub` |
  * |---|---|---|
  * | a `'cognito'` block: email + password, social, SAML or OIDC | the username — on a pool whose `users.signInWith` omits `'username'`, the one Cognito generates, equal to `userSub` | the Cognito `sub` (a UUID) |
- * | a `store: 'blocks'` block: OIDC, OAuth 2.0 or the stub IdP (no pool record) | `` `${issuer}:${sub}` `` | `` `${issuer}:${sub}` `` |
+ * | a `store: 'builtin'` block: OIDC, OAuth 2.0 or the stub IdP (no pool record) | `` `${issuer}:${sub}` `` | `` `${issuer}:${sub}` `` |
  *
  * Key your own data on `userSub`: it is stable for the user's lifetime.
  *
@@ -2032,13 +2032,13 @@ export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends 
 	 * of the pool issued (`allowBearerAuth`), and for a session issued before
 	 * email + password was turned off.
 	 *
-	 * A `store: 'blocks'` block has no password users, so its type is the
+	 * A `store: 'builtin'` block has no password users, so its type is the
 	 * provider ids alone.
 	 */
-	signInProvider: O extends { store: 'blocks' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
+	signInProvider: O extends { store: 'builtin' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
 	/**
 	 * The provider's verified identity claims, for a user who signed in
-	 * through a `providers` entry of a `store: 'blocks'` block — what `AuthOIDC`'s user carried as `claims`. `sub` and `iss`
+	 * through a `providers` entry of a `store: 'builtin'` block — what `AuthOIDC`'s user carried as `claims`. `sub` and `iss`
 	 * are the provider's own, unprefixed (`userId` is `` `${iss}:${sub}` ``):
 	 * the ID token's claims, or, from a provider that issued no ID token (an
 	 * OAuth 2.0 provider), `iss`, `sub` and the profile claims it returned.
@@ -2064,7 +2064,7 @@ export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends 
 	 * account id, the SAML `NameID`).
 	 *
 	 * Unlike `userId` / `userSub`, it does not change if a provider moves
-	 * between a `store: 'blocks'` block and a `'cognito'` block, so it is
+	 * between a `store: 'builtin'` block and a `'cognito'` block, so it is
 	 * the key to store alongside your data if that switch is possible — for
 	 * example to adopt the Amplify client libraries later, which sign users in
 	 * through Cognito only.
@@ -2477,7 +2477,7 @@ export type CodeDeliveryFn = (username: string, code: string, purpose: CodeDeliv
  * Both fields belong to the user pool, so only the Cognito arm
  * ({@link CognitoAuthMockOptions}) has them.
  */
-export type AuthMockOptions = BlocksAuthMockOptions | CognitoAuthMockOptions;
+export type AuthMockOptions = BuiltinAuthMockOptions | CognitoAuthMockOptions;
 
 /** The Cognito arm of {@link AuthMockOptions}: {@link CognitoAuthOptions} plus the mock-only fields. */
 export interface CognitoAuthMockOptions extends CognitoAuthOptions {
@@ -2519,11 +2519,11 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 	totpVerification?: 'any' | 'rfc6238';
 }
 
-/** The `'blocks'` arm of {@link AuthMockOptions}: the mock-only fields need a user pool. */
-export interface BlocksAuthMockOptions extends BlocksAuthOptions {
-	/** The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'blocks'` block sends no codes. */
+/** The `'builtin'` arm of {@link AuthMockOptions}: the mock-only fields need a user pool. */
+export interface BuiltinAuthMockOptions extends BuiltinAuthOptions {
+	/** The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'builtin'` block sends no codes. */
 	codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
-	/** The mock-only `totpVerification` needs `store: 'cognito'`: a `'blocks'` block has no MFA. */
+	/** The mock-only `totpVerification` needs `store: 'cognito'`: a `'builtin'` block has no MFA. */
 	totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
 }
 
@@ -2828,45 +2828,45 @@ export type AdminDisabled = {
 export type AdminOff = [ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: never];
 
 /**
- * Returned by `auth.admin` on a `store: 'blocks'` block, which has no user
+ * Returned by `auth.admin` on a `store: 'builtin'` block, which has no user
  * pool to administer — its users live at their identity providers. Like
  * {@link AdminDisabled}, every call is a compile error, here naming the real
  * fix (`store: 'cognito'`) rather than `admin: {}`, which that store refuses.
  * The getter throws at runtime.
  */
-export type AdminDisabledOnBlocks = {
+export type AdminDisabledOnBuiltin = {
 	readonly __adminNotEnabled: "auth.admin needs store: 'cognito'";
-	addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	removeUserFromGroup(
 		username: string,
 		group: string,
-		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin
 	): never;
-	listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 	setUserPassword(
 		username: string,
 		password: string,
-		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin
 	): never;
-	getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-	revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+	getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 };
 
 /**
- * The trailing rest parameter of every {@link AdminDisabledOnBlocks} method: a
+ * The trailing rest parameter of every {@link AdminDisabledOnBuiltin} method: a
  * single `never`, so no call compiles, named after the fix.
  *
  * A building block of the public gate types, exported because they are built
  * from it, and stable like them.
  */
-export type AdminOffOnBlocks = [ERROR_auth_admin_needs_store_cognito: never];
+export type AdminOffOnBuiltin = [ERROR_auth_admin_needs_store_cognito: never];
 
 /**
  * The `auth.admin` getter's return type — the gate.
@@ -2874,8 +2874,8 @@ export type AdminOffOnBlocks = [ERROR_auth_admin_needs_store_cognito: never];
  * - The check is `{ admin: object }`, NOT `{ admin: any }`: a primitive like
  *   `admin: true` fails the gate, so the opt-in MUST be an object (`admin: {}`).
  *   It also requires the Cognito arm ({@link CognitoAuthOptions}): a
- *   `store: 'blocks'` block has no user pool to administer, and gets
- *   {@link AdminDisabledOnBlocks}, whose errors name `store: 'cognito'`.
+ *   `store: 'builtin'` block has no user pool to administer, and gets
+ *   {@link AdminDisabledOnBuiltin}, whose errors name `store: 'cognito'`.
  * - The gate condition tests a **fixed shape** and the positive branch is a
  *   plain generic interface (`AdminSurface<O>`), so `Auth<O>` stays
  *   covariant in `O`.
@@ -2886,9 +2886,9 @@ export type AdminOffOnBlocks = [ERROR_auth_admin_needs_store_cognito: never];
  *   admin-enabled instance unassignable to the wide type.)
  */
 export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O
-	? AdminSurface<O> | AdminDisabled | AdminDisabledOnBlocks
-	: O extends { store: 'blocks' }
-		? AdminDisabledOnBlocks
+	? AdminSurface<O> | AdminDisabled | AdminDisabledOnBuiltin
+	: O extends { store: 'builtin' }
+		? AdminDisabledOnBuiltin
 		: O extends { admin: object; store?: 'cognito' }
 			? AdminSurface<O>
 			: AdminDisabled;

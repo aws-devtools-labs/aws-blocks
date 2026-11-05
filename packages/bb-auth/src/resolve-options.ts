@@ -43,7 +43,7 @@ export interface SocialProviders {
 	apple?: Untagged<AppleProvider>;
 }
 
-/** A directly federated OIDC provider (a `'blocks'` block's `type: 'oidc'`). @internal */
+/** A directly federated OIDC provider (a `'builtin'` block's `type: 'oidc'`). @internal */
 export interface DirectOidcProviderOptions extends Untagged<DirectOidcProvider> {
 	federateVia?: 'direct';
 }
@@ -79,7 +79,7 @@ export type SamlProviderOptions = Untagged<SamlProvider>;
  * configuration is the caller's, unchanged (including the mock-only
  * `codeDelivery` / `totpVerification`, read structurally by the mock).
  *
- * For `store: 'blocks'`, `emailPassword` is `false`, so the email + password
+ * For `store: 'builtin'`, `emailPassword` is `false`, so the email + password
  * helpers (`emailPasswordEnabled`, `requiresUserPool`) see no pool method.
  *
  * @internal
@@ -96,7 +96,7 @@ export interface ResolvedAuthOptions
 /** The options `providers` replaced. */
 const REPLACED_KEYS = ['socialProviders', 'oidcProviders', 'samlProviders'] as const;
 
-/** Options only a user pool gives meaning to, refused on `store: 'blocks'` (including the mock-only ones). */
+/** Options only a user pool gives meaning to, refused on `store: 'builtin'` (including the mock-only ones). */
 const COGNITO_ONLY_KEYS = [
 	'emailPassword',
 	'mfa',
@@ -115,9 +115,9 @@ function prefix(id: string | undefined): string {
 	return id === undefined ? 'Auth:' : `Auth '${id}':`;
 }
 
-/** The message for a `store: 'blocks'` block with no provider (every layer refuses it the same way). @internal */
-export function blocksNeedsAProvider(id?: string): string {
-	return `${prefix(id)} \`store: 'blocks'\` needs at least one provider in \`providers\` (\`type: 'oidc'\`, \`github()\`, \`stubIdp()\`, …): its users can sign in no other way.`;
+/** The message for a `store: 'builtin'` block with no provider (every layer refuses it the same way). @internal */
+export function builtinNeedsAProvider(id?: string): string {
+	return `${prefix(id)} \`store: 'builtin'\` needs at least one provider in \`providers\` (\`type: 'oidc'\`, \`github()\`, \`stubIdp()\`, …): its users can sign in no other way.`;
 }
 
 /** The provider `type`s only the default (Cognito) store accepts. */
@@ -148,7 +148,7 @@ function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Un
  * - `store` omitted or `'cognito'`: social entries go to `socialProviders`,
  *   SAML to `samlProviders`, OIDC to `oidcProviders` with
  *   `federateVia: 'cognito'`.
- * - `store: 'blocks'`: every entry goes to `oidcProviders` with
+ * - `store: 'builtin'`: every entry goes to `oidcProviders` with
  *   `federateVia: 'direct'`, and `emailPassword` is `false`.
  *
  * Provider keys pass through unchanged. A social entry must be keyed by its
@@ -158,8 +158,8 @@ function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Un
  *
  * @throws Error for an unknown `store`; for a leftover `socialProviders`,
  *   `oidcProviders` or `samlProviders`; for an option only a user pool gives
- *   meaning to on `store: 'blocks'` (`emailPassword` other than `false`, `mfa`, `userPool`,
- *   `admin`, `users.<anything but groups>`, …) and for a `'blocks'` block with
+ *   meaning to on `store: 'builtin'` (`emailPassword` other than `false`, `mfa`, `userPool`,
+ *   `admin`, `users.<anything but groups>`, …) and for a `'builtin'` block with
  *   no provider; for a provider `type` the store does not accept (or none); and
  *   for a social entry keyed differently from its `type` (so two entries of one
  *   social type cannot both pass). The backstop for configurations the compiler
@@ -170,21 +170,21 @@ function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Un
 export function resolveOptions(options: AuthOptions, blockId?: string): ResolvedAuthOptions {
 	const auth = prefix(blockId);
 	const storeValue: unknown = Reflect.get(options, 'store');
-	if (storeValue !== undefined && storeValue !== 'cognito' && storeValue !== 'blocks') {
+	if (storeValue !== undefined && storeValue !== 'cognito' && storeValue !== 'builtin') {
 		throw new Error(
-			`${auth} \`store\` must be 'cognito' (the default) or 'blocks', got ${JSON.stringify(storeValue)}.`,
+			`${auth} \`store\` must be 'cognito' (the default) or 'builtin', got ${JSON.stringify(storeValue)}.`,
 		);
 	}
 	const replaced = setKeys(options, REPLACED_KEYS);
 	if (replaced.length > 0) {
 		throw new Error(
 			`${auth} ${listKeys(replaced)} ${replaced.length === 1 ? 'was' : 'were'} replaced by \`providers\`: move each entry there, ` +
-				"keyed as before, with its `type` ('google', 'oidc', 'saml', …). Directly federated OIDC providers go in a block with `store: 'blocks'`.",
+				"keyed as before, with its `type` ('google', 'oidc', 'saml', …). Directly federated OIDC providers go in a block with `store: 'builtin'`.",
 		);
 	}
 
-	if (options.store === 'blocks') {
-		// `emailPassword: false` states what a `'blocks'` block is anyway.
+	if (options.store === 'builtin') {
+		// `emailPassword: false` states what a `'builtin'` block is anyway.
 		const cognitoOnly = setKeys(options, COGNITO_ONLY_KEYS).filter(
 			(key) => key !== 'emailPassword' || options.emailPassword !== false,
 		);
@@ -193,7 +193,7 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 		if (cognitoOnly.length > 0) {
 			throw new Error(
 				`${auth} ${listKeys(cognitoOnly)} ${cognitoOnly.length === 1 ? 'needs' : 'need'} \`store: 'cognito'\` (the default): ` +
-					"a `store: 'blocks'` block has no user pool. Remove it, or drop `store: 'blocks'`.",
+					"a `store: 'builtin'` block has no user pool. Remove it, or drop `store: 'builtin'`.",
 			);
 		}
 		const {
@@ -219,7 +219,7 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 			if (entry.type !== 'oidc' && entry.type !== 'oauth2' && entry.type !== 'stub') {
 				const type: unknown = Reflect.get(entry, 'type');
 				const accepted =
-					"A `store: 'blocks'` block accepts `type: 'oidc'`, `'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`).";
+					"A `store: 'builtin'` block accepts `type: 'oidc'`, `'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`).";
 				throw new Error(
 					COGNITO_TYPES.includes(type)
 						? `${auth} providers.${id} has ${describeType(type)}, which needs \`store: 'cognito'\` (the default). ${accepted}`
@@ -229,7 +229,7 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 			}
 			oidcProviders[id] = { ...untag(entry), federateVia: 'direct' };
 		}
-		if (Object.keys(oidcProviders).length === 0) throw new Error(blocksNeedsAProvider(blockId));
+		if (Object.keys(oidcProviders).length === 0) throw new Error(builtinNeedsAProvider(blockId));
 		return {
 			...rest,
 			...(users ? { users: { groups: users.groups } } : {}),
@@ -269,7 +269,7 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 			default:
 				throw new Error(
 					`${auth} providers.${id} has ${describeType(Reflect.get(entry, 'type'))}, which a Cognito user pool cannot federate. ` +
-						"`type: 'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`) need `store: 'blocks'`; " +
+						"`type: 'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`) need `store: 'builtin'`; " +
 						"the default store accepts `type: 'google'`, `'facebook'`, `'amazon'`, `'apple'`, `'saml'` and `'oidc'`.",
 				);
 		}

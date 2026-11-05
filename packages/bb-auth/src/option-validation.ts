@@ -32,13 +32,13 @@
  *
  * **Per-store rules.** A provider entry's accepted keys depend on its `type`
  * *and* the block's `store`: a `type: 'oidc'` entry takes `groupsClaim` only
- * with `store: 'blocks'`, `attributesRequestMethod` only on the default
+ * with `store: 'builtin'`, `attributesRequestMethod` only on the default
  * Cognito store, and needs a `clientSecret` there. A key the same `type`
  * accepts on the other store is reported as a store conflict naming the store
  * it needs. A removed key (`socialProviders`, `oidcProviders`, `samlProviders`,
  * `federateVia`) is reported as unknown, with what replaced it as the hint.
  * The store value itself, a `type` the store does not accept and the
- * user-pool options a `'blocks'` block refuses are `resolveOptions()`'s to
+ * user-pool options a `'builtin'` block refuses are `resolveOptions()`'s to
  * reject (it runs right after this check, in every layer); the walk skips an
  * entry whose `type` its store does not accept, so the resolver's message is
  * the one reported.
@@ -57,7 +57,7 @@ import type {
 	AuthMockOptions,
 	AuthStore,
 	BearerAuthOptions,
-	BlocksProvider,
+	BuiltinProvider,
 	CognitoOidcProvider,
 	CognitoProvider,
 	DirectOidcProvider,
@@ -266,7 +266,7 @@ const COGNITO_OIDC = {
 	attributesRequestMethod: 'value',
 } as const satisfies ShapeOf<CognitoOidcProvider>;
 
-/** A `type: 'oidc'` provider of a `store: 'blocks'` block: federated directly. */
+/** A `type: 'oidc'` provider of a `store: 'builtin'` block: federated directly. */
 const DIRECT_OIDC = {
 	...OIDC_BASE,
 	type: 'value',
@@ -313,11 +313,11 @@ const PROVIDER: Spec = {
 			saml: SAML_PROVIDER,
 			oidc: COGNITO_OIDC,
 		} satisfies { readonly [T in CognitoProvider['type']]: Shape },
-		blocks: {
+		builtin: {
 			oidc: DIRECT_OIDC,
 			oauth2: OAUTH2_PROVIDER,
 			stub: STUB_PROVIDER,
-		} satisfies { readonly [T in BlocksProvider['type']]: Shape },
+		} satisfies { readonly [T in BuiltinProvider['type']]: Shape },
 	},
 };
 
@@ -471,7 +471,7 @@ export interface InvalidOption {
 export interface StoreConflict {
 	/** Where it was found, e.g. `providers.okta.groupsClaim`. */
 	readonly path: string;
-	/** What is wrong and the fix, e.g. ``needs `store: 'blocks'` …``. */
+	/** What is wrong and the fix, e.g. ``needs `store: 'builtin'` …``. */
 	readonly message: string;
 }
 
@@ -589,10 +589,10 @@ const REPLACED_OPTIONS: { readonly [key: string]: string } = {
 	socialProviders:
 		"replaced by `providers`: move each entry there, keyed as before, with its `type` (`'google'`, `'facebook'`, `'amazon'`, `'apple'`).",
 	oidcProviders:
-		"replaced by `providers`: move each entry there, keyed as before, with `type: 'oidc'`. A directly federated provider, `github()`, `customOauth2()` and `stubIdp()` go in a block with `store: 'blocks'`.",
+		"replaced by `providers`: move each entry there, keyed as before, with `type: 'oidc'`. A directly federated provider, `github()`, `customOauth2()` and `stubIdp()` go in a block with `store: 'builtin'`.",
 	samlProviders: "replaced by `providers`: move each entry there, keyed as before, with `type: 'saml'`.",
 	federateVia:
-		"replaced by the block's `store`: remove it. `'cognito'` (the default) federates through Cognito; `store: 'blocks'` federates directly.",
+		"replaced by the block's `store`: remove it. `'cognito'` (the default) federates through Cognito; `store: 'builtin'` federates directly.",
 };
 
 /**
@@ -679,7 +679,7 @@ function walkSpec(spec: Spec, value: unknown, path: string, out: Findings): void
 	if (!shape) return;
 	const before = out.unknown.length;
 	walkShape(shape, value, path, out);
-	const otherStore: AuthStore = out.store === 'cognito' ? 'blocks' : 'cognito';
+	const otherStore: AuthStore = out.store === 'cognito' ? 'builtin' : 'cognito';
 	const twin = Object.hasOwn(spec.variants[otherStore], type) ? spec.variants[otherStore][type] : undefined;
 	const all = [...Object.values(shapes), ...Object.values(spec.variants[otherStore])];
 	const found = out.unknown.splice(before);
@@ -698,9 +698,10 @@ function walkSpec(spec: Spec, value: unknown, path: string, out: Findings): void
 
 /** The message for a provider key only the other store accepts. */
 const NEEDS_STORE: { readonly [S in AuthStore]: string } = {
-	blocks: "needs `store: 'blocks'` (a directly federated provider). Remove it, or move the provider to a `store: 'blocks'` block.",
+	builtin:
+		"needs `store: 'builtin'` (a directly federated provider). Remove it, or move the provider to a `store: 'builtin'` block.",
 	cognito:
-		"needs `store: 'cognito'`, the default (a provider federated through Cognito). Remove it, or move the provider to a block without `store: 'blocks'`.",
+		"needs `store: 'cognito'`, the default (a provider federated through Cognito). Remove it, or move the provider to a block without `store: 'builtin'`.",
 };
 
 function walkShape(shape: Shape, value: object, path: string, out: Findings, otherwise?: string): void {
@@ -743,9 +744,9 @@ export function findInvalidAuthOptions(options: unknown): InvalidOption[] {
  * Every option the block's `store` does not allow or requires, in walk order:
  * a provider key only the same `type` on the other store accepts
  * (`groupsClaim` on a `'cognito'` block's `type: 'oidc'` entry,
- * `attributesRequestMethod` on a `'blocks'` one), a `'cognito'` block's
+ * `attributesRequestMethod` on a `'builtin'` one), a `'cognito'` block's
  * `type: 'oidc'` entry without `clientSecret`, and `allowBearerAuth` as an
- * object on a `'blocks'` block. Empty for a `store` value the resolver rejects.
+ * object on a `'builtin'` block. Empty for a `store` value the resolver rejects.
  *
  * @internal
  */
@@ -758,7 +759,7 @@ function findAll(options: unknown): Findings {
 	const store =
 		storeValue === undefined
 			? 'cognito'
-			: storeValue === 'cognito' || storeValue === 'blocks'
+			: storeValue === 'cognito' || storeValue === 'builtin'
 				? storeValue
 				: undefined;
 	const out: Findings = { store, unknown: [], invalid: [], conflicts: [] };
@@ -773,15 +774,15 @@ function findAll(options: unknown): Findings {
 					path: join(join('providers', id), 'clientSecret'),
 					message:
 						"is required with `store: 'cognito'` (the default): Cognito federates OIDC as a confidential client. " +
-						"Add one, or move the provider to a `store: 'blocks'` block for a public (PKCE-only) client.",
+						"Add one, or move the provider to a `store: 'builtin'` block for a public (PKCE-only) client.",
 				});
 			}
 		}
-	} else if (store === 'blocks' && isPlainObject(field(options, 'allowBearerAuth'))) {
+	} else if (store === 'builtin' && isPlainObject(field(options, 'allowBearerAuth'))) {
 		out.conflicts.push({
 			path: 'allowBearerAuth',
 			message:
-				"as an object (extra Cognito app clients) needs `store: 'cognito'`. A `store: 'blocks'` block takes `true` or `false`.",
+				"as an object (extra Cognito app clients) needs `store: 'cognito'`. A `store: 'builtin'` block takes `true` or `false`.",
 		});
 	}
 	return out;
@@ -839,7 +840,7 @@ export function assertKnownAuthOptions(id: string, options: unknown): void {
 			`${conflicts.length === 1 ? 'option conflicts' : 'options conflict'} with \`store: '${store}'\`:\n${lines.join('\n')}`,
 		);
 		reasons.push(
-			"A `'cognito'` block (the default) federates through a Cognito user pool and a `store: 'blocks'` block verifies its providers itself, so each accepts different provider options.",
+			"A `'cognito'` block (the default) federates through a Cognito user pool and a `store: 'builtin'` block verifies its providers itself, so each accepts different provider options.",
 		);
 	}
 	throw new Error(

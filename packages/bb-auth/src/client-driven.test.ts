@@ -210,19 +210,19 @@ describe('allowBearerAuth: { clientIds } — option resolution and synth checks'
 
 	test('the CDK layer applies the checks, and refuses clientIds without a pool', () => {
 		assert.match(synthError("{ allowBearerAuth: { clientIds: ['bad id'] } }"), /must be a Cognito app-client id/);
-		// The only pool-less configuration is a `store: 'blocks'` block, and the option validation
+		// The only pool-less configuration is a `store: 'builtin'` block, and the option validation
 		// refuses the object form there before the CDK layer's own pool check runs.
 		const needsCognito = /`allowBearerAuth` as an object \(extra Cognito app clients\) needs `store: 'cognito'`/;
 		assert.match(
 			synthError(
-				"{ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['${Token[TOKEN.1]}'] } }",
+				"{ store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['${Token[TOKEN.1]}'] } }",
 			),
 			needsCognito,
 			'a token on a pool-less configuration is refused too',
 		);
 		assert.match(
 			synthError(
-				"{ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['abc123'] } }",
+				"{ store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, allowBearerAuth: { clientIds: ['abc123'] } }",
 			),
 			needsCognito,
 		);

@@ -245,7 +245,7 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 			`new Auth(stack, 'owner', { ${VALIDATE} }); new Auth(stack, 'plain');` +
 				` new Auth(stack, 'wrapper', { userPool: Auth.fromExisting('us-east-1_existing', 'client-1'), admin: {} });` +
 				` new Auth(stack, 'wrapval', { userPool: Auth.fromExisting('us-east-1_existing', 'client-1'), ${VALIDATE} });` +
-				` new Auth(stack, 'poolless', { store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, ${VALIDATE} });`,
+				` new Auth(stack, 'poolless', { store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, ${VALIDATE} });`,
 		);
 		const flags = Object.keys(config).filter((k) => k.endsWith('_PRE_SIGN_UP_TRIGGER'));
 		assert.strictEqual(flags.length, 1, flags.join(', '));
@@ -270,9 +270,9 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 		);
 	});
 
-	test("no pool (store: 'blocks', directly federated OIDC only): no trigger", () => {
+	test("no pool (store: 'builtin', directly federated OIDC only): no trigger", () => {
 		const { template } = synth(
-			`new Auth(stack, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, ${VALIDATE} })`,
+			`new Auth(stack, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } }, ${VALIDATE} })`,
 		);
 		assert.deepStrictEqual(byType(template, 'AWS::Lambda::Permission'), []);
 		assert.deepStrictEqual(byType(template, 'AWS::Cognito::UserPool'), []);

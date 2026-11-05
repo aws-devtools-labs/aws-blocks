@@ -3,7 +3,7 @@ import { Scope } from '@aws-blocks/blocks';
 
 const scope = new Scope('app');
 export const auth = new Auth(scope, 'auth', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: { corp: stubIdp() },
 });
 

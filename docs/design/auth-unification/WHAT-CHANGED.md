@@ -1,6 +1,6 @@
 # What changed: the auth unification, in plain words
 
-> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'builtin'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
 
 **For:** the project lead. **Branch:** `refactor/auth-blocks` (local only, not pushed). **Compared with:** `origin/main` (merge-base `b58f2487`).
 
@@ -117,7 +117,7 @@ const auth = new Auth(scope, 'auth', {
 
 An `oidcProviders` entry can be federated two ways. You choose per provider with `federateVia`.
 
-> **Superseded:** the choice is now per block, with `store` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). A `type: 'oidc'` entry on the default store federates through Cognito (`clientSecret` required); on a `store: 'blocks'` block it is verified by your backend, next to `github()`, `customOauth2()` and `stubIdp()`. The table below still describes the two paths: read `federateVia: 'direct'` as `store: 'blocks'` and `federateVia: 'cognito'` as the default store.
+> **Superseded:** the choice is now per block, with `store` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). A `type: 'oidc'` entry on the default store federates through Cognito (`clientSecret` required); on a `store: 'builtin'` block it is verified by your backend, next to `github()`, `customOauth2()` and `stubIdp()`. The table below still describes the two paths: read `federateVia: 'direct'` as `store: 'builtin'` and `federateVia: 'cognito'` as the default store.
 
 ```ts
 // Before (AuthOIDC)
@@ -503,7 +503,7 @@ The changesets mark these as minor releases (the repo forbids majors while on 0.
 **Options**
 - [ ] Options are grouped: `emailPassword.*`, `users.*`, `session.*`, `mfa: { mode, types }`, `passkeys: { relyingPartyId, … }`, `redirects.*`. Full table in `MIGRATION.md`.
 - [ ] `signInWith` is an array; `authFlowType` → `users.authFlow`; `sessionTtlSeconds` / `sessionDuration` → `session.ttlSeconds`; `crossDomain` → `session.crossDomain`; `requireSpecialChars` → `requireSymbols`.
-- [ ] `AuthOIDC`'s `providers` array → `oidcProviders` / `socialProviders` records (superseded: one `providers` map tagged with `type`, plus `store: 'blocks'` for direct providers; see [D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)); `customOauth2()` takes `endpoints: { authorization, token, userInfo }`; `stubIdp()` takes no `name`.
+- [ ] `AuthOIDC`'s `providers` array → `oidcProviders` / `socialProviders` records (superseded: one `providers` map tagged with `type`, plus `store: 'builtin'` for direct providers; see [D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)); `customOauth2()` takes `endpoints: { authorization, token, userInfo }`; `stubIdp()` takes no `name`.
 - [ ] Provider secrets must be `AppSetting` references, not strings or functions; `clientId` is a plain string.
 - [ ] `passkeys.userVerification: 'discouraged'` is rejected.
 - [ ] Unknown options and non-boolean values for boolean options throw at construction.

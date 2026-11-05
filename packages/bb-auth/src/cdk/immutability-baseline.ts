@@ -237,8 +237,8 @@ function rejection(fullId: string, file: string, violations: Violation[]): strin
 			'',
 			'If the pool was deployed — Remedy: keep a pool-backed sign-in method (email + password, or a social, SAML ' +
 				"or `type: 'oidc'` provider on the default `store: 'cognito'`), and keep owning the pool rather than " +
-				"wrapping one via `userPool`. A `store: 'blocks'` block has no user pool: keep this block on the Cognito " +
-				"store and put the `store: 'blocks'` providers in a second `Auth` block.",
+				"wrapping one via `userPool`. A `store: 'builtin'` block has no user pool: keep this block on the Cognito " +
+				"store and put the `store: 'builtin'` providers in a second `Auth` block.",
 			`Baseline: ${display(file)}.`,
 			`If removing the pool is deliberate, re-baseline: ${rebaseline}, then commit the file.`,
 		].join('\n');

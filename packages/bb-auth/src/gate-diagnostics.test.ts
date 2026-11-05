@@ -50,11 +50,11 @@ const probes = {
 		void auth.getSignInUrl(context, 'okta');
 	`,
 	passwordOff: `
-		const auth = new Auth(scope, 'off', { store: 'blocks', providers: { okta: { type: 'oidc', ...okta } } });
+		const auth = new Auth(scope, 'off', { store: 'builtin', providers: { okta: { type: 'oidc', ...okta } } });
 		void auth.signIn('alice', 'pw', context);
 	`,
 	passwordOffNoOptionals: `
-		const auth = new Auth(scope, 'off', { store: 'blocks', providers: { okta: { type: 'oidc', ...okta } } });
+		const auth = new Auth(scope, 'off', { store: 'builtin', providers: { okta: { type: 'oidc', ...okta } } });
 		void auth.resendSignUpCode('alice');
 	`,
 	federationOff: `

@@ -59,7 +59,7 @@ const names = (s: AuthState) => s.actions.map((a) => a.name);
 describe('createApi()', () => {
 	test('exposes exactly getAuthState and setAuthState — no getClient()', () => {
 		const { auth } = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		const api = auth.createApi();
@@ -279,9 +279,9 @@ describe('signedOut shapes', () => {
 		]);
 	});
 
-	test("store: 'blocks' → only the provider actions", async () => {
+	test("store: 'builtin' → only the provider actions", async () => {
 		const h = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		const s = await rpc(new Browser(), h.auth.createApi(), (a) => a.getAuthState());

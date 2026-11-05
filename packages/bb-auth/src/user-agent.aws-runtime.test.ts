@@ -76,7 +76,7 @@ function sessionStore(auth: object): SignedStore {
 /** A direct-OIDC-only `Auth`: no user pool, so nothing but the session store signs requests. */
 function makeAuth(scope: ScopeParent): Auth {
 	return new Auth(scope, 'auth', {
-		store: 'blocks',
+		store: 'builtin',
 		providers: { okta: { type: 'oidc', issuer: 'https://idp.example.com', clientId: 'cid' } },
 	});
 }

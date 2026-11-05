@@ -27,7 +27,7 @@ export const authApi = auth.createApi();
 
 // An IdP your backend verifies itself (no Cognito user pool) is a second block:
 const sso = new Auth(scope, 'sso', {
-  store: 'blocks',
+  store: 'builtin',
   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
 });
 export const ssoApi = sso.createApi();

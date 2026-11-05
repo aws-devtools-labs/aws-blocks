@@ -49,27 +49,27 @@ export type AdminDisabled = {
 };
 
 // @public
-export type AdminDisabledOnBlocks = {
+export type AdminDisabledOnBuiltin = {
     readonly __adminNotEnabled: "auth.admin needs store: 'cognito'";
-    addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    removeUserFromGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    setUserPassword(username: string, password: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
-    revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBlocks): never;
+    addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    removeUserFromGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    setUserPassword(username: string, password: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+    revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
 };
 
 // @public
-export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O ? AdminSurface<O> | AdminDisabled | AdminDisabledOnBlocks : O extends {
-    store: 'blocks';
-} ? AdminDisabledOnBlocks : O extends {
+export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O ? AdminSurface<O> | AdminDisabled | AdminDisabledOnBuiltin : O extends {
+    store: 'builtin';
+} ? AdminDisabledOnBuiltin : O extends {
     admin: object;
     store?: 'cognito';
 } ? AdminSurface<O> : AdminDisabled;
@@ -85,7 +85,7 @@ export type AdminGrants<O extends AuthOptions, A extends AdminAction> = O extend
 export type AdminOff = [ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: never];
 
 // @public
-export type AdminOffOnBlocks = [ERROR_auth_admin_needs_store_cognito: never];
+export type AdminOffOnBuiltin = [ERROR_auth_admin_needs_store_cognito: never];
 
 // @public
 export interface AdminOptions {
@@ -333,7 +333,7 @@ export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends 
     federatedIdentity?: FederatedIdentity;
     groups: GroupOf<O>[];
     signInProvider: O extends {
-        store: 'blocks';
+        store: 'builtin';
     } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
     userSub: string;
 }
@@ -350,10 +350,10 @@ export type AuthFlowOf<O extends AuthOptions> = O extends {
 } ? F extends 'USER_PASSWORD_AUTH' | 'USER_AUTH' ? F : 'USER_PASSWORD_AUTH' : 'USER_PASSWORD_AUTH' : 'USER_PASSWORD_AUTH';
 
 // @public
-export type AuthMockOptions = BlocksAuthMockOptions | CognitoAuthMockOptions;
+export type AuthMockOptions = BuiltinAuthMockOptions | CognitoAuthMockOptions;
 
 // @public
-export type AuthOptions = BlocksAuthOptions | CognitoAuthOptions;
+export type AuthOptions = BuiltinAuthOptions | CognitoAuthOptions;
 
 // @public
 export interface AuthSession {
@@ -419,48 +419,18 @@ export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit
     displayName: string;
     groups: GroupOf<O>[];
     signInProvider: O extends {
-        store: 'blocks';
+        store: 'builtin';
     } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
     userSub: string;
 }
 
 // @public
-export type AuthStore = 'cognito' | 'blocks';
+export type AuthStore = 'cognito' | 'builtin';
 
 // @public
 export interface BearerAuthOptions {
     clientIds?: readonly string[];
 }
-
-// @public
-export interface BlocksAuthMockOptions extends BlocksAuthOptions {
-    codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
-    totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
-}
-
-// @public
-export interface BlocksAuthOptions extends AuthCommonOptions {
-    admin?: ERROR_needs_store_cognito<'admin'>;
-    allowBearerAuth?: boolean;
-    email?: ERROR_needs_store_cognito<'email'>;
-    emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
-    featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
-    hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
-    mfa?: ERROR_needs_store_cognito<'mfa'>;
-    passkeys?: ERROR_needs_store_cognito<'passkeys'>;
-    providers: Record<string, BlocksProvider>;
-    store: 'blocks';
-    userPool?: ERROR_needs_store_cognito<'userPool'>;
-    users?: BlocksUserOptions;
-}
-
-// @public
-export type BlocksProvider = DirectOidcProvider | OAuth2Provider | StubProvider;
-
-// @public
-export type BlocksUserOptions = Pick<UserPoolOptions, 'groups'> & {
-    [K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
-};
 
 // @public
 export type BrowserAuthSession = {
@@ -474,6 +444,36 @@ export type BrowserAuthSession = {
 export interface BrowserUser extends Omit<AuthenticatedUser, 'claims' | 'federatedIdentity'> {
     displayName: string;
 }
+
+// @public
+export interface BuiltinAuthMockOptions extends BuiltinAuthOptions {
+    codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
+    totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
+}
+
+// @public
+export interface BuiltinAuthOptions extends AuthCommonOptions {
+    admin?: ERROR_needs_store_cognito<'admin'>;
+    allowBearerAuth?: boolean;
+    email?: ERROR_needs_store_cognito<'email'>;
+    emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
+    featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
+    hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
+    mfa?: ERROR_needs_store_cognito<'mfa'>;
+    passkeys?: ERROR_needs_store_cognito<'passkeys'>;
+    providers: Record<string, BuiltinProvider>;
+    store: 'builtin';
+    userPool?: ERROR_needs_store_cognito<'userPool'>;
+    users?: BuiltinUserOptions;
+}
+
+// @public
+export type BuiltinProvider = DirectOidcProvider | OAuth2Provider | StubProvider;
+
+// @public
+export type BuiltinUserOptions = Pick<UserPoolOptions, 'groups'> & {
+    [K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
+};
 
 // @public
 export interface CodeDeliveryDetails {
@@ -607,7 +607,7 @@ export interface DirectOidcProvider extends OidcProviderBase {
 
 // @public
 export type EmailPasswordEnabled<O extends AuthOptions> = O extends {
-    store: 'blocks';
+    store: 'builtin';
 } ? false : O extends {
     emailPassword: false;
 } ? false : 'emailPassword' extends keyof O ? false extends O['emailPassword'] ? boolean : true : true;

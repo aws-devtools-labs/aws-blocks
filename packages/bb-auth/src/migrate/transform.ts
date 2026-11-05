@@ -1053,10 +1053,10 @@ class FileMigrator {
 		};
 		if (block === 'oidc') {
 			const q = this.quote;
-			// AuthOIDC federated directly by default: that is a 'blocks' block; only all-cognitoFederated stays on a pool.
+			// AuthOIDC federated directly by default: that is a 'builtin' block; only all-cognitoFederated stays on a pool.
 			if (this.oidcPlan(this.propOf(obj, 'providers')).store === 'cognito')
 				place([], this.textEntry('emailPassword', 'false'));
-			else place([], this.textEntry('store', `${q}blocks${q}`));
+			else place([], this.textEntry('store', `${q}builtin${q}`));
 		}
 		const handled = new Set<string>();
 		props.forEach((prop, index) => {
@@ -1437,17 +1437,17 @@ class FileMigrator {
 	/**
 	 * Which store a migrated `AuthOIDC` block gets: `'cognito'` only when every
 	 * provider is a `cognitoFederated()` one; any directly federated provider (the
-	 * `AuthOIDC` default) makes it `'blocks'`. `mixed`: both kinds, which one `Auth`
+	 * `AuthOIDC` default) makes it `'builtin'`. `mixed`: both kinds, which one `Auth`
 	 * block cannot hold.
 	 */
-	private oidcPlan(prop: TS.ObjectLiteralElementLike | undefined): { store: 'cognito' | 'blocks'; mixed: boolean } {
+	private oidcPlan(prop: TS.ObjectLiteralElementLike | undefined): { store: 'cognito' | 'builtin'; mixed: boolean } {
 		const value = valueNode(this.ts, prop);
 		const arr = value ? unwrap(this.ts, value) : undefined;
-		if (!arr || !this.ts.isArrayLiteralExpression(arr)) return { store: 'blocks', mixed: false };
+		if (!arr || !this.ts.isArrayLiteralExpression(arr)) return { store: 'builtin', mixed: false };
 		const viaCognito = arr.elements.map((el) => this.factoryCall(el)?.factory === 'cognitoFederated');
 		const some = viaCognito.some(Boolean);
 		const all = viaCognito.length > 0 && viaCognito.every(Boolean);
-		return { store: all ? 'cognito' : 'blocks', mixed: some && !all };
+		return { store: all ? 'cognito' : 'builtin', mixed: some && !all };
 	}
 
 	private convertProvider(call: TS.CallExpression, factory: OidcFactory): { path: string[]; entry: OutEntry } {

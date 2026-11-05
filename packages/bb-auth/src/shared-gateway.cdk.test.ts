@@ -66,7 +66,7 @@ describe('Auth on the shared stack-level REST API', () => {
 		dirs.push(appDir);
 		const result = synthBlocksApp({
 			appDir,
-			build: `new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } });`,
+			build: `new Auth(stack, 'auth', { store: 'builtin', providers: { corp: stubIdp() } });`,
 			context: { sandboxMode: 'true' },
 		});
 		assert.ok(result.ok, result.stderr);
@@ -121,7 +121,7 @@ describe('Auth on the shared stack-level REST API', () => {
 		dirs.push(appDir);
 		const result = synthBlocksApp({
 			appDir,
-			build: `new Auth(stack, 'auth', { store: 'blocks', providers: { corp: stubIdp() } });`,
+			build: `new Auth(stack, 'auth', { store: 'builtin', providers: { corp: stubIdp() } });`,
 			context: { sandboxMode: 'true' },
 			createOptions: "apiFrontDoor: 'cloudfront',",
 		});

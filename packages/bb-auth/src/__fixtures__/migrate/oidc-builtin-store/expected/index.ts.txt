@@ -5,9 +5,9 @@ import { Auth, github, stubIdp } from '@aws-blocks/bb-auth';
 const scope = new Scope('app');
 const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
 
-// Directly federated (the AuthOIDC default): no user pool, so the block moves to store: 'blocks'.
+// Directly federated (the AuthOIDC default): no user pool, so the block moves to store: 'builtin'.
 export const auth = new Auth(scope, 'sso', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: {
 		// A public (PKCE-only) client: no secret.
 		okta: {

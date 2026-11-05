@@ -5,7 +5,7 @@
  * `validateUser` (decision Q10): one policy for every sign-up and sign-in —
  * only `@allowed.example` addresses may join. Two instances share it, one per
  * store: `auth-gated` (Cognito, email + password: the sign-up and sign-in
- * phases) and `auth-gated-idp` (`store: 'blocks'`, the stub IdP: the sign-in
+ * phases) and `auth-gated-idp` (`store: 'builtin'`, the stub IdP: the sign-in
  * phase).
  *
  * - Local and deployed: an email + password sign-up outside the policy is

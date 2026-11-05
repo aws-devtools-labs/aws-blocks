@@ -16,7 +16,7 @@ import { codePoller } from './poll-for-code.js';
 export interface AuthStateApis {
   /** `auth`: email + password; no passkeys, MFA off. */
   authApi: typeof authApiType;
-  /** `oidcAuth`: `store: 'blocks'` (no email + password) and two OIDC providers. */
+  /** `oidcAuth`: `store: 'builtin'` (no email + password) and two OIDC providers. */
   oidcAuthApi: typeof oidcAuthApiType;
   /** `authC`: declared groups (`admins`, `readers`) and a `department` attribute. */
   authCApi: typeof authCApiType;
@@ -35,7 +35,7 @@ const isLocal = (process.env.BLOCKS_TEST_ENV || 'local') === 'local';
  */
 export function authApiNarrowingTests(getApis: () => AuthStateApis) {
   describe('Auth createApi() is typed by the block options', () => {
-    test('store: blocks — password actions are compile errors and refused at runtime', async () => {
+    test('store: builtin — password actions are compile errors and refused at runtime', async () => {
       const { oidcAuthApi } = getApis();
       // @ts-expect-error — email + password is off on this block
       const state = await oidcAuthApi.setAuthState({ action: 'signIn', username: 'nobody', password: 'pw' });

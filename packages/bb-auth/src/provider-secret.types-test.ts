@@ -51,7 +51,7 @@ function providerSecretsAccepted() {
 		},
 	});
 	new Auth(scope, 'oidc', {
-		store: 'blocks',
+		store: 'builtin',
 		providers: {
 			entra: { type: 'oidc', issuer: 'https://login.example.com', clientId: 'e', clientSecret: googleSecret },
 			gh: github({ clientId: 'Iv1.abc', clientSecret: googleSecret }),
@@ -86,8 +86,8 @@ function providerSecretsRefused() {
 		providers: { google: { type: 'google', clientId: 'g', clientSecret: jsonSecret } },
 	};
 	const direct: AuthOptions = {
-		store: 'blocks',
-		// @ts-expect-error a plain string is not a secret on the 'blocks' store either.
+		store: 'builtin',
+		// @ts-expect-error a plain string is not a secret on the 'builtin' store either.
 		providers: { okta: { type: 'oidc', issuer: 'https://x.example', clientId: 'o', clientSecret: 'plain-text' } },
 	};
 	// @ts-expect-error a KVStore is not a secret: its `get(key)` takes an argument.

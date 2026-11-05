@@ -3,7 +3,7 @@
 
 /**
  * The stub IdP end to end on the mock entry, over real HTTP and through the
- * real routes: a `store: 'blocks'` block with a `stubIdp()` provider signs in
+ * real routes: a `store: 'builtin'` block with a `stubIdp()` provider signs in
  * offline (sign-in route → stub `/authorize` → account picker → callback →
  * session → `requireAuth` / `requireRole` → `getAuthState` → sign-out via the
  * IdP's end-session redirect), plus the stub's own protocol checks.
@@ -61,7 +61,7 @@ function bind(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 
 function makeStubAuth() {
 	return new Auth(unique(), 'auth', {
-		store: 'blocks',
+		store: 'builtin',
 		providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 		users: { groups: ['admin'] },
 	});
@@ -100,7 +100,7 @@ async function continueThroughPicker(b: TestBrowser, start: Response, sub: strin
 	return b.fetch(callback);
 }
 
-describe("stub IdP — store: 'blocks', end to end on the mock", () => {
+describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 	test('sign in via the routes → session → requireAuth / requireRole → getAuthState → sign-out', async () => {
 		const auth = makeStubAuth();
 		const api = auth.createApi();
@@ -236,7 +236,7 @@ describe("stub IdP — store: 'blocks', end to end on the mock", () => {
 		// Defense in depth: a cookie signed before the stricter check (or by any
 		// future writer) is re-validated where it becomes a `Location`.
 		const auth = new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 			redirects: { postSignInPath: '/home' },
 		});
@@ -269,7 +269,7 @@ describe("stub IdP — store: 'blocks', end to end on the mock", () => {
 	test('onAuthorize picks the user without the picker; a throw denies (access_denied)', async () => {
 		let allow = true;
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: {
 				corp: stubIdp({
 					users: [ALICE, BOB],
@@ -299,7 +299,7 @@ describe("stub IdP — store: 'blocks', end to end on the mock", () => {
 	});
 
 	test('users.json in .bb-data/<fullId>/ is the directory when no inline users are given', async () => {
-		const auth = new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
+		const auth = new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
 		const dir = join('.bb-data', auth.fullId);
 		mkdirSync(dir, { recursive: true });
 		writeFileSync(
@@ -471,7 +471,7 @@ describe('stub IdP — protocol checks', () => {
 
 	test('/logout redirects only to a registered post_logout_redirect_uri (the app origin + its sign-out paths)', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
@@ -484,7 +484,7 @@ describe('stub IdP — protocol checks', () => {
 
 	test('/logout refuses an unregistered post_logout_redirect_uri with 400 and no redirect (RP-Initiated Logout §3)', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
@@ -604,7 +604,7 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 	test('a foreign redirect_uri with onAuthorize: 400, and onAuthorize is never asked', async () => {
 		let asked = 0;
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: {
 				corp: stubIdp({
 					users: [ALICE],
@@ -629,7 +629,7 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 
 	test('onAuthorize throwing: access_denied goes only to a registered redirect_uri, a foreign one is a 400', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: {
 				corp: stubIdp({
 					onAuthorize: () => {
@@ -656,7 +656,7 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 
 	test('the legitimate flow still works: the app callback gets the code (onAuthorize, and the picker)', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ users: [ALICE, BOB], onAuthorize: (r) => r.users[1] }) },
 		});
 		const direct = await getAuthorize(authorizeQuery());
@@ -680,7 +680,7 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 
 	test('the registered redirect URI follows redirects.callbackPath (the default path is then refused)', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ onAuthorize: (r) => r.users[0] }) },
 			redirects: { callbackPath: '/aws-blocks/auth/extras/callback' },
 		});
@@ -696,7 +696,7 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 describe('relay + browser PKCE through the stub (the native / SPA transports)', () => {
 	test('relay: authorize-params → stub → callback 302 to relayTo → /exchange (+ bearer) → /refresh', async () => {
 		const auth = new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			allowBearerAuth: true,
 			providers: { corp: stubIdp({ users: [ALICE], onAuthorize: (r) => r.users[0] }) },
 		});
@@ -780,7 +780,7 @@ describe('relay + browser PKCE through the stub (the native / SPA transports)', 
 
 	test('browser PKCE: GET authorize-params → client PKCE → stub → POST /exchange (no tokens without allowBearerAuth)', async () => {
 		const auth = new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ users: [BOB], onAuthorize: (r) => r.users[0] }) },
 		});
 		const params = await (await fetch(`${server.origin}/aws-blocks/auth/authorize-params/corp`)).json();
@@ -894,9 +894,9 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 				codes.push(code);
 			},
 		});
-		// A stub IdP federates directly: its own `store: 'blocks'` block.
+		// A stub IdP federates directly: its own `store: 'builtin'` block.
 		const sso = new Auth(root, 'sso', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 			redirects: { postSignOutPath: '/goodbye' },
 		});
@@ -987,7 +987,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 		assert.throws(
 			() =>
 				new Auth(unique(), 'auth', {
-					store: 'blocks',
+					store: 'builtin',
 					providers: { corp: stubIdp() },
 					redirects: { postSignOutPath: 'https://evil.example.com' },
 				}),
@@ -1011,7 +1011,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 				assert.throws(
 					() =>
 						new Auth(unique(), 'auth', {
-							store: 'blocks',
+							store: 'builtin',
 							providers: { corp: stubIdp() },
 							redirects: { [key]: bad },
 						}),
@@ -1024,7 +1024,7 @@ describe('email + password and a stub IdP side by side: two Auth blocks (mock)',
 
 	test('postSignInPath / postSignOutPath are emitted re-serialised', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
 			redirects: { postSignInPath: '/welcome page?x=1#top', postSignOutPath: '/bye now' },
 		});

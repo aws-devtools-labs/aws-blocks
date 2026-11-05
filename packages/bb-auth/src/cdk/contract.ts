@@ -125,7 +125,7 @@ export function selfSignUpEnabled(options: ResolvedAuthOptions | undefined): boo
 /**
  * Whether options need a Cognito user pool (decision Q6).
  *
- * Never for `store: 'blocks'`. Otherwise `true` when email + password is enabled (the default), when any provider
+ * Never for `store: 'builtin'`. Otherwise `true` when email + password is enabled (the default), when any provider
  * federates through Cognito (see {@link cognitoFederatedProviderIds}), or when
  * an existing pool is wrapped via `userPool`. `false` only for a configuration
  * whose sign-in methods are all directly federated OIDC providers: the CDK
@@ -141,7 +141,7 @@ export function selfSignUpEnabled(options: ResolvedAuthOptions | undefined): boo
  * @internal
  */
 export function requiresUserPool(options: ResolvedAuthOptions | undefined): boolean {
-	if (options?.store === 'blocks') return false;
+	if (options?.store === 'builtin') return false;
 	return (
 		options?.userPool !== undefined ||
 		emailPasswordEnabled(options) ||

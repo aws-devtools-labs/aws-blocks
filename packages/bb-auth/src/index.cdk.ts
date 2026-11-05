@@ -17,7 +17,7 @@
  * - **Q4:** the pool's removal policy and deletion protection follow the
  *   stack defaults when the per-block option is unset (`AuthCognito`'s pool is
  *   `DESTROY` even under `BlocksPresets.production`).
- * - **Q6:** a `store: 'blocks'` configuration (no email + password, and only
+ * - **Q6:** a `store: 'builtin'` configuration (no email + password, and only
  *   backend-verified OIDC, OAuth 2.0 or stub providers) synthesizes no Cognito
  *   resources at all.
  *
@@ -75,7 +75,7 @@ import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
-import { blocksNeedsAProvider, type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import { builtinNeedsAProvider, type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -184,7 +184,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		if (!needsPool && bearerClientIds(opts).length > 0) {
 			throw new Error(
 				`Auth '${this.fullId}': \`allowBearerAuth.clientIds\` names Cognito app clients, but this configuration ` +
-					"has no user pool (`store: 'blocks'`). " +
+					"has no user pool (`store: 'builtin'`). " +
 					'Remove `clientIds`, or enable a pool-backed sign-in method.',
 			);
 		}
@@ -727,8 +727,8 @@ function validateOptions(
 		const hasDirectOidc = Object.values(opts.oidcProviders ?? {}).some((p) => p && p.federateVia !== 'cognito');
 		if (!opts.userPool && !hasDirectOidc && cognitoFederatedProviderIds(opts).length === 0) {
 			throw new Error(
-				opts.store === 'blocks'
-					? blocksNeedsAProvider()
+				opts.store === 'builtin'
+					? builtinNeedsAProvider()
 					: 'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
 			);
 		}
@@ -736,7 +736,7 @@ function validateOptions(
 
 	if (opts.admin && !ctx.needsPool) {
 		throw new Error(
-			"Auth: `admin` manages Cognito pool users, but this configuration provisions no user pool (`store: 'blocks'`). Remove `admin`, or use the default store.",
+			"Auth: `admin` manages Cognito pool users, but this configuration provisions no user pool (`store: 'builtin'`). Remove `admin`, or use the default store.",
 		);
 	}
 }

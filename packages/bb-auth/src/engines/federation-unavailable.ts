@@ -41,7 +41,7 @@ export function unavailableMessage(provider: ResolvedProvider, reason: Unavailab
 			return (
 				`Sign-in provider '${provider.id}' is ${what}, which is unavailable locally (npm run dev): managed login ` +
 				'needs a deployed Cognito user pool. This is expected, not a configuration error: the provider works ' +
-				"after deploy (npm run sandbox). Use a block with store: 'blocks' (a backend-verified OIDC provider, or the " +
+				"after deploy (npm run sandbox). Use a block with store: 'builtin' (a backend-verified OIDC provider, or the " +
 				'stub IdP, stubIdp()) for local sign-in, or deploy a sandbox to test this provider.'
 			);
 		case 'stub-deployed':

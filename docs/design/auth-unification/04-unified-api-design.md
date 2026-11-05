@@ -1,6 +1,6 @@
 # Unified Auth Building Block — API Design Proposal
 
-> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'blocks'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
+> **Superseded (options shape).** The `Auth` options shape described here — `socialProviders`, `oidcProviders` and `samlProviders`, with a per-provider `federateVia` — was replaced before release by a block-level `store` (`'cognito'`, the default, or `'builtin'`) and one `providers` map whose entries carry a `type` (option D). One block now holds one kind of user; an app that wants password users and backend-verified IdP users uses two `Auth` blocks. See [D-023 in DECISIONS.md](../../DECISIONS.md#d-023-auth-options-store--providers-option-d) and [the bb-auth README](../../../packages/bb-auth/README.md#which-option-and-why). The text below is kept as decision history.
 
 > **Status:** proposal for maintainer review. Planning only — no source files were modified.
 > **Scope:** replace `bb-auth-basic` + `bb-auth-cognito` + `bb-auth-oidc` + `auth-common` with **one**
@@ -194,7 +194,7 @@ const auth = new Auth(scope, 'auth', {
 export const authApi = auth.createApi();
 ```
 
-> **Superseded:** these cases use the pre-release keys. With `store` + `providers` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)), (b), (d) and (e) put every provider in `providers` with a `type` (`okta: { type: 'oidc', issuer, clientId, clientSecret }` federates through Cognito there, so `clientSecret` is required), SAML is `partner: { type: 'saml', metadataUrl }`, and (c) becomes `new Auth(scope, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer, clientId } } })`. (e) can no longer combine password users with backend-verified IdP users in one block; that takes two blocks.
+> **Superseded:** these cases use the pre-release keys. With `store` + `providers` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)), (b), (d) and (e) put every provider in `providers` with a `type` (`okta: { type: 'oidc', issuer, clientId, clientSecret }` federates through Cognito there, so `clientSecret` is required), SAML is `partner: { type: 'saml', metadataUrl }`, and (c) becomes `new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } })`. (e) can no longer combine password users with backend-verified IdP users in one block; that takes two blocks.
 
 ### 2.2 Why three provider keys, keyed records, and what that buys
 
@@ -1671,7 +1671,7 @@ repo and agree with its substance, with one correction: it undercounts **unified
 **Recommendation: (c), with `federateVia` defaulting to `'direct'` for `oidcProviders`;
 `socialProviders` and `samlProviders` always federate via Cognito.**
 
-> **Superseded:** both engines still ship, but the choice moved from the provider to the block: `store: 'blocks'` (direct) or the default `store: 'cognito'` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). Mixing the two kinds of user in one block is a non-goal; an app that needs both uses two `Auth` blocks.
+> **Superseded:** both engines still ship, but the choice moved from the provider to the block: `store: 'builtin'` (direct) or the default `store: 'cognito'` ([D-023](../../DECISIONS.md#d-023-auth-options-store--providers-option-d)). Mixing the two kinds of user in one block is a non-goal; an app that needs both uses two `Auth` blocks.
 
 Reasoning:
 1. **(b) is not actually simpler than (c).** SAML has no direct implementation in this repo and social

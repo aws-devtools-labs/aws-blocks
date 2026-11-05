@@ -83,7 +83,7 @@ function untyped(options: unknown): AuthOptions {
 	return options as AuthOptions;
 }
 
-/** A directly federated OIDC provider, for a `store: 'blocks'` block. */
+/** A directly federated OIDC provider, for a `store: 'builtin'` block. */
 const OKTA: Record<string, DirectOidcProvider> = {
 	okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' },
 };
@@ -157,7 +157,7 @@ describe('Auth (CDK) — requiresUserPool (Q6)', () => {
 		['zero-config (email + password default)', undefined, true],
 		['emailPassword: true', { emailPassword: true }, true],
 		['emailPassword options object', { emailPassword: { selfSignUp: false } }, true],
-		["store: 'blocks' (direct OIDC only)", { store: 'blocks', providers: OKTA }, false],
+		["store: 'builtin' (direct OIDC only)", { store: 'builtin', providers: OKTA }, false],
 		[
 			"type: 'oidc' on the Cognito store",
 			{
@@ -271,8 +271,8 @@ describe('Auth (CDK) — synth-time option checks', () => {
 			assert.match(message, /Auth\.fromExisting/);
 		});
 
-		test("refused when the configuration creates no pool (store: 'blocks')", () => {
-			const message = constructError(untyped({ email: sender, store: 'blocks', providers: OKTA }));
+		test("refused when the configuration creates no pool (store: 'builtin')", () => {
+			const message = constructError(untyped({ email: sender, store: 'builtin', providers: OKTA }));
 			assert.match(message, /`email` .* no user pool/);
 		});
 
@@ -370,9 +370,9 @@ describe('Auth (CDK) — synth-time option checks', () => {
 
 	test('a stubIdp() provider throws at synth outside a sandbox: the stub IdP is local and sandbox only', () => {
 		const configs: AuthOptions[] = [
-			{ store: 'blocks', providers: { corp: stubIdp() } },
+			{ store: 'builtin', providers: { corp: stubIdp() } },
 			{
-				store: 'blocks',
+				store: 'builtin',
 				providers: { ...OKTA, corp: stubIdp({ users: [{ sub: 'u', email: 'u@example.com', name: 'U' }] }) },
 			},
 		];
@@ -392,15 +392,15 @@ describe('Auth (CDK) — synth-time option checks', () => {
 		assert.match(constructError({ emailPassword: false }), /leaves no way to sign in/);
 	});
 
-	test("admin on a pool-less (store: 'blocks') configuration throws", () => {
+	test("admin on a pool-less (store: 'builtin') configuration throws", () => {
 		assert.match(
-			constructError(untyped({ store: 'blocks', providers: OKTA, admin: {} })),
+			constructError(untyped({ store: 'builtin', providers: OKTA, admin: {} })),
 			/`admin` needs `store: 'cognito'`/,
 		);
 	});
 
 	test('a fullId over 128 chars throws even when no pool is provisioned', () => {
 		const longId = 'a'.repeat(130);
-		assert.match(constructError({ store: 'blocks', providers: OKTA }, longId), /Cognito's limit is 128/);
+		assert.match(constructError({ store: 'builtin', providers: OKTA }, longId), /Cognito's limit is 128/);
 	});
 });

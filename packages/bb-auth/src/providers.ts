@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Provider factories for a `store: 'blocks'` block's `providers`: `stubIdp()` (the local stub IdP,
+ * Provider factories for a `store: 'builtin'` block's `providers`: `stubIdp()` (the local stub IdP,
  * `type: 'stub'`), `github()` and `customOauth2()` (bare OAuth 2.0,
  * `type: 'oauth2'`, federated directly — Cognito cannot federate OAuth 2.0
  * without an ID token).
@@ -50,7 +50,7 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * const corp = getDeploymentType() === 'production'
  *   ? { type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } as const
  *   : stubIdp();
- * const auth = new Auth(scope, 'auth', { store: 'blocks', providers: { corp } });
+ * const auth = new Auth(scope, 'auth', { store: 'builtin', providers: { corp } });
  * ```
  *
  * What a sandbox stub exposes: it signs users in **without credentials**.
@@ -68,7 +68,7 @@ const STUB_CLIENT_ID = 'stub-client-id';
  * @example
  * ```ts
  * const auth = new Auth(scope, 'auth', {
- *   store: 'blocks',
+ *   store: 'builtin',
  *   providers: {
  *     corp: stubIdp({
  *       users: [
@@ -107,7 +107,7 @@ export function stubIdp(options: StubIdpOptions = {}): StubProvider {
  * ```ts
  * const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
  * const auth = new Auth(scope, 'auth', {
- *   store: 'blocks',
+ *   store: 'builtin',
  *   providers: { github: github({ clientId: 'Iv1.abc', clientSecret: githubSecret }) },
  * });
  * ```

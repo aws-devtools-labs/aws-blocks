@@ -249,7 +249,7 @@ describe('HostedUiFederationEngine — the authorize URL', () => {
 		}
 	});
 
-	test('the AWS entry builds a hosted-UI engine per Cognito-store provider and a direct one per blocks-store provider', () => {
+	test('the AWS entry builds a hosted-UI engine per Cognito-store provider and a direct one per builtin-store provider', () => {
 		const kindsOf = (auth: object) => {
 			const providers: Map<string, { provider: ResolvedProvider; engine: FederationEngine }> = Reflect.get(
 				auth,
@@ -276,7 +276,7 @@ describe('HostedUiFederationEngine — the authorize URL', () => {
 		});
 		clearRouteRegistry();
 		const sso = new AwsAuth({ id: `sel${process.pid}x${++counter}` }, 'sso', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'o' } },
 		});
 		assert.deepStrictEqual(kindsOf(sso), { okta: 'direct' });
@@ -623,7 +623,7 @@ describe('HostedUiFederationEngine — pool-less safety', () => {
 	test('the engine refuses a provider that does not federate through Cognito', () => {
 		const scope = new Scope('auth', { parent: { id: `hui-direct${++counter}` } });
 		const options = resolveOptions({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'o' } },
 		});
 		const [provider] = resolveProviders(options);
@@ -888,9 +888,9 @@ describe('password + hosted-UI social in one block, direct OIDC in a second bloc
 
 	test('all three are reachable, and each signs out correctly', async () => {
 		const h = awsAuth({ providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } } });
-		// Direct OIDC needs `store: 'blocks'`: a second block, on its own route base.
+		// Direct OIDC needs `store: 'builtin'`: a second block, on its own route base.
 		const sso = new AwsAuth({ id: `huisso${process.pid}x${++counter}` }, 'sso', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'okta-client' } },
 			redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 		});

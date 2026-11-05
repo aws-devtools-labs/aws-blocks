@@ -106,8 +106,8 @@ const GUARDED: Record<string, { build: string; property: string; message: RegExp
 };
 
 const POOL_REMOVED: Record<string, string> = {
-	"last pool-backed method removed (store: 'blocks', direct OIDC only)":
-		"new Auth(stack, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } } })",
+	"last pool-backed method removed (store: 'builtin', direct OIDC only)":
+		"new Auth(stack, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } } })",
 	'owned pool swapped for a wrapped one (userPool)':
 		"new Auth(stack, 'auth', { userPool: Auth.fromExisting('us-east-1_existing') })",
 };
@@ -329,7 +329,7 @@ describe('permitted changes pass both layers', () => {
 	test('adding a pool to a pool-less config is permitted (and the guard then sees no pool yet)', async () => {
 		const dir = appDir();
 		const poolless = synthGuarded({
-			build: `const auth = ${POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]};`,
+			build: `const auth = ${POOL_REMOVED["last pool-backed method removed (store: 'builtin', direct OIDC only)"]};`,
 			appDir: dir,
 		});
 		assert.ok(poolless.ok, poolless.stderr);
@@ -460,9 +460,9 @@ describe('pool removal is refused at synth (layer 1)', () => {
 		});
 	}
 
-	test("flipping a deployed block from the Cognito store to store: 'blocks' is a pool removal, with the two-block remedy", () => {
+	test("flipping a deployed block from the Cognito store to store: 'builtin' is a pool removal, with the two-block remedy", () => {
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'builtin', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 		});
 		assert.strictEqual(result.ok, false, 'synth must fail');
@@ -475,14 +475,14 @@ describe('pool removal is refused at synth (layer 1)', () => {
 		);
 		assert.match(
 			result.stderr,
-			/A `store: 'blocks'` block has no user pool: keep this block on the Cognito store and put the `store: 'blocks'` providers in a second `Auth` block\./,
+			/A `store: 'builtin'` block has no user pool: keep this block on the Cognito store and put the `store: 'builtin'` providers in a second `Auth` block\./,
 		);
 		assert.doesNotMatch(result.stderr, /federateVia/);
 	});
 
 	test('…and deliberately allowed with the escape hatch', () => {
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'builtin', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 			env: { BLOCKS_AUTH_REBASELINE: 'TestStack-auth' },
 		});
@@ -555,7 +555,7 @@ describe('reverting a change that was synthesized but never deployed', () => {
 	test('a pool removal: refused, leading with the danger and the stack check before the re-baseline hint', () => {
 		// No deploy-time backstop for a removal: the danger comes first.
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'builtin', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 		});
 		assert.strictEqual(result.ok, false);
@@ -683,7 +683,7 @@ describe('the baseline file', () => {
 
 	test('a deliberate re-baseline to a pool-less config does not repeat the first-synth warning', () => {
 		const result = synthGuarded({
-			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'blocks', direct OIDC only)"]),
+			build: asBuild(POOL_REMOVED["last pool-backed method removed (store: 'builtin', direct OIDC only)"]),
 			appDir: deployedAppDir(),
 			env: { BLOCKS_AUTH_REBASELINE: 'TestStack-auth' },
 		});

@@ -22,7 +22,7 @@ import { resolveOptions } from './resolve-options.js';
 import type { DirectSessionRecord } from './sessions.js';
 import { captureLogger, TEST_SECRET } from './test-helpers.js';
 import { FakeIdp } from './test-support/fake-idp.js';
-import type { BlocksAuthOptions } from './types.js';
+import type { BuiltinAuthOptions } from './types.js';
 
 const APP = 'http://127.0.0.1:3999';
 
@@ -47,7 +47,7 @@ function pendingCookie(ctx: BlocksContext): string {
 
 let counter = 0;
 
-function makeEngine(blockOptions: BlocksAuthOptions, opts: { allowInsecure?: boolean } = {}) {
+function makeEngine(blockOptions: BuiltinAuthOptions, opts: { allowInsecure?: boolean } = {}) {
 	const options = resolveOptions(blockOptions);
 	const { logger, entries } = captureLogger();
 	const scope = new Scope('auth', { parent: { id: `fed${process.pid}x${++counter}` } });
@@ -110,8 +110,8 @@ describe('DirectFederationEngine', () => {
 		idp.revoked.length = 0;
 	});
 
-	const okta = (extra: Record<string, unknown> = {}): BlocksAuthOptions => ({
-		store: 'blocks',
+	const okta = (extra: Record<string, unknown> = {}): BuiltinAuthOptions => ({
+		store: 'builtin',
 		providers: {
 			okta: { type: 'oidc', issuer: idp.issuer, clientId: 'client-1', groupsClaim: 'groups', ...extra },
 		},
@@ -622,7 +622,7 @@ describe('DirectFederationEngine', () => {
 	test('bare OAuth 2.0 (customOauth2): userinfo + mapClaims, Q1 identity oauth2:<name>:<sub>', async () => {
 		idp.userInfoClaims = { id: 4242, login: 'ada', email: 'ada@example.com', name: 'Ada' };
 		const { engine } = makeEngine({
-			store: 'blocks',
+			store: 'builtin',
 			providers: {
 				gh: customOauth2({
 					name: 'gh',

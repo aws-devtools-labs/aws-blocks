@@ -53,7 +53,7 @@ type ActionsOf<A extends { createApi(): AuthStateApi<AuthActionInput> }> =
 	ReturnType<A['createApi']> extends AuthStateApi<infer I> ? I['action'] : never;
 type ChallengesOf<O extends AuthOptions> = ConfirmSignInInputOf<O>['challenge'];
 
-/** An OIDC provider of a `store: 'blocks'` block. */
+/** An OIDC provider of a `store: 'builtin'` block. */
 const okta = { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-okta' } as const;
 /** The same IdP federated through Cognito (the default store), which needs a client secret. */
 const oktaViaCognito = { ...okta, clientSecret: oktaSecret };
@@ -78,12 +78,12 @@ type TotpActionName = 'setUpTotp' | 'verifyTotpSetup';
 type MfaPreferenceActionName = 'getMfaPreference' | 'updateMfaPreference';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (1) One OIDC provider and no email + password (`store: 'blocks'`) — the
+// (1) One OIDC provider and no email + password (`store: 'builtin'`) — the
 //     reviewer's repro. The password actions are compile errors; signOut is
 //     the only action. `emailPassword: false` on the Cognito store is the same.
 // ─────────────────────────────────────────────────────────────────────────────
 async function oidcOnly() {
-	const auth = new Auth(scope, 'oidc-only', { store: 'blocks', providers: { okta } });
+	const auth = new Auth(scope, 'oidc-only', { store: 'builtin', providers: { okta } });
 	const authApi = auth.createApi();
 	await authApi.setAuthState({ action: 'signOut' });
 	// @ts-expect-error — email + password is off on this block
@@ -285,7 +285,7 @@ function takesPlainApi(_api: AuthStateApi): void {
 	/* no-op */
 }
 async function compatibility() {
-	const oidcApi = new Auth(scope, 'c-oidc', { store: 'blocks', providers: { okta } }).createApi();
+	const oidcApi = new Auth(scope, 'c-oidc', { store: 'builtin', providers: { okta } }).createApi();
 	const pwApi = new Auth(scope, 'c-pw', { emailPassword: { selfSignUp: false } }).createApi();
 	takesPlainApi(oidcApi);
 	takesPlainApi(pwApi);

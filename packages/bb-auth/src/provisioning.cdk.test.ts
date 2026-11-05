@@ -6,7 +6,7 @@
  * durability follows the stack defaults (decision Q4). Real synth under
  * `--conditions=cdk` (see `test-support/cdk-synth.ts`).
  *
- * Q6: a configuration with no pool-backed sign-in method — a `store: 'blocks'`
+ * Q6: a configuration with no pool-backed sign-in method — a `store: 'builtin'`
  * block (no email + password, no social, SAML or Cognito-federated OIDC
  * provider) — synthesizes no Cognito resources, only `sessions` and
  * `session-secret`.
@@ -52,15 +52,15 @@ const OKTA_DIRECT = "okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', cli
 
 const CONFIGS = {
 	default: "new Auth(stack, 'auth')",
-	directOnly: `new Auth(stack, 'auth', { store: 'blocks', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] } })`,
+	directOnly: `new Auth(stack, 'auth', { store: 'builtin', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] } })`,
 	// OIDC and bare OAuth 2.0 (`stubIdp()` is covered by stub-idp.cdk.test.ts: it needs a sandbox context).
-	directAndOauth2: `new Auth(stack, 'auth', { store: 'blocks', providers: { ${OKTA_DIRECT}, gh: github({ clientId: 'gh-client', clientSecret: ${SECRET} }) } })`,
+	directAndOauth2: `new Auth(stack, 'auth', { store: 'builtin', providers: { ${OKTA_DIRECT}, gh: github({ clientId: 'gh-client', clientSecret: ${SECRET} }) } })`,
 	socialOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } } })`,
 	samlOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { corp: { type: 'saml', metadataUrl: 'https://idp.example.com/metadata' } } })`,
 	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: ${SECRET} } } })`,
 	// Email + password and social in `auth`; the directly federated okta can no longer share it, so it gets its
-	// own `store: 'blocks'` block, built first (the comma expression keeps `auth` the block under test).
-	mixed: `(new Auth(stack, 'sso', { store: 'blocks', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] } }), new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } }, users: { groups: ['admins'] } }))`,
+	// own `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test).
+	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] } }), new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } }, users: { groups: ['admins'] } }))`,
 } as const;
 
 const cache: Record<string, SynthesizedAuth> = {};
@@ -115,7 +115,7 @@ describe('Auth — Q6 conditional provisioning', () => {
 		assert.deepStrictEqual(diffIdentity(FIXTURE_DEFAULT, identity), []);
 	});
 
-	describe("store: 'blocks' (direct OIDC only): no Cognito resources at all", () => {
+	describe("store: 'builtin' (direct OIDC only): no Cognito resources at all", () => {
 		test('synthesizes no AWS::Cognito::* resource (not even the declared groups)', () => {
 			assert.deepStrictEqual(cognitoResources(synth(CONFIGS.directOnly).template), []);
 		});
@@ -208,7 +208,7 @@ describe('Auth — Q6 conditional provisioning', () => {
 		});
 	}
 
-	describe("mixed (email + password and social; direct OIDC in a second, store: 'blocks' block)", () => {
+	describe("mixed (email + password and social; direct OIDC in a second, store: 'builtin' block)", () => {
 		test('pool, client and the declared group under the frozen ids', () => {
 			const { identity } = synth(CONFIGS.mixed);
 			const paths = Object.values(identity.resources).map((r) => r.path);
@@ -225,7 +225,7 @@ describe('Auth — Q6 conditional provisioning', () => {
 		});
 	});
 
-	test("store: 'blocks', then moving the block to the Cognito store (email + password), is additive and lands on the frozen ids", () => {
+	test("store: 'builtin', then moving the block to the Cognito store (email + password), is additive and lands on the frozen ids", () => {
 		const before = synth(CONFIGS.directOnly).identity;
 		const after = synth(CONFIGS.default).identity;
 		// Additive: nothing that existed is removed or changed…
@@ -309,7 +309,7 @@ describe('Auth — Q4 pool durability follows the stack defaults', () => {
 			assert.deepStrictEqual(removalWarnings(s), []);
 		});
 
-		test("a store: 'blocks' config (no pool) and a wrapped existing pool do not warn", () => {
+		test("a store: 'builtin' config (no pool) and a wrapped existing pool do not warn", () => {
 			assert.deepStrictEqual(removalWarnings(synth(CONFIGS.directOnly, 'production')), []);
 			const existing = synth(
 				"new Auth(stack, 'auth', { userPool: Auth.fromExisting('us-east-1_existing') })",

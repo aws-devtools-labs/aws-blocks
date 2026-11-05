@@ -782,7 +782,7 @@ describe('AWS engine construction contract', () => {
 		process.env[keys.CLIENT_ID] = TEST_CLIENT_ID;
 		try {
 			const auth = new Auth(root, id, {
-				store: 'blocks',
+				store: 'builtin',
 				providers: { okta: { type: 'oidc', issuer: 'https://example.okta.com', clientId: 'okta-client' } },
 			});
 			assert.strictEqual(auth.fullId, `q6-${id}`);

@@ -26,7 +26,7 @@ import { decodeState, encodeState, relayStateKey } from './state-envelope.js';
 import { FakeIdp } from './test-support/fake-idp.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
 import { encodeTriggerRejection } from './trigger-rejection.js';
-import type { AppSettingRef, BlocksAuthOptions, CognitoAuthOptions } from './types.js';
+import type { AppSettingRef, BuiltinAuthOptions, CognitoAuthOptions } from './types.js';
 
 const secret: AppSettingRef = { fullId: 'provider-secret', get: async () => 's3cret' };
 let counter = 0;
@@ -51,7 +51,7 @@ afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 /**
  * Every configured kind of provider, in the two blocks an app needs for them:
  * the user pool's (federated through the hosted UI) on the default route base,
- * and a `'blocks'` one (federated directly) on its own, `/aws-blocks/auth/sso`.
+ * and a `'builtin'` one (federated directly) on its own, `/aws-blocks/auth/sso`.
  */
 function mixedPool(): CognitoAuthOptions {
 	return {
@@ -66,9 +66,9 @@ function mixedPool(): CognitoAuthOptions {
 }
 
 /** The directly federated half of {@link mixedPool}. */
-function mixedDirect(): BlocksAuthOptions {
+function mixedDirect(): BuiltinAuthOptions {
 	return {
-		store: 'blocks',
+		store: 'builtin',
 		allowBearerAuth: true,
 		providers: {
 			corp: stubIdp(),
@@ -145,7 +145,7 @@ describe('route table', () => {
 	});
 
 	test('refresh routes only with allowBearerAuth; no routes at all without a provider', () => {
-		new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
+		new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
 		assert.ok(!table().some((p) => p.endsWith('/refresh')));
 		clearRouteRegistry();
 		new Auth(unique(), 'auth');
@@ -154,7 +154,7 @@ describe('route table', () => {
 
 	test('a custom callbackPath moves the whole flow; a path outside /aws-blocks/auth/ is refused', () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp() },
 			redirects: { callbackPath: '/aws-blocks/auth/real/callback', signOutPath: '/aws-blocks/auth/real/signout' },
 		});
@@ -174,7 +174,7 @@ describe('route table', () => {
 		assert.throws(
 			() =>
 				new Auth(unique(), 'auth', {
-					store: 'blocks',
+					store: 'builtin',
 					providers: { corp: stubIdp() },
 					redirects: { callbackPath: '/auth/callback' },
 				}),
@@ -184,11 +184,11 @@ describe('route table', () => {
 	test('two blocks with providers on the default paths: the second names both blocks and the redirects to set', () => {
 		const scope = unique();
 		new Auth(scope, 'auth'); // password only: mounts no sign-in routes
-		new Auth(scope, 'sso', { store: 'blocks', providers: { corp: stubIdp() } });
+		new Auth(scope, 'sso', { store: 'builtin', providers: { corp: stubIdp() } });
 		assert.throws(
 			() =>
 				new Auth(scope, 'partners', {
-					store: 'blocks',
+					store: 'builtin',
 					providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
 				}),
 			(e: Error) => {
@@ -199,7 +199,7 @@ describe('route table', () => {
 			},
 		);
 		new Auth(scope, 'partners2', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
 			redirects: {
 				callbackPath: '/aws-blocks/auth/partners2/callback',
@@ -218,7 +218,7 @@ describe('route table', () => {
 		assert.throws(
 			() =>
 				new Auth(fresh, 'vendors', {
-					store: 'blocks',
+					store: 'builtin',
 					providers: { okta: { type: 'oidc', issuer: idp.issuer, clientId: 'c' } },
 				}),
 			{ message: /^Auth 'vendors': .* already mounted by another route\./ },
@@ -273,9 +273,9 @@ describe('relay state envelope — the native SDKs’ wire format', () => {
 });
 
 describe('callback dispatch — each transport and wire error code', () => {
-	function stubAuth(extra: Partial<BlocksAuthOptions> = {}) {
+	function stubAuth(extra: Partial<BuiltinAuthOptions> = {}) {
 		const auth = new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp() },
 			redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] },
 			...extra,
@@ -655,7 +655,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 	});
 
 	test('GET session: 401 NotAuthenticatedException without a session (the browser redirect client)', async () => {
-		new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
+		new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
 		const res = await fetch(`${server.origin}/aws-blocks/auth/session`);
 		assert.strictEqual(res.status, 401);
 		assert.strictEqual(res.headers.get('cache-control'), 'no-store');
@@ -663,7 +663,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 	});
 
 	test('POST sign-out: 204 for the native SDKs; `?format=json` answers 200 with the body the browser can read', async () => {
-		new Auth(unique(), 'auth', { store: 'blocks', providers: { corp: stubIdp() } });
+		new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
 		const json = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
 		const native = await fetch(`${server.origin}/aws-blocks/auth/signout`, { ...json, redirect: 'manual' });
 		assert.strictEqual(native.status, 204, 'the native contract is unchanged');
@@ -674,7 +674,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 
 	test('GET on the sign-out path is the sign-out landing: 302 to postSignOutPath, no state change', async () => {
 		new Auth(unique(), 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { corp: stubIdp() },
 			redirects: { postSignOutPath: '/bye' },
 		});

@@ -114,7 +114,7 @@ describe('bb-auth migrate — TODOs where a person must decide', () => {
 		['oidc-cognito-federated', 'index.ts', /users of this provider get a NEW userId/],
 		['oidc-cognito-federated', 'index.ts', /deploy twice/],
 		['oidc-direct', 'index.ts', /provider secrets must be AppSetting references/],
-		['oidc-mixed', 'index.ts', /The codemod chose store: 'blocks'/],
+		['oidc-mixed', 'index.ts', /The codemod chose store: 'builtin'/],
 		['oidc-mixed', 'index.ts', /Replace the placeholder key with its provider id/],
 		['oidc-direct', 'client.ts', /getClient\(\) is gone/],
 		['by-reference', 'index.ts', /options are passed by reference/],

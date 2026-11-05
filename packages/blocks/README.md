@@ -123,7 +123,7 @@ Start from what you need:
 - **Authenticate users** → `Auth` (bb-auth) — one block; `store` picks where users live, and every sign-in provider is a `providers` entry with a `type` (see [Choosing a sign-in method](#choosing-a-sign-in-method) below)
   - Your own users with email + password (the default) → `new Auth(scope, 'auth')`
   - Google, Apple, Facebook or Amazon sign-in → `providers: { google: { type: 'google', … } }`
-  - Okta, Entra ID, Auth0, GitHub or any OIDC provider, verified by your backend → `store: 'blocks'` with `type: 'oidc'` entries (or `github()`)
+  - Okta, Entra ID, Auth0, GitHub or any OIDC provider, verified by your backend → `store: 'builtin'` with `type: 'oidc'` entries (or `github()`)
   - An identity provider that only speaks SAML → `type: 'saml'`
 - **Run work outside the request/response**
   - Fire-and-forget background jobs → `AsyncJob` (bb-async-job)
@@ -150,19 +150,19 @@ If you need SQL, prefer `DistributedDatabase` for Aurora DSQL, which is PostgreS
 
 ### Choosing a sign-in method
 
-First pick where the users live: in a Cognito user pool (the default store), or at their identity provider with `store: 'blocks'` (no user pool). One block holds one kind of user, so password users and backend-verified OIDC users need two `Auth` blocks. The methods differ in cost and in where they run:
+First pick where the users live: in a Cognito user pool (the default store), or at their identity provider with `store: 'builtin'` (no user pool). One block holds one kind of user, so password users and backend-verified OIDC users need two `Auth` blocks. The methods differ in cost and in where they run:
 
 | Method | Configure with | Cognito free tier | Works offline in `npm run dev` | User-pool user (Cognito groups, `auth.admin`) |
 |---|---|---|---|---|
 | Email + password | `emailPassword` (on by default; default store) | 10,000 MAUs (none on the Plus plan) | Yes | Yes |
 | Social | `providers` entry, `type: 'google'` / `'apple'` / `'facebook'` / `'amazon'` (default store) | 10,000 MAUs, shared with email + password (none on Plus) | No — deploy a sandbox to test | Yes |
-| OIDC, verified by your backend | `store: 'blocks'`, `type: 'oidc'` entry | No Cognito charge | Yes, with `stubIdp()` | No — groups come from the IdP's token |
+| OIDC, verified by your backend | `store: 'builtin'`, `type: 'oidc'` entry | No Cognito charge | Yes, with `stubIdp()` | No — groups come from the IdP's token |
 | OIDC through Cognito | `type: 'oidc'` entry on the default store | 50 MAUs, then $0.015 per MAU on every plan | No | Yes |
 | SAML | `type: 'saml'` entry (default store) | 50 MAUs, then $0.015 per MAU on every plan | No | Yes |
 
 Free tiers and rates are from [Amazon Cognito pricing](https://aws.amazon.com/cognito/pricing/) as read on 4 October 2026.
 
-MFA and passkeys apply only to email + password users; federated users get MFA from their identity provider. Only `store: 'blocks'` supports PKCE-only (public) clients. For the full comparison and how to choose, read *Which option and why* in the `Auth` README (`docs/bb-auth/README.md`).
+MFA and passkeys apply only to email + password users; federated users get MFA from their identity provider. Only `store: 'builtin'` supports PKCE-only (public) clients. For the full comparison and how to choose, read *Which option and why* in the `Auth` README (`docs/bb-auth/README.md`).
 
 ## Building Block documentation
 

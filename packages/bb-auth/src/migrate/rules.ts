@@ -510,7 +510,7 @@ export const TODOS = {
 	],
 	mixedFederation: [
 		'this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth',
-		"block now holds one kind of user. The codemod chose store: 'blocks' (no user pool; the direct providers keep their userIds).",
+		"block now holds one kind of user. The codemod chose store: 'builtin' (no user pool; the direct providers keep their userIds).",
 		"Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),",
 		"with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.",
 	],
@@ -558,7 +558,7 @@ export const TODOS = {
 	oidcUserField: (field: string): string =>
 		`OIDCUser.${field} is gone: AuthenticatedUser has signInProvider, attributes (string claims), claims (iss, sub, …) and userId (still \`\${iss}:\${sub}\`).`,
 	oidcUserClaims:
-		"AuthenticatedUser.claims is optional now: it is set for users of a store: 'blocks' block, and absent for user-pool users (a cognitoFederated() provider becomes one). Read it as claims?.x.",
+		"AuthenticatedUser.claims is optional now: it is set for users of a store: 'builtin' block, and absent for user-pool users (a cognitoFederated() provider becomes one). Read it as claims?.x.",
 	namespaceImport: 'namespace import of an old auth package: rename its members by hand (MIGRATION.md, "Names").',
 	dynamicImport:
 		'dynamic import of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.',

@@ -14,7 +14,7 @@ const corp = getDeploymentType() === 'production'
 	? ({ type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } as const)
 	: stubIdp();
 
-new Auth(app, 'auth', { store: 'blocks', providers: { corp } });
+new Auth(app, 'auth', { store: 'builtin', providers: { corp } });
 ```
 
 A sandbox stub signs users in without credentials: anyone who can reach the sandbox can sign in as any of the stub's users, with their claims and groups.

@@ -42,14 +42,14 @@ npm test             # typecheck + test:e2e; starts its own dev server, so stop 
 
 ## Configuring OIDC
 
-`aws-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'blocks'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
+`aws-blocks/index.ts` declares a single Google provider on the `Auth` block, federated directly by the backend (`store: 'builtin'`: no Cognito user pool). The client ID is public, so it is a plain string; the client secret is a secret `AppSetting`:
 
 ```typescript
 const GOOGLE_CLIENT_ID = 'replace-me.apps.googleusercontent.com';
 const googleClientSecret = new AppSetting(scope, 'google-client-secret', { secret: true });
 
 const auth = new Auth(scope, 'auth', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     google: {
       type: 'oidc',
@@ -141,7 +141,7 @@ To exercise sign-in without any Google setup, swap the provider for the stub IdP
 import { Auth, stubIdp, relayOrigin } from '@aws-blocks/blocks';
 
 const auth = new Auth(scope, 'auth', {
-  store: 'blocks',
+  store: 'builtin',
   providers: { google: stubIdp() },
   allowBearerAuth: true,
   redirects: {

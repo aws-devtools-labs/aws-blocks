@@ -298,13 +298,21 @@ export async function confirm(username: string, context: BlocksContext) {
 		}
 	});
 
-	test("a directly federated AuthOIDC app compiles against Auth as a store: 'blocks' block", async () => {
-		const dir = scratch('oidc-blocks-store');
-		const input = join(PACKAGE_DIR, 'src', '__fixtures__', 'migrate', 'oidc-blocks-store', 'input', 'index.ts.txt');
+	test("a directly federated AuthOIDC app compiles against Auth as a store: 'builtin' block", async () => {
+		const dir = scratch('oidc-builtin-store');
+		const input = join(
+			PACKAGE_DIR,
+			'src',
+			'__fixtures__',
+			'migrate',
+			'oidc-builtin-store',
+			'input',
+			'index.ts.txt',
+		);
 		const [file] = writeFiles(dir, { 'aws-blocks/index.ts': readFileSync(input, 'utf8') });
 		assert.ok(file);
 		await migrateDir(dir);
-		assert.match(readFileSync(file, 'utf8'), /store: 'blocks',\n\tproviders: \{/);
+		assert.match(readFileSync(file, 'utf8'), /store: 'builtin',\n\tproviders: \{/);
 		assert.deepStrictEqual(typecheck([file]), [], 'the migrated app compiles against Auth');
 	});
 

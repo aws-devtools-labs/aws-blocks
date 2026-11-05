@@ -347,7 +347,7 @@ function cognitoOidcRegistration(
 	}
 	if (!p.clientSecret) {
 		throw new Error(
-			`Auth: providers.${id} is a \`type: 'oidc'\` provider of a Cognito user pool but has no \`clientSecret\`. Cognito is a confidential client and needs one; use a \`store: 'blocks'\` block for a PKCE-only IdP.`,
+			`Auth: providers.${id} is a \`type: 'oidc'\` provider of a Cognito user pool but has no \`clientSecret\`. Cognito is a confidential client and needs one; use a \`store: 'builtin'\` block for a PKCE-only IdP.`,
 		);
 	}
 	const details: Record<string, string> = {

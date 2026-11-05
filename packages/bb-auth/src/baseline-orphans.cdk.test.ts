@@ -28,7 +28,7 @@ import { defaultBaselineFile, freshAppDir } from './test-support/guard-synth.js'
 const AUTH = "new Auth(stack, 'auth');";
 const TWO = "new Auth(stack, 'auth'); new Auth(stack, 'staff');";
 const POOL_LESS =
-	"new Auth(stack, 'auth', { store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } } });";
+	"new Auth(stack, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } } });";
 
 const tempDirs: string[] = [];
 after(() => {

@@ -11,7 +11,7 @@ const entraSecret = new AppSetting(scope, 'entra-secret', { secret: true });
 
 // Direct and Cognito-federated providers in one block: Auth cannot hold both kinds in one block.
 export const auth = new Auth(scope, 'auth', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: {
 		okta: {
 			type: 'oidc',
@@ -24,7 +24,7 @@ export const auth = new Auth(scope, 'auth', {
 		//   To keep the old prefix instead, set hostedUi: { domainPrefix: <old cognitoDomain> } and deploy twice
 		//   (MIGRATION.md, "AuthOIDC with cognitoFederated()") — a single deploy fails on the domain collision.
 		// TODO(aws-blocks-auth-migrate): this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth
-		//   block now holds one kind of user. The codemod chose store: 'blocks' (no user pool; the direct providers keep their userIds).
+		//   block now holds one kind of user. The codemod chose store: 'builtin' (no user pool; the direct providers keep their userIds).
 		//   Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),
 		//   with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.
 		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),
@@ -37,7 +37,7 @@ export const auth = new Auth(scope, 'auth', {
 			clientSecret: googleSecret,
 		},
 		// TODO(aws-blocks-auth-migrate): this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth
-		//   block now holds one kind of user. The codemod chose store: 'blocks' (no user pool; the direct providers keep their userIds).
+		//   block now holds one kind of user. The codemod chose store: 'builtin' (no user pool; the direct providers keep their userIds).
 		//   Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),
 		//   with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.
 		// TODO(aws-blocks-auth-migrate): users of this provider get a NEW userId: Auth's hosted-UI federation uses the Cognito username (cognito:username),

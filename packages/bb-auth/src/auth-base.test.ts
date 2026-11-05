@@ -362,7 +362,7 @@ describe('requireRole', () => {
 
 	test('a direct-federated session uses its groupsClaim snapshot, narrowed', async () => {
 		const h = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			users: { groups: ['admins'] },
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
@@ -391,7 +391,7 @@ describe('requireRole', () => {
 describe('federated sessions in the same table', () => {
 	test('a direct session is a discriminated row; it refreshes and signs out through its provider engine', async () => {
 		const h = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		const okta = h.federation.get('okta');
@@ -438,7 +438,7 @@ describe('federated sessions in the same table', () => {
 
 	test('a session whose provider was removed from the config → signed out', async () => {
 		const h = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		const okta = h.federation.get('okta');
@@ -462,7 +462,7 @@ describe('federated sessions in the same table', () => {
 describe('runtime mode gates (backstop for untyped callers)', () => {
 	test('email + password disabled → 409 EmailPasswordNotEnabled on every password method; no engine call', async () => {
 		const h = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		// An untyped JavaScript caller, simulated through the wide type.
@@ -485,9 +485,9 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 		assert.deepStrictEqual(h.native.calls, []);
 	});
 
-	test("store: 'blocks' → the MFA and passkey methods answer 409 EmailPasswordNotEnabled (naming the store); no engine call", async () => {
+	test("store: 'builtin' → the MFA and passkey methods answer 409 EmailPasswordNotEnabled (naming the store); no engine call", async () => {
 		const h = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		const wide: MockAuth = h.auth;
@@ -502,7 +502,7 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 			await assert.rejects(call(), {
 				name: AuthErrors.EmailPasswordNotEnabled,
 				status: 409,
-				message: /disabled on this Auth instance \(store: 'blocks'\)/,
+				message: /disabled on this Auth instance \(store: 'builtin'\)/,
 			});
 		const passkeys: Array<() => Promise<unknown>> = [
 			() => wide.startPasskeyRegistration(ctx),
@@ -514,7 +514,7 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 			await assert.rejects(call(), {
 				name: AuthErrors.EmailPasswordNotEnabled,
 				status: 409,
-				message: /disabled on this Auth instance \(store: 'blocks'\)/,
+				message: /disabled on this Auth instance \(store: 'builtin'\)/,
 			});
 		assert.deepStrictEqual(h.native.calls, []);
 	});
@@ -529,7 +529,7 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 			status: 409,
 		});
 		const some = makeAuth({
-			store: 'blocks',
+			store: 'builtin',
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
 		assert.match(await some.auth.getSignInUrl(makeContext(), 'okta'), /^https:\/\/idp\.example\.com\//);
@@ -543,7 +543,7 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 		const pool = (options: AuthOptions) => requiresUserPool(resolveOptions(options));
 		assert.strictEqual(pool({}), true);
 		assert.strictEqual(
-			pool({ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c' } } }),
+			pool({ store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c' } } }),
 			false,
 		);
 		assert.strictEqual(
@@ -586,7 +586,7 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 			],
 		);
 		const direct = resolveProviders(
-			resolveOptions({ store: 'blocks', providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c' } } }),
+			resolveOptions({ store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'i', clientId: 'c' } } }),
 		);
 		assert.deepStrictEqual(
 			direct.map((p) => [p.id, p.transport, p.label]),
@@ -760,7 +760,7 @@ describe('email + password flows through AuthBase', () => {
 	});
 
 	test('updatePassword on a federated session is a 400, not a call to the pool', async () => {
-		// A password block's federated users come through the hosted UI (a `'blocks'` block has no updatePassword).
+		// A password block's federated users come through the hosted UI (a `'builtin'` block has no updatePassword).
 		const h = makeAuth({
 			providers: { google: { type: 'google', clientId: 'g', clientSecret: oktaSecret } },
 		});

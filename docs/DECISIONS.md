@@ -958,7 +958,7 @@ D-022 gave `Auth` one options object whose sign-in methods were sibling keys: `e
 Every `Auth` block has one `store`, and all of its sign-in providers go in one `providers` map whose entries carry a `type`:
 
 - **`store: 'cognito'`** (the default, so `new Auth(scope, 'auth')` is unchanged): users live in a Cognito user pool. It allows email + password, `mfa`, `passkeys`, `admin` and `userPool`, plus `providers` of `type: 'google' | 'facebook' | 'amazon' | 'apple' | 'saml' | 'oidc'`. `oidc` federates through Cognito and requires `clientSecret`.
-- **`store: 'blocks'`**: there is no user pool. The backend verifies each provider itself, and the only storage is the session table. It allows `providers` of `type: 'oidc' | 'oauth2' | 'stub'` (`github()` / `customOauth2()` and `stubIdp()` set the latter two), `users.groups` and `allowBearerAuth: true`. `validateUser` runs at sign-in only.
+- **`store: 'builtin'`**: there is no user pool. The backend verifies each provider itself, and the only storage is the session table. It allows `providers` of `type: 'oidc' | 'oauth2' | 'stub'` (`github()` / `customOauth2()` and `stubIdp()` set the latter two), `users.groups` and `allowBearerAuth: true`. `validateUser` runs at sign-in only.
 - **Removed:** `socialProviders`, `oidcProviders`, `samlProviders` and `federateVia`.
 - **One block holds one kind of user.** An app that wants password users and backend-verified IdP users uses two `Auth` blocks, with two session cookies and two `createApi()`s.
 - **Compile time first, runtime as a backstop.** `AuthOptions` is a union discriminated on `store`. Each arm declares the other arm's keys with named error types (`ERROR_needs_store_cognito<'emailPassword'>`, `ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`), because `Auth` captures its options as a `const` generic, where TypeScript does no excess-property check. The constructor rejects the same combinations with readable messages, and also what the compiler can't see: options built from JSON or env, casts, and a social entry keyed differently from its `type`.
@@ -982,10 +982,13 @@ Every `Auth` block has one `store`, and all of its sign-in providers go in one `
 - **H. Cognito by default, with direct OIDC as a separate plugin block.** Close to D in effect, but it adds a second block type and a plugin seam to keep stable.
 
 ### Locked
-These don't change with the option names: construct ids (`<authId>/pool`, `client`, `sessions`, `session-secret`, `saml-<id>`, `idp-<id>`); user ids (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'blocks'` users); the session row format, including its internal `kind: 'direct'` discriminator; the default store (`'cognito'`); and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`).
+These don't change with the option names: construct ids (`<authId>/pool`, `client`, `sessions`, `session-secret`, `saml-<id>`, `idp-<id>`); user ids (`userId` / `userSub` for pool users, `` `${issuer}:${sub}` `` for `'builtin'` users); the session row format, including its internal `kind: 'direct'` discriminator; the default store (`'cognito'`); and the client-side provider ids and routes (`getSignInUrl(context, '<id>')`, `signIn:<id>`).
+
+### Naming
+The option is `store: 'cognito' | 'builtin'`. The second value was called `'blocks'` until review, which chose `'builtin'` over it; the type names that encode it (`BuiltinAuthOptions`, `BuiltinProvider`, …) were renamed with it.
 
 ### Provisional
-`store`, its values (`'cognito'`, `'blocks'`) and the `type` names are working names until `@aws-blocks/bb-auth` is released. They appear only in the types, the resolver, the validation messages and the docs, and no resource, user id or stored row depends on them. Renaming them before release is a find-and-replace.
+The `type` names are working names until `@aws-blocks/bb-auth` is released. Like `store` and its values, they appear only in the types, the resolver, the validation messages and the docs, and no resource, user id or stored row depends on them. Renaming them before release is a find-and-replace.
 
 ### References
 - User doc: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#where-do-your-users-live)

@@ -376,7 +376,7 @@ describe('AWS allowBearerAuth — direct OIDC (HTTPS issuer, stubbed discovery +
 	let n = 0;
 	function makeDirectAuth() {
 		return new Auth({ id: `d6caws${process.pid}x${++n}` }, 'auth', {
-			store: 'blocks',
+			store: 'builtin',
 			allowBearerAuth: true,
 			providers: { okta: { type: 'oidc', issuer: HTTPS_ISSUER, clientId: 'client-1', groupsClaim: 'groups' } },
 			users: { groups: ['admins'] },

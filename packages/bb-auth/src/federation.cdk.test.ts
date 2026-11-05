@@ -5,7 +5,7 @@
  * Hosted-UI federation infrastructure (D3b): what `Auth` provisions for social,
  * SAML and Cognito-federated OIDC providers (`type: 'oidc'` on the default
  * `store: 'cognito'`), and — just as important — that it provisions nothing new
- * otherwise (including for a `store: 'blocks'` block).
+ * otherwise (including for a `store: 'builtin'` block).
  *
  * Template tests synth under `--conditions=cdk` (see `test-support/cdk-synth.ts`);
  * the synth-time checks run in process, like `index.cdk.test.ts`.
@@ -63,13 +63,13 @@ const P = {
 
 const CONFIGS = {
 	default: "new Auth(stack, 'auth')",
-	directOnly: `new Auth(stack, 'auth', { store: 'blocks', providers: { ${P.oktaDirect} } })`,
+	directOnly: `new Auth(stack, 'auth', { store: 'builtin', providers: { ${P.oktaDirect} } })`,
 	socialOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.google} } })`,
 	samlOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.corpUrl} } })`,
 	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.oktaCognito} } })`,
 	// Password + social + SAML in `auth`; the directly federated okta can no longer share it, so it gets its own
-	// `store: 'blocks'` block, built first (the comma expression keeps `auth` the block under test).
-	mixed: `(new Auth(stack, 'sso', { store: 'blocks', providers: { ${P.oktaDirect} } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
+	// `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test).
+	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${P.oktaDirect} } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
 	allSocial: `new Auth(stack, 'auth', { providers: { ${P.google}, ${P.facebook}, ${P.amazon}, ${P.apple} } })`,
 	defaultPlusGoogle: `new Auth(stack, 'auth', { providers: { ${P.google} } })`,
 } as const;
@@ -277,7 +277,7 @@ describe('Auth federation — provisioning matrix', () => {
 		});
 	}
 
-	test("mixed's directly federated okta (its own `store: 'blocks'` block) is not registered with Cognito", () => {
+	test("mixed's directly federated okta (its own `store: 'builtin'` block) is not registered with Cognito", () => {
 		const { template } = synth(CONFIGS.mixed);
 		assert.strictEqual(byPath(template, 'idp-okta/Default'), undefined);
 		assert.ok(!(props(hostedUiClient(template)).SupportedIdentityProviders as string[]).includes('okta'));

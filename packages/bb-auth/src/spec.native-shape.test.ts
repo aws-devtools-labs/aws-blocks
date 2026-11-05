@@ -4,7 +4,7 @@
 /**
  * What the OpenRPC spec — and so every native client — gets from `Auth`
  * blocks configured differently (password only, TOTP required, SMS, passkeys
- * with `USER_AUTH`, a `store: 'blocks'` block with an OIDC provider, password
+ * with `USER_AUTH`, a `store: 'builtin'` block with an OIDC provider, password
  * plus a Cognito-federated provider, declared groups and attributes):
  *
  * - The types `Auth` narrows by its mode options for TypeScript callers only
@@ -48,7 +48,7 @@ const BLOCKS = {
 	totp: `{ mfa: { mode: 'required', types: ['TOTP'] } }`,
 	sms: `{ mfa: { mode: 'optional', types: ['SMS'] } }`,
 	passkey: `{ users: { authFlow: 'USER_AUTH' }, passkeys: ${JSON.stringify(passkeys)}, featurePlan: 'essentials' }`,
-	federated: `{ store: 'blocks', providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)} } } }`,
+	federated: `{ store: 'builtin', providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)} } } }`,
 	mixed: `{ providers: { okta: { type: 'oidc', ...${JSON.stringify(okta)}, clientSecret: ${oktaSecret} } }, redirects: ${JSON.stringify(mixedRedirects)} }`,
 	attributes: `{ users: { groups: ['admins'], attributes: [{ name: 'department' }] } }`,
 } as const;
@@ -63,7 +63,7 @@ const OPTIONS: Record<Block, AuthOptions> = {
 	totp: { mfa: { mode: 'required', types: ['TOTP'] } },
 	sms: { mfa: { mode: 'optional', types: ['SMS'] } },
 	passkey: { users: { authFlow: 'USER_AUTH' }, passkeys, featurePlan: 'essentials' },
-	federated: { store: 'blocks', providers: { okta: { type: 'oidc', ...okta } } },
+	federated: { store: 'builtin', providers: { okta: { type: 'oidc', ...okta } } },
 	mixed: {
 		providers: { okta: { type: 'oidc', ...okta, clientSecret: { fullId: 'okta-secret', get: async () => 's' } } },
 		redirects: mixedRedirects,
@@ -159,7 +159,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		}
 		const actions = json(method('federatedApi.setAuthState').params[0]?.schema);
 		for (const action of ['signIn', 'signInWithPasskey', 'listPasskeys', 'confirmSignIn', 'signOut']) {
-			assert.ok(actions.includes(`"${action}"`), `the store: 'blocks' block still lists ${action}`);
+			assert.ok(actions.includes(`"${action}"`), `the store: 'builtin' block still lists ${action}`);
 		}
 		for (const challenge of ['code', 'mfaType', 'totpSetup', 'email', 'password', 'firstFactor', 'webauthn']) {
 			assert.ok(actions.includes(`"${challenge}"`), `confirmSignIn keeps the ${challenge} challenge`);
@@ -199,7 +199,7 @@ describe('the OpenRPC spec of differently configured Auth blocks', () => {
 		}
 		const providers = (b: Block) => [...(user(b).properties?.signInProvider?.enum ?? [])].sort();
 		for (const b of shared) assert.deepStrictEqual(providers(b), ['password'], b);
-		assert.deepStrictEqual(providers('federated'), ['okta'], "a `store: 'blocks'` block has no password users");
+		assert.deepStrictEqual(providers('federated'), ['okta'], "a `store: 'builtin'` block has no password users");
 		assert.deepStrictEqual(providers('mixed'), ['okta', 'password']);
 		const groups = user('attributes').properties?.groups as { items?: Schema } | undefined;
 		assert.deepStrictEqual(groups?.items?.enum, ['admins']);

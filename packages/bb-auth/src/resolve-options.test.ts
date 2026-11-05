@@ -105,7 +105,7 @@ describe('resolveOptions — store omitted / cognito', () => {
 			const options: unknown = { providers: { p: entry } };
 			assert.throws(
 				() => resolveOptions(options as AuthOptions),
-				/providers\.p has `type: '(stub|oauth2)'`.*store: 'blocks'/,
+				/providers\.p has `type: '(stub|oauth2)'`.*store: 'builtin'/,
 			);
 		}
 		const untyped: unknown = { providers: { p: { issuer, clientId: 'c' } } };
@@ -118,7 +118,7 @@ describe('resolveOptions — store omitted / cognito', () => {
 	});
 });
 
-describe('resolveOptions — store: blocks', () => {
+describe('resolveOptions — store: builtin', () => {
 	it('puts every provider in oidcProviders with federateVia direct, keys unchanged, and disables email + password', () => {
 		const gh = github({ clientId: 'gh', clientSecret: secret });
 		const custom = customOauth2({
@@ -130,7 +130,7 @@ describe('resolveOptions — store: blocks', () => {
 		});
 		const stub = stubIdp({ users: [{ sub: 'u1', email: 'a@example.com', name: 'A' }] });
 		const resolved = resolveOptions({
-			store: 'blocks',
+			store: 'builtin',
 			providers: {
 				'okta-dev': { type: 'oidc', issuer, clientId: 'c', groupsClaim: 'groups' },
 				github: gh,
@@ -140,7 +140,7 @@ describe('resolveOptions — store: blocks', () => {
 			users: { groups: ['admin'] },
 			allowBearerAuth: true,
 		});
-		assert.equal(resolved.store, 'blocks');
+		assert.equal(resolved.store, 'builtin');
 		assert.equal(resolved.emailPassword, false);
 		assert.deepEqual(resolved.users, { groups: ['admin'] });
 		assert.equal(resolved.allowBearerAuth, true);
@@ -162,7 +162,7 @@ describe('resolveOptions — store: blocks', () => {
 
 	it('rejects the cognito-only provider types (backstop for untyped callers)', () => {
 		for (const type of ['google', 'saml']) {
-			const options: unknown = { store: 'blocks', providers: { p: { type, clientId: 'x' } } };
+			const options: unknown = { store: 'builtin', providers: { p: { type, clientId: 'x' } } };
 			assert.throws(
 				() => resolveOptions(options as AuthOptions),
 				new RegExp(`providers\\.p has \`type: '${type}'\`, which needs \`store: 'cognito'\``),
@@ -172,7 +172,7 @@ describe('resolveOptions — store: blocks', () => {
 
 	it('an unknown type is not a provider type, not a store mismatch', () => {
 		for (const type of ['github', 'okta']) {
-			const options: unknown = { store: 'blocks', providers: { p: { type, clientId: 'x' } } };
+			const options: unknown = { store: 'builtin', providers: { p: { type, clientId: 'x' } } };
 			assert.throws(
 				() => resolveOptions(options as AuthOptions),
 				(e: Error) => {
@@ -211,7 +211,7 @@ describe('resolveOptions — backstops for untyped callers', () => {
 		const options: unknown = { store: 'cognit0' };
 		assert.throws(
 			() => resolveOptions(options as AuthOptions),
-			/`store` must be 'cognito' \(the default\) or 'blocks', got "cognit0"/,
+			/`store` must be 'cognito' \(the default\) or 'builtin', got "cognit0"/,
 		);
 	});
 
@@ -219,14 +219,14 @@ describe('resolveOptions — backstops for untyped callers', () => {
 		for (const options of [
 			{ emailPassword: false, oidcProviders: {} },
 			{ providers: {}, socialProviders: {}, samlProviders: {} },
-			{ store: 'blocks', providers: { local: stubIdp() }, oidcProviders: {} },
+			{ store: 'builtin', providers: { local: stubIdp() }, oidcProviders: {} },
 		]) {
 			const untyped: unknown = options;
 			assert.throws(() => resolveOptions(untyped as AuthOptions), /replaced by `providers`/);
 		}
 	});
 
-	it('rejects options only a user pool gives meaning to on store: blocks', () => {
+	it('rejects options only a user pool gives meaning to on store: builtin', () => {
 		for (const [key, value] of [
 			['userPool', { __brand: 'ExternalUserPoolRef', userPoolId: 'us-east-1_x' }],
 			['admin', {}],
@@ -236,38 +236,38 @@ describe('resolveOptions — backstops for untyped callers', () => {
 			['emailPassword', {}],
 			['codeDelivery', async () => {}],
 		] as const) {
-			const options: unknown = { store: 'blocks', providers: { local: stubIdp() }, [key]: value };
+			const options: unknown = { store: 'builtin', providers: { local: stubIdp() }, [key]: value };
 			assert.throws(
 				() => resolveOptions(options as AuthOptions),
 				new RegExp(
-					`\`${key}\` needs \`store: 'cognito'\` \\(the default\\): a \`store: 'blocks'\` block has no user pool`,
+					`\`${key}\` needs \`store: 'cognito'\` \\(the default\\): a \`store: 'builtin'\` block has no user pool`,
 				),
 				key,
 			);
 		}
 		const users: unknown = {
-			store: 'blocks',
+			store: 'builtin',
 			providers: { local: stubIdp() },
 			users: { groups: [], attributes: [] },
 		};
 		assert.throws(() => resolveOptions(users as AuthOptions), /`users\.attributes` needs `store: 'cognito'`/);
 	});
 
-	it('accepts emailPassword: false on store: blocks (what the block is anyway)', () => {
-		const resolved = resolveOptions({ store: 'blocks', providers: { local: stubIdp() }, emailPassword: false });
+	it('accepts emailPassword: false on store: builtin (what the block is anyway)', () => {
+		const resolved = resolveOptions({ store: 'builtin', providers: { local: stubIdp() }, emailPassword: false });
 		assert.equal(resolved.emailPassword, false);
 	});
 
-	it('rejects a store: blocks block with no provider', () => {
+	it('rejects a store: builtin block with no provider', () => {
 		assert.throws(
-			() => resolveOptions({ store: 'blocks', providers: {} }),
-			/`store: 'blocks'` needs at least one provider/,
+			() => resolveOptions({ store: 'builtin', providers: {} }),
+			/`store: 'builtin'` needs at least one provider/,
 		);
 	});
 
 	it("prefixes every error with the block id when given (as the option validation does), else 'Auth:'", () => {
-		assert.throws(() => resolveOptions({ store: 'blocks', providers: {} }, 'sso'), {
-			message: /^Auth 'sso': `store: 'blocks'` needs/,
+		assert.throws(() => resolveOptions({ store: 'builtin', providers: {} }, 'sso'), {
+			message: /^Auth 'sso': `store: 'builtin'` needs/,
 		});
 		const untyped: unknown = { store: 'cognit0' };
 		assert.throws(() => resolveOptions(untyped as AuthOptions, 'auth'), {

@@ -192,9 +192,9 @@ import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { supabaseCrud } from './supabase.js';
 
 const googleSecret = new AppSetting(scope, 'google-secret', { secret: true, name: 'google-client-secret' });
-// store: 'blocks' — your backend verifies the provider's tokens; no Cognito user pool.
+// store: 'builtin' — your backend verifies the provider's tokens; no Cognito user pool.
 const auth = new Auth(scope, 'auth', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     google: { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'your-google-client-id', clientSecret: googleSecret },
   },
@@ -220,7 +220,7 @@ The \`userId\` from your auth BB is passed to \`withRLS()\`, which sets
 \`current_setting('request.jwt.claims', true)::jsonb->>'sub'\` work
 with any auth provider that returns a stable userId.
 
-**Key rule:** for a user who signs in through a \`providers\` entry of a \`store: 'blocks'\`
+**Key rule:** for a user who signs in through a \`providers\` entry of a \`store: 'builtin'\`
 block (Auth0, Clerk, Okta… as \`type: 'oidc'\`), \`Auth\`'s user carries the provider's
 verified \`claims\`, and \`supabaseCrud()\` passes them on: \`claims.sub\` (the raw provider
 \`sub\`) is what reaches RLS — not the iss-prefixed \`userId\`. Existing rows keyed on the
@@ -478,6 +478,6 @@ Your migrated tables store the raw provider \`sub\` as the user identifier
 by default, which is iss-prefixed (e.g., \`https://tenant.auth0.com/:auth0|abc123\`).
 
 When JOINing migrated tables with new tables, use \`user.claims?.sub\` (the raw sub,
-on users of a \`store: 'blocks'\` block) as the foreign key
+on users of a \`store: 'builtin'\` block) as the foreign key
 in new tables for consistency.
 `;

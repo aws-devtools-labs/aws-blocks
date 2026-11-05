@@ -40,7 +40,7 @@ The codemod uses your project's own `typescript` package to parse your code. If 
 What it does:
 
 - Rewrites imports. `@aws-blocks/bb-auth-basic`, `-cognito` and `-oidc` become `@aws-blocks/bb-auth`, and `@aws-blocks/bb-auth-cognito/ui` becomes `@aws-blocks/bb-auth/ui`, with its names renamed (`cognitoOverrides` → `authOverrides`, …; see [Names](#names-methods-and-types)). Names imported from `@aws-blocks/bb-auth-oidc/client` or `/middleware` that `@aws-blocks/bb-auth` also exports (the provider helpers, `relayOrigin`, the error constants and types) move to `@aws-blocks/bb-auth`; the rest stay, with a TODO. Old names imported from `@aws-blocks/blocks` are renamed, and the import itself keeps pointing at `@aws-blocks/blocks`. So are old names reached through `import * as blocks from '@aws-blocks/blocks'` (`new blocks.AuthCognito(…)` → `new blocks.Auth(…)`). Several old imports that end up on the same module are merged into one.
-- Renames the classes, types and error constants, and maps each old options object onto the `Auth` shape (see [Option mapping](#option-mapping)). That includes `AuthOIDC`'s `providers` array, which becomes the `providers` record keyed by provider id, each entry tagged with its `type` (the old `name` is the key). An `AuthOIDC` block with any directly federated provider gets `store: 'blocks'`. One whose providers are all `cognitoFederated()` stays on the default store (a Cognito user pool), with `emailPassword: false` and `type: 'google'` (and the other social types) or `type: 'oidc'` entries. A block that mixed the two gets `store: 'blocks'` and a TODO to move the `cognitoFederated()` entries to a second `Auth` block. `AuthBasic` and `AuthCognito` blocks get no `store`: the default is theirs.
+- Renames the classes, types and error constants, and maps each old options object onto the `Auth` shape (see [Option mapping](#option-mapping)). That includes `AuthOIDC`'s `providers` array, which becomes the `providers` record keyed by provider id, each entry tagged with its `type` (the old `name` is the key). An `AuthOIDC` block with any directly federated provider gets `store: 'builtin'`. One whose providers are all `cognitoFederated()` stays on the default store (a Cognito user pool), with `emailPassword: false` and `type: 'google'` (and the other social types) or `type: 'oidc'` entries. A block that mixed the two gets `store: 'builtin'` and a TODO to move the `cognitoFederated()` entries to a second `Auth` block. `AuthBasic` and `AuthCognito` blocks get no `store`: the default is theirs.
 - Renames the methods that changed (`fetch*` → `get*` / `scan*`, `updateUserAttribute` → `updateUserAttributes`, …) on any receiver it can trace to an old block: a local variable, an import of an exported instance, or a parameter typed with the old class.
 - Leaves a `// TODO(aws-blocks-auth-migrate): …` comment wherever you have to decide something. That covers every `AuthBasic` block, every `hasAuthError` / `isBlocksError` / `isAuthError` check on an auth error, error names that split, `cognitoFederated()` providers, options it can't see (passed by reference or spread in), and every case in [What the codemod can't map](#what-the-codemod-cant-map).
 - Never touches the scope or id argument, and refuses to write a file if a constructor's first two arguments would differ afterwards.
@@ -163,7 +163,7 @@ const oktaSecret = new AppSetting(scope, 'okta-secret', { secret: true });
 const profiles = new KVStore<{ email: string | null }>(scope, 'profiles');
 
 const auth = new Auth(scope, 'auth', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: {
 		google: { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'google-client-id', clientSecret: googleSecret },
 		github: github({ clientId: 'github-client-id', clientSecret: githubSecret }),
@@ -182,10 +182,10 @@ export const authApi = auth.createApi();
 
 What changes:
 
-- **`store: 'blocks'`.** `AuthOIDC` had no password sign-in and no user pool. Without this line, `Auth` would use its default store, a Cognito user pool with email + password, and a `type: 'oidc'` entry there would federate through Cognito (and need a client secret). The codemod adds it. A `store: 'blocks'` block has no email + password, so `emailPassword` is not set (it is a compile error there).
+- **`store: 'builtin'`.** `AuthOIDC` had no password sign-in and no user pool. Without this line, `Auth` would use its default store, a Cognito user pool with email + password, and a `type: 'oidc'` entry there would federate through Cognito (and need a client secret). The codemod adds it. A `store: 'builtin'` block has no email + password, so `emailPassword` is not set (it is a compile error there).
 - **Providers are a record keyed by id.** The key is the id used by `getSignInUrl(context, '<id>')` and by the `signIn:<id>` UI action, the same string the old `name` held. `google()` and `customOidc()` are gone: a generic OIDC provider is a plain `{ type: 'oidc', issuer, clientId, clientSecret? }` entry. `github()` and `customOauth2()` return `type: 'oauth2'` and `stubIdp()` `type: 'stub'`, so they need no `type` of your own. `github()`, `customOauth2()` and `stubIdp()` stay. `customOauth2()` takes `endpoints: { authorization, token, userInfo }` (was `authUrl` / `tokenUrl` / `userInfoUrl`), and `stubIdp()` takes no `name`.
 - **Secrets are `AppSetting` references,** never strings or functions. The codemod rewrites `() => setting.get()` to `setting`. It leaves a TODO for a literal or any other form. `clientId` is a plain string.
-- **The user object:** `OIDCUser` becomes `AuthenticatedUser`. `user.userId` and `user.username` are unchanged. `email` / `name` are now `user.attributes.email` / `user.attributes.name`, and `provider` is now `user.signInProvider`. `iss` and `sub` are gone: `userId` still carries `` `${iss}:${sub}` ``, `attributes` holds the string claims, and `user.claims` is still there: the provider's verified ID-token claims, so `user.claims.sub` is the raw provider `sub`. It is optional on `AuthenticatedUser` (set for users of a `store: 'blocks'` block, absent for user-pool users), so read it as `user.claims?.sub`. It is server-side only: `getAuthState()` and the sign-in routes don't send it to the browser.
+- **The user object:** `OIDCUser` becomes `AuthenticatedUser`. `user.userId` and `user.username` are unchanged. `email` / `name` are now `user.attributes.email` / `user.attributes.name`, and `provider` is now `user.signInProvider`. `iss` and `sub` are gone: `userId` still carries `` `${iss}:${sub}` ``, `attributes` holds the string claims, and `user.claims` is still there: the provider's verified ID-token claims, so `user.claims.sub` is the raw provider `sub`. It is optional on `AuthenticatedUser` (set for users of a `store: 'builtin'` block, absent for user-pool users), so read it as `user.claims?.sub`. It is server-side only: `getAuthState()` and the sign-in routes don't send it to the browser.
 - **No client handle.** `authApi.getClient()` and the `@aws-blocks/bb-auth-oidc/middleware` (or `/client`) import are gone. Federated sign-in buttons come from `getAuthState()`: each provider is a `signIn:<id>` action that carries a `url`, and the `Authenticator` renders it. `auth.handleCallback*`, `handleExchange`, `getAuthorizeParams` and `refreshBearerTokens` are gone too, because `Auth` serves those routes itself under the same `/aws-blocks/auth/*` paths.
 - **A frontend on a different origin than the API** used `getClient()`'s browser PKCE flow, which `AuthOIDC`'s README said was required there. Use `createAuthClient()` from `@aws-blocks/bb-auth/browser-client` (also in `@aws-blocks/blocks/ui`) instead; see the README, *Frontend on a different origin*. The calls map as follows: `getClient().signIn(provider)` → `signInWithRedirect({ provider })`; `handleRedirectCallback()` → `handleSignInRedirect()`; reading the user → `getCurrentUser()` / `fetchAuthSession()`; sign-out → `signOut()`. On the backend, add the frontend's origin to `redirects.allowedRelayOrigins` with `relayOrigin()`. The provider's `redirect_uri` is now the block's own callback, not a page of the frontend, so update it in the provider's console if you had registered the frontend's page.
 - **Redirect options** (`callbackPath`, `signOutPath`, `postSignInPath`, `allowedRelayOrigins`) move under `redirects`. `crossDomain` moves to `session.crossDomain`.
@@ -206,7 +206,7 @@ import { Auth, Scope, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
 const corp = getDeploymentType() === 'production'
 	? ({ type: 'oidc', issuer: 'https://login.example.com', clientId: 'my-client-id' } as const)
 	: stubIdp();
-const auth = new Auth(new Scope('my-app'), 'auth', { store: 'blocks', providers: { corp } });
+const auth = new Auth(new Scope('my-app'), 'auth', { store: 'builtin', providers: { corp } });
 ```
 
 ## `AuthOIDC` with `cognitoFederated()`
@@ -237,7 +237,7 @@ const auth = new Auth(scope, 'auth', {
 export const authApi = auth.createApi();
 ```
 
-`identityProvider: 'Google' | 'Facebook' | 'LoginWithAmazon' | 'SignInWithApple'` maps to a `providers` entry `google: { type: 'google', … }` (or `facebook`, `amazon`, `apple`; a social entry is keyed by its type). Any other IdP (one with `idpIssuerUrl`) becomes a `type: 'oidc'` entry, which on the default store federates through Cognito. An `AuthOIDC` block that mixed `cognitoFederated()` with directly federated providers needs two `Auth` blocks: the codemod gives it `store: 'blocks'` and leaves a TODO to move the `cognitoFederated()` entries to a second `Auth` block on the default store. The original id stays on the `store: 'blocks'` block; give the new block an id of its own (its pool is new either way: `AuthOIDC`'s `cognito-pool` is deleted, as described above). `clientId` is now a plain string, where `cognitoFederated()` took an `AppSetting`. `region` and `cognitoDomain` are gone: the pool is in the stack's region, and the domain is described next.
+`identityProvider: 'Google' | 'Facebook' | 'LoginWithAmazon' | 'SignInWithApple'` maps to a `providers` entry `google: { type: 'google', … }` (or `facebook`, `amazon`, `apple`; a social entry is keyed by its type). Any other IdP (one with `idpIssuerUrl`) becomes a `type: 'oidc'` entry, which on the default store federates through Cognito. An `AuthOIDC` block that mixed `cognitoFederated()` with directly federated providers needs two `Auth` blocks: the codemod gives it `store: 'builtin'` and leaves a TODO to move the `cognitoFederated()` entries to a second `Auth` block on the default store. The original id stays on the `store: 'builtin'` block; give the new block an id of its own (its pool is new either way: `AuthOIDC`'s `cognito-pool` is deleted, as described above). `clientId` is now a plain string, where `cognitoFederated()` took an `AppSetting`. `region` and `cognitoDomain` are gone: the pool is in the stack's region, and the domain is described next.
 
 **The domain prefix.** `Auth` derives a new Cognito domain prefix from the block's `fullId` by default. The deploy then succeeds, but the IdP redirect URI changes, so **re-register `https://<new prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse` (`/saml2/idpresponse` for SAML) in every IdP console.** The prefix is shown in the synthesized template, and in the `UserPoolDomain` resource after the deploy.
 
@@ -408,7 +408,7 @@ Behaviour that changes for your users and your code:
 
 | `AuthOIDC` option | `Auth` option |
 |---|---|
-| (no password sign-in, no user pool) | `store: 'blocks'` |
+| (no password sign-in, no user pool) | `store: 'builtin'` |
 | `providers: [google({ clientId, clientSecret })]` | `providers: { google: { type: 'oidc', issuer: 'https://accounts.google.com', clientId, clientSecret } }` |
 | `providers: [customOidc({ name, issuerUrl, … })]` | `providers: { <name>: { type: 'oidc', issuer: issuerUrl, … } }` |
 | `providers: [github({ … })]` | `providers: { github: github({ … }) }` |
@@ -483,7 +483,7 @@ These get a TODO (or a compile error) and need a person:
 - **Options it can't see:** an options object passed by variable, spread into the call, or built by a function. Unknown option keys are kept as they are.
 - **Providers it can't see:** a `providers` value that isn't an array literal, or an entry that isn't an inline `google()` / `github()` / `customOidc()` / `customOauth2()` / `stubIdp()` / `cognitoFederated()` call. A provider name that isn't a string literal becomes a computed key.
 - **Secrets that aren't `() => setting.get()`:** inline strings, environment variables, other functions. A `clientId` read from an `AppSetting` must become the literal client id.
-- **`cognitoFederated()`:** in a block that also has directly federated providers, moving those entries to a second `Auth` block (the codemod gives the block `store: 'blocks'`); the domain prefix decision, re-keying data on `userId`, and Sign in with Apple's `teamId` / `keyId` / `privateKey`. A social provider whose old `name` wasn't its fixed id (`google`, `facebook`, `amazon`, `apple`) changes id.
+- **`cognitoFederated()`:** in a block that also has directly federated providers, moving those entries to a second `Auth` block (the codemod gives the block `store: 'builtin'`); the domain prefix decision, re-keying data on `userId`, and Sign in with Apple's `teamId` / `keyId` / `privateKey`. A social provider whose old `name` wasn't its fixed id (`google`, `facebook`, `amazon`, `apple`) changes id.
 - **The result of `updateUserAttribute()` when you use it:** it's now a record keyed by attribute name.
 - **`signUp()` with an `autoSignIn` that differs from the block's (`false` in an app that keeps `Auth`'s default, or a non-literal value), `signIn()` with `cognitoSession`, and `confirmSignIn()` with a computed response.**
 - **Old defaults on options it can't see:** with options passed by variable or spread in, the codemod can't add `emailPassword: { autoSignIn: false }` (`AuthCognito`) or `session: { ttlSeconds: 86_400 }` (`AuthBasic`), so it leaves a TODO to add them.
@@ -505,9 +505,9 @@ Before release, `Auth` configured providers through three records and a per-prov
 | `socialProviders: { google: { clientId, clientSecret } }` (also `facebook`, `amazon`, `apple`) | `providers: { google: { type: 'google', clientId, clientSecret } }` — keyed by its type |
 | `samlProviders: { corp: { metadataUrl } }` | `providers: { corp: { type: 'saml', metadataUrl } }` |
 | `oidcProviders: { entra: { federateVia: 'cognito', issuer, clientId, clientSecret } }` | `providers: { entra: { type: 'oidc', issuer, clientId, clientSecret } }` on the default store (`clientSecret` required) |
-| `oidcProviders: { okta: { issuer, clientId } }` (`federateVia: 'direct'`, the old default) with `emailPassword: false` | `store: 'blocks'`, `providers: { okta: { type: 'oidc', issuer, clientId } }` (`emailPassword: false` may stay; it is accepted and changes nothing) |
-| `oidcProviders: { gh: github(…), local: stubIdp() }` | `store: 'blocks'`, `providers: { gh: github(…), local: stubIdp() }` |
-| email + password (or `mfa`, `passkeys`, `admin`, `userPool: Auth.fromExisting(…)`, social, SAML) **and** a `federateVia: 'direct'` provider in one block | two blocks: the Cognito part as it was, and the direct providers in a new `Auth` block with `store: 'blocks'` and a new id |
+| `oidcProviders: { okta: { issuer, clientId } }` (`federateVia: 'direct'`, the old default) with `emailPassword: false` | `store: 'builtin'`, `providers: { okta: { type: 'oidc', issuer, clientId } }` (`emailPassword: false` may stay; it is accepted and changes nothing) |
+| `oidcProviders: { gh: github(…), local: stubIdp() }` | `store: 'builtin'`, `providers: { gh: github(…), local: stubIdp() }` |
+| email + password (or `mfa`, `passkeys`, `admin`, `userPool: Auth.fromExisting(…)`, social, SAML) **and** a `federateVia: 'direct'` provider in one block | two blocks: the Cognito part as it was, and the direct providers in a new `Auth` block with `store: 'builtin'` and a new id |
 | `users: { groups, signInWith, … }` with only direct providers | `users: { groups }` (the other user-pool options need the default store) |
 
 Before and after, for a block that mixed password users with a directly federated IdP:
@@ -537,14 +537,14 @@ const auth = new Auth(scope, 'auth', {
 export const authApi = auth.createApi();
 
 const sso = new Auth(scope, 'sso', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: { okta: { type: 'oidc', issuer: 'https://dev-123.okta.com', clientId: 'okta-id' } },
 });
 export const ssoApi = sso.createApi();
 ```
 
-- **Keep the original block's id** (`'auth'` above) for the part that holds the user pool. The new `store: 'blocks'` block needs an id of its own; its users keep their `userId` (`` `${issuer}:${sub}` ``, which does not include the block id), but they sign in once more, because the session cookie is per block.
+- **Keep the original block's id** (`'auth'` above) for the part that holds the user pool. The new `store: 'builtin'` block needs an id of its own; its users keep their `userId` (`` `${issuer}:${sub}` ``, which does not include the block id), but they sign in once more, because the session cookie is per block.
 - **Two blocks, two session cookies.** The frontend uses `authApi` for the pool's users and `ssoApi` for the IdP's users, and each API method guards with the block its callers sign in through. The same person signing in both ways was already two users (there is no account linking), so no data changes owner.
-- **Don't flip a deployed block from the default store to `store: 'blocks'`.** It would remove the user pool and every user in it; the immutability guard refuses it at synth once a committed baseline records the pool ([DESIGN.md](./DESIGN.md#renaming-or-removing-an-auth-block)).
+- **Don't flip a deployed block from the default store to `store: 'builtin'`.** It would remove the user pool and every user in it; the immutability guard refuses it at synth once a committed baseline records the pool ([DESIGN.md](./DESIGN.md#renaming-or-removing-an-auth-block)).
 - **The compiler flags every leftover key**: `socialProviders`, `oidcProviders` and `samlProviders` are typed `ERROR_replaced_by_providers`, and `federateVia` `ERROR_federateVia_replaced_by_store`. At runtime (untyped code, options built elsewhere) the constructor rejects them with a message naming the replacement.
 - **The codemod** (`npx @aws-blocks/bb-auth migrate`) rewrites `AuthBasic`, `AuthCognito` and `AuthOIDC` blocks straight to the new shape. It does not rewrite an existing `Auth` block: move those by hand with the table above.

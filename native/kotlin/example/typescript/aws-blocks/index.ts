@@ -21,7 +21,7 @@ const GOOGLE_CLIENT_ID = 'replace-me.apps.googleusercontent.com';
 const googleClientSecret = new AppSetting(scope, 'google-client-secret', { secret: true });
 
 const auth = new Auth(scope, 'auth', {
-  store: 'blocks',
+  store: 'builtin',
   providers: {
     google: {
       type: 'oidc',

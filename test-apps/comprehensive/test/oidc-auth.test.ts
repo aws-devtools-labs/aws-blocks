@@ -11,7 +11,7 @@ import type { api as apiType } from 'aws-blocks';
 import { signInPoller } from './poll-for-signin.js';
 
 // The `oidc-auth*` instances were `AuthOIDC`; they are now the unified `Auth`
-// block (same ids, `store: 'blocks'`, stub-IdP `providers`). What
+// block (same ids, `store: 'builtin'`, stub-IdP `providers`). What
 // changed on the wire, and is asserted below:
 //   - the session cookie is `auth_<fullId>` (was `oidc_<…>_session`);
 //   - the user's provider is `signInProvider`, email/name are `attributes`;

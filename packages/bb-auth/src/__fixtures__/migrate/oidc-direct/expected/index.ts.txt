@@ -15,7 +15,7 @@ const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
 const oktaSecret = new AppSetting(scope, 'okta-secret', { secret: true });
 
 export const auth = new Auth(scope, 'oidc-auth', {
-	store: 'blocks',
+	store: 'builtin',
 	providers: {
 		// Production IdPs.
 		google: {
