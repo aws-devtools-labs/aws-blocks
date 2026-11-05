@@ -10,9 +10,13 @@ For platforms that deploy many apps (often written by AI coding agents) into
 one AWS account through one pipeline. All of it is opt-in: without
 `defaults.app`, synthesized templates are unchanged. The core README section "Running many apps
 in one AWS account" shows what a platform puts in its own project template, and
-documents the IAM policies the platform writes and owns: a shared permissions
-boundary keyed on `${aws:PrincipalTag/app}`, a per-app CloudFormation execution
-policy, and a deploy guard.
+documents the IAM policies the platform writes and owns, all three shared by
+every app in the account and keyed on the role's `app` tag
+(`${aws:PrincipalTag/app}`): a permissions boundary, a CloudFormation execution
+policy, and a deploy guard. Each app gets its own CDK bootstrap tagged with its
+id. Runtime API calls (`execute-api:Invoke` and `ManageConnections`) aren't
+isolated between apps; the README lists this under its limits. The app id comes
+from the platform; to AWS Blocks it is just a string.
 
 - **`defaults.app: { id, strict? }`** (new, optional). AWS Blocks tags every
   resource and every IAM role it creates `app=<id>` — including the CDK
@@ -35,7 +39,9 @@ policy, and a deploy guard.
   prefix, a wildcard or "everything except" grant on a data service, a resource
   the check can't resolve, a resource policy that opens up another app's
   resource, a role that trusts anything but an AWS service, a broad AWS managed
-  policy, or a stack or block outside the prefix. With `strict: true`, synth
+  policy, the CDK asset bucket of another bootstrap, an API Gateway stage,
+  route or deployment attached to an API outside the app's own template, or a
+  stack or block outside the prefix. With `strict: true`, synth
   fails on any violation.
 - **`HostingConstructProps.edgeStackId`** (new, optional, `@aws-blocks/hosting`):
   the id of the `us-east-1` stack Lambda@Edge functions are hoisted into. AWS
