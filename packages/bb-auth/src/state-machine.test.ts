@@ -117,7 +117,7 @@ describe('createApi()', () => {
 		assert.deepStrictEqual(wrong, {
 			state: 'signedOut',
 			actions: [],
-			// FX59 (#678): the fixed wrong-code message, not the engine's text.
+			// the fixed wrong-code message, not the engine's text.
 			error: WRONG_CODE_MESSAGE,
 			retriable: true,
 			errorName: AuthErrors.CodeMismatch,
@@ -170,7 +170,7 @@ describe('createApi()', () => {
 	});
 });
 
-describe('emailPassword.revealExistingUsers (R9)', () => {
+describe('emailPassword.revealExistingUsers', () => {
 	test('default false: signing up an existing account answers exactly like a new one', async () => {
 		const h = makeAuth();
 		h.native.addUser('alice');

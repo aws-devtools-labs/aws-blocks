@@ -8,7 +8,7 @@
  * of its own: the framework function flushes its last log lines a few seconds
  * after CloudFormation has deleted its group, and with `logs:CreateLogGroup`
  * that flush recreated the group outside the stack, so it outlived `destroy()`
- * (L80). Each role therefore carries an explicit deny, and each function reads
+ *. Each role therefore carries an explicit deny, and each function reads
  * its group by reference, so the group exists before the first invocation.
  */
 
@@ -59,7 +59,7 @@ const OWNED_GROUPS = [
 	/authidpregistrationproviderlogs/,
 ];
 
-describe("Auth's deploy-time Lambdas never create their own log groups (L80)", () => {
+describe("Auth's deploy-time Lambdas never create their own log groups", () => {
 	const dirs: string[] = [];
 	after(() => {
 		for (const d of dirs) rmSync(d, { recursive: true, force: true });

@@ -2,17 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock ↔ AWS parity for **which user attributes a write may carry** (FX39,
- * R74; from R65 (c)): the same writes go through the same `Auth` API on the
+ * Mock ↔ AWS parity for **which user attributes a write may carry**: the same writes go through the same `Auth` API on the
  * local engine (`./index.mock.js`) and on the AWS entry (`./index.aws.js`,
  * offline through `test-support/aws-harness.ts`), and what a caller observes —
  * success, or the error `name` / HTTP status / `retriable` — must agree.
  *
  * On the AWS side the harness answers as {@link cognitoSchema}, a stand-in for
  * the pool's attribute schema that implements exactly the documented rules
- * (quotes and URLs on each). Before FX39 the mock accepted every one of these
- * writes: it stored an attribute named `attributes` holding an object (what a
- * Kotlin client sent before FX32) and returned it from `getUserAttributes`.
+ * (quotes and URLs on each). Before these checks the mock accepted every one of these
+ * writes: it stored an attribute named `attributes` holding an object (what an older
+ * Kotlin client sent) and returned it from `getUserAttributes`.
  *
  * `AdminUpdateUserAttributes` is not covered: `auth.admin` has no attribute
  * update.
@@ -83,7 +82,7 @@ const OPTIONS = {
  * - "You can only write a value to an immutable attribute when you create a
  *   user." (the guide, "Custom attributes"); `sub` "has a fixed value".
  *
- * **A wrong-typed value, on the wire** (FX43, R78). The AWS JS SDK validates
+ * **A wrong-typed value, on the wire**. The AWS JS SDK validates
  * nothing: it serializes a number, boolean, object or array `Value` as-is and
  * drops a `null` one. Which answer Cognito then gives is not documented for
  * the JS SDK ("depending on your SDK … a client-side type-validation error or
@@ -95,7 +94,7 @@ const OPTIONS = {
  * checks them before the SDK call (`engines/attribute-write-rules.ts`), as
  * `index.aws.attributes.test.ts` asserts; the stand-in is the red.
  *
- * **Precedence** (FX44, R79). Cognito documents no order between these rules,
+ * **Precedence**. Cognito documents no order between these rules,
  * so the stand-in answers in the order both engines use
  * (`engines/attribute-write-rules.ts`): an admin-only pool refuses `SignUp`
  * before anything else ("If you do not enable self-registration, new users
@@ -276,7 +275,7 @@ const CREATE_CASES: readonly [label: string, attributes: Record<string, unknown>
 		'ok',
 	],
 	[
-		'an attribute the pool does not have (`attributes`, holding an object — R65 (c))',
+		'an attribute the pool does not have (`attributes`, holding an object)',
 		{ email: 'bob@example.com', attributes: { name: 'Bob' } },
 		INVALID,
 	],
@@ -311,7 +310,7 @@ describe('parity: attributes on signUp (SignUp)', () => {
 		});
 	}
 
-	test('createApi signUp with the attributes nested under `attributes` (the pre-FX32 Kotlin body) is rejected in both runtimes', async () => {
+	test('createApi signUp with the attributes nested under `attributes` (the older Kotlin client body) is rejected in both runtimes', async () => {
 		const input = {
 			action: 'signUp',
 			username: 'bob',
@@ -486,7 +485,7 @@ describe('parity: userAttributes on the new-password challenge (RespondToAuthCha
 });
 
 /**
- * Several rules broken in one write (FX44, R79): both engines must name the
+ * Several rules broken in one write: both engines must name the
  * same error. The order (`engines/attribute-write-rules.ts`), over the whole
  * write: every value a string, every value within 2,048 characters, the app
  * client's write permissions (the verified flags), then the pool schema
@@ -497,7 +496,7 @@ describe('parity: userAttributes on the new-password challenge (RespondToAuthCha
 describe('parity: precedence when one write breaks several rules', () => {
 	const SIGN_UP: readonly [label: string, attributes: Record<string, unknown>, expected: unknown][] = [
 		[
-			"an undeclared `custom:` attribute, then `email_verified` (FX43's example)",
+			"an undeclared `custom:` attribute, then `email_verified` (the documented example)",
 			{ 'custom:undeclared': 'x', email_verified: 'true' },
 			UNAUTHORIZED,
 		],
@@ -589,7 +588,7 @@ describe('parity: precedence when one write breaks several rules', () => {
 });
 
 /**
- * `emailPassword: { selfSignUp: false }` (FX44, R79): the pool is provisioned
+ * `emailPassword: { selfSignUp: false }`: the pool is provisioned
  * with `AllowAdminCreateUserOnly`, and Cognito refuses the `SignUp` operation
  * itself with `NotAuthorizedException`, whatever the attributes. The local
  * engine checks `selfSignUp` first; the AWS engine must too, before its own

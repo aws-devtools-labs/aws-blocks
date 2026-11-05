@@ -10,7 +10,7 @@
  * `UserNotFoundException` (e.g. adopted via `fromExisting` without
  * `PreventUserExistenceErrors`). `auth.admin.*` may still report UserNotFound.
  *
- * Ported from `bb-auth-cognito/src/index.aws.enumeration.test.ts` (B6). Where
+ * Ported from `bb-auth-cognito/src/index.aws.enumeration.test.ts`. Where
  * an expectation differs it says why, inline (`Auth:`). Harness:
  * `test-support/aws-harness.ts`.
  */
@@ -110,7 +110,7 @@ describe('AWS enumeration: sign-in is uniform', () => {
 			}));
 			const pick = await b.request((ctx) => h.auth.signIn('someone', '', ctx));
 			const s1 = pick.status === 'continueSignIn' && 'session' in pick.nextStep ? pick.nextStep.session : '';
-			// Auth: `confirmSignIn` takes the answer as a string (D5a); AuthCognito
+			// Auth: `confirmSignIn` takes the answer as a string; AuthCognito
 			// also took `{ firstFactor }` / `{ password }` objects.
 			const pw = await b.request((ctx) => h.auth.confirmSignIn(s1, 'PASSWORD', ctx));
 			const s2 = pw.status === 'continueSignIn' && 'session' in pw.nextStep ? pw.nextStep.session : '';
@@ -165,7 +165,7 @@ describe('AWS enumeration: sign-in is uniform', () => {
 			throw cognitoError('NotAuthorizedException', 'Invalid session for the user, session is expired.');
 		});
 		const e = await rejection(b.request((ctx) => h.auth.confirmSignIn(session, '123456', ctx)));
-		// The name is Cognito's (not masked); the message is the name's fixed one (FX59, #678).
+		// The name is Cognito's (not masked); the message is the name's fixed one (#678).
 		assert.strictEqual(wireView(e).name, AuthErrors.NotAuthorized);
 		assert.strictEqual(wireView(e).message, clientMessageFor(AuthErrors.NotAuthorized));
 	});
@@ -283,7 +283,7 @@ describe('AWS enumeration: admin.* is inside the trust boundary', () => {
 		const e = await rejection(h.auth.admin.deleteUser('ghost'));
 		assert.deepStrictEqual(wireView(e), {
 			code: 404,
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			message: clientMessageFor(AuthErrors.UserNotFound),
 			name: AuthErrors.UserNotFound,
 			retriable: false,
@@ -292,7 +292,7 @@ describe('AWS enumeration: admin.* is inside the trust boundary', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// FX3 (A3): account *state* — unknown vs unconfirmed vs already-confirmed — on
+// Account *state* — unknown vs unconfirmed vs already-confirmed — on
 // every public email + password step, not only `signUp`. Each table row is what
 // Cognito answers for that kind of user (with and without
 // PreventUserExistenceErrors; `bb-auth`'s own client enables it, an adopted pool
@@ -376,7 +376,7 @@ const CONFIRM_RESET_ANSWERS: Record<string, Answer> = {
 
 const EMAIL = 'nobody@example.com';
 
-describe('AWS enumeration (FX3): confirmSignUp hides the account state', () => {
+describe('AWS enumeration: confirmSignUp hides the account state', () => {
 	test('unknown, unconfirmed and already-confirmed users get the identical wrong-code error', async () => {
 		const seen = new Set<string>();
 		for (const [label, answer] of Object.entries(CONFIRM_SIGN_UP_ANSWERS)) {
@@ -408,7 +408,7 @@ describe('AWS enumeration (FX3): confirmSignUp hides the account state', () => {
 		h.on('ConfirmSignUpCommand', CONFIRM_SIGN_UP_ANSWERS['already-confirmed user']);
 		assert.deepStrictEqual(wireView(await rejection(h.auth.confirmSignUp(EMAIL, '000000'))), {
 			code: 401,
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			message: clientMessageFor(AuthErrors.NotAuthorized),
 			name: AuthErrors.NotAuthorized,
 			retriable: false,
@@ -424,7 +424,7 @@ describe('AWS enumeration (FX3): confirmSignUp hides the account state', () => {
 	});
 });
 
-describe('AWS enumeration (FX3): resendSignUpCode hides the account state', () => {
+describe('AWS enumeration: resendSignUpCode hides the account state', () => {
 	test('unknown, unconfirmed and already-confirmed users all get a silent success', async () => {
 		const seen = new Set<string>();
 		for (const [label, answer] of Object.entries(RESEND_ANSWERS)) {
@@ -444,7 +444,7 @@ describe('AWS enumeration (FX3): resendSignUpCode hides the account state', () =
 		h.on('ResendConfirmationCodeCommand', RESEND_ANSWERS['already-confirmed user']);
 		assert.deepStrictEqual(wireView(await rejection(h.auth.resendSignUpCode(EMAIL))), {
 			code: 400,
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			message: clientMessageFor(AuthErrors.InvalidParameter),
 			name: AuthErrors.InvalidParameter,
 			retriable: true,
@@ -452,7 +452,7 @@ describe('AWS enumeration (FX3): resendSignUpCode hides the account state', () =
 	});
 });
 
-describe('AWS enumeration (FX3): resetPassword hides the account state', () => {
+describe('AWS enumeration: resetPassword hides the account state', () => {
 	test('unknown, unconfirmed, never-signed-in and confirmed users get identical delivery details', async () => {
 		const seen = new Set<string>();
 		for (const [label, answer] of Object.entries(RESET_ANSWERS)) {
@@ -476,7 +476,7 @@ describe('AWS enumeration (FX3): resetPassword hides the account state', () => {
 	});
 });
 
-describe('AWS enumeration (FX3): confirmResetPassword hides the account state', () => {
+describe('AWS enumeration: confirmResetPassword hides the account state', () => {
 	test('every account state gets the identical wrong-code error', async () => {
 		const seen = new Set<string>();
 		for (const [label, answer] of Object.entries(CONFIRM_RESET_ANSWERS)) {
@@ -497,7 +497,7 @@ describe('AWS enumeration (FX3): confirmResetPassword hides the account state', 
 	});
 });
 
-describe('R2-4: a withheld answer is logged at warn, without the username', () => {
+describe('a withheld answer is logged at warn, without the username', () => {
 	// Cognito echoes some request values in a validation message; the username must not reach the log.
 	const LOGIN = 'Nobody@Example.com';
 	const echoing = (name: string) =>
@@ -549,7 +549,7 @@ describe('R2-4: a withheld answer is logged at warn, without the username', () =
 	});
 });
 
-describe('AWS enumeration (FX3): sign-in needs no extra masking', () => {
+describe('AWS enumeration: sign-in needs no extra masking', () => {
 	test('an unconfirmed user with a wrong password looks like any other credential failure', async () => {
 		const seen = new Set<string>();
 		const answers = [

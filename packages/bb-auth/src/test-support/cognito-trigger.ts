@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Test-only: Cognito's side of the PreSignUp trigger (decision Q10) for the
+ * Test-only: Cognito's side of the PreSignUp trigger for the
  * offline AWS harness (`aws-harness.ts`). On `SignUp` / `AdminCreateUser` the
  * responders build the event Cognito would send and invoke **core's real
  * Lambda handler** (`createLambdaHandler`), which routes it by user pool id to

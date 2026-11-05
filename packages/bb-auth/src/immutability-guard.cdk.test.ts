@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * THE IMMUTABILITY GUARD (task D4, decision Q5), end to end without AWS.
+ * THE IMMUTABILITY GUARD, end to end without AWS.
  *
  * Four user-pool properties are immutable at the Cognito service level while
  * CloudFormation calls them "No interruption": a change synths, `cdk diff`
@@ -58,16 +58,16 @@ const PERMITTED: Record<string, string> = {
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins', 'editors'] } })",
 	'removal policy + deletion protection':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, removalPolicy: 'retain', deletionProtection: true })",
-	// BASE resolves to ACTIVE (the harness default is production); `false` now drops the property (L20).
+	// BASE resolves to ACTIVE (the harness default is production); `false` now drops the property.
 	'turning deletion protection off (DeletionProtection ACTIVE → omitted)':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, deletionProtection: false })",
 	'stating the default CaseSensitive: true': `const auth = ${BASE}; ${L1_POOL}.usernameConfiguration = { caseSensitive: true };`,
 	'stating the default with the option (users.caseSensitive: true)':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'], caseSensitive: true } })",
-	// Q10: `validateUser` adds the PreSignUp trigger (`LambdaConfig`), an in-place pool update.
+	// `validateUser` adds the PreSignUp trigger (`LambdaConfig`), an in-place pool update.
 	'adding validateUser (PreSignUp trigger, LambdaConfig)':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, validateUser: async () => {} })",
-	// L75: an SES sender (`EmailConfiguration`) is an in-place pool update ("No interruption").
+	// An SES sender (`EmailConfiguration`) is an in-place pool update ("No interruption").
 	'adding an SES email sender (email, EmailConfiguration)':
 		"new Auth(stack, 'auth', { users: { attributes: [{ name: 'tenant' }], groups: ['admins'] }, email: { fromAddress: 'no-reply@example.com', fromName: 'Example' } })",
 };
@@ -333,7 +333,7 @@ describe('permitted changes pass both layers', () => {
 			appDir: dir,
 		});
 		assert.ok(poolless.ok, poolless.stderr);
-		assert.strictEqual(guardResource(poolless.template), undefined, 'no pool → no guard (Q6)');
+		assert.strictEqual(guardResource(poolless.template), undefined, 'no pool → no guard');
 		const withPool = synthGuarded({ build: asBuild(BASE), appDir: dir });
 		assert.ok(withPool.ok, withPool.stderr);
 		assert.ok(withPool.infos.some((m) => m.includes('updated the user-pool baseline')));
@@ -487,7 +487,7 @@ describe('pool removal is refused at synth (layer 1)', () => {
 			env: { BLOCKS_AUTH_REBASELINE: 'TestStack-auth' },
 		});
 		assert.ok(result.ok, result.stderr);
-		assert.strictEqual(guardResource(result.template), undefined, 'no pool → no guard resources (Q6)');
+		assert.strictEqual(guardResource(result.template), undefined, 'no pool → no guard resources');
 	});
 });
 
@@ -764,7 +764,7 @@ describe('the deploy-time guard: wiring', () => {
 					],
 				},
 			},
-			// L80: the role may not recreate its owned log group after `destroy()`.
+			// The role may not recreate its owned log group after `destroy()`.
 			{ Action: 'logs:CreateLogGroup', Effect: 'Deny', Resource: '*' },
 		]);
 	});
@@ -789,7 +789,7 @@ describe('the deploy-time guard: wiring', () => {
 		assert.deepStrictEqual(entries.map((e) => e.FullId).sort(), ['TestStack-auth', 'TestStack-staff']);
 	});
 
-	test('no guard without an owned pool (Q6): pool-less and wrapped-pool configs', () => {
+	test('no guard without an owned pool: pool-less and wrapped-pool configs', () => {
 		for (const build of Object.values(POOL_REMOVED)) {
 			const result = synthGuarded({ build: asBuild(build), appDir: appDir() });
 			assert.ok(result.ok, result.stderr);

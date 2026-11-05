@@ -196,31 +196,31 @@ describe('users CLI: local pool', () => {
 	});
 
 	test('a username that looks like an email cannot stand in for the user who holds that email verified', async () => {
-		// `signInWith: ['username']`: any string is a username, `boss@corp.com` included.
+		// `signInWith: ['username']`: any string is a username, `boss@example.org` included.
 		const pool = new Auth(root, 'auth', {
 			users: { signInWith: ['username'], groups: ['admin'] },
 			admin: { actions: ['lifecycle'] },
 		});
-		await pool.admin.createUser('owner', { attributes: { email: 'boss@corp.com', email_verified: 'true' } });
-		await pool.signUp('boss@corp.com', PASSWORD, { attributes: { email: 'eve@example.com' } });
+		await pool.admin.createUser('owner', { attributes: { email: 'boss@example.org', email_verified: 'true' } });
+		await pool.signUp('boss@example.org', PASSWORD, { attributes: { email: 'eve@example.com' } });
 		const file = join('.bb-data', pool.fullId, 'state.json');
 		const admins = () => JSON.parse(readFileSync(file, 'utf8')).groups.admin;
 
-		const r = await cli(['add-to-group', 'boss@corp.com', 'admin']);
+		const r = await cli(['add-to-group', 'boss@example.org', 'admin']);
 		assert.strictEqual(r.code, 1);
 		assert.match(
 			r.err,
-			/'boss@corp.com' is ambiguous: it is the username of user 'boss@corp.com' and the verified email of user 'owner'.*--username boss@corp.com, or --email boss@corp.com/,
+			/'boss@example.org' is ambiguous: it is the username of user 'boss@example.org' and the verified email of user 'owner'.*--username boss@example.org, or --email boss@example.org/,
 		);
 		assert.deepStrictEqual(admins(), []);
 
-		const byEmail = await cli(['add-to-group', '--email', 'boss@corp.com', 'admin']);
+		const byEmail = await cli(['add-to-group', '--email', 'boss@example.org', 'admin']);
 		assert.strictEqual(byEmail.code, 0, byEmail.err);
 		assert.deepStrictEqual(admins(), ['owner']);
-		const byUsername = await cli(['add-to-group', '--username=boss@corp.com', 'admin']);
+		const byUsername = await cli(['add-to-group', '--username=boss@example.org', 'admin']);
 		assert.strictEqual(byUsername.code, 0, byUsername.err);
-		assert.deepStrictEqual(admins(), ['owner', 'boss@corp.com']);
-		assert.match((await cli(['list-groups', '--email', 'boss@corp.com'])).out, /\(username owner\) is in: admin/);
+		assert.deepStrictEqual(admins(), ['owner', 'boss@example.org']);
+		assert.match((await cli(['list-groups', '--email', 'boss@example.org'])).out, /\(username owner\) is in: admin/);
 		// --email takes a verified email only; --username a username only.
 		assert.match((await cli(['list-groups', '--email', 'eve@example.com'])).err, /has not verified it/);
 		assert.match((await cli(['list-groups', '--username', 'nobody'])).err, /No user with the username 'nobody'/);
@@ -520,11 +520,11 @@ describe('users CLI: deployed pool', () => {
 	});
 
 	test('a username that looks like an email cannot stand in for the user who holds that email verified', async () => {
-		// The username `boss@corp.com` (listed first, so AdminGetUser matches it by username) and the
+		// The username `boss@example.org` (listed first, so AdminGetUser matches it by username) and the
 		// user whose verified email it is.
 		const users = {
-			'boss@corp.com': { sub: 'eve-sub', email: 'eve@example.com', email_verified: 'true' },
-			[UUID]: { sub: UUID, email: 'boss@corp.com', email_verified: 'true' },
+			'boss@example.org': { sub: 'eve-sub', email: 'eve@example.com', email_verified: 'true' },
+			[UUID]: { sub: UUID, email: 'boss@example.org', email_verified: 'true' },
 		};
 		const run = async (argv: string[]) => {
 			const fake = fakeClients(stackResponders(users));
@@ -534,19 +534,19 @@ describe('users CLI: deployed pool', () => {
 			});
 			return { ...r, sent: fake.sent };
 		};
-		const refused = await run(['add-to-group', 'boss@corp.com', 'admin']);
+		const refused = await run(['add-to-group', 'boss@example.org', 'admin']);
 		assert.strictEqual(refused.code, 1);
 		assert.match(
 			refused.err,
-			/'boss@corp.com' is ambiguous: .*username of user 'boss@corp.com' and the verified email of user '0f1e2d3c/,
+			/'boss@example.org' is ambiguous: .*username of user 'boss@example.org' and the verified email of user '0f1e2d3c/,
 		);
 		assert.deepStrictEqual(input(refused.sent, 'ListUsersCommand'), {
 			UserPoolId: POOL_ID,
-			Filter: 'email = "boss@corp.com"',
+			Filter: 'email = "boss@example.org"',
 		});
 		assert.ok(!refused.sent.some((s) => s.name === 'AdminAddUserToGroupCommand'));
 
-		const byEmail = await run(['add-to-group', '--email', 'boss@corp.com', 'admin']);
+		const byEmail = await run(['add-to-group', '--email', 'boss@example.org', 'admin']);
 		assert.strictEqual(byEmail.code, 0, byEmail.err);
 		assert.deepStrictEqual(input(byEmail.sent, 'AdminAddUserToGroupCommand'), {
 			UserPoolId: POOL_ID,
@@ -555,11 +555,11 @@ describe('users CLI: deployed pool', () => {
 		});
 		assert.ok(!byEmail.sent.some((s) => s.name === 'AdminGetUserCommand'), '--email never resolves by username');
 
-		const byUsername = await run(['add-to-group', '--username', 'boss@corp.com', 'admin']);
+		const byUsername = await run(['add-to-group', '--username', 'boss@example.org', 'admin']);
 		assert.strictEqual(byUsername.code, 0, byUsername.err);
 		assert.deepStrictEqual(input(byUsername.sent, 'AdminAddUserToGroupCommand'), {
 			UserPoolId: POOL_ID,
-			Username: 'boss@corp.com',
+			Username: 'boss@example.org',
 			GroupName: 'admin',
 		});
 

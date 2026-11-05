@@ -1478,7 +1478,7 @@ class FileMigrator {
 			const entry = mfa ? this.movedEntry(mfa, 'mfa') : this.textEntry('mfa', modeText);
 			return entry;
 		}
-		// R10: AuthCognito with MFA on and no mfaTypes enabled SMS only; Auth defaults to SMS + TOTP.
+		// AuthCognito with MFA on and no mfaTypes enabled SMS only; Auth defaults to SMS + TOTP.
 		const typesText = typesValue
 			? this.slice(typesValue.getStart(this.sf), typesValue.getEnd())
 			: `[${this.quote}SMS${this.quote}]`;

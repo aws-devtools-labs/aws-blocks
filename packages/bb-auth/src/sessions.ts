@@ -19,7 +19,7 @@
  *   is decoded from the ID token, its validity is the access token's `exp`.
  *   `Auth` adds one optional field, `provider`, only for sessions that came
  *   through a hosted-UI federated provider; `AuthCognito` ignores it.
- * - A **direct session** (an OIDC provider federated directly, Q1 — no Cognito
+ * - A **direct session** (an OIDC provider federated directly — no Cognito
  *   record and no Cognito tokens) carries the discriminator `kind: 'direct'`.
  *   Its identity is `` `${issuer}:${subject}` ``.
  * - Every write stamps the row with a DynamoDB TTL of `now + session ttl`
@@ -146,7 +146,7 @@ export interface SessionIdentity {
 	/**
 	 * The session ID token's `email_verified` / `phone_number_verified`, which
 	 * are not `attributes` (a Cognito or OIDC ID token carries them as JSON
-	 * booleans). Read by the sign-in UI's display name only (R64, FX31).
+	 * booleans). Read by the sign-in UI's display name only.
 	 */
 	verified: ContactVerification;
 }
@@ -545,7 +545,7 @@ export class SessionStore {
  * (`sessionSecret`), so reading it from there keeps local sessions signed in
  * across the `AuthCognito` → `Auth` switch too. When that file has no secret,
  * one is generated and merged into it (other fields untouched), so the native
- * mock engine (D5b), which owns the rest of that file, must preserve the
+ * mock engine, which owns the rest of that file, must preserve the
  * `sessionSecret` field when it writes.
  *
  * @param dataDir - `getMockDataDir(auth)`.

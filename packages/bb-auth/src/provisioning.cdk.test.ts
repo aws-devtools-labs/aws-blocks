@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * What `Auth` provisions per configuration (decision Q6) and how the pool's
- * durability follows the stack defaults (decision Q4). Real synth under
+ * What `Auth` provisions per configuration and how the pool's
+ * durability follows the stack defaults. Real synth under
  * `--conditions=cdk` (see `test-support/cdk-synth.ts`).
  *
- * Q6: a configuration with no pool-backed sign-in method — a `store: 'builtin'`
+ * A configuration with no pool-backed sign-in method — a `store: 'builtin'`
  * block (no email + password, no social, SAML or Cognito-federated OIDC
  * provider) — synthesizes no Cognito resources, only `sessions` and
  * `session-secret`.
@@ -109,7 +109,7 @@ function sessionsTableOf(template: CfnTemplateJson): CfnResourceJson {
 const removalWarnings = (s: SynthesizedAuth) =>
 	s.warnings.filter((w) => w.message.includes('@aws-blocks/bb-auth:RemovalPolicyUnset'));
 
-describe('Auth — Q6 conditional provisioning', () => {
+describe('Auth — conditional provisioning', () => {
 	test('default: pool, client, sessions and session-secret (the AuthCognito identity)', () => {
 		const { identity } = synth(CONFIGS.default);
 		assert.deepStrictEqual(diffIdentity(FIXTURE_DEFAULT, identity), []);
@@ -173,7 +173,7 @@ describe('Auth — Q6 conditional provisioning', () => {
 					diff.filter((line) => !line.startsWith('+')),
 					[],
 				);
-				// …and what D3b adds is the federation infrastructure (federation.cdk.test.ts
+				// …and what hosted-UI federation adds is the federation infrastructure (federation.cdk.test.ts
 				// pins it resource by resource) plus exactly the two federation config keys.
 				const keys = federationConfigKeys(identity.fullId);
 				assert.deepStrictEqual(
@@ -240,14 +240,14 @@ describe('Auth — Q6 conditional provisioning', () => {
 	});
 });
 
-describe('Auth — Q4 pool durability follows the stack defaults', () => {
+describe('Auth — pool durability follows the stack defaults', () => {
 	describe('BlocksPresets.sandbox', () => {
 		test('removalPolicy unset → pool Delete, DeletionProtection omitted (inactive, as AuthCognito); sessions follow too', () => {
 			const { template } = synth(CONFIGS.default, 'sandbox');
 			const pool = poolOf(template);
 			assert.strictEqual(pool.DeletionPolicy, 'Delete');
 			assert.strictEqual(pool.UpdateReplacePolicy, 'Delete');
-			// L20: only ACTIVE is emitted; unset is Cognito's default (inactive).
+			// Only ACTIVE is emitted; unset is Cognito's default (inactive).
 			assert.ok(!('DeletionProtection' in (pool.Properties ?? {})));
 			const table = sessionsTableOf(template);
 			assert.strictEqual(table.DeletionPolicy, 'Delete');
@@ -301,7 +301,7 @@ describe('Auth — Q4 pool durability follows the stack defaults', () => {
 			);
 			const pool = poolOf(s.template);
 			assert.strictEqual(pool.DeletionPolicy, 'Delete');
-			// L20: `false` omits the property rather than emitting INACTIVE.
+			// `false` omits the property rather than emitting INACTIVE.
 			assert.ok(!('DeletionProtection' in (pool.Properties ?? {})));
 			const table = sessionsTableOf(s.template);
 			assert.strictEqual(table.DeletionPolicy, 'Delete');
@@ -319,7 +319,7 @@ describe('Auth — Q4 pool durability follows the stack defaults', () => {
 		});
 	});
 
-	test('identity is unchanged by the preset (Q4 touches durability only)', () => {
+	test('identity is unchanged by the preset (the preset touches durability only)', () => {
 		for (const preset of ['sandbox', 'production'] as const) {
 			assert.deepStrictEqual(diffIdentity(FIXTURE_DEFAULT, synth(CONFIGS.default, preset).identity), [], preset);
 		}

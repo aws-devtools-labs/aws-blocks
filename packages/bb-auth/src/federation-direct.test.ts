@@ -117,7 +117,7 @@ describe('DirectFederationEngine', () => {
 		},
 	});
 
-	test('a public (PKCE-only) client: discovery, PKCE S256, verified ID token, Q1 identity, groupsClaim', async () => {
+	test('a public (PKCE-only) client: discovery, PKCE S256, verified ID token, `<iss>:<sub>` identity, groupsClaim', async () => {
 		const { engine } = makeEngine(okta());
 		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
 		const authorizeUrl = new URL(await engine.buildSignInUrl(start, {}));
@@ -241,7 +241,7 @@ describe('DirectFederationEngine', () => {
 			),
 			(e: unknown) => {
 				assert.ok(e instanceof ApiError && isBlocksError(e, AuthErrors.IdpError));
-				// FX60: the fixed message, not the IdP's `error` / `error_description`.
+				// The fixed message, not the IdP's `error` / `error_description`.
 				assert.strictEqual(e.message, idpRefusedMessage('okta'));
 				return true;
 			},
@@ -258,7 +258,7 @@ describe('DirectFederationEngine', () => {
 		assert.ok(cb.response.headers.getSetCookie().some((l) => l.startsWith('authpending_') && /Max-Age=0/.test(l)));
 	});
 
-	test('R2-2: an IdP error is honoured only with the pending state — a forged one is InvalidState', async () => {
+	test('an IdP error is honoured only with the pending state — a forged one is InvalidState', async () => {
 		const { engine } = makeEngine(okta());
 		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
 		const authorizeUrl = await engine.buildSignInUrl(start, {});
@@ -277,7 +277,7 @@ describe('DirectFederationEngine', () => {
 		}
 	});
 
-	test('FX7b: a state of another length or encoding is InvalidState, never a throw of its own', async () => {
+	test('a state of another length or encoding is InvalidState, never a throw of its own', async () => {
 		const { engine } = makeEngine(okta());
 		const start = ctxFor(`${APP}/aws-blocks/auth/signin/okta`);
 		const authorizeUrl = await engine.buildSignInUrl(start, {});
@@ -294,7 +294,7 @@ describe('DirectFederationEngine', () => {
 		}
 	});
 
-	test('FX7b: a nonce of another length or type is refused (401), never a throw of its own', async () => {
+	test('a nonce of another length or type is refused (401), never a throw of its own', async () => {
 		for (const nonce of ['short', `${'n'.repeat(40)}é`]) {
 			idp.overrides = { nonce };
 			const { engine } = makeEngine(okta());
@@ -545,7 +545,7 @@ describe('DirectFederationEngine', () => {
 		await assert.rejects(signIn(idp, noSecret), assertWireSafe(AuthErrors.ProviderUnavailable, 502, RAW_ARN));
 	});
 
-	// FX60: the callback's own OAuth error response was the last path that still
+	// The callback's own OAuth error response was the last path that still
 	// quoted external text in the wire message, which is what the
 	// `<Authenticator>` renders. Now it gets the fixed message and the text is
 	// logged — the engine-level mirror of the `#231` guard above.
@@ -619,7 +619,7 @@ describe('DirectFederationEngine', () => {
 		assert.deepStrictEqual(await plain.engine.signOut({ kind: 'direct', record: r2 }, ctxFor(`${APP}/x`)), {});
 	});
 
-	test('bare OAuth 2.0 (customOauth2): userinfo + mapClaims, Q1 identity oauth2:<name>:<sub>', async () => {
+	test('bare OAuth 2.0 (customOauth2): userinfo + mapClaims, identity oauth2:<name>:<sub>', async () => {
 		idp.userInfoClaims = { id: 4242, login: 'ada', email: 'ada@example.com', name: 'Ada' };
 		const { engine } = makeEngine({
 			store: 'builtin',

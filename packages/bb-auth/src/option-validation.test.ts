@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Unknown and misplaced `Auth` options are rejected at construction (D1b).
+ * Unknown and misplaced `Auth` options are rejected at construction.
  *
  * TypeScript does no excess-property check on the inferred `Auth<const O>`
  * options literal, so without this a typo (`emailPasword`) or a misplaced

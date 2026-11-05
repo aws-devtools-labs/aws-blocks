@@ -1,6 +1,6 @@
 {
 	"$comment": [
-		"FROZEN at the cutover (F1b), RE-FROZEN in MERGE1 from bb-auth-cognito@0.1.11 (origin/main 12c0ace9):",
+		"Re-captured from bb-auth-cognito@0.1.11 after bb-kv-store #635 changed the sessions table:",
 		"AuthCognito synthesized under --conditions=cdk",
 		"in the test-support/cdk-synth.ts harness stack, for every pair in test-support/authcognito-pairs.ts,",
 		"under the sandbox preset and with no stack defaults ('production', the harness default).",
@@ -8,13 +8,13 @@
 		"A resource identical in every template is stored once under sharedResources; \"$sharedResources\"",
 		"marks its place (test-support/legacy-fixtures.ts frozenAuthCognitoSynths() puts it back).",
 		"Proven equal to the live package by legacy-fixtures.proof.test.ts in the commit that froze it, and again",
-		"in MERGE1 (17/17) against origin/main merged into that commit: only the nested sessions table changed,",
+		"at the re-capture (17/17): only the nested sessions table changed,",
 		"gaining SSESpecification and PointInTimeRecoverySpecification from bb-kv-store #635 — a dependency change",
-		"both blocks get, so without the re-freeze property-snapshot.cdk.test.ts compared Auth against a stale capture.",
+		"both blocks get, so without the re-capture property-snapshot.cdk.test.ts compared Auth against a stale capture.",
 		"Regenerate from the revision that froze it (the parent of the commit that deleted packages/bb-auth-cognito): UPDATE_LEGACY_FIXTURES=1 node --test dist/legacy-fixtures.proof.test.js (in packages/bb-auth).",
-		"Updated in R126 (main @ c04387ab merge): #637's stack-level config-log bucket (ConfigLogDelivery/*: bucket, policy, auto-delete) added to each template (it differs by preset). Core creates it for every stack, whatever the auth block, so a re-freeze against the merged core yields exactly these; the pool, client and every block-owned resource are unchanged.",
-		"Also R126: sharedResources refreshed from the merged core (each live version identical in every pair and preset): BlocksSecretProviderframeworkonEventB025B3DA, BlocksConfigBucket439874BD, BlocksConfigBucketPolicy3A1A2C90, CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536; now preset-specific and inlined per template: CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F — #637's config-bucket logging/versioning/lifecycle/TLS policy and the aws-cdk-lib bump's handler Runtime/Architectures/MemorySize.",
-		"Also R129 (main @ 91ed1fc8 merge): sharedResources BlocksSecretInitFn2E010B7A gains Timeout: 120 from bb-app-setting's secret-init Lambda timeout fix, a dependency change both blocks get; nothing else moved."
+		"Updated after a later merge from main: #637's stack-level config-log bucket (ConfigLogDelivery/*: bucket, policy, auto-delete) added to each template (it differs by preset). Core creates it for every stack, whatever the auth block, so a re-freeze against the merged core yields exactly these; the pool, client and every block-owned resource are unchanged.",
+		"Also in that update: sharedResources refreshed from the merged core (each live version identical in every pair and preset): BlocksSecretProviderframeworkonEventB025B3DA, BlocksConfigBucket439874BD, BlocksConfigBucketPolicy3A1A2C90, CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536; now preset-specific and inlined per template: CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F — #637's config-bucket logging/versioning/lifecycle/TLS policy and the aws-cdk-lib bump's handler Runtime/Architectures/MemorySize.",
+		"Updated again after a further merge from main: sharedResources BlocksSecretInitFn2E010B7A gains Timeout: 120 from bb-app-setting's secret-init Lambda timeout fix, a dependency change both blocks get; nothing else moved."
 	],
 	"awsCdkLib": "2.257.0",
 	"sharedResources": {

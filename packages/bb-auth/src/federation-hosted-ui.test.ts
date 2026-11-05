@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The hosted-UI federation engine (D6b) against an in-process fake Cognito
+ * The hosted-UI federation engine against an in-process fake Cognito
  * domain over real HTTP (`test-support/fake-cognito.ts`: authorize, token,
  * revoke, logout, JWKS). Proves:
  *
@@ -20,7 +20,7 @@
  * - a mixed configuration (password + direct OIDC + hosted-UI social): all
  *   three reachable, each signing out correctly;
  * - pool-less safety: no config keys → a clear refusal, never a request;
- * - decision Q10: a federated **first** sign-in runs `validateUser` in the
+ * - `validateUser`: a federated **first** sign-in runs `validateUser` in the
  *   pool's PreSignUp trigger (the fake plays Cognito, invoking core's real
  *   Lambda handler); a rejection reaches the browser as the canonical error.
  *
@@ -87,7 +87,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
-/** Point the fake at this test's front door (D3b registers exactly these). */
+/** Point the fake at this test's front door (the CDK layer registers exactly these). */
 function registerFrontDoor(origin: string, signOutPath = '/aws-blocks/auth/signout') {
 	cognito.callbackUrls = [`${origin}/aws-blocks/auth/callback`];
 	cognito.logoutUrls = [`${origin}${signOutPath}`];
@@ -149,7 +149,7 @@ function rejectsWith(name: string, status?: number) {
 
 const APP = 'http://127.0.0.1:3998';
 
-/** What an attacker would like the app to answer with (R2-2). */
+/** What an attacker would like the app to answer with. */
 const ATTACKER_TEXT = 'Your account is suspended. Call +1-555-0100 to restore it.';
 const FORGED_REJECTION = encodeTriggerRejection(new ApiError(ATTACKER_TEXT, 451, { name: 'AccountSuspended' }));
 
@@ -367,7 +367,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		);
 	});
 
-	test('R2-2: an error callback is honoured only with the pending state — anything else is InvalidState', async () => {
+	test('an error callback is honoured only with the pending state — anything else is InvalidState', async () => {
 		registerFrontDoor(APP);
 		const { engine } = makeEngine('google');
 		const start = ctxFor(`${APP}/s`);
@@ -405,7 +405,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		);
 	});
 
-	test('FX60: managed login’s own error text never reaches the client; it is logged at the right level', async () => {
+	test('managed login’s own error text never reaches the client; it is logged at the right level', async () => {
 		registerFrontDoor(APP);
 		// What managed login sends: its own wording, an echoed request value, and
 		// (for a trigger failure it could not decode) a function ARN.
@@ -455,7 +455,7 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		}
 	});
 
-	test('FX7b: a state of another length or encoding is InvalidState, never a throw of its own', async () => {
+	test('a state of another length or encoding is InvalidState, never a throw of its own', async () => {
 		registerFrontDoor(APP);
 		const { engine } = makeEngine('google');
 		const start = ctxFor(`${APP}/s`);
@@ -471,12 +471,12 @@ describe('HostedUiFederationEngine — completing the sign-in', () => {
 		}
 	});
 
-	test('a managed-login error is an IdpError with the fixed message; the description is logged (FX60)', async () => {
+	test('a managed-login error is an IdpError with the fixed message; the description is logged', async () => {
 		cognito.authorizeError = 'invalid_request';
 		const { engine, entries } = makeEngine('google');
 		await assert.rejects(engineSignIn(engine), (e: unknown) => {
 			assert.ok(isBlocksError(e, AuthErrors.IdpError));
-			// FX60: Cognito's own `error` / `error_description` stay server-side.
+			// Cognito's own `error` / `error_description` stay server-side.
 			assert.strictEqual(e instanceof Error ? e.message : '', idpRefusedMessage('google'));
 			return true;
 		});
@@ -578,7 +578,7 @@ describe('HostedUiFederationEngine — refresh, revoke, logout', () => {
 		assert.strictEqual(
 			url.searchParams.get('logout_uri'),
 			`${APP}/aws-blocks/auth/signout`,
-			"the sign-out path D3b registers as the client's logout URL",
+			"the sign-out path the CDK layer registers as the client's logout URL",
 		);
 	});
 
@@ -671,7 +671,7 @@ function awsAuth<const O extends AuthOptions>(options: O) {
 			if (!fn) throw new Error(`test: unexpected Cognito command ${name}`);
 			return { output: { $metadata: { httpStatusCode: 200 }, ...((await fn(args.input)) ?? {}) } };
 		},
-		{ step: 'initialize', name: 'd6b-cognito-intercept', override: true },
+		{ step: 'initialize', name: 'hosted-ui-cognito-intercept', override: true },
 	);
 	Reflect.get(native, 'verifier').cacheJwks(cognito.jwks);
 	const providers: Map<string, { provider: ResolvedProvider; engine: FederationEngine }> = Reflect.get(
@@ -974,7 +974,7 @@ describe('password + hosted-UI social in one block, direct OIDC in a second bloc
 	});
 });
 
-describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigger (aws-runtime)', () => {
+describe('validateUser on a federated first sign-in — the PreSignUp trigger (aws-runtime)', () => {
 	beforeEach(scriptUsers);
 
 	/** Cognito invoking the trigger: core's real Lambda handler, which routes by pool id. */
@@ -1024,7 +1024,7 @@ describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigg
 		]);
 	});
 
-	test('R2-2: a crafted callback during a pending sign-in cannot choose the error the app answers with', async () => {
+	test('a crafted callback during a pending sign-in cannot choose the error the app answers with', async () => {
 		awsAuth({
 			emailPassword: false,
 			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },
@@ -1048,7 +1048,7 @@ describe('Q10: validateUser on a federated first sign-in — the PreSignUp trigg
 		}
 	});
 
-	test('FX60: a genuine error callback answers the browser with the fixed message, none of Cognito’s text', async () => {
+	test('a genuine error callback answers the browser with the fixed message, none of Cognito’s text', async () => {
 		awsAuth({
 			emailPassword: false,
 			providers: { google: { type: 'google', clientId: 'g', clientSecret: secret } },

@@ -6,9 +6,9 @@
  * spied Cognito client (no network). Pins the exact SDK command + input each
  * flow sends and the session record + cookie it produces.
  *
- * Ported from `bb-auth-cognito/src/index.aws.signin.test.ts` (B5/B6) so `Auth`
+ * Ported from `bb-auth-cognito/src/index.aws.signin.test.ts` so `Auth`
  * is held to `AuthCognito`'s behaviour. Where an expectation differs it says
- * why, inline (`Auth:`). Option renames (D3): `sessionTtlSeconds` →
+ * why, inline (`Auth:`). Option renames: `sessionTtlSeconds` →
  * `session.ttlSeconds`, `authFlowType` → `users.authFlow`, `userAttributes` →
  * `users.attributes`. Harness: `test-support/aws-harness.ts`.
  */
@@ -237,7 +237,7 @@ describe('AWS signIn (USER_AUTH)', () => {
 
 	test('preferredChallenge PASSWORD → PASSWORD bundled into InitiateAuth', async () => {
 		// Auth: AuthCognito's pool-wide `preferredChallenge` is `users.preferredChallenge`
-		// (D3 rename; restored by D5c2, L22).
+		// (renamed; restored).
 		const h = makeAwsAuth({ users: { authFlow: 'USER_AUTH', preferredChallenge: 'PASSWORD' } });
 		const b = new Browser();
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
@@ -249,7 +249,7 @@ describe('AWS signIn (USER_AUTH)', () => {
 		});
 	});
 
-	test('the per-call preferredChallenge overrides the pool default (added for Auth, L22)', async () => {
+	test('the per-call preferredChallenge overrides the pool default (added for Auth)', async () => {
 		const h = makeAwsAuth({ users: { authFlow: 'USER_AUTH', preferredChallenge: 'PASSWORD' } });
 		const b = new Browser();
 		h.on('InitiateAuthCommand', () => ({
@@ -263,7 +263,7 @@ describe('AWS signIn (USER_AUTH)', () => {
 		assert.strictEqual(r.nextStep.name, 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP');
 	});
 
-	test('the pool default is ignored by USER_PASSWORD_AUTH (added for Auth, L22)', async () => {
+	test('the pool default is ignored by USER_PASSWORD_AUTH (added for Auth)', async () => {
 		const h = makeAwsAuth({ users: { preferredChallenge: 'EMAIL_OTP' } });
 		const b = new Browser();
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
@@ -418,7 +418,7 @@ describe('AWS auto-sign-in bridge (signUp → confirmSignUp → autoSignIn)', ()
 		const b = new Browser();
 		const bridge = `autosignin_${h.fullId}`;
 		h.on('SignUpCommand', () => ({ UserConfirmed: false, UserSub: 'sub-n', Session: 'signup-session' }));
-		// Auth (Q2): `emailPassword.autoSignIn` defaults on, so a sign-up with a
+		// Auth: `emailPassword.autoSignIn` defaults on, so a sign-up with a
 		// context sets the bridge — AuthCognito needed `{ autoSignIn: true }` per call.
 		await b.request((ctx) => h.auth.signUp('newbie', 'Password!1', {}, ctx));
 		return { h, b, bridge };
@@ -438,7 +438,7 @@ describe('AWS auto-sign-in bridge (signUp → confirmSignUp → autoSignIn)', ()
 		assert.ok(!decoded.includes('signup-session'));
 	});
 
-	test('emailPassword.autoSignIn: false → no bridge cookie (added for Auth: the Q2 opt-out)', async () => {
+	test('emailPassword.autoSignIn: false → no bridge cookie (added for Auth: the auto-sign-in opt-out)', async () => {
 		const h = makeAwsAuth({ emailPassword: { autoSignIn: false } });
 		const b = new Browser();
 		h.on('SignUpCommand', () => ({ UserConfirmed: false, UserSub: 'sub-n', Session: 'signup-session' }));

@@ -155,7 +155,7 @@ export class FakeIdp {
 
 	/**
 	 * Mint a JWT **access token** (as Okta / Entra / Keycloak issue them) for the
-	 * bearer tests (D6c), signed with the published key unless `foreignKey`.
+	 * bearer tests, signed with the published key unless `foreignKey`.
 	 * `claims` are added; `audience`, `issuer` and `expiresIn` override the defaults.
 	 */
 	async accessJwt(

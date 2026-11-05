@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The **direct** federation engine — the D0 default for `oidcProviders`: your
+ * The **direct** federation engine — the default for `oidcProviders`: your
  * backend talks to the IdP itself. The same code runs in `npm run dev` and in
  * Lambda; only the issuer differs (the built-in stub IdP locally, the real
  * IdP when deployed).
@@ -24,7 +24,7 @@
  *   discovery advertises them.
  * - **Groups** for `requireRole` come from the provider's `groupsClaim`.
  *
- * Identity is `` `${iss}:${sub}` `` (Q1) — `AuthOIDC`'s `userId`, so existing
+ * Identity is `` `${iss}:${sub}` `` — `AuthOIDC`'s `userId`, so existing
  * keys survive. Sessions are written by `AuthBase` as `kind: 'direct'` rows.
  *
  * Errors are `ApiError`s named from the `AuthErrors` vocabulary; detail that
@@ -270,7 +270,7 @@ export class DirectFederationEngine implements FederationEngine {
 		}
 		if (pending.provider !== this.provider.id) throw invalidState('the callback is for another provider');
 		const params = context.request.url.searchParams;
-		// R2-2: `state` first, error response or not (RFC 6749 §4.1.2.1 returns it
+		// `state` first, error response or not (RFC 6749 §4.1.2.1 returns it
 		// on both), so an attacker's link cannot put its own `error_description` in
 		// front of a user mid-sign-in: without this browser's pending state, every
 		// callback is the same generic InvalidState.
@@ -278,10 +278,10 @@ export class DirectFederationEngine implements FederationEngine {
 		if (!pendingStateMatches(returnedState, pending)) throw invalidState('state mismatch');
 		const idpErr = params.get('error');
 		if (idpErr) {
-			// FX60: `error_description` is the IdP's own text — it can name an internal
+			// `error_description` is the IdP's own text — it can name an internal
 			// endpoint or echo the login — and `ApiError.message` is what the
 			// `<Authenticator>` renders. So the client gets the fixed message and the
-			// text goes to the log only, as FX59 does for every other engine error.
+			// text goes to the log only, as the error policy does for every other engine error.
 			throw idpError(
 				maskIdpCallbackError(
 					this.host.log,
@@ -421,7 +421,7 @@ export class DirectFederationEngine implements FederationEngine {
 	}
 
 	/**
-	 * Verify a bearer access token (`allowBearerAuth`, D6c) — the check
+	 * Verify a bearer access token (`allowBearerAuth`) — the check
 	 * `AuthOIDC` makes today, so the native SDKs' tokens keep working: a JWT
 	 * whose `iss` is this provider's issuer, signed by a key in the provider's
 	 * JWKS (asymmetric algorithms only — never `none` or HMAC), `aud` = the

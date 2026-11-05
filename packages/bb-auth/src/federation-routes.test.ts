@@ -97,10 +97,10 @@ describe('route table', () => {
 		const perBlock = (base: string) => [
 			`GET ${base}/callback`,
 			`POST ${base}/signout`,
-			// The sign-out landing: Cognito's /logout returns here with a GET (D6b).
+			// The sign-out landing: Cognito's /logout returns here with a GET.
 			`GET ${base}/signout`,
 			`POST ${base}/exchange`,
-			// The browser redirect client's session read (L69).
+			// The browser redirect client's session read.
 			`GET ${base}/session`,
 			`POST ${base}/refresh`,
 			`POST ${base}/exchange/refresh`,
@@ -345,14 +345,14 @@ describe('callback dispatch — each transport and wire error code', () => {
 		assert.strictEqual(to.searchParams.get('error'), 'access_denied');
 		assert.strictEqual(to.searchParams.get('error_description'), 'user said no');
 		assert.strictEqual(to.searchParams.get('state'), state);
-		// FX60: the pass-through is the OAuth error response handed back to the
+		// The pass-through is the OAuth error response handed back to the
 		// native / CLI app that started the sign-in (the relay target the state
 		// envelope was signed with), never something a browser renders — the 302
 		// body is empty, so the only thing carrying the text is the Location.
 		assert.strictEqual(await res.text(), '', 'nothing is rendered to the browser that followed the redirect');
 	});
 
-	test('R2-2: a crafted error callback during a pending sign-in is invalid_state, never the attacker’s error', async () => {
+	test('a crafted error callback during a pending sign-in is invalid_state, never the attacker’s error', async () => {
 		stubAuth();
 		const forged = encodeTriggerRejection(
 			new ApiError('Your account is suspended. Call +1-555-0100.', 451, { name: 'AccountSuspended' }),
@@ -651,7 +651,7 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		const corp = await fetch(`${server.origin}/aws-blocks/auth/sso/signin/corp`, { redirect: 'manual' });
 		assert.strictEqual(corp.status, 501);
 		assert.match((await corp.json()).error, /runs only in local development/);
-		// The hosted-UI engine (D6b) is wired; with no deployed domain / client it
+		// The hosted-UI engine is wired; with no deployed domain / client it
 		// refuses (federation-hosted-ui.test.ts covers the configured flow).
 		const google = await fetch(`${server.origin}/aws-blocks/auth/signin/google`, { redirect: 'manual' });
 		assert.strictEqual(google.status, 500);

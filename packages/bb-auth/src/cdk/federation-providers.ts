@@ -3,7 +3,7 @@
 
 /**
  * `ResolvedAuthOptions` provider records → Cognito identity-provider registrations, and
- * the synth-time checks for them (D3b).
+ * the synth-time checks for them.
  *
  * Pure: no `aws-cdk-lib`. `federation.ts` turns each {@link IdpRegistration}
  * into CloudFormation; keeping the mapping here lets it be tested without a

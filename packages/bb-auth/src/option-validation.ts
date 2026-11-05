@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Construction-time rejection of unknown and misplaced `Auth` options (D1b).
+ * Construction-time rejection of unknown and misplaced `Auth` options.
  *
  * `Auth<const O extends AuthOptions>` infers `O` from the options literal, and
  * TypeScript performs no excess-property check on an inferred generic. Without
@@ -15,7 +15,7 @@
  * construction, so the same configuration fails the same way in `npm run dev`,
  * at synth and in Lambda.
  *
- * **Boolean options are type-checked too** (FX53, R85). Each layer reads a boolean
+ * **Boolean options are type-checked too**. Each layer reads a boolean
  * option by truthiness or by `!== false`, so a non-boolean value from an
  * untyped caller decided the setting by accident: `selfSignUp: 0` enabled
  * self-service sign-up (`0 !== false`), `passkeys: 'false'` enabled passkeys.
@@ -465,7 +465,7 @@ export interface UnknownOption {
 	readonly hint?: string;
 }
 
-/** One option whose value has the wrong type (FX53). */
+/** One option whose value has the wrong type. */
 export interface InvalidOption {
 	/** Where it was found, e.g. `emailPassword.selfSignUp`. */
 	readonly path: string;
@@ -820,7 +820,7 @@ export function findUnknownAuthOptions(options: unknown): UnknownOption[] {
 /**
  * Every known option whose value has the wrong type, in declaration order: a
  * `boolean` option set to anything but `true` / `false`, or a group with a
- * boolean shorthand set to anything but a boolean or an object (FX53); a
+ * boolean shorthand set to anything but a boolean or an object; a
  * `providers` value that is not a plain object, a `__proto__` provider id, or
  * a provider entry that is not an object; a `'cognito'` block's `type: 'oidc'`
  * entry with an `attributesRequestMethod` other than `'GET'` / `'POST'`. Values
@@ -908,7 +908,7 @@ function findAll(options: unknown): Findings {
 /**
  * Throw if `options` contains a key `Auth` does not know, at any nesting
  * level. Called by every entry's constructor before anything is registered.
- * Also throws if a boolean option has a non-boolean value (FX53; see
+ * Also throws if a boolean option has a non-boolean value (see
  * {@link findInvalidAuthOptions}), and, once every key and value is valid, if
  * `emailPassword: false` is combined with an option only email + password
  * users can use (see {@link findPasswordOnlyOptions}).

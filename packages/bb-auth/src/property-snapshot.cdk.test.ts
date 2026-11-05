@@ -19,7 +19,7 @@
  * stack. The `AuthCognito` side was synthesized the same way, in the same
  * harness, from the real `bb-auth-cognito` and frozen into
  * `__fixtures__/authcognito-templates.json` when the package was deleted at the
- * cutover (F1b) — proven equal to the live package in the commit that froze it
+ * cutover — proven equal to the live package in the commit that froze it
  * (see `test-support/legacy-fixtures.ts` for how to regenerate it). The
  * comparisons themselves are unchanged; only the source of the expected side
  * moved. One adjustment keeps the frozen side comparable as dependencies move
@@ -45,13 +45,13 @@ import { frozenAuthCognitoSynths } from './test-support/legacy-fixtures.js';
  * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST})
  * and the password-reset grant ({@link withoutResetGrant}).
  *
- * Decision Q4: the pool honours the stack defaults when `removalPolicy` /
+ * The pool honours the stack defaults when `removalPolicy` /
  * `deletionProtection` are unset. `AuthCognito` hard-codes `DESTROY` unless
  * `removalPolicy: 'retain'` and never sets `DeletionProtection`.
  *
  * - `DeletionPolicy` / `UpdateReplacePolicy` are template metadata: changing
  *   them updates no property of the pool.
- * - **No pool property is allowlisted under the sandbox preset** (L20, D3c).
+ * - **No pool property is allowlisted under the sandbox preset**.
  *   `Auth` omits `DeletionProtection` unless it resolves to `ACTIVE` (unset is
  *   already inactive), so a default `AuthCognito` → `Auth` upgrade causes no
  *   `UpdateUserPool` at all.
@@ -60,7 +60,7 @@ import { frozenAuthCognitoSynths } from './test-support/legacy-fixtures.js';
  *   intended in-place update. Any other value (notably `INACTIVE`) fails.
  */
 const POOL_ALLOWLIST = {
-	/** Resource attributes (siblings of `Properties`). Q4. */
+	/** Resource attributes (siblings of `Properties`): follow the stack defaults. */
 	resourceAttributes: ['DeletionPolicy', 'UpdateReplacePolicy'],
 	/** `Properties` keys `Auth` may add, per preset, with the only value each may take. */
 	properties: {
@@ -94,7 +94,7 @@ function stripAllowlistedProperties(
 }
 
 /**
- * THE GUARD ALLOWLIST (task D4, decision Q5) — the deploy-time immutability
+ * THE GUARD ALLOWLIST — the deploy-time immutability
  * guard, and nothing else. `AuthCognito` has no such guard.
  *
  * - **New resources only**, all at the stack root under `BlocksAuthPoolGuard*`
@@ -137,7 +137,7 @@ function isGuardResource(resource: CfnResourceJson): boolean {
 /** `__fixtures__/authcognito-templates.json`: the `AuthCognito` side, frozen at the cutover. */
 const FROZEN = frozenAuthCognitoSynths();
 
-/** The frozen `AuthCognito` synth for pair `name` (B1's harness, same as {@link synth}). */
+/** The frozen `AuthCognito` synth for pair `name` (the `AuthCognito` harness, same as {@link synth}). */
 function authCognito(
 	name: string,
 	preset: Preset = 'production',
@@ -169,7 +169,7 @@ function withoutAssetHashes(template: CfnTemplateJson): CfnTemplateJson {
 }
 
 const cache: Record<string, SynthesizedAuth> = {};
-/** `preset: 'production'` synthesizes with the harness default (no preset line), sharing the cache with B1's identity runs. */
+/** `preset: 'production'` synthesizes with the harness default (no preset line), sharing the cache with the identity runs. */
 function synth(construct: string, preset?: Preset): SynthesizedAuth {
 	const effective = preset === 'production' ? undefined : preset;
 	const key = `${effective ?? ''}|${construct}`;
@@ -318,7 +318,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 		}
 	}
 
-	describe('the guard allowlist adds resources and changes none (D4)', () => {
+	describe('the guard allowlist adds resources and changes none', () => {
 		for (const [name, pair] of Object.entries(PAIRS)) {
 			test(`pair "${name}": guard resources are new, at the stack root, and the pool only gains DependsOn`, () => {
 				const cognito = authCognito(name).template;
@@ -328,7 +328,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 					.filter(([, r]) => isGuardResource(r))
 					.map(([id]) => id);
 				if (!authPool) {
-					// A wrapped existing pool: Auth owns no pool, so there is no guard (Q6).
+					// A wrapped existing pool: Auth owns no pool, so there is no guard.
 					assert.deepStrictEqual(guardIds, []);
 					return;
 				}
@@ -347,7 +347,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 		}
 	});
 
-	describe('users.preferredChallenge reaches the template (L22)', () => {
+	describe('users.preferredChallenge reaches the template', () => {
 		const firstFactors = (construct: string): unknown => {
 			const pool = resourceOfType(synth(construct).template, 'AWS::Cognito::UserPool');
 			const policies = pool?.[1].Properties?.Policies as { SignInPolicy?: { AllowedFirstAuthFactors?: unknown } };
@@ -369,7 +369,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 		});
 	});
 
-	describe('the allowlisted fields differ only as Q4 says', () => {
+	describe('the allowlisted fields differ only as the stack defaults say', () => {
 		test('no stack defaults (the harness falls back to production): Auth retains + protects, AuthCognito destroys', () => {
 			const cognitoPool = resourceOfType(authCognito('default').template, 'AWS::Cognito::UserPool');
 			const authPool = resourceOfType(synth(PAIRS.default.auth).template, 'AWS::Cognito::UserPool');
@@ -381,7 +381,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 			assert.strictEqual(authPool[1].Properties?.DeletionProtection, 'ACTIVE');
 		});
 
-		test('sandbox preset: the default pool omits DeletionProtection, exactly like AuthCognito (L20)', () => {
+		test('sandbox preset: the default pool omits DeletionProtection, exactly like AuthCognito', () => {
 			const cognito = authCognito('default', 'sandbox').template;
 			const auth = synth(PAIRS.default.auth, 'sandbox').template;
 			const authPool = resourceOfType(auth, 'AWS::Cognito::UserPool');

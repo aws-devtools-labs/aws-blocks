@@ -5,8 +5,8 @@
  * The local user pool's attribute schema: which user attributes a write may
  * name, with what values, through which call — checked the way Cognito checks
  * `SignUp`, `UpdateUserAttributes`, `AdminCreateUser` and a challenge's
- * `userAttributes` (FX39, R74). Without it the mock stored anything (an
- * attribute named `attributes` holding an object, R65 (c)) and returned it from
+ * `userAttributes`. Without it the mock stored anything (an
+ * attribute named `attributes` holding an object) and returned it from
  * `getUserAttributes`, so local dev hid a bug that fails on AWS.
  *
  * The pool's schema is the one the CDK layer provisions: Cognito's standard
@@ -45,15 +45,15 @@
  *
  * The rules that need no schema (string value, length, the verified flags,
  * `sub`) live in `attribute-write-rules.ts`, which the Cognito engine applies
- * too before its SDK call (FX43, R78); this module adds the schema-dependent
+ * too before its SDK call; this module adds the schema-dependent
  * ones (a known name, immutability) around them, in the order below.
  *
- * **Precedence** (FX44, R79): when one write breaks several rules, the
+ * **Precedence**: when one write breaks several rules, the
  * answer is the one the Cognito engine gives for the same write. The
  * schema-independent rules run first, over the whole write
  * (`checkAttributeValues`: string, length, verified flags, `sub`), then the
  * schema rules here (unknown name, immutable after creation), all
- * `InvalidParameterException`. Before FX44 this checked each attribute in
+ * `InvalidParameterException`. Before the shared precedence order, this checked each attribute in
  * turn, so `{ 'custom:undeclared': 'x', email_verified: 'true' }` on `signUp`
  * was 400 here and 401 on AWS.
  *
@@ -117,7 +117,7 @@ export class MockAttributeSchema {
 	 * rejects; return normally when every attribute is accepted. `attributes`
 	 * is the caller's input as received — an untyped client can send any JSON.
 	 *
-	 * "First" is in the shared precedence order (FX44): the
+	 * "First" is in the shared precedence order: the
 	 * schema-independent rules over the whole write, then the schema rules
 	 * below, each in input order.
 	 */

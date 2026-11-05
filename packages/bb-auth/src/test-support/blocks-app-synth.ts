@@ -7,7 +7,7 @@
  *
  * `guard-synth.ts` builds a plain `cdk.Stack` dressed up as a Blocks stack,
  * which is enough for a block's own checks. The stack-level orphaned-baseline
- * check (task D4b) lives in `BlocksStack` itself and must run with no `Auth`
+ * check lives in `BlocksStack` itself and must run with no `Auth`
  * block in the app, so this harness goes through `BlocksStack.create()`
  * exactly as an app does: a backend module whose default export builds the
  * blocks, loaded under `--conditions=cdk` in a child process. The default

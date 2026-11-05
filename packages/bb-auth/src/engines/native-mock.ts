@@ -118,7 +118,7 @@ function credentialIdOf(credential: string): string {
 }
 
 /**
- * What Cognito records from a registration credential besides its id (L22):
+ * What Cognito records from a registration credential besides its id:
  * `response.transports` (→ `AuthenticatorTransports`) and
  * `authenticatorAttachment` (→ `AuthenticatorAttachment`).
  */
@@ -146,7 +146,7 @@ const SIGN_UP_CODE_PREFERENCE: readonly ContactAttribute[] = ['phone_number', 'e
 /**
  * Where `ForgotPassword` sends a reset code: the first **verified** contact in
  * the pool's `AccountRecoverySetting` priority, skipping the one whose factor
- * is the user's preferred MFA (FX39, R75). Every pool the CDK layer provisions
+ * is the user's preferred MFA. Every pool the CDK layer provisions
  * has `verified_phone_number` (1), `verified_email` (2) — CDK's default
  * `AccountRecovery.PHONE_WITHOUT_MFA_AND_EMAIL` — which is also Cognito's
  * order for a pool without the setting (developer guide, "Passwords, account
@@ -205,7 +205,7 @@ export class MockNativeEngine implements NativeEngine {
 			const created = this.newUser(login, attrs, exists);
 			// Then an email / phone the admin marks verified must not be another
 			// user's verified alias: `Auth` sends no `ForceAliasCreation`, so
-			// Cognito answers `AliasExistsException` (FX49). On a username-attribute
+			// Cognito answers `AliasExistsException`. On a username-attribute
 			// pool `newUser` has already refused one in use (`UsernameExistsException`).
 			for (const attr of this.signInMode.aliasAttributes) {
 				const value = created.attributes[attr];
@@ -221,7 +221,7 @@ export class MockNativeEngine implements NativeEngine {
 	async signUp(input: NativeSignUpInput): Promise<NativeSignUpOutcome> {
 		const { password } = input;
 		// Cognito refuses self-service sign-up on a pool with AllowAdminCreateUserOnly.
-		// Before any attribute rule, on both engines (FX44).
+		// Before any attribute rule, on both engines.
 		if (!selfSignUpEnabled(this.host.options)) throw signUpNotPermitted();
 		// As Cognito does: an unknown or non-string attribute is refused, not stored.
 		this.attributeSchema.check(input.attributes, 'signUp');
@@ -236,7 +236,7 @@ export class MockNativeEngine implements NativeEngine {
 		for (const contact of CONTACT_ATTRIBUTES) {
 			if (attributes[contact]) attributes[`${contact}_verified`] ??= 'false';
 		}
-		// Users always start unconfirmed and must complete the emailed-code flow (Q2).
+		// Users always start unconfirmed and must complete the emailed-code flow.
 		this.store.addUser(username, {
 			userSub,
 			password,
@@ -273,11 +273,11 @@ export class MockNativeEngine implements NativeEngine {
 		// Cognito marks verified only the contact attribute the sign-up code was
 		// sent to ("the attribute that was used to confirm"), so Email / SMS MFA
 		// and the one-time-code first factors can use that one right away. Any
-		// other email / phone stays unverified until `confirmUserAttribute` (R67).
+		// other email / phone stays unverified until `confirmUserAttribute`.
 		const delivered = this.signUpCodeAttribute(user.attributes);
 		// A valid code for an email / phone another user holds as a verified alias
 		// is `AliasExistsException`: the user stays unconfirmed and the code stays
-		// valid (FX49). Checked only once the code matches, as Cognito does, so a
+		// valid. Checked only once the code matches, as Cognito does, so a
 		// caller without the code learns nothing.
 		this.store.verifyCode(`signUp:${found.username}`, input.code, () => {
 			if (delivered) this.refuseAliasInUse(delivered, user.attributes[delivered], found.username);
@@ -933,7 +933,7 @@ export class MockNativeEngine implements NativeEngine {
 		// Validated as a whole first, as Cognito does: a rejected write changes nothing.
 		this.attributeSchema.check(attributes, 'update');
 		// On a username-attribute pool the email / phone is the username: one
-		// another user has, verified or not, is refused (FX49). On an alias pool
+		// another user has, verified or not, is refused. On an alias pool
 		// the new value is unverified, so it is no alias yet: accepted.
 		for (const attr of this.signInMode.usernameAttributes) {
 			const value = attributes[attr];
@@ -968,7 +968,7 @@ export class MockNativeEngine implements NativeEngine {
 		if (name === 'email' || name === 'phone_number') {
 			// Verifying an email / phone that is another user's verified alias moves
 			// it here and marks it unverified there, without an error, as Cognito's
-			// `VerifyUserAttribute` does (FX49).
+			// `VerifyUserAttribute` does.
 			const value = user.attributes[name];
 			if (value && this.signInMode.aliasAttributes.includes(name)) {
 				for (const holder of this.store.aliasHolders(name, value, username)) {
@@ -1132,7 +1132,7 @@ export class MockNativeEngine implements NativeEngine {
 	 * Refuse `value` as `attribute` when a user other than `except` holds it as
 	 * a sign-in attribute Cognito keeps unique ({@link MockStore.aliasHolders}):
 	 * `AliasExistsException`, Cognito's name for it on `ConfirmSignUp`,
-	 * `UpdateUserAttributes` and `AdminCreateUser` (FX49).
+	 * `UpdateUserAttributes` and `AdminCreateUser`.
 	 */
 	private refuseAliasInUse(attribute: ContactAttribute, value: string, except?: string): void {
 		if (this.store.aliasHolders(attribute, value, except).length === 0) return;

@@ -294,7 +294,7 @@ export function umbrellaBlockFor(name: string): OldBlock | undefined {
 
 // ─── Methods ───────────────────────────────────────────────────────────────
 
-/** Plain method renames on an `AuthCognito` instance (D3: G14, avoid `fetch`). */
+/** Plain method renames on an `AuthCognito` instance (API guideline G14: avoid `fetch`). */
 export const COGNITO_METHOD_RENAMES: Readonly<Record<string, string>> = {
 	fetchAuthSession: 'getAuthSession',
 	fetchUserAttributes: 'getUserAttributes',

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Decision Q10, mock ↔ AWS parity: for every PreSignUp trigger source the
+ * `validateUser`, mock ↔ AWS parity: for every PreSignUp trigger source the
  * local runtime has a counterpart for, `validateUser` sees the same candidate
  * and a rejection looks the same to the caller.
  *
@@ -33,7 +33,7 @@ beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
 let n = 0;
-const root = (): ScopeParent => ({ id: `q10parity${process.pid}x${++n}` });
+const root = (): ScopeParent => ({ id: `presignupparity${process.pid}x${++n}` });
 
 function recorder(reject?: (c: UserCandidate) => unknown) {
 	const calls: UserCandidate[] = [];
@@ -75,7 +75,7 @@ const SCENARIOS: {
 	},
 ];
 
-describe('Q10 parity: PreSignUp_SignUp ↔ local auth.signUp — same candidate', () => {
+describe('PreSignUp parity: PreSignUp_SignUp ↔ local auth.signUp — same candidate', () => {
 	for (const s of SCENARIOS) {
 		test(s.name, async () => {
 			const local = recorder();
@@ -102,7 +102,7 @@ describe('Q10 parity: PreSignUp_SignUp ↔ local auth.signUp — same candidate'
 	}
 });
 
-describe('Q10 parity: PreSignUp_AdminCreateUser ↔ local auth.admin.createUser — same candidate', () => {
+describe('PreSignUp parity: PreSignUp_AdminCreateUser ↔ local auth.admin.createUser — same candidate', () => {
 	test('admin-created user', async () => {
 		const local = recorder();
 		const mock = new MockAuth(root(), 'auth', { admin: {}, validateUser: local.validateUser });
@@ -122,7 +122,7 @@ describe('Q10 parity: PreSignUp_AdminCreateUser ↔ local auth.admin.createUser 
 	});
 });
 
-describe('Q10 parity: a rejection looks the same locally and from the AWS trigger', () => {
+describe('PreSignUp parity: a rejection looks the same locally and from the AWS trigger', () => {
 	const cases: { name: string; error: () => unknown; expected: Record<string, unknown> }[] = [
 		{
 			name: 'an ApiError with an AuthErrors name',

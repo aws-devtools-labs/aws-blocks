@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The **hosted-UI** federation engine (D6b): sign-in through Cognito managed
+ * The **hosted-UI** federation engine: sign-in through Cognito managed
  * login, for every `socialProviders` and `samlProviders` entry and each
  * `oidcProviders` entry with `federateVia: 'cognito'`. AWS runtime only — the
  * managed-login endpoints exist only on a deployed user-pool domain.
@@ -12,7 +12,7 @@
  * client of the pool's domain, not of the IdP:
  *
  * - **Authorize** — `https://<domain>/oauth2/authorize` with the separate
- *   hosted-UI app client (D3b's `hosted-ui-client`), the authorization-code
+ *   hosted-UI app client (the CDK layer's `hosted-ui-client`), the authorization-code
  *   grant with **PKCE S256**, and `identity_provider=<Cognito provider name>`
  *   (`cognitoProviderName`), so the user goes straight to the IdP instead of
  *   Cognito's own page. `state`, the verifier and the exact `redirect_uri` ride
@@ -29,7 +29,7 @@
  * - **Sign-out** — returns `https://<domain>/logout?client_id=…&logout_uri=…`.
  *   Managed login keeps its own session cookie (one hour); without `/logout` the
  *   next sign-in would silently re-authenticate the user. `logout_uri` is
- *   `<app origin><redirects.signOutPath>` — the URL D3b registers on the client —
+ *   `<app origin><redirects.signOutPath>` — the URL the CDK layer registers on the client —
  *   and Cognito returns there with a **GET**, which the sign-out route answers
  *   with a redirect to `redirects.postSignOutPath`.
  *
@@ -85,7 +85,7 @@ import type {
 	ResolvedProvider,
 } from './types.js';
 
-/** The scopes the hosted-UI client allows (D3b). The IdP's own scopes are part of its registration. */
+/** The scopes the hosted-UI client allows. The IdP's own scopes are part of its registration. */
 const HOSTED_UI_SCOPES = ['openid', 'email', 'profile'] as const;
 const DEFAULT_CALLBACK_PATH = '/aws-blocks/auth/callback';
 const DEFAULT_SIGN_OUT_PATH = '/aws-blocks/auth/signout';
@@ -149,7 +149,7 @@ function isTransientVerifyFailure(e: unknown): boolean {
 
 /**
  * `https://<domain>` from the `DOMAIN` config value (`<prefix>.auth.<region>.amazoncognito.com`,
- * no scheme — what D3b registers). An explicit `https://` value is accepted;
+ * no scheme — what the CDK layer registers). An explicit `https://` value is accepted;
  * `http://` only for a loopback host (an in-process test server). `undefined`
  * for anything else.
  *
@@ -268,7 +268,7 @@ export class HostedUiFederationEngine implements FederationEngine {
 		}
 		if (pending.provider !== this.provider.id) throw invalidState('the callback is for another provider');
 		const params = context.request.url.searchParams;
-		// R2-2: `state` first, error response or not (RFC 6749 §4.1.2.1 returns it
+		// `state` first, error response or not (RFC 6749 §4.1.2.1 returns it
 		// on both). Only a redirect carrying this browser's pending state comes from
 		// the sign-in it started; anything else — an attacker's link with a forged
 		// `error_description` (even an encoded trigger rejection) — is the same
@@ -291,10 +291,10 @@ export class HostedUiFederationEngine implements FederationEngine {
 				});
 				throw rejected;
 			}
-			// FX60: `description` is managed login's own text — it can quote the
+			// `description` is managed login's own text — it can quote the
 			// request, name a trigger ARN or the pool — and `ApiError.message` is what
 			// the `<Authenticator>` renders. So the client gets the fixed message and
-			// the text goes to the log only, as FX59 does for every other engine error.
+			// the text goes to the log only, as the error policy does for every other engine error.
 			throw idpError(
 				maskIdpCallbackError(this.host.log, '[bb-auth] managed login returned an error', {
 					provider: this.provider.id,
@@ -426,7 +426,7 @@ export class HostedUiFederationEngine implements FederationEngine {
 	/**
 	 * The domain, the hosted-UI client id and the pool id, resolved now. Throws
 	 * a clear `500` (detail in the log) when the deployment registered none —
-	 * hosted-UI providers need the pool, the domain and the client D3b provisions.
+	 * hosted-UI providers need the pool, the domain and the client the CDK layer provisions.
 	 */
 	private ids(): HostedUiIdentifiers {
 		const registered = getSdkIdentifiers(this.host.scope);

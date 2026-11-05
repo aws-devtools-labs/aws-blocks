@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Decision Q10, the trigger's own logic (`presignup-trigger.ts`,
+ * `validateUser`'s PreSignUp trigger, its own logic (`presignup-trigger.ts`,
  * `trigger-rejection.ts`), with stubbed Cognito events: how each trigger
  * source maps to the `UserCandidate` `validateUser` receives, the "validated
  * in-process" marker, and how a rejection is encoded so the client sees the
@@ -90,7 +90,7 @@ async function runTrigger(event: unknown, options: CognitoAuthOptions & { reject
 	return { seen, error, entries };
 }
 
-describe('Q10 trigger: each trigger source maps to the UserCandidate validateUser gets', () => {
+describe('PreSignUp trigger: each trigger source maps to the UserCandidate validateUser gets', () => {
 	test('PreSignUp_SignUp on the default (username + email alias) pool', () => {
 		const c = candidateFromTrigger(
 			{},
@@ -210,7 +210,7 @@ describe('Q10 trigger: each trigger source maps to the UserCandidate validateUse
 	});
 });
 
-describe('Q10 trigger: accept / reject', () => {
+describe('PreSignUp trigger: accept / reject', () => {
 	test('accepts by resolving, never touches the event (no auto-confirm, no auto-verify)', async () => {
 		const event = cognitoEvent('PreSignUp_SignUp', 'alice', { email: 'alice@example.com' });
 		const before = structuredClone(event);
@@ -227,7 +227,7 @@ describe('Q10 trigger: accept / reject', () => {
 
 	test('a rejection throws an encoded, canonical ApiError: the client decodes the same name, status, message', async () => {
 		const reject = new ApiError('Corporate accounts only', 403, { name: AuthErrors.NotAuthorized });
-		const event = cognitoEvent('PreSignUp_SignUp', 'mallory', { email: 'mallory@gmail.com' });
+		const event = cognitoEvent('PreSignUp_SignUp', 'mallory', { email: 'mallory@example.org' });
 		const before = structuredClone(event);
 		const { error } = await runTrigger(event, { reject });
 		assert.ok(error instanceof Error);
@@ -272,7 +272,7 @@ describe('Q10 trigger: accept / reject', () => {
 	test('ExternalProvider: validateUser runs (phase signUp) and can reject a federated first sign-in', async () => {
 		const reject = new ApiError('Corporate accounts only', 403, { name: AuthErrors.NotAuthorized });
 		const { seen, error } = await runTrigger(
-			cognitoEvent('PreSignUp_ExternalProvider', 'Google_1', { email: 'x@gmail.com' }),
+			cognitoEvent('PreSignUp_ExternalProvider', 'Google_1', { email: 'x@example.org' }),
 			{ reject, providers: { google: { type: 'google', clientId: 'g', clientSecret: PROVIDER_SECRET } } },
 		);
 		assert.strictEqual(seen[0]?.provider, 'google');
@@ -301,7 +301,7 @@ describe('Q10 trigger: accept / reject', () => {
 	});
 });
 
-describe('Q10 trigger: the "validated in-process" marker makes the check run once', () => {
+describe('PreSignUp trigger: the "validated in-process" marker makes the check run once', () => {
 	const signUp = (meta?: Record<string, string>, userName = 'alice') =>
 		cognitoEvent('PreSignUp_SignUp', userName, { email: 'alice@example.com' }, meta);
 
@@ -387,7 +387,7 @@ describe('Q10 trigger: the "validated in-process" marker makes the check run onc
 	});
 });
 
-describe('R2-5: the marker is keyed by an HKDF-derived key, never the raw session secret', () => {
+describe('the marker is keyed by an HKDF-derived key, never the raw session secret', () => {
 	const event = () => parsed(cognitoEvent('PreSignUp_SignUp', 'alice', { email: 'alice@example.com' }));
 	const exp = Date.now() + 60_000;
 	const message = (login: string) => `bb-auth/pre-sign-up/v1\n${FULL_ID}\n${login}\n${exp}`;
@@ -401,7 +401,7 @@ describe('R2-5: the marker is keyed by an HKDF-derived key, never the raw sessio
 		assert.strictEqual(verifyValidatedMarker(marker(expected), SECRET, FULL_ID, event()), true);
 	});
 
-	test('a marker HMAC-ed with the raw session secret (the pre-R2-5 scheme) does not verify', () => {
+	test('a marker HMAC-ed with the raw session secret (the earlier scheme) does not verify', () => {
 		const raw = crypto.createHmac('sha256', SECRET).update(message('alice')).digest('base64url');
 		assert.strictEqual(verifyValidatedMarker(marker(raw), SECRET, FULL_ID, event()), false);
 	});
@@ -414,7 +414,7 @@ describe('R2-5: the marker is keyed by an HKDF-derived key, never the raw sessio
 	});
 });
 
-describe('Q10 trigger: rejection encoding', () => {
+describe('PreSignUp trigger: rejection encoding', () => {
 	test("round-trips name, status, message and retriable through Cognito's wrapping and URL encoding", () => {
 		const original = new ApiError('Nope — not on the list. (Ask an admin.)', 429, {
 			name: AuthErrors.TooManyRequests,
@@ -463,14 +463,14 @@ describe('Q10 trigger: rejection encoding', () => {
 		assert.strictEqual(mapped.message, 'Corporate accounts only');
 		assert.ok(!JSON.stringify(mapped).includes('$metadata'));
 		// An ordinary (foreign) PreSignUp message gets the name's fixed message
-		// (FX59, #678); before FX59 it passed through unchanged.
+		// (#678); before that it passed through unchanged.
 		const foreign = new Error('PreSignUp failed with error Email domain not allowed.');
 		foreign.name = AuthErrors.UserLambdaValidation;
 		assert.strictEqual(toAuthApiError(foreign, logger).message, clientMessageFor(AuthErrors.UserLambdaValidation));
 	});
 });
 
-describe('Q10 × FX3: trigger decoding and account-state masking coexist in the error policy', () => {
+describe('trigger decoding and account-state masking coexist in the error policy', () => {
 	const encoded = () => {
 		const e = new Error(
 			`PreSignUp failed with error ${encodeTriggerRejection(new ApiError('Corporate accounts only', 403, { name: AuthErrors.NotAuthorized }))}.`,

@@ -5,7 +5,7 @@
  * The upgrade safety property for sessions: an app that switches
  * `AuthCognito` → `Auth` with the same id keeps its users signed in.
  *
- * Proven three ways. `bb-auth-cognito` was deleted at the cutover (F1b); the
+ * Proven three ways. `bb-auth-cognito` was deleted at the cutover; the
  * first two were captured from the real package just before, and are restored
  * from `__fixtures__/legacy-mock-state.json` with `Date` pinned to the moment of
  * capture (see `test-support/legacy-fixtures.ts`):

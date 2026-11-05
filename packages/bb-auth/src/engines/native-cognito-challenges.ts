@@ -306,7 +306,7 @@ export function mapChallengeToNextStep(
  * The `userAttributes` are checked against the schema-independent write rules
  * first (`attribute-write-rules.ts`, as an `update`): a non-string or
  * over-long value or `sub` throws `InvalidParameterException`, a verified flag
- * `NotAuthorizedException`, before any `RespondToAuthChallenge` (FX43).
+ * `NotAuthorizedException`, before any `RespondToAuthChallenge`.
  *
  * @internal
  */
@@ -350,7 +350,7 @@ export function buildChallengeResponses(
 			return { USERNAME: username, CREDENTIAL: response };
 		case 'NEW_PASSWORD_REQUIRED': {
 			// Written to the existing user through the app client, like
-			// `UpdateUserAttributes`: checked before the SDK call (FX43).
+			// `UpdateUserAttributes`: checked before the SDK call.
 			checkAttributeValues(userAttributes ?? {}, 'update');
 			const body: Record<string, string> = { USERNAME: username, NEW_PASSWORD: response };
 			for (const [name, value] of Object.entries(userAttributes ?? {})) {
@@ -366,7 +366,7 @@ export function buildChallengeResponses(
 
 /**
  * Cognito `CodeDeliveryDetails` → `Auth`'s. An unknown medium reads as
- * `EMAIL` (the only medium a self sign-up uses under Q2).
+ * `EMAIL` (the only medium a self sign-up uses).
  *
  * @internal
  */

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The Cognito PreSignUp trigger behind `validateUser` (decision Q10) — CDK side.
+ * The Cognito PreSignUp trigger behind `validateUser` — CDK side.
  *
  * Provisioned **only** when `validateUser` is set and the block owns its pool
  * (a pool wrapped with `userPool` belongs to someone else, who owns its
@@ -18,7 +18,7 @@
  * runtime — of this block only — registers the trigger's event handler.
  *
  * `LambdaConfig` updates in place (no pool replacement) and is outside the
- * four service-immutable properties the D4 guard watches, so adding or
+ * four service-immutable properties the immutability guard watches, so adding or
  * removing `validateUser` is a permitted change.
  *
  * The trigger is set as a property override on the L1 pool rather than with

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * AWS runtime — `allowBearerAuth` (D6c), offline.
+ * AWS runtime — `allowBearerAuth`, offline.
  *
  * - **Pool users**: a Cognito access token, verified for real by
  *   `aws-jwt-verify` against a locally generated RS256 JWKS (the harness's
@@ -42,7 +42,7 @@ beforeEach(() => {
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
 const ISSUER = `https://cognito-idp.${TEST_REGION}.amazonaws.com/${TEST_POOL_ID}`;
-const HOSTED_UI_CLIENT_ID = 'd6chosteduiclient0000000';
+const HOSTED_UI_CLIENT_ID = 'bearerhosteduiclient0000';
 const NOT_AUTHENTICATED = { name: AuthErrors.NotAuthenticated, status: 401, message: 'Authentication required' };
 
 function withBearer(ctx: BlocksContext, token: string): BlocksContext {
@@ -106,7 +106,7 @@ function makeBearerAuth(options: { hostedUi?: boolean; allowBearerAuth?: boolean
 
 /** A `SecretRef`-shaped value (never read in these tests). */
 function secretRef() {
-	return { fullId: 'd6c-unused-secret', get: async () => 'unused' };
+	return { fullId: 'bearer-unused-secret', get: async () => 'unused' };
 }
 
 describe('AWS allowBearerAuth — Cognito access tokens (pool users)', () => {
@@ -346,7 +346,7 @@ describe('AWS federatedIdentity — Cognito-federated bearer users', () => {
 
 describe('AWS allowBearerAuth — direct OIDC (HTTPS issuer, stubbed discovery + JWKS)', () => {
 	const idp = new OidcIdp();
-	const HTTPS_ISSUER = 'https://idp.d6c.example/tenant';
+	const HTTPS_ISSUER = 'https://idp.bearer.example/tenant';
 	const realFetch = globalThis.fetch;
 	let jwksFetches = 0;
 	before(async () => {
@@ -375,7 +375,7 @@ describe('AWS allowBearerAuth — direct OIDC (HTTPS issuer, stubbed discovery +
 
 	let n = 0;
 	function makeDirectAuth() {
-		return new Auth({ id: `d6caws${process.pid}x${++n}` }, 'auth', {
+		return new Auth({ id: `beareraws${process.pid}x${++n}` }, 'auth', {
 			store: 'builtin',
 			allowBearerAuth: true,
 			providers: { okta: { type: 'oidc', issuer: HTTPS_ISSUER, clientId: 'client-1', groupsClaim: 'groups' } },
@@ -387,7 +387,7 @@ describe('AWS allowBearerAuth — direct OIDC (HTTPS issuer, stubbed discovery +
 		return withBearer(new Browser().context(), token);
 	}
 
-	test('the IdP access token is accepted (Q1 identity, groupsClaim) and its JWKS is fetched once', async () => {
+	test('the IdP access token is accepted (`<iss>:<sub>` identity, groupsClaim) and its JWKS is fetched once', async () => {
 		const auth = makeDirectAuth();
 		const token = await idp.accessJwt('user-1', {
 			issuer: HTTPS_ISSUER,
@@ -447,7 +447,7 @@ describe('AWS allowBearerAuth — the mock verifier is unreachable by constructi
 		assert.ok(seen.has('engines/stub-idp-routes.js'), 'the graph walk sees the stub route table');
 		// The stub IdP signs anyone in through its account picker: a normal
 		// deployed backend must never load it (local dev and sandbox deployments only).
-		// FX43: the Cognito engine shares the local engine's schema-independent
+		// The Cognito engine shares the local engine's schema-independent
 		// attribute rules through a pure module, not through the mock's.
 		assert.ok(seen.has('engines/attribute-write-rules.js'), 'the graph walk sees the shared attribute rules');
 		for (const forbidden of [
@@ -459,7 +459,7 @@ describe('AWS allowBearerAuth — the mock verifier is unreachable by constructi
 		]) {
 			assert.ok(!seen.has(forbidden), `index.aws.js must not reach ${forbidden}`);
 		}
-		// FX8: the one way in is a lazy import, from index.aws.js, inside
+		// The one way in is a lazy import, from index.aws.js, inside
 		// `deployedStubIdp()` — which runs only on a sandbox deployment.
 		assert.deepStrictEqual(dynamic, [['index.aws.js', 'engines/stub-idp.js']], 'the only dynamic import');
 		const entry = readFileSync(join(dist, 'index.aws.js'), 'utf8');

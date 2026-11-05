@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * IAM coverage (D5c2): every Cognito command the AWS engine sends is granted by
+ * IAM coverage: every Cognito command the AWS engine sends is granted by
  * the policy the CDK layer synthesizes for that configuration — and the admin
  * grant stays scoped by `admin.actions`.
  *

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Keep a deploy-time Lambda's log group owned by the stack (L80).
+ * Keep a deploy-time Lambda's log group owned by the stack.
  *
  * `Auth`'s deploy-time Lambdas (the pool guard and the IdP registration, each an
  * onEvent function plus its `cr.Provider` framework function) log to a

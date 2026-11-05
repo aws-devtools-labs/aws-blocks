@@ -27,7 +27,7 @@ export const auth = new AuthCognito(scope, 'auth', {
 	},
 });
 
-// R10: MFA on without mfaTypes meant SMS only — the codemod writes that out.
+// MFA on without mfaTypes meant SMS only — the codemod writes that out.
 export const smsOnly = new AuthCognito(scope, 'sms-only', { mfa: 'required' });
 
 export const plain = new AuthCognito(scope, 'plain');

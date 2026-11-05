@@ -7,9 +7,9 @@
  *
  * `Auth` is the real engine-agnostic `AuthBase` (sessions,
  * cookies, guards, the `createApi()` state machine) over the local user-pool
- * engine (`engines/native-mock.ts`, D5b) — users, groups, codes, MFA, devices,
+ * engine (`engines/native-mock.ts`) — users, groups, codes, MFA, devices,
  * passkeys and the admin surface, persisted to `.bb-data/<fullId>/`.
- * Federation is real (D6a): a direct OIDC / OAuth 2.0 provider talks to its
+ * Federation is real: a direct OIDC / OAuth 2.0 provider talks to its
  * IdP exactly as in Lambda, and a `stubIdp()` provider is served by the
  * in-process stub IdP, so federated sign-in works offline. Hosted-UI providers
  * (a `'cognito'` block's social, SAML and OIDC `providers`) answer an actionable 501.

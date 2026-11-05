@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `allowBearerAuth` on the mock entry (D6c): the guards accept
+ * `allowBearerAuth` on the mock entry: the guards accept
  * `Authorization: Bearer` the way `AuthOIDC` does, so the native SDKs work
  * unchanged.
  *
@@ -188,7 +188,7 @@ describe('allowBearerAuth — direct OIDC (stub IdP, real ES256) on the mock', (
 		const first = await whoAmI(tokens.accessToken);
 		assert.strictEqual(first.status, 200, JSON.stringify(first.body));
 		const user = first.body.user as Record<string, unknown>;
-		assert.strictEqual(user.userId, `${issuer}:u-1`, 'Q1: <iss>:<sub>, as AuthOIDC');
+		assert.strictEqual(user.userId, `${issuer}:u-1`, 'userId is <iss>:<sub>, as AuthOIDC');
 		assert.strictEqual(user.userSub, user.userId);
 		assert.strictEqual(user.username, 'Alice', 'name ?? email ?? sub, as AuthOIDC');
 		assert.strictEqual(user.signInProvider, 'corp');

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Compile-time proof of the `Auth` mode gates (task D1).
+ * Compile-time proof of the `Auth` mode gates.
  *
  * The compile is the test — nothing here runs. `tsc --build` checks this file
  * with the rest of the package: every `@ts-expect-error` asserts that the next
@@ -559,7 +559,7 @@ async function adminGate() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (18) Unknown options (D1b). `const O` inference does no excess-property
+// (18) Unknown options. `const O` inference does no excess-property
 //      check once the literal shares a key with `AuthOptions` (a literal with
 //      *only* unknown keys is caught by TypeScript's weak-type check), so a
 //      misspelled or misplaced option is rejected at construction by the

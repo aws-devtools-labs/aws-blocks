@@ -4,8 +4,7 @@
 /**
  * The four user-pool properties Cognito will not change after the pool exists
  * — even though CloudFormation documents every one of them as "Update
- * requires: No interruption" — and the diff both guard layers share (decision
- * Q5, task D4):
+ * requires: No interruption" — and the diff both guard layers share:
  *
  * | Property | AWS evidence |
  * |---|---|

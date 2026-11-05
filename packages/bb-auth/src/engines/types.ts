@@ -16,12 +16,12 @@
  *   its challenges, token refresh, live group reads, passkeys, the signed-in
  *   user's own account ({@link NativeAccountEngine}: attributes, MFA, devices,
  *   self-deletion) and the opt-in admin surface ({@link NativeAdminEngine}).
- *   Implemented by `engines/native-cognito.ts` (D5c, real SDK; the account and
- *   admin surface by D5c2, the admin half in `native-cognito-admin.ts`) and
- *   `engines/native-mock*.ts` (D5b, local).
+ *   Implemented by `engines/native-cognito.ts` (real SDK; the account and
+ *   admin surface, the admin half in `native-cognito-admin.ts`) and
+ *   `engines/native-mock*.ts` (local).
  * - {@link FederationEngine} — one per configured provider: the redirect
  *   sign-in, refresh and sign-out. Implemented by `federation-direct.ts`,
- *   `federation-hosted-ui.ts` and `stub-idp.ts` (D6).
+ *   `federation-hosted-ui.ts` and `stub-idp.ts`.
  *
  * ## Errors
  *
@@ -37,13 +37,13 @@
  * `fabricateCodeDelivery(...)`, and `resendSignUpCode` for an unknown user
  * resolves normally.
  *
- * Account *state* (FX3) is the opposite: an engine reports it raw, exactly as
+ * Account *state* is the opposite: an engine reports it raw, exactly as
  * Cognito does — `confirmSignUp` for a confirmed user throws
  * `NotAuthorizedException`, `resendSignUpCode` for one throws
  * `InvalidParameterException` (and sends nothing) — and `AuthBase` decides,
  * from `emailPassword.revealExistingUsers`, whether the client may see it.
  *
- * ## "No user pool provisioned" (Q6)
+ * ## "No user pool provisioned"
  *
  * A configuration with no email + password, social, SAML or
  * `federateVia: 'cognito'` provider provisions no Cognito pool. `AuthBase`
@@ -153,7 +153,7 @@ export interface NativeSignUpInput {
 
 /** Result of {@link NativeEngine.signUp}. */
 export interface NativeSignUpOutcome {
-	/** `true` when the user needs no confirmation (never for self sign-up under Q2). */
+	/** `true` when the user needs no confirmation (never for self sign-up). */
 	userConfirmed: boolean;
 	/** The new user's stable id (Cognito `sub`), when known. */
 	userSub?: string;
@@ -177,10 +177,10 @@ export type NativeSignInOutcome =
  * (see the module docs). Every method is called only after `AuthBase` has
  * applied the mode gate.
  *
- * The surface is the sign-in core below (task D5a) plus
+ * The surface is the sign-in core below plus
  * {@link NativeAccountEngine} (the signed-in user's own account: attributes,
  * MFA, devices, self-deletion) and {@link NativeEngine.admin} (the opt-in admin
- * surface), added by D5b. {@link NativeCoreEngine} names the D5a subset.
+ * surface). {@link NativeCoreEngine} names the core subset.
  */
 export interface NativeEngine extends NativeAccountEngine {
 	/** Register a user; a confirmation code follows. Throw `UsernameExistsException` for an existing user. */
@@ -274,17 +274,17 @@ export interface NativeEngine extends NativeAccountEngine {
 }
 
 /**
- * The D5a subset of {@link NativeEngine}: sign-up, sign-in and its challenges,
+ * The core subset of {@link NativeEngine}: sign-up, sign-in and its challenges,
  * password reset, refresh, live groups, sign-out and passkeys — everything
  * except {@link NativeAccountEngine} and `admin`. Both shipped engines
- * implement the full `NativeEngine` (the Cognito engine since D5c2, which also
+ * implement the full `NativeEngine` (the Cognito engine, whose completion also
  * removed the `withPendingNativeSurface()` bridge that completed this subset
- * with 501s); the name remains to document the D5a subset.
+ * with 501s); the name remains to document the core subset.
  */
 export type NativeCoreEngine = Omit<NativeEngine, keyof NativeAccountEngine | 'admin'>;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Native — the signed-in user's own account (D5b)
+// Native — the signed-in user's own account
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // Every method takes the signed-in user's **access token** (from the session
@@ -413,12 +413,12 @@ export interface NativeAccountEngine {
 	 * `DeviceRememberedStatus: 'remembered'`). The device key is the access
 	 * token's `device_key` claim, present only when device tracking is on and
 	 * the device was confirmed at sign-in — which needs the `ConfirmDevice` /
-	 * device-verifier flow at sign-in that `Auth` does not run. **Decision
-	 * (D5b review): the Cognito engine keeps `AuthCognito`'s `ApiError` 501**,
-	 * with a message saying why (since D5c2 the engine itself throws it —
+	 * device-verifier flow at sign-in that `Auth` does not run. **Decision:
+	 * the Cognito engine keeps `AuthCognito`'s `ApiError` 501**,
+	 * with a message saying why (the engine itself throws it —
 	 * `rememberDeviceUnsupported()` in `engines/native-cognito.ts`; it was in the
 	 * deleted `engines/pending.ts`); a real implementation is new feature work,
-	 * listed under "Known gaps" in `DESIGN.md` (L25).
+	 * listed under "Known gaps" in `DESIGN.md`.
 	 */
 	rememberDevice(accessToken: string): Promise<void>;
 
@@ -427,7 +427,7 @@ export interface NativeAccountEngine {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Native — admin (D5b)
+// Native — admin
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -627,7 +627,7 @@ export interface FederationEngine {
 		context: BlocksContext,
 	): Promise<{ logoutUrl?: string }>;
 
-	// ── Client-driven transports (D6a; optional) ────────────────────────────
+	// ── Client-driven transports (optional) ────────────────────────────
 	//
 	// The browser-PKCE and native-relay transports let the *client* run PKCE
 	// and talk to the IdP; the server only hands out public parameters and
@@ -658,7 +658,7 @@ export interface FederationEngine {
 
 	/**
 	 * Verify an `Authorization: Bearer` access token this provider issued
-	 * (`allowBearerAuth`, D6c) and return its subject, or `null` when the token
+	 * (`allowBearerAuth`) and return its subject, or `null` when the token
 	 * is not this provider's or does not verify — a foreign issuer, an opaque
 	 * token, a bad signature, audience or expiry. **Never throws.** Optional: an
 	 * engine without it accepts no bearer tokens. Hosted-UI providers omit it;
@@ -686,7 +686,7 @@ export interface DirectBearerIdentity {
 
 /**
  * Verifies a Cognito (pool) access token presented as `Authorization: Bearer`
- * (`allowBearerAuth`, D6c). Built by {@link AuthLayer.poolBearer}: the AWS layer
+ * (`allowBearerAuth`). Built by {@link AuthLayer.poolBearer}: the AWS layer
  * checks a real Cognito access token (`aws-jwt-verify`, `token_use: access`,
  * the native or the hosted-UI client); the local layer accepts only tokens its
  * own mock pool minted and still recognises.
@@ -771,7 +771,7 @@ export interface AuthLayer {
 	federation(host: EngineHost, provider: ResolvedProvider): FederationEngine;
 
 	/**
-	 * Mount the federation HTTP routes (D6a — `mountFederationRoutes` from
+	 * Mount the federation HTTP routes (`mountFederationRoutes` from
 	 * `federation-routes.ts`). Called once by the constructor, only when a
 	 * provider is configured. Optional: a layer without it (a test harness)
 	 * mounts no routes.
@@ -789,11 +789,11 @@ export interface AuthLayer {
 	poolBearer?(host: EngineHost, native: NativeEngine): PoolBearerVerifier;
 
 	/**
-	 * Route the user pool's Cognito PreSignUp trigger to this block (decision
-	 * Q10; `presignup-trigger.ts`). Called once by the constructor, only when the
+	 * Route the user pool's Cognito PreSignUp trigger to this block
+	 * (`presignup-trigger.ts`). Called once by the constructor, only when the
 	 * configuration has a user pool. The AWS layer registers `host.handle` with
 	 * core's Lambda handler under the pool id — only when the CDK layer flagged
-	 * this block as the trigger's owner (R2-1) — and the local layer has no
+	 * this block as the trigger's owner — and the local layer has no
 	 * trigger (the in-process check is the whole story there) and omits it.
 	 */
 	preSignUpTrigger?(host: PreSignUpTriggerHost): void;

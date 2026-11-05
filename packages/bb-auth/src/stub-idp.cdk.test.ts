@@ -41,7 +41,7 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 		assert.match(warning?.message ?? '', /Synth refuses it for any deployment that is not a sandbox/);
 
 		assert.strictEqual(config[stubIdpConfigKeys(fullId).API_URL], HARNESS_API_URL);
-		// Direct federation only: no user pool, as for any `store: 'builtin'` block (Q6).
+		// Direct federation only: no user pool, as for any `store: 'builtin'` block.
 		assert.ok(!Object.values(template.Resources).some((r) => r.Type === 'AWS::Cognito::UserPool'));
 	});
 

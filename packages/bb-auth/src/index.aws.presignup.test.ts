@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Decision Q10 on the AWS runtime, offline: the pool's PreSignUp trigger runs
+ * `validateUser` on the AWS runtime, offline: the pool's PreSignUp trigger runs
  * `validateUser` for every pool user Cognito creates — through `auth.signUp`,
  * `auth.admin.createUser`, or a `SignUp` called straight against Cognito.
  *
@@ -76,7 +76,7 @@ function apiFor<O extends AuthOptions>(auth: Auth<O>, ctx: BlocksContext): AuthS
 	return (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx);
 }
 
-describe('Q10 (aws-runtime): auth.signUp — validateUser runs once, in-process, before Cognito', () => {
+describe('validateUser (aws-runtime): auth.signUp — validateUser runs once, in-process, before Cognito', () => {
 	test('accepted: one validateUser call; the trigger ran and recognised the marker', async () => {
 		const policy = corpOnly();
 		const h = makeAwsAuth({ validateUser: policy.validateUser });
@@ -98,7 +98,7 @@ describe('Q10 (aws-runtime): auth.signUp — validateUser runs once, in-process,
 		const policy = corpOnly();
 		const h = makeAwsAuth({ validateUser: policy.validateUser });
 		const cognito = cognitoWithTrigger(h);
-		const e = await rejection(h.auth.signUp('mal', 'Password!1', { attributes: { email: 'mal@gmail.com' } }));
+		const e = await rejection(h.auth.signUp('mal', 'Password!1', { attributes: { email: 'mal@example.org' } }));
 		assert.deepStrictEqual(wireView(e), {
 			code: 403,
 			message: 'Corporate accounts only',
@@ -113,9 +113,9 @@ describe('Q10 (aws-runtime): auth.signUp — validateUser runs once, in-process,
 		const h = makeAwsAuth();
 		// No `validateUser`: the CDK layer wires no trigger, so Cognito invokes none.
 		h.on('SignUpCommand', () => ({ UserConfirmed: false, UserSub: 'sub-ada' }));
-		await h.auth.signUp('ada', 'Password!1', { attributes: { email: 'ada@gmail.com' } });
+		await h.auth.signUp('ada', 'Password!1', { attributes: { email: 'ada@example.org' } });
 		assert.strictEqual(h.sent[0]?.input.ClientMetadata, undefined);
-		// …and the block does not answer one either (R2-1: only the trigger's owner does).
+		// …and the block does not answer one either: only the trigger's owner does.
 		await quietly(() =>
 			assert.rejects(invokeLambda(preSignUpEvent('PreSignUp_SignUp', { Username: 'eve' })), {
 				message: 'This user pool trigger is not configured.',
@@ -124,7 +124,7 @@ describe('Q10 (aws-runtime): auth.signUp — validateUser runs once, in-process,
 	});
 });
 
-describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', () => {
+describe('validateUser (aws-runtime): the trigger blocks pool users the app never saw', () => {
 	test('a SignUp made straight against Cognito is rejected; no user is created', async () => {
 		const policy = corpOnly();
 		const h = makeAwsAuth({ validateUser: policy.validateUser });
@@ -134,7 +134,7 @@ describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', (
 				ClientId: 'client-id-from-an-authorize-url',
 				Username: 'mal',
 				Password: 'Password!1',
-				UserAttributes: [{ Name: 'email', Value: 'mal@gmail.com' }],
+				UserAttributes: [{ Name: 'email', Value: 'mal@example.org' }],
 			}),
 		);
 		assert.ok(e instanceof Error);
@@ -144,10 +144,10 @@ describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', (
 			{
 				provider: 'password',
 				subject: '',
-				email: 'mal@gmail.com',
+				email: 'mal@example.org',
 				username: 'mal',
 				phase: 'signUp',
-				claims: { email: 'mal@gmail.com' },
+				claims: { email: 'mal@example.org' },
 			},
 		]);
 		// What the caller of Cognito sees decodes to the developer's error, masked like in-process.
@@ -163,7 +163,7 @@ describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', (
 		await rejection(
 			cognito.directSignUp({
 				Username: 'mal',
-				UserAttributes: [{ Name: 'email', Value: 'mal@gmail.com' }],
+				UserAttributes: [{ Name: 'email', Value: 'mal@example.org' }],
 				ClientMetadata: { [VALIDATED_MARKER_KEY]: signValidatedMarker('guessed-secret', h.fullId, 'mal') },
 			}),
 		);
@@ -203,7 +203,7 @@ describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', (
 	test('the trigger answers only its own pool: two blocks, two pools', async () => {
 		const seen: string[] = [];
 		const make = (id: string, pool: string) => {
-			const fullId = `q10-app-${id}`;
+			const fullId = `presignup-app-${id}`;
 			const keys = cognitoConfigKeys(fullId);
 			process.env[keys.USER_POOL_ID] = pool;
 			process.env[keys.CLIENT_ID] = `client-${id}`;
@@ -214,7 +214,7 @@ describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', (
 				},
 			};
 			simulateTriggerConfig(fullId, options, pool);
-			return new Auth({ id: 'q10-app' }, id, options);
+			return new Auth({ id: 'presignup-app' }, id, options);
 		};
 		make('a', 'us-east-1_PoolA');
 		make('b', 'us-east-1_PoolB');
@@ -228,8 +228,8 @@ describe('Q10 (aws-runtime): the trigger blocks pool users the app never saw', (
 	});
 });
 
-describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', () => {
-	const SHARED_POOL = 'us-east-1_R21SharedPool';
+describe('aws-runtime: only the block that owns the trigger answers it', () => {
+	const SHARED_POOL = 'us-east-1_SharedPool';
 	let run = 0;
 
 	/**
@@ -240,7 +240,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 		const fullId = `${root}-${id}`;
 		const keys = cognitoConfigKeys(fullId);
 		process.env[keys.USER_POOL_ID] = SHARED_POOL;
-		process.env[keys.CLIENT_ID] = 'r21-client';
+		process.env[keys.CLIENT_ID] = 'shared-client';
 		process.env[keys.REGION] = TEST_REGION;
 		const flag = preSignUpTriggerConfigKey(fullId);
 		if (ownsPreSignUpTrigger(resolveOptions(options))) process.env[flag] = 'true';
@@ -263,7 +263,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 		invokeLambda(
 			preSignUpEvent(
 				'PreSignUp_SignUp',
-				{ Username: 'mal', UserAttributes: [{ Name: 'email', Value: 'mal@gmail.com' }] },
+				{ Username: 'mal', UserAttributes: [{ Name: 'email', Value: 'mal@example.org' }] },
 				SHARED_POOL,
 			),
 		);
@@ -272,7 +272,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 
 	for (const order of ['owner first', 'wrapper first'] as const) {
 		test(`a second Auth wrapping the same pool does not disable validateUser (${order})`, async () => {
-			const root = `r21-app${++run}`;
+			const root = `shared-app${++run}`;
 			const policy = rejectAll();
 			const owner = configure(root, 'auth', { validateUser: policy.validateUser });
 			const wrapper = configure(root, 'adminauth', { userPool: Auth.fromExisting(SHARED_POOL), admin: {} });
@@ -298,7 +298,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 		// E.g. `validateUser` on a wrapped pool, or a runtime whose config predates the
 		// trigger: the CDK layer registered no flag, so no handler — and an event the
 		// pool still sends is refused (fail closed), never accepted.
-		const root = `r21-app${++run}`;
+		const root = `shared-app${++run}`;
 		const policy = rejectAll();
 		const options = { validateUser: policy.validateUser };
 		configure(root, 'auth', options);
@@ -309,7 +309,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 	});
 
 	test("a wrapped pool with validateUser: no handler (the pool and its triggers are its owner's)", async () => {
-		const root = `r21-app${++run}`;
+		const root = `shared-app${++run}`;
 		const policy = rejectAll();
 		new Auth(
 			{ id: root },
@@ -321,7 +321,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 	});
 
 	test('the flag without validateUser (a rollout removing it, config not yet updated): the handler accepts', async () => {
-		const root = `r21-app${++run}`;
+		const root = `shared-app${++run}`;
 		configure(root, 'auth', {});
 		process.env[preSignUpTriggerConfigKey(`${root}-auth`)] = 'true';
 		new Auth({ id: root }, 'auth', {});
@@ -334,7 +334,7 @@ describe('R2-1 (aws-runtime): only the block that owns the trigger answers it', 
 	});
 });
 
-describe('Q10 (aws-runtime): admin.createUser runs validateUser too', () => {
+describe('validateUser (aws-runtime): admin.createUser runs validateUser too', () => {
 	test('accepted: in-process check, the marker rides on AdminCreateUser, the trigger skips', async () => {
 		const policy = corpOnly();
 		const h = makeAwsAuth({ admin: {}, validateUser: policy.validateUser });
@@ -358,7 +358,7 @@ describe('Q10 (aws-runtime): admin.createUser runs validateUser too', () => {
 		const policy = corpOnly();
 		const h = makeAwsAuth({ admin: {}, validateUser: policy.validateUser });
 		cognitoWithTrigger(h);
-		const e = await rejection(h.auth.admin.createUser('mal', { attributes: { email: 'mal@gmail.com' } }));
+		const e = await rejection(h.auth.admin.createUser('mal', { attributes: { email: 'mal@example.org' } }));
 		assert.strictEqual(wireView(e).name, AuthErrors.NotAuthorized);
 		assert.deepStrictEqual(h.sentNames(), []);
 	});
@@ -370,7 +370,7 @@ describe('Q10 (aws-runtime): admin.createUser runs validateUser too', () => {
 			invokeLambda(
 				preSignUpEvent('PreSignUp_AdminCreateUser', {
 					Username: 'mal',
-					UserAttributes: [{ Name: 'email', Value: 'mal@gmail.com' }],
+					UserAttributes: [{ Name: 'email', Value: 'mal@example.org' }],
 				}),
 			),
 		);
@@ -380,7 +380,7 @@ describe('Q10 (aws-runtime): admin.createUser runs validateUser too', () => {
 	});
 });
 
-describe('Q10 × FX3 (aws-runtime): a trigger rejection and the confirm-code masking on one instance', () => {
+describe('validateUser with account-state masking (aws-runtime): a trigger rejection and the confirm-code masking on one instance', () => {
 	test('default (revealExistingUsers off): sign-up rejection is canonical; a disabled-user confirm is a wrong code', async () => {
 		let n = 0;
 		const h = makeAwsAuth({

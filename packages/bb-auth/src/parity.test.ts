@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock ↔ AWS parity for the native surface D5c2 completed: the same scenario
+ * Mock ↔ AWS parity for the full native surface: the same scenario
  * is driven through the same `Auth` API on the local engine (`./index.mock.js`,
  * a real local user) and on the AWS entry (`./index.aws.js`, offline through
  * `test-support/aws-harness.ts`, with Cognito answering as it does), and what a
@@ -137,7 +137,7 @@ describe('parity: user attributes', () => {
 
 	test('requireAuth / getCurrentUser `attributes` and the ID token carry the same claims in both runtimes (no `*_verified` attributes)', async () => {
 		// Cognito's ID token carries `email_verified` / `phone_number_verified`
-		// as booleans, which are not string attributes (L36(c)).
+		// as booleans, which are not string attributes.
 		const contact = { email: 'alice@example.com', phone_number: '+15555550100' };
 		const codes: string[] = [];
 		const mockAuth: MockAuth = new MockAuth(root(), 'auth', {
@@ -153,7 +153,7 @@ describe('parity: user attributes', () => {
 		const h = makeAwsAuth({});
 		const awsBrowser = new Browser();
 		// The default pool auto-verifies the email only, so the sign-up code
-		// verifies the email and the phone stays unverified (R67, FX34).
+		// verifies the email and the phone stays unverified.
 		const claims = { ...contact, email_verified: true, phone_number_verified: false };
 		await signInAs(h, awsBrowser, 'alice', h.idp.authResult('alice', { claims }));
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice', { claims }) }));
@@ -611,7 +611,7 @@ describe('parity: auth.admin', () => {
 	});
 });
 
-describe('parity: restored options (L22)', () => {
+describe('parity: restored options', () => {
 	test('users.preferredChallenge: EMAIL_OTP opens with the same passwordless step in both runtimes', async () => {
 		const options = { users: { authFlow: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' } } as const;
 		const codes: string[] = [];
@@ -697,7 +697,7 @@ describe('parity: restored options (L22)', () => {
 	});
 });
 
-describe('parity: account-state hiding on the confirm / resend steps (FX3)', () => {
+describe('parity: account-state hiding on the confirm / resend steps', () => {
 	/** The full client view of a rejection (message included — these are user-facing). */
 	async function wire(p: Promise<unknown>): Promise<ReturnType<typeof wireView>> {
 		return wireView(
@@ -755,7 +755,7 @@ function bindAuthApi(api: AuthStateApi, ctx: BlocksContext): AuthStateApi {
 	};
 }
 
-describe('parity: displayName honours the ID token’s `*_verified` flags (R64, FX31)', () => {
+describe('parity: displayName honours the ID token’s `*_verified` flags', () => {
 	// An email-only pool: the username is generated (= `sub`), so the display
 	// name is the email when it is verified, else `preferred_username`.
 	const EMAIL_ONLY = { users: { signInWith: ['email'] } } as const;
@@ -828,7 +828,7 @@ describe('parity: displayName honours the ID token’s `*_verified` flags (R64, 
 			assert.strictEqual(
 				user.attributes.email_verified,
 				undefined,
-				`${label}: no \`*_verified\` attribute (FX26)`,
+				`${label}: no \`*_verified\` attribute`,
 			);
 			const s = await state();
 			assert.strictEqual(s.user?.displayName, 'ali', `${label}: the unverified email is skipped`);
@@ -836,7 +836,7 @@ describe('parity: displayName honours the ID token’s `*_verified` flags (R64, 
 	});
 });
 
-describe('parity: ID-token claims Cognito types as non-strings — `updated_at`, `address` (FX31)', () => {
+describe('parity: ID-token claims Cognito types as non-strings — `updated_at`, `address`', () => {
 	test('requireAuth().attributes leave them out and the ID token carries a number and an object, in both runtimes', async () => {
 		const profile = { address: '1 Main St, Springfield', updated_at: '1700000000' };
 		const codes: string[] = [];
@@ -881,7 +881,7 @@ describe('parity: ID-token claims Cognito types as non-strings — `updated_at`,
 	});
 });
 
-describe('parity: confirmSignUp verifies only the contact the code was sent to (R67, FX34)', () => {
+describe('parity: confirmSignUp verifies only the contact the code was sent to', () => {
 	type Contact = 'email' | 'phone_number';
 	const CONTACTS: readonly Contact[] = ['email', 'phone_number'];
 	const EMAIL = 'alice@example.com';
@@ -1084,7 +1084,7 @@ describe('parity: confirmSignUp verifies only the contact the code was sent to (
 				},
 				`${run.label}: only the phone is verified`,
 			);
-			// The unverified email is skipped for the display name (R34): the phone.
+			// The unverified email is skipped for the display name: the phone.
 			const api = run.auth.createApi();
 			const state = await run.browser.request((ctx) => bindAuthApi(api, ctx).getAuthState());
 			assert.strictEqual(state.user?.displayName, PHONE, `${run.label}: displayName`);

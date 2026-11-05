@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The Cognito admin engine behind `auth.admin` (task D5c2): Cognito's `Admin*`
+ * The Cognito admin engine behind `auth.admin`: Cognito's `Admin*`
  * / `List*` APIs on the pool, ported from `AuthCognito`'s AWS
- * `buildAdminSurface` (with B6's fixes). `AuthBase` (`auth-admin.ts`) owns
+ * `buildAdminSurface` (with its security fixes). `AuthBase` (`auth-admin.ts`) owns
  * everything engine-agnostic — the `admin` / `admin.actions` gates, `custom:`
  * prefixing, group narrowing, paging and `revokeUserSessions`' session-row
  * deletion — so this module only talks to Cognito and returns data.
@@ -109,7 +109,7 @@ export function cognitoAdminEngine(deps: CognitoAdminDeps): NativeAdminEngine {
 
 		// ── lifecycle ────────────────────────────────────────────────────────
 		async createUser(username, init) {
-			// The schema-independent rules, before the SDK call (FX43); an
+			// The schema-independent rules, before the SDK call; an
 			// administrator may write the verified flags.
 			checkAttributeValues(init.attributes, 'adminCreateUser');
 			const attributes = Object.entries(init.attributes).map(([Name, Value]) => ({ Name, Value }));

@@ -4,15 +4,15 @@
 /**
  * Frozen outputs of the replaced auth blocks (test-only).
  *
- * `AuthBasic`, `AuthCognito` and `AuthOIDC` were deleted at the cutover (F1b).
+ * `AuthBasic`, `AuthCognito` and `AuthOIDC` were deleted at the cutover.
  * The compatibility tests that compared `Auth` against them now compare
  * against what those blocks produced, captured from the real packages just
  * before they were deleted and committed under `src/__fixtures__/`:
  *
  * - `authcognito-templates.json` — `AuthCognito`'s synthesized CloudFormation
  *   per configuration and stack preset (`property-snapshot.cdk.test.ts`).
- *   Re-frozen in MERGE1 from `bb-auth-cognito` 0.1.11 with `origin/main`
- *   merged into the freezing commit, because `bb-kv-store` #635 added
+ *   Re-captured from `bb-auth-cognito` 0.1.11 after `bb-kv-store` #635 changed
+ *   the sessions table: #635 added
  *   `SSESpecification` and `PointInTimeRecoverySpecification` to the nested
  *   sessions table that BOTH blocks create — the capture was otherwise stale
  *   on a dependency change, not on anything either auth block did.

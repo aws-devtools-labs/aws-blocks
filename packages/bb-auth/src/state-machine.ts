@@ -421,7 +421,7 @@ export interface DisplayNameSource {
 	/**
 	 * Whether the email / phone number is verified, from the session's ID
 	 * token, whose `email_verified` / `phone_number_verified` are JSON booleans
-	 * and so never in `attributes` (FX31). Wins over a string flag in
+	 * and so never in `attributes`. Wins over a string flag in
 	 * `attributes`; `undefined` (or absent) when the token doesn't say.
 	 */
 	verified?: { email?: boolean; phone_number?: boolean };
@@ -440,11 +440,11 @@ export interface DisplayNameSource {
  * "Marks it unverified" reads the same source on both runtimes: the session ID
  * token's `email_verified` / `phone_number_verified` (`verified`), which a
  * Cognito ID token — and an OIDC provider's, per OIDC Core §5.1 — carries as
- * JSON booleans, so they are never in `attributes` (FX26); else a string
+ * JSON booleans, so they are never in `attributes`; else a string
  * `'false'` flag in `attributes` (from a direct provider that sends the flag as
  * a string). A flag that says nothing — no claim — doesn't skip the value. So
  * an email changed with `updateUserAttributes` and not yet confirmed is skipped
- * once the session's tokens are refreshed (FX31; before, a pool session's
+ * once the session's tokens are refreshed (before, a pool session's
  * display name could never see the flags and showed it).
  */
 export function displayNameOf(user: DisplayNameSource): string {

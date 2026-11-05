@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Decision Q10, CDK side: `validateUser` provisions the pool's Cognito
+ * `validateUser`, CDK side: `validateUser` provisions the pool's Cognito
  * PreSignUp trigger — and nothing else changes. Real synth under
  * `--conditions=cdk` (see `test-support/cdk-synth.ts`), plus a real
  * `BlocksStack` app (`test-support/blocks-app-synth.ts`) for the dependency
@@ -10,7 +10,7 @@
  *
  * With the option unset the template is untouched: that is pinned by the
  * frozen fixtures (`resource-identity.cdk.test.ts`,
- * `property-snapshot.cdk.test.ts`) and the D4 guard tests, none of which set
+ * `property-snapshot.cdk.test.ts`) and the immutability guard tests, none of which set
  * it; the first test below checks the absence directly.
  */
 
@@ -110,7 +110,7 @@ function findCycle(template: CfnTemplateJson): string[] | null {
 	return null;
 }
 
-describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
+describe('validateUser provisions the PreSignUp trigger (CDK)', () => {
 	const unset = synth("new Auth(stack, 'auth', { admin: {} })");
 	const set = synth(`new Auth(stack, 'auth', { admin: {}, ${VALIDATE} })`);
 
@@ -186,7 +186,7 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 				.sort(),
 			['auth/pool-access/Resource', 'auth/pre-sign-up-permission'],
 		);
-		// One new config key: the trigger-owner flag the runtime registers its handler from (R2-1).
+		// One new config key: the trigger-owner flag the runtime registers its handler from.
 		assert.deepStrictEqual(
 			set.config,
 			{ ...unset.config, [preSignUpTriggerConfigKey('TestStack-auth')]: 'true' },
@@ -240,7 +240,7 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 		assert.match(warning.message, /no PreSignUp trigger is attached/);
 	});
 
-	test('R2-1: only the trigger owner gets the runtime flag that registers its handler', () => {
+	test('only the trigger owner gets the runtime flag that registers its handler', () => {
 		const { config } = synth(
 			`new Auth(stack, 'owner', { ${VALIDATE} }); new Auth(stack, 'plain');` +
 				` new Auth(stack, 'wrapper', { userPool: Auth.fromExisting('us-east-1_existing', 'client-1'), admin: {} });` +
@@ -254,7 +254,7 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 		assert.strictEqual(config[flag ?? ''], 'true');
 	});
 
-	test('R2-1: the flag key is the one the runtime reads', () => {
+	test('the flag key is the one the runtime reads', () => {
 		assert.strictEqual(
 			preSignUpTriggerConfigKey('my-app-auth'),
 			'BLOCKS_AUTH_COGNITO_MY_APP_AUTH_PRE_SIGN_UP_TRIGGER',
@@ -289,7 +289,7 @@ describe('Q10: validateUser provisions the PreSignUp trigger (CDK)', () => {
 	});
 });
 
-describe('Q10: a real BlocksStack app with validateUser synthesizes with no cycle', () => {
+describe('a real BlocksStack app with validateUser synthesizes with no cycle', () => {
 	const dirs: string[] = [];
 	after(() => {
 		for (const d of dirs) rmSync(d, { recursive: true, force: true });

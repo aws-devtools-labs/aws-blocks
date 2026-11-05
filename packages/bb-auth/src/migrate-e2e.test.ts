@@ -30,7 +30,7 @@ const UMBRELLA_DIST = join(REPO_ROOT, 'packages', 'blocks', 'dist', 'index.js');
 
 /**
  * `@aws-blocks/bb-auth-cognito`'s published `.d.ts` API, frozen at the cutover
- * (F1b) — the package is gone, so the codemod's *input* is compiled against
+ * — the package is gone, so the codemod's *input* is compiled against
  * these, proving the inputs are real `AuthCognito` code. Byte-equal to the
  * built package when frozen (see `test-support/legacy-fixtures.ts`).
  */

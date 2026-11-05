@@ -3,7 +3,7 @@
 
 /**
  * AWS runtime — the user-attribute rules the Cognito engine checks **before**
- * the SDK call (FX43, R78), against a spied Cognito client (no network).
+ * the SDK call, against a spied Cognito client (no network).
  *
  * An untyped client (JSON-RPC, a native app) can send any JSON as an attribute
  * value. The AWS JS SDK does not validate input: it serializes a number, an
@@ -11,7 +11,7 @@
  * call reaches Cognito, whose JSON protocol answers a wrong-typed member with
  * `SerializationException` — outside the `AuthErrors` vocabulary, so a client
  * saw 500 `InternalErrorException` where the local engine answers 400
- * `InvalidParameterException` (FX39, R74). The engine now applies the rules
+ * `InvalidParameterException`. The engine now applies the rules
  * that need no pool schema itself (`engines/attribute-write-rules.ts`, shared
  * with the local engine): the value is a string of at most 2,048 characters,
  * `sub` is never written, and the `*_verified` flags are not client-writable.

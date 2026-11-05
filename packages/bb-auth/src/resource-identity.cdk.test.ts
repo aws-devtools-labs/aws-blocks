@@ -11,7 +11,7 @@
  * CloudFormation create a NEW user pool / client and DELETE the old one —
  * every user and every signed-in session in that app is gone.
  *
- * This test runs B1's golden fixture — `bb-auth-cognito`'s
+ * This test runs `AuthCognito`'s golden fixture — `bb-auth-cognito`'s
  * `__fixtures__/resource-identity.json`, vendored **unchanged** as
  * `__fixtures__/authcognito-resource-identity.json` (`bb-auth-cognito` itself
  * was deleted at the cutover; its hash pins the copy) — against `Auth`. For each
@@ -22,8 +22,8 @@
  * name, and no `GenerateSecret`. The only field not compared is the fixture's
  * `construct` label (the customer code differs: `AuthOptions` is a new shape).
  *
- * The fixture must never be edited here. If `Auth` cannot match it, that is the
- * plan's abort criterion for D3 — report it; do not regenerate.
+ * The fixture must never be edited here. If `Auth` cannot match it, that is a
+ * blocking incompatibility — report it; do not regenerate.
  */
 
 import assert from 'node:assert';
@@ -46,8 +46,8 @@ import {
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const FIXTURE_PATH = join(SRC_DIR, '__fixtures__', 'authcognito-resource-identity.json');
 /**
- * SHA-256 of B1's original, `bb-auth-cognito/src/__fixtures__/resource-identity.json`,
- * as it was when the package was deleted at the cutover (F1b). Until then this
+ * SHA-256 of the original, `bb-auth-cognito/src/__fixtures__/resource-identity.json`,
+ * as it was when the package was deleted at the cutover. Until then this
  * test compared the two files byte for byte; the hash keeps that check.
  */
 const B1_FIXTURE_SHA256 = '2ddc53c9a77eaf1ca674aac86676445d9fc103f6f32a5478e0ec0f4087946b11';
@@ -57,7 +57,7 @@ interface Fixture {
 	variants: Record<string, VariantIdentity>;
 }
 
-/** Each B1 variant → the equivalent `Auth` configuration (same block id, same stack). */
+/** Each fixture variant → the equivalent `Auth` configuration (same block id, same stack). */
 const AUTH_VARIANTS: Record<string, string> = {
 	default: "new Auth(stack, 'auth')",
 	configured:
@@ -73,12 +73,12 @@ function synthOnce(name: string): SynthesizedAuth {
 	return synthesized[name];
 }
 
-describe('Auth — deployed resource identity equals AuthCognito (B1 golden fixture)', () => {
-	test('the vendored fixture is byte-identical to B1’s (never edited here)', () => {
+describe('Auth — deployed resource identity equals AuthCognito (golden fixture)', () => {
+	test('the vendored fixture is byte-identical to the original (never edited here)', () => {
 		assert.strictEqual(createHash('sha256').update(readFileSync(FIXTURE_PATH)).digest('hex'), B1_FIXTURE_SHA256);
 	});
 
-	test('every B1 variant has an Auth equivalent', () => {
+	test('every fixture variant has an Auth equivalent', () => {
 		assert.deepStrictEqual(Object.keys(fixture.variants).sort(), Object.keys(AUTH_VARIANTS).sort());
 	});
 
@@ -146,8 +146,8 @@ describe('Auth — deployed resource identity equals AuthCognito (B1 golden fixt
 			});
 
 			test('session cookie is named auth_<fullId>', () => {
-				// Until D5 lands a cookie writer, this pins the shared `sessionCookieName()`
-				// the runtime must use. D5: switch to reading a real Set-Cookie back, as B1 does.
+				// Until this test reads a cookie the runtime writes, it pins the shared
+				// `sessionCookieName()` the runtime must use. Then switch to reading a real Set-Cookie back.
 				const { identity } = synthOnce(name);
 				assert.strictEqual(identity.sessionCookieName, `auth_${identity.fullId}`);
 			});
