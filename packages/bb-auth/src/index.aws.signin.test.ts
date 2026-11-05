@@ -144,7 +144,7 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 				userSub: 'sub-alice',
 				groups: ['admins'],
 				attributes: { email: 'alice@example.com' },
-				// Auth: `AuthenticatedUser` adds `signInProvider` (design 04) — always
+				// Auth: `AuthenticatedUser` adds `signInProvider` — always
 				// 'password' for a native sign-in.
 				signInProvider: 'password',
 			},

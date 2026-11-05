@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `AuthBase` — the engine-agnostic core of the `Auth` Building Block
- * (design 04 §7.0). Every runtime entry's `Auth` is `AuthBase` plus a
- * per-layer {@link AuthLayer} (the session-secret source and the engine
- * factories).
+ * `AuthBase` — the engine-agnostic core of the `Auth` Building Block.
+ * Every runtime entry's `Auth` is `AuthBase` plus a per-layer
+ * {@link AuthLayer} (the session-secret source and the engine factories).
  *
  * Owns: the session cookie and store (`cookies.ts`, `sessions.ts`), the
  * auto-sign-in bridge, the guards (`requireAuth`, `requireRole`, `checkAuth`,
@@ -601,7 +600,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * never block the local sign-out. `{ global: true }` also revokes the pool
 	 * user's sessions on every other device. For a federated session whose
 	 * provider keeps its own session, the provider's logout URL is recorded for
-	 * the sign-out route to redirect to (design 04 §4.5).
+	 * the sign-out route to redirect to.
 	 */
 	async signOut(context: BlocksContext, options?: SignOutOptions): Promise<void> {
 		const raw = readSessionCookie(context, this.fullId);

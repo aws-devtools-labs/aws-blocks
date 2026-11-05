@@ -943,7 +943,7 @@ Replace all three with one block, `Auth` (`@aws-blocks/bb-auth`), configured thr
 - User doc and comparison table: [`packages/bb-auth/README.md`](../packages/bb-auth/README.md#which-option-and-why)
 - Upgrade guide and codemod: [`packages/bb-auth/MIGRATION.md`](../packages/bb-auth/MIGRATION.md)
 - Design: [`packages/bb-auth/DESIGN.md`](../packages/bb-auth/DESIGN.md)
-- Research and plan: [`docs/design/auth-unification/`](./design/auth-unification/) (Cognito pricing and federation facts: [`03-cognito-capabilities.md`](./design/auth-unification/03-cognito-capabilities.md))
+- Cognito pricing and federation facts: Cognito bills OIDC/SAML-federated users on a separate meter with 50 free MAUs (10,000 for direct and social sign-in), and cannot federate a PKCE-only client because it requires a client secret (see Rationale 2)
 - Supersedes the three-block naming in [D-004](#d-004-auth-first-naming-convention-for-auth-building-blocks)
 
 ## D-023: Auth options: `store` + `providers` (option D)

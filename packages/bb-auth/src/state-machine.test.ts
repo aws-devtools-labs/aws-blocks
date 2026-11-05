@@ -315,7 +315,7 @@ describe('signedOut shapes', () => {
 		);
 	});
 
-	test('a federated signed-in session gets a url-bearing POST signOut (design 04 §4.5)', () => {
+	test('a federated signed-in session gets a url-bearing POST signOut', () => {
 		const user = { userId: 'u', username: 'u' };
 		assert.deepStrictEqual(signedIn(user, { federatedSignOutUrl: '/aws-blocks/auth/signout' }).actions, [
 			{ name: 'signOut', label: 'Sign Out', fields: [], url: '/aws-blocks/auth/signout', method: 'POST' },

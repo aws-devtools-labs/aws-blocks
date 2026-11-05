@@ -9,9 +9,8 @@
  * AWS, CDK and browser — can re-export it without pulling in runtime code.
  *
  * Status: published as `@aws-blocks/bb-auth` and exported from the
- * `@aws-blocks/blocks` umbrella (designed in tasks D1/D2 of the
- * auth-unification plan). The option groups and the gated method surface
- * below are the contract the runtime layers (D3–D7) implement. `types-test.ts` is the compile-time proof
+ * `@aws-blocks/blocks` umbrella. The option groups and the gated method surface
+ * below are the contract the runtime layers implement. `types-test.ts` is the compile-time proof
  * that the mode gates work and that `Auth<O>` stays covariant in `O`.
  */
 

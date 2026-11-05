@@ -473,7 +473,7 @@ export interface SignedInInput {
 	/**
 	 * For a federated session: the sign-out route. The `signOut` action then
 	 * carries `url` + `method: 'POST'`, so the browser follows the provider's
-	 * logout redirect chain (design 04 §4.5) — otherwise the IdP's own session
+	 * logout redirect chain — otherwise the IdP's own session
 	 * would silently sign the user back in.
 	 */
 	federatedSignOutUrl?: string;

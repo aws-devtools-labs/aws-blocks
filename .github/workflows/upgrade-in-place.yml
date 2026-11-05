@@ -13,8 +13,8 @@ name: Upgrade-in-place E2E
 #   - Cost and time: two real deploys plus a destroy (~5–8 minutes of AWS time)
 #     on top of a second checkout's `npm ci` + build, per run.
 #   - Signal: it only says something about changes to the auth blocks' CDK layer
-#     (bb-auth), and the auth-unification plan runs it at fixed
-#     milestones (D3, P4a, P6, and before release) rather than on every push.
+#     (bb-auth), so it runs at fixed milestones (such as before a release)
+#     rather than on every push.
 #   - Churn: every run creates and deletes a Cognito user pool in the shared e2e
 #     account; on every PR that would multiply for no added signal.
 #   - Why not reuse E2E Production: that job's stack suffix is per PR

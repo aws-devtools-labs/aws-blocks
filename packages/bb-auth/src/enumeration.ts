@@ -6,7 +6,7 @@
  * Cognito engine answer an unknown username the same way. Ported from
  * `bb-auth-cognito/src/enumeration.ts` as fixed by B6.
  *
- * Rules (design 04 §6.3): sign-in failures are uniform; password reset and
+ * Rules: sign-in failures are uniform; password reset and
  * code resend always report success with plausible delivery details; confirm-
  * code flows answer an unknown user exactly like a wrong code. `auth.admin.*`
  * is inside the trust boundary and may still report `UserNotFoundException`.

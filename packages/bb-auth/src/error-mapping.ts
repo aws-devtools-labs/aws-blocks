@@ -4,7 +4,7 @@
 /**
  * Translate anything an engine throws into the `ApiError` a client may see.
  *
- * Policy (LATER-DISCUSSION L10, B6):
+ * Policy:
  *
  * - **Every client-visible `name` is an `AuthErrors` member.** A raw error
  *   whose name is in the vocabulary keeps it (with the HTTP status from
@@ -31,7 +31,7 @@
  * - **No SDK metadata reaches a client.** The result is always a fresh
  *   `ApiError`; the original error rides along only as `cause`, which `Error`
  *   installs as a non-enumerable property, so it never serializes.
- * - **Enumeration masking** per {@link ErrorFlow} (design 04 §6.3).
+ * - **Enumeration masking** per {@link ErrorFlow}.
  * - A `UserLambdaValidationException` that carries a `validateUser` rejection
  *   from the PreSignUp trigger (`trigger-rejection.ts`) becomes that
  *   rejection — the same name and message as the in-process check.
@@ -54,7 +54,7 @@ import type { PasswordPolicy } from './types.js';
 
 /**
  * Which public flow an error came from — selects the user-enumeration masking
- * {@link toAuthApiError} applies (design 04 §6.3):
+ * {@link toAuthApiError} applies:
  *
  * - `signIn` — a credential check (a password sign-in, or a challenge answered
  *   with a password). Unknown user, wrong password and disabled user all become

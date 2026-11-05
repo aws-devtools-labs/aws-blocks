@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The engine contracts `AuthBase` delegates to (design 04 §7.0).
+ * The engine contracts `AuthBase` delegates to.
  *
  * `AuthBase` owns everything engine-agnostic: the session cookie and session
  * store, the auto-sign-in bridge cookie, `requireAuth` / `requireRole` /
@@ -620,7 +620,7 @@ export interface FederationEngine {
 	 * Best-effort upstream revocation. Return `logoutUrl` when the provider
 	 * keeps its own session that would otherwise silently re-authenticate the
 	 * user (Cognito managed login's `/logout`, an OIDC `end_session_endpoint`);
-	 * the sign-out route redirects there (design 04 §4.5).
+	 * the sign-out route redirects there.
 	 */
 	signOut(
 		session: { kind: 'pool'; tokens: PoolTokens } | { kind: 'direct'; record: DirectSessionRecord },

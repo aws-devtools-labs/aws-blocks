@@ -8,7 +8,7 @@ import * as browserClient from '@aws-blocks/bb-auth/browser-client';
 import * as authUi from '@aws-blocks/bb-auth/ui';
 import * as ui from './ui.js';
 
-// Requirements R1 / S1 (docs/design/auth-unification/D7-reactivity-requirements.md):
+// Requirements R1 / S1 of the auth UI reactivity tests (`auth-common`):
 // the notifier and the store ship from `@aws-blocks/blocks/ui` next to the
 // components, as the very same functions — one per-`api` store, whichever path
 // an app imports from.

@@ -4,7 +4,7 @@
 /**
  * The auth UI module outside a browser (SSR, Node scripts, e2e cookie-jar
  * clients). Runs in its own process with **no DOM globals** — requirements
- * R10 and S11 in `docs/design/auth-unification/D7-reactivity-requirements.md`.
+ * R10 (`submitAuthAction`) and S11 (the store) of the auth UI reactivity tests.
  *
  * `submitAuthAction` still performs the RPC and returns its result, but skips
  * the store write and the broadcast silently; the store reads return `null`

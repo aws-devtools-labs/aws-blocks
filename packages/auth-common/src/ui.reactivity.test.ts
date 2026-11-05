@@ -5,9 +5,8 @@
  * Acceptance tests for the client-side auth notifier (`submitAuthAction`) and
  * the public auth-state store (`subscribeAuthState` / `getAuthStateSnapshot`).
  *
- * Each test names the requirement it covers from
- * `docs/design/auth-unification/D7-reactivity-requirements.md` (R1–R17 for
- * `submitAuthAction`, S1–S11 for the store). The Node-only cases (R10, S11)
+ * Each test names the requirement it covers (R1–R17 for `submitAuthAction`,
+ * S1–S11 for the store); the test body states what the requirement asks. The Node-only cases (R10, S11)
  * live in `ui.node.test.ts`, which runs without DOM globals.
  */
 

@@ -231,7 +231,7 @@ describe('AWS attribute filtering', () => {
 			userSub: 'sub-alice',
 			groups: ['admins'],
 			attributes: { email: 'alice@example.com', 'custom:department': 'eng' },
-			// Auth: `AuthenticatedUser` adds `signInProvider` (design 04).
+			// Auth: `AuthenticatedUser` adds `signInProvider`.
 			signInProvider: 'password',
 		});
 	});

@@ -3,7 +3,7 @@
 
 /**
  * AWS runtime — user-enumeration safety on every public, non-admin flow, against
- * a spied Cognito client (no network). The rules (design 04 §6.3): sign-in is
+ * a spied Cognito client (no network). The rules: sign-in is
  * uniform for unknown / wrong-password / disabled; password reset and code
  * resend always succeed with plausible details; confirm-code flows answer an
  * unknown user exactly like a wrong code. Covers pools that DO surface
