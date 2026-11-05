@@ -71,16 +71,20 @@ export function runOrThrow(cmd, args, opts = {}, root) {
  * exit is pushed onto `failures` so the caller can fail the job at the end.
  *
  * {@link runSpawn} returns the spawnSync result and never throws on a non-zero
- * exit, so the result must be checked here: wrapping it in try/catch alone
- * missed every failed `sandbox:destroy` and the job stayed green with a stack
- * left deployed.
+ * exit, so the result's error and status are checked here (a try/catch alone
+ * would miss every failed command); the try/catch still covers a spawn that
+ * throws (an invalid option, for example).
  */
 export function runTeardown(cmd, args, opts = {}, root, failures) {
 	console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? root})`);
-	const r = runSpawn(cmd, args, opts, root, { log: false });
 	let reason = null;
-	if (r.error) reason = r.error.message;
-	else if (r.status !== 0) reason = r.status === null ? `terminated by signal ${r.signal}` : `exited with ${r.status}`;
+	try {
+		const r = runSpawn(cmd, args, opts, root, { log: false });
+		if (r.error) reason = r.error.message;
+		else if (r.status !== 0) reason = r.status === null ? `terminated by signal ${r.signal}` : `exited with ${r.status}`;
+	} catch (e) {
+		reason = e?.message ?? String(e);
+	}
 	if (reason === null) return;
 	const failure = `${cmd} ${args.join(' ')}: ${reason}`;
 	failures.push(failure);

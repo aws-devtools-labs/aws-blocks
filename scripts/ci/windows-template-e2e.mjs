@@ -54,8 +54,9 @@ async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
     if (await ready()) return child;
     await sleep(2000);
   }
-  // Stop it before the caller's teardown runs, so a still-deploying sandbox
-  // can't race (or be redeployed by watch after) the destroy.
+  // Stop it before the caller's teardown runs, so the local sandbox process
+  // can't race (or redeploy in watch mode after) the destroy. A CloudFormation
+  // operation it already started may still be in progress.
   killTree(child.pid);
   throw new Error(`${cmd} ${args.join(' ')} did not become ready within ${timeoutMs / 1000}s`);
 }

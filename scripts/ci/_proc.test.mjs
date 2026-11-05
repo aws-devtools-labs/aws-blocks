@@ -46,6 +46,14 @@ describe('runTeardown', () => {
 		assert.match(failures[1], /exited with 3/);
 	});
 
+	it('records a spawn that throws instead of returning a result', () => {
+		const failures = [];
+		// spawnSync throws ERR_INVALID_ARG_TYPE for a non-string cwd.
+		assert.doesNotThrow(() => runTeardown(process.execPath, ['-e', ''], { cwd: 42 }, ROOT, failures));
+		assert.equal(failures.length, 1);
+		assert.match(failures[0], /cwd/);
+	});
+
 	// POSIX only: spawnSync reports a signal kill as status null + signal.
 	it('records a command killed by a signal', { skip: process.platform === 'win32' }, () => {
 		const failures = [];
