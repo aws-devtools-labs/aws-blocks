@@ -2493,6 +2493,40 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+				] }),
+			},
+			subscribe,
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		t.mock.timers.tick(700_000);
+		assert.strictEqual(errors.length, 1, 'no later Timed-out error from the failsafe');
+		chat.destroy();
+	});
+
 	test('reconnect re-checks pending interrupts', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
@@ -4009,6 +4043,43 @@ describe('createChat', () => {
 		cap.chunk({ type: 'done', text: 'done at last' });
 		await flush();
 		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+					],
+				}),
+			},
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		t.mock.timers.tick(700_000);
+		assert.strictEqual(errors.length, 1, 'no later Timed-out error from the failsafe');
 		chat.destroy();
 		await flush();
 	});
