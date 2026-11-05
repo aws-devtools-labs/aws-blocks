@@ -1529,8 +1529,15 @@ function handleApiRequest(
   const isRpc = method === 'POST' && isRpcPath(url.pathname);
   if (isRpc || matchRoute(method, url.pathname)) {
     const signal = clientGoneSignal(res);
+    // The server's request handler set these on `res`; a dispatcher 500 clears every header
+    // set so far, so it is handed them again to keep the answer readable by the
+    // browser.
+    const corsHeaders = buildDevCorsHeaders(req.headers.origin || '');
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    // An aborted upload never emits 'end'; close the response instead of
+    // leaving it open.
+    req.on('error', () => res.destroy());
     req.on('end', () => {
       const body = Buffer.concat(chunks);
       // Verbose request/response logging — useful when debugging cross-stack
@@ -1552,11 +1559,11 @@ function handleApiRequest(
         console.log('[rpc-in]', inLog.length > 800 ? inLog.slice(0, 800) + '…' : inLog);
       }
       dispatch(toDispatchRequest(req, body, { path: url.pathname, signal })).then(
-        (response) => writeResponse(res, response),
+        (response) => writeResponse(res, response, undefined, corsHeaders),
         (error: unknown) => {
           console.error('Dev server error:', error);
           if (res.headersSent) res.destroy();
-          else writeInternalServerError(res);
+          else writeInternalServerError(res, corsHeaders);
         },
       );
     });

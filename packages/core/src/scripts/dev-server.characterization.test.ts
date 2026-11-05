@@ -226,10 +226,15 @@ const CASES: Record<string, Case> = {
 // - RPC and RawRoute responses carry the no-store Cache-Control / Pragma /
 //   Expires headers.
 // - Handlers see the request cookies and the validated client user agent
-//   through requestCookies / requestClientUserAgent ("cookie", "userAgent").
+//   through requestCookies / requestClientUserAgent ("cookie", "userAgent");
+//   a request without a Cookie header reads as "" rather than null.
+// - A request header Node delivers as several values (Set-Cookie) reaches the
+//   handler with all of them, not only the first.
 // - A RawRoute that sets a Content-Type and then throws keeps that Content-Type.
 // - ctx.request.url re-serializes the query string ("b=x+y&a=1&flag=").
-// - A RawRoute that sets an out-of-range status gets a plain 500.
+// - A RawRoute that sets an out-of-range status gets a plain 500, still with the
+//   dev CORS headers: its body is {"error":"Internal Server Error"} rather than
+//   {"error":"Internal error"}.
 const EXPECTED: Record<string, unknown> = {
   "rpc success with a localhost origin, cookie and client user agent": {
     "status": 200,
@@ -878,7 +883,13 @@ const EXPECTED: Record<string, unknown> = {
   "raw route out-of-range status": {
     "status": 500,
     "headers": {
-      "content-type": "application/json"
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "content-type": "application/json",
+      "vary": "Origin"
     },
     "cookies": [],
     "body": "{\"error\":\"Internal Server Error\"}"

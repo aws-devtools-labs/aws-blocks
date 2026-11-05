@@ -480,7 +480,9 @@ function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
 
 /**
  * Write a dispatcher response to a Node HTTP response. `requestId`, when set,
- * prefixes the error line logged for an invalid status.
+ * prefixes the error line logged for an invalid status. `errorHeaders`, when
+ * set, is added to the plain 500 sent for an invalid status (see
+ * {@link writeInternalServerError}).
  *
  * @internal
  */
@@ -488,6 +490,7 @@ export function writeResponse(
   res: http.ServerResponse,
   response: Omit<DispatchResponse, 'kind'>,
   requestId?: string,
+  errorHeaders?: Readonly<Record<string, string>>,
 ): void {
   // A handler can set any number as `ctx.response.status`. Only a final status
   // is sent: Node refuses an out-of-range one only while ending the response,
@@ -498,7 +501,7 @@ export function writeResponse(
   if (!isValidStatus(response.status)) {
     if (requestId === undefined) console.error('HTTP server error:', 'invalid response status', response.status);
     else console.error('HTTP server error:', `[request ${requestId}]`, 'invalid response status', response.status);
-    writeInternalServerError(res);
+    writeInternalServerError(res, errorHeaders);
     return;
   }
   res.statusCode = response.status;
@@ -520,13 +523,22 @@ function isValidStatus(status: number): boolean {
  * Answer a plain 500. Every header set so far is removed first, so the error
  * response carries no stale Content-Length (which would misframe the next
  * response on a keep-alive connection) and none of the handler's cookies.
+ * `extraHeaders`, when set, is added after that removal, for headers the
+ * caller sends on every response (such as the dev server's CORS headers).
  *
  * @internal
  */
-export function writeInternalServerError(res: http.ServerResponse): void {
+export function writeInternalServerError(
+  res: http.ServerResponse,
+  extraHeaders?: Readonly<Record<string, string>>,
+): void {
   for (const name of res.getHeaderNames()) res.removeHeader(name);
   const body = JSON.stringify({ error: 'Internal Server Error' });
-  res.writeHead(500, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  res.writeHead(500, {
+    ...extraHeaders,
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  });
   res.end(body);
 }
 
