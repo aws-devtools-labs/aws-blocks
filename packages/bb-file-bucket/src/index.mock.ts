@@ -4,6 +4,7 @@
 import { Scope, blocksError, registerSdkIdentifiers } from '@aws-blocks/core';
 import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { ScopeParent } from '@aws-blocks/core';
+import { randomUUID } from 'node:crypto';
 import {
 	existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync, copyFileSync, utimesSync, rmSync,
 } from 'node:fs';
@@ -595,11 +596,12 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 	private nextVersionId(path: string): string {
 		const dir = versionsDirFor(this.dataDir, path);
-		if (!existsSync(dir)) return 'v1';
-		const existing = readdirSync(dir)
+		const existing = (existsSync(dir) ? readdirSync(dir) : [])
 			.filter(f => f.startsWith('v') && !f.includes('.'))
 			.map(f => parseInt(f.slice(1), 10))
 			.filter(n => !isNaN(n));
-		return `v${(existing.length > 0 ? Math.max(...existing) : 0) + 1}`;
+		// The number orders equal-timestamp versions; the UUID prevents ID reuse
+		// after deletion or restart, including collisions with legacy v<n> IDs.
+		return `v${(existing.length > 0 ? Math.max(...existing) : 0) + 1}-${randomUUID()}`;
 	}
 }

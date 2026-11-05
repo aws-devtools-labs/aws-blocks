@@ -248,6 +248,27 @@ export function fileBucketTests(getApi: () => typeof apiType) {
     // ── Versioned FileBucket ──────────────────────────────────────────────
 
     describe('Versioned', () => {
+      for (const keepOlder of [false, true]) {
+        test(`a deleted version reference stays absent after re-upload (older remains: ${keepOlder})`, async () => {
+          const api = getApi();
+          const path = `v/version-identity-${crypto.randomUUID()}.txt`;
+          try {
+            if (keepOlder) await api.vFilePut(path, 'older');
+            await api.vFilePut(path, 'deleted');
+            const [saved] = await api.vFileListVersions(path);
+            await api.vFileDelete(path, saved.versionId);
+            assert.strictEqual(await api.vFileGet(path, saved.versionId), null);
+            await api.vFilePut(path, 'replacement');
+            assert.strictEqual(await api.vFileGet(path, saved.versionId), null);
+            await api.vFileDelete(path, saved.versionId);
+            assert.strictEqual((await api.vFileGet(path))?.body, 'replacement');
+            assert.strictEqual((await api.vFileListVersions(path)).length, keepOlder ? 2 : 1);
+          } finally {
+            await api.vFilePurge(path);
+          }
+        });
+      }
+
       test('deleting a version of a prefix key does not delete nested objects', async () => {
         const api = getApi();
         const prefix = `v/prefix-delete-${crypto.randomUUID()}`;

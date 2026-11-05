@@ -125,7 +125,8 @@ describe('scan: segregated on-disk layout', () => {
 		// Metadata is segregated under meta/
 		assert.ok(existsSync(`${base}/meta/docs/report.pdf.json`), 'meta/ should hold the sidecar');
 		// Versions are segregated under versions/{key}/
-		assert.ok(existsSync(`${base}/versions/docs/report.pdf/v1`), 'versions/ should hold version bodies');
+		const [version] = await bucket.listVersions('docs/report.pdf');
+		assert.ok(existsSync(`${base}/versions/docs/report.pdf/${version.versionId}`), 'versions/ should hold version bodies');
 
 		// scan() only ever sees the content root — exactly one user file.
 		const files: string[] = [];
