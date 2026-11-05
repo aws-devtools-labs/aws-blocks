@@ -11,6 +11,8 @@
  * - container-jobs.test.ts — container-backed AsyncJobs in the VPC
  * - api-namespace-compute.test.ts — an API namespace on its own serverless compute
  * - container-api-namespace.test.ts — an API namespace on a container compute
+ * - hosting-container-api.test.ts — the same namespace through a Hosting
+ *   distribution (`cloudfront` leg only)
  * - scope-compute.test.ts — blocks placed by their scope's compute (a namespace, a
  *   child scope's namespace, an AsyncJob, a CronJob), and a block's own compute
  *   winning over its scope's
@@ -37,6 +39,7 @@ import { containerApiNamespaceTests } from './container-api-namespace.test.js';
 import { containerCronTests } from './container-cron.test.js';
 import { containerJobTests } from './container-jobs.test.js';
 import { cronJobComputeTests } from './cron-job-compute.test.js';
+import { hostingContainerApiTests } from './hosting-container-api.test.js';
 import { scaleFromZeroTests } from './scale-from-zero.test.js';
 import { scopeComputeTests } from './scope-compute.test.js';
 import { type ComputeTestContext, FRONT_DOORS, type FrontDoor, rpcCall } from './context.js';
@@ -52,13 +55,32 @@ const frontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as FrontD
 if (!FRONT_DOORS.includes(frontDoor)) throw new Error(`Unknown COMPUTE_API_FRONT_DOOR '${frontDoor}'`);
 
 let apiUrl: string | undefined;
+let hostingUrl: string | undefined;
 const ctx: ComputeTestContext = {
   frontDoor,
   apiUrl() {
     if (!apiUrl) throw new Error('The stack is not deployed yet');
     return apiUrl;
   },
+  hostingUrl() {
+    if (!hostingUrl) throw new Error(`No Hosting URL: the stack is not deployed yet, or the ${frontDoor} leg deploys no Hosting`);
+    return hostingUrl;
+  },
 };
+
+/** The Hosting construct's `HostingUrl` output; CDK appends a hash to the output key, so match its prefix. */
+function findHostingUrl(outputs: Record<string, unknown>): string | undefined {
+  for (const value of [outputs, ...Object.values(outputs)]) {
+    if (!value || typeof value !== 'object') continue;
+    const entries = Object.entries(value as Record<string, unknown>);
+    const found = entries.find(([key, url]) => key.startsWith('HostingHostingUrl') && typeof url === 'string');
+    if (found) {
+      const url = String(found[1]);
+      return url.startsWith('http') ? url : `https://${url}`;
+    }
+  }
+  return undefined;
+}
 
 /**
  * A new CloudFront distribution reports CREATE_COMPLETE before its domain
@@ -100,6 +122,11 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
     }
     if (!apiUrl) throw new Error(`No ApiUrl found in ${outputsPath}: ${JSON.stringify(outputs)}`);
     console.log(`📡 API URL: ${apiUrl}\n`);
+    if (frontDoor === 'cloudfront') {
+      hostingUrl = findHostingUrl(outputs);
+      if (!hostingUrl) throw new Error(`No HostingHostingUrl* found in ${outputsPath}: ${JSON.stringify(outputs)}`);
+      console.log(`🌐 Hosting URL: ${hostingUrl}\n`);
+    }
     await waitForFrontDoor();
   });
 
@@ -129,4 +156,5 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
   containerJobTests(ctx);
   containerCronTests(ctx);
   scaleFromZeroTests(ctx);
+  hostingContainerApiTests(ctx);
 });

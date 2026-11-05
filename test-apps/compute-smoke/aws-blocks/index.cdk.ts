@@ -3,7 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, Hosting } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -98,6 +98,24 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
     },
   },
 });
+
+// On the `cloudfront` leg, a Hosting distribution (the default CloudFront door)
+// fronts the API too, so the suite reaches the container namespace through both
+// CloudFront paths that route it straight to the load balancer: the backend's
+// managed distribution (`ApiUrl`) and Hosting's (its `HostingUrl` output, see
+// test/hosting-container-api.test.ts). Hosting gets the gateway URL and the
+// direct routes rather than the backend itself: given the backend, it would
+// claim the front-door role, the managed distribution would stand down, and
+// `ApiUrl` would move onto Hosting, leaving the managed path untested. The
+// `apigateway` leg deploys no Hosting.
+if (apiFrontDoor === 'cloudfront') {
+  new Hosting(blocksStack, 'Hosting', {
+    root: join(__dirname, '..', 'site'),
+    framework: 'static',
+    buildOutputDir: 'public',
+    api: { apiUrl: blocksStack.apiUrl, _apiDirectRoutes: blocksStack._apiDirectRoutes },
+  });
+}
 
 // Tag the whole app, so the vpc-ref stack carries the purpose tag too:
 // cleanup-stacks.yml skips any stack without an e2e blocks:purpose tag.
