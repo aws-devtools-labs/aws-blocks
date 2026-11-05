@@ -152,6 +152,125 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       };
     }
 
+    // Everything past preflight runs inside the request cookie and client user
+    // agent stores (see below).
+    const dispatchWithinStores = async (): Promise<DispatchResponse> => {
+      // RawRoute dispatch — check path-based routes before falling through to RPC.
+      // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
+      // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
+      // JSON-RPC body, and a per-namespace path must name the same one (see
+      // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
+      // handling below.
+      const requestPath = request.path;
+      if (!isRpcPath(requestPath)) {
+        const matched = matchRoute(httpMethod, requestPath);
+        if (matched) {
+          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders);
+        }
+        // No RawRoute matched and the path is not under the RPC endpoint — 404.
+        // Log it: an unmatched route used to be entirely silent, which is what
+        // made a split route registry (duplicate @aws-blocks/core copies)
+        // undiagnosable from CloudWatch alone. The path is already in the front
+        // door's access logs, so this adds no new category of data.
+        const copies = getLoadedCoreCopies();
+        const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        console.error(
+          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+        );
+        return {
+          kind: 'not-found',
+          status: 404,
+          headers: {
+            'Content-Type': 'application/json',
+            ...corsHeaders,
+          },
+          cookies: [],
+          body: JSON.stringify({ error: 'Not Found' }),
+        };
+      }
+
+      const rpcHeaders = rpcResponseHeaders(corsHeaders);
+      const rpcEnvelope = (body: string): DispatchResponse => ({ kind: 'rpc', status: 200, headers: rpcHeaders, cookies: [], body });
+
+      const { text: bodyText, stream: bodyStream } = request.body();
+      // The path is validated against the body's namespace (see parseRpcRequest);
+      // dispatch always uses the body's `namespace.method`.
+      const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
+
+      if (!parsed.ok) {
+        return rpcEnvelope(parsed.response);
+      }
+
+      const { apiNamespace, method, args, id: rpcId } = parsed.request;
+
+      // Declared outside the try so the error path can still deliver cookies the
+      // method set before throwing (e.g. clearing a dead session on a 401).
+      let responseHeaders: Headers | undefined;
+
+      try {
+        const headers = request.headers();
+
+        let responseStatus = 200;
+        responseHeaders = new Headers(rpcHeaders);
+        let responseBody: any;
+
+        const context = {
+          request: {
+            headers,
+            body: bodyStream,
+            json: async () => JSON.parse(bodyText),
+            text: async () => bodyText,
+            url: request.url(),
+            params: {},
+            signal: request.signal,
+          },
+          response: {
+            headers: responseHeaders,
+            get status() { return responseStatus; },
+            set status(code: number) { responseStatus = code; },
+            send: (body: any) => { responseBody = body; },
+          },
+        };
+
+        // Get the API by export name. resolveApiNamespace refuses exported Building
+        // Block instances and `_`-private exports, so only an API surface is callable.
+        const apiHandler = resolveApiNamespace(backend, apiNamespace);
+        if (!apiHandler) {
+          return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId));
+        }
+
+        // Call the handler to get methods
+        const apiMethods = typeof apiHandler === 'function'
+          ? apiHandler(context)
+          : apiHandler;
+
+        // Own/declared callable methods only — never an inherited Object.prototype member.
+        const apiMethod = resolveApiMethod(apiMethods, method);
+        if (!apiMethod) {
+          return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
+        }
+
+        const result = await apiMethod(...args);
+
+        return {
+          kind: 'rpc-result',
+          status: responseStatus,
+          headers: withoutSetCookie(responseHeaders),
+          cookies: setCookiesOf(responseHeaders),
+          body: successResponse(responseBody ?? result, rpcId),
+        };
+      } catch (error: any) {
+        console.error(rpcErrorLabel, error);
+        // Only Set-Cookie values that DELETE a cookie survive into the error
+        // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
+        // session cookie, but a method that signs a user in and then throws can
+        // never hand out a live session. The method's other headers are dropped,
+        // as before, so the JSON-RPC error envelope keeps its standard headers.
+        // The body is unchanged (message/name only — never SDK metadata).
+        return { ...rpcEnvelope(errorResponseFromCatch(error, rpcId)), cookies: errorResponseSetCookies(responseHeaders) };
+      }
+    };
+
     // Store the inbound request cookies in AsyncLocalStorage so downstream code
     // (e.g. the Blocks client making server-side API calls during SSR) can forward
     // them automatically. Wraps both RawRoute and RPC handling so any handler that
@@ -162,122 +281,8 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     const clientUserAgent = validateClientUserAgentToken(request.clientUserAgent);
 
     return requestCookies.run(request.cookie, () =>
-      requestClientUserAgent.run(clientUserAgent, async (): Promise<DispatchResponse> => {
-    // RawRoute dispatch — check path-based routes before falling through to RPC.
-    // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
-    // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
-    // JSON-RPC body, and a per-namespace path must name the same one (see
-    // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
-    // handling below.
-    const requestPath = request.path;
-    if (!isRpcPath(requestPath)) {
-      const matched = matchRoute(httpMethod, requestPath);
-      if (matched) {
-        return dispatchRawRoute(request, matched.route, matched.params, corsHeaders);
-      }
-      // No RawRoute matched and the path is not under the RPC endpoint — 404.
-      // Log it: an unmatched route used to be entirely silent, which is what
-      // made a split route registry (duplicate @aws-blocks/core copies)
-      // undiagnosable from CloudWatch alone. The path is already in the front
-      // door's access logs, so this adds no new category of data.
-      const copies = getLoadedCoreCopies();
-      const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
-      console.error(
-        `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
-      );
-      return {
-        kind: 'not-found',
-        status: 404,
-        headers: {
-          'Content-Type': 'application/json',
-          ...corsHeaders,
-        },
-        cookies: [],
-        body: JSON.stringify({ error: 'Not Found' }),
-      };
-    }
-
-    const rpcHeaders = rpcResponseHeaders(corsHeaders);
-    const rpcEnvelope = (body: string): DispatchResponse => ({ kind: 'rpc', status: 200, headers: rpcHeaders, cookies: [], body });
-
-    const { text: bodyText, stream: bodyStream } = request.body();
-    // The path is validated against the body's namespace (see parseRpcRequest);
-    // dispatch always uses the body's `namespace.method`.
-    const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
-
-    if (!parsed.ok) {
-      return rpcEnvelope(parsed.response);
-    }
-
-    const { apiNamespace, method, args, id: rpcId } = parsed.request;
-
-    // Declared outside the try so the error path can still deliver cookies the
-    // method set before throwing (e.g. clearing a dead session on a 401).
-    let responseHeaders: Headers | undefined;
-
-    try {
-      const headers = request.headers();
-
-      let responseStatus = 200;
-      responseHeaders = new Headers(rpcHeaders);
-      let responseBody: any;
-
-      const context = {
-        request: {
-          headers,
-          body: bodyStream,
-          json: async () => JSON.parse(bodyText),
-          text: async () => bodyText,
-          url: request.url(),
-          params: {},
-          signal: request.signal,
-        },
-        response: {
-          headers: responseHeaders,
-          get status() { return responseStatus; },
-          set status(code: number) { responseStatus = code; },
-          send: (body: any) => { responseBody = body; },
-        },
-      };
-
-      // Get the API by export name. resolveApiNamespace refuses exported Building
-      // Block instances and `_`-private exports, so only an API surface is callable.
-      const apiHandler = resolveApiNamespace(backend, apiNamespace);
-      if (!apiHandler) {
-        return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId));
-      }
-
-      // Call the handler to get methods
-      const apiMethods = typeof apiHandler === 'function'
-        ? apiHandler(context)
-        : apiHandler;
-
-      // Own/declared callable methods only — never an inherited Object.prototype member.
-      const apiMethod = resolveApiMethod(apiMethods, method);
-      if (!apiMethod) {
-        return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
-      }
-
-      const result = await apiMethod(...args);
-
-      return {
-        kind: 'rpc-result',
-        status: responseStatus,
-        headers: withoutSetCookie(responseHeaders),
-        cookies: setCookiesOf(responseHeaders),
-        body: successResponse(responseBody ?? result, rpcId),
-      };
-    } catch (error: any) {
-      console.error(rpcErrorLabel, error);
-      // Only Set-Cookie values that DELETE a cookie survive into the error
-      // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
-      // session cookie, but a method that signs a user in and then throws can
-      // never hand out a live session. The method's other headers are dropped,
-      // as before, so the JSON-RPC error envelope keeps its standard headers.
-      // The body is unchanged (message/name only — never SDK metadata).
-      return { ...rpcEnvelope(errorResponseFromCatch(error, rpcId)), cookies: errorResponseSetCookies(responseHeaders) };
-    }
-    }));
+      requestClientUserAgent.run(clientUserAgent, dispatchWithinStores),
+    );
   };
 }
 
