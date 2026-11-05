@@ -27,9 +27,54 @@ type WhereAmI = {
 
 // The stack reports deployed before the container's first task is RUNNING and
 // healthy behind its load balancer; until then a call through the front door
-// fails (no healthy target), so the first call is retried within this budget.
+// fails (no healthy target), so readiness is probed within this budget.
 const FIRST_CALL_BUDGET_MS = 300_000;
 const FIRST_CALL_RETRY_MS = 5_000;
+
+/** Statuses the gateway or load balancer returns while no healthy target is registered yet. */
+const NO_HEALTHY_TARGET_STATUSES = new Set([502, 503, 504]);
+
+/**
+ * Whether `fetch` failed before any response arrived (`TypeError: fetch failed`,
+ * e.g. a reset connection). Anything else it throws is a real failure.
+ */
+function isNetworkError(error: unknown): boolean {
+  return error instanceof TypeError;
+}
+
+/**
+ * Probe `{apiUrl}/{namespace}` with a raw JSON-RPC call until it answers with
+ * anything but "no healthy target yet". The typed client doesn't surface the
+ * HTTP status, so the probe can't use it to tell a cold start from a real error.
+ * Returns once the namespace answers 2xx; throws at once on any other status.
+ */
+async function waitForHealthyTarget(apiUrl: string, namespace: string, method: string): Promise<void> {
+  const deadline = Date.now() + FIRST_CALL_BUDGET_MS;
+  let lastFailure = 'no attempt';
+  while (Date.now() < deadline) {
+    let res: Response;
+    try {
+      res = await fetch(`${apiUrl}/${namespace}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: `${namespace}.${method}`, params: [], id: 1 }),
+      });
+    } catch (error) {
+      if (!isNetworkError(error)) throw error;
+      lastFailure = String(error);
+      await sleep(FIRST_CALL_RETRY_MS);
+      continue;
+    }
+    if (res.ok) return;
+    const body = await res.text();
+    if (!NO_HEALTHY_TARGET_STATUSES.has(res.status)) {
+      throw new Error(`${namespace} answered ${res.status}: ${body}`);
+    }
+    lastFailure = `${res.status} ${body}`;
+    await sleep(FIRST_CALL_RETRY_MS);
+  }
+  throw new Error(`${namespace} not reachable within ${FIRST_CALL_BUDGET_MS / 1000}s: ${lastFailure}`);
+}
 
 export function containerApiNamespaceTests(ctx: ComputeTestContext) {
   /** The real typed client, pointed at the front door — what a customer's frontend runs. */
@@ -40,18 +85,8 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
     let onContainer: WhereAmI;
 
     before(async () => {
-      const deadline = Date.now() + FIRST_CALL_BUDGET_MS;
-      let lastError: unknown;
-      while (Date.now() < deadline) {
-        try {
-          onContainer = await whereAmI('containerApi');
-          return;
-        } catch (error) {
-          lastError = error;
-          await sleep(FIRST_CALL_RETRY_MS);
-        }
-      }
-      throw new Error(`containerApi not reachable within ${FIRST_CALL_BUDGET_MS / 1000}s: ${String(lastError)}`);
+      await waitForHealthyTarget(ctx.apiUrl(), 'containerApi', 'whereAmI');
+      onContainer = await whereAmI('containerApi');
     });
 
     test('a namespace on a container compute is served by its task, not a function', () => {
