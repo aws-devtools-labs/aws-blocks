@@ -6,9 +6,10 @@
  * is not cached.
  *
  * Runs in the package's second test pass, under `--conditions=aws-runtime`, so
- * `frameworkKey()` resolves its AWS entry: Secrets Manager when the compute's
- * environment carries the key's ARN (a `secretsStore: 'secrets-manager'`
- * stack), the SSM SecureString otherwise. The SDK clients are stubbed.
+ * `frameworkKey()` resolves its AWS entry: Secrets Manager when the loaded
+ * config carries the key's ARN (a `secretsStore: 'secrets-manager'` stack),
+ * the SSM SecureString otherwise, with one config reload when an SSM read
+ * fails. The SDK clients are stubbed.
  *
  * `signOut()` reads the secret to verify the session cookie, so a request with
  * a (garbage) session cookie drives one read per call.
@@ -17,7 +18,8 @@
 import assert from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, mock, test } from 'node:test';
 import type { BlocksContext } from '@aws-blocks/core';
-import { clearRouteRegistry, Scope } from '@aws-blocks/core';
+import { _resetConfigCache, clearRouteRegistry, loadConfigToProcessEnv, Scope } from '@aws-blocks/core';
+import { S3Client } from '@aws-sdk/client-s3';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SSMClient } from '@aws-sdk/client-ssm';
 import { Auth } from './index.aws.js';
@@ -144,5 +146,41 @@ describe('Auth session secret store (aws-runtime)', {
 		await auth.signOut(contextWithSessionCookie());
 		await auth.signOut(contextWithSessionCookie());
 		assert.strictEqual(calls, 2, 'one failed read, one successful read, then the cached value');
+	});
+
+	test('upgrade window: the previous config (no ARN), a failed SSM read, one reload, then Secrets Manager', async () => {
+		process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+		_resetConfigCache();
+		const configs = [{ BLOCKS_SSM_PARAM_SESSION_SECRET: '/app-auth-session-secret' }, { [ARN_KEY]: ARN }];
+		let gets = 0;
+		mock.method(S3Client.prototype, 'send', async () => {
+			const body = configs[Math.min(gets, configs.length - 1)];
+			gets += 1;
+			return { Body: { transformToString: async () => JSON.stringify(body) } };
+		});
+		const sent = stubStores({
+			ssm: () => {
+				const err = new Error('User is not authorized to perform: ssm:GetParameter');
+				err.name = 'AccessDeniedException';
+				throw err;
+			},
+			sm: () => ({ SecretString: 'k'.repeat(64) }),
+		});
+		try {
+			await loadConfigToProcessEnv();
+			const auth = new Auth(new Scope('app'), 'auth');
+			await auth.signOut(contextWithSessionCookie());
+			assert.strictEqual(gets, 2, 'cold start + one reload');
+			assert.strictEqual(sent.ssm.length, 1);
+			assert.deepStrictEqual(
+				sent.sm.map((c) => c.input.SecretId),
+				[ARN],
+			);
+		} finally {
+			for (const k of ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY', 'BLOCKS_SSM_PARAM_SESSION_SECRET'])
+				delete process.env[k];
+			_resetConfigCache();
+		}
 	});
 });

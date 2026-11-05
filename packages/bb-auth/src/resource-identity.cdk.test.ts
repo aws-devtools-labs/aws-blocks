@@ -210,20 +210,19 @@ describe("Auth: production preset with secretsStore 'secrets-manager'", () => {
 		assert.deepStrictEqual(SM.identity.configKeys, expected.configKeys);
 	});
 
-	test('the compute gets the secret ARN in its environment, and the app role only GetSecretValue on it', () => {
+	test('the secret ARN reaches the runtime through config only (no compute env var), and the app role gets only GetSecretValue', () => {
 		const [secretId] =
 			Object.entries(SM.template.Resources).find(([, r]) => r.Type === 'AWS::SecretsManager::Secret') ?? [];
-		const handler = Object.values(SM.template.Resources).find(
-			(r) =>
-				r.Type === 'AWS::Lambda::Function' &&
-				'BLOCKS_CONFIG_BUCKET' in
-					((r.Properties?.Environment as { Variables?: Record<string, unknown> } | undefined)?.Variables ??
-						{}),
-		);
-		assert.ok(handler, 'no compute loads the config');
-		const vars = (handler.Properties as { Environment: { Variables: Record<string, unknown> } }).Environment
-			.Variables;
-		assert.deepStrictEqual(vars.BLOCKS_SECRET_ARN_TESTSTACK_AUTH_SESSION_SECRET, { Ref: secretId });
+		assert.deepStrictEqual(SM.config.BLOCKS_SECRET_ARN_TESTSTACK_AUTH_SESSION_SECRET, { Ref: secretId });
+		for (const r of Object.values(SM.template.Resources)) {
+			if (r.Type !== 'AWS::Lambda::Function') continue;
+			const vars =
+				(r.Properties?.Environment as { Variables?: Record<string, unknown> } | undefined)?.Variables ?? {};
+			assert.deepStrictEqual(
+				Object.keys(vars).filter((k) => k.startsWith('BLOCKS_SECRET_ARN_')),
+				[],
+			);
+		}
 
 		const statements = Object.values(SM.template.Resources)
 			.filter((r) => r.Type === 'AWS::IAM::Policy')
