@@ -4,7 +4,7 @@
 import { describe, test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { AuthOIDCClient, resolveApiBaseOrigin, handle401 } from './index.browser.js';
-import { ApiError } from '@aws-blocks/core/client';
+import { ApiError, ApiNamespaceClient } from '@aws-blocks/core/client';
 
 /**
  * Browser-client tests for `AuthOIDCClient.signIn()` redirect-target
@@ -682,5 +682,53 @@ describe('handle401 — documented 401-redirect pattern', () => {
 		const handled = handle401(bare, 'google');
 		assert.strictEqual(handled, false);
 		assert.strictEqual(navigatedTo, '');
+	});
+});
+
+/**
+ * Importing `index.browser.js` registers the OIDC response middleware, which runs on
+ * every RPC response. It must return the server's data unchanged apart from the
+ * `oidc/client` descriptors it rewrites. A JSON key named `__proto__` is an own data
+ * property after `JSON.parse`; copying it with `result[k] = v` would set the copy's
+ * prototype instead, dropping the key and making its contents look inherited.
+ */
+describe('OIDC client middleware — own keys are preserved', () => {
+	let originalFetch: typeof globalThis.fetch;
+	let responseBody = '';
+	const api = ApiNamespaceClient<{ get: () => Promise<unknown> }>('api', { url: 'http://localhost:3001/aws-blocks/api' });
+	const call = (resultJson: string) => {
+		responseBody = `{"jsonrpc":"2.0","id":1,"result":${resultJson}}`;
+		return api.get();
+	};
+
+	beforeEach(() => {
+		originalFetch = globalThis.fetch;
+		globalThis.fetch = async () => new Response(responseBody);
+	});
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+	});
+
+	test('keeps an own "__proto__" key as data and leaves the prototype alone', async () => {
+		const out = (await call('{"tags":{"__proto__":{"pinned":true},"bob":1}}')) as { tags: Record<string, unknown> };
+		assert.deepStrictEqual(Object.keys(out.tags), ['__proto__', 'bob']);
+		assert.strictEqual(Object.getPrototypeOf(out.tags), Object.prototype);
+		assert.deepStrictEqual(Object.getOwnPropertyDescriptor(out.tags, '__proto__')?.value, { pinned: true });
+		assert.strictEqual('pinned' in out.tags, false);
+		assert.strictEqual(out.tags.bob, 1);
+	});
+
+	test('still hydrates oidc/client descriptors nested in objects and arrays', async () => {
+		const descriptor = '{"__blocks":"oidc/client","providers":["google"]}';
+		const out = (await call(`{"auth":${descriptor},"list":[${descriptor},1]}`)) as {
+			auth: { providers: readonly string[]; signIn: unknown };
+			list: [{ signIn: unknown }, number];
+		};
+		assert.deepStrictEqual(out.auth.providers, ['google']);
+		assert.strictEqual(typeof out.auth.signIn, 'function');
+		assert.ok(Array.isArray(out.list));
+		assert.strictEqual(typeof out.list[0].signIn, 'function');
+		assert.strictEqual(out.list[1], 1);
 	});
 });
