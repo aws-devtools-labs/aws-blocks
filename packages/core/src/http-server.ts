@@ -96,6 +96,15 @@ const STAGE_PATTERN = /^[A-Za-z0-9_-]+$/;
  */
 const STAMPED_HOST_PATTERN = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
 
+/**
+ * A request's own `Host` header: a host as {@link STAMPED_HOST_PATTERN} allows,
+ * or a bracketed IPv6 address (`[::1]:8080`), with an optional port.
+ */
+const REQUEST_HOST_PATTERN = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
+/** Largest delay `setTimeout` honors; a longer one fires immediately. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 interface RequestEnv {
   dispatch: Dispatcher;
   maxBodyBytes: number;
@@ -114,16 +123,31 @@ interface RequestEnv {
  */
 export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}): Promise<HttpServerHandle> {
   const host = options.host ?? '127.0.0.1';
-  const port = options.port ?? portFromEnv();
-  const healthPort = options.healthPort ?? DEFAULT_HEALTH_PORT;
+  const port = options.port === undefined ? portFromEnv() : validPortOption('port', options.port);
+  const healthPort =
+    options.healthPort === undefined ? DEFAULT_HEALTH_PORT : validPortOption('healthPort', options.healthPort);
+  if (port !== 0 && port === healthPort) {
+    throw new Error(`[Blocks] The request port and healthPort must differ, both are ${port}`);
+  }
   const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+  if (!Number.isFinite(drainTimeoutMs) || drainTimeoutMs < 0 || drainTimeoutMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `[Blocks] drainTimeoutMs must be a number from 0 to ${MAX_TIMER_DELAY_MS}, got ${String(drainTimeoutMs)}`,
+    );
+  }
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_RPC_BODY_BYTES;
+  // A non-integer limit (NaN in particular) would fail every size comparison and
+  // so disable the limit altogether.
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
+    throw new Error(`[Blocks] maxBodyBytes must be a non-negative integer, got ${String(maxBodyBytes)}`);
+  }
   const publicOrigin = options.publicOrigin ?? process.env.BLOCKS_PUBLIC_ORIGIN;
   if (publicOrigin && !URL.canParse(publicOrigin)) {
     throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
   }
   const env: RequestEnv = {
     dispatch: createDispatcher(backend),
-    maxBodyBytes: options.maxBodyBytes ?? MAX_RPC_BODY_BYTES,
+    maxBodyBytes,
     publicOrigin,
     trustForwardedHeaders: options.trustForwardedHeaders ?? false,
   };
@@ -152,10 +176,14 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
       if ((error as NodeJS.ErrnoException | undefined)?.code === 'ECONNRESET') return;
       console.error('HTTP server error:', error);
       if (res.destroyed) return;
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
+      if (res.headersSent) {
+        // Part of a response is already on the wire and its framing can't be
+        // completed correctly: drop the connection so a keep-alive client never
+        // reads the next response out of a misframed one.
+        res.destroy();
+        return;
       }
-      res.end(JSON.stringify({ error: 'Internal Server Error' }));
+      writeInternalServerError(res);
     });
     // The response is done once it is handed to the OS (or the client is gone).
     const responded = new Promise<void>((resolve) => res.once('close', resolve));
@@ -246,6 +274,14 @@ function portFromEnv(): number {
     throw new Error(`[Blocks] PORT must be an integer from 1 to 65535, got "${raw}"`);
   }
   return port;
+}
+
+/** A port option: an integer from 0 (any free port) to 65535. An invalid value fails fast. */
+function validPortOption(name: 'port' | 'healthPort', value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 65_535) {
+    throw new Error(`[Blocks] ${name} must be an integer from 0 to 65535, got ${String(value)}`);
+  }
+  return value;
 }
 
 function listen(server: http.Server, port: number, host: string): Promise<void> {
@@ -358,6 +394,15 @@ function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
 }
 
 function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse, 'kind'>): void {
+  // A handler can set any number as `ctx.response.status`. Node refuses an
+  // out-of-range one only while ending the response, after the handler's headers
+  // and the body's Content-Length are already recorded: check it up front and
+  // answer a plain 500 without any of the handler's headers or cookies.
+  if (!isValidStatus(response.status)) {
+    console.error('HTTP server error: invalid response status', response.status);
+    writeInternalServerError(res);
+    return;
+  }
   res.statusCode = response.status;
   for (const [name, value] of Object.entries(response.headers)) {
     res.setHeader(name, value);
@@ -366,6 +411,23 @@ function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse
     res.setHeader('Set-Cookie', response.cookies);
   }
   res.end(response.body);
+}
+
+/** Whether `status` is a status code Node can send (an integer from 100 to 599). */
+function isValidStatus(status: number): boolean {
+  return Number.isInteger(status) && status >= 100 && status <= 599;
+}
+
+/**
+ * Answer a plain 500. Every header set so far is removed first, so the error
+ * response carries no stale Content-Length (which would misframe the next
+ * response on a keep-alive connection) and none of the handler's cookies.
+ */
+function writeInternalServerError(res: http.ServerResponse): void {
+  for (const name of res.getHeaderNames()) res.removeHeader(name);
+  const body = JSON.stringify({ error: 'Internal Server Error' });
+  res.writeHead(500, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  res.end(body);
 }
 
 /**
@@ -434,7 +496,7 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
   } else if (publicOrigin) {
     url = new URL(publicOrigin);
   } else {
-    url = new URL(`http://${header(req, 'host') || 'localhost'}`);
+    url = new URL(`http://${requestHost(req)}`);
   }
   // Assign the path rather than resolving the target against the origin.
   url.pathname = `${stage}${pathname}`;
@@ -442,6 +504,18 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
   // API Gateway's parsed parameters), so `href` matches across transports.
   url.search = new URLSearchParams(search).toString();
   return url;
+}
+
+/**
+ * The request's own `Host`, or `localhost` when it is missing or isn't a plain
+ * host[:port] (see {@link REQUEST_HOST_PATTERN}). Falling back rather than
+ * answering 400 keeps a request that never reads its URL working, and keeps
+ * userinfo, a path or a second host out of `ctx.request.url`.
+ */
+function requestHost(req: http.IncomingMessage): string {
+  const host = header(req, 'host');
+  if (host && REQUEST_HOST_PATTERN.test(host) && URL.canParse(`http://${host}`)) return host;
+  return 'localhost';
 }
 
 /**
