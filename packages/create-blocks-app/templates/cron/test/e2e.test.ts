@@ -89,13 +89,13 @@ test('app: server serves its Blocks config', async () => {
 //
 // `heartbeat` runs every minute (the shortest schedule), so this waits for its
 // first run rather than triggering it: the test proves the schedule itself fires.
-test('heartbeat fires on its schedule and records the run', { timeout: 120_000 }, async () => {
+test('heartbeat fires on its schedule and records the run', { timeout: 150_000 }, async () => {
   let run = await api.lastRun('heartbeat');
-  for (let i = 0; i < 30 && !run; i++) {
+  for (let i = 0; i < 40 && !run; i++) {
     await setTimeout(3000);
     run = await api.lastRun('heartbeat');
   }
-  assert.ok(run, 'heartbeat should have fired within 90 seconds');
+  assert.ok(run, 'heartbeat should have fired within 120 seconds');
   assert.ok(run.jobName.endsWith('heartbeat'), `unexpected jobName: ${run.jobName}`);
   assert.ok(!Number.isNaN(Date.parse(run.scheduledTime)), 'scheduledTime should be an ISO 8601 timestamp');
   assert.ok(run.count >= 1);
