@@ -519,6 +519,18 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 		assert.deepStrictEqual(h.native.calls, []);
 	});
 
+	test("auth.admin: store: 'builtin' names the store; a 'cognito' block without `admin` names `admin: {}`", () => {
+		const builtin = makeAuth({
+			store: 'builtin',
+			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
+		});
+		assert.throws(() => builtin.auth.admin, { message: "admin not available: auth.admin needs store: 'cognito'" });
+		assert.throws(() => makeAuth().auth.admin, {
+			message: /admin not enabled: construct Auth with \{ admin: \{\} \}/,
+		});
+		assert.deepStrictEqual(builtin.native.calls, []);
+	});
+
 	test('no federated provider → 409 NoFederatedProvider; unknown provider → 400 ProviderNotConfigured', async () => {
 		const none = makeAuth();
 		const wide: { getSignInUrl(ctx: unknown, p: string): Promise<string> } = {

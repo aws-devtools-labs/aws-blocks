@@ -171,7 +171,6 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		const preSignUpTrigger = ownsPreSignUpTrigger(opts);
 
 		validateOptions(opts, {
-			needsPool,
 			mfaMode: mfa.mode,
 			mfaTypes: mfa.types,
 			emailPassword,
@@ -179,15 +178,9 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		});
 		// The SES sender (L75): only for a pool this block creates, and well-formed.
 		assertEmailSender(this.fullId, opts, needsPool);
-		// Extra bearer clients: literal Cognito client ids, and only with a pool to issue them.
+		// Extra bearer clients: literal Cognito client ids. (A pool-less `store: 'builtin'` block cannot set
+		// them: assertKnownAuthOptions refuses `allowBearerAuth` as an object there.)
 		assertBearerClientIds(this.fullId, opts);
-		if (!needsPool && bearerClientIds(opts).length > 0) {
-			throw new Error(
-				`Auth '${this.fullId}': \`allowBearerAuth.clientIds\` names Cognito app clients, but this configuration ` +
-					"has no user pool (`store: 'builtin'`). " +
-					'Remove `clientIds`, or enable a pool-backed sign-in method.',
-			);
-		}
 
 		// Cognito caps UserPool names at 128 chars. Fail loudly at synth rather
 		// than truncating (two long fullIds differing past 128 would collide).
@@ -661,7 +654,7 @@ function resolveRemovalPolicy(
  */
 function validateOptions(
 	opts: ResolvedAuthOptions,
-	ctx: { needsPool: boolean; mfaMode: string; mfaTypes: readonly string[]; emailPassword: boolean; sandbox: boolean },
+	ctx: { mfaMode: string; mfaTypes: readonly string[]; emailPassword: boolean; sandbox: boolean },
 ): void {
 	// The stub IdP is a local and sandbox development aid: its account picker
 	// signs anyone in. Fail the synth of any other deployment instead of
@@ -732,11 +725,5 @@ function validateOptions(
 					: 'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
 			);
 		}
-	}
-
-	if (opts.admin && !ctx.needsPool) {
-		throw new Error(
-			"Auth: `admin` manages Cognito pool users, but this configuration provisions no user pool (`store: 'builtin'`). Remove `admin`, or use the default store.",
-		);
 	}
 }

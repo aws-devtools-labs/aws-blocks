@@ -253,6 +253,52 @@ describe('resolveOptions — backstops for untyped callers', () => {
 		assert.throws(() => resolveOptions(users as AuthOptions), /`users\.attributes` needs `store: 'cognito'`/);
 	});
 
+	it('names every user-pool option of a store: builtin block in one message, in option order', () => {
+		const options: unknown = {
+			store: 'builtin',
+			providers: { local: stubIdp() },
+			admin: {},
+			mfa: 'required',
+			users: { groups: ['admin'], signInWith: ['email'] },
+		};
+		assert.throws(() => resolveOptions(options as AuthOptions, 'sso'), {
+			message:
+				"Auth 'sso': `mfa`, `admin`, `users.signInWith` need `store: 'cognito'` (the default): " +
+				"a `store: 'builtin'` block has no user pool. Remove it, or drop `store: 'builtin'`.",
+		});
+	});
+
+	it('keeps only users.groups on store: builtin', () => {
+		const resolved = resolveOptions({
+			store: 'builtin',
+			providers: { local: stubIdp() },
+			users: { groups: ['a'] },
+		});
+		assert.deepEqual(resolved.users, { groups: ['a'] });
+		assert.equal('users' in resolveOptions({ store: 'builtin', providers: { local: stubIdp() } }), false);
+	});
+
+	it('a store: builtin block with providers omitted, or only undefined entries, has no provider', () => {
+		for (const providers of [undefined, { local: undefined }]) {
+			const options: unknown = { store: 'builtin', providers };
+			assert.throws(
+				() => resolveOptions(options as AuthOptions),
+				/`store: 'builtin'` needs at least one provider/,
+				JSON.stringify(providers),
+			);
+		}
+		const mixed: unknown = { store: 'builtin', providers: { gone: undefined, local: stubIdp() } };
+		assert.deepEqual(Object.keys(resolveOptions(mixed as AuthOptions).oidcProviders ?? {}), ['local']);
+	});
+
+	it('an entry with no type on store: builtin is not a provider type', () => {
+		const options: unknown = { store: 'builtin', providers: { okta: { issuer, clientId: 'c' } } };
+		assert.throws(
+			() => resolveOptions(options as AuthOptions),
+			/providers\.okta has no `type`, which is not a provider type/,
+		);
+	});
+
 	it('accepts emailPassword: false on store: builtin (what the block is anyway)', () => {
 		const resolved = resolveOptions({ store: 'builtin', providers: { local: stubIdp() }, emailPassword: false });
 		assert.equal(resolved.emailPassword, false);

@@ -1028,7 +1028,51 @@ function validateUserOnEitherStore() {
 	new Auth(scope, 'validate-shared-blocks', { store: 'builtin', providers: { okta }, validateUser: corporateOnly });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// (27) Per-store provider narrowing: a `'builtin'` user never signed in with a
+//      password; an empty `providers` gates the federation methods; the mock-
+//      only options are refused on `'builtin'`. Provider-entry keys of the other
+//      store, a social key that is not its type and an empty `'builtin'`
+//      `providers` compile (`const O` does no excess-property check, and a
+//      record's keys are free): the construction-time check rejects them
+//      (`option-validation.test.ts`, `resolve-options.test.ts`).
+// ─────────────────────────────────────────────────────────────────────────────
+async function perStoreProviders() {
+	const builtin = new Auth(scope, 'ps-builtin', { store: 'builtin', providers: { okta, local: stubIdp() } });
+	const builtinUser = await builtin.requireAuth(context);
+	type _builtinProvider = Expect<Equal<typeof builtinUser.signInProvider, 'okta' | 'local'>>;
+	const cognito = new Auth(scope, 'ps-cognito', {
+		providers: { google: { type: 'google', clientId: 'g', clientSecret: googleSecret } },
+	});
+	const cognitoUser = await cognito.requireAuth(context);
+	type _cognitoProvider = Expect<Equal<typeof cognitoUser.signInProvider, 'password' | 'google'>>;
+
+	const empty = new Auth(scope, 'ps-empty', { providers: {} });
+	type _emptyIds = Expect<Equal<ProviderIdOf<OptionsOf<typeof empty>>, never>>;
+	// @ts-expect-error — ERROR_no_federated_provider_is_configured: `providers: {}` configures none.
+	await empty.getSignInUrl(context, 'google');
+
+	new Auth(scope, 'ps-bearer-off', { store: 'builtin', providers: { okta }, allowBearerAuth: false });
+	new Auth(scope, 'ps-users-empty', { store: 'builtin', providers: { okta }, users: {} });
+	// @ts-expect-error — ERROR_needs_store_cognito<'codeDelivery'> (mock-only, for pool users)
+	new Auth(scope, 'ps-code', { store: 'builtin', providers: { okta }, codeDelivery: async () => {} });
+	// @ts-expect-error — ERROR_needs_store_cognito<'totpVerification'> (mock-only, for pool users)
+	new Auth(scope, 'ps-totp', { store: 'builtin', providers: { okta }, totpVerification: 'real' });
+
+	// Compile; rejected at construction.
+	new Auth(scope, 'ps-gmail', {
+		providers: { gmail: { type: 'google', clientId: 'g', clientSecret: googleSecret } },
+	});
+	new Auth(scope, 'ps-groups-claim', { providers: { okta: { ...oktaViaCognito, groupsClaim: 'groups' } } });
+	new Auth(scope, 'ps-attr-method', {
+		store: 'builtin',
+		providers: { okta: { ...okta, attributesRequestMethod: 'GET' } },
+	});
+	new Auth(scope, 'ps-builtin-empty', { store: 'builtin', providers: {} });
+}
+
 void [
+	perStoreProviders,
 	wrongStoreOptions,
 	blocksSurface,
 	validateUserOnEitherStore,

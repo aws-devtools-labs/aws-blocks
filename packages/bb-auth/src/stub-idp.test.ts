@@ -24,7 +24,7 @@ import { AuthErrors } from './errors.js';
 import { Auth, stubIdp } from './index.mock.js';
 import { readMockSessionSecret } from './sessions.js';
 import { location, type RouteServer, startRouteServer, TestBrowser } from './test-support/route-server.js';
-import type { StubUser } from './types.js';
+import type { StubUser, UserCandidate } from './types.js';
 
 const ALICE: StubUser = { sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } };
 const BOB: StubUser = { sub: 'u-2', email: 'bob@example.com', name: 'Bob' };
@@ -161,6 +161,37 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 			assert.ok(e instanceof ApiError && isBlocksError(e, AuthErrors.NotAuthenticated));
 			return true;
 		});
+	});
+
+	test('validateUser sees only phase signIn, and a rejection issues no session', async () => {
+		const seen: UserCandidate[] = [];
+		const auth = new Auth(unique(), 'auth', {
+			store: 'builtin',
+			providers: { corp: stubIdp({ users: [ALICE, BOB] }) },
+			validateUser: async (candidate) => {
+				seen.push(candidate);
+				if (candidate.email !== ALICE.email) {
+					throw new ApiError('Corporate accounts only', 403, { name: AuthErrors.NotAuthorized });
+				}
+			},
+		});
+		const alice = new TestBrowser();
+		assert.strictEqual((await signInThroughPicker(alice, 'u-1')).status, 302);
+		assert.strictEqual((await auth.requireAuth(alice.context(server.origin))).username, 'Alice');
+
+		const bob = new TestBrowser();
+		const refused = await signInThroughPicker(bob, 'u-2');
+		assert.notStrictEqual(refused.headers.get('location'), '/', 'not landed');
+		assert.ok(!bob.jar.has(`auth_${auth.fullId}`), 'no session cookie');
+		await assert.rejects(auth.requireAuth(bob.context(server.origin)), { status: 401 });
+
+		assert.deepStrictEqual(
+			seen.map((c) => [c.phase, c.provider, c.email]),
+			[
+				['signIn', 'corp', ALICE.email],
+				['signIn', 'corp', BOB.email],
+			],
+		);
 	});
 
 	test('a user outside the role is refused by requireRole (403)', async () => {

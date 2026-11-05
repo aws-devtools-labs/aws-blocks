@@ -255,6 +255,47 @@ describe('bb-auth migrate — never a silent empty import', () => {
 	});
 });
 
+describe('bb-auth migrate — the store an AuthOIDC block gets', () => {
+	const project = { blocks: new Set<'oidc'>(['oidc']), instanceExports: new Map() };
+	const google =
+		"cognitoFederated({ name: 'google', identityProvider: 'Google', cognitoDomain: 'd', region: 'us-east-1', clientId: 'g', clientSecret: s })";
+	const options = (providers: string) =>
+		transformFile(
+			ts,
+			'/app/x.ts',
+			`import { AuthOIDC, cognitoFederated, customOidc } from '@aws-blocks/bb-auth-oidc';\nexport const auth = new AuthOIDC(scope, 'auth', { ${providers} });\n`,
+			project,
+		).output;
+
+	test("only cognitoFederated() providers: the default store, emailPassword: false, a type: 'google' entry", () => {
+		assert.match(
+			options(`providers: [${google}]`),
+			/\{ emailPassword: false, providers: \{ google: \{ type: 'google', clientId: 'g', clientSecret: s \} \} \}/,
+		);
+	});
+
+	test("a direct provider: store: 'builtin', a type: 'oidc' entry", () => {
+		const out = options("providers: [customOidc({ name: 'okta', issuerUrl: 'https://o', clientId: 'c' })]");
+		assert.match(
+			out,
+			/\{ store: 'builtin', providers: \{ okta: \{ type: 'oidc', issuer: 'https:\/\/o', clientId: 'c' \} \} \}/,
+		);
+		assert.doesNotMatch(out, /emailPassword/);
+	});
+
+	test("a providers value that is not an array literal: store: 'builtin', kept as is, with a TODO", () => {
+		const out = options('providers: list');
+		assert.match(out, /\{ store: 'builtin', providers: list \}/);
+		assert.match(out, /`providers` is not an array literal, so the codemod could not key it/);
+	});
+
+	test("no providers (or an empty list): store: 'builtin' with none, which Auth then refuses", () => {
+		for (const providers of ['', 'providers: []']) {
+			assert.match(options(providers), /new Auth\(scope, 'auth', \{ store: 'builtin' \}\)/, providers);
+		}
+	});
+});
+
 describe('bb-auth migrate — dry run and file handling', () => {
 	test('--dry-run prints a unified diff and writes nothing', async () => {
 		await withCase('cognito-options', async (dir) => {

@@ -72,6 +72,7 @@ describe('unknown options — top level', () => {
 
 	test('a key with no close match is reported without a suggestion', () => {
 		assert.deepStrictEqual(only({ zzzzzzzz: 1 }), ['zzzzzzzz', undefined]);
+		assert.throws(() => assertKnownAuthOptions('auth', { zzzzzzzz: 1 }), /unknown option:\n {2}- `zzzzzzzz`\n/);
 	});
 
 	test('a removed provider map is unknown, and the hint names what replaced it', () => {
@@ -763,6 +764,31 @@ describe('boolean options are type-checked, not only key-checked', () => {
 		assert.deepStrictEqual(invalid({ emailPassword: [] }), [['emailPassword', `${expected} an array`]]);
 		assert.deepStrictEqual(invalid({ passkeys: 'false' }), [['passkeys', `${expected} the string "false"`]]);
 		assert.deepStrictEqual(invalid({ passkeys: null }), [['passkeys', `${expected} \`null\``]]);
+		// What an untyped caller can pass that JSON cannot.
+		assert.deepStrictEqual(invalid({ allowBearerAuth: () => true }), [
+			['allowBearerAuth', `${expected} a function`],
+		]);
+		assert.deepStrictEqual(invalid({ allowBearerAuth: Symbol('on') }), [
+			['allowBearerAuth', `${expected} a symbol`],
+		]);
+		assert.deepStrictEqual(invalid({ deletionProtection: 1n }), [
+			['deletionProtection', 'must be `true` or `false`, got the number 1'],
+		]);
+		assert.deepStrictEqual(invalid({ deletionProtection: 'x'.repeat(50) }), [
+			['deletionProtection', `must be \`true\` or \`false\`, got the string "${'x'.repeat(40)}…"`],
+		]);
+	});
+
+	test("on store: 'builtin', allowBearerAuth takes a boolean; any other non-object is invalid, not a conflict", () => {
+		const providers = { local: stubIdp() };
+		for (const ok of [true, false, undefined]) {
+			assert.deepStrictEqual(invalid({ store: 'builtin', providers, allowBearerAuth: ok }), [], String(ok));
+			assert.deepStrictEqual(findStoreConflicts({ store: 'builtin', providers, allowBearerAuth: ok }), []);
+		}
+		assert.deepStrictEqual(invalid({ store: 'builtin', providers, allowBearerAuth: 'true' }), [
+			['allowBearerAuth', 'must be `true`, `false` or an options object, got the string "true"'],
+		]);
+		assert.deepStrictEqual(findStoreConflicts({ store: 'builtin', providers, allowBearerAuth: 'true' }), []);
 	});
 
 	test('options that are not booleans are not type-checked', () => {
