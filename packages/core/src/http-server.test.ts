@@ -815,6 +815,13 @@ describe('serveHttp — request IDs in error logs', { timeout: 30_000 }, () => {
     });
   }
 
+  it('tags the unmatched-route log line with the load balancer trace ID', async () => {
+    const calls = await logged('GET', '/no-such-route', { 'x-amzn-trace-id': TRACE_ID });
+    const line = calls.find((args) => String(args[0]).startsWith('No RawRoute matched GET /no-such-route'));
+    assert.ok(line, 'a "No RawRoute matched" line was logged');
+    assert.ok(String(line[0]).endsWith(` [request ${TRACE_ID}]`));
+  });
+
   for (const [name, traceId] of [
     ['a space', 'Root=1-abc Self=1-def'],
     ['a tab', 'Root=1-abc\tSelf=1-def'],

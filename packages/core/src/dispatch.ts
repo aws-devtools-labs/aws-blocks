@@ -181,8 +181,9 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // door's access logs, so this adds no new category of data.
         const copies = getLoadedCoreCopies();
         const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
+        const requestNote = request.requestId === undefined ? '' : ` [request ${request.requestId}]`;
         console.error(
-          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
+          `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}${requestNote}`,
         );
         return {
           kind: 'not-found',
