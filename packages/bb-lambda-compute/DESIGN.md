@@ -89,13 +89,65 @@ Public surface (CDK layer):
 | Member | Type | Description |
 |--------|------|-------------|
 | `fn` | `NodejsFunction` | The function backing this compute. |
-| `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from `defaults.logRetention`). |
+| `logGroup` | `LogGroup` | The function's CloudWatch log group (retention from the `logRetention` option, else `defaults.logRetention`). |
 | `apiHandler()` | `IFunction` | The function the stack's shared REST API gateway integrates (the `Compute` contract; returns `fn`). |
 | `setEnv(key, value)` | `void` | Inject a runtime env var onto the function — the `Compute` contract the framework calls instead of `handler.addEnvironment` directly. |
+| `LambdaCompute.isLambdaCompute(x)` | `x is LambdaCompute` | Type guard keyed on a `Symbol.for` brand, so it holds across duplicate copies of this package (where `instanceof` fails). Event blocks use it to narrow a resolved compute to Lambda. |
 
-`fn` and `apiHandler` exist only on the CDK layer (they are `aws-cdk-lib`
+`fn`, `logGroup`, `apiHandler`, and `isLambdaCompute` exist only on the CDK layer (they are `aws-cdk-lib`
 constructs/contracts); `setEnv` is part of the `Compute` contract present in every
 layer (a no-op in the non-CDK layers — see below).
+
+## Options
+
+`LambdaComputeProps` (all optional):
+
+| Option | Default | Notes |
+|--------|---------|-------|
+| `memory` | `2048` MB | One shared handler serves both the synchronous API path and async workers, so the default is sized for the heavier async path. A request/response-only compute can lower it to cut cost. |
+| `maxTimeoutSeconds` | `900` | The Lambda function timeout. It bounds async invocations (SQS / `AsyncJob`); it does **not** extend the synchronous API path, which API Gateway caps at 29s. |
+| `logRetention` | `defaults.logRetention` | Retention of this compute's handler log group only; the shared gateway's access logs follow the stack-wide default. |
+| `architecture` | `ARM_64` | Graviton, ~20% cheaper per GB-second at equal performance. Only settable on a directly constructed `LambdaCompute`; the `Compute` block does not expose it. |
+
+The `Compute` block (`@aws-blocks/bb-compute`) maps `{ type: 'serverless' }` to
+a `LambdaCompute` it owns, forwarding `memory`, `maxTimeoutSeconds`, and
+`logRetention`. The default compute is built without options.
+
+## Stack-derived configuration
+
+Besides identity (below), two settings come from the owning stack rather than
+from options:
+
+- **VPC placement.** The compute reads the shared VPC context with
+  `getVpcContext(this)` **once, in its constructor**. When context exists, the
+  function is placed in its `computeSubnets` with the shared
+  `computeSecurityGroup`, and core grants the shared execution role the ENI
+  permissions. With no context, `vpc` / `vpcSubnets` / `securityGroups` are left
+  unset and the function runs in the AWS-managed network.
+
+  Only `defaults.vpc` is initialized before the default compute is built
+  (`BlocksStack` / `BlocksBackend` construction), so it is the one VPC every
+  `LambdaCompute` honors. A VPC Blocks derives on its own — by a container
+  compute during the backend import, or at finalize because a block
+  `requiresVpc` — arrives after the default compute exists and does not move it;
+  only a `LambdaCompute` constructed after the derivation sees it. Creating and
+  wiring the VPC (endpoints, subnet roles) is core's job; this package only
+  consumes the context.
+- **CORS origins.** A non-empty `defaults.allowedOrigins` is set on the function
+  as `CORS_ALLOWED_ORIGINS`, comma-joined to match how the runtime's
+  `getCorsPatterns()` parses it. The `production` preset allows no origins, so
+  the variable is absent there unless the app sets its own.
+
+## Observability
+
+- **Tracing.** `applyTracing()` switches the function to X-Ray Active mode. Core
+  calls it from `finalizeTracing` for every compute once any `Tracer` is
+  registered, and grants X-Ray publish once on the shared role.
+- **Dashboard.** The compute contributes rows to `bb-dashboard`: health
+  (invocations, errors, average/p99 duration, concurrent executions) and logging
+  (recent errors, log volume) always, queried against `logGroup` rather than the
+  AWS default `/aws/lambda/<fn>` name; trace widgets only once a `Tracer` is
+  attached.
 
 ## Owner-derived identity
 
@@ -161,8 +213,9 @@ framework's default compute. It slots into the broader model as follows:
   compute-specific delivery narrow on the concrete type.
 
 The broader multi-compute model also covers request routing across computes,
-per-compute event delivery, the IAM and trust model, and VPC networking — none
-of which live in this package.
+per-compute event delivery, the IAM and trust model, and VPC creation — none
+of which live in this package (it only consumes the VPC context; see
+[Stack-derived configuration](#stack-derived-configuration)).
 
 ## How the default compute is injected
 
