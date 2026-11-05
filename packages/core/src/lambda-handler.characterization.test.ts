@@ -304,6 +304,27 @@ const CASES: Record<string, Case> = {
       rawQueryString: 'z=9',
     },
   },
+  // The origin check runs before the preflight: a disallowed origin's preflight
+  // gets the CORS rejection, not a 200.
+  'preflight from a disallowed origin': {
+    cors: 'https://app\\.example\\.com',
+    event: getEvent('/aws-blocks/api', { httpMethod: 'OPTIONS', headers: { Host: API_HOST, Origin: 'https://other.example' } }),
+  },
+  'rpc url on a custom domain': {
+    event: rpcEvent({ headers: { 'Content-Type': 'application/json', Host: 'api.example.com' } }),
+  },
+  // Payload v2 can carry cookies in `event.cookies` instead of a `cookie` header.
+  'payload v2 rpc with cookies only in event.cookies': {
+    event: {
+      version: '2.0',
+      headers: { 'content-type': 'application/json', host: API_HOST },
+      cookies: ['sid=abc', 'theme=dark'],
+      requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+      body: rpcBody('api.echo', ['hi']),
+      isBase64Encoded: false,
+    },
+  },
+  'rpc with null headers': { event: rpcEvent({ headers: null }) },
 };
 
 async function run(c: Case): Promise<unknown> {
@@ -924,6 +945,54 @@ const EXPECTED: Record<string, unknown> = {
       "Set-Cookie": []
     },
     "body": "plain text"
+  },
+  "preflight from a disallowed origin": {
+    "statusCode": 403,
+    "headers": {
+      "Content-Type": "application/json",
+      "Vary": "Origin"
+    },
+    "body": "{\"error\":\"Forbidden: cross-origin request rejected\"}"
+  },
+  "rpc url on a custom domain": {
+    "statusCode": 200,
+    "headers": {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "multiValueHeaders": {
+      "Set-Cookie": []
+    },
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://api.example.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "payload v2 rpc with cookies only in event.cookies": {
+    "statusCode": 200,
+    "headers": {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "rpc with null headers": {
+    "statusCode": 200,
+    "headers": {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "multiValueHeaders": {
+      "Set-Cookie": []
+    },
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://localhost/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   }
 };
 
