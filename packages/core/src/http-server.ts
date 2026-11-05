@@ -6,6 +6,7 @@
 // handling the Lambda handler serves, without the Lambda-only parts (API Gateway
 // event parsing, base64 bodies, the 28 s timeout guard).
 
+import { randomUUID } from 'node:crypto';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
@@ -104,6 +105,13 @@ const STAMPED_HOST_PATTERN = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
  */
 const REQUEST_HOST_PATTERN = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
 
+/**
+ * A load balancer trace ID usable as the request ID in log lines: one bounded
+ * run of printable, non-space ASCII, so a header value never adds whitespace or
+ * a line break to a log line.
+ */
+const TRACE_ID_PATTERN = /^[\x21-\x7e]{1,256}$/;
+
 /** Largest delay `setTimeout` honors; a longer one fires immediately. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
@@ -173,10 +181,13 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     // is closed by the drain sweep (once idle) or by the final
     // closeAllConnections() in drainAndClose.
     if (draining) res.shouldKeepAlive = false;
-    const handled = handleRequest(req, res, env).catch((error: unknown) => {
+    // Concurrent requests share one log stream; every error line for this request
+    // carries this ID.
+    const requestId = requestIdOf(req);
+    const handled = handleRequest(req, res, env, requestId).catch((error: unknown) => {
       // The client went away mid-request (e.g. an aborted upload): nothing to answer.
       if ((error as NodeJS.ErrnoException | undefined)?.code === 'ECONNRESET') return;
-      console.error('HTTP server error:', error);
+      console.error('HTTP server error:', `[request ${requestId}]`, error);
       if (res.destroyed) return;
       if (res.headersSent) {
         // Defensive: every response is written with a single res.end, so headers
@@ -299,7 +310,23 @@ function listen(server: http.Server, port: number, host: string): Promise<void> 
   });
 }
 
-async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse, env: RequestEnv): Promise<void> {
+/**
+ * The ID that ties a request's log lines together: the load balancer's
+ * `X-Amzn-Trace-Id` when it is one well-formed value (see {@link TRACE_ID_PATTERN}),
+ * so the lines also match the ALB access logs, else a random UUID.
+ */
+function requestIdOf(req: http.IncomingMessage): string {
+  const trace = req.headersDistinct['x-amzn-trace-id'];
+  if (trace?.length === 1 && TRACE_ID_PATTERN.test(trace[0])) return trace[0];
+  return randomUUID();
+}
+
+async function handleRequest(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  env: RequestEnv,
+  requestId: string,
+): Promise<void> {
   const origin = header(req, 'origin') ?? '';
   // Front doors forward the routing path itself (no API Gateway stage).
   const { pathname } = splitTarget(req.url ?? '/');
@@ -321,7 +348,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     await discardRemainingBody(req);
     // Still uploading after the linger window: answer, then drop the connection.
     if (!req.complete) res.setHeader('Connection', 'close');
-    writeResponse(res, payloadTooLarge(pathname, origin, bodyLimit));
+    writeResponse(res, payloadTooLarge(pathname, origin, bodyLimit), requestId);
     return;
   }
 
@@ -335,7 +362,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       headers: { 'Content-Type': 'application/json', ...buildCorsHeaders(origin) },
       cookies: [],
       body: JSON.stringify({ error: 'Bad Request' }),
-    });
+    }, requestId);
     return;
   }
 
@@ -349,8 +376,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     url: () => buildRequestUrl(req, env.publicOrigin, env.trustForwardedHeaders),
     body: () => ({ text: body.toString('utf-8'), stream: body.length > 0 ? bytesStream(body) : null }),
     signal: abort.signal,
+    requestId,
   });
-  writeResponse(res, response);
+  writeResponse(res, response, requestId);
 }
 
 /**
@@ -398,7 +426,7 @@ function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
   });
 }
 
-function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse, 'kind'>): void {
+function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse, 'kind'>, requestId: string): void {
   // A handler can set any number as `ctx.response.status`. Only a final status
   // is sent: Node refuses an out-of-range one only while ending the response,
   // after the handler's headers and Content-Length are recorded, and sends a 1xx
@@ -406,7 +434,7 @@ function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse
   // next response as the answer. Check it up front and answer an out-of-range or
   // interim status with a plain 500, without the handler's headers or cookies.
   if (!isValidStatus(response.status)) {
-    console.error('HTTP server error: invalid response status', response.status);
+    console.error('HTTP server error:', `[request ${requestId}]`, 'invalid response status', response.status);
     writeInternalServerError(res);
     return;
   }

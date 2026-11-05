@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import * as http from 'node:http';
 import * as net from 'node:net';
@@ -774,6 +774,60 @@ describe('serveHttp — request stores under concurrency', { timeout: 30_000 }, 
       await server.close();
     }
   });
+});
+
+describe('serveHttp — request IDs in error logs', { timeout: 30_000 }, () => {
+  const TRACE_ID = 'Root=1-67891233-abcdef012345678912345678';
+  const UUID_TAG = /^\[request [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\]$/;
+
+  /** Send one request with console.error stubbed; returns the logged calls' arguments. */
+  async function logged(method: string, target: string, headers: Record<string, string>, body?: string): Promise<unknown[][]> {
+    const server = await start();
+    const error = mock.method(console, 'error', () => {});
+    try {
+      await send(server.port, method, target, headers, body);
+      return error.mock.calls.map((call) => call.arguments);
+    } finally {
+      error.mock.restore();
+      await server.close();
+    }
+  }
+
+  const sources = [
+    ['an RPC method that throws', 'HTTP Server RPC Error:', 'POST', '/aws-blocks/api', json, rpc('api.fail')],
+    ['a RawRoute that throws', 'RawRoute Error:', 'GET', '/boom', {}, undefined],
+    ['an invalid response status', 'HTTP server error:', 'GET', '/bad-status?status=1000', {}, undefined],
+  ] as const;
+
+  for (const [name, label, method, target, headers, body] of sources) {
+    it(`tags the log line for ${name} with the load balancer trace ID`, async () => {
+      const calls = await logged(method, target, { ...headers, 'x-amzn-trace-id': TRACE_ID }, body);
+      const line = calls.find((args) => args[0] === label);
+      assert.ok(line, `a "${label}" line was logged`);
+      assert.strictEqual(line[1], `[request ${TRACE_ID}]`);
+    });
+
+    it(`tags the log line for ${name} with a generated ID when no trace ID is sent`, async () => {
+      const calls = await logged(method, target, { ...headers }, body);
+      const line = calls.find((args) => args[0] === label);
+      assert.ok(line, `a "${label}" line was logged`);
+      assert.match(String(line[1]), UUID_TAG);
+    });
+  }
+
+  for (const [name, traceId] of [
+    ['a space', 'Root=1-abc Self=1-def'],
+    ['a tab', 'Root=1-abc\tSelf=1-def'],
+    ['more than 256 characters', `Root=1-${'a'.repeat(256)}`],
+  ] as const) {
+    it(`generates an ID instead of using a trace ID with ${name}`, async () => {
+      const calls = await logged('GET', '/boom', { 'x-amzn-trace-id': traceId });
+      const line = calls.find((args) => args[0] === 'RawRoute Error:');
+      assert.ok(line);
+      assert.match(String(line[1]), UUID_TAG);
+      assert.ok(!calls.flat().some((arg) => String(arg).includes(traceId)), 'the trace ID is not logged');
+    });
+  }
 });
 
 describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => {

@@ -53,6 +53,13 @@ export interface DispatchRequest {
   body: () => DispatchRequestBody;
   /** Fires when the transport gives up on the request (timeout, client gone). */
   signal?: AbortSignal;
+  /**
+   * Identifier included in the dispatcher's error logs to correlate them with a
+   * request; absent means no prefix. Set by transports that serve concurrent
+   * requests into one log stream (the container server). The Lambda handler
+   * leaves it unset: Lambda log lines already carry the invocation request ID.
+   */
+  requestId?: string;
 }
 
 /** @internal */
@@ -260,7 +267,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
           body: successResponse(responseBody ?? result, rpcId),
         };
       } catch (error: any) {
-        console.error(rpcErrorLabel, error);
+        logRequestError(request, rpcErrorLabel, error);
         // Only Set-Cookie values that DELETE a cookie survive into the error
         // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
         // session cookie, but a method that signs a user in and then throws can
@@ -332,7 +339,7 @@ async function dispatchRawRoute(
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
   } catch (error: unknown) {
-    console.error('RawRoute Error:', error);
+    logRequestError(request, 'RawRoute Error:', error);
     const { status, body } = rawRouteErrorFromCatch(error);
     return {
       kind: 'raw-route',
@@ -342,6 +349,15 @@ async function dispatchRawRoute(
       body,
     };
   }
+}
+
+/**
+ * Log a handler error under `label`, with the request's {@link DispatchRequest.requestId}
+ * after the label when the transport set one, and exactly `label, error` otherwise.
+ */
+function logRequestError(request: DispatchRequest, label: string, error: unknown): void {
+  if (request.requestId === undefined) console.error(label, error);
+  else console.error(label, `[request ${request.requestId}]`, error);
 }
 
 /**
