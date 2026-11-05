@@ -32,7 +32,7 @@ export interface AdminCreateInit<O extends AuthOptions = AuthOptions> {
 
 // @public
 export type AdminDisabled = {
-    readonly __adminNotEnabled: 'construct Auth with { admin: {} }';
+    readonly __adminNotEnabled: 'construct Auth with { admin: {} }' | "auth.admin needs store: 'cognito'";
     addUserToGroup(username: string, group: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     removeUserFromGroup(username: string, group: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
     listGroupsForUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
@@ -67,7 +67,7 @@ export type AdminDisabledOnBuiltin = {
 };
 
 // @public
-export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O ? AdminSurface<O> | AdminDisabled | AdminDisabledOnBuiltin : O extends {
+export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O ? AdminSurface<O> | AdminDisabled : O extends {
     store: 'builtin';
 } ? AdminDisabledOnBuiltin : O extends {
     admin: object;
@@ -447,22 +447,31 @@ export interface BrowserUser extends Omit<AuthenticatedUser, 'claims' | 'federat
 
 // @public
 export interface BuiltinAuthMockOptions extends BuiltinAuthOptions {
+    // @deprecated (undocumented)
     codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
+    // @deprecated (undocumented)
     totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
 }
 
 // @public
 export interface BuiltinAuthOptions extends AuthCommonOptions {
+    // @deprecated (undocumented)
     admin?: ERROR_needs_store_cognito<'admin'>;
-    allowBearerAuth?: boolean;
+    allowBearerAuth?: boolean | ERROR_needs_store_cognito<'allowBearerAuth (object form)'>;
+    // @deprecated (undocumented)
     email?: ERROR_needs_store_cognito<'email'>;
     emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
+    // @deprecated (undocumented)
     featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
+    // @deprecated (undocumented)
     hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
+    // @deprecated (undocumented)
     mfa?: ERROR_needs_store_cognito<'mfa'>;
+    // @deprecated (undocumented)
     passkeys?: ERROR_needs_store_cognito<'passkeys'>;
-    providers: Record<string, BuiltinProvider>;
+    providers: Record<string, BuiltinProvider | undefined>;
     store: 'builtin';
+    // @deprecated (undocumented)
     userPool?: ERROR_needs_store_cognito<'userPool'>;
     users?: BuiltinUserOptions;
 }
@@ -472,7 +481,12 @@ export type BuiltinProvider = DirectOidcProvider | OAuth2Provider | StubProvider
 
 // @public
 export type BuiltinUserOptions = Pick<UserPoolOptions, 'groups'> & {
-    [K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
+    signInWith?: ERROR_needs_store_cognito<'users.signInWith'>;
+    attributes?: ERROR_needs_store_cognito<'users.attributes'>;
+    authFlow?: ERROR_needs_store_cognito<'users.authFlow'>;
+    preferredChallenge?: ERROR_needs_store_cognito<'users.preferredChallenge'>;
+    deviceTracking?: ERROR_needs_store_cognito<'users.deviceTracking'>;
+    caseSensitive?: ERROR_needs_store_cognito<'users.caseSensitive'>;
 };
 
 // @public
@@ -507,7 +521,7 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
     hostedUi?: HostedUiOptions;
     mfa?: MfaMode | MfaOptions;
     passkeys?: false | PasskeyOptions;
-    providers?: Record<string, CognitoProvider>;
+    providers?: Record<string, CognitoProvider | undefined>;
     store?: 'cognito';
     userPool?: ExternalUserPoolRef;
     users?: UserPoolOptions;

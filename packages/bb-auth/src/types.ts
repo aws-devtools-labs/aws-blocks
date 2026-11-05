@@ -311,8 +311,12 @@ export interface CognitoAuthOptions extends AuthCommonOptions {
 	 * For an IdP your backend should verify itself — no Cognito charge, offline
 	 * sign-in with `stubIdp()`, public (PKCE-only) clients, `github()` — use a
 	 * separate block with `store: 'builtin'` ({@link BuiltinAuthOptions}).
+	 *
+	 * An `undefined` entry is skipped, so a map picked per environment
+	 * (`isProd ? { okta: … } : { local: … }`) keeps both ids narrow.
 	 */
-	providers?: Record<string, CognitoProvider>;
+	// `| undefined`: a ternary between two maps normalizes to `{ a: …; b?: undefined } | …`.
+	providers?: Record<string, CognitoProvider | undefined>;
 
 	/**
 	 * Multi-factor authentication. `'off' | 'optional' | 'required'` is shorthand
@@ -490,8 +494,12 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	 *   `customOauth2()` ({@link OAuth2Provider}).
 	 * - `'stub'` — the local stub IdP, built with `stubIdp()`
 	 *   ({@link StubProvider}).
+	 *
+	 * An `undefined` entry is skipped, so a map picked per environment
+	 * (`isProd ? { okta: … } : { local: … }`) keeps both ids narrow.
 	 */
-	providers: Record<string, BuiltinProvider>;
+	// `| undefined`: a ternary between two maps normalizes to `{ a: …; b?: undefined } | …`.
+	providers: Record<string, BuiltinProvider | undefined>;
 
 	/** The groups `requireRole()` accepts. Only `groups`: there is no user pool to shape. See {@link BuiltinUserOptions}. */
 	users?: BuiltinUserOptions;
@@ -507,7 +515,7 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	 *
 	 * @default false
 	 */
-	allowBearerAuth?: boolean;
+	allowBearerAuth?: boolean | ERROR_needs_store_cognito<'allowBearerAuth (object form)'>;
 
 	/**
 	 * Email + password needs `store: 'cognito'`: a `'builtin'` block has no user pool.
@@ -517,19 +525,19 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	// `false & {}`, not `false`: with a bare literal here, TypeScript reports a default-store block's
 	// unrelated option errors against this arm ("Property 'store' is missing").
 	emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
-	/** MFA needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated MFA needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	mfa?: ERROR_needs_store_cognito<'mfa'>;
-	/** Passkeys needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated Passkeys needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	passkeys?: ERROR_needs_store_cognito<'passkeys'>;
-	/** The Cognito hosted UI needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated The Cognito hosted UI needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
-	/** `auth.admin` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated `auth.admin` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	admin?: ERROR_needs_store_cognito<'admin'>;
-	/** Wrapping an existing user pool needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated Wrapping an existing user pool needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	userPool?: ERROR_needs_store_cognito<'userPool'>;
-	/** A Cognito feature plan needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated A Cognito feature plan needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
-	/** An SES email sender needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	/** @deprecated An SES email sender needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
 	email?: ERROR_needs_store_cognito<'email'>;
 }
 
@@ -578,8 +586,21 @@ export type ERROR_federateVia_replaced_by_store = string & {
  * {@link UserPoolOptions} describe a user pool, which a `'builtin'` block does
  * not have, so they are compile errors there.
  */
+// Listed, not mapped: a mapped member's JSDoc (`@deprecated`, which sorts it last in completions) does not reach its keys.
+// `types-test.ts` pins that the keys stay those of `UserPoolOptions`.
 export type BuiltinUserOptions = Pick<UserPoolOptions, 'groups'> & {
-	[K in Exclude<keyof UserPoolOptions, 'groups'>]?: ERROR_needs_store_cognito<`users.${K}`>;
+	/** @deprecated `users.signInWith` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	signInWith?: ERROR_needs_store_cognito<'users.signInWith'>;
+	/** @deprecated `users.attributes` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	attributes?: ERROR_needs_store_cognito<'users.attributes'>;
+	/** @deprecated `users.authFlow` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	authFlow?: ERROR_needs_store_cognito<'users.authFlow'>;
+	/** @deprecated `users.preferredChallenge` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	preferredChallenge?: ERROR_needs_store_cognito<'users.preferredChallenge'>;
+	/** @deprecated `users.deviceTracking` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	deviceTracking?: ERROR_needs_store_cognito<'users.deviceTracking'>;
+	/** @deprecated `users.caseSensitive` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	caseSensitive?: ERROR_needs_store_cognito<'users.caseSensitive'>;
 };
 
 /**
@@ -2521,9 +2542,9 @@ export interface CognitoAuthMockOptions extends CognitoAuthOptions {
 
 /** The `'builtin'` arm of {@link AuthMockOptions}: the mock-only fields need a user pool. */
 export interface BuiltinAuthMockOptions extends BuiltinAuthOptions {
-	/** The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'builtin'` block sends no codes. */
+	/** @deprecated The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'builtin'` block sends no codes. */
 	codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
-	/** The mock-only `totpVerification` needs `store: 'cognito'`: a `'builtin'` block has no MFA. */
+	/** @deprecated The mock-only `totpVerification` needs `store: 'cognito'`: a `'builtin'` block has no MFA. */
 	totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
 }
 
@@ -2780,7 +2801,8 @@ export type AdminSurface<O extends AuthOptions = AuthOptions> = GroupAdmin<O> & 
  * The getter throws at runtime.
  */
 export type AdminDisabled = {
-	readonly __adminNotEnabled: 'construct Auth with { admin: {} }';
+	// Both fixes: the wide `Auth` (`AdminGetterOf<AuthOptions>`) reports this type for a block of either store.
+	readonly __adminNotEnabled: 'construct Auth with { admin: {} }' | "auth.admin needs store: 'cognito'";
 	addUserToGroup(
 		username: string,
 		group: string,
@@ -2883,10 +2905,14 @@ export type AdminOffOnBuiltin = [ERROR_auth_admin_needs_store_cognito: never];
  *   of every branch: no member is reachable without narrowing — like the
  *   zero-config default — and every configured instance, admin-enabled or not
  *   (and of either store), stays assignable to the wide type. (`AuthCognito`'s gate made an
- *   admin-enabled instance unassignable to the wide type.)
+ *   admin-enabled instance unassignable to the wide type.) The disabled half
+ *   is {@link AdminDisabled} alone, whose `__adminNotEnabled` names both fixes
+ *   ({@link AdminDisabledOnBuiltin} is assignable to it), so the error on a
+ *   zero-config `new Auth(scope, 'auth')` does not depend on which union
+ *   member the compiler happens to report.
  */
 export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O
-	? AdminSurface<O> | AdminDisabled | AdminDisabledOnBuiltin
+	? AdminSurface<O> | AdminDisabled
 	: O extends { store: 'builtin' }
 		? AdminDisabledOnBuiltin
 		: O extends { admin: object; store?: 'cognito' }

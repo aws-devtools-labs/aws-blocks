@@ -18,7 +18,7 @@
  * @internal
  */
 
-import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, type Scope } from '@aws-blocks/core';
+import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-blocks/core';
 
 /** Root under which every stub issuer is mounted (inside the reserved auth subtree). */
 export const STUB_ROOT = `${BLOCKS_AUTH_PREFIX}/idp`;
@@ -68,6 +68,9 @@ export interface StubIdpHandlers {
  * Mount one provider's stub IdP routes on `scope` (the `Auth` instance). The
  * handlers are built by `load()` on the first request and reused; a failed
  * load is not cached, so the next request retries it.
+ *
+ * @throws Error when another `Auth` block already serves a stub IdP under the
+ *   same provider key (the routes do not depend on `redirects`), naming the fix.
  */
 export function mountStubIdpRoutes(scope: Scope, providerId: string, load: () => Promise<StubIdpHandlers>): void {
 	let pending: Promise<StubIdpHandlers> | undefined;
@@ -93,11 +96,19 @@ export function mountStubIdpRoutes(scope: Scope, providerId: string, load: () =>
 		['revoke', 'POST', '/revoke', 'revoke'],
 		['logout', 'GET', '/logout', 'logout'],
 	];
-	for (const [suffix, method, path, name] of routes) {
-		new RawRoute(scope, id(suffix), {
-			method,
-			path: `${base}${path}`,
-			handler: async (ctx) => (await handlers())[name](ctx),
-		});
+	try {
+		for (const [suffix, method, path, name] of routes) {
+			new RawRoute(scope, id(suffix), {
+				method,
+				path: `${base}${path}`,
+				handler: async (ctx) => (await handlers())[name](ctx),
+			});
+		}
+	} catch (e) {
+		if (!(e instanceof Error) || e.name !== RawRouteErrors.DuplicateRoute) throw e;
+		throw new Error(
+			`Auth '${scope.id}': providers.${providerId} is a stubIdp() provider, but another Auth block already serves a ` +
+				`stub IdP under that key (${base}/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.`,
+		);
 	}
 }

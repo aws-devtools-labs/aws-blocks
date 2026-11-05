@@ -37,10 +37,12 @@ import type {
 	AuthMockOptions,
 	AuthOptions,
 	BuiltinAuthOptions,
+	BuiltinUserOptions,
 	CognitoAuthOptions,
 	DeviceRecord,
 	EmailPasswordEnabled,
 	ERROR_EMAIL_is_not_in_mfa_types,
+	ERROR_needs_store_cognito,
 	ERROR_SMS_is_not_in_mfa_types,
 	ERROR_TOTP_is_not_in_mfa_types,
 	FederatedActionNameOf,
@@ -61,6 +63,7 @@ import type {
 	SignInResult,
 	SignInUrlOptions,
 	UserCandidate,
+	UserPoolOptions,
 } from './index.mock.js';
 import { Auth, customOauth2, github, stubIdp } from './index.mock.js';
 import type { AUTH_OPTIONS_SHAPE } from './option-validation.js';
@@ -552,9 +555,7 @@ async function adminGate() {
 	const wide: Auth = full;
 	// @ts-expect-error — the wide type does not know admin is enabled.
 	await wide.admin.createUser('u');
-	type _wide = Expect<
-		Equal<AdminGetterOf<AuthOptions>, AdminSurface<AuthOptions> | AdminDisabled | AdminDisabledOnBuiltin>
-	>;
+	type _wide = Expect<Equal<AdminGetterOf<AuthOptions>, AdminSurface<AuthOptions> | AdminDisabled>>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1075,7 +1076,73 @@ async function perStoreProviders() {
 	new Auth(scope, 'ps-builtin-empty', { store: 'builtin', providers: {} });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// (28) A ternary between two provider maps with different keys (one map per
+//      environment) keeps the narrow ids on either store: TypeScript normalizes
+//      the union of object literals to `{ okta: …; local?: undefined } | …`,
+//      which the `providers` record must accept (`… | undefined`), or `O` falls
+//      back to the wide default and every id is rejected.
+// ─────────────────────────────────────────────────────────────────────────────
+async function ternaryProviderMaps() {
+	const builtin = new Auth(scope, 'tern-builtin', {
+		store: 'builtin',
+		providers: runtimeFlag ? { okta } : { local: stubIdp() },
+		users: { groups: ['admins'] },
+	});
+	type BuiltinIds = ProviderIdOf<OptionsOf<typeof builtin>>;
+	type _builtinIds = Expect<Equal<BuiltinIds, 'okta' | 'local'>>;
+	await builtin.getSignInUrl(context, 'okta');
+	await builtin.getSignInUrl(context, 'local');
+	// @ts-expect-error — 'google' is in neither map.
+	await builtin.getSignInUrl(context, 'google');
+	const builtinAdmin = await builtin.requireRole(context, 'admins');
+	type _builtinGroups = Expect<Equal<typeof builtinAdmin.groups, 'admins'[]>>;
+	// @ts-expect-error — 'admin' (typo) is not a declared group.
+	await builtin.requireRole(context, 'admin');
+
+	const cognito = new Auth(scope, 'tern-cognito', {
+		providers: runtimeFlag
+			? { okta: oktaViaCognito }
+			: { google: { type: 'google', clientId: 'g', clientSecret: googleSecret } },
+		users: { groups: ['admins'] },
+	});
+	type CognitoIds = ProviderIdOf<OptionsOf<typeof cognito>>;
+	type _cognitoIds = Expect<Equal<CognitoIds, 'okta' | 'google'>>;
+	await cognito.getSignInUrl(context, 'okta');
+	await cognito.getSignInUrl(context, 'google');
+	// @ts-expect-error — 'facebook' is in neither map.
+	await cognito.getSignInUrl(context, 'facebook');
+	const cognitoAdmin = await cognito.requireRole(context, 'admins');
+	type _cognitoGroups = Expect<Equal<typeof cognitoAdmin.groups, 'admins'[]>>;
+	// @ts-expect-error — 'admin' (typo) is not a declared group.
+	await cognito.requireRole(context, 'admin');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// (29) `BuiltinUserOptions` lists its keys (so each error member can carry
+//      `@deprecated`, asserted in gate-diagnostics.test.ts): they stay exactly
+//      those of `UserPoolOptions`, each but `groups` a named error.
+// ─────────────────────────────────────────────────────────────────────────────
+type PoolOnlyUserKey = Exclude<keyof UserPoolOptions, 'groups'>;
+type _builtinUserKeys = Expect<Equal<keyof BuiltinUserOptions, keyof UserPoolOptions>>;
+type _builtinUserErrors = Expect<
+	Equal<
+		{ [K in PoolOnlyUserKey]: BuiltinUserOptions[K] },
+		{ [K in PoolOnlyUserKey]: ERROR_needs_store_cognito<`users.${K}`> | undefined }
+	>
+>;
+
+// The object form of `allowBearerAuth` is typed as the store error (not just "not a boolean"), so the
+// compiler names the fix (message asserted in gate-diagnostics.test.ts).
+type _builtinBearer = Expect<
+	Equal<
+		BuiltinAuthOptions['allowBearerAuth'],
+		boolean | ERROR_needs_store_cognito<'allowBearerAuth (object form)'> | undefined
+	>
+>;
+
 void [
+	ternaryProviderMaps,
 	perStoreProviders,
 	wrongStoreOptions,
 	blocksSurface,

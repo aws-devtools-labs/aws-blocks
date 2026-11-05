@@ -864,12 +864,27 @@ function findAll(options: unknown): Findings {
 				});
 			}
 		}
-	} else if (store === 'builtin' && isPlainObject(field(options, 'allowBearerAuth'))) {
-		out.conflicts.push({
-			path: 'allowBearerAuth',
-			message:
-				"as an object (extra Cognito app clients) needs `store: 'cognito'`. A `store: 'builtin'` block takes `true` or `false`.",
-		});
+	} else if (store === 'builtin') {
+		if (isPlainObject(field(options, 'allowBearerAuth'))) {
+			out.conflicts.push({
+				path: 'allowBearerAuth',
+				message:
+					"as an object (extra Cognito app clients) needs `store: 'cognito'`. A `store: 'builtin'` block takes `true` or `false`.",
+			});
+		}
+		// The backend reads a 'builtin' provider's secret itself (`ref.get()` at the first token exchange), so a
+		// plain string would fail only then. (A 'cognito' block's secret is resolved, and checked, at synth.)
+		for (const [id, entry] of isPlainObject(providers) ? Object.entries(providers) : []) {
+			const secret = field(entry, 'clientSecret');
+			if (secret != null && (typeof secret !== 'object' || typeof Reflect.get(secret, 'get') !== 'function')) {
+				// Named by its type only: the value may be the secret itself, which must not reach a log.
+				const got = typeof secret === 'object' ? 'an object without `get()`' : `a ${typeof secret}`;
+				out.invalid.push({
+					path: join(join('providers', id), 'clientSecret'),
+					message: `must be a \`Secret\` or an \`AppSetting\` with \`secret: true\`, not the secret itself; got ${got}`,
+				});
+			}
+		}
 	}
 	return out;
 }

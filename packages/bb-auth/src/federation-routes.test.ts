@@ -521,13 +521,16 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		assert.deepStrictEqual(
 			{ ...pool.unavailable, ...direct.unavailable },
 			{
-				'signIn:google': 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+				'signIn:google':
+					"Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.",
 				'signIn:corp': null,
 				'signIn:okta': null,
 				'signIn:gh': null,
-				'signIn:entra': 'Entra sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+				'signIn:entra':
+					"Entra sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.",
 				'signIn:my idp': null,
-				'signIn:acme': 'Acme sign-in works after deploy (npm run sandbox), or use stubIdp() locally.',
+				'signIn:acme':
+					"Acme sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.",
 			},
 		);
 	});
@@ -585,7 +588,10 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 			assert.match(String(page.headers['content-security-policy']), /default-src 'none'/);
 			const html = page.body;
 			assert.match(html, /<title>Google sign-in is not available here<\/title>/);
-			assert.match(html, /Google sign-in works after deploy \(npm run sandbox\), or use stubIdp\(\) locally\./);
+			assert.match(
+				html,
+				/Google sign-in works after deploy \(npm run sandbox\), or use stubIdp\(\) in a store: &#39;builtin&#39; block locally\./,
+			);
 			assert.match(html, /not a configuration error/);
 			assert.match(html, /ProviderUnavailableException/);
 			assert.doesNotMatch(html, /<script/i);

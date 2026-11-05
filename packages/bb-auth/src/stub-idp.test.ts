@@ -163,6 +163,26 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 		});
 	});
 
+	test('two blocks with a stubIdp() under the same key fail at construction, naming the fix (the stub routes ignore redirects)', () => {
+		const scope = unique();
+		const own = (id: string) => ({
+			callbackPath: `/aws-blocks/auth/${id}/callback`,
+			signOutPath: `/aws-blocks/auth/${id}/signout`,
+		});
+		new Auth(scope, 'one', { store: 'builtin', providers: { corp: stubIdp() }, redirects: own('one') });
+		assert.throws(
+			() => new Auth(scope, 'two', { store: 'builtin', providers: { corp: stubIdp() }, redirects: own('two') }),
+			(e: unknown) =>
+				e instanceof Error &&
+				e.name === 'Error' &&
+				e.message ===
+					"Auth 'two': providers.corp is a stubIdp() provider, but another Auth block already serves a stub IdP under that key " +
+						"(/aws-blocks/auth/idp/corp/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.",
+		);
+		// A different key is fine.
+		new Auth(scope, 'three', { store: 'builtin', providers: { staff: stubIdp() }, redirects: own('three') });
+	});
+
 	test('validateUser sees only phase signIn, and a rejection issues no session', async () => {
 		const seen: UserCandidate[] = [];
 		const auth = new Auth(unique(), 'auth', {

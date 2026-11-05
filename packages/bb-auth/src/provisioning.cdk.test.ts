@@ -60,7 +60,7 @@ const CONFIGS = {
 	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1', clientSecret: ${SECRET} } } })`,
 	// Email + password and social in `auth`; the directly federated okta can no longer share it, so it gets its
 	// own `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test).
-	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] } }), new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } }, users: { groups: ['admins'] } }))`,
+	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${OKTA_DIRECT} }, users: { groups: ['admins'] }, redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' } }), new Auth(stack, 'auth', { providers: { google: { type: 'google', clientId: 'g-client', clientSecret: ${SECRET} } }, users: { groups: ['admins'] } }))`,
 } as const;
 
 const cache: Record<string, SynthesizedAuth> = {};

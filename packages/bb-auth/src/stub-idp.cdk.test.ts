@@ -87,6 +87,26 @@ describe('stubIdp() at synth on a sandbox deployment', () => {
 	});
 });
 
+describe('stubIdp() at synth: one stub per provider key on a backend', () => {
+	test('two blocks with a stub under the same key fail synth, even with their own redirects (the stub routes ignore them)', () => {
+		const own = (id: string) =>
+			`redirects: { callbackPath: '/aws-blocks/auth/${id}/callback', signOutPath: '/aws-blocks/auth/${id}/signout' }`;
+		assert.throws(
+			() =>
+				synth(
+					`(new Auth(stack, 'one', { store: 'builtin', providers: { corp: stubIdp() }, ${own('one')} }), ` +
+						`new Auth(stack, 'two', { store: 'builtin', providers: { corp: stubIdp() }, ${own('two')} }))`,
+				),
+			/Auth '[^']*two': providers\.corp is a stubIdp\(\) provider, but Auth '[^']*one' already serves a stub IdP under that key \(\/aws-blocks\/auth\/idp\/corp\/…\)\. .*give each block's stub a different key/,
+		);
+		// Different keys synthesize.
+		synth(
+			`(new Auth(stack, 'one', { store: 'builtin', providers: { corp: stubIdp() }, ${own('one')} }), ` +
+				`new Auth(stack, 'two', { store: 'builtin', providers: { staff: stubIdp() }, ${own('two')} }))`,
+		);
+	});
+});
+
 describe('stubIdp() at synth outside a sandbox', () => {
 	const expected =
 		/Auth: providers\.corp is a stubIdp\(\) provider, which is only available in local development and sandbox deployments[\s\S]*getDeploymentType\(\)/;

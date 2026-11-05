@@ -21,6 +21,7 @@
  * @internal
  */
 
+import { safeRedirectPath } from '../redirect-path.js';
 import type { CognitoOidcProviderOptions, ResolvedAuthOptions, SamlProviderOptions } from '../resolve-options.js';
 import type { ProviderCommon, ProviderSecretRef } from '../types.js';
 import { AUTH_ROUTE_PREFIX, type CognitoFederatedKind, cognitoFederatedProviders } from './contract.js';
@@ -413,18 +414,13 @@ export function validateDomainPrefix(prefix: unknown, what: string): string {
 }
 
 /**
- * Federation-specific synth-time checks that do not depend on a single
- * provider: provider ids free of `/`, redirect paths under the auth subtree,
- * and no hosted-UI federation on a wrapped (`userPool`) pool. (Ids are unique
- * by construction: they are the keys of the one `providers` map.)
+ * The `redirects` checks of a block with `providers`, on either store (the
+ * runtime mounts the sign-in routes for any provider, and refuses the same
+ * values when it loads): the callback and sign-out routes are explicit paths
+ * under the auth subtree, and the landing paths stay on the app origin
+ * ({@link safeRedirectPath}, as the runtime's `federationRoutePaths()` checks them).
  */
-export function validateFederationOptions(options: ResolvedAuthOptions): void {
-	for (const value of [options.socialProviders, options.oidcProviders, options.samlProviders]) {
-		for (const [id, entry] of Object.entries(value ?? {})) {
-			if (entry && id.includes('/')) throw new Error(`Auth: provider id '${id}' must not contain '/'.`);
-		}
-	}
-
+export function assertRedirectPaths(options: ResolvedAuthOptions): void {
 	for (const key of ['callbackPath', 'signOutPath'] as const) {
 		const path = options.redirects?.[key];
 		if (path === undefined) continue;
@@ -439,6 +435,31 @@ export function validateFederationOptions(options: ResolvedAuthOptions): void {
 			);
 		}
 	}
+	for (const key of ['postSignInPath', 'postSignOutPath'] as const) {
+		const path: unknown = options.redirects?.[key];
+		if (path !== undefined && safeRedirectPath(path) === null) {
+			throw new Error(
+				`Auth: redirects.${key} must be an absolute path starting with '/', got ${JSON.stringify(path)}. ` +
+					'It must stay on the app origin: no scheme, no `//host`, no backslash and no control characters (TAB, CR, LF).',
+			);
+		}
+	}
+}
+
+/**
+ * Federation-specific synth-time checks that do not depend on a single
+ * provider: provider ids free of `/`, redirect paths under the auth subtree,
+ * and no hosted-UI federation on a wrapped (`userPool`) pool. (Ids are unique
+ * by construction: they are the keys of the one `providers` map.)
+ */
+export function validateFederationOptions(options: ResolvedAuthOptions): void {
+	for (const value of [options.socialProviders, options.oidcProviders, options.samlProviders]) {
+		for (const [id, entry] of Object.entries(value ?? {})) {
+			if (entry && id.includes('/')) throw new Error(`Auth: provider id '${id}' must not contain '/'.`);
+		}
+	}
+
+	assertRedirectPaths(options);
 
 	if (options.userPool && cognitoFederatedProviders(options).length > 0) {
 		throw new Error(

@@ -22,7 +22,7 @@ function getBaseUrl(): string {
   return apiUrl.replace(/\/aws-blocks\/api$/, '');
 }
 
-const HINT = 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.';
+const HINT = "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
 
 export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
   describe('Auth - social sign-in in local dev', () => {
@@ -47,7 +47,7 @@ export function authSocialLocalTests(getApi: () => typeof authSocialApiType) {
       assert.strictEqual(page.status, 501);
       assert.match(page.headers.get('content-type') ?? '', /^text\/html/);
       const html = await page.text();
-      assert.ok(html.includes(HINT), 'the page shows the hint');
+      assert.ok(html.includes(HINT.replaceAll("'", '&#39;')), 'the page shows the hint (HTML-escaped)');
       assert.match(html, /not a configuration error/);
 
       const json = await fetch(url, { redirect: 'manual' });

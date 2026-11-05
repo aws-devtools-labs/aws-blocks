@@ -1102,7 +1102,7 @@ describe('test hooks', () => {
 	});
 
 	test('an unavailable external action renders a disabled button with its reason, and never navigates', async () => {
-		const hint = 'Google sign-in works after deploy (npm run sandbox), or use stubIdp() locally.';
+		const hint = "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
 		const api = mockApi(signedOutState([
 			{ name: 'signIn:google', label: 'Sign in with Google', url: '/aws-blocks/auth/signin/google', method: 'GET', fields: [], unavailable: hint },
 			{ name: 'signIn:okta', label: 'Sign in with Okta', url: '/aws-blocks/auth/signin/okta', method: 'GET', fields: [] },

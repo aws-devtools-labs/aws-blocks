@@ -26,6 +26,7 @@ import type {
 	AuthStore,
 	CognitoAuthOptions,
 	CognitoOidcProvider,
+	CognitoProvider,
 	DirectOidcProvider,
 	FacebookProvider,
 	GoogleProvider,
@@ -212,6 +213,7 @@ export function resolveOptions(input: AuthOptions, blockId?: string): ResolvedAu
 			socialProviders: _social,
 			oidcProviders: _oidc,
 			samlProviders: _saml,
+			allowBearerAuth,
 			...rest
 		} = options;
 		const oidcProviders: Record<string, OidcProviderOptions> = {};
@@ -234,6 +236,8 @@ export function resolveOptions(input: AuthOptions, blockId?: string): ResolvedAu
 		return {
 			...rest,
 			...(users ? { users: { groups: users.groups } } : {}),
+			// Only the boolean form: assertKnownAuthOptions refuses the object form (Cognito app clients) here.
+			...(typeof allowBearerAuth === 'boolean' ? { allowBearerAuth } : {}),
 			store,
 			emailPassword: false,
 			oidcProviders,
@@ -241,7 +245,7 @@ export function resolveOptions(input: AuthOptions, blockId?: string): ResolvedAu
 	}
 
 	const { store, providers, socialProviders: _social, oidcProviders: _oidc, samlProviders: _saml, ...rest } = options;
-	const entries = Object.entries(providers ?? {}).filter(([, entry]) => entry);
+	const entries = Object.entries(providers ?? {}).filter((pair): pair is [string, CognitoProvider] => !!pair[1]);
 	if (options.emailPassword === false && !options.userPool && entries.length === 0) {
 		throw new Error(
 			`${auth} \`emailPassword: false\` with no \`providers\` leaves no way to sign in. Configure a provider or re-enable email + password.`,

@@ -68,8 +68,9 @@ const CONFIGS = {
 	samlOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.corpUrl} } })`,
 	cognitoOidcOnly: `new Auth(stack, 'auth', { emailPassword: false, providers: { ${P.oktaCognito} } })`,
 	// Password + social + SAML in `auth`; the directly federated okta can no longer share it, so it gets its own
-	// `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test).
-	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${P.oktaDirect} } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
+	// `store: 'builtin'` block, built first (the comma expression keeps `auth` the block under test), with its own
+	// sign-in routes (two blocks with providers on the default `redirects` fail synth).
+	mixed: `(new Auth(stack, 'sso', { store: 'builtin', providers: { ${P.oktaDirect} }, redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' } }), new Auth(stack, 'auth', { providers: { ${P.google}, ${P.apple}, ${P.corpUrl} } }))`,
 	allSocial: `new Auth(stack, 'auth', { providers: { ${P.google}, ${P.facebook}, ${P.amazon}, ${P.apple} } })`,
 	defaultPlusGoogle: `new Auth(stack, 'auth', { providers: { ${P.google} } })`,
 } as const;
@@ -1016,6 +1017,28 @@ describe('Auth federation — synth-time checks', () => {
 		);
 	});
 
+	test("a `store: 'builtin'` block's redirects are checked at synth too, landing paths included (as the runtime does)", () => {
+		const okta = { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' };
+		assert.match(
+			constructError({ store: 'builtin', providers: { okta }, redirects: { callbackPath: '/oops/callback' } }),
+			/redirects\.callbackPath must be an explicit path under '\/aws-blocks\/auth\/'/,
+		);
+		assert.match(
+			constructError({ store: 'builtin', providers: { okta }, redirects: { signOutPath: '/signout' } }),
+			/redirects\.signOutPath must be an explicit path/,
+		);
+		assert.match(
+			constructError({ store: 'builtin', providers: { okta }, redirects: { postSignInPath: '//evil.example' } }),
+			/redirects\.postSignInPath must be an absolute path starting with '\/'.*stay on the app origin/,
+		);
+		assert.match(
+			constructError({ providers: { google }, redirects: { postSignOutPath: 'https://evil.example/' } }),
+			/redirects\.postSignOutPath must be an absolute path/,
+		);
+		// Without providers no sign-in route is mounted, so `redirects` is not read (as at runtime).
+		synth(`new Auth(stack, 'auth', { redirects: { postSignInPath: 'https://evil.example/' } })`);
+	});
+
 	test('hostedUi.domainPrefix must be a valid, unreserved Cognito prefix', () => {
 		for (const bad of ['Upper', '-edge', 'edge-', 'has_underscore', 'a'.repeat(64), '']) {
 			assert.match(
@@ -1035,6 +1058,55 @@ describe('Auth federation — synth-time checks', () => {
 			constructError({ userPool: Auth.fromExisting('us-east-1_x'), providers: { google } }),
 			/cannot be combined with `userPool`/,
 		);
+	});
+});
+
+describe('Auth federation — two blocks with providers on one backend cannot share the sign-in routes (synth)', () => {
+	const okta = { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } as const;
+	const own = (id: string) => ({
+		callbackPath: `${AUTH_ROUTE_PREFIX}/${id}/callback`,
+		signOutPath: `${AUTH_ROUTE_PREFIX}/${id}/signout`,
+	});
+
+	test('the default redirects on both: the second block fails synth, naming the first and the fix', () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta } });
+		assert.throws(
+			() => new Auth(stack, 'staff', { store: 'builtin', providers: { okta } }),
+			/Auth '[^']*staff': its sign-in routes \(\/aws-blocks\/auth\/…\) are already mounted by Auth '[^']*sso'\. Each Auth block with `providers` needs its own `redirects\.callbackPath` and `redirects\.signOutPath`, e\.g\. `redirects: \{ callbackPath: '\/aws-blocks\/auth\/staff\/callback', signOutPath: '\/aws-blocks\/auth\/staff\/signout' \}`/,
+		);
+	});
+
+	test("a shared sign-out path alone (or a callback beside the other block's) collides too; trailing slashes do not hide it", () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, redirects: own('sso') });
+		assert.throws(
+			() =>
+				new Auth(stack, 'staff', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: own('staff').callbackPath, signOutPath: `${own('sso').signOutPath}/` },
+				}),
+			/its sign-out route \(\/aws-blocks\/auth\/sso\/signout\/\) is already mounted by Auth '[^']*sso'/,
+		);
+		assert.throws(
+			() =>
+				new Auth(stack, 'other', {
+					store: 'builtin',
+					providers: { okta },
+					redirects: { callbackPath: `${AUTH_ROUTE_PREFIX}/sso/cb`, signOutPath: own('other').signOutPath },
+				}),
+			/its sign-in routes \(\/aws-blocks\/auth\/sso\/…\) are already mounted by Auth '[^']*sso'/,
+		);
+	});
+
+	test('own redirects on each block, and the same paths on another backend, synthesize', () => {
+		const stack = newStack();
+		new Auth(stack, 'sso', { store: 'builtin', providers: { okta }, redirects: own('sso') });
+		new Auth(stack, 'staff', { store: 'builtin', providers: { okta }, redirects: own('staff') });
+		new Auth(newStack(), 'sso', { store: 'builtin', providers: { okta }, redirects: own('sso') });
+		new Auth(newStack(), 'staff', { store: 'builtin', providers: { okta } });
+		new Auth(newStack(), 'other', { store: 'builtin', providers: { okta } });
 	});
 });
 

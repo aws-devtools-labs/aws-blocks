@@ -81,6 +81,30 @@ const probes = {
 		const auth = new Auth(scope, 'noadm', { users: { groups: ['admins'] } });
 		void auth.admin.scan();
 	`,
+	zeroConfigAdmin: `
+		const auth = new Auth(scope, 'zero');
+		void auth.admin.createUser('u');
+	`,
+	builtinBearerObject: `
+		new Auth(scope, 'bearer', {
+			store: 'builtin',
+			providers: { okta: { type: 'oidc', ...okta } },
+			allowBearerAuth: { clientIds: ['c'] },
+		});
+	`,
+	plainConstBuiltin: `
+		const options = { store: 'builtin', providers: { okta: { type: 'oidc', ...okta } } };
+		new Auth(scope, 'plain-builtin', options);
+	`,
+	plainConstCognito: `
+		const options = { providers: { google: { type: 'google', clientId: 'g', clientSecret: oktaSecret } } };
+		new Auth(scope, 'plain-cognito', options);
+	`,
+	builtinOptionMembers: `
+		import type { BuiltinAuthMockOptions, BuiltinUserOptions } from './dist/index.mock.js';
+		export declare const builtinOptions: BuiltinAuthMockOptions;
+		export declare const builtinUsers: BuiltinUserOptions;
+	`,
 	mfaFactorNotInTypes: `
 		const auth = new Auth(scope, 'totp', { mfa: { mode: 'optional', types: ['TOTP'] } });
 		void auth.updateMfaPreference(context, { sms: 'ENABLED' });
@@ -91,6 +115,7 @@ type ProbeName = keyof typeof probes;
 const probeFile = (name: ProbeName): string => join(packageRoot, `__gate_probe_${name}__.ts`);
 
 let diagnosticsByProbe: Map<ProbeName, string[]> | undefined;
+let probeProgram: ts.Program | undefined;
 
 /**
  * Type-check every probe once; return each diagnostic's full text (`TS<code>: <message>`), then one line
@@ -115,6 +140,7 @@ function diagnose(name: ProbeName): string[] {
 		host.readFile = (fileName) => sources.get(fileName) ?? readFile(fileName);
 
 		const program = ts.createProgram([...sources.keys()], compilerOptions, host);
+		probeProgram = program;
 		diagnosticsByProbe = new Map(
 			(Object.keys(probes) as ProbeName[]).map((n) => [
 				n,
@@ -188,5 +214,63 @@ describe('mode-gate diagnostics', () => {
 		const [diagnostic] = diagnose('adminOff');
 		assert.match(diagnostic, /Expected 2 arguments, but got 1/);
 		assert.doesNotMatch(diagnostic, /does not exist on type/);
+	});
+});
+
+describe('option diagnostics and completions', () => {
+	test('zero-config `auth.admin` names the admin gate, not the builtin store', () => {
+		// The wide getter is `AdminSurface | AdminDisabled`: with `AdminDisabledOnBuiltin` in the union too, which
+		// member the compiler reported depended on program order.
+		const diagnostics = diagnose('zeroConfigAdmin');
+		assert.strictEqual(diagnostics.length, 1, diagnostics.join('\n---\n'));
+		assert.match(diagnostics[0], /ERROR_admin_is_not_enabled__construct_Auth_with_admin_options/);
+		assert.doesNotMatch(diagnostics[0], /ERROR_auth_admin_needs_store_cognito/);
+	});
+
+	test("`allowBearerAuth` as an object on a 'builtin' block names the store fix, not `boolean`", () => {
+		const diagnostics = diagnose('builtinBearerObject');
+		assert.strictEqual(diagnostics.length, 1, diagnostics.join('\n---\n'));
+		assert.match(diagnostics[0], /ERROR_needs_store_cognito<"allowBearerAuth \(object form\)">/);
+	});
+
+	test('options in a plain `const` (no `as const`): the two messages the README troubleshooting note quotes', () => {
+		const [builtin] = diagnose('plainConstBuiltin');
+		assert.match(builtin, /Type 'string' is not assignable to type '"cognito"'/);
+		const [cognito] = diagnose('plainConstCognito');
+		assert.match(cognito, /Property 'issuer' is missing in type .* 'CognitoOidcProvider'/s);
+	});
+
+	test("every option a 'builtin' block refuses is `@deprecated` (sorts last in completions); `emailPassword` is not", () => {
+		diagnose('valid');
+		assert.ok(probeProgram);
+		const checker = probeProgram.getTypeChecker();
+		const source = probeProgram.getSourceFile(probeFile('builtinOptionMembers'));
+		assert.ok(source);
+		const exported = checker.getExportsOfModule(checker.getSymbolAtLocation(source) as ts.Symbol);
+		const seen: string[] = [];
+		for (const name of ['builtinOptions', 'builtinUsers']) {
+			const symbol = exported.find((s) => s.name === name);
+			assert.ok(symbol, name);
+			const type = checker.getTypeOfSymbol(symbol);
+			for (const prop of checker.getPropertiesOfType(type)) {
+				const value = checker.getNonNullableType(checker.getTypeOfSymbol(prop));
+				const members = value.isUnion() ? value.types : [value];
+				const onlyErrors = members.every((m) => m.getProperty('__blocksOptionError') !== undefined);
+				const deprecated = prop.getJsDocTags(checker).some((tag) => tag.name === 'deprecated');
+				assert.strictEqual(
+					deprecated,
+					onlyErrors,
+					`${name}.${prop.name}: @deprecated iff typed only as an error`,
+				);
+				if (deprecated) seen.push(`${name}.${prop.name}`);
+			}
+		}
+		// Guards the walk itself: the refused options were found, and the legal `emailPassword: false` is not among them.
+		for (const key of ['mfa', 'admin', 'userPool', 'codeDelivery', 'totpVerification', 'socialProviders']) {
+			assert.ok(seen.includes(`builtinOptions.${key}`), key);
+		}
+		assert.ok(seen.includes('builtinUsers.signInWith'));
+		assert.ok(!seen.includes('builtinOptions.emailPassword'));
+		assert.ok(!seen.includes('builtinOptions.allowBearerAuth'));
 	});
 });

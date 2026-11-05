@@ -512,7 +512,8 @@ export const TODOS = {
 		'this provider federated through Cognito, but the block also has providers your backend verifies itself, and one Auth',
 		"block now holds one kind of user. The codemod chose store: 'builtin' (no user pool; the direct providers keep their userIds).",
 		"Move this entry to a second Auth block without store, e.g. new Auth(scope, '<new id>', { emailPassword: false, providers: { … } }),",
-		"with its own createApi(); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.",
+		'with its own createApi() and its own redirects: { callbackPath, signOutPath } (two blocks with providers cannot share the',
+		"default sign-in routes); or, for an OIDC IdP, keep it here as a type: 'oidc' provider your backend verifies.",
 	],
 	apple: 'Sign in with Apple needs teamId, keyId and privateKey (an AppSetting with the .p8 key) instead of clientSecret.',
 	socialRenamed: (from: string, to: string): string =>

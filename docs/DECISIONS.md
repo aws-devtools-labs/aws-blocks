@@ -966,7 +966,7 @@ Every `Auth` block has one `store`, and all of its sign-in providers go in one `
 
 ### Rationale
 1. **The store is visible at the call site.** "Where do my users live?" is one explicit key with a safe default, not a consequence of which provider keys and `federateVia` values a block uses.
-2. **The strongest compile-time guard.** Each store accepts only its own options and provider types, and autocomplete for `type:` lists only the chosen store's types.
+2. **The strongest compile-time guard.** Each store accepts only its own options and provider types. With `store` set, autocomplete for `type:` lists only that store's types; with `store` omitted it lists every type, and the compiler rejects `'oauth2'` / `'stub'`.
 3. **Mixing stores in one block was ruled a non-goal.** A block's users never shared identities across the two kinds (no account linking), and features differed per user (`auth.admin` and pool groups for one kind, `groupsClaim` for the other). Two blocks make that split explicit. Without mixing as a goal, the main advantage of grouping options by store (C) over one store per block (D) went away.
 4. **Upgrade-safe.** Provider keys pass through the resolver unchanged, and construct ids are derived from them, so no deployed pool, identity provider or session moves.
 5. **Leaves room for later.** A future store, or an injectable engine construct created at the existing `<authId>/pool` path, would fit behind `store` without reshaping `providers`.

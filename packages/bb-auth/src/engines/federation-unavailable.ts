@@ -62,7 +62,7 @@ export function unavailableMessage(provider: ResolvedProvider, reason: Unavailab
 export function unavailableHint(provider: ResolvedProvider, reason: UnavailableReason): string {
 	switch (reason) {
 		case 'hosted-ui-local':
-			return `${providerDisplayName(provider.id)} sign-in works after deploy (npm run sandbox), or use stubIdp() locally.`;
+			return `${providerDisplayName(provider.id)} sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.`;
 		case 'stub-deployed':
 			return `${providerDisplayName(provider.id)} sign-in uses the stub IdP, which runs only in local development and sandboxes.`;
 	}

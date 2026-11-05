@@ -463,6 +463,40 @@ describe('the store selects which provider options apply', () => {
 		assert.deepStrictEqual(conflicts({ store: 'builtin', providers: { okta } }), []);
 	});
 
+	test("a 'builtin' provider's clientSecret must be a reference, never the secret itself (read only at the first token exchange)", () => {
+		const message = (got: string) =>
+			`must be a \`Secret\` or an \`AppSetting\` with \`secret: true\`, not the secret itself; got ${got}`;
+		const builtin = (clientSecret: unknown) => ({
+			store: 'builtin',
+			providers: { okta: { ...okta, clientSecret } },
+		});
+		assert.deepStrictEqual(invalid(builtin('shh-plain-text')), [
+			['providers.okta.clientSecret', message('a string')],
+		]);
+		assert.deepStrictEqual(invalid(builtin(5)), [['providers.okta.clientSecret', message('a number')]]);
+		assert.deepStrictEqual(invalid(builtin({ fullId: 'x' })), [
+			['providers.okta.clientSecret', message('an object without `get()`')],
+		]);
+		// Named by type only: the value (maybe the secret itself) never reaches the message.
+		assert.throws(
+			() => assertKnownAuthOptions('auth', builtin('shh-plain-text')),
+			(e: unknown) =>
+				e instanceof Error &&
+				e.message.includes('`providers.okta.clientSecret` must be a `Secret`') &&
+				!e.message.includes('shh-plain-text'),
+		);
+		// A reference (a plain one or a class instance with `get()`), or none, passes.
+		class Ref {
+			readonly fullId = 'ref';
+			async get() {
+				return 's';
+			}
+		}
+		for (const ok of [secret, new Ref(), undefined, null]) assert.deepStrictEqual(invalid(builtin(ok)), []);
+		// A 'cognito' block's secret is resolved, and checked, at synth (federation.cdk.test.ts).
+		assert.deepStrictEqual(invalid({ providers: { okta: { ...okta, clientSecret: 'plain' } } }), []);
+	});
+
 	test("allowBearerAuth as an object needs store: 'cognito'; a boolean is fine on both", () => {
 		const providers = { okta };
 		assert.deepStrictEqual(conflicts({ store: 'builtin', providers, allowBearerAuth: { clientIds: ['c'] } }), [
