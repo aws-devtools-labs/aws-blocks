@@ -183,10 +183,9 @@ export interface BlocksDefaults {
 
 	/**
 	 * Where AWS Blocks stores the secrets it generates for its own Building
-	 * Blocks. It currently applies to the `Realtime` connection token key; other
-	 * keys that AWS Blocks generates will adopt it. Secrets you declare yourself
-	 * (your own `AppSetting`, `Secret`, or a value passed in at the CDK layer)
-	 * are not affected.
+	 * Blocks: the `Auth` session secret and the `Realtime` connection token key.
+	 * Secrets you declare yourself (your own `AppSetting`, `Secret`, or a value
+	 * passed in at the CDK layer) are not affected.
 	 *
 	 * - `'secrets-manager'` (the `production` preset): one Secrets Manager secret
 	 *   per key, with a CloudFormation-generated name and value. The app's
@@ -196,7 +195,7 @@ export interface BlocksDefaults {
 	 *   stacks.
 	 *
 	 * Changing this value on a deployed stack creates new keys in the new store.
-	 * For `Realtime`, open WebSocket connections keep working; on their next
+	 * For `Auth`, every signed-in user is signed out once. For `Realtime`, open WebSocket connections keep working; on their next
 	 * reconnect, clients that pass `refresh` to `subscribe()` get new tokens, and
 	 * clients without it receive `onDisconnect('error')` and must call
 	 * `getChannel()` again. To keep an existing stack's keys where they are, set
