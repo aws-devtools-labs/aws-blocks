@@ -220,6 +220,16 @@ const CASES: Record<string, Case> = {
   'runtime config endpoint': { method: 'GET', path: '/.blocks-sandbox/config.json' },
 };
 
+// The dev server answers RawRoute and JSON-RPC requests through the same
+// dispatcher as the deployed handlers, so these responses match theirs where
+// local dev used to differ:
+// - RPC and RawRoute responses carry the no-store Cache-Control / Pragma /
+//   Expires headers.
+// - Handlers see the request cookies and the validated client user agent
+//   through requestCookies / requestClientUserAgent ("cookie", "userAgent").
+// - A RawRoute that sets a Content-Type and then throws keeps that Content-Type.
+// - ctx.request.url re-serializes the query string ("b=x+y&a=1&flag=").
+// - A RawRoute that sets an out-of-range status gets a plain 500.
 const EXPECTED: Record<string, unknown> = {
   "rpc success with a localhost origin, cookie and client user agent": {
     "status": 200,
@@ -229,11 +239,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:5173",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":null,\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"sid=abc\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
   },
   "rpc success without origin": {
     "status": 200,
@@ -243,11 +256,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":null,\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc success with a non-localhost origin": {
     "status": 200,
@@ -257,11 +273,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":null,\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc success with an unvalidated client user agent": {
     "status": 200,
@@ -271,11 +290,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":null,\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc sets two cookies, a custom header and a status": {
     "status": 201,
@@ -285,7 +307,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin",
       "x-custom": "yes"
     },
@@ -303,7 +328,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -317,7 +345,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -331,7 +362,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -345,7 +379,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -359,7 +396,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [
@@ -375,7 +415,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -389,7 +432,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -403,7 +449,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -417,7 +466,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -431,7 +483,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -445,7 +500,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -459,7 +517,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -473,7 +534,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -487,11 +551,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"named\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":null,\"userAgent\":null},\"id\":\"req-7\"}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"named\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":\"req-7\"}"
   },
   "rpc per-namespace path": {
     "status": 200,
@@ -501,11 +568,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api/api\",\"cookie\":null,\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc per-namespace path that mismatches the body": {
     "status": 200,
@@ -515,7 +585,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -529,7 +602,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -543,7 +619,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -557,7 +636,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -625,7 +707,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://127.0.0.1:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin",
       "x-route": "users"
     },
@@ -633,7 +718,7 @@ const EXPECTED: Record<string, unknown> = {
       "r1=1; Path=/",
       "r2=2; Path=/"
     ],
-    "body": "{\"id\":\"42\",\"q\":[\"a\",\"b\"],\"cookie\":null}"
+    "body": "{\"id\":\"42\",\"q\":[\"a\",\"b\"],\"cookie\":\"sid=abc\"}"
   },
   "raw route text body": {
     "status": 200,
@@ -643,7 +728,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "text/plain; charset=utf-8",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -657,7 +745,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -671,7 +762,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [
@@ -687,7 +781,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
-      "content-type": "application/json",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "text/plain",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -701,7 +798,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -715,11 +815,14 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
-    "body": "{\"url\":\"http://localhost:3000/url?b=x%20y&a=1&flag\"}"
+    "body": "{\"url\":\"http://localhost:3000/url?b=x+y&a=1&flag=\"}"
   },
   "raw route wildcard": {
     "status": 200,
@@ -729,7 +832,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -743,7 +849,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -757,7 +866,10 @@ const EXPECTED: Record<string, unknown> = {
       "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
       "access-control-allow-origin": "http://localhost:3000",
       "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
       "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
       "vary": "Origin"
     },
     "cookies": [],
@@ -766,16 +878,10 @@ const EXPECTED: Record<string, unknown> = {
   "raw route out-of-range status": {
     "status": 500,
     "headers": {
-      "access-control-allow-credentials": "true",
-      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
-      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
-      "access-control-allow-origin": "http://localhost:3000",
-      "access-control-max-age": "7200",
-      "content-type": "application/json",
-      "vary": "Origin"
+      "content-type": "application/json"
     },
     "cookies": [],
-    "body": "{\"error\":\"Internal error\"}"
+    "body": "{\"error\":\"Internal Server Error\"}"
   },
   "raw route with the wrong method falls through to the frontend": {
     "status": 404,
