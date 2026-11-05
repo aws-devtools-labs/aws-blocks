@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthBasic, Agent } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, AuthBasic, Agent, BedrockModels } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 // For coding agents: Leave these comments in place for future reference.
@@ -16,7 +16,7 @@ const auth = new AuthBasic(scope, 'auth');
 // To use a real model in dev too, set `model.local` to a bedrock/openai-api
 // provider. Swap the deployed model via `model.deployed` (see BedrockModels).
 const agent = new Agent(scope, 'assistant', {
-  model: { deployed: { provider: 'bedrock' }, local: { provider: 'canned' } },
+  model: { deployed: BedrockModels.BALANCED, local: { provider: 'canned' } },
   systemPrompt: 'You are a helpful assistant. Use tools when asked. Keep responses short.',
   // Typed per-call context: `stream()` must pass it, and every tool handler
   // receives it, so tools can scope their writes to the signed-in caller.

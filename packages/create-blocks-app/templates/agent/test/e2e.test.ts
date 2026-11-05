@@ -28,7 +28,9 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 
 // The canned-provider assertions below only hold in the local mock runtime; a
 // deployed sandbox runs a real Bedrock model whose text is non-deterministic.
-// The readiness config.json carries which one we hit.
+// So no test drives a deployed turn: the deployed path relies on `model.deployed`
+// in aws-blocks/index.ts naming a valid model. The readiness config.json
+// carries which runtime we hit.
 let isLocalMock = false;
 
 const creds = { username: 'agent-user@example.com', password: 'TestPass123!' };
