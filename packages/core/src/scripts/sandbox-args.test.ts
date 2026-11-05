@@ -24,6 +24,7 @@ import {
 } from './sandbox.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 
 /**
  * Return the value that follows `flag` in `args`, failing with a clear message
@@ -86,7 +87,7 @@ describe('buildSandboxDeployArgs — express mode (sandbox only)', () => {
     // A production deploy must keep a reviewable change set and full
     // stabilization with rollback: neither `--express` nor `--method direct`
     // (both sandbox-only speedups) may appear in buildCdkDeployArgs.
-    const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+    const prod = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: OUTPUTS_FILE.production });
     assert.ok(!prod.includes('--express'), `production deploy must not use --express: ${prod.join(' ')}`);
     assert.ok(!prod.includes('--method'), `production deploy must not use --method: ${prod.join(' ')}`);
   });

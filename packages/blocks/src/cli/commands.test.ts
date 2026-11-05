@@ -7,10 +7,10 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@aws-blocks/core/scripts';
+import { type AwsIdentity, describeDeploymentCredentials, OUTPUTS_FILE as CORE_OUTPUTS_FILE, runSecretCli } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
@@ -640,6 +640,8 @@ describe('lifecycle commands', () => {
 		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
 		const seed = (config: unknown) => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
+			// Both stacks in one document is the pre-split shape, which an app that
+			// upgrades still has on disk: a sandbox destroy must take only its own.
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
 		};
@@ -669,15 +671,20 @@ describe('lifecycle commands', () => {
 		assert.ok(!existsSync(join(dir, 'outputs.json')));
 	});
 
-	it('forgets the deleted production stack in last-deploy.json, outputs.json and config.json, and keeps the sandbox', async () => {
+	it('forgets the deleted production stack in its own outputs document, and leaves the sandbox one alone', async () => {
 		const root = withSandboxId(fixtureApp());
 		const dir = join(root, '.blocks-sandbox');
+		// Named from core's own map, so renaming the document there without
+		// updating the CLI fails here instead of silently leaving a dead stack
+		// recorded for anything that reads it.
+		const prodOutputs = basename(CORE_OUTPUTS_FILE.production);
 		const write = (name: string, value: unknown) => writeFileSync(join(dir, name), JSON.stringify(value));
 		const read = (name: string) => JSON.parse(readFileSync(join(dir, name), 'utf-8')) as unknown;
 		const entry = (stack: string) => ({ stack, apiUrl: 'https://a', url: null, account: null, region: 'us-east-1', credentials: 'x' });
 		const seed = (config: unknown) => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
-			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
+			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
+			write(prodOutputs, { 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
 		};
 		seed({ apiUrl: 'https://p', environment: 'production' });
@@ -687,19 +694,22 @@ describe('lifecycle commands', () => {
 		const declined = await runCli(['destroy'], { cwd: root, env: AWS_ENV, stdinIsTTY: true, answer: 'n' });
 		assert.strictEqual(declined.code, 1);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox', 'production']);
-		assert.deepStrictEqual(Object.keys(read('outputs.json') as object), ['demo-jdoe-abc123', 'demo-prod']);
+		assert.deepStrictEqual(Object.keys(read(prodOutputs) as object), ['demo-prod']);
 		assert.ok(existsSync(join(dir, 'config.json')));
 		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox']);
+		// Its own document held only that stack, so it goes; the sandbox's is untouched.
+		assert.ok(!existsSync(join(dir, prodOutputs)));
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
 		assert.ok(!existsSync(join(dir, 'config.json')), 'the production config.json points at the deleted API');
-		// A sandbox config.json stays; an outputs.json with only the production stack goes.
+		// A sandbox config.json stays. A production document naming a second stack
+		// keeps that entry rather than being removed wholesale.
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
-		write('outputs.json', { 'demo-prod': { ApiUrl: 'https://p' } });
+		write(prodOutputs, { 'demo-prod': { ApiUrl: 'https://p' }, 'edge-lambda-stack-x': { Fn: 'arn' } });
 		assert.strictEqual((await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV })).code, 0);
 		assert.deepStrictEqual(read('config.json'), { apiUrl: 'https://s', environment: 'sandbox' });
-		assert.ok(!existsSync(join(dir, 'outputs.json')));
+		assert.deepStrictEqual(read(prodOutputs), { 'edge-lambda-stack-x': { Fn: 'arn' } });
 	});
 
 	it('refuses a project telemetry change outside an app, and reads status from the -C directory', async () => {

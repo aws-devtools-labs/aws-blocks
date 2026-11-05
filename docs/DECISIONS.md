@@ -905,3 +905,46 @@ What the bound needs is an ordering rather than a margin: 64 characters sits bel
 - D-020 — what a native generator validates
 - `packages/core/src/scripts/validate-native-catalogs.ts` — `EXPORT_GRAMMAR`, the alphabet the generators follow; `MAX_EXPORT_LENGTH`, the 64-character bound shared with `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/parser/NativeCatalogParser.kt` alone; and `seenTags`, which a derived type name is distinct from
 - `native/swift/Sources/BlocksCodegen/CodegenModel.swift`, `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/NamingUtils.kt`, `native/dart/packages/blocks_codegen/lib/src/builder.dart` — the three derivations
+
+## D-022: Each deploy stage writes its own CDK outputs document
+
+**Date**: 2026-11-05
+**Authors:** phandpau
+
+### Context
+`npm run deploy` and `npm run sandbox` both passed `--outputs-file .blocks-sandbox/outputs.json`, so one file held whichever stage deployed last.
+
+The CDK CLI does not merge into that file. It writes the stacks of the one invocation that produced it, and it writes from a `finally` block, so the write lands even when the deploy throws (confirmed in review against the pinned `aws-cdk@2.1138.0`). Two consequences followed. A production deploy replaced the sandbox's record with its own stack alone, so anything reading the file for the sandbox got production's stack. And a deploy that failed on its first stack wrote an empty document, blanking the record of a stack that was still standing.
+
+Readers have been working around this rather than relying on the file. `.blocks-sandbox/last-deploy.json` exists because the shared document cannot be trusted after the runner exits, and `sandbox console` derives the sandbox stack name instead of reading a stack out of the document at all.
+
+### Decision
+One outputs document per stage, by name:
+
+- sandbox keeps `.blocks-sandbox/outputs.json`
+- production writes `.blocks-sandbox/outputs.production.json`
+
+The names live in one place, `OUTPUTS_FILE` in `packages/core/src/scripts/deploy-outputs.ts`, with `outputsFileIn` for the sandbox commands, whose out directory is an option. The CLI's record cleanup takes the document of the stage it is forgetting, so destroying one stage no longer leaves the other's record behind, and no longer fails to clean its own.
+
+### Rationale
+Two distinct file names are the whole fix, because the write is the CDK CLI's and it cannot be asked to merge. Nothing downstream has to detect or repair a mixed document: a stage's file holds only ever that stage's stacks, and a failed production deploy can only blank production's record.
+
+Both documents stay in `.blocks-sandbox/`. The directory's name is a wart (it holds per-deploy state for every stage, not only the sandbox) but it is already ignored everywhere, while `.blocks/` is committed for the `config.json` carrying the app's stable `stackId` (D-012). A per-deploy, account-specific file placed there would need an explicit per-file ignore in every template, every example and the scaffolder, and any consumer that forgot one would commit another developer's deployment record. Renaming the directory is a separate, breaking change: the Hosting construct serves it as a public URL path.
+
+An app that upgrades still has a pre-split `outputs.json` on disk, and it can hold production's stack alone. That document is now only ever corroboration for a derived stack name, never the source of one, so a stale file cannot name the wrong stack. The CLI test for a sandbox destroy keeps a mixed document as its fixture for exactly that shape.
+
+### Alternatives Considered
+**Keep one file and choose the right stack when reading it.** Rejected: after a deploy the file physically holds only that invocation's stacks, so there is no second stack to choose between. The other stage's record is gone, not ambiguous.
+
+**Record production's outputs in `.blocks/` instead.** Rejected: that directory is committed, so it would need a per-file ignore everywhere a template or example is scaffolded, and a single omission commits a developer's deployment record.
+
+**Rely on `last-deploy.json` alone and leave the shared document as it is.** Rejected: it records only a successful deploy made through the CLI runner, so a failed deploy and an app driven by the old npm-script wrappers leave no entry, and it is owned by the CLI while core and the dashboard sit below it. It remains the right source for what a deploy reported; it is not a substitute for the document being correct.
+
+**Merge each invocation's stacks into the existing file after the deploy.** Rejected: it re-derives state the CDK CLI just wrote, and a deploy killed between the CLI's write and the merge leaves the file in the state this decision exists to prevent.
+
+### References
+- `packages/core/src/scripts/deploy-outputs.ts` — `OUTPUTS_FILE`, the two names, and `outputsFileIn` for a caller-supplied out directory
+- `packages/core/src/scripts/deploy.ts` — the production write and the post-deploy read
+- `packages/core/src/scripts/sandbox.ts` — the sandbox writes and read, via `outputsFileIn`
+- `packages/blocks/src/cli/commands.ts` — `OUTPUTS_BASENAME`, mirrored rather than imported because core is resolved lazily and version-checked, and pinned against core by a test
+- D-012 — the committed `.blocks/config.json` and the app's stable `stackId`

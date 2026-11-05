@@ -14,6 +14,7 @@ import { generateDeployClient } from './deploy-client-codegen.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 import { log } from './log.js';
 
 export interface DeployOptions {
@@ -30,9 +31,11 @@ export interface DeployOptions {
   waitLiveTimeoutSec?: number;
   /**
    * Called with the outputs of the deployed stack as soon as the deploy has read
-   * them from `.blocks-sandbox/outputs.json`, before the liveness wait. A launcher
-   * that reports the result records them here: a sandbox deploy of the same app
-   * rewrites that file with only its own stack, and can do so during the wait.
+   * them from `.blocks-sandbox/outputs.production.json`, before the liveness wait.
+   * A launcher that reports the result records them here, rather than reading that
+   * file after the wait: a second production deploy of the same app rewrites it
+   * with only its own stack, and can do so during the wait. A sandbox deploy no
+   * longer can, since each stage now writes its own document.
    */
   onDeployed?: (deployed: DeployedStack) => void;
   /** How the user runs the deploy, in the guidance (for example `cdk-blocks deploy`). Default: `npm run deploy`. */
@@ -289,7 +292,7 @@ export async function deploy(options: DeployOptions) {
     const cdkOutput = createCdkOutput({ label: 'cdk deploy', verb: 'deploy' });
 
     // Captured from the CDK progress stream the moment CloudFront's URL appears
-    // — well before CREATE_COMPLETE and the post-run outputs.json read. Printing
+    // — well before CREATE_COMPLETE and the post-run outputs read. Printing
     // it early means a deploy that is still converging, or gets killed at a
     // caller's timeout, has already surfaced where the frontend lives.
     let earlyHostingUrl: string | undefined;
@@ -304,7 +307,7 @@ export async function deploy(options: DeployOptions) {
         "npx",
         buildCdkDeployArgs({
           projectRoot: options.projectRoot,
-          outputsFile: '.blocks-sandbox/outputs.json',
+          outputsFile: OUTPUTS_FILE.production,
         }),
         {
           label: 'cdk deploy',
@@ -319,7 +322,7 @@ export async function deploy(options: DeployOptions) {
           onHostingUrl: (url) => {
             earlyHostingUrl = url;
             // Not the canonical BLOCKS_DEPLOYED line (that needs the API URL,
-            // known only from outputs.json below). This is an early, greppable
+            // known only from the outputs read below). This is an early, greppable
             // frontend-URL line so a caller learns where the app lives even if
             // the process is killed before the deploy fully completes. Its label
             // deliberately differs from the final `🌐 Frontend URL:` line so a
@@ -344,7 +347,7 @@ export async function deploy(options: DeployOptions) {
     
     registerFrameworkFromSink(frameworkSink);
 
-    const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
+    const outputs = JSON.parse(readFileSync(join(options.projectRoot, ...OUTPUTS_FILE.production.split('/')), 'utf-8'));
     // `--all` can write more than one stack's outputs (e.g. the us-east-1
     // CloudFront-alarm monitoring stack). Pick the group that carries `ApiUrl`
     // — the main Blocks stack, which also holds the Hosting outputs — rather

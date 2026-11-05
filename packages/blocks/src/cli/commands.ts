@@ -601,11 +601,23 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 }
 
 /**
+ * Each stage's CDK outputs document, by basename, mirroring core's `OUTPUTS_FILE`.
+ *
+ * Spelled here rather than imported: core is resolved lazily and version-checked
+ * (`core-load.ts`), so a static value import would bypass that guard and fail
+ * with Node's raw error on a skewed install. A test pins these against core.
+ */
+const OUTPUTS_BASENAME: Readonly<Record<DeployStage, string>> = {
+	sandbox: 'outputs.json',
+	production: 'outputs.production.json',
+};
+
+/**
  * Remove what this machine recorded about the deleted stack of `stage`, so that
  * `sandbox console`, `--output json` and the frontend no longer point at it: its
- * entry in `last-deploy.json`, its stack in `outputs.json`, and `config.json`
- * when a deploy of that stage wrote it. The other stage's records stay, and so
- * does the sandbox id: the next deploy reuses it.
+ * entry in `last-deploy.json`, its stack in that stage's outputs document, and
+ * `config.json` when a deploy of that stage wrote it. The other stage's records
+ * stay, and so does the sandbox id: the next deploy reuses it.
  */
 function forgetDeployRecords(root: string, stage: DeployStage, stack: string): void {
 	forgetLastDeploy(root, stage);
@@ -621,23 +633,26 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
 			? Object.fromEntries(Object.entries(value))
 			: undefined;
 	};
-	const outputs = readJson('outputs.json');
+	const outputsName = OUTPUTS_BASENAME[stage];
+	const outputs = readJson(outputsName);
 	if (outputs && Object.hasOwn(outputs, stack)) {
 		delete outputs[stack];
-		if (Object.keys(outputs).length === 0) rmSync(join(dir, 'outputs.json'));
-		else writeFileSync(join(dir, 'outputs.json'), `${JSON.stringify(outputs, null, 2)}\n`);
+		if (Object.keys(outputs).length === 0) rmSync(join(dir, outputsName));
+		else writeFileSync(join(dir, outputsName), `${JSON.stringify(outputs, null, 2)}\n`);
 	}
 	if (readJson('config.json')?.environment === stage) rmSync(join(dir, 'config.json'));
 }
 
 /**
  * Open the console for this machine's sandbox stack, never another stack in
- * `.blocks-sandbox/outputs.json`, which a production deploy rewrites with its
- * own stack alone. The Region is the one the sandbox was deployed to, when
- * `last-deploy.json` recorded it; otherwise the sandbox's configured Region.
- * When neither record names the stack (a sandbox that the old npm-script
- * wrappers deployed, then a production deploy), CloudFormation is asked: only a
- * stack that does not exist is refused.
+ * `.blocks-sandbox/outputs.json`. A production deploy no longer rewrites that
+ * file, since each stage now writes its own document, but one written before
+ * that split still holds production's stack alone, so the stack is derived here
+ * and the document is only ever corroboration. The Region is the one the sandbox
+ * was deployed to, when `last-deploy.json` recorded it; otherwise the sandbox's
+ * configured Region. When neither record names the stack (a sandbox that the old
+ * npm-script wrappers deployed, then a production deploy), CloudFormation is
+ * asked: only a stack that does not exist is refused.
  */
 export async function sandboxConsole(ctx: Context): Promise<number> {
 	const root = ctx.enterRoot();
@@ -651,7 +666,7 @@ export async function sandboxConsole(ctx: Context): Promise<number> {
 	const last = readLastDeploy(root, 'sandbox');
 	let outputs: unknown;
 	try {
-		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
+		outputs = JSON.parse(readFileSync(join(root, '.blocks-sandbox', OUTPUTS_BASENAME.sandbox), 'utf-8'));
 	} catch {
 		// No outputs: only last-deploy.json can show that the sandbox was deployed.
 	}
