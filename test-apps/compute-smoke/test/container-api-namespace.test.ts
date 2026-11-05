@@ -165,6 +165,17 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       assert.strictEqual(reply.result?.requestUrl, `${ctx.apiUrl()}/containerApi`);
     });
 
+    if (ctx.frontDoor === 'cloudfront') {
+      test('ignores a loopback X-Forwarded-Host a client sends', async () => {
+        // The container takes a loopback X-Forwarded-Host first (local dev); the
+        // CloudFront edge drops the client's, so the URL stays the public one.
+        const res = await post('whereAmI', [], { 'x-forwarded-host': 'localhost' });
+        assert.strictEqual(res.status, 200);
+        const reply = (await res.json()) as { result?: WhereAmI };
+        assert.strictEqual(reply.result?.requestUrl, `${ctx.apiUrl()}/containerApi`);
+      });
+    }
+
     test('never takes the host from a client copy under another letter case', async () => {
       // A front door that overwrites only the exact name it maps could pass this one
       // through alongside its own: the container then refuses the request (400)
