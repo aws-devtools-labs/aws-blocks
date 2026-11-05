@@ -19,7 +19,7 @@ npm run dev
 
 `npm run dev` starts a local development server at `http://localhost:3000` with every Block running a local implementation — no AWS account or credentials required. Define your backend in `aws-blocks/index.ts` and your frontend in `src/`; types flow end to end with no code generation step.
 
-- Start from a specific template with `--template <name>`. Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `amplify`, `demo` (`npx @aws-blocks/create-blocks-app --help` describes each; `auth` was previously `auth-cognito`, which still works).
+- Start from a specific template with `--template <name>`. Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `cron`, `amplify`, `demo` (`npx @aws-blocks/create-blocks-app --help` describes each; `auth` was previously `auth-cognito`, which still works).
 - Run the command inside an existing project (omit the directory, or pass `.`) to add an `aws-blocks/` backend to it. The CLI auto-detects an AWS Amplify Gen 2 project and integrates with it.
 
 For a full walkthrough, see [Getting started with AWS Blocks](https://docs.aws.amazon.com/blocks/latest/devguide/getting-started.html).

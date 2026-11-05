@@ -187,11 +187,11 @@ sequenceDiagram
 
 Adding `AuthErrors` changed nothing about what the predecessor blocks threw. There are **no runtime aliases**: a caller matching an old `AuthBasic` name will not match the new one, so each rename below is a breaking change when `AuthBasic` callers move to `Auth` (see [`MIGRATION.md`](../bb-auth/MIGRATION.md#error-names)).
 
-### Mapping from today's names
+### Mapping from predecessor names
 
-`src/errors.test.ts` holds this table as data and fails when any of the three auth BBs' sources contain an error name with no row, so the table cannot fall behind.
+`src/errors.test.ts` holds this table as data and checks every error name recorded from the three removed blocks' sources against it: a name with no row fails the test.
 
-| Source | Today's name | `AuthErrors` | Change |
+| Source | Predecessor name | `AuthErrors` | Change |
 |---|---|---|---|
 | `AuthCognito` | all 29 `AuthCognitoErrors` | same keys, same values | unchanged |
 | `AuthOIDC` | all 8 `AuthOIDCErrors` | same keys, same values | unchanged |
@@ -269,11 +269,6 @@ Display: the session answer if it is signed in, else the flow answer if there is
 The race tests check this exhaustively: every interleaving of up to three concurrent operations (hydration, another tab's sign-in or sign-out and the refetch it triggers, a submit with a terminal result, a submit with a mid-flow result, a session timeout followed by a new sign-in, and failures of each), for one and two APIs, both with this cookie timing and with the old naive timing in which a request's effect lands when it is sent. After every event the snapshot must be the one the rule names; once everything settles it must equal the session's truth (a fresh read, or the step the tab is still in) when no request failed, `onAuthChange` must agree with it (or hold the last broadcast, when a refetch failed), and nothing may cross APIs. With cookie timing, `onAuthChange`'s emissions are also checked against the server's session: once it reported a sign-out the server had made, it reports a user again only after a sign-in since (another tab's late broadcast excepted: it names a sign-in that happened, and the refetch corrects it). Reads are bounded by their causes (one per API, broadcast, action and failure), and a run that does not settle, or an enumeration that overruns its time budget, fails.
 
 `npm test` runs the one-API sets and the two-API sets of up to two operations (about 1.2 million interleavings). The two-API, three-operation sets (about 8.6 million more) run with `AUTH_STORE_RACES_FULL=1`; the `Auth Store Races` workflow does that on every PR that changes `src/ui.ts` or the race model. Run it locally the same way after changing the store: `AUTH_STORE_RACES_FULL=1 node --test dist/ui.races.*.test.js` in this package.
-
-Follow-ups:
-
-- **A bounded fallback for a failed re-read.** Falling back from a held step to the signed-in answer whenever the re-read fails loses live steps (an older read still in flight may yet say `signedOut`) and can re-emit a stale user. A fallback is safe only when the signed-in session answer is newer than the last broadcast heard and than every read still in flight; the race suite (with the oracle checking the end state against the server's session on failure paths too) is the check for it.
-- The ordering itself (`sendRead`, `takeAction` and the display choice in `updateState`) could move into a pure reducer module so `ui.ts` keeps only the DOM and broadcast wiring; the race suite in full mode is the check that such a move changes nothing.
 
 The model takes a failed request to have never reached the server; a request the server handled whose answer was then lost is outside it (the store keeps what it showed, and the next broadcast or reload corrects it).
 
