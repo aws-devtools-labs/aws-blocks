@@ -1035,8 +1035,34 @@ describe('Auth federation — synth-time checks', () => {
 			constructError({ providers: { google }, redirects: { postSignOutPath: 'https://evil.example/' } }),
 			/redirects\.postSignOutPath must be an absolute path/,
 		);
+		// The bare prefix names no route: refused on either store (a `'builtin'` block was not checked before).
+		for (const store of [undefined, 'builtin']) {
+			for (const key of ['callbackPath', 'signOutPath']) {
+				assert.match(
+					constructError({
+						store,
+						providers: store ? { okta } : { google },
+						redirects: { [key]: '/aws-blocks/auth/' },
+					}),
+					new RegExp(`redirects\\.${key} must be an explicit path under`),
+					`${store ?? 'cognito'} ${key}`,
+				);
+			}
+		}
 		// Without providers no sign-in route is mounted, so `redirects` is not read (as at runtime).
 		synth(`new Auth(stack, 'auth', { redirects: { postSignInPath: 'https://evil.example/' } })`);
+	});
+
+	test("a provider id must not contain '/', on either store", () => {
+		const okta = { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' };
+		assert.match(
+			constructError({ store: 'builtin', providers: { 'corp/okta': okta } }),
+			/provider id 'corp\/okta' must not contain '\/'/,
+		);
+		assert.match(
+			constructError({ providers: { 'corp/okta': { ...okta, clientSecret: secret } } }),
+			/provider id 'corp\/okta' must not contain '\/'/,
+		);
 	});
 
 	test('hostedUi.domainPrefix must be a valid, unreserved Cognito prefix', () => {

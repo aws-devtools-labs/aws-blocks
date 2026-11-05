@@ -159,6 +159,9 @@ export interface AuthCommonOptions {
 	 *   library, with its own app client) is not seen: no trigger backs this
 	 *   phase. Its tokens still reach the guards with
 	 *   {@link CognitoAuthOptions.allowBearerAuth}, so gate per request there.
+	 *   On either store, a bearer token is verified per request and does not run
+	 *   `validateUser`; gate per request (e.g. check `user.attributes.email`)
+	 *   when you rely on it.
 	 *
 	 * **By store.** A `'cognito'` block runs both phases. A `store: 'builtin'`
 	 * block's providers (OIDC, OAuth 2.0 and `stubIdp()`) create no pool user, so
@@ -512,6 +515,12 @@ export interface BuiltinAuthOptions extends AuthCommonOptions {
 	 * (issuer, audience = its client id, expiry). See
 	 * {@link CognitoAuthOptions.allowBearerAuth} for the details. The object
 	 * form (extra Cognito app clients) needs `store: 'cognito'`.
+	 *
+	 * A bearer token is verified per request and does not run `validateUser`;
+	 * gate per request (e.g. check `user.attributes.email`) when you rely on it.
+	 * Its groups for `requireRole()` are the token's `groupsClaim`, and the
+	 * returned user's `groups` is narrowed to the declared `users.groups`, as for
+	 * a session.
 	 *
 	 * @default false
 	 */

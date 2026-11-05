@@ -648,13 +648,17 @@ function hintFor(key: string, parentPath: string, shape: Shape, store: AuthStore
 	return undefined;
 }
 
-/** The wrong value, for a message: ``the number 0``, ``the string "false"``, `` `null` ``, ``an array``, ``a Map``. */
+/**
+ * The wrong value, for a message: ``the number 0``, ``the string "false"``, `` `null` ``, ``an array``, ``a Map``.
+ * A string longer than 8 characters is shown by length only (``a string (40 characters)``): a misplaced token or
+ * secret must not reach a log.
+ */
 function describeValue(value: unknown): string {
 	if (value === null) return '`null`';
 	if (Array.isArray(value)) return 'an array';
 	switch (typeof value) {
 		case 'string':
-			return `the string ${JSON.stringify(value.length > 40 ? `${value.slice(0, 40)}…` : value)}`;
+			return value.length > 8 ? `a string (${value.length} characters)` : `the string ${JSON.stringify(value)}`;
 		case 'number':
 		case 'bigint':
 			return `the number ${String(value)}`;

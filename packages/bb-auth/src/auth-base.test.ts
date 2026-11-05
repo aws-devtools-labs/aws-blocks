@@ -604,6 +604,20 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 			direct.map((p) => [p.id, p.transport, p.label]),
 			[['okta', 'direct', 'Sign in with Okta']],
 		);
+		// An id named like an `Object.prototype` member gets the capitalized fallback, not the member.
+		const protoNamed = resolveProviders(
+			resolveOptions({
+				store: 'builtin',
+				providers: {
+					constructor: { type: 'oidc' as const, issuer: 'i', clientId: 'c' },
+					toString: { type: 'oidc' as const, issuer: 'i2', clientId: 'c' },
+				},
+			}),
+		);
+		assert.deepStrictEqual(
+			protoNamed.map((p) => p.label),
+			['Sign in with Constructor', 'Sign in with ToString'],
+		);
 	});
 
 	test('two entries of one social type fail at construction (a social provider is keyed by its type)', () => {

@@ -863,9 +863,19 @@ describe('boolean options are type-checked, not only key-checked', () => {
 		assert.deepStrictEqual(invalid({ deletionProtection: 1n }), [
 			['deletionProtection', 'must be `true` or `false`, got the number 1'],
 		]);
-		assert.deepStrictEqual(invalid({ deletionProtection: 'x'.repeat(50) }), [
-			['deletionProtection', `must be \`true\` or \`false\`, got the string "${'x'.repeat(40)}…"`],
+		// Longer than 8 characters: the length only, so a misplaced token is never echoed.
+		assert.deepStrictEqual(invalid({ deletionProtection: 'x'.repeat(9) }), [
+			['deletionProtection', 'must be `true` or `false`, got a string (9 characters)'],
 		]);
+		assert.deepStrictEqual(invalid({ deletionProtection: 'x'.repeat(8) }), [
+			['deletionProtection', 'must be `true` or `false`, got the string "xxxxxxxx"'],
+		]);
+		const token = `ghp_${'a'.repeat(36)}`;
+		const shown = invalid({ store: 'builtin', providers: { corp: token } });
+		assert.deepStrictEqual(shown, [
+			['providers.corp', 'must be a provider object (`{ type: … }`), got a string (40 characters)'],
+		]);
+		assert.ok(!JSON.stringify(shown).includes('ghp_'), 'the token is not echoed');
 	});
 
 	test("on store: 'builtin', allowBearerAuth takes a boolean; any other non-object is invalid, not a conflict", () => {

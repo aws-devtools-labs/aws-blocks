@@ -22,5 +22,8 @@ const KNOWN_PROVIDER_NAMES: Record<string, string> = {
 
 /** The provider's display name: its brand casing when known, else the id, capitalized. */
 export function providerDisplayName(id: string): string {
-	return KNOWN_PROVIDER_NAMES[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
+	// `Object.hasOwn`: an id like `constructor` must not read `Object.prototype`.
+	return Object.hasOwn(KNOWN_PROVIDER_NAMES, id)
+		? KNOWN_PROVIDER_NAMES[id]
+		: id.charAt(0).toUpperCase() + id.slice(1);
 }

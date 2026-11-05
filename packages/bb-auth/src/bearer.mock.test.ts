@@ -313,8 +313,11 @@ describe('allowBearerAuth — direct OIDC rejections (fake IdP) on the mock', ()
 
 	test('a valid access token is accepted; groupsClaim drives requireRole', async () => {
 		const auth = makeOktaAuth();
-		const token = await idp.accessJwt('user-1', { claims: { groups: ['admin'], email: 'ada@example.com' } });
+		const token = await idp.accessJwt('user-1', {
+			claims: { groups: ['admin', 'out-of-band'], email: 'ada@example.com' },
+		});
 		const user = await auth.requireRole(bearerCtx(APP, token), 'admin');
+		assert.deepStrictEqual(user.groups, ['admin'], 'narrowed to the declared groups, as for a session');
 		assert.strictEqual(user.userId, `${idp.issuer}:user-1`);
 		assert.strictEqual(user.username, 'ada@example.com');
 		assert.strictEqual(user.attributes.email, 'ada@example.com');

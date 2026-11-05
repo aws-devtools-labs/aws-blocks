@@ -413,6 +413,15 @@ export function validateDomainPrefix(prefix: unknown, what: string): string {
 	return prefix;
 }
 
+/** Provider ids free of `/` (they name routes and resources), on either store. */
+export function assertProviderIds(options: ResolvedAuthOptions): void {
+	for (const value of [options.socialProviders, options.oidcProviders, options.samlProviders]) {
+		for (const [id, entry] of Object.entries(value ?? {})) {
+			if (entry && id.includes('/')) throw new Error(`Auth: provider id '${id}' must not contain '/'.`);
+		}
+	}
+}
+
 /**
  * The `redirects` checks of a block with `providers`, on either store (the
  * runtime mounts the sign-in routes for any provider, and refuses the same
@@ -453,12 +462,7 @@ export function assertRedirectPaths(options: ResolvedAuthOptions): void {
  * by construction: they are the keys of the one `providers` map.)
  */
 export function validateFederationOptions(options: ResolvedAuthOptions): void {
-	for (const value of [options.socialProviders, options.oidcProviders, options.samlProviders]) {
-		for (const [id, entry] of Object.entries(value ?? {})) {
-			if (entry && id.includes('/')) throw new Error(`Auth: provider id '${id}' must not contain '/'.`);
-		}
-	}
-
+	assertProviderIds(options);
 	assertRedirectPaths(options);
 
 	if (options.userPool && cognitoFederatedProviders(options).length > 0) {

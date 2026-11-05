@@ -60,7 +60,7 @@ import {
 } from './cdk/contract.js';
 import { assertEmailSender, mapEmailSender } from './cdk/email-sender.js';
 import { provisionHostedUiFederation } from './cdk/federation.js';
-import { assertRedirectPaths } from './cdk/federation-providers.js';
+import { assertProviderIds, assertRedirectPaths } from './cdk/federation-providers.js';
 import { guardUserPool } from './cdk/immutability-guard.js';
 import {
 	adminIamActions,
@@ -187,6 +187,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 				Object.values(m ?? {}).some(Boolean),
 			)
 		) {
+			assertProviderIds(opts);
 			assertRedirectPaths(opts);
 			claimAuthRoutes(this, id, opts);
 		}
