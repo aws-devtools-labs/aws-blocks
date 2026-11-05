@@ -307,10 +307,14 @@ export async function runContainer(options: RunContainerOptions = {}): Promise<v
 			// Closing the API server reports not-ready at once, so the load balancer
 			// stops routing here while requests drain.
 			const drains = handles.filter((h) => h.drain).map((h) => h.drain!());
-			await Promise.allSettled([
-				api?.close(),
-				Promise.race([Promise.allSettled(drains), new Promise((r) => setTimeout(r, DRAIN_GRACE_MS))]),
-			]);
+			// Cleared once the drains settle, so a finished drain doesn't hold the
+			// process open for the rest of the grace window.
+			let graceTimer: ReturnType<typeof setTimeout> | undefined;
+			const grace = new Promise((r) => {
+				graceTimer = setTimeout(r, DRAIN_GRACE_MS);
+			});
+			await Promise.allSettled([api?.close(), Promise.race([Promise.allSettled(drains), grace])]);
+			clearTimeout(graceTimer);
 			health?.close();
 			resolve();
 		};
