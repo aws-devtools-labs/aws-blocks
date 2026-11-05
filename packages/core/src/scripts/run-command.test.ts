@@ -26,6 +26,9 @@ describe('runCapture', () => {
   });
 
   it('throws when the command is killed by a signal', { skip: process.platform === 'win32' }, () => {
-    assert.throws(() => runCapture(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")']), /terminated by signal SIGTERM/);
+    assert.throws(
+      () => runCapture(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")']),
+      /terminated by signal SIGTERM/,
+    );
   });
 });

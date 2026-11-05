@@ -172,6 +172,8 @@ export interface SandboxDeployArgsOptions {
    * {@link SandboxOptions.preview}.
    */
   preview?: boolean;
+  /** Shell the `--app` command string is quoted for (see {@link quoteCdkAppPath}). Default: `process.platform`. */
+  platform?: NodeJS.Platform;
 }
 
 /**
@@ -179,7 +181,7 @@ export interface SandboxDeployArgsOptions {
  * once into `<outDir>/cdk.out`, inspect the templates (see
  * {@link stacksWithExpressUnsafeResources}), then deploy that assembly.
  */
-export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, preview = false }: SandboxDeployArgsOptions): string[] {
+export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, preview = false, platform }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "synth",
     "--quiet",
@@ -187,7 +189,7 @@ export function buildSandboxSynthArgs({ outDir, projectRoot, backendPath, previe
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`,
   ];
 }
 
@@ -290,6 +292,7 @@ export function buildSandboxDeployArgs({
   assemblyDir,
   hotswap = false,
   preview = false,
+  platform,
 }: SandboxDeployArgsOptions): string[] {
   return [
     "exec", "cdk", "--", "deploy",
@@ -302,7 +305,7 @@ export function buildSandboxDeployArgs({
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
-    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
+    "--app", assemblyDir ?? `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`,
   ];
 }
 
