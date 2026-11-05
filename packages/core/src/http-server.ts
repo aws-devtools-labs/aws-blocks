@@ -57,8 +57,9 @@ export interface HttpServerHandle {
   /**
    * Stop accepting requests and report not-ready, wait up to `drainTimeoutMs` for
    * in-flight requests (until their handlers settle and their responses have been
-   * written), then close any remaining connections. Repeated calls return the
-   * same promise.
+   * written), then close any remaining connections. A request whose client
+   * disconnects before the response is fully delivered also counts as complete
+   * once its connection closes. Repeated calls return the same promise.
    */
   close(): Promise<void>;
 }
@@ -147,7 +148,7 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
   }
   const env: RequestEnv = {
-    dispatch: createDispatcher(backend),
+    dispatch: createDispatcher(backend, { rpcErrorLabel: 'HTTP Server RPC Error:' }),
     maxBodyBytes,
     publicOrigin,
     trustForwardedHeaders: options.trustForwardedHeaders ?? false,
@@ -527,11 +528,17 @@ function requestHost(req: http.IncomingMessage): string {
 /**
  * Whether the front-door-stamped headers, where present, are one well-formed
  * value each: {@link FORWARDED_HOST_HEADER} a host (see
- * {@link STAMPED_HOST_PATTERN}), {@link FORWARDED_STAGE_HEADER} a stage name.
+ * {@link STAMPED_HOST_PATTERN}) that also forms a valid `https://` URL (so its
+ * port is in range), {@link FORWARDED_STAGE_HEADER} a stage name.
  */
 function hasValidStampedHeaders(req: http.IncomingMessage): boolean {
   const host = req.headersDistinct[FORWARDED_HOST_HEADER];
-  if (host && (host.length !== 1 || !STAMPED_HOST_PATTERN.test(host[0]))) return false;
+  if (
+    host &&
+    (host.length !== 1 || !STAMPED_HOST_PATTERN.test(host[0]) || !URL.canParse(`https://${host[0]}`))
+  ) {
+    return false;
+  }
   const stage = req.headersDistinct[FORWARDED_STAGE_HEADER];
   if (stage && (stage.length !== 1 || !STAGE_PATTERN.test(stage[0]))) return false;
   return true;

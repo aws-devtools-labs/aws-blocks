@@ -693,6 +693,7 @@ describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => 
     ['a list of hosts', [`x-blocks-forwarded-host: attacker.example, ${API_HOST}`]],
     ['two stages', [`x-blocks-forwarded-host: ${API_HOST}`, 'X-Blocks-Forwarded-Stage: evil', 'x-blocks-forwarded-stage: prod']],
     ['a stage with a path', [`x-blocks-forwarded-host: ${API_HOST}`, 'x-blocks-forwarded-stage: prod/evil']],
+    ['a host with an out-of-range port', ['x-blocks-forwarded-host: a.example:99999']],
   ] as const) {
     it(`refuses ${name} with 400`, async () => {
       const server = await start({ trustForwardedHeaders: true });
@@ -703,6 +704,16 @@ describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => 
       }
     });
   }
+
+  it('accepts a stamped host with the highest valid port', async () => {
+    const server = await start({ trustForwardedHeaders: true });
+    try {
+      const reply = await send(server.port, 'GET', '/url', { 'x-blocks-forwarded-host': 'a.example:65535' });
+      assert.deepStrictEqual(JSON.parse(reply.body), { url: 'https://a.example:65535/url' });
+    } finally {
+      await server.close();
+    }
+  });
 
   it('ignores stamped headers it does not trust', async () => {
     const server = await start();
@@ -811,7 +822,7 @@ describe('serveHttp — initialization and request targets', { timeout: 30_000 }
     ['a fractional port', { port: 80.5 }, /port must be an integer from 0 to 65535/],
     ['a negative healthPort', { healthPort: -1 }, /healthPort must be an integer from 0 to 65535/],
     ['a NaN healthPort', { healthPort: Number.NaN }, /healthPort must be an integer from 0 to 65535/],
-    ['a healthPort equal to the port', { port: 18_080, healthPort: 18_080 }, /port and healthPort must differ/],
+    ['a healthPort equal to the port', { port: 18_080, healthPort: 18_080 }, /The request port and healthPort must differ/],
   ] as const) {
     it(`fails fast on ${name}`, async () => {
       let started: HttpServerHandle | undefined;
