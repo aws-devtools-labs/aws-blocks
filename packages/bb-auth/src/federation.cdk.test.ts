@@ -990,7 +990,7 @@ describe('Auth federation — synth-time checks', () => {
 		// Rejected by the options resolver, before the CDK layer's own checks.
 		assert.match(
 			constructError({ providers: { github: { ...google, type: 'github' } } }),
-			/providers\.github has `type: 'github'`, which a Cognito user pool cannot federate/,
+			/providers\.github has `type: 'github'`, which is not a provider type/,
 		);
 	});
 

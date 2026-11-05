@@ -235,6 +235,10 @@ describe('resolveOptions — backstops for untyped callers', () => {
 			['emailPassword', true],
 			['emailPassword', {}],
 			['codeDelivery', async () => {}],
+			['hostedUi', { domainPrefix: 'x' }],
+			['featurePlan', 'essentials'],
+			['email', { fromAddress: 'a@example.com' }],
+			['totpVerification', 'rfc6238'],
 		] as const) {
 			const options: unknown = { store: 'builtin', providers: { local: stubIdp() }, [key]: value };
 			assert.throws(
@@ -266,6 +270,84 @@ describe('resolveOptions — backstops for untyped callers', () => {
 				"Auth 'sso': `mfa`, `admin`, `users.signInWith` need `store: 'cognito'` (the default): " +
 				"a `store: 'builtin'` block has no user pool. Remove it, or drop `store: 'builtin'`.",
 		});
+	});
+
+	it('ignores a users key set to undefined on store: builtin, and does not crash on a non-object users', () => {
+		const options: unknown = {
+			store: 'builtin',
+			providers: { local: stubIdp() },
+			users: { groups: ['a'], signInWith: undefined, attributes: undefined },
+		};
+		assert.deepEqual(resolveOptions(options as AuthOptions).users, { groups: ['a'] });
+		const text: unknown = { store: 'builtin', providers: { local: stubIdp() }, users: 'x' };
+		assert.doesNotThrow(() => resolveOptions(text as AuthOptions));
+	});
+
+	it('reads own keys only, as the option validation does: an inherited store is not the store', () => {
+		const inherited: unknown = Object.assign(Object.create({ store: 'builtin' }), { mfa: 'optional' });
+		const resolved = resolveOptions(inherited as AuthOptions);
+		assert.equal(resolved.store, 'cognito');
+		assert.equal(resolved.mfa, 'optional');
+	});
+
+	it('quotes a provider id that is not an identifier, as the option validation does', () => {
+		const cases: [unknown, RegExp][] = [
+			[
+				{ providers: { 'my-gmail': { type: 'google', clientId: 'g', clientSecret: secret } } },
+				/Auth: providers\["my-gmail"\] has `type: 'google'`, so its key must be `google`/,
+			],
+			[
+				{ store: 'builtin', providers: { 'my-idp': { type: 'saml', metadataUrl: 'https://p' } } },
+				/Auth: providers\["my-idp"\] has `type: 'saml'`, which needs/,
+			],
+			[{ providers: { 'my-idp': { type: 'odic', issuer } } }, /Auth: providers\["my-idp"\] has `type: 'odic'`/],
+		];
+		for (const [options, expected] of cases) assert.throws(() => resolveOptions(options as AuthOptions), expected);
+	});
+
+	it('an unknown, missing or non-string type on the default store is not a provider type', () => {
+		for (const [type, shown] of [
+			['odic', "`type: 'odic'`"],
+			[undefined, 'no `type`'],
+			[1, '`type: 1`'],
+			[Object.create(null), 'a `type` that is not a string'],
+		] as const) {
+			const options: unknown = { providers: { p: { type, issuer, clientId: 'c', clientSecret: secret } } };
+			assert.throws(
+				() => resolveOptions(options as AuthOptions),
+				(e: Error) => {
+					assert.ok(
+						e.message.startsWith(`Auth: providers.p has ${shown}, which is not a provider type.`),
+						e.message,
+					);
+					assert.doesNotMatch(e.message, /cannot federate/);
+					return true;
+				},
+				shown,
+			);
+		}
+		const builtin: unknown = { store: 'builtin', providers: { p: { type: 1, issuer, clientId: 'c' } } };
+		assert.throws(
+			() => resolveOptions(builtin as AuthOptions),
+			/providers\.p has `type: 1`, which is not a provider type/,
+		);
+	});
+
+	it('emailPassword: false on the default store needs a provider or a wrapped pool (no way to sign in otherwise)', () => {
+		for (const options of [{ emailPassword: false }, { emailPassword: false, providers: { google: undefined } }]) {
+			assert.throws(() => resolveOptions(options as AuthOptions, 'auth'), {
+				message:
+					"Auth 'auth': `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.",
+			});
+		}
+		const okta = { type: 'oidc', issuer, clientId: 'c', clientSecret: secret } as const;
+		assert.doesNotThrow(() => resolveOptions({ emailPassword: false, providers: { okta } }));
+		const wrapped: unknown = {
+			emailPassword: false,
+			userPool: { __brand: 'ExternalUserPoolRef', userPoolId: 'us-east-1_x' },
+		};
+		assert.doesNotThrow(() => resolveOptions(wrapped as AuthOptions));
+		assert.doesNotThrow(() => resolveOptions({}));
 	});
 
 	it('keeps only users.groups on store: builtin', () => {

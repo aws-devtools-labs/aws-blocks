@@ -75,7 +75,7 @@ import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
 import { apiNamespaceOptionsOf } from './protect.js';
-import { builtinNeedsAProvider, type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
 import type {
 	ApiMethods,
 	AuthOptions,
@@ -173,7 +173,6 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		validateOptions(opts, {
 			mfaMode: mfa.mode,
 			mfaTypes: mfa.types,
-			emailPassword,
 			sandbox: isSandboxContext(this),
 		});
 		// The SES sender (L75): only for a pool this block creates, and well-formed.
@@ -654,7 +653,7 @@ function resolveRemovalPolicy(
  */
 function validateOptions(
 	opts: ResolvedAuthOptions,
-	ctx: { mfaMode: string; mfaTypes: readonly string[]; emailPassword: boolean; sandbox: boolean },
+	ctx: { mfaMode: string; mfaTypes: readonly string[]; sandbox: boolean },
 ): void {
 	// The stub IdP is a local and sandbox development aid: its account picker
 	// signs anyone in. Fail the synth of any other deployment instead of
@@ -714,16 +713,7 @@ function validateOptions(
 		}
 	}
 
-	if (!ctx.emailPassword) {
-		// MFA, passkeys and device tracking with `emailPassword: false` are
-		// rejected by `assertKnownAuthOptions` (every layer, at construction).
-		const hasDirectOidc = Object.values(opts.oidcProviders ?? {}).some((p) => p && p.federateVia !== 'cognito');
-		if (!opts.userPool && !hasDirectOidc && cognitoFederatedProviderIds(opts).length === 0) {
-			throw new Error(
-				opts.store === 'builtin'
-					? builtinNeedsAProvider()
-					: 'Auth: `emailPassword: false` with no `providers` leaves no way to sign in. Configure a provider or re-enable email + password.',
-			);
-		}
-	}
+	// `emailPassword: false` with no way to sign in, and MFA, passkeys or device
+	// tracking with it, are refused at construction in every layer
+	// (`resolveOptions`, `assertKnownAuthOptions`).
 }

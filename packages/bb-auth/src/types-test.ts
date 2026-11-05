@@ -852,6 +852,10 @@ function wrongStoreOptions() {
 	});
 	// @ts-expect-error — ERROR_needs_store_cognito<'hostedUi'>
 	new Auth(scope, 'b-hosted-ui', { store: 'builtin', providers: { okta }, hostedUi: { domainPrefix: 'example' } });
+	// @ts-expect-error — ERROR_needs_store_cognito<'featurePlan'>
+	new Auth(scope, 'b-feature-plan', { store: 'builtin', providers: { okta }, featurePlan: 'essentials' });
+	// @ts-expect-error — ERROR_needs_store_cognito<'email'>
+	new Auth(scope, 'b-email', { store: 'builtin', providers: { okta }, email: { fromAddress: 'a@example.com' } });
 	// @ts-expect-error — ERROR_needs_store_cognito<'users.signInWith'>: only `users.groups` exists here.
 	new Auth(scope, 'b-sign-in-with', { store: 'builtin', providers: { okta }, users: { signInWith: ['email'] } });
 	new Auth(scope, 'b-attributes', {

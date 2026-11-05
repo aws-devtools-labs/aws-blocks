@@ -389,7 +389,18 @@ describe('Auth (CDK) — synth-time option checks', () => {
 	});
 
 	test('emailPassword: false with no provider at all throws (no way to sign in)', () => {
-		assert.match(constructError({ emailPassword: false }), /leaves no way to sign in/);
+		// The resolver's message (it names the block), as in the mock and AWS entries.
+		assert.match(
+			constructError({ emailPassword: false }),
+			/^Auth 'auth': `emailPassword: false` .*leaves no way to sign in/,
+		);
+	});
+
+	test("store: 'builtin' with no provider throws the resolver's message (names the block)", () => {
+		assert.match(
+			constructError({ store: 'builtin', providers: {} }),
+			/^Auth 'auth': `store: 'builtin'` needs at least one provider/,
+		);
 	});
 
 	test("admin on a pool-less (store: 'builtin') configuration throws", () => {

@@ -77,7 +77,8 @@ function isRelayOrigin(uri: string): uri is RelayOrigin {
  * @example
  * ```ts
  * new Auth(scope, 'auth', {
- *   oidcProviders: { okta: { issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
+ *   store: 'builtin',
+ *   providers: { okta: { type: 'oidc', issuer: 'https://dev-1.okta.com', clientId: '0oa1' } },
  *   redirects: { allowedRelayOrigins: [relayOrigin('myapp://auth')] },
  * });
  * ```

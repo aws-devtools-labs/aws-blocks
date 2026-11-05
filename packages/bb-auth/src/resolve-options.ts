@@ -12,11 +12,13 @@
  * `idp-<id>`) and Cognito identity-provider names, so the same key always
  * yields the same resources.
  *
- * Pure and dependency-free. Not exported from any package entry point.
+ * Pure; it shares only the option validator's path quoting and key list. Not
+ * exported from any package entry point.
  *
  * @internal
  */
 
+import { COGNITO_ONLY_KEYS, join } from './option-validation.js';
 import type {
 	AmazonProvider,
 	AppleProvider,
@@ -96,27 +98,13 @@ export interface ResolvedAuthOptions
 /** The options `providers` replaced. */
 const REPLACED_KEYS = ['socialProviders', 'oidcProviders', 'samlProviders'] as const;
 
-/** Options only a user pool gives meaning to, refused on `store: 'builtin'` (including the mock-only ones). */
-const COGNITO_ONLY_KEYS = [
-	'emailPassword',
-	'mfa',
-	'passkeys',
-	'hostedUi',
-	'admin',
-	'userPool',
-	'featurePlan',
-	'email',
-	'codeDelivery',
-	'totpVerification',
-] as const;
-
 /** The `Auth '<id>':` prefix of every resolver error (`Auth:` without an id). */
 function prefix(id: string | undefined): string {
 	return id === undefined ? 'Auth:' : `Auth '${id}':`;
 }
 
-/** The message for a `store: 'builtin'` block with no provider (every layer refuses it the same way). @internal */
-export function builtinNeedsAProvider(id?: string): string {
+/** The message for a `store: 'builtin'` block with no provider (every layer refuses it here, the same way). */
+function builtinNeedsAProvider(id: string | undefined): string {
 	return `${prefix(id)} \`store: 'builtin'\` needs at least one provider in \`providers\` (\`type: 'oidc'\`, \`github()\`, \`stubIdp()\`, …): its users can sign in no other way.`;
 }
 
@@ -133,7 +121,11 @@ function listKeys(keys: readonly string[]): string {
 }
 
 function describeType(type: unknown): string {
-	return typeof type === 'string' ? `\`type: '${type}'\`` : 'no `type`';
+	if (type === undefined) return 'no `type`';
+	if (typeof type === 'string') return `\`type: '${type}'\``;
+	return typeof type === 'number' || typeof type === 'boolean'
+		? `\`type: ${type}\``
+		: 'a `type` that is not a string';
 }
 
 /** The entry without its `type` tag (and without a leftover `federateVia`, which the store now decides). */
@@ -162,12 +154,16 @@ function untag<P extends { type: unknown; federateVia?: unknown }>(entry: P): Un
  *   `admin`, `users.<anything but groups>`, …) and for a `'builtin'` block with
  *   no provider; for a provider `type` the store does not accept (or none); and
  *   for a social entry keyed differently from its `type` (so two entries of one
- *   social type cannot both pass). The backstop for configurations the compiler
- *   did not see: plain JavaScript, casts, a `: AuthOptions` variable.
+ *   social type cannot both pass); and for a default-store block with
+ *   `emailPassword: false`, no `userPool` and no provider (no way to sign in).
+ *   The backstop for configurations the compiler did not see: plain
+ *   JavaScript, casts, a `: AuthOptions` variable.
  * @param blockId - The block id, for the messages (`Auth '<id>': …`, as the option validation's).
  * @internal
  */
-export function resolveOptions(options: AuthOptions, blockId?: string): ResolvedAuthOptions {
+export function resolveOptions(input: AuthOptions, blockId?: string): ResolvedAuthOptions {
+	// Own keys only, as the option validation reads them: an inherited `store` must not pick the store.
+	const options: AuthOptions = { ...input };
 	const auth = prefix(blockId);
 	const storeValue: unknown = Reflect.get(options, 'store');
 	if (storeValue !== undefined && storeValue !== 'cognito' && storeValue !== 'builtin') {
@@ -188,7 +184,12 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 		const cognitoOnly = setKeys(options, COGNITO_ONLY_KEYS).filter(
 			(key) => key !== 'emailPassword' || options.emailPassword !== false,
 		);
-		const userKeys = Object.keys(options.users ?? {}).filter((key) => key !== 'groups');
+		// A key set to `undefined` is not set (as at the top level).
+		const userOptions: unknown = options.users;
+		const userKeys =
+			typeof userOptions === 'object' && userOptions !== null
+				? setKeys(userOptions, Object.keys(userOptions)).filter((key) => key !== 'groups')
+				: [];
 		cognitoOnly.push(...userKeys.map((key) => `users.${key}`));
 		if (cognitoOnly.length > 0) {
 			throw new Error(
@@ -222,8 +223,8 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 					"A `store: 'builtin'` block accepts `type: 'oidc'`, `'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`).";
 				throw new Error(
 					COGNITO_TYPES.includes(type)
-						? `${auth} providers.${id} has ${describeType(type)}, which needs \`store: 'cognito'\` (the default). ${accepted}`
-						: `${auth} providers.${id} has ${describeType(type)}, which is not a provider type. ${accepted} ` +
+						? `${auth} ${join('providers', id)} has ${describeType(type)}, which needs \`store: 'cognito'\` (the default). ${accepted}`
+						: `${auth} ${join('providers', id)} has ${describeType(type)}, which is not a provider type. ${accepted} ` +
 								"For GitHub use `github()`; for another OAuth 2.0 provider `customOauth2()`; for an OIDC provider (Okta, Entra ID, …) `type: 'oidc'` with its `issuer`.",
 				);
 			}
@@ -241,6 +242,11 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 
 	const { store, providers, socialProviders: _social, oidcProviders: _oidc, samlProviders: _saml, ...rest } = options;
 	const entries = Object.entries(providers ?? {}).filter(([, entry]) => entry);
+	if (options.emailPassword === false && !options.userPool && entries.length === 0) {
+		throw new Error(
+			`${auth} \`emailPassword: false\` with no \`providers\` leaves no way to sign in. Configure a provider or re-enable email + password.`,
+		);
+	}
 	const resolved: ResolvedAuthOptions = { ...rest, store: store ?? 'cognito' };
 	for (const [id, entry] of entries) {
 		switch (entry.type) {
@@ -250,7 +256,7 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 			case 'apple':
 				if (id !== entry.type) {
 					throw new Error(
-						`${auth} providers.${id} has \`type: '${entry.type}'\`, so its key must be \`${entry.type}\`: ` +
+						`${auth} ${join('providers', id)} has \`type: '${entry.type}'\`, so its key must be \`${entry.type}\`: ` +
 							'a social provider is keyed by its type (google, facebook, amazon, apple).',
 					);
 				}
@@ -266,12 +272,18 @@ export function resolveOptions(options: AuthOptions, blockId?: string): Resolved
 				resolved.oidcProviders ??= {};
 				resolved.oidcProviders[id] = { ...untag(entry), federateVia: 'cognito' };
 				break;
-			default:
+			default: {
+				const type: unknown = Reflect.get(entry, 'type');
+				const accepted =
+					"The default store accepts `type: 'google'`, `'facebook'`, `'amazon'`, `'apple'`, `'saml'` and `'oidc'`.";
 				throw new Error(
-					`${auth} providers.${id} has ${describeType(Reflect.get(entry, 'type'))}, which a Cognito user pool cannot federate. ` +
-						"`type: 'oauth2'` (`github()`, `customOauth2()`) and `'stub'` (`stubIdp()`) need `store: 'builtin'`; " +
-						"the default store accepts `type: 'google'`, `'facebook'`, `'amazon'`, `'apple'`, `'saml'` and `'oidc'`.",
+					type === 'oauth2' || type === 'stub'
+						? `${auth} ${join('providers', id)} has ${describeType(type)}, which a Cognito user pool cannot federate. ` +
+								`\`type: 'oauth2'\` (\`github()\`, \`customOauth2()\`) and \`'stub'\` (\`stubIdp()\`) need \`store: 'builtin'\`. ${accepted}`
+						: `${auth} ${join('providers', id)} has ${describeType(type)}, which is not a provider type. ${accepted} ` +
+								"For GitHub or another OAuth 2.0 provider, use `github()` / `customOauth2()` in a `store: 'builtin'` block.",
 				);
+			}
 		}
 	}
 	return resolved;

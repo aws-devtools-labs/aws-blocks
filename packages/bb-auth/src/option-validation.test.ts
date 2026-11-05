@@ -137,11 +137,11 @@ describe('misplaced options', () => {
 	});
 
 	test('a key valid in many places lists a few of them', () => {
-		const [, hint] = only({ name: 'x' });
-		assert.match(
-			hint ?? '',
-			/^it is not an option here; did you mean one of `[^`]+\.name`, `[^`]+\.name`, `[^`]+\.name`\?$/,
-		);
+		// A path the block's store refuses says which store it needs (here a stub IdP's, on the default store).
+		assert.deepStrictEqual(only({ name: 'x' }), [
+			'name',
+			"it is not an option here; did you mean one of `providers.<id>.stubIdp.users[].name` (needs `store: 'builtin'`), `users.attributes[].name`, `users.groups[].name`?",
+		]);
 		assert.match(only({ scopes: ['openid'] })[1] ?? '', /did you mean `providers\.<id>\.scopes`\?/);
 	});
 });
@@ -171,6 +171,50 @@ describe('nested typos rank the keys under the same parent first', () => {
 			assert.deepStrictEqual(only(options), [path, hint]);
 		});
 	}
+
+	test("a suggestion the block's store refuses says which store it needs", () => {
+		const builtin = { store: 'builtin', providers: { okta: { type: 'oidc', issuer: 'https://o', clientId: 'c' } } };
+		const cognito = " (needs `store: 'cognito'`)";
+		const cases: [Record<string, unknown>, string, string][] = [
+			[{ users: { signInWit: ['email'] } }, 'users.signInWit', `did you mean \`users.signInWith\`${cognito}?`],
+			[{ mfaa: 'optional' }, 'mfaa', `did you mean \`mfa\`${cognito}?`],
+			[
+				{ emailPassword: { selfSignup: false } },
+				'emailPassword.selfSignup',
+				`did you mean \`emailPassword.selfSignUp\`${cognito}?`,
+			],
+			[
+				{ allowBearerAuth: { clientId: ['c'] } },
+				'allowBearerAuth.clientId',
+				`did you mean \`allowBearerAuth.clientIds\`${cognito}?`,
+			],
+			[
+				{ users: { grups: [] } },
+				'users.grups',
+				'did you mean `users.groups`?', // `users.groups` is a builtin option
+			],
+			// `emailPassword: false` is accepted on builtin, so its bare key carries no note.
+			[{ emailPasword: false }, 'emailPasword', 'did you mean `emailPassword`?'],
+		];
+		for (const [extra, path, hint] of cases) {
+			assert.deepStrictEqual(only({ ...builtin, ...extra }), [path, hint], path);
+		}
+		// The same typos on the default store point at options it accepts: no note.
+		assert.deepStrictEqual(only({ users: { signInWit: ['email'] } }), [
+			'users.signInWit',
+			'did you mean `users.signInWith`?',
+		]);
+		assert.deepStrictEqual(only({ mfaa: 'optional' }), ['mfaa', 'did you mean `mfa`?']);
+		// A provider key only the other store's providers accept.
+		assert.deepStrictEqual(only({ ...builtin, attributesRequestMethods: 'GET' }), [
+			'attributesRequestMethods',
+			"did you mean `providers.<id>.attributesRequestMethod` (needs `store: 'cognito'`)?",
+		]);
+		assert.deepStrictEqual(only({ groupsClaims: 'groups' }), [
+			'groupsClaims',
+			"did you mean `providers.<id>.groupsClaim` (needs `store: 'builtin'`)?",
+		]);
+	});
 
 	test('with no close sibling, a misplaced key still points where it belongs', () => {
 		assert.deepStrictEqual(only({ mfa: { mode: 'optional', groups: ['admins'] } }), [
@@ -411,6 +455,10 @@ describe('the store selects which provider options apply', () => {
 			conflicts({ store: 'cognito', providers: { 'my-idp': { ...okta, clientSecret: undefined } } }),
 			[['providers["my-idp"].clientSecret', message]],
 		);
+		// `null` is no secret either: the CDK layer refuses it at synth, so every layer must.
+		assert.deepStrictEqual(conflicts({ providers: { okta: { ...okta, clientSecret: null } } }), [
+			['providers.okta.clientSecret', message],
+		]);
 		assert.deepStrictEqual(conflicts({ providers: { okta: { ...okta, clientSecret: secret } } }), []);
 		assert.deepStrictEqual(conflicts({ store: 'builtin', providers: { okta } }), []);
 	});
@@ -504,9 +552,16 @@ describe('the resolver owns the store value and the type a store accepts', () =>
 	test('an unknown or missing type, or a social provider keyed differently from its type', () => {
 		assert.match(
 			message({ providers: { github: { type: 'github', clientId: 'g', clientSecret: secret } } }),
-			/providers\.github has `type: 'github'`, which a Cognito user pool cannot federate/,
+			/providers\.github has `type: 'github'`, which is not a provider type/,
 		);
-		assert.match(message({ providers: { okta: { issuer: 'https://o' } } }), /providers\.okta has no `type`/);
+		assert.match(
+			message({ providers: { okta: { issuer: 'https://o' } } }),
+			/providers\.okta has no `type`, which is not a provider type/,
+		);
+		assert.match(
+			message({ providers: { okta: { type: 'odic', issuer: 'https://o' } } }),
+			/providers\.okta has `type: 'odic'`, which is not a provider type/,
+		);
 		assert.match(
 			message({ providers: { gogle: { type: 'google', clientId: 'g', clientSecret: secret } } }),
 			/its key must be `google`/,
@@ -825,6 +880,96 @@ describe('boolean options are type-checked, not only key-checked', () => {
 	});
 });
 
+describe('providers must map ids to provider objects', () => {
+	const okta = { type: 'oidc', issuer: 'https://o', clientId: 'c' };
+	const record = 'must be an object mapping provider ids to providers, got';
+	const entry = 'must be a provider object (`{ type: … }`), got';
+
+	test('a providers value that is not a plain object is invalid, on either store', () => {
+		for (const store of [undefined, 'builtin']) {
+			for (const [value, shown] of [
+				[true, '`true`'],
+				[5, 'the number 5'],
+				['okta', 'the string "okta"'],
+				[[okta], 'an array'],
+				[new Map([['okta', okta]]), 'a Map'],
+			] as const) {
+				assert.deepStrictEqual(
+					invalid({ store, providers: value }),
+					[['providers', `${record} ${shown}`]],
+					shown,
+				);
+			}
+			for (const [value, label] of [
+				[undefined, 'undefined'],
+				[null, 'null'],
+				[{ okta }, 'a literal'],
+				[Object.assign(Object.create(null), { okta }), 'a null-prototype object'],
+			] as const) {
+				assert.deepStrictEqual(invalid({ store, providers: value }), [], label);
+			}
+		}
+	});
+
+	test('an entry that is not an object is invalid; an omitted (null / undefined) one is skipped', () => {
+		for (const store of [undefined, 'builtin']) {
+			for (const [value, shown] of [
+				['x', 'the string "x"'],
+				[true, '`true`'],
+				[false, '`false`'],
+				[0, 'the number 0'],
+				[[okta], 'an array'],
+			] as const) {
+				assert.deepStrictEqual(invalid({ store, providers: { 'my-idp': value } }), [
+					['providers["my-idp"]', `${entry} ${shown}`],
+				]);
+			}
+			for (const value of [undefined, null]) {
+				assert.deepStrictEqual(invalid({ store, providers: { okta: value } }), []);
+			}
+		}
+		// An unknown store: entries are not walked, so the resolver names the store.
+		assert.deepStrictEqual(invalid({ store: 'direct', providers: { okta: 'x' } }), []);
+	});
+
+	test('__proto__ cannot be a provider id (it would vanish from the resolved map)', () => {
+		const providers: unknown = JSON.parse(
+			'{"__proto__": {"type": "oidc", "issuer": "https://o", "clientId": "c"}}',
+		);
+		assert.deepStrictEqual(invalid({ store: 'builtin', providers }), [
+			['providers.__proto__', 'cannot be a provider id: rename it'],
+		]);
+	});
+
+	test('the constructor names the value, not a TypeError, and registers no provider "0"', () => {
+		const cases: [unknown, RegExp][] = [
+			[
+				{ providers: { okta: 'x' } },
+				/- `providers\.okta` must be a provider object \(`\{ type: … \}`\), got the string "x"/,
+			],
+			[
+				{ store: 'builtin', providers: [okta] },
+				/- `providers` must be an object mapping provider ids to providers, got an array/,
+			],
+			[{ providers: true }, /- `providers` must be an object mapping provider ids to providers, got `true`/],
+		];
+		for (const [options, expected] of cases) {
+			assert.throws(
+				() => new Auth(root(), 'auth', untyped(options)),
+				(e: Error) => {
+					assert.match(e.message, /^Auth 'auth': invalid option value:\n/);
+					assert.match(e.message, expected);
+					assert.match(
+						e.message,
+						/and the shape of `providers` and its entries, so a provider cannot be silently dropped\./,
+					);
+					return true;
+				},
+			);
+		}
+	});
+});
+
 describe('every entry rejects unknown options at construction', () => {
 	const bad = untyped({ emailPasword: false, users: { preferedChallenge: 'EMAIL_OTP' } });
 
@@ -902,6 +1047,51 @@ describe('every entry rejects unknown options at construction', () => {
 			message(() => assertKnownAuthOptions('auth', [])),
 			/got an array/,
 		);
+		assert.match(
+			message(() => assertKnownAuthOptions('auth', null)),
+			/options must be an object, got null\.$/,
+		);
+	});
+
+	describe('the resolver rejects a type the store does not accept, and a block with no way to sign in, in every entry', () => {
+		const cases: [unknown, RegExp][] = [
+			[
+				{ store: 'builtin', providers: { g: { type: 'google' } } },
+				/^Auth 'auth': providers\.g has `type: 'google'`, which needs `store: 'cognito'`/,
+			],
+			[
+				{ emailPassword: false },
+				/^Auth 'auth': `emailPassword: false` with no `providers` leaves no way to sign in/,
+			],
+		];
+		test('mock (default entry)', () => {
+			for (const [options, expected] of cases) {
+				assert.match(
+					message(() => new Auth(root(), 'auth', untyped(options))),
+					expected,
+				);
+			}
+		});
+		test('AWS runtime entry', () => {
+			for (const [options, expected] of cases) {
+				assert.match(
+					message(() => new AwsAuth(root(), 'auth', untyped(options))),
+					expected,
+				);
+			}
+		});
+		test('CDK entry (fails synth)', () => {
+			for (const [options, expected] of cases) {
+				const stack = Object.assign(new cdk.Stack(new cdk.App(), 'OptValResolveStack'), {
+					id: 'OptValResolveStack',
+				});
+				// Test plumbing: a bare stack is an acceptable CDK parent.
+				assert.match(
+					message(() => new CdkAuth(stack as unknown as ScopeParent, 'auth', untyped(options))),
+					expected,
+				);
+			}
+		});
 	});
 });
 

@@ -22,7 +22,10 @@
  * Every option typed `boolean` must be `true`, `false` or omitted; a group
  * with a boolean shorthand (`emailPassword`, `passkeys`) must be a boolean or
  * an options object. Other values (strings, numbers, references) are not
- * type-checked.
+ * type-checked. `providers` must be a plain object (an array, a `Map` or `true`
+ * would register the wrong providers or none), each entry an object (or
+ * omitted), and no provider id may be `__proto__` (it would vanish from the
+ * resolved map).
  *
  * **One source of truth.** The known keys are the {@link AUTH_OPTIONS_SHAPE}
  * tree below. Each node is declared with `satisfies ShapeOf<T>` against the
@@ -102,10 +105,13 @@ import type {
  *   `orBoolean`, a value that is not an object must be a boolean (or
  *   `undefined`): the group's shorthand.
  * - `{ record }` — user-chosen keys (provider ids): each *value* is checked.
+ *   The record itself must be a plain object (or omitted), and `__proto__` is
+ *   refused as a key.
  * - `{ array }` — each element is checked.
  * - `{ variants }` — the shape depends on the value: a provider's `type`,
  *   on the block's `store`, selects its accepted keys. An entry whose `type`
- *   the store does not accept is not walked (the resolver rejects it).
+ *   the store does not accept is not walked (the resolver rejects it). A
+ *   `null` / `undefined` entry is skipped; any other non-object is invalid.
  */
 type Spec =
 	| 'value'
@@ -303,23 +309,23 @@ const SAML_PROVIDER = {
  * keys. Each store's map lists exactly the `type`s that store accepts; a `type`
  * it does not (or an unknown one) is the resolver's to reject.
  */
-const PROVIDER: Spec = {
-	variants: {
-		cognito: {
-			google: OAUTH_SOCIAL,
-			facebook: OAUTH_SOCIAL,
-			amazon: OAUTH_SOCIAL,
-			apple: APPLE_SOCIAL,
-			saml: SAML_PROVIDER,
-			oidc: COGNITO_OIDC,
-		} satisfies { readonly [T in CognitoProvider['type']]: Shape },
-		builtin: {
-			oidc: DIRECT_OIDC,
-			oauth2: OAUTH2_PROVIDER,
-			stub: STUB_PROVIDER,
-		} satisfies { readonly [T in BuiltinProvider['type']]: Shape },
-	},
-};
+const PROVIDER_VARIANTS = {
+	cognito: {
+		google: OAUTH_SOCIAL,
+		facebook: OAUTH_SOCIAL,
+		amazon: OAUTH_SOCIAL,
+		apple: APPLE_SOCIAL,
+		saml: SAML_PROVIDER,
+		oidc: COGNITO_OIDC,
+	} satisfies { readonly [T in CognitoProvider['type']]: Shape },
+	builtin: {
+		oidc: DIRECT_OIDC,
+		oauth2: OAUTH2_PROVIDER,
+		stub: STUB_PROVIDER,
+	} satisfies { readonly [T in BuiltinProvider['type']]: Shape },
+} satisfies { readonly [S in AuthStore]: ShapesByType };
+
+const PROVIDER: Spec = { variants: PROVIDER_VARIANTS };
 
 const PASSWORD_POLICY = {
 	minLength: 'value',
@@ -488,9 +494,23 @@ function isPlainObject(value: unknown): value is object {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** A `{ … }` literal or `Object.create(null)`: not an array, a `Map` or a class instance. */
+function isRecordObject(value: unknown): value is object {
+	if (!isPlainObject(value)) return false;
+	const proto: unknown = Object.getPrototypeOf(value);
+	return proto === Object.prototype || proto === null;
+}
+
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 
-function join(path: string, key: string): string {
+/**
+ * `path` + `key` as a display path: `providers.okta`, `providers["my-idp"]`
+ * (a key that is not an identifier is quoted). Shared with the resolver, so
+ * both quote a provider id the same way.
+ *
+ * @internal
+ */
+export function join(path: string, key: string): string {
 	if (IDENTIFIER.test(key)) return path ? `${path}.${key}` : key;
 	return `${path}[${JSON.stringify(key)}]`;
 }
@@ -575,8 +595,8 @@ function closest(key: string, candidates: Iterable<string>): string | undefined 
 	return best;
 }
 
-function formatPaths(paths: readonly string[]): string {
-	const shown = paths.slice(0, 3).map((p) => `\`${p}\``);
+function formatPaths(paths: readonly string[], store: AuthStore | undefined): string {
+	const shown = paths.slice(0, 3).map((p) => `\`${p}\`${storeNote(p, store)}`);
 	if (paths.length > 3) shown.push('…');
 	return shown.length === 1 ? shown[0] : `one of ${shown.join(', ')}`;
 }
@@ -605,27 +625,30 @@ const REPLACED_OPTIONS: { readonly [key: string]: string } = {
  * misplaced: `mfa: { type: [...] }` means `mfa.types`, not the unrelated
  * `users.attributes[].type`.
  */
-function hintFor(key: string, parentPath: string, shape: Shape): string | undefined {
+function hintFor(key: string, parentPath: string, shape: Shape, store: AuthStore | undefined): string | undefined {
 	if (Object.hasOwn(REPLACED_OPTIONS, key)) return REPLACED_OPTIONS[key];
-	const siblingPath = (sibling: string) => join(parentPath, sibling);
+	const siblingHint = (sibling: string) => {
+		const path = join(parentPath, sibling);
+		return `did you mean \`${path}\`${storeNote(path, store)}?`;
+	};
 	const siblings = Object.keys(shape);
 	const sameButCase = siblings.find((s) => normalize(s) === normalize(key));
-	if (sameButCase) return `did you mean \`${siblingPath(sameButCase)}\`?`;
+	if (sameButCase) return siblingHint(sameButCase);
 
 	const sibling = closest(key, siblings);
-	if (sibling) return `did you mean \`${siblingPath(sibling)}\`?`;
+	if (sibling) return siblingHint(sibling);
 
 	knownPaths ??= indexKnownPaths();
 	const elsewhere = knownPaths.get(key);
-	if (elsewhere) return `it is not an option here; did you mean ${formatPaths(elsewhere)}?`;
+	if (elsewhere) return `it is not an option here; did you mean ${formatPaths(elsewhere, store)}?`;
 
 	const near = closest(key, knownPaths.keys());
 	const nearPaths = near === undefined ? undefined : knownPaths.get(near);
-	if (nearPaths) return `did you mean ${formatPaths(nearPaths)}?`;
+	if (nearPaths) return `did you mean ${formatPaths(nearPaths, store)}?`;
 	return undefined;
 }
 
-/** The wrong value, for a message: ``the number 0``, ``the string "false"``, `` `null` ``, ``an array``. */
+/** The wrong value, for a message: ``the number 0``, ``the string "false"``, `` `null` ``, ``an array``, ``a Map``. */
 function describeValue(value: unknown): string {
 	if (value === null) return '`null`';
 	if (Array.isArray(value)) return 'an array';
@@ -639,8 +662,10 @@ function describeValue(value: unknown): string {
 			return 'a function';
 		case 'symbol':
 			return 'a symbol';
+		case 'boolean':
+			return `\`${value}\``;
 		default:
-			return 'an object';
+			return value instanceof Map ? 'a Map' : 'an object';
 	}
 }
 
@@ -663,8 +688,21 @@ function walkSpec(spec: Spec, value: unknown, path: string, out: Findings): void
 		return;
 	}
 	if ('record' in spec) {
-		if (!isPlainObject(value)) return;
-		for (const [id, entry] of Object.entries(value)) walkSpec(spec.record, entry, join(path, id), out);
+		if (value === undefined || value === null) return;
+		if (!isRecordObject(value)) {
+			// `Object.entries()` of an array would register providers `"0"`, `"1"`; of `true` or a `Map`, none.
+			out.invalid.push({
+				path,
+				message: `must be an object mapping provider ids to providers, got ${describeValue(value)}`,
+			});
+			return;
+		}
+		for (const [id, entry] of Object.entries(value)) {
+			// Assigning `map['__proto__']` sets the prototype: the provider would vanish from the resolved map.
+			if (id === '__proto__') {
+				out.invalid.push({ path: join(path, id), message: 'cannot be a provider id: rename it' });
+			} else walkSpec(spec.record, entry, join(path, id), out);
+		}
 		return;
 	}
 	if ('array' in spec) {
@@ -672,7 +710,12 @@ function walkSpec(spec: Spec, value: unknown, path: string, out: Findings): void
 		for (const [i, entry] of value.entries()) walkSpec(spec.array, entry, `${path}[${i}]`, out);
 		return;
 	}
-	if (!isPlainObject(value) || out.store === undefined) return;
+	// An omitted entry is skipped; with an unknown store, the resolver names the store.
+	if (value === undefined || value === null || out.store === undefined) return;
+	if (!isPlainObject(value)) {
+		out.invalid.push({ path, message: `must be a provider object (\`{ type: … }\`), got ${describeValue(value)}` });
+		return;
+	}
 	const type = String(Reflect.get(value, 'type'));
 	const shapes = spec.variants[out.store];
 	const shape = Object.hasOwn(shapes, type) ? shapes[type] : undefined;
@@ -696,6 +739,47 @@ function walkSpec(spec: Spec, value: unknown, path: string, out: Findings): void
 	}
 }
 
+/**
+ * Options only a user pool gives meaning to, refused on `store: 'builtin'`
+ * (including the mock-only ones). `resolveOptions()` rejects them; the hints
+ * here mark a suggestion that points at one.
+ *
+ * @internal
+ */
+export const COGNITO_ONLY_KEYS = [
+	'emailPassword',
+	'mfa',
+	'passkeys',
+	'hostedUi',
+	'admin',
+	'userPool',
+	'featurePlan',
+	'email',
+	'codeDelivery',
+	'totpVerification',
+] as const;
+
+/**
+ * ` (needs \`store: '…'\`)` when the option at `path` (a display path from a
+ * hint) is one the block's `store` refuses, else `''`: a suggestion must not
+ * lead straight to a second error.
+ */
+function storeNote(path: string, store: AuthStore | undefined): string {
+	const [top, sub, providerKey] = path.split('.');
+	if (store === 'builtin') {
+		const refused = (COGNITO_ONLY_KEYS as readonly string[]).includes(top)
+			? top !== 'emailPassword' || sub !== undefined // `emailPassword: false` is accepted
+			: top === 'users'
+				? sub !== undefined && !sub.startsWith('groups')
+				: top === 'allowBearerAuth' && sub !== undefined;
+		if (refused) return " (needs `store: 'cognito'`)";
+	}
+	if (top !== 'providers' || providerKey === undefined || store === undefined) return '';
+	const accepts = (s: AuthStore) =>
+		Object.values(PROVIDER_VARIANTS[s]).some((shape) => Object.hasOwn(shape, providerKey));
+	return accepts(store) ? '' : ` (needs \`store: '${store === 'cognito' ? 'builtin' : 'cognito'}'\`)`;
+}
+
 /** The message for a provider key only the other store accepts. */
 const NEEDS_STORE: { readonly [S in AuthStore]: string } = {
 	builtin:
@@ -709,7 +793,7 @@ function walkShape(shape: Shape, value: object, path: string, out: Findings, oth
 		const keyPath = join(path, key);
 		const spec = Object.hasOwn(shape, key) ? shape[key] : undefined;
 		if (spec === undefined) {
-			const hint = hintFor(key, path, shape) ?? otherwise;
+			const hint = hintFor(key, path, shape, out.store) ?? otherwise;
 			out.unknown.push(hint === undefined ? { path: keyPath, key } : { path: keyPath, key, hint });
 			continue;
 		}
@@ -731,8 +815,10 @@ export function findUnknownAuthOptions(options: unknown): UnknownOption[] {
 /**
  * Every known option whose value has the wrong type, in declaration order: a
  * `boolean` option set to anything but `true` / `false`, or a group with a
- * boolean shorthand set to anything but a boolean or an object (FX53). Values
- * under an unknown key are not checked (the key is reported instead).
+ * boolean shorthand set to anything but a boolean or an object (FX53); a
+ * `providers` value that is not a plain object, a `__proto__` provider id, or
+ * a provider entry that is not an object. Values under an unknown key are not
+ * checked (the key is reported instead).
  *
  * @internal
  */
@@ -769,7 +855,7 @@ function findAll(options: unknown): Findings {
 	const providers = field(options, 'providers');
 	if (store === 'cognito' && isPlainObject(providers)) {
 		for (const [id, entry] of Object.entries(providers)) {
-			if (field(entry, 'type') === 'oidc' && field(entry, 'clientSecret') === undefined) {
+			if (field(entry, 'type') === 'oidc' && field(entry, 'clientSecret') == null) {
 				out.conflicts.push({
 					path: join(join('providers', id), 'clientSecret'),
 					message:
@@ -810,7 +896,7 @@ function findAll(options: unknown): Findings {
 export function assertKnownAuthOptions(id: string, options: unknown): void {
 	if (options !== undefined && !isPlainObject(options)) {
 		throw new Error(
-			`Auth '${id}': options must be an object, got ${Array.isArray(options) ? 'an array' : typeof options}.`,
+			`Auth '${id}': options must be an object, got ${options === null ? 'null' : Array.isArray(options) ? 'an array' : typeof options}.`,
 		);
 	}
 	const { unknown, invalid, conflicts, store } = findAll(options);
@@ -831,7 +917,8 @@ export function assertKnownAuthOptions(id: string, options: unknown): void {
 		const lines = invalid.map((v) => `  - \`${v.path}\` ${v.message}`);
 		sections.push(`invalid option value${invalid.length === 1 ? '' : 's'}:\n${lines.join('\n')}`);
 		reasons.push(
-			"Auth checks the type of each boolean option, so a value such as `0` or `'false'` cannot silently turn a setting on or off.",
+			"Auth checks the type of each boolean option, so a value such as `0` or `'false'` cannot silently turn a setting on or off, " +
+				'and the shape of `providers` and its entries, so a provider cannot be silently dropped.',
 		);
 	}
 	if (conflicts.length > 0) {
