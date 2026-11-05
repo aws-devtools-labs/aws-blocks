@@ -33,7 +33,8 @@ new CronJob(scope, 'heartbeat', {
   },
 });
 
-// A job with `enabled: false` is created but its schedule never fires.
+// A job with `enabled: false` is created but its schedule never fires. Its
+// handler still writes a run, so the e2e can tell if it ever fired anyway.
 new CronJob(scope, 'paused', {
   schedule: 'rate(1 minute)',
   enabled: false,

@@ -243,6 +243,7 @@ describe('create-blocks-app template metadata', () => {
       'api-only': { port: 3001, frontend: false },
       backend: { port: 3001, frontend: false },
       sql: { port: 3001, frontend: false },
+      cron: { port: 3001, frontend: false },
       nextjs: frontend,
       'auth-cognito': frontend,
       bare: frontend,
