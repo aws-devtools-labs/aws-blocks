@@ -313,6 +313,9 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      - name: Test the E2E cleanup wrapper
+        run: node --test scripts/ci/e2e-cleanup.test.mjs
+
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
       - name: Test the packed-assets guard
@@ -580,11 +583,17 @@ jobs:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E Sandbox
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, here and in the other AWS E2E jobs
+    # below: they run their own npm ci and build and use none of its outputs, so
+    # they start as soon as detect-changes finishes.
+    # "Build, Unit Tests, E2E Local" is a required check itself, so a red unit
+    # job still blocks merge. Trade-off: AWS deploys also run when unit tests
+    # fail. The Templates jobs keep the edge because they download its
+    # dist-registry artifact.
+    needs: [detect-changes]
     # Required check: see "Check that Detect Changes succeeded" below. Only
-    # that branch uses always(); the run branch keeps success() so a failed
-    # need still skips the job and a cancelled run (a new push) still cancels
-    # the deploy.
+    # that branch uses always(); the run branch keeps success() so a cancelled
+    # run (a new push) still cancels the deploy.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       ((always() && needs.detect-changes.result != 'success') ||
@@ -689,7 +698,8 @@ jobs:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E VPC Smoke
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'sandbox-vpc') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -765,7 +775,8 @@ jobs:
     permissions:
       contents: read
       id-token: write  # assumes the AWS role below
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'compute-smoke') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 70
@@ -933,11 +944,11 @@ jobs:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E Production
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
     # Required check: see "Check that Detect Changes succeeded" below. Only
-    # that branch uses always(); the run branch keeps success() so a failed
-    # need still skips the job and a cancelled run (a new push) still cancels
-    # the deploy.
+    # that branch uses always(); the run branch keeps success() so a cancelled
+    # run (a new push) still cancels the deploy.
     if: >-
       github.event.pull_request.head.repo.full_name == github.repository &&
       ((always() && needs.detect-changes.result != 'success') ||
@@ -1042,7 +1053,8 @@ jobs:
       contents: read
       id-token: write  # assumes the AWS role below
     name: E2E Supabase
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'supabase') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1126,7 +1138,8 @@ jobs:
       id-token: write  # assumes the AWS role below
     name: E2E Hosting (${{ matrix.framework }})
     timeout-minutes: 60
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'hosting') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     environment: e2e
@@ -1215,6 +1228,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -1264,15 +1278,20 @@ jobs:
           cd ${{ matrix.app-dir }}
           npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup sandbox
-        if: always() && steps.destroy.outcome != 'success'
+        if: always() && steps.aws-creds.outcome == 'success' && steps.destroy.outcome != 'success'
         run: |
           cd ${{ matrix.app-dir }}
-          npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts || true
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx test/sandbox-destroy.ts aws-blocks/index.cdk.ts
 
   e2e-telemetry:
     name: Telemetry E2E
-    needs: [build-and-test-local, detect-changes]
+    # No build-and-test-local edge on purpose, see e2e-sandbox.
+    needs: [detect-changes]
     if: contains(fromJSON(needs.detect-changes.outputs.e2e-run), 'telemetry') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -1303,6 +1322,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -1317,12 +1337,16 @@ jobs:
       - name: Telemetry E2E Tests
         run: npm run test:telemetry
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their cdk holds the cdk.out lock), and reports a failed destroy
+      # as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed (and a trailer-blocked job has no checkout).
       - name: Cleanup stacks
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         run: |
           cd test-apps/telemetry
-          npx tsx aws-blocks/scripts/sandbox-destroy.ts || true
-          npx tsx aws-blocks/scripts/destroy.ts || true
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/sandbox-destroy.ts
+          node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npx tsx aws-blocks/scripts/destroy.ts
 
   # Waits for the stack deletes that E2E Production starts in its last step
   # but no longer waits for, and for any stack the E2E Sandbox or E2E Compute
@@ -1373,7 +1397,11 @@ jobs:
             ${{ needs.e2e-compute-smoke.outputs.teardown-stacks }}
         run: node scripts/ci/e2e-stack-wait.mjs $STACKS
 
-  # Gate job — matches the branch protection required check name.
+  # Gate job: one summary check over every job above. When this comment was
+  # written it was not in the main ruleset's required checks, so merge
+  # protection came from the required jobs themselves
+  # ("Build, Unit Tests, E2E Local"; "E2E Sandbox"; "E2E Production").
+  # Update this if the ruleset changes.
   # Skipped E2E jobs (not selected by detect-changes) are treated as passing.
   # Note: Amplify interop tests live in a separate workflow
   # (e2e-amplify-interop.yml) so their failures don't show red here.

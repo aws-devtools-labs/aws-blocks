@@ -57,7 +57,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, cron, amplify, demo/);
     assert.match(result.stdout, /Former names \(still accepted\): auth-cognito → auth/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
@@ -267,6 +267,7 @@ describe('create-blocks-app template metadata', () => {
       'api-only': { port: 3001, frontend: false },
       backend: { port: 3001, frontend: false },
       sql: { port: 3001, frontend: false },
+      cron: { port: 3001, frontend: false },
       nextjs: frontend,
       auth: frontend,
       bare: frontend,

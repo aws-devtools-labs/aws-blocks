@@ -338,7 +338,7 @@ type TemplateInfo = {
   overlayOnly: boolean;
 };
 
-const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth', 'amplify', 'demo'];
+const TEMPLATE_DISPLAY_ORDER = ['default', 'bare', 'react', 'backend', 'api-only', 'sql', 'nextjs', 'auth', 'cron', 'amplify', 'demo'];
 
 // Former template names that still resolve to a template, so existing
 // `--template <old name>` invocations (docs, scripts, CI) keep working after a
