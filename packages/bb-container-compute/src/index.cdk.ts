@@ -366,6 +366,8 @@ export class ContainerCompute extends ComputeBase {
 				internetFacing: false,
 				vpcSubnets: subnets,
 				securityGroup,
+				// Headers that aren't valid HTTP are dropped here, before they reach a task.
+				dropInvalidHeaderFields: true,
 			});
 		});
 		// One listener for every container's API namespaces; a path rule per
@@ -480,16 +482,22 @@ export class ContainerCompute extends ComputeBase {
 	 * listener passes the load balancer's default rule quota.
 	 */
 	private allocateRulePriority(path: string, listener: elbv2.ApplicationListener): number {
-		const taken = getOrCreateOnRoot(this, API_RULE_PRIORITIES, () => new Map<number, string>());
+		// Each priority keeps the path holding it and the id of the compute that routed it,
+		// so a collision names both namespaces and where each one runs.
+		const taken = getOrCreateOnRoot(
+			this,
+			API_RULE_PRIORITIES,
+			() => new Map<number, { path: string; compute: string }>(),
+		);
 		const priority = 1 + (hashPath(path) % MAX_RULE_PRIORITY);
 		const holder = taken.get(priority);
 		if (holder !== undefined) {
 			throw new Error(
-				`API paths '${holder}' and '${path}' map to the same load balancer rule priority (${priority}). ` +
-					'Rename one of the two namespace exports.',
+				`API paths '${holder.path}' (compute '${holder.compute}') and '${path}' (compute '${this.node.id}') map to ` +
+					`the same load balancer rule priority (${priority}). Rename one of the two namespace exports.`,
 			);
 		}
-		taken.set(priority, path);
+		taken.set(priority, { path, compute: this.node.id });
 		if (taken.size === DEFAULT_RULES_PER_LOAD_BALANCER + 1) {
 			cdk.Annotations.of(listener).addWarningV2(
 				'@aws-blocks/bb-container-compute:api-rule-quota',

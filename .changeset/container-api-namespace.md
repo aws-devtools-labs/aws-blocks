@@ -16,6 +16,7 @@ The container's tasks serve the namespace with the same dispatch as the Lambda h
 
 - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
 - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.
+- The load balancer drops request headers that aren't valid HTTP before they reach a task.
 - API calls to a container keep the gateway's ~29-second cap. A stopping task finishes its in-flight requests (up to 65 s) before it shuts down.
 - A container that serves API namespaces needs a running task: `scaling.minInstances: 0` fails synth. Without a `scaling.strategy`, one that also runs an `AsyncJob` scales on CPU, and its queue backlog adds tasks too.
 - Moving a namespace that already serves traffic onto a container: during that deploy, its calls can get 503s for the minute or two the new tasks take to start.

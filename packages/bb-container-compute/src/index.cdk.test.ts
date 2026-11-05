@@ -331,6 +331,12 @@ describe('ContainerCompute — API ingress', () => {
 		preview.routePath('/aws-blocks/api/preview');
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+		template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+			Scheme: 'internal',
+			LoadBalancerAttributes: Match.arrayWith([
+				{ Key: 'routing.http.drop_invalid_header_fields.enabled', Value: 'true' },
+			]),
+		});
 		template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
 		template.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
 			Port: 10_000,
@@ -388,14 +394,14 @@ describe('ContainerCompute — API ingress', () => {
 		assert.deepStrictEqual(await ruleIdOn('preview'), await ruleIdOn('render'));
 	});
 
-	test('two paths that map to one rule priority fail synth, naming both', async () => {
-		const { computes } = await stackWith(['render']);
-		const ingress = computes[0].apiIngress();
-		assert.ok(ingress?.kind === 'load-balancer');
-		ingress.routePath('/aws-blocks/api/orders428');
+	test('two paths that map to one rule priority fail synth, naming both and their computes', async () => {
+		const { computes } = await stackWith(['render', 'preview']);
+		const [render, preview] = computes.map((c) => c.apiIngress());
+		assert.ok(render?.kind === 'load-balancer' && preview?.kind === 'load-balancer');
+		render.routePath('/aws-blocks/api/orders428');
 		assert.throws(
-			() => ingress.routePath('/aws-blocks/api/orders842'),
-			/'\/aws-blocks\/api\/orders428' and '\/aws-blocks\/api\/orders842' map to the same load balancer rule priority/,
+			() => preview.routePath('/aws-blocks/api/orders842'),
+			/'\/aws-blocks\/api\/orders428' \(compute 'render'\) and '\/aws-blocks\/api\/orders842' \(compute 'preview'\) map to the same load balancer rule priority/,
 		);
 	});
 
@@ -433,6 +439,18 @@ describe('ContainerCompute — API ingress', () => {
 			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
 		} as never);
 		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 2 } });
+		assert.throws(() => compute.apiIngress(), /serves API namespaces, so it needs a running task: set scaling\.minInstances/);
+	});
+
+	test('a compute that serves API traffic with no tasks at all also needs a running task', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ApiIngressMaxZero', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 0 } });
 		assert.throws(() => compute.apiIngress(), /serves API namespaces, so it needs a running task: set scaling\.minInstances/);
 	});
 
