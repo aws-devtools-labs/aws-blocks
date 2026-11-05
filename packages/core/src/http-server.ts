@@ -33,6 +33,11 @@ export interface ServeHttpOptions {
    * goes through a front door that overwrites or strips them (the container
    * compute behind its internal load balancer). A request whose stamped headers
    * aren't exactly one well-formed value each is refused with a 400. Default `false`.
+   *
+   * Whatever this option is, a loopback `X-Forwarded-Host` (`localhost:<port>`,
+   * say) takes precedence over the stamped host and the public origin, as in the
+   * Lambda handler, so the sandbox dev server can proxy to the compute. It only
+   * ever yields a loopback `http://` URL (see {@link buildRequestUrl}).
    */
   trustForwardedHeaders?: boolean;
   /** Public origin for request URLs when no front door stamped one. Default: `BLOCKS_PUBLIC_ORIGIN`. */
@@ -505,7 +510,9 @@ function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer | un
  * Lambda handler reports them in `ctx.request.url` for the same request:
  *
  * 1. A trusted loopback `X-Forwarded-Host` (the sandbox dev-server front door):
- *    `http://<that host><path>`, no stage.
+ *    `http://<that host><path>`, no stage. Applies with or without
+ *    `trustForwardedHeaders`, as in the Lambda handler; only a loopback host is
+ *    taken, so it never yields anything but a loopback `http://` URL.
  * 2. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}
  *    (+ optional {@link FORWARDED_STAGE_HEADER}): `https://<host>/<stage><path>`.
  * 3. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
