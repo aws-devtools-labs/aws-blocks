@@ -74,6 +74,12 @@ export interface ProjectInfo {
 	 */
 	instanceExports: ReadonlyMap<string, ReadonlyMap<string, OldBlock>>;
 	/**
+	 * Old classes a module re-exports (`export { AuthBasic } from '@aws-blocks/bb-auth-basic'`,
+	 * `export *` of an old package), keyed like {@link ProjectInfo.instanceExports}, so a
+	 * `new AuthBasic(…)` constructed through a local barrel is migrated like a direct import.
+	 */
+	classExports?: ReadonlyMap<string, ReadonlyMap<string, ClassExport>>;
+	/**
 	 * Some file relies on `AuthCognito` auto-signing-in after `confirmSignUp`:
 	 * a traced `createApi()` (its UI turned it on) or `signUp(…, { autoSignIn: true })`
 	 * ({@link FileResult.cognitoAutoSignIn}). Then `Auth`'s default (`true`) is
@@ -81,6 +87,18 @@ export interface ProjectInfo {
 	 * the old `signUp()` default.
 	 */
 	cognitoAutoSignIn?: boolean;
+	/**
+	 * The {@link NameRule.todoIfMentioned} names some file mentions. Unset: every
+	 * such TODO is left (nothing is known about the other files).
+	 */
+	mentioned?: ReadonlySet<string>;
+}
+
+/** An old class a module re-exports, and the name it exports it under once migrated (when that changes). */
+export interface ClassExport {
+	block: OldBlock;
+	/** `Auth`, when the migrated module no longer exports the old name (`export *`, a renamed re-export). */
+	renamedTo?: string;
 }
 
 /** The result of transforming one file. */
@@ -116,6 +134,10 @@ type Todo = string | readonly string[];
 
 const OLD_CLASS_NAMES = new Set(['AuthBasic', 'AuthCognito', 'AuthOIDC']);
 const SHARED_FACTORY_NAMES = new Set(['github', 'stubIdp', 'customOauth2']);
+/** Every {@link NameRule.todoIfMentioned}: the analysis pass records which ones the project mentions. */
+const TODO_IF_MENTIONED: ReadonlySet<string> = new Set(
+	Object.values(NAME_RULES).flatMap((rules) => Object.values(rules).flatMap((r) => r.todoIfMentioned ?? [])),
+);
 
 // ─── Analysis pass ────────────────────────────────────────────────────────
 
@@ -178,12 +200,65 @@ function unwrap(ts: TypeScript, node: TS.Expression): TS.Expression {
 	return n;
 }
 
+/** `name` is imported from `@aws-blocks/bb-auth` or the umbrella. */
+function importsNewName(ts: TypeScript, sf: TS.SourceFile, name: string): boolean {
+	for (const stmt of sf.statements) {
+		if (!ts.isImportDeclaration(stmt)) continue;
+		const spec = moduleText(ts, stmt.moduleSpecifier);
+		if (spec !== NEW_MODULE && !(spec && UMBRELLA_MODULES.has(spec))) continue;
+		const b = stmt.importClause?.namedBindings;
+		if (b && ts.isNamedImports(b) && b.elements.some((el) => el.name.text === name)) return true;
+	}
+	return false;
+}
+
+/** Every name bound at the top level by something other than an old-auth import. */
+function topLevelNames(ts: TypeScript, sf: TS.SourceFile): Set<string> {
+	const names = new Set<string>();
+	for (const stmt of sf.statements) {
+		if (ts.isImportDeclaration(stmt)) {
+			const spec = moduleText(ts, stmt.moduleSpecifier);
+			if (spec && (own(OLD_MODULES, spec) || UMBRELLA_MODULES.has(spec) || spec === NEW_MODULE)) continue;
+			const clause = stmt.importClause;
+			if (clause?.name) names.add(clause.name.text);
+			const b = clause?.namedBindings;
+			if (b && ts.isNamespaceImport(b)) names.add(b.name.text);
+			if (b && ts.isNamedImports(b)) for (const el of b.elements) names.add(el.name.text);
+		} else if (ts.isVariableStatement(stmt)) {
+			for (const d of stmt.declarationList.declarations) if (ts.isIdentifier(d.name)) names.add(d.name.text);
+		} else if (
+			(ts.isFunctionDeclaration(stmt) ||
+				ts.isClassDeclaration(stmt) ||
+				ts.isInterfaceDeclaration(stmt) ||
+				ts.isTypeAliasDeclaration(stmt) ||
+				ts.isEnumDeclaration(stmt)) &&
+			stmt.name
+		) {
+			names.add(stmt.name.text);
+		}
+	}
+	return names;
+}
+
+/**
+ * An unaliased import of an old name is renamed (`AuthCognito` → `Auth`), and so
+ * is every use of it, unless the new name is already bound by something else.
+ */
+function renamesImport(ts: TypeScript, sf: TS.SourceFile, taken: ReadonlySet<string>, to: string): boolean {
+	return !(taken.has(to) && !importsNewName(ts, sf, to));
+}
+
 /** Analyse one file for the project-wide pass. */
 export function analyzeFile(
 	ts: TypeScript,
 	fileName: string,
 	text: string,
-): { blocks: Set<OldBlock>; instanceExports: Map<string, OldBlock> } {
+): {
+	blocks: Set<OldBlock>;
+	instanceExports: Map<string, OldBlock>;
+	classExports: Map<string, ClassExport>;
+	mentioned: Set<string>;
+} {
 	const sf = parse(ts, fileName, text);
 	const classes = oldClassLocals(ts, sf);
 	const blocks = new Set<OldBlock>(classes.values());
@@ -241,7 +316,63 @@ export function analyzeFile(
 			if (block) exported.set(el.name.text, block);
 		}
 	}
-	return { blocks, instanceExports: exported };
+	const mentioned = new Set([...TODO_IF_MENTIONED].filter((n) => new RegExp(`\\b${n}\\b`).test(text)));
+	return { blocks, instanceExports: exported, classExports: classExports(ts, sf, classes), mentioned };
+}
+
+/**
+ * The old classes `sf` re-exports, by exported name: what a consumer importing
+ * from this module constructs. The renamed-to name mirrors this module's own
+ * migration: `export *` and an unaliased `export { AuthBasic } from …` next to
+ * an import of `AuthBasic` export `Auth` afterwards; every other form keeps the
+ * exported name (`export { Auth as AuthBasic }`).
+ */
+function classExports(
+	ts: TypeScript,
+	sf: TS.SourceFile,
+	classes: ReadonlyMap<string, OldBlock>,
+): Map<string, ClassExport> {
+	const out = new Map<string, ClassExport>();
+	const star = new Map<string, ClassExport>();
+	const taken = topLevelNames(ts, sf);
+	const renamedImports = new Set<string>();
+	for (const stmt of sf.statements) {
+		if (!ts.isImportDeclaration(stmt)) continue;
+		const b = stmt.importClause?.namedBindings;
+		if (!b || !ts.isNamedImports(b)) continue;
+		for (const el of b.elements) {
+			if (!el.propertyName && classes.has(el.name.text) && renamesImport(ts, sf, taken, 'Auth'))
+				renamedImports.add(el.name.text);
+		}
+	}
+	for (const stmt of sf.statements) {
+		if (!ts.isExportDeclaration(stmt)) continue;
+		const spec = moduleText(ts, stmt.moduleSpecifier);
+		const fromOld = spec === undefined ? undefined : own(OLD_MODULES, spec);
+		const fromUmbrella = spec !== undefined && UMBRELLA_MODULES.has(spec);
+		const classOf = (name: string): OldBlock | undefined => {
+			const block = fromOld ?? (fromUmbrella ? umbrellaBlockFor(name) : undefined);
+			return block && own(NAME_RULES[block], name)?.role === 'class' ? block : undefined;
+		};
+		if (!stmt.exportClause) {
+			// `export * from '<old package>'`: the old class names are gone from the migrated module.
+			for (const name of OLD_CLASS_NAMES) {
+				const block = classOf(name);
+				if (block) star.set(name, { block, renamedTo: 'Auth' });
+			}
+			continue;
+		}
+		if (!ts.isNamedExports(stmt.exportClause)) continue;
+		for (const el of stmt.exportClause.elements) {
+			const local = (el.propertyName ?? el.name).text;
+			const block = spec === undefined ? classes.get(local) : classOf(local);
+			if (!block) continue;
+			const renamed = spec !== undefined && !el.propertyName && renamedImports.has(local);
+			out.set(el.name.text, { block, ...(renamed ? { renamedTo: 'Auth' } : {}) });
+		}
+	}
+	for (const [name, e] of star) if (!out.has(name)) out.set(name, e);
+	return out;
 }
 
 // ─── Transform pass ───────────────────────────────────────────────────────
@@ -310,6 +441,10 @@ interface Layout {
 
 const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
+/** The character classes `Auth`'s password policy requires by default, and `AuthBasic`'s did not. */
+const BASIC_POLICY_CLASSES = ['requireUppercase', 'requireLowercase', 'requireDigits', 'requireSymbols'] as const;
+const BASIC_POLICY_WHY = "AuthBasic's password policy (it required no character classes)";
+
 /** Transform one file. Pure: no I/O. */
 export function transformFile(ts: TypeScript, fileName: string, text: string, project: ProjectInfo): FileResult {
 	return new FileMigrator(ts, fileName, text, project).run();
@@ -335,6 +470,8 @@ class FileMigrator {
 	private readonly instanceLocals = new Map<string, OldBlock>();
 	private readonly thisInstances = new Map<string, OldBlock>();
 	private readonly consumedFactoryCalls = new Set<TS.CallExpression>();
+	/** The `providers` values of the old blocks' options: a factory call outside them is built elsewhere. */
+	private readonly providerValues: [number, number][] = [];
 	private readonly importJobs: ImportJob[] = [];
 	/** Local names of `import * as x from '@aws-blocks/blocks'` (or `/cdk`). */
 	private readonly umbrellaNamespaces = new Set<string>();
@@ -389,13 +526,13 @@ class FileMigrator {
 
 	private scanImports(): void {
 		const { ts } = this;
-		const takenNames = this.topLevelNames();
+		const takenNames = topLevelNames(ts, this.sf);
 		for (const stmt of this.sf.statements) {
 			const isImport = ts.isImportDeclaration(stmt);
 			if (!isImport && !ts.isExportDeclaration(stmt)) continue;
 			const spec = moduleText(ts, stmt.moduleSpecifier);
 			if (spec === undefined) continue;
-			if (isImport && spec.startsWith('.')) this.scanRelativeImport(stmt, spec);
+			if (isImport && spec.startsWith('.')) this.scanRelativeImport(stmt, spec, takenNames);
 			if (isImport && (spec === NEW_MODULE || UMBRELLA_MODULES.has(spec) || spec === '@aws-blocks/auth-common')) {
 				const b = stmt.importClause?.namedBindings;
 				if (b && ts.isNamedImports(b)) {
@@ -474,8 +611,8 @@ class FileMigrator {
 				const to = rule.to;
 				if (typeof to === 'string' && to !== imported && !s.aliased) {
 					// Keep the old local name (aliased) when the new one is already taken.
-					if (takenNames.has(to) && !this.importsNewName(to)) s.local = imported;
-					else this.renames.set(s.local, to);
+					if (renamesImport(ts, this.sf, takenNames, to)) this.renames.set(s.local, to);
+					else s.local = imported;
 				}
 			}
 			if (oldBlock || touched) {
@@ -503,7 +640,7 @@ class FileMigrator {
 		const to = rule?.to;
 		if (this.ts.isImportSpecifier(el) && typeof to === 'string' && to !== imported && !s.aliased) {
 			// Keep the old local name (aliased) when the new one is already taken.
-			if (!(takenNames.has(to) && !this.importsNewName(to))) this.renames.set(s.local, to);
+			if (renamesImport(this.ts, this.sf, takenNames, to)) this.renames.set(s.local, to);
 		}
 		return s;
 	}
@@ -567,58 +704,31 @@ class FileMigrator {
 		if (mapped.length > 0) this.importJobs.push({ decl: stmt, specs: mapped, newModule: NEW_MODULE, leftover });
 	}
 
-	private importsNewName(name: string): boolean {
-		for (const stmt of this.sf.statements) {
-			if (!this.ts.isImportDeclaration(stmt)) continue;
-			const spec = moduleText(this.ts, stmt.moduleSpecifier);
-			if (spec !== NEW_MODULE && !(spec && UMBRELLA_MODULES.has(spec))) continue;
-			const b = stmt.importClause?.namedBindings;
-			if (b && this.ts.isNamedImports(b) && b.elements.some((el) => el.name.text === name)) return true;
-		}
-		return false;
-	}
-
-	/** Every name bound at the top level by something other than an old-auth import. */
-	private topLevelNames(): Set<string> {
-		const { ts } = this;
-		const names = new Set<string>();
-		for (const stmt of this.sf.statements) {
-			if (ts.isImportDeclaration(stmt)) {
-				const spec = moduleText(ts, stmt.moduleSpecifier);
-				if (spec && (own(OLD_MODULES, spec) || UMBRELLA_MODULES.has(spec) || spec === NEW_MODULE)) continue;
-				const clause = stmt.importClause;
-				if (clause?.name) names.add(clause.name.text);
-				const b = clause?.namedBindings;
-				if (b && ts.isNamespaceImport(b)) names.add(b.name.text);
-				if (b && ts.isNamedImports(b)) for (const el of b.elements) names.add(el.name.text);
-			} else if (ts.isVariableStatement(stmt)) {
-				for (const d of stmt.declarationList.declarations) if (ts.isIdentifier(d.name)) names.add(d.name.text);
-			} else if (
-				(ts.isFunctionDeclaration(stmt) ||
-					ts.isClassDeclaration(stmt) ||
-					ts.isInterfaceDeclaration(stmt) ||
-					ts.isTypeAliasDeclaration(stmt) ||
-					ts.isEnumDeclaration(stmt)) &&
-				stmt.name
-			) {
-				names.add(stmt.name.text);
-			}
-		}
-		return names;
-	}
-
-	private scanRelativeImport(stmt: TS.ImportDeclaration, spec: string): void {
+	private scanRelativeImport(stmt: TS.ImportDeclaration, spec: string, takenNames: ReadonlySet<string>): void {
 		const b = stmt.importClause?.namedBindings;
 		if (!b || !this.ts.isNamedImports(b)) return;
-		const exports = this.project.instanceExports.get(moduleKey(resolve(dirname(this.fileName), spec)));
-		if (!exports) return;
-		for (const el of b.elements) {
-			const block = exports.get((el.propertyName ?? el.name).text);
+		const key = moduleKey(resolve(dirname(this.fileName), spec));
+		const instances = this.project.instanceExports.get(key);
+		const classes = this.project.classExports?.get(key);
+		let renamed = false;
+		const specs = b.elements.map((el) => {
+			const imported = (el.propertyName ?? el.name).text;
+			const block = instances?.get(imported);
 			if (block) {
 				this.instanceLocals.set(el.name.text, block);
 				this.authTouching = true;
 			}
-		}
+			const cls = classes?.get(imported);
+			if (!cls) return this.specFor(el, undefined, takenNames);
+			// A class re-exported by a local barrel: its constructions migrate like a direct import's.
+			this.classLocals.set(el.name.text, cls.block);
+			this.authTouching = true;
+			if (!cls.renamedTo) return this.specFor(el, undefined, takenNames);
+			renamed = true;
+			return { ...this.specFor(el, { to: cls.renamedTo, role: 'class' }, takenNames), block: cls.block };
+		});
+		// The barrel exports it as `Auth` once migrated: import that name.
+		if (renamed) this.importJobs.push({ decl: stmt, specs });
 	}
 
 	private queueImportJobs(): void {
@@ -748,7 +858,7 @@ class FileMigrator {
 			if (rule.todo) goneTodos.push(rule.todo);
 		} else if (typeof rule.to === 'string') {
 			name = rule.to;
-			if (rule.todo) goneTodos.push(rule.todo);
+			if (rule.todo && this.mentioned(rule)) goneTodos.push(rule.todo);
 			if (name !== s.imported) this.changes.push(`${s.imported} → ${name}`);
 		}
 		const local = s.aliased ? s.local : (this.renames.get(s.local) ?? s.local);
@@ -867,7 +977,13 @@ class FileMigrator {
 			const ns = (this.ts.isPropertyAccessExpression(node) ? node.expression : node.left).getText(this.sf);
 			this.changes.push(`${ns}.${name.text} → ${ns}.${rule.to}`);
 		}
-		if (rule.todo) this.todo(node, rule.todo);
+		if (rule.todo && this.mentioned(rule)) this.todo(node, rule.todo);
+	}
+
+	/** Whether {@link NameRule.todoIfMentioned} (if any) is mentioned somewhere in the project. */
+	private mentioned(rule: NameRule): boolean {
+		const name = rule.todoIfMentioned;
+		return name === undefined || this.project.mentioned === undefined || this.project.mentioned.has(name);
 	}
 
 	/** A use of an umbrella namespace the codemod can't follow (`blocks['AuthCognito']`, `const { AuthCognito } = blocks`). */
@@ -981,7 +1097,11 @@ class FileMigrator {
 		if (obj.properties.some((p) => this.ts.isSpreadAssignment(p))) {
 			for (const d of this.keptDefaults(block, obj)) this.todo(node, TODOS.keepDefault(d.text, d.why));
 		}
-		if (block === 'oidc') this.markConsumedProviders(obj);
+		if (block === 'oidc') {
+			this.markConsumedProviders(obj);
+			const providers = valueNode(this.ts, this.propOf(obj, 'providers'));
+			if (providers) this.providerValues.push([providers.getStart(this.sf), providers.getEnd()]);
+		}
 		const statement = node;
 		this.jobs.push({
 			start: obj.getStart(this.sf),
@@ -992,9 +1112,8 @@ class FileMigrator {
 
 	private markConsumedProviders(obj: TS.ObjectLiteralExpression): void {
 		const providers = this.propOf(obj, 'providers');
-		const value =
-			providers && this.ts.isPropertyAssignment(providers) ? unwrap(this.ts, providers.initializer) : undefined;
-		if (!value || !this.ts.isArrayLiteralExpression(value)) return;
+		const value = providers && this.ts.isPropertyAssignment(providers) ? this.providersArray(providers) : undefined;
+		if (!value) return;
 		for (const el of value.elements) {
 			const call = this.factoryCall(el);
 			if (call) this.consumedFactoryCalls.add(call.call);
@@ -1112,9 +1231,11 @@ class FileMigrator {
 	/**
 	 * Defaults `Auth` changed, written out so the block keeps behaving as before
 	 * (as `mfaEntry` does for `mfa.types`): `AuthBasic`'s 24-hour session when
-	 * `sessionDuration` is unset (`Auth`: 400 days), and `AuthCognito`'s
-	 * `signUp()` without auto sign-in, unless the project relies on it
-	 * ({@link ProjectInfo.cognitoAutoSignIn}).
+	 * `sessionDuration` is unset (`Auth`: 400 days), `AuthBasic`'s password
+	 * policy (no required character classes) when `passwordPolicy` is unset (a
+	 * set one gets the missing classes in {@link FileMigrator.mapPasswordPolicy}),
+	 * and `AuthCognito`'s `signUp()` without auto sign-in, unless the project
+	 * relies on it ({@link ProjectInfo.cognitoAutoSignIn}).
 	 */
 	private keptDefaults(
 		block: OldBlock,
@@ -1128,8 +1249,15 @@ class FileMigrator {
 			text: `${group}: { ${key}: ${value} }`,
 			note: `${group}.${key}: ${value} (${why})`,
 		});
-		if (block === 'basic' && !(obj && this.propOf(obj, 'sessionDuration'))) {
-			return [kept('session', 'ttlSeconds', '86_400', "AuthBasic's 24-hour default")];
+		if (block === 'basic') {
+			const out: ReturnType<typeof kept>[] = [];
+			if (!(obj && this.propOf(obj, 'sessionDuration')))
+				out.push(kept('session', 'ttlSeconds', '86_400', "AuthBasic's 24-hour default"));
+			if (!(obj && this.propOf(obj, 'passwordPolicy'))) {
+				const policy = `{ ${BASIC_POLICY_CLASSES.map((k) => `${k}: false`).join(', ')} }`;
+				out.push(kept('emailPassword', 'passwordPolicy', policy, BASIC_POLICY_WHY));
+			}
+			return out;
 		}
 		if (block === 'cognito' && !this.project.cognitoAutoSignIn) {
 			return [kept('emailPassword', 'autoSignIn', 'false', "AuthCognito's signUp() default")];
@@ -1150,7 +1278,7 @@ class FileMigrator {
 			const newKey = simple[simple.length - 1] ?? key;
 			const entry = this.movedEntry(prop, newKey);
 			if (block === 'basic' && key === 'codeDelivery') entry.todos.push(TODOS.basicCodeDelivery);
-			if (block === 'basic' && key === 'passwordPolicy') this.renameSpecialChars(prop, entry);
+			if (block === 'basic' && key === 'passwordPolicy') this.mapPasswordPolicy(prop, entry);
 			if (block === 'oidc' && (key === 'onSignIn' || key === 'onSignOut')) this.flagOidcUserFields(prop, entry);
 			if (block === 'cognito' && key === 'preferredChallenge' && !this.propOf(obj, 'userPool')) {
 				if (literalOf(this.ts, valueNode(this.ts, prop)) === 'EMAIL_OTP') {
@@ -1241,7 +1369,12 @@ class FileMigrator {
 		};
 	}
 
-	private renameSpecialChars(prop: TS.ObjectLiteralElementLike, entry: OutEntry): void {
+	/**
+	 * `AuthBasic`'s `passwordPolicy`: `requireSpecialChars` → `requireSymbols`,
+	 * and every character class it leaves unset written out as `false`
+	 * (`AuthBasic` required none; `Auth` requires all four by default).
+	 */
+	private mapPasswordPolicy(prop: TS.ObjectLiteralElementLike, entry: OutEntry): void {
 		const { ts } = this;
 		const value = valueNode(ts, prop);
 		const obj = value ? unwrap(ts, value) : undefined;
@@ -1262,8 +1395,26 @@ class FileMigrator {
 				extra.push({ start: p.name.getStart(this.sf), end: p.name.getEnd(), text: 'requireSymbols' });
 			}
 		}
+		if (extra.length > 0) this.changes.push('passwordPolicy.requireSpecialChars → requireSymbols');
+		const set = new Set(obj.properties.map((p) => propName(ts, p)));
+		if (set.has('requireSpecialChars')) set.add('requireSymbols');
+		const missing = BASIC_POLICY_CLASSES.filter((k) => !set.has(k)).map((k) => `${k}: false`);
+		const last = obj.properties[obj.properties.length - 1];
+		if (missing.length > 0 && obj.properties.some((p) => ts.isSpreadAssignment(p))) {
+			// The spread may set them: writing `false` after it would override it.
+			entry.todos.push(TODOS.keepDefault(`${missing.join(', ')} (in passwordPolicy)`, BASIC_POLICY_WHY));
+		} else if (missing.length > 0) {
+			const multiline = obj.getText(this.sf).includes('\n');
+			const at = last ? last.getEnd() : obj.getStart(this.sf);
+			const lead = last && multiline ? `,${this.nl}${indentAt(this.text, last.getStart(this.sf))}` : ', ';
+			extra.push(
+				last
+					? { start: at, end: at, text: missing.map((m) => `${lead}${m}`).join('') }
+					: { start: at, end: obj.getEnd(), text: `{ ${missing.join(', ')} }` },
+			);
+			this.changes.push(`emailPassword.passwordPolicy: ${missing.join(', ')} (${BASIC_POLICY_WHY})`);
+		}
 		if (extra.length === 0) return;
-		this.changes.push('passwordPolicy.requireSpecialChars → requireSymbols');
 		entry.value = {
 			t: 'text',
 			text: this.slice(value.getStart(this.sf), value.getEnd(), extra),
@@ -1395,11 +1546,17 @@ class FileMigrator {
 
 	// ── AuthOIDC providers ─────────────────────────────────────────────────
 
+	/** `AuthOIDC`'s `providers` array, when the codemod can key it: an array literal with no spread. */
+	private providersArray(prop: TS.ObjectLiteralElementLike | undefined): TS.ArrayLiteralExpression | undefined {
+		const value = valueNode(this.ts, prop);
+		const arr = value ? unwrap(this.ts, value) : undefined;
+		if (!arr || !this.ts.isArrayLiteralExpression(arr)) return undefined;
+		return arr.elements.some((el) => this.ts.isSpreadElement(el)) ? undefined : arr;
+	}
+
 	private providerEntries(prop: TS.ObjectLiteralElementLike): { path: string[]; entry: OutEntry }[] {
-		const { ts } = this;
-		const value = valueNode(ts, prop);
-		const arr = value ? unwrap(ts, value) : undefined;
-		if (!value || !arr || !ts.isArrayLiteralExpression(arr)) {
+		const arr = this.providersArray(prop);
+		if (!arr) {
 			const entry = this.movedEntry(prop, 'providers');
 			entry.todos.push(TODOS.providersNotArray);
 			return [{ path: [], entry }];
@@ -1441,9 +1598,8 @@ class FileMigrator {
 	 * block cannot hold.
 	 */
 	private oidcPlan(prop: TS.ObjectLiteralElementLike | undefined): { store: 'cognito' | 'builtin'; mixed: boolean } {
-		const value = valueNode(this.ts, prop);
-		const arr = value ? unwrap(this.ts, value) : undefined;
-		if (!arr || !this.ts.isArrayLiteralExpression(arr)) return { store: 'builtin', mixed: false };
+		const arr = this.providersArray(prop);
+		if (!arr) return { store: 'builtin', mixed: false };
 		const viaCognito = arr.elements.map((el) => this.factoryCall(el)?.factory === 'cognitoFederated');
 		const some = viaCognito.some(Boolean);
 		const all = viaCognito.length > 0 && viaCognito.every(Boolean);
@@ -1573,7 +1729,8 @@ class FileMigrator {
 				take('onAuthorize');
 				take('users');
 				rest();
-				// AuthOIDC and Auth both limit the stub to local and sandbox: a 1:1 move.
+				// Auth refuses the stub when synthesizing a production deployment; AuthOIDC did not.
+				todos.push(TODOS.stubIdpDeployed);
 				return record(key, {
 					t: 'call',
 					callee: this.calleeText(call),
@@ -1664,7 +1821,7 @@ class FileMigrator {
 			const spec = moduleText(ts, node.arguments[0]);
 			if (spec && (own(OLD_MODULES, spec) || own(DEAD_SUBPATHS, spec) || own(OLD_SUBPATHS, spec))) {
 				this.authTouching = true;
-				this.todo(node, TODOS.dynamicImport);
+				this.todo(node, ts.isIdentifier(callee) ? TODOS.requireCall : TODOS.dynamicImport);
 			}
 			return;
 		}
@@ -1676,7 +1833,9 @@ class FileMigrator {
 		if (fnName && ERROR_CHECK_FUNCTIONS.has(fnName) && this.project.blocks.size > 0)
 			this.handleErrorCheck(node, fnName);
 		if (ts.isIdentifier(callee) && this.factoryLocals.has(callee.text) && !this.consumedFactoryCalls.has(node)) {
-			this.todo(node, TODOS.providerNotFactory);
+			// Inside a block's providers, its entry (or the whole unkeyable value) already carries the TODO.
+			const pos = node.getStart(this.sf);
+			if (!this.providerValues.some(([s, e]) => pos >= s && pos < e)) this.todo(node, TODOS.providerOutsideBlock);
 		}
 		const member = this.umbrellaMember(callee);
 		if (member?.rule.role === 'factory' && member.rule.to === null && !this.consumedFactoryCalls.has(node)) {
@@ -1953,7 +2112,14 @@ class FileMigrator {
 			p.name === node
 		)
 			return;
-		if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) return;
+		if (ts.isImportSpecifier(p)) return;
+		if (ts.isExportSpecifier(p)) {
+			// `export { AuthCognitoErrors };` of a renamed import: export the new local under the old name.
+			if (p.parent.parent.moduleSpecifier) return;
+			if (p.propertyName === node) this.edit(node.getStart(this.sf), node.getEnd(), to);
+			else if (!p.propertyName) this.edit(node.getStart(this.sf), node.getEnd(), `${to} as ${node.text}`);
+			return;
+		}
 		if (
 			(ts.isVariableDeclaration(p) ||
 				ts.isParameter(p) ||
@@ -2136,7 +2302,7 @@ class FileMigrator {
 
 	private renderValue(v: OutValue, indent: string, layout: Layout, hoisted: Todo[]): string {
 		if (v.t === 'text') return v.indent ? reindent(v.text, v.indent, indent) : v.text;
-		if (v.t === 'call') return `${v.callee}(${v.arg ? this.renderValue(v.arg, indent, layout, hoisted) : ''})`;
+		if (v.t === 'call') return `${v.callee}(${hasArg(v) ? this.renderValue(v.arg, indent, layout, hoisted) : ''})`;
 		if (v.inline) return this.renderInline(v.entries);
 		return this.renderObject(v.entries, indent, layout, hoisted);
 	}
@@ -2151,7 +2317,7 @@ class FileMigrator {
 			v.t === 'text'
 				? v.text
 				: v.t === 'call'
-					? `${v.callee}(${v.arg ? (v.arg.t === 'obj' ? this.renderInline(v.arg.entries) : v.arg.t === 'text' ? v.arg.text : '') : ''})`
+					? `${v.callee}(${hasArg(v) ? (v.arg.t === 'obj' ? this.renderInline(v.arg.entries) : v.arg.t === 'text' ? v.arg.text : '') : ''})`
 					: this.renderInline(v.entries);
 		return e.key === null ? value : `${e.key}: ${value}`;
 	}
@@ -2265,6 +2431,11 @@ function propName(ts: TypeScript, p: TS.ObjectLiteralElementLike): string | unde
 	if (!name) return undefined;
 	if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) return name.text;
 	return undefined;
+}
+
+/** A factory call keeps its argument unless every entry moved out (`stubIdp({ name: 'dev' })` → `stubIdp()`). */
+function hasArg(v: { arg?: OutValue }): v is { arg: OutValue } {
+	return v.arg !== undefined && !(v.arg.t === 'obj' && v.arg.entries.length === 0);
 }
 
 function valueNode(ts: TypeScript, p: TS.ObjectLiteralElementLike | undefined): TS.Expression | undefined {

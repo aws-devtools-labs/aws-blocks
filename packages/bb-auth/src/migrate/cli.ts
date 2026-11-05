@@ -14,7 +14,7 @@
  * TypeScript dependency.
  */
 
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -23,6 +23,7 @@ import { type OldBlock, SUMMARY_WARNINGS, TODO_TAG } from './rules.js';
 import { unifiedDiff } from './text.js';
 import {
 	analyzeFile,
+	type ClassExport,
 	type FileResult,
 	moduleKey,
 	type ProjectInfo,
@@ -133,13 +134,17 @@ export async function runMigrate(options: MigrateOptions = {}): Promise<MigrateS
 	const sources = new Map<string, string>();
 	for (const f of files) sources.set(f, readFileSync(f, 'utf8'));
 
-	// Pass 1: what the project uses, and which modules export an old block instance.
+	// Pass 1: what the project uses, and which modules export an old block instance or re-export an old class.
 	const blocks = new Set<OldBlock>();
 	const instanceExports = new Map<string, Map<string, OldBlock>>();
+	const classExports = new Map<string, Map<string, ClassExport>>();
+	const mentioned = new Set<string>();
 	for (const [file, text] of sources) {
 		const a = analyzeFile(ts, file, text);
 		for (const b of a.blocks) blocks.add(b);
+		for (const n of a.mentioned) mentioned.add(n);
 		if (a.instanceExports.size > 0) instanceExports.set(moduleKey(file), a.instanceExports);
+		if (a.classExports.size > 0) classExports.set(moduleKey(file), a.classExports);
 	}
 	// Pass 2: transform (pure; nothing is written until the end).
 	const transformAll = (project: ProjectInfo) => {
@@ -159,9 +164,10 @@ export async function runMigrate(options: MigrateOptions = {}): Promise<MigrateS
 		}
 		return { summary, results, cognitoAutoSignIn };
 	};
-	let pass = transformAll({ blocks, instanceExports });
+	const project: ProjectInfo = { blocks, instanceExports, classExports, mentioned };
+	let pass = transformAll(project);
 	// Only the transform can trace receivers: once it finds the project relying on auto sign-in, redo with that known.
-	if (pass.cognitoAutoSignIn) pass = transformAll({ blocks, instanceExports, cognitoAutoSignIn: true });
+	if (pass.cognitoAutoSignIn) pass = transformAll({ ...project, cognitoAutoSignIn: true });
 	const { summary, results } = pass;
 	for (const { file, result } of results) {
 		if (!result.changed) continue;
@@ -236,6 +242,10 @@ export async function main(argv: readonly string[]): Promise<number> {
 		console.log(USAGE);
 		return argv.length === 0 ? 2 : 0;
 	}
+	// A mistyped path must not read as "nothing to migrate".
+	const missing = parsed.positionals.filter((p) => !existsSync(resolve(p)));
+	for (const p of missing) console.error(`✗ ${p}: not found`);
+	if (missing.length > 0) return 2;
 	try {
 		const summary = await runMigrate({ paths: parsed.positionals, dryRun: parsed.values['dry-run'] === true });
 		return summary.failed.length > 0 ? 1 : 0;

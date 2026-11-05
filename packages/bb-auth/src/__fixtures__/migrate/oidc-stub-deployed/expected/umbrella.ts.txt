@@ -5,6 +5,7 @@ const scope = new blocks.Scope('app');
 export const auth = new blocks.Auth(scope, 'umbrella-auth', {
 	store: 'builtin',
 	providers: {
+		// TODO(aws-blocks-auth-migrate): Auth runs stubIdp() only in npm run dev and on sandbox deployments: synthesizing any other deployment with it fails (AuthOIDC synthesized it anywhere). If this module is also deployed to production, pick the provider with getDeploymentType() (README, "Usage").
 		dev: blocks.stubIdp({
 			scopes: ['openid'],
 		}),

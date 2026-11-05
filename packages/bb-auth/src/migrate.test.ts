@@ -286,13 +286,74 @@ describe('bb-auth migrate — the store an AuthOIDC block gets', () => {
 	test("a providers value that is not an array literal: store: 'builtin', kept as is, with a TODO", () => {
 		const out = options('providers: list');
 		assert.match(out, /\{ store: 'builtin', providers: list \}/);
-		assert.match(out, /`providers` is not an array literal, so the codemod could not key it/);
+		assert.match(out, /`providers` is not an array literal \(or spreads one in\), so the codemod could not key it/);
 	});
 
 	test("no providers (or an empty list): store: 'builtin' with none, which Auth then refuses", () => {
 		for (const providers of ['', 'providers: []']) {
 			assert.match(options(providers), /new Auth\(scope, 'auth', \{ store: 'builtin' \}\)/, providers);
 		}
+	});
+});
+
+describe('bb-auth migrate — a class re-exported by a local barrel', () => {
+	/** Migrate `body` once importing `cls` directly and once through `barrel`; return both migrated bodies. */
+	async function both(cls: string, module: string, barrel: string, body: string): Promise<[string, string]> {
+		const out: string[] = [];
+		for (const viaBarrel of [false, true]) {
+			const dir = mkdtempSync(join(tmpdir(), 'bb-auth-migrate-barrel-'));
+			try {
+				const from = viaBarrel ? './barrel.js' : module;
+				writeFileSync(join(dir, 'index.ts'), `import { ${cls} } from '${from}';\n${body}`);
+				if (viaBarrel) writeFileSync(join(dir, 'barrel.ts'), barrel);
+				await migrate(dir);
+				// Drop the import line; the barrel keeps the old name where it exports it unrenamed.
+				const text = readFileSync(join(dir, 'index.ts'), 'utf8');
+				out.push(text.slice(text.indexOf('\n') + 1).replaceAll(/\bAuth(?:Basic|Cognito)\b/g, 'Auth'));
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		}
+		const [direct, viaBarrel] = out;
+		assert.ok(direct !== undefined && viaBarrel !== undefined);
+		return [direct, viaBarrel];
+	}
+
+	const scope =
+		"import type { BlocksContext } from '@aws-blocks/core';\nimport { Scope } from '@aws-blocks/core';\nconst scope = new Scope('app');\n";
+
+	test('AuthBasic: the same option mapping, kept defaults and TODOs as a direct import', async () => {
+		const body = `${scope}export const auth = new AuthBasic(scope, 'auth', { passwordPolicy: { requireSpecialChars: true } });
+export const bare = new AuthBasic(scope, 'bare');
+export const legacyApi = auth.buildApi();
+`;
+		const [direct, viaBarrel] = await both(
+			'AuthBasic',
+			'@aws-blocks/bb-auth-basic',
+			"export { AuthBasic } from '@aws-blocks/bb-auth-basic';\n",
+			body,
+		);
+		assert.match(direct, /session: \{ ttlSeconds: 86_400 \}/);
+		assert.match(direct, /has no migration path to Auth/);
+		assert.match(direct, /buildApi\(\) is gone/);
+		assert.strictEqual(viaBarrel, direct);
+	});
+
+	test('AuthCognito (export *): the same option mapping, method renames and TODOs as a direct import', async () => {
+		const body = `${scope}export const auth = new AuthCognito(scope, 'auth', { sessionTtlSeconds: 60, signInWith: 'email' });
+export async function tokens(context: BlocksContext) {
+	return auth.fetchAuthSession(context);
+}
+`;
+		const [direct, viaBarrel] = await both(
+			'AuthCognito',
+			'@aws-blocks/bb-auth-cognito',
+			"export * from '@aws-blocks/bb-auth-cognito';\n",
+			body,
+		);
+		assert.match(direct, /emailPassword: \{ autoSignIn: false \}/);
+		assert.match(direct, /getAuthSession/);
+		assert.strictEqual(viaBarrel, direct);
 	});
 });
 
@@ -426,5 +487,16 @@ describe('bb-auth migrate — the published bin (dist/bin.js)', () => {
 		assert.strictEqual(run(['frobnicate'], PACKAGE_DIR).status, 2);
 		assert.strictEqual(run(['migrate', '--yes'], PACKAGE_DIR).status, 2);
 		assert.strictEqual(run([], PACKAGE_DIR).status, 2);
+	});
+
+	test('`migrate <missing path>` reports it and exits 2 (not "nothing to migrate")', async () => {
+		await withCase('cognito-methods', async (dir) => {
+			const before = readTree(dir);
+			const r = run(['migrate', '.', 'does-not-exist'], dir);
+			assert.strictEqual(r.status, 2);
+			assert.match(r.stderr, /✗ does-not-exist: not found/);
+			assert.doesNotMatch(r.stdout, /nothing to migrate/);
+			assert.deepStrictEqual(readTree(dir), before);
+		});
 	});
 });

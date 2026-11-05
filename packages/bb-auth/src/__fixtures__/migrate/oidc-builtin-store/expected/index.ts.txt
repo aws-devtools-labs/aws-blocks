@@ -19,9 +19,8 @@ export const auth = new Auth(scope, 'sso', {
 			clientId: 'gh-client',
 			clientSecret: githubSecret,
 		}),
-		local: stubIdp({
-
-		}),
+		// TODO(aws-blocks-auth-migrate): Auth runs stubIdp() only in npm run dev and on sandbox deployments: synthesizing any other deployment with it fails (AuthOIDC synthesized it anywhere). If this module is also deployed to production, pick the provider with getDeploymentType() (README, "Usage").
+		local: stubIdp(),
 	},
 	allowBearerAuth: true,
 	redirects: {

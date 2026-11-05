@@ -1,0 +1,16 @@
+import { Scope } from '@aws-blocks/core';
+import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+
+const scope = new Scope('app');
+const base = { minLength: 12 };
+
+export const multiline = new AuthBasic(scope, 'multiline', {
+	sessionDuration: 3600,
+	passwordPolicy: {
+		minLength: 12,
+		requireUppercase: true,
+	},
+});
+export const empty = new AuthBasic(scope, 'empty', { sessionDuration: 3600, passwordPolicy: {} });
+export const spread = new AuthBasic(scope, 'spread', { sessionDuration: 3600, passwordPolicy: { ...base } });
+export const byRef = new AuthBasic(scope, 'by-ref', { sessionDuration: 3600, passwordPolicy: base });

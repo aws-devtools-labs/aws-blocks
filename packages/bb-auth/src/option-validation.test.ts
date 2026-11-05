@@ -605,7 +605,7 @@ describe('the resolver owns the store value and the type a store accepts', () =>
 	test('an unknown store value: provider entries are not walked, the resolver names the store', () => {
 		assert.match(
 			message({ store: 'direct', providers: { okta: { type: 'oidc', issuer: 'https://o', clientId: 'c' } } }),
-			/`store` must be 'cognito' \(the default\) or 'builtin', got "direct"/,
+			/`store` must be 'cognito' \(the default\) or 'builtin', got the string "direct"/,
 		);
 	});
 });

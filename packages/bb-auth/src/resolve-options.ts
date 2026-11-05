@@ -18,7 +18,7 @@
  * @internal
  */
 
-import { COGNITO_ONLY_KEYS, join } from './option-validation.js';
+import { COGNITO_ONLY_KEYS, describeValue, join } from './option-validation.js';
 import type {
 	AmazonProvider,
 	AppleProvider,
@@ -123,7 +123,9 @@ function listKeys(keys: readonly string[]): string {
 
 function describeType(type: unknown): string {
 	if (type === undefined) return 'no `type`';
-	if (typeof type === 'string') return `\`type: '${type}'\``;
+	// A long string is shown by length only, as in describeValue: it may be a misplaced secret.
+	if (typeof type === 'string')
+		return type.length > 8 ? `\`type\` set to ${describeValue(type)}` : `\`type: '${type}'\``;
 	return typeof type === 'number' || typeof type === 'boolean'
 		? `\`type: ${type}\``
 		: 'a `type` that is not a string';
@@ -169,7 +171,7 @@ export function resolveOptions(input: AuthOptions, blockId?: string): ResolvedAu
 	const storeValue: unknown = Reflect.get(options, 'store');
 	if (storeValue !== undefined && storeValue !== 'cognito' && storeValue !== 'builtin') {
 		throw new Error(
-			`${auth} \`store\` must be 'cognito' (the default) or 'builtin', got ${JSON.stringify(storeValue)}.`,
+			`${auth} \`store\` must be 'cognito' (the default) or 'builtin', got ${describeValue(storeValue)}.`,
 		);
 	}
 	const replaced = setKeys(options, REPLACED_KEYS);

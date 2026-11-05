@@ -652,8 +652,9 @@ function hintFor(key: string, parentPath: string, shape: Shape, store: AuthStore
  * The wrong value, for a message: ``the number 0``, ``the string "false"``, `` `null` ``, ``an array``, ``a Map``.
  * A string longer than 8 characters is shown by length only (``a string (40 characters)``): a misplaced token or
  * secret must not reach a log.
+ * @internal
  */
-function describeValue(value: unknown): string {
+export function describeValue(value: unknown): string {
 	if (value === null) return '`null`';
 	if (Array.isArray(value)) return 'an array';
 	switch (typeof value) {

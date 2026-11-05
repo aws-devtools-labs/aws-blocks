@@ -48,6 +48,7 @@ export const auth = new Auth(scope, 'oidc-auth', {
 			scopes: ['read_user'],
 			mapClaims: (raw) => ({ providerSub: String(raw), email: null, name: null }),
 		}),
+		// TODO(aws-blocks-auth-migrate): Auth runs stubIdp() only in npm run dev and on sandbox deployments: synthesizing any other deployment with it fails (AuthOIDC synthesized it anywhere). If this module is also deployed to production, pick the provider with getDeploymentType() (README, "Usage").
 		corp: stubIdp({
 			users: [{ sub: 'u-1', email: 'a@example.com', name: 'A' }],
 		}),

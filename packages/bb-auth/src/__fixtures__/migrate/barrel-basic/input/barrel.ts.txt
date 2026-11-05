@@ -1,0 +1,3 @@
+// The app's own barrel: the rest of the backend imports auth from here.
+export { AuthBasic } from '@aws-blocks/bb-auth-basic';
+export type { AuthBasicUser } from '@aws-blocks/bb-auth-basic';

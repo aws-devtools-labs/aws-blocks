@@ -211,8 +211,33 @@ describe('resolveOptions — backstops for untyped callers', () => {
 		const options: unknown = { store: 'cognit0' };
 		assert.throws(
 			() => resolveOptions(options as AuthOptions),
-			/`store` must be 'cognito' \(the default\) or 'builtin', got "cognit0"/,
+			/`store` must be 'cognito' \(the default\) or 'builtin', got the string "cognit0"/,
 		);
+	});
+
+	it('never echoes a long string as the store or a provider type (it may be a misplaced secret)', () => {
+		const token = 'misplaced-token-'.padEnd(40, '0');
+		const cases: [unknown, RegExp][] = [
+			[{ store: token }, /got a string \(40 characters\)\.$/],
+			[
+				{ store: 'builtin', providers: { p: { type: token, clientId: 'c' } } },
+				/providers\.p has `type` set to a string \(40 characters\), which is not a provider type/,
+			],
+			[
+				{ providers: { p: { type: token, issuer, clientId: 'c', clientSecret: secret } } },
+				/providers\.p has `type` set to a string \(40 characters\), which is not a provider type/,
+			],
+		];
+		for (const [options, expected] of cases) {
+			assert.throws(
+				() => resolveOptions(options as AuthOptions),
+				(e: Error) => {
+					assert.match(e.message, expected);
+					assert.ok(!e.message.includes(token), e.message);
+					return true;
+				},
+			);
+		}
 	});
 
 	it('rejects the replaced provider maps on either store, even next to providers', () => {

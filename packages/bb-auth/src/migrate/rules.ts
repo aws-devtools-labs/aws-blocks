@@ -101,6 +101,11 @@ export interface NameRule {
 	role: 'class' | 'errors' | 'factory' | 'type' | 'value';
 	/** Left as a TODO next to the import. */
 	todo?: string;
+	/**
+	 * Leave {@link NameRule.todo} only when some file of the project mentions this
+	 * name (a field the new type lacks: no TODO when nothing reads it).
+	 */
+	todoIfMentioned?: string;
 	/** For `role: 'factory'`: the old provider factory. */
 	factory?: OidcFactory;
 }
@@ -226,6 +231,7 @@ export const NAME_RULES: Readonly<Record<OldBlock, Readonly<Record<string, NameR
 			to: 'AuthenticatedUser',
 			role: 'type',
 			todo: 'AuthenticatedUser has no createdAt. Read the creation date with auth.admin.getUser() if you need it.',
+			todoIfMentioned: 'createdAt',
 		},
 		CodeDeliveryFn: same('type'),
 		PasswordPolicy: same('type'),
@@ -474,7 +480,8 @@ export const TODOS = {
 		'Export them first if you need them (MIGRATION.md, "AuthBasic"); the users / codes tables and the jwt-secret',
 		'parameter are retained under BlocksPresets.production and deleted under BlocksPresets.sandbox.',
 		'Sign-up now needs the emailed code (autoSignIn then signs the user in), Cognito sends at most 50 emails/day',
-		'with its default sender, and the password policy now defaults to requiring upper/lower/digit/symbol.',
+		"with its default sender, and Auth's password policy defaults to requiring upper/lower/digit/symbol (the codemod",
+		'wrote `false` for each one the old policy left unset, so passwords that worked before still do).',
 	],
 	basicCodeDelivery:
 		'codeDelivery is now local-only (npm run dev / tests). On AWS, Cognito emails the codes itself; this hook no longer runs there.',
@@ -485,10 +492,18 @@ export const TODOS = {
 	spreadOptions: 'spread into the options: map the spread object’s keys by hand (MIGRATION.md, "Option mapping").',
 	unknownOption: (key: string): string =>
 		`unknown option \`${key}\` was kept as is; map it by hand (MIGRATION.md, "Option mapping").`,
-	providersNotArray:
-		'`providers` is not an array literal, so the codemod could not key it. Rewrite it as a providers record keyed by provider id, each entry tagged with its type.',
+	providersNotArray: [
+		'`providers` is not an array literal (or spreads one in), so the codemod could not key it. Rewrite it as a providers',
+		'record keyed by provider id, each entry tagged with its type. Not seeing the providers, the codemod chose',
+		"store: 'builtin' (AuthOIDC federated directly by default); if every provider is a cognitoFederated() one, replace",
+		"store: 'builtin' with emailPassword: false, which keeps the block on a Cognito user pool.",
+	],
 	providerNotFactory:
 		'this provider is not an inline factory call, so the codemod could not key it. Replace the placeholder key with its provider id and tag the entry with its type.',
+	stubIdpDeployed:
+		'Auth runs stubIdp() only in npm run dev and on sandbox deployments: synthesizing any other deployment with it fails (AuthOIDC synthesized it anywhere). If this module is also deployed to production, pick the provider with getDeploymentType() (README, "Usage").',
+	providerOutsideBlock:
+		'this provider is built outside an Auth block\'s providers list; move it into the block\'s providers record keyed by its id and convert it (MIGRATION.md, "Option mapping").',
 	providerName:
 		'the provider name is not a string literal; it is used as a computed key. The record key is the provider id.',
 	secretNotAppSetting:
@@ -534,7 +549,7 @@ export const TODOS = {
 	passkeysDisabledRp: 'webAuthnRelyingParty without enablePasskeys: true was ignored by AuthCognito and was dropped.',
 	signInWithByRef: 'users.signInWith must be an array now; wrap this value if it is a single string.',
 	passwordPolicyByRef:
-		'AuthBasic passwordPolicy.requireSpecialChars is now requireSymbols; rename it in this object.',
+		"AuthBasic passwordPolicy.requireSpecialChars is now requireSymbols; rename it in this object, and set requireUppercase, requireLowercase, requireDigits and requireSymbols to false where it leaves them unset, to keep AuthBasic's password policy (it required no character classes).",
 	signUpAutoSignIn:
 		'signUp() no longer takes autoSignIn: it is emailPassword.autoSignIn in the options (default true), and applies when a context is passed.',
 	signUpAutoSignInFlips: [
@@ -563,6 +578,7 @@ export const TODOS = {
 	namespaceImport: 'namespace import of an old auth package: rename its members by hand (MIGRATION.md, "Names").',
 	dynamicImport:
 		'dynamic import of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.',
+	requireCall: 'require() of an old auth package: point it at @aws-blocks/bb-auth and rename its members by hand.',
 	typeArguments: 'explicit type arguments on the old class: Auth<O> captures the options literal; drop them.',
 	unknownReceiver: (method: string, to: string): string =>
 		`if this is an AuthCognito instance, ${method}() is now ${to}().`,

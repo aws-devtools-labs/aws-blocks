@@ -363,7 +363,7 @@ Behaviour that changes for your users and your code:
 - **Sign-up needs the emailed code.** Every deployed sign-up confirms the email address with a code. With `emailPassword.autoSignIn` (on by default) the user is signed in once they enter it, with no second password entry. `AuthBasic`'s instant "sign up and you're in" is gone.
 - **Cognito's default sender sends at most 50 emails a day.** That covers confirmation, password-reset and email-MFA codes, which is enough for development but not for production. To send at volume, give the pool an Amazon SES sender with `email: { fromAddress }` ([README](./README.md#sign-up-and-email-delivery)). Adding it later is an in-place update.
 - **`codeDelivery` runs locally only.** On AWS, Cognito sends the codes; your hook no longer runs there.
-- **The password policy defaults are stricter.** `Auth` requires upper case, lower case, digits and symbols unless you turn them off. `AuthBasic` required none of them. `requireSpecialChars` is now `requireSymbols`.
+- **The password policy defaults are stricter.** `Auth` requires upper case, lower case, digits and symbols unless you turn them off. `AuthBasic` required none of them. `requireSpecialChars` is now `requireSymbols`. The codemod writes `false` for each of the four your `passwordPolicy` left unset (all four when you set none), so the passwords your users could pick before are still accepted.
 - **The default session lifetime** is 400 days in `Auth` and was 24 hours in `AuthBasic`. The codemod carries `sessionDuration` over when you set it, and writes `session: { ttlSeconds: 86_400 }` when you didn't, so sessions keep lasting 24 hours.
 - `signIn()` returns `{ status: 'signedIn', user }` or `{ status: 'continueSignIn', nextStep }` instead of the user. `buildApi()` is gone: use `createApi()` with the `Authenticator`. The user type has no `createdAt`.
 - Error names change. See [Error names](#error-names), in particular the split of `InvalidCodeException`.
@@ -426,7 +426,7 @@ Behaviour that changes for your users and your code:
 | `AuthBasic` option | `Auth` option |
 |---|---|
 | `sessionDuration` | `session.ttlSeconds`; unset, `session.ttlSeconds: 86_400` (`AuthBasic`'s 24 hours) |
-| `passwordPolicy` (`requireSpecialChars`) | `emailPassword.passwordPolicy` (`requireSymbols`) |
+| `passwordPolicy` (`requireSpecialChars`) | `emailPassword.passwordPolicy` (`requireSymbols`); each of `requireUppercase` / `requireLowercase` / `requireDigits` / `requireSymbols` left unset is written as `false` (`AuthBasic` required none) |
 | `crossDomain` | `session.crossDomain` |
 | `codeDelivery` | `codeDelivery` (local development only; three arguments: `username, code, purpose`) |
 | `logger` | `logger` |
@@ -481,17 +481,19 @@ These get a TODO (or a compile error) and need a person:
 
 - **Every `AuthBasic` block:** the switch loses users (see [`AuthBasic`](#authbasic)).
 - **Options it can't see:** an options object passed by variable, spread into the call, or built by a function. Unknown option keys are kept as they are.
-- **Providers it can't see:** a `providers` value that isn't an array literal, or an entry that isn't an inline `google()` / `github()` / `customOidc()` / `customOauth2()` / `stubIdp()` / `cognitoFederated()` call. A provider name that isn't a string literal becomes a computed key.
+- **Providers it can't see:** a `providers` value that isn't an array literal (or spreads one in; the codemod then picks `store: 'builtin'`, so check it), a provider built outside the block's `providers` list, or an entry that isn't an inline `google()` / `github()` / `customOidc()` / `customOauth2()` / `stubIdp()` / `cognitoFederated()` call. A provider name that isn't a string literal becomes a computed key.
 - **Secrets that aren't `() => setting.get()`:** inline strings, environment variables, other functions. A `clientId` read from an `AppSetting` must become the literal client id.
 - **`cognitoFederated()`:** in a block that also has directly federated providers, moving those entries to a second `Auth` block (the codemod gives the block `store: 'builtin'`); the domain prefix decision, re-keying data on `userId`, and Sign in with Apple's `teamId` / `keyId` / `privateKey`. A social provider whose old `name` wasn't its fixed id (`google`, `facebook`, `amazon`, `apple`) changes id.
 - **The result of `updateUserAttribute()` when you use it:** it's now a record keyed by attribute name.
 - **`signUp()` with an `autoSignIn` that differs from the block's (`false` in an app that keeps `Auth`'s default, or a non-literal value), `signIn()` with `cognitoSession`, and `confirmSignIn()` with a computed response.**
-- **Old defaults on options it can't see:** with options passed by variable or spread in, the codemod can't add `emailPassword: { autoSignIn: false }` (`AuthCognito`) or `session: { ttlSeconds: 86_400 }` (`AuthBasic`), so it leaves a TODO to add them.
+- **Old defaults on options it can't see:** with options passed by variable or spread in, the codemod can't add `emailPassword: { autoSignIn: false }` (`AuthCognito`), or `session: { ttlSeconds: 86_400 }` and the password policy's `false` character classes (`AuthBasic`), so it leaves a TODO to add them.
 - **`AuthBasic` error names as plain strings anywhere:** once any file imports `AuthBasic`, the codemod rewrites every string literal in the project that equals an `AuthBasic` error name (`'InvalidCodeException'`, …), whatever it is compared with. Check that none of them is an unrelated name of your own, such as a custom `InvalidCodeException`.
 - **`AuthOIDC` members with no equivalent:** `getClient()`, the side-effect `/middleware` import, and what `/middleware` and `/client` exported for the client handle (`AuthOIDCClient`, `handle401`, `AuthStateMeta`, …), `handleCallback`, `handleCallbackDispatch`, `handleExchange`, `getAuthorizeParams`, `refreshBearerTokens`, `signInRoutePath`, `signInBasePath`, and the `providers` / `callbackPath` / `signOutPath` / `postSignInPath` / `allowBearerAuth` getters.
 - **`OIDCUser` fields** `iss`, `sub`, `provider`, `email` and `name` read in `onSignIn` / `onSignOut` (TODO), or anywhere else (compile error). `claims` is still there but now optional (TODO in `onSignIn` / `onSignOut`).
 - **Exports that are gone:** `makeExternalUserPoolRef` (use `Auth.fromExisting`), `envVarNames`, `isRetriableAuthError`, `AuthFlowType`, `SignInWith`, `ConfirmSignInResponse`, `OIDCClient`, `SessionStore`, `SessionRecord`, and the `@aws-blocks/auth-common` types that `@aws-blocks/bb-auth-basic` re-exported (import them from `@aws-blocks/blocks`).
 - **Method calls it can't trace to an old block:** for example `ctx.auth.fetchDevices()`. In a file that uses an old block, these get a TODO naming the new method.
+- **`stubIdp()` on a production deployment:** `Auth` runs the stub only in `npm run dev` and on sandbox deployments, and refuses to synthesize any other deployment with it; `AuthOIDC` did not. Each moved `stubIdp()` gets a TODO: if the module is also deployed to production, pick the provider with `getDeploymentType()` ([README](./README.md#usage)).
+- **A class re-exported through more than one local barrel:** a block constructed from a class your own module re-exports (`export { AuthCognito } from '@aws-blocks/bb-auth-cognito'`, `export *`) is migrated like a direct import, but only one re-export deep. Error constants imported through a barrel aren't renamed or re-keyed: check them against [Error names](#error-names).
 - **Namespace imports of the old packages** (`import * as cognito from '@aws-blocks/bb-auth-cognito'`), uses of an `@aws-blocks/blocks` namespace it can't follow (`blocks['AuthCognito']`, `const { AuthCognito } = blocks`), and dynamic `import()` / `require()` of the old packages.
 - **An import that names nothing** (`import {} from '@aws-blocks/bb-auth-cognito/ui'`): left as it is, with a TODO, and the summary lists the file as needing attention.
 - **`package.json`:** the codemod rewrites only source files. Swap the dependencies yourself.
@@ -507,7 +509,7 @@ Before release, `Auth` configured providers through three records and a per-prov
 | `oidcProviders: { entra: { federateVia: 'cognito', issuer, clientId, clientSecret } }` | `providers: { entra: { type: 'oidc', issuer, clientId, clientSecret } }` on the default store (`clientSecret` required) |
 | `oidcProviders: { okta: { issuer, clientId } }` (`federateVia: 'direct'`, the old default) with `emailPassword: false` | `store: 'builtin'`, `providers: { okta: { type: 'oidc', issuer, clientId } }` (`emailPassword: false` may stay; it is accepted and changes nothing) |
 | `oidcProviders: { gh: github(…), local: stubIdp() }` | `store: 'builtin'`, `providers: { gh: github(…), local: stubIdp() }` |
-| email + password (or `mfa`, `passkeys`, `admin`, `userPool: Auth.fromExisting(…)`, social, SAML) **and** a `federateVia: 'direct'` provider in one block | two blocks: the Cognito part as it was, and the direct providers in a new `Auth` block with `store: 'builtin'` and a new id |
+| email + password (or `mfa`, `passkeys`, `admin`, `userPool: Auth.fromExisting(…)`, social, SAML) **and** a `federateVia: 'direct'` provider in one block | two blocks: the Cognito part as it was, and the direct providers in a new `Auth` block with `store: 'builtin'` and a new id and, if the Cognito part keeps any `providers`, its own `redirects.callbackPath` / `signOutPath` ([why](./README.md#where-do-your-users-live)) |
 | `users: { groups, signInWith, … }` with only direct providers | `users: { groups }` (the other user-pool options need the default store) |
 
 Before and after, for a block that mixed password users with a directly federated IdP:
@@ -539,11 +541,14 @@ export const authApi = auth.createApi();
 const sso = new Auth(scope, 'sso', {
 	store: 'builtin',
 	providers: { okta: { type: 'oidc', issuer: 'https://dev-123.okta.com', clientId: 'okta-id' } },
+	// Its own sign-in routes: `auth` keeps providers, so it already mounts the default ones.
+	redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 });
 export const ssoApi = sso.createApi();
 ```
 
 - **Keep the original block's id** (`'auth'` above) for the part that holds the user pool. The new `store: 'builtin'` block needs an id of its own; its users keep their `userId` (`` `${issuer}:${sub}` ``, which does not include the block id), but they sign in once more, because the session cookie is per block.
+- **Two blocks, two sets of sign-in routes.** Both blocks above have `providers`, so `sso` needs its own `redirects` (on the default ones it would collide with `auth`): register `<origin>/aws-blocks/auth/sso/callback` with Okta in place of the old `/aws-blocks/auth/callback`.
 - **Two blocks, two session cookies.** The frontend uses `authApi` for the pool's users and `ssoApi` for the IdP's users, and each API method guards with the block its callers sign in through. The same person signing in both ways was already two users (there is no account linking), so no data changes owner.
 - **Don't flip a deployed block from the default store to `store: 'builtin'`.** It would remove the user pool and every user in it; the immutability guard refuses it at synth once a committed baseline records the pool ([DESIGN.md](./DESIGN.md#renaming-or-removing-an-auth-block)).
 - **The compiler flags every leftover key**: `socialProviders`, `oidcProviders` and `samlProviders` are typed `ERROR_replaced_by_providers`, and `federateVia` `ERROR_federateVia_replaced_by_store`. At runtime (untyped code, options built elsewhere) the constructor rejects them with a message naming the replacement.

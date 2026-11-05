@@ -25,10 +25,12 @@ const auth = new Auth(scope, 'auth', {
 });
 export const authApi = auth.createApi();
 
-// An IdP your backend verifies itself (no Cognito user pool) is a second block:
+// An IdP your backend verifies itself (no Cognito user pool) is a second block,
+// with its own sign-in routes (`auth` already mounts the default ones):
 const sso = new Auth(scope, 'sso', {
   store: 'builtin',
   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
+  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 });
 export const ssoApi = sso.createApi();
 

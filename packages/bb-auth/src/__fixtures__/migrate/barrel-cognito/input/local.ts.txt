@@ -1,0 +1,5 @@
+import { AuthCognito, AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
+
+// Re-exported under their old names: a local export of a renamed import.
+export { AuthCognito, AuthCognitoErrors };
+export { AuthCognitoErrors as CognitoErrors };

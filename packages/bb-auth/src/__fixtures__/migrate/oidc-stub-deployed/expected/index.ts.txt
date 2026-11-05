@@ -7,9 +7,9 @@ const scope = new Scope('app');
 export const auth = new Auth(scope, 'e2e-auth', {
 	store: 'builtin',
 	providers: {
-		corp: stubIdp({
-
-		}),
+		// TODO(aws-blocks-auth-migrate): Auth runs stubIdp() only in npm run dev and on sandbox deployments: synthesizing any other deployment with it fails (AuthOIDC synthesized it anywhere). If this module is also deployed to production, pick the provider with getDeploymentType() (README, "Usage").
+		corp: stubIdp(),
+		// TODO(aws-blocks-auth-migrate): Auth runs stubIdp() only in npm run dev and on sandbox deployments: synthesizing any other deployment with it fails (AuthOIDC synthesized it anywhere). If this module is also deployed to production, pick the provider with getDeploymentType() (README, "Usage").
 		staff: stubIdp({
 			onAuthorize: (req) => req.users[0],
 			users: [{ sub: 'u-1', email: 'alice@example.com', name: 'Alice', extra: { groups: ['admin'] } }],

@@ -363,7 +363,7 @@ const sso = new Auth(scope, 'sso', {
 });
 ```
 
-**What is checked when.** The compiler checks the combinations: with `store: 'builtin'`, `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool`, `users.signInWith` and the other user-pool options are compile errors whose type names the fix (`ERROR_needs_store_cognito<'emailPassword'>`), and so is a `type: 'google'` or `type: 'saml'` entry; on the default store, `stubIdp()`, `github()` and a `type: 'oidc'` entry without `clientSecret` are compile errors; a leftover `socialProviders`, `oidcProviders`, `samlProviders` or `federateVia` is one too (`ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`). With `store` set, autocomplete for `type:` lists only that store's types; with `store` omitted it lists every type, and the compiler rejects `'oauth2'` / `'stub'`. The constructor checks the same rules again at runtime (in `npm run dev`, at synth and in Lambda) with a readable message, and also what the compiler cannot see: options from a variable annotated `: AuthOptions`, built from JSON or env, or cast; a social entry keyed differently from its `type` (`providers: { gmail: { type: 'google', … } }`); and a `store: 'builtin'` block with no provider.
+**What is checked when.** The compiler checks the combinations: with `store: 'builtin'`, `emailPassword` (other than `false`), `mfa`, `passkeys`, `admin`, `userPool`, `users.signInWith` and the other user-pool options are compile errors whose type names the fix (`ERROR_needs_store_cognito<'emailPassword'>`), and so is a `type: 'google'` or `type: 'saml'` entry; on the default store, `stubIdp()`, `github()` and a `type: 'oidc'` entry without `clientSecret` are compile errors; a leftover `socialProviders`, `oidcProviders`, `samlProviders` or `federateVia` is one too (`ERROR_replaced_by_providers`, `ERROR_federateVia_replaced_by_store`). With `store` set, autocomplete for `type:` lists only that store's types; with `store` omitted it lists every type, and the compiler rejects `'oauth2'` / `'stub'`. The constructor checks the same rules again at runtime (in `npm run dev`, at synth and in Lambda) with a readable message, and also what the compiler cannot see: options from a variable annotated `: AuthOptions`, built from JSON or env, or cast; a social entry keyed differently from its `type` (`providers: { gmail: { type: 'google', … } }`); and a `store: 'builtin'` block with an empty `providers`.
 
 ### The sign-in methods
 
@@ -381,7 +381,7 @@ MAU = monthly active user. Prices are from [Amazon Cognito pricing](https://aws.
 
 **How to choose.** Start with email + password: it is the default, needs no identity-provider account, runs fully offline, and is the only option where `Auth` itself enforces MFA and passkeys. Add social `providers` entries for consumer sign-in — those users cost the same as password users, but their sign-in only works on a deployed stack. For a workforce IdP or any other OIDC provider, prefer a `store: 'builtin'` block: there is no Cognito charge, `stubIdp()` lets you test offline, and public PKCE-only clients work. Put a `type: 'oidc'` entry on the default store instead only when you need its users in your user pool — next to password users, or for Cognito groups, `auth.admin` or Cognito-issued tokens — and accept the 50-free-MAU meter and the client-secret requirement; it adds no MFA, device tracking or adaptive authentication, because Cognito leaves all authentication of federated users to their IdP. Use `type: 'saml'` only for an IdP that does not speak OIDC. If a frontend may later sign in with the Amplify client libraries against the same pool, read [Planning to use Amplify client libraries?](#planning-to-use-amplify-client-libraries) before the first deploy: some of those choices are permanent.
 
-All five, in the two blocks they need (provider secrets are `AppSetting` or `Secret` references, never strings):
+All five, in the two blocks they need (provider secrets are `AppSetting` or `Secret` references, never strings). Both blocks have `providers`, so `sso` gets its own `redirects`: register `<origin>/aws-blocks/auth/sso/callback` with Okta (`auth` keeps the default `/aws-blocks/auth/callback`):
 
 ```typescript
 import { AppSetting, Auth, Scope } from '@aws-blocks/blocks';
@@ -410,6 +410,8 @@ const auth = new Auth(scope, 'auth', {
 const sso = new Auth(scope, 'sso', {
   store: 'builtin',
   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa-your-client-id' } },
+  // Its own sign-in routes: `auth` above already mounts the default ones.
+  redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 });
 ```
 
