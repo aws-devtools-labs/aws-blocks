@@ -17,7 +17,13 @@ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import { ComputeBase } from './compute/compute.js';
-import { finalizeConfigRegistry, getConfigLocation, getRegisteredConfigValue, registerConfig } from './config-registry.js';
+import {
+	finalizeConfigRegistry,
+	getConfigLocation,
+	getRegisteredConfigValue,
+	registerComputeEnv,
+	registerConfig,
+} from './config-registry.js';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 
 // getConfigLocation reads globalThis.CURRENT_BLOCKS_STACK to place the bucket under the owning
@@ -105,7 +111,11 @@ test('finalize uploads + wires the computes even with zero entries when a bucket
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
+	assert.strictEqual(
+		Object.keys(t.findResources('AWS::S3::Bucket')).length,
+		2,
+		'config bucket + its access-log bucket',
+	);
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1); // the (empty) blocks-config.json is uploaded
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -122,13 +132,41 @@ test('finalize uploads + wires the computes even with zero entries when a bucket
 	});
 });
 
+test('registerComputeEnv sets the value as config AND as an env var on every compute', () => {
+	const { stack, role, computes } = stackWithCompute('ComputeEnv');
+	registerComputeEnv(stack, 'BLOCKS_EARLY', 'early-value');
+	finalizeConfigRegistry(stack, role, computes);
+	// Registered after finalize (app code after create() resolves): still stamped.
+	registerComputeEnv(stack, 'BLOCKS_LATE', 'late-value');
+
+	assert.strictEqual(getRegisteredConfigValue(stack, 'BLOCKS_EARLY'), 'early-value');
+	assert.strictEqual(getRegisteredConfigValue(stack, 'BLOCKS_LATE'), 'late-value');
+	Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+		Environment: { Variables: Match.objectLike({ BLOCKS_EARLY: 'early-value', BLOCKS_LATE: 'late-value' }) },
+	});
+});
+
+test('registerConfig alone never adds an env var to the compute', () => {
+	const { stack, role, computes } = stackWithCompute('ConfigOnly');
+	registerConfig(stack, 'BLOCKS_CONFIG_ONLY', 'v');
+	finalizeConfigRegistry(stack, role, computes);
+	const [fn] = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')) as {
+		Properties: { Environment?: { Variables?: Record<string, unknown> } };
+	}[];
+	assert.strictEqual(fn.Properties.Environment?.Variables?.BLOCKS_CONFIG_ONLY, undefined);
+});
+
 test('finalize deploys + wires the config even with zero entries and no bucket', () => {
 	// The deployment must exist so config registered later (before synth) is still uploaded.
 	const { stack, role, computes } = stackWithCompute('EmptyNoBucket');
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
+	assert.strictEqual(
+		Object.keys(t.findResources('AWS::S3::Bucket')).length,
+		2,
+		'config bucket + its access-log bucket',
+	);
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -176,7 +214,11 @@ test('finalize uploads + wires the computes when config was registered (bucket a
 	finalizeConfigRegistry(stack, role, computes);
 
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket');
+	assert.strictEqual(
+		Object.keys(t.findResources('AWS::S3::Bucket')).length,
+		2,
+		'config bucket + its access-log bucket',
+	);
 	t.resourceCountIs('Custom::CDKBucketDeployment', 1);
 	t.hasResourceProperties('AWS::Lambda::Function', {
 		Environment: { Variables: Match.objectLike({ BLOCKS_CONFIG_KEY: 'blocks-config.json' }) },
@@ -201,11 +243,11 @@ test('the config bucket is created under the owning stack/backend, not the (deep
 	// at the stack root it would be `BlocksConfigBucket…`. Pin that both follow the owner, and that
 	// the config bucket specifically is nested under it.
 	assert.ok(
-		bucketIds.every(id => id.startsWith('Embedded')),
+		bucketIds.every((id) => id.startsWith('Embedded')),
 		`buckets should be nested under the owner, got ${bucketIds.join(', ')}`,
 	);
 	assert.ok(
-		bucketIds.some(id => id.startsWith('EmbeddedBlocksConfigBucket')),
+		bucketIds.some((id) => id.startsWith('EmbeddedBlocksConfigBucket')),
 		`config bucket should be nested under the owner, got ${bucketIds.join(', ')}`,
 	);
 });
@@ -218,7 +260,11 @@ test('getConfigLocation creates exactly one bucket across repeated calls (idempo
 	assert.strictEqual(a.key, b.key, 'same config key');
 	assert.strictEqual(a.bucketName, b.bucketName, 'same bucket');
 	const t = Template.fromStack(stack);
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + its access-log bucket (created once)');
+	assert.strictEqual(
+		Object.keys(t.findResources('AWS::S3::Bucket')).length,
+		2,
+		'config bucket + its access-log bucket (created once)',
+	);
 });
 
 test('the config bucket enforces TLS, enables versioning, and delivers server access logs', () => {
@@ -229,7 +275,11 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 	const t = Template.fromStack(stack);
 
 	// A dedicated access-log bucket is provisioned alongside the config bucket.
-	assert.strictEqual(Object.keys(t.findResources('AWS::S3::Bucket')).length, 2, 'config bucket + dedicated access-log bucket');
+	assert.strictEqual(
+		Object.keys(t.findResources('AWS::S3::Bucket')).length,
+		2,
+		'config bucket + dedicated access-log bucket',
+	);
 
 	// (a) Versioning enabled + (c) the config bucket ships access logs to the dedicated log bucket
 	// (not to itself) under a prefix.
@@ -275,9 +325,7 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 			]),
 		},
 		LifecycleConfiguration: {
-			Rules: Match.arrayWith([
-				Match.objectLike({ Id: 'ExpireAccessLogs', Status: 'Enabled' }),
-			]),
+			Rules: Match.arrayWith([Match.objectLike({ Id: 'ExpireAccessLogs', Status: 'Enabled' })]),
 		},
 	});
 
@@ -302,9 +350,7 @@ test('the config bucket enforces TLS, enables versioning, and delivers server ac
 	// ObjectOwnership: ObjectWriter, so a flag regression is caught.
 	const buckets = t.findResources('AWS::S3::Bucket');
 	const logBucketEntry = Object.entries(buckets).find(([, res]) =>
-		(res.Properties?.LifecycleConfiguration?.Rules ?? []).some(
-			(r: { Id?: string }) => r.Id === 'ExpireAccessLogs',
-		),
+		(res.Properties?.LifecycleConfiguration?.Rules ?? []).some((r: { Id?: string }) => r.Id === 'ExpireAccessLogs'),
 	);
 	assert.ok(logBucketEntry, 'access-log bucket present');
 	const logBucketProps = logBucketEntry[1].Properties ?? {};

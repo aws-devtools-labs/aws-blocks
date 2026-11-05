@@ -16,9 +16,11 @@ import {
 	type BlocksDefaults,
 	BlocksPresets,
 	DEFAULT_NODE_RUNTIME,
+	finalizeConfigRegistry,
 	getRegisteredConfigValue,
 	Scope,
 } from '@aws-blocks/core/cdk';
+import type { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
@@ -105,19 +107,81 @@ test('production preset: no SSM SecureString, no secret-init custom resource', (
 	assert.strictEqual(stack.node.tryFindChild('BlocksSecretInitFn'), undefined);
 });
 
-test('production preset: the app role can only read the key', () => {
+test('production preset: the app role gets only GetSecretValue on the key', () => {
 	const { stack, parent } = setup(BlocksPresets.production);
 	frameworkKey(parent, 'signing-key');
 	const actions = actionsOf(allStatements(Template.fromStack(stack)));
+	assert.deepStrictEqual(actions, ['secretsmanager:GetSecretValue']);
+});
 
-	assert.ok(actions.includes('secretsmanager:GetSecretValue'), `expected GetSecretValue in ${actions.join(', ')}`);
-	const readOnly = new Set([
-		'secretsmanager:GetSecretValue',
-		'secretsmanager:DescribeSecret',
-		'secretsmanager:ListSecretVersionIds',
+test('production preset: the secret ARN is set as an environment variable on every compute', () => {
+	const { stack, parent } = setup(BlocksPresets.production);
+	frameworkKey(parent, 'signing-key');
+	// What BlocksStack.create() does once the backend module is loaded.
+	finalizeConfigRegistry(stack, stack.executionRole, [
+		{ setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as unknown as ComputeBase,
 	]);
-	const unexpected = actions.filter((a) => !readOnly.has(a));
-	assert.deepStrictEqual(unexpected, [], `non-read actions granted: ${unexpected.join(', ')}`);
+	const template = Template.fromStack(stack);
+	const [secretId] = Object.keys(template.findResources('AWS::SecretsManager::Secret'));
+	template.hasResourceProperties('AWS::Lambda::Function', {
+		Environment: {
+			Variables: Match.objectLike({ [secretArnConfigKey('TestStack-app-signing-key')]: { Ref: secretId } }),
+		},
+	});
+});
+
+test('a compute stamped before the key is registered still gets the environment variable', () => {
+	const { stack, parent } = setup(BlocksPresets.production);
+	finalizeConfigRegistry(stack, stack.executionRole, [
+		{ setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as unknown as ComputeBase,
+	]);
+	// App code that builds a block after `create()` resolves.
+	frameworkKey(parent, 'signing-key');
+	Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+		Environment: {
+			Variables: Match.objectLike({ [secretArnConfigKey('TestStack-app-signing-key')]: Match.anyValue() }),
+		},
+	});
+});
+
+test('sandbox preset: no environment variable is added to the compute', () => {
+	const { stack, parent } = setup(BlocksPresets.sandbox, SANDBOX_CONTEXT);
+	frameworkKey(parent, 'signing-key');
+	finalizeConfigRegistry(stack, stack.executionRole, [
+		{ setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as unknown as ComputeBase,
+	]);
+	const [fn] = Object.values(
+		Template.fromStack(stack).findResources('AWS::Lambda::Function', {
+			Properties: { Handler: 'index.handler', Code: { ZipFile: Match.anyValue() } },
+		}),
+	) as { Properties: { Environment?: { Variables?: Record<string, unknown> } } }[];
+	const keys = Object.keys(fn.Properties.Environment?.Variables ?? {}).filter((k) =>
+		k.startsWith('BLOCKS_SECRET_ARN_'),
+	);
+	assert.deepStrictEqual(keys, []);
+});
+
+test('a plain options object cannot switch a customer Secret into framework key mode', () => {
+	const { stack, parent } = setup(BlocksPresets.production);
+	// Built in a variable, so TypeScript's excess property check does not apply,
+	// exactly what a customer (or JavaScript caller) could pass.
+	const opts = {
+		name: 'customer-key',
+		generatedName: true,
+		generatedValue: { passwordLength: 4, excludePunctuation: true },
+		frameworkKey: true,
+	};
+	new Secret(parent, 'customer', opts);
+	const template = Template.fromStack(stack);
+	template.hasResource('AWS::SecretsManager::Secret', {
+		DeletionPolicy: 'Retain',
+		Properties: Match.objectLike({ Name: 'customer-key' }),
+	});
+	const [secret] = Object.values(template.findResources('AWS::SecretsManager::Secret')) as {
+		Properties: Record<string, unknown>;
+	}[];
+	assert.strictEqual(secret.Properties.GenerateSecretString, undefined);
+	assert.ok(actionsOf(allStatements(template)).includes('secretsmanager:ListSecretVersionIds'), 'public grant kept');
 });
 
 test('production preset: the secret ARN is registered under the key the runtime reads', () => {
@@ -215,7 +279,16 @@ for (const c of warningCases) {
 	});
 }
 
-test('the warning can be acknowledged on the stack', () => {
+test('the warning can be acknowledged on the stack before any block exists', () => {
+	// The usual customer pattern: acknowledge right after BlocksStack.create(),
+	// before the backend's blocks are constructed.
+	const { stack, parent } = setup({ ...BlocksPresets.production, secretsStore: 'ssm' });
+	cdk.Annotations.of(stack).acknowledgeWarning(SSM_SECRETS_STORE_WARNING_ID);
+	frameworkKey(parent, 'signing-key');
+	Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp(SSM_SECRETS_STORE_WARNING_ID));
+});
+
+test('the warning can be acknowledged on the stack after the key is created', () => {
 	const { stack, parent } = setup({ ...BlocksPresets.production, secretsStore: 'ssm' });
 	frameworkKey(parent, 'signing-key');
 	cdk.Annotations.of(stack).acknowledgeWarning(SSM_SECRETS_STORE_WARNING_ID);

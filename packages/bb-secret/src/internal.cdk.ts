@@ -15,29 +15,22 @@ import type { ScopeParent } from '@aws-blocks/core';
 import { type BlocksDefaults, BlocksPresets, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
 import { Annotations, RemovalPolicy } from 'aws-cdk-lib';
 import type { IConstruct } from 'constructs';
+import { FRAMEWORK_KEY, type FrameworkKeySecretOptions } from './framework-key-options.js';
 import { Secret } from './index.cdk.js';
 import { type FrameworkKey, SSM_SECRETS_STORE_WARNING_ID } from './internal-shared.js';
-import type { InternalSecretOptions } from './types.js';
 
 export { type FrameworkKey, SSM_SECRETS_STORE_WARNING_ID } from './internal-shared.js';
-
-/**
- * Settings for the generated value in Secrets Manager mode. 64 characters from
- * `[A-Za-z0-9]` give about 381 bits of entropy (64 * log2(62)), above the 256
- * bits of the 32 random bytes the SSM path generates. The blocks use the value
- * as a UTF-8 string (HMAC and HKDF input), so its alphabet does not matter for
- * strength; letters and digits avoid any escaping issues.
- */
-const GENERATED_VALUE = { passwordLength: 64, excludePunctuation: true } as const;
 
 /**
  * Create a key that AWS Blocks generates for one of its own Building Blocks,
  * in the store chosen by `defaults.secretsStore`.
  *
  * - `'secrets-manager'`: a bb-secret `Secret` with a CloudFormation-generated
- *   name, a CloudFormation-generated value (`GenerateSecretString`),
- *   `DeletionPolicy: Delete`, and read-only access for the app's execution
- *   role. The ARN reaches the runtime through config, as for any `Secret`.
+ *   name, a CloudFormation-generated 64-character value
+ *   (`GenerateSecretString`), `DeletionPolicy: Delete`, and only
+ *   `secretsmanager:GetSecretValue` for the app's execution role. The ARN
+ *   reaches the runtime as an environment variable on every compute (and in
+ *   config), so the store choice arrives with the code update.
  * - `'ssm'`: exactly `new AppSetting(scope, id, { secret: true })`, the
  *   SecureString the blocks created before this option existed. A synth-time
  *   warning fires when the stack looks like production.
@@ -52,18 +45,20 @@ const GENERATED_VALUE = { passwordLength: 64, excludePunctuation: true } as cons
  * @internal
  */
 export function frameworkKey(scope: ScopeParent, id: string): FrameworkKey {
-	const defaults = resolveDefaults(scope);
+	const defaults = resolveDefaults(scope, id);
+	// A missing field (plain JavaScript, or a cast) falls back to the production
+	// preset's store, matching the fallback for a block with no owning backend.
 	const store = defaults.secretsStore ?? BlocksPresets.production.secretsStore;
 
 	if (store === 'secrets-manager') {
-		const options: InternalSecretOptions = {
-			generatedName: true,
-			generatedValue: GENERATED_VALUE,
-			removalPolicy: 'destroy',
-		};
+		const options: FrameworkKeySecretOptions = { removalPolicy: 'destroy', [FRAMEWORK_KEY]: true };
 		new Secret(scope, id, options);
 	} else if (store === 'ssm') {
 		const setting = new AppSetting(scope, id, { secret: true });
+		// Under `--conditions=cdk` this is bb-app-setting's CDK construct, but its
+		// TypeScript types always resolve to the mock entry (the package's `types`
+		// condition), which is not an `IConstruct`. The cast reflects the runtime
+		// value, not a type error in the construct.
 		warnIfProductionLike(setting as unknown as IConstruct, defaults);
 	} else {
 		throw new Error(
@@ -75,19 +70,27 @@ export function frameworkKey(scope: ScopeParent, id: string): FrameworkKey {
 }
 
 /**
- * The defaults that apply to a block created under `scope`, resolved the same
- * way as `Scope.defaults`: the scope's own defaults, then the ambient
- * `CURRENT_BLOCKS_STACK`, then the production preset. Needed because the store
- * has to be known before the key's construct exists.
+ * The defaults that apply to a block created under `scope`. The store has to be
+ * known before the key's construct exists, so this cannot read the new
+ * construct's own `defaults`.
+ *
+ * A Building Block parent (the normal case) and a `BlocksStack` / `BlocksBackend`
+ * expose `defaults`, and `Scope.defaults` already applies the full resolution
+ * (owning backend, ambient stack, production preset with a warning). A bare
+ * `{ id }` parent falls back to the ambient stack, then to the production
+ * preset with the same kind of warning.
  */
-function resolveDefaults(scope: ScopeParent): BlocksDefaults {
-	if ('defaults' in scope) {
-		const own = (scope as { defaults?: BlocksDefaults }).defaults;
-		if (own) return own;
-	}
+function resolveDefaults(scope: ScopeParent, id: string): BlocksDefaults {
+	const own = (scope as { defaults?: BlocksDefaults }).defaults;
+	if (own) return own;
 	const ambient = (globalThis as { CURRENT_BLOCKS_STACK?: { defaults?: BlocksDefaults } }).CURRENT_BLOCKS_STACK
 		?.defaults;
-	return ambient ?? BlocksPresets.production;
+	if (ambient) return ambient;
+	console.warn(
+		`[Blocks] frameworkKey '${id}' resolved infrastructure defaults with no owning BlocksStack/BlocksBackend; ` +
+			'using BlocksPresets.production.',
+	);
+	return BlocksPresets.production;
 }
 
 /**

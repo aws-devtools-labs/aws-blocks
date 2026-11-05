@@ -3,12 +3,15 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { registerComputeEnv } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import type { ExternalSecretRef, InternalSecretOptions, SecretOptions } from './types.js';
+import { FRAMEWORK_KEY_VALUE, isFrameworkKeyOptions } from './framework-key-options.js';
+import { secretArnConfigKey } from './internal-shared.js';
+import type { ExternalSecretRef, SecretOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -52,7 +55,16 @@ export class Secret extends BuildingBlockScope {
 	}
 
 	constructor(scope: ScopeParent, id: string, options?: SecretOptions<unknown>) {
-		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER] } });
+		super(id, {
+			parent: scope,
+			bbName: BB_NAME,
+			vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER] },
+		});
+
+		// Framework key mode is set only by `frameworkKey()` in `./internal`,
+		// through a module-private Symbol a customer options object cannot carry
+		// (see `framework-key-options.ts`). Public defaults are unaffected.
+		const frameworkKeyMode = isFrameworkKeyOptions(options);
 
 		if (options?.secret) {
 			// `fromExisting`: bind to the pre-existing secret by ARN; do not
@@ -68,27 +80,15 @@ export class Secret extends BuildingBlockScope {
 						? RemovalPolicy.RETAIN
 						: this.defaults.removalPolicy;
 
-			// `generatedName` / `generatedValue` are package-internal (set only by
-			// the framework key helper in `./internal`), not on the public
-			// SecretOptions, so read them via the internal options type.
-			const internalOptions = options as InternalSecretOptions | undefined;
-
 			const l2 = new secretsmanager.Secret(this, 'secret', {
 				// Use the caller's explicit, well-known name when provided (so a
 				// team/CI pipeline can target it with `aws secretsmanager …`); else
 				// derive a unique name from the scope tree. The framework key
 				// helper leaves the name unset instead, so CloudFormation generates
 				// a unique one and a recreate never collides with a retained name.
-				secretName: internalOptions?.generatedName === true
-					? undefined
-					: (options?.name ?? this.fullId).substring(0, 255),
+				secretName: frameworkKeyMode ? undefined : (options?.name ?? this.fullId).substring(0, 255),
 				removalPolicy,
-				generateSecretString: internalOptions?.generatedValue
-					? {
-						passwordLength: internalOptions.generatedValue.passwordLength,
-						excludePunctuation: internalOptions.generatedValue.excludePunctuation,
-					}
-					: undefined,
+				generateSecretString: frameworkKeyMode ? { ...FRAMEWORK_KEY_VALUE } : undefined,
 			});
 
 			// Default: an EMPTY secret, so an unset secret reads back as `null`
@@ -99,7 +99,7 @@ export class Secret extends BuildingBlockScope {
 			// that generator only when `generate: true` (signing/HMAC keys that just
 			// need to exist). CloudFormation treats a secret with neither
 			// `GenerateSecretString` nor `SecretString` as empty.
-			if (options?.generate !== true && internalOptions?.generatedValue === undefined) {
+			if (options?.generate !== true && !frameworkKeyMode) {
 				const cfn = l2.node.defaultChild as secretsmanager.CfnSecret;
 				cfn.addPropertyDeletionOverride('GenerateSecretString');
 			}
@@ -118,13 +118,24 @@ export class Secret extends BuildingBlockScope {
 		// Grant the shared execution role read on this specific secret (not a
 		// wildcard): secretsmanager:GetSecretValue + ListSecretVersionIds (the
 		// latter for listVersions(), which grantRead does NOT include).
-		this.secret.grantRead(this.executionRole);
-		this.executionRole.addToPrincipalPolicy(
-			new iam.PolicyStatement({
-				actions: ['secretsmanager:ListSecretVersionIds'],
-				resources: [this.secret.secretArn],
-			}),
-		);
+		// A framework key is only ever read with `get()`, so it gets
+		// GetSecretValue alone (no DescribeSecret, no ListSecretVersionIds).
+		if (frameworkKeyMode) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['secretsmanager:GetSecretValue'],
+					resources: [this.secret.secretArn],
+				}),
+			);
+		} else {
+			this.secret.grantRead(this.executionRole);
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['secretsmanager:ListSecretVersionIds'],
+					resources: [this.secret.secretArn],
+				}),
+			);
+		}
 		// Writes are opt-in and least-privilege: grant PutSecretValue (plus the KMS
 		// grants Secrets Manager attaches) ONLY when the app will write at runtime.
 		// By default the role has read-only access, matching the runtime object,
@@ -143,7 +154,19 @@ export class Secret extends BuildingBlockScope {
 		// so both instances would read/write a single secret. `fullId` is unique
 		// within the stack, and the runtime derives the identical key from its own
 		// `fullId`.
-		registerConfig(this, configKey(this.fullId), this.secret.secretArn);
+		//
+		// A framework key also sets the ARN as an environment variable on every
+		// compute. The S3 config upload is not ordered before the compute update,
+		// so during an upgrade deploy new code can cold-start against the previous
+		// config object; without the ARN it would choose SSM, whose grant the same
+		// deploy removed. The env var arrives with the code. It is one short value
+		// per framework key, an exception to the "registerConfig, not
+		// addEnvironment" rule that the rule's 4 KB budget can afford.
+		if (frameworkKeyMode) {
+			registerComputeEnv(this, secretArnConfigKey(this.fullId), this.secret.secretArn);
+		} else {
+			registerConfig(this, secretArnConfigKey(this.fullId), this.secret.secretArn);
+		}
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────
@@ -160,15 +183,4 @@ export class Secret extends BuildingBlockScope {
 	listVersions(..._args: unknown[]): never {
 		return synthGuard('Secret', 'listVersions');
 	}
-}
-
-/**
- * The config key used to pass a Secret's ARN to the runtime. Derived from the
- * scoped `fullId` (same derivation as the runtime layer, so the two agree
- * without handing a value between them) — unique within the stack, so same-`id`
- * secrets in different scopes get distinct keys. The `BLOCKS_` prefix is
- * framework-reserved.
- */
-function configKey(fullId: string): string {
-	return `BLOCKS_SECRET_ARN_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }

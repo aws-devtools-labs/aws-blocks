@@ -56,7 +56,7 @@ export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, i
 // Resolve the owning backend root (BlocksStack/BlocksBackend), so a container
 // compute can create the shared VPC + ECS cluster once per backend at a fixed id
 // rather than once per compute or per stack.
-export { registerSharedConfig } from './config-registry.js';
+export { registerComputeEnv, registerSharedConfig } from './config-registry.js';
 export { getBlocksRoot, getOrCreateOnRoot } from './root-registry.js';
 
 // Shared DynamoDB protection resolver for the two Blocks-provisioned DynamoDB

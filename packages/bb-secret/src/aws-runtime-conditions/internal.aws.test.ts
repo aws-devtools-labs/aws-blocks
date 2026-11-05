@@ -10,7 +10,8 @@
  */
 import assert from 'node:assert';
 import { afterEach, mock, test } from 'node:test';
-import { isBlocksError, Scope } from '@aws-blocks/core';
+import { _resetConfigCache, isBlocksError, loadConfigToProcessEnv, Scope } from '@aws-blocks/core';
+import { S3Client } from '@aws-sdk/client-s3';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SSMClient } from '@aws-sdk/client-ssm';
 import { SecretErrors } from '../errors.js';
@@ -131,5 +132,36 @@ test('the store is chosen per key: another key without an ARN stays on SSM', asy
 		assert.strictEqual(await frameworkKey(new Scope('app'), 'other-secret').get(), 'from-ssm');
 	} finally {
 		stubs.restore();
+	}
+});
+
+test('upgrade window: the S3 config is the previous one (no ARN) but the env var is set, so get() reads Secrets Manager', async () => {
+	// The compute update carries the env var; the config object it loads at
+	// cold start can still be the previous deploy's, which only names the SSM
+	// parameter.
+	process.env[ENV_KEY] = ARN;
+	process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+	process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
+	_resetConfigCache();
+	const s3 = mock.method(S3Client.prototype, 'send', async () => ({
+		Body: { transformToString: async () => JSON.stringify({ BLOCKS_SSM_PARAM_SIGNING_KEY: '/app-signing-key' }) },
+	}));
+	const stubs = stubClients({ sm: () => ({ SecretString: 'from-secrets-manager' }) });
+	try {
+		await loadConfigToProcessEnv();
+		assert.strictEqual(process.env.BLOCKS_SSM_PARAM_SIGNING_KEY, '/app-signing-key', 'the old config was loaded');
+		assert.strictEqual(await frameworkKey(new Scope('app'), 'signing-key').get(), 'from-secrets-manager');
+		assert.deepStrictEqual(
+			stubs.sm.map((c) => c.input.SecretId),
+			[ARN],
+		);
+		assert.strictEqual(stubs.ssm.length, 0, 'never falls back to SSM');
+	} finally {
+		stubs.restore();
+		s3.mock.restore();
+		delete process.env.BLOCKS_CONFIG_BUCKET;
+		delete process.env.BLOCKS_CONFIG_KEY;
+		delete process.env.BLOCKS_SSM_PARAM_SIGNING_KEY;
+		_resetConfigCache();
 	}
 });

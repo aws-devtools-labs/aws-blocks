@@ -37,9 +37,12 @@ export interface FrameworkKey {
 export const SSM_SECRETS_STORE_WARNING_ID = '@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox';
 
 /**
- * The config key under which the CDK `Secret` registers its ARN. Must match the
- * private `configKey()` in `index.cdk.ts` and `index.aws.ts`; a synth test
- * checks that it does.
+ * The config key (and, for framework keys, the environment variable) under
+ * which the CDK `Secret` registers its ARN and the runtime `Secret` reads it.
+ * Derived from the scoped `fullId`, so same-`id` secrets in different scopes
+ * get distinct keys. The `BLOCKS_` prefix is framework-reserved. Shared by
+ * `index.cdk.ts`, `index.aws.ts` and `internal.aws.ts` so the writer and the
+ * readers cannot drift.
  *
  * @internal
  */

@@ -14,6 +14,7 @@ import {
 } from '@aws-sdk/client-secrets-manager';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
+import { secretArnConfigKey } from './internal-shared.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -226,11 +227,11 @@ class SecretImpl<T = string> extends Scope {
 	 * different scopes resolve distinct ARNs.
 	 */
 	private resolveSecretArn(): string {
-		const secretArn = this.externalArn ?? process.env[configKey(this.fullId)];
+		const secretArn = this.externalArn ?? process.env[secretArnConfigKey(this.fullId)];
 		if (!secretArn) {
 			throw blocksError(
 				SecretErrors.NotSupported,
-				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${configKey(this.fullId)}), or pass an existing secret via Secret.fromExisting().`,
+				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${secretArnConfigKey(this.fullId)}), or pass an existing secret via Secret.fromExisting().`,
 			);
 		}
 		return secretArn;
@@ -440,13 +441,3 @@ function fromExisting(secretArn: string): ExternalSecretRef {
 // plumbing: a class cannot narrow its own constructor return type per-overload).
 Object.assign(SecretImpl, { fromExisting });
 export const Secret = SecretImpl as unknown as SecretConstructor;
-
-/**
- * The config-registry / environment key the CDK layer uses to pass a Secret's
- * ARN to the runtime. Derived from the scoped `fullId` (same derivation on both
- * layers), so same-`id` secrets in different scopes resolve distinct keys. The
- * `BLOCKS_` prefix is framework-reserved.
- */
-function configKey(fullId: string): string {
-	return `BLOCKS_SECRET_ARN_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-}

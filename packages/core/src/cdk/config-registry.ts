@@ -24,6 +24,14 @@ interface ConfigRegistryState {
 	 * {@link registerSharedConfig}, which keep last-one-wins.
 	 */
 	owners: Map<string, Construct>;
+	/**
+	 * Entries that are also set as an environment variable on every compute (see
+	 * {@link registerComputeEnv}), so they reach the runtime with the compute
+	 * update itself rather than through the S3 config object.
+	 */
+	computeEnv: Map<string, string>;
+	/** The computes {@link finalizeConfigRegistry} stamped, for late {@link registerComputeEnv} calls. */
+	computes?: readonly ComputeBase[];
 	finalized: boolean;
 	/** The shared config bucket, created once per backend root by {@link getConfigLocation}. */
 	bucket?: s3.Bucket;
@@ -46,7 +54,7 @@ interface ConfigRegistryState {
 function getRegistry(root: Construct): ConfigRegistryState {
 	let state = (root as any)[REGISTRY_KEY] as ConfigRegistryState | undefined;
 	if (!state) {
-		state = { entries: new Map(), owners: new Map(), finalized: false };
+		state = { entries: new Map(), owners: new Map(), computeEnv: new Map(), finalized: false };
 		(root as any)[REGISTRY_KEY] = state;
 	}
 	return state;
@@ -114,6 +122,37 @@ export function registerConfig(scope: Construct, key: string, value: unknown): v
 export function registerSharedConfig(scope: Construct, key: string, value: unknown): void {
 	const registry = getRegistry(getBlocksRoot(scope));
 	registry.entries.set(key, value);
+}
+
+/**
+ * Register a config entry ({@link registerConfig}) AND set it as an environment
+ * variable on every compute of the backend.
+ *
+ * Use this only for a small value the runtime must see together with the code
+ * that reads it. The S3 config object is uploaded by a separate deployment that
+ * CloudFormation does not order before the compute update, so during a deploy a
+ * new compute can cold-start against the previous config object. An environment
+ * variable is part of the compute update, so it cannot be stale. Lambda caps the
+ * whole environment at 4 KB, so keep the value short (an ARN, a mode marker).
+ *
+ * The key is still registered as config, so the value is identical in both
+ * places and the cold-start config load does not warn about a shadowed key.
+ *
+ * @internal First-party plumbing for Building Blocks; not a public API.
+ *
+ * @param scope - The registering construct (used to find the backend root).
+ * @param key - The config / environment variable name.
+ * @param value - The value (may be a CDK token).
+ */
+export function registerComputeEnv(scope: Construct, key: string, value: string): void {
+	registerConfig(scope, key, value);
+	const registry = getRegistry(getBlocksRoot(scope));
+	registry.computeEnv.set(key, value);
+	// Registered after finalize (app code after `create()` resolves): stamp the
+	// computes finalize already saw, the same set that got the config coordinates.
+	if (registry.finalized) {
+		for (const compute of registry.computes ?? []) compute.setEnv(key, value);
+	}
 }
 
 /**
@@ -383,5 +422,8 @@ export function finalizeConfigRegistry(
 	for (const compute of computes) {
 		compute.setEnv('BLOCKS_CONFIG_BUCKET', configBucket.bucketName);
 		compute.setEnv('BLOCKS_CONFIG_KEY', configKey);
+		// Entries that must arrive with the compute update (see registerComputeEnv).
+		for (const [key, value] of registry.computeEnv) compute.setEnv(key, value);
 	}
+	registry.computes = computes;
 }

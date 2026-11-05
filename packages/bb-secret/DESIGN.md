@@ -247,24 +247,40 @@ path, change `fullId`, and rename the SSM parameter. The function creates the
 
 **CDK.** The store comes from `defaults.secretsStore` of the caller's scope:
 
-- `'secrets-manager'`: a `Secret` with two package-internal options
-  (`InternalSecretOptions`, not exported from the entry points): no `Name`, so
-  CloudFormation generates a unique one, and a `GenerateSecretString` of 64
-  characters from `[A-Za-z0-9]` (about 381 bits). It also sets
-  `removalPolicy: 'destroy'` and leaves `allowRuntimeWrite` unset, so the app
-  role can only read it. The ARN reaches the runtime through config, as for any
-  `Secret`. The public `Secret` defaults (fixed name, empty value, removal
-  policy from `defaults`) are unchanged.
+- `'secrets-manager'`: a `Secret` in framework key mode. The mode is switched on
+  by a module-private `Symbol` in the options (`framework-key-options.ts`), so a
+  plain options object can never turn it on. In this mode the `Secret` has no
+  `Name` (CloudFormation generates a unique one), a `GenerateSecretString` of 64
+  characters from `[A-Za-z0-9]` (about 381 bits), `removalPolicy: 'destroy'`,
+  and only `secretsmanager:GetSecretValue` for the app role. Its ARN goes into
+  config as for any `Secret`, and is also set as an environment variable on
+  every compute (`registerComputeEnv` in `@aws-blocks/core/cdk/internal`). The
+  public `Secret` defaults (fixed name, empty value, removal policy from
+  `defaults`, read and list grants) are unchanged.
 - `'ssm'`: `new AppSetting(scope, id, { secret: true })`. When the stack looks
   like production (`sandboxMode` context not `'true'`, `removalPolicy` `RETAIN`,
   or `deletionProtection` on), synth emits the warning
   `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`.
 
-**Runtime.** The AWS entry checks config for the key's Secret ARN
+**Runtime.** The AWS entry checks `process.env` for the key's Secret ARN
 (`BLOCKS_SECRET_ARN_<FULLID>`). If present, the stack was synthesized in
 `'secrets-manager'` mode and the key is read from Secrets Manager; otherwise it
 is read through `AppSetting` from SSM. The choice is made once, at
-construction; a failed read is never retried against the other store. The mock
+construction; a failed read is never retried against the other store.
+
+**Why the ARN is also an environment variable.** The S3 config object is
+uploaded by a `BucketDeployment` that CloudFormation does not order before the
+compute update, and the object key does not change between deploys. On the
+upgrade deploy, new code can cold-start while S3 still serves the previous
+config, which has no ARN. Without the environment variable that code would
+choose SSM, whose grant the same deploy removed. The environment variable is
+part of the compute update, so the code and its store choice always arrive
+together. This is a deliberate, small exception to the rule of passing Building
+Block config through `registerConfig()` rather than `addEnvironment()`: one ARN
+(about 100 bytes) per framework key, against Lambda's 4 KB environment limit.
+Making the compute depend on the config deployment instead is expected to create a cycle
+for `Realtime`, whose config holds the WebSocket stage URL while the stage's
+integrations reference the compute. The mock
 entry is the mock `AppSetting`, so local development does not depend on the
 setting.
 
