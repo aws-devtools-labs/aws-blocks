@@ -132,7 +132,7 @@ The WebSocket stage adopts the stack-wide `BlocksDefaults`:
 
 | Resource | Type | Purpose |
 |----------|------|---------|
-| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key, so open connection tokens are rejected once and clients reconnect |
+| Token Secret | `frameworkKey(parent, 'token-secret')` from `@aws-blocks/bb-secret/internal`: a Secrets Manager secret (`secretsStore: 'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset) | HMAC signing key, auto-generated. Changing `secretsStore` on a deployed stack creates a new key. Open connections keep working; on their next reconnect, clients that pass `refresh` get new tokens, and clients without it get `onDisconnect('error')` and must call `getChannel()` again |
 
 ### DynamoDB Connections Table
 
@@ -189,7 +189,7 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 | `BLOCKS_RT_WS_URL` | `wss://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_RT_CALLBACK_URL` | `https://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
-| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (set by the `Secret` the framework key creates; `'secrets-manager'` mode only) |
+| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). Set both in config and as a real Lambda environment variable, so new code never reads the previous deploy's config without it |
 
 The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
 

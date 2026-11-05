@@ -174,8 +174,11 @@ export interface BlocksDefaults {
 	 *   stacks.
 	 *
 	 * Changing this value on a deployed stack creates new keys in the new store.
-	 * For `Realtime`, open connection tokens are rejected once and clients
-	 * reconnect.
+	 * For `Realtime`, open WebSocket connections keep working; on their next
+	 * reconnect, clients that pass `refresh` to `subscribe()` get new tokens, and
+	 * clients without it receive `onDisconnect('error')` and must call
+	 * `getChannel()` again. To keep an existing stack's keys where they are, set
+	 * this before you deploy a version that reads it.
 	 *
 	 * Synth emits the warning `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`
 	 * when this is `'ssm'` and the stack looks like production: the
@@ -185,7 +188,8 @@ export interface BlocksDefaults {
 	 * if SSM is a deliberate choice.
 	 *
 	 * The local mock ignores this field; local development behaves the same in
-	 * both modes.
+	 * both modes. If the field is missing at synth (plain JavaScript, or a cast),
+	 * it is treated as `'secrets-manager'`, the production preset's value.
 	 */
 	secretsStore: BlocksSecretsStore;
 
