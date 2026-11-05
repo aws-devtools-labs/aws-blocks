@@ -5,9 +5,9 @@
  * Runs with the `tsx` loader, started by `cdk-blocks sandbox`, `cdk-blocks sandbox deploy`
  * and `cdk-blocks sandbox preview`. After the first deploy, in every mode, it records
  * the outputs and the target it
- * deployed with (see `last-deploy.ts`): watch mode then keeps running, and a
- * production deploy can rewrite `outputs.json` meanwhile, so `cdk-blocks sandbox
- * console` reads the record.
+ * deployed with (see `last-deploy.ts`): watch mode then keeps running, and every
+ * redeploy it triggers rewrites `outputs.json` (a failed one can blank it), so
+ * `cdk-blocks sandbox console` reads the record.
  */
 
 import * as core from '@aws-blocks/core/scripts';

@@ -17,8 +17,8 @@ const options = JSON.parse(process.argv[2]) as core.DeployOptions;
 const projectRoot = options.projectRoot ?? process.cwd();
 const waitLive = process.argv.includes('--wait-live');
 
-// Core reads the outputs before its `--wait-live` wait, during which a sandbox
-// deploy of the same app can rewrite outputs.json.
+// Core reads the outputs before its `--wait-live` wait, during which a second
+// production deploy can rewrite that stage's outputs document.
 let deployed: DeployedOutputs | undefined;
 try {
 	await core.deploy({

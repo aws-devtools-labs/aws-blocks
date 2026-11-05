@@ -14,6 +14,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
+import { outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -224,7 +225,7 @@ export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: Sand
   return [
     "cdk", "watch",
     "--hotswap-fallback",
-    "--outputs-file", `${outDir}/outputs.json`,
+    "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
@@ -299,7 +300,7 @@ export function buildSandboxDeployArgs({
     "--method", "direct",
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
-    "--outputs-file", `${outDir}/outputs.json`,
+    "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
@@ -424,7 +425,7 @@ export async function startSandbox(options: SandboxOptions) {
   // A preview re-deploy hotswaps (see SandboxOptions.preview). A previous
   // deploy wrote `<outDir>/outputs.json`, so the stack exists; if it was
   // destroyed since, `--hotswap-fallback` falls back to a full deploy.
-  const previousOutputs = join(process.cwd(), outDir, "outputs.json");
+  const previousOutputs = join(process.cwd(), outputsFileIn(outDir, 'sandbox'));
   const hotswap = preview && existsSync(previousOutputs);
 
   const removalWarning = previewRemovalWarning(previousOutputs, preview, previewInvocation);
@@ -486,7 +487,7 @@ export async function startSandbox(options: SandboxOptions) {
 
   registerFrameworkFromSink(frameworkSink);
 
-  const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
+  const outputs = JSON.parse(readFileSync(outputsFileIn(outDir, 'sandbox'), "utf-8"));
   // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /
   // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
   // on the outputs file's write order; fall back to the first group so a
