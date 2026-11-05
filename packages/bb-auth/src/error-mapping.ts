@@ -12,13 +12,13 @@
  *   a `TypeError`, a network failure — becomes `InternalErrorException`, HTTP
  *   500, `retriable: true`, with a generic message. The original name and
  *   message are logged server-side only.
- * - **No engine text reaches a client** (FX59, the guarantee `AuthCognito`
+ * - **No engine text reaches a client** (the guarantee `AuthCognito`
  *   0.1.11 shipped in #678). An error an engine throws — Cognito's, or the
  *   local engine's stand-in for it — gets the fixed, BB-authored message for
  *   its name ({@link CLIENT_ERROR_MESSAGES}); its own text is logged
  *   server-side with the login redacted ({@link withoutLogin}), at `error` for
  *   a 5xx name or text naming AWS resources and at `info` otherwise.
- * - **One exception, written by the block: a weak password** (L71). An
+ * - **One exception, written by the block: a weak password**. An
  *   `InvalidPasswordException` gets {@link passwordPolicyMessage}, built from
  *   the password policy this block configured, so a user can see what a
  *   password needs. It never carries Cognito's text. An imported pool
@@ -69,12 +69,12 @@ import type { PasswordPolicy } from './types.js';
  *   error too: `NotAuthorizedException` (an already-confirmed user — "User
  *   cannot be confirmed. Current status is CONFIRMED" — or a disabled one) and
  *   `ExpiredCodeException` (a code that was issued and has expired, or a reset
- *   that was never requested). Cognito does not mask these itself (FX3).
+ *   that was never requested). Cognito does not mask these itself.
  *   `AliasExistsException` (a right sign-up code for an email / phone another
  *   user holds as a verified alias) is **not** folded: Cognito checks the code
  *   first, so only the holder of the code sent to that email / phone can get
  *   it, and folding it into a wrong code would leave that user retrying a
- *   right code forever (FX49).
+ *   right code forever.
  *
  * Omitted for authenticated and `admin.*` calls, which are not enumeration
  * surfaces (the admin API may legitimately report `UserNotFoundException`).
@@ -123,7 +123,7 @@ const REDACTED = '[REDACTED]';
  * the withheld-answer lines — whose point is to show *why* the client got a
  * uniform answer — strip the login from the message first. Every line in this
  * module that carries a thrown error's own message goes through it, including
- * the AWS-access and out-of-vocabulary lines (FX60): an unmapped name such as
+ * the AWS-access and out-of-vocabulary lines: an unmapped name such as
  * `CodeDeliveryFailureException` quotes the delivery destination.
  *
  * @internal
@@ -160,7 +160,7 @@ const AWS_ACCESS_ERROR_NAMES: ReadonlySet<string> = new Set([
 /**
  * An ARN (any partition) or a 12-digit AWS account id. Exported so the one
  * other place that decides a log level from external text — a federation
- * callback's `error_description`, `engines/idp-callback-error.ts` (FX60) —
+ * callback's `error_description`, `engines/idp-callback-error.ts` —
  * cannot drift from this test.
  *
  * @internal
@@ -180,8 +180,8 @@ const AUTH_ERROR_NAMES: ReadonlySet<string> = new Set<string>(Object.values(Auth
 
 /**
  * The message a client gets for each `AuthErrors` name when the error comes
- * from an engine — Cognito, or the local engine standing in for it (FX59;
- * the guarantee `AuthCognito` 0.1.11 shipped in #678).
+ * from an engine — Cognito, or the local engine standing in for it (the
+ * guarantee `AuthCognito` 0.1.11 shipped in #678).
  *
  * Cognito's own `message` can quote the request (the login, a rejected
  * value), name an endpoint, a role or the account, and `ApiError.message`
@@ -196,7 +196,7 @@ const AUTH_ERROR_NAMES: ReadonlySet<string> = new Set<string>(Object.values(Auth
  * `Auth` already sends: `CodeMismatchException` and
  * `EnableSoftwareTokenMFAException` use the enumeration-masked wrong-code
  * text ({@link WRONG_CODE_MESSAGE}), so a real wrong code and a masked one are
- * byte-identical (FX3); `InternalErrorException` uses
+ * byte-identical; `InternalErrorException` uses
  * {@link INTERNAL_ERROR_MESSAGE}; `NotAuthenticatedException` and
  * `ReauthenticationRequiredException` use the text `Auth` throws itself.
  *
@@ -258,7 +258,7 @@ function joinWithAnd(items: readonly string[]): string {
 
 /**
  * The client message for a weak password, built from the block's own
- * `emailPassword.passwordPolicy` (L71) — never from Cognito's text.
+ * `emailPassword.passwordPolicy` — never from Cognito's text.
  *
  * It describes the whole policy, not the rule a given password broke: Cognito
  * reports only that a password "did not conform", and the local engine must
@@ -339,7 +339,7 @@ export function toAuthApiError(
 	if (e instanceof ApiError) {
 		// An engine that mapped its own error (a password answer to a sign-in
 		// challenge) produced the fixed weak-password text; it gets the
-		// policy's (L71).
+		// policy's.
 		if (
 			e.name === AuthErrors.InvalidPassword &&
 			options.passwordPolicyMessage !== undefined &&
@@ -384,7 +384,7 @@ export function toAuthApiError(
 	if (flow === 'confirmCode' && e.name === AuthErrors.UserNotFound) return wrongCodeError();
 	if (flow === 'confirmCode' && options.hideAccountState && ACCOUNT_STATE_CONFIRM_ERRORS.has(e.name)) {
 		// Warn, not info: an expired code shown as a wrong code is a documented
-		// trade-off operators need to be able to see (R2-4).
+		// trade-off operators need to be able to see.
 		log.warn('[bb-auth] confirmation rejected; reported to the client as a wrong code (account state hidden)', {
 			error: e.name,
 			message: withoutLogin(e.message, options.login),
@@ -408,7 +408,7 @@ export function toAuthApiError(
 			{
 				error: e.name,
 				// An unmapped name carries unmapped text too — `CodeDeliveryFailureException`
-				// names the destination the code was sent to (FX60).
+				// names the destination the code was sent to.
 				message: withoutLogin(e.message, options.login),
 				requestId: sdkRequestId(e),
 			},
@@ -416,7 +416,7 @@ export function toAuthApiError(
 		return new ApiError(INTERNAL_ERROR_MESSAGE, 500, { name: AuthErrors.InternalError, cause: e, retriable: true });
 	}
 
-	// FX59 (#678): the client gets the name's fixed message, never the
+	// the client gets the name's fixed message, never the
 	// engine's own text; that goes to the log, the login redacted.
 	const message =
 		e.name === AuthErrors.InvalidPassword && options.passwordPolicyMessage !== undefined

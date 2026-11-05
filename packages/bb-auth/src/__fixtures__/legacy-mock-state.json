@@ -1,6 +1,6 @@
 {
 	"$comment": [
-		"FROZEN at the cutover (F1b): what the real AuthCognito (bb-auth-cognito@0.1.10) and AuthBasic",
+		"FROZEN at the cutover: what the real AuthCognito (bb-auth-cognito@0.1.10) and AuthBasic",
 		"(bb-auth-basic@0.1.9) mocks left in .bb-data/ and in the browser cookie jar after each scenario,",
 		"byte for byte. Tests restore the files and cookies and pin Date to capturedAt.",
 		"Proven equal to the live packages by legacy-fixtures.proof.test.ts in the commit that froze it.",

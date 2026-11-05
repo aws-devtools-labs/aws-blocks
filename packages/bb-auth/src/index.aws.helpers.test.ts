@@ -5,7 +5,7 @@
  * Pure helpers on the AWS path: the ID-token attribute allow-shape and the
  * per-request memo behind `requireRole`'s live group reads.
  *
- * Ported from `bb-auth-cognito/src/index.aws.test.ts` (B5) unchanged. In `Auth`
+ * Ported from `bb-auth-cognito/src/index.aws.test.ts` unchanged. In `Auth`
  * the helpers live in `sessions.ts` and `auth-base.ts` (shared by every
  * runtime), not on the AWS entry, whose exports must match the other entries.
  */

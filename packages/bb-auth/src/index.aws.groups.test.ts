@@ -5,10 +5,10 @@
  * AWS runtime — live-group authorization (`requireRole`, #583) and attribute
  * filtering, against a spied Cognito client (no network).
  *
- * Ported from `bb-auth-cognito/src/index.aws.groups.test.ts` (B5). Where an
- * expectation differs it says why, inline (`Auth:`). Renames (D3): `groups` →
+ * Ported from `bb-auth-cognito/src/index.aws.groups.test.ts`. Where an
+ * expectation differs it says why, inline (`Auth:`). Renames: `groups` →
  * `users.groups`, `userAttributes` → `users.attributes`. The attribute
- * read/write and admin tests were `todo` until D5c2 implemented those engine
+ * read/write and admin tests were `todo` until the engine implemented those
  * members. Harness: `test-support/aws-harness.ts`.
  */
 
@@ -236,7 +236,7 @@ describe('AWS attribute filtering', () => {
 		});
 	});
 
-	// Auth: `fetchUserAttributes` is `getUserAttributes` (D3 rename).
+	// Auth: `fetchUserAttributes` is `getUserAttributes` (renamed).
 	test('fetchUserAttributes sends GetUser with the access token and returns name/value pairs', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
@@ -293,7 +293,7 @@ describe('AWS attribute filtering', () => {
 		});
 	});
 
-	// Auth: the single-attribute `updateUserAttribute` was dropped (R13); the
+	// Auth: the single-attribute `updateUserAttribute` was dropped; the
 	// same call is `updateUserAttributes` with one key.
 	test('updateUserAttribute (single) returns that attribute’s outcome', async () => {
 		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String', mutable: true }] } });

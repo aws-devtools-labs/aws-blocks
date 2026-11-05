@@ -114,7 +114,7 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 
 		const issuer = `${server.origin}/aws-blocks/auth/idp/corp`;
 		const user = await auth.requireAuth(b.context(server.origin));
-		assert.strictEqual(user.userId, `${issuer}:u-1`, 'Q1: userId is <iss>:<sub>');
+		assert.strictEqual(user.userId, `${issuer}:u-1`, 'userId is <iss>:<sub>');
 		assert.strictEqual(user.userSub, user.userId);
 		assert.strictEqual(user.username, 'Alice');
 		assert.strictEqual(user.signInProvider, 'corp');
@@ -671,7 +671,7 @@ describe('stub IdP — /authorize accepts only the registered client and redirec
 		for (const target of FOREIGN_REDIRECTS()) {
 			await assertRefused(await getAuthorize(authorizeQuery({ redirect_uri: target })), /redirect_uri/, target);
 		}
-		// The reviewer's repro, verbatim: any client_id, an attacker's redirect_uri.
+		// Repro: any client_id, an attacker's redirect_uri.
 		const repro = await fetch(
 			`${AUTHORIZE()}?client_id=anything&redirect_uri=https://evil.example/land&response_type=code&code_challenge=abc&code_challenge_method=S256`,
 			{ redirect: 'manual' },

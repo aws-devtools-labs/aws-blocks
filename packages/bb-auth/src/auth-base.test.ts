@@ -366,7 +366,7 @@ describe('requireRole', () => {
 			users: { groups: ['admins'] },
 			providers: { okta: { type: 'oidc', issuer: 'https://okta.example.com', clientId: 'c' } },
 		});
-		assert.strictEqual(h.nativeBuilt, false, 'no pool → no native engine (Q6)');
+		assert.strictEqual(h.nativeBuilt, false, 'no pool → no native engine');
 		const okta = h.federation.get('okta');
 		assert.ok(okta);
 		okta.identity = {
@@ -379,7 +379,7 @@ describe('requireRole', () => {
 		};
 		const b = new Browser();
 		const user = await b.request((ctx) => h.auth.completeFederated(ctx, 'okta'));
-		assert.strictEqual(user.userId, 'https://okta.example.com:u-1', 'Q1 identity');
+		assert.strictEqual(user.userId, 'https://okta.example.com:u-1', '<iss>:<sub> identity');
 		assert.strictEqual(user.userSub, 'https://okta.example.com:u-1');
 		assert.strictEqual(user.username, 'eve@example.com');
 		assert.strictEqual(user.signInProvider, 'okta');
@@ -551,7 +551,7 @@ describe('runtime mode gates (backstop for untyped callers)', () => {
 		});
 	});
 
-	test('requiresUserPool follows Q6; provider resolution is per provider', () => {
+	test('requiresUserPool follows the options; provider resolution is per provider', () => {
 		const pool = (options: AuthOptions) => requiresUserPool(resolveOptions(options));
 		assert.strictEqual(pool({}), true);
 		assert.strictEqual(
@@ -697,7 +697,7 @@ describe('email + password flows through AuthBase', () => {
 		assert.strictEqual(r.status, 'signedIn');
 		assert.ok(h.native.calls.includes('signIn:newbie:bridge-from-confirm'));
 		assert.ok(!b.jar.has(bridge), 'bridge cleared');
-		assert.ok(b.jar.has(h.cookieName), 'session issued in the same response (B6: both lines survive)');
+		assert.ok(b.jar.has(h.cookieName), 'session issued in the same response (both lines survive)');
 		await assert.rejects(
 			b.request((ctx) => h.auth.autoSignIn(ctx)),
 			{ name: AuthErrors.NotAuthenticated },
@@ -807,7 +807,7 @@ describe('email + password flows through AuthBase', () => {
 });
 
 describe('the real entry points construct AuthBase with their engines', () => {
-	test('index.mock.ts: guards work; the local user pool answers (D5b), uniform for an unknown user', async () => {
+	test('index.mock.ts: guards work; the local user pool answers, uniform for an unknown user', async () => {
 		const auth = new MockAuth({ id: 'placeholder-app' }, 'auth');
 		assert.strictEqual(await auth.getCurrentUser(makeContext()), null);
 		await assert.rejects(auth.signIn('a', 'b', makeContext()), (e: unknown) => {
@@ -843,7 +843,7 @@ describe('the real entry points construct AuthBase with their engines', () => {
 		const { Auth: AwsAuth } = await import('./index.aws.js');
 		const auth = new AwsAuth({ id: 'aws-placeholder-app' }, 'auth');
 		assert.strictEqual(auth.fullId, 'aws-placeholder-app-auth');
-		// A hosted-UI provider (D6b) without its deployed config keys refuses
+		// A hosted-UI provider without its deployed config keys refuses
 		// clearly — never a 404, and no request is made. The configured flow is in
 		// federation-hosted-ui.test.ts; direct providers in federation-direct.test.ts.
 		const secret = { fullId: 'okta-secret', get: async () => 's' };

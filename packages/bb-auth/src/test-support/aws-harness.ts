@@ -5,7 +5,7 @@
  * Offline harness for the AWS runtime entry (`index.aws.ts`) — `Auth` over the
  * real Cognito engine (`engines/native-cognito.ts`).
  *
- * Ported from B5's `bb-auth-cognito/src/test-support/aws-harness.ts`, so the
+ * Ported from `bb-auth-cognito/src/test-support/aws-harness.ts`, so the
  * same scenarios that pin `AuthCognito`'s AWS layer pin `Auth`'s: it is the
  * safety net proving `Auth` behaves like `AuthCognito` against Cognito. Drives
  * the real classes in a plain `npm test` run — no network, no AWS account, no
@@ -49,9 +49,9 @@ import { resolveOptions } from '../resolve-options.js';
 import type { AuthOptions } from '../types.js';
 
 export const TEST_REGION = 'us-east-1';
-export const TEST_POOL_ID = 'us-east-1_D5cTestPool';
-export const TEST_CLIENT_ID = 'd5ctestclientid000000000';
-export const ROOT_ID = 'd5c-app';
+export const TEST_POOL_ID = 'us-east-1_TestPool';
+export const TEST_CLIENT_ID = 'testclientid000000000000';
+export const ROOT_ID = 'harness-app';
 const ROOT: ScopeParent = { id: ROOT_ID };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ export function captureLogger(): { logger: ChildLogger; entries: LogEntry[] } {
 // Fake IdP: RS256 keypair + JWT minting that the real verifier accepts
 // ─────────────────────────────────────────────────────────────────────────────
 
-const KID = 'd5c-test-kid';
+const KID = 'harness-test-kid';
 
 function b64url(v: object): string {
 	return Buffer.from(JSON.stringify(v)).toString('base64url');
@@ -306,7 +306,7 @@ let counter = 0;
 /**
  * Free the slot core's Lambda event-handler registry keeps for `poolId`'s
  * Cognito trigger, as a fresh Lambda container would have it. Core refuses a
- * second registration for one key (R2-1), and the suites build one `Auth` per
+ * second registration for one key, and the suites build one `Auth` per
  * test against the same fake pool.
  */
 export function freeTriggerSlot(poolId: string): void {
@@ -359,7 +359,7 @@ export function makeAwsAuth<const O extends AuthOptions = AuthOptions>(options?:
 			if (!fn) throw new Error(`harness: unexpected Cognito command ${name}`);
 			return { output: { $metadata: { httpStatusCode: 200 }, ...((await fn(args.input)) ?? {}) } };
 		},
-		{ step: 'initialize', name: 'd5c-cognito-intercept', override: true },
+		{ step: 'initialize', name: 'harness-cognito-intercept', override: true },
 	);
 
 	// 2. Real verifier, local JWKS.

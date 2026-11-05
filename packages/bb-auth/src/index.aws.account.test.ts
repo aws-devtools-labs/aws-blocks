@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * AWS runtime — the signed-in user's account (D5c2): attributes, `deleteUser`,
+ * AWS runtime — the signed-in user's account: attributes, `deleteUser`,
  * TOTP setup, MFA preferences, devices and the passkey description fields,
  * against a spied Cognito client (no network). Each test pins the exact SDK
  * command + input the engine sends and what the caller sees, including the
@@ -122,7 +122,7 @@ describe('AWS account — attributes', () => {
 		const e = await rejection(b.request((ctx) => h.auth.updateUserAttributes(ctx, { name: 'Alice' })));
 		assert.deepStrictEqual(wireView(e), {
 			code: 401,
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			message: clientMessageFor(AuthErrors.NotAuthorized),
 			name: AuthErrors.NotAuthorized,
 			retriable: false,
@@ -250,7 +250,7 @@ describe('AWS account — TOTP setup', () => {
 				throw cognitoError(name, `msg for ${name}`);
 			});
 			const e = await rejection(b.request((ctx) => h.auth.verifyTotpSetup(ctx, '123456')));
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			assert.deepStrictEqual(wireView(e), { code: status, message: clientMessageFor(name), name, retriable });
 			assertWireClean(e);
 		}
@@ -373,7 +373,7 @@ describe('AWS account — devices', () => {
 		]);
 	});
 
-	test('rememberDevice is a 501 explaining why (L25), before any Cognito call', async () => {
+	test('rememberDevice is a 501 explaining why, before any Cognito call', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
 		await signInAs(h, b, 'alice');
@@ -386,7 +386,7 @@ describe('AWS account — devices', () => {
 	});
 });
 
-describe('AWS account — passkey description fields (L22)', () => {
+describe('AWS account — passkey description fields', () => {
 	const PASSKEYS = {
 		users: { authFlow: 'USER_AUTH' },
 		passkeys: { relyingPartyId: 'example.com', origins: ['https://example.com'] },

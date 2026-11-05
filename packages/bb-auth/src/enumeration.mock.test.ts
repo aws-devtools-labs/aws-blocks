@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Local runtime — account-state hiding (FX3 / finding A3) on every public
+ * Local runtime — account-state hiding on every public
  * email + password step. With `emailPassword.revealExistingUsers` off (the
  * default), an unknown user, an unconfirmed user and an already-confirmed user
  * must be indistinguishable to a client on `confirmSignUp`, `resendSignUpCode`,
@@ -94,7 +94,7 @@ function expireCodes(): void {
 	mock.method(Date, 'now', () => now + 25 * 60 * 60 * 1000);
 }
 
-describe('mock enumeration (FX3): confirmSignUp hides the account state', () => {
+describe('mock enumeration: confirmSignUp hides the account state', () => {
 	test('unknown, unconfirmed (wrong or expired code) and already-confirmed are byte-identical', async () => {
 		const h = await setup();
 		const seen = new Set<string>();
@@ -127,7 +127,7 @@ describe('mock enumeration (FX3): confirmSignUp hides the account state', () => 
 		const h = await setup({ emailPassword: { revealExistingUsers: true } });
 		assert.deepStrictEqual(wireView(await rejection(h.auth.confirmSignUp(CONFIRMED, '000000'))), {
 			code: 401,
-			// FX59 (#678): the name's fixed message; Cognito's "User cannot be
+			// the name's fixed message; Cognito's "User cannot be
 			// confirmed. Current status is CONFIRMED" stays in the server log.
 			message: clientMessageFor(AuthErrors.NotAuthorized),
 			name: AuthErrors.NotAuthorized,
@@ -136,7 +136,7 @@ describe('mock enumeration (FX3): confirmSignUp hides the account state', () => 
 	});
 });
 
-describe('mock enumeration (FX3): resendSignUpCode hides the account state', () => {
+describe('mock enumeration: resendSignUpCode hides the account state', () => {
 	test('every account state resolves identically, and only the unconfirmed user gets a code', async () => {
 		const h = await setup();
 		const seen = new Set<string>();
@@ -160,7 +160,7 @@ describe('mock enumeration (FX3): resendSignUpCode hides the account state', () 
 		const h = await setup({ emailPassword: { revealExistingUsers: true } });
 		assert.deepStrictEqual(wireView(await rejection(h.auth.resendSignUpCode(CONFIRMED))), {
 			code: 400,
-			// FX59 (#678): the fixed message; "User is already confirmed." is logged.
+			// the fixed message; "User is already confirmed." is logged.
 			message: clientMessageFor(AuthErrors.InvalidParameter),
 			name: AuthErrors.InvalidParameter,
 			retriable: true,
@@ -169,7 +169,7 @@ describe('mock enumeration (FX3): resendSignUpCode hides the account state', () 
 	});
 });
 
-describe('mock enumeration (FX3): password reset hides the account state', () => {
+describe('mock enumeration: password reset hides the account state', () => {
 	test('resetPassword: identical delivery details; an unconfirmed user is sent no code', async () => {
 		const h = await setup();
 		const seen = new Set<string>();
@@ -213,7 +213,7 @@ describe('mock enumeration (FX3): password reset hides the account state', () =>
 	});
 });
 
-describe('mock enumeration (FX3): sign-in', () => {
+describe('mock enumeration: sign-in', () => {
 	test('a wrong password is byte-identical for unknown, unconfirmed and confirmed users', async () => {
 		const h = await setup();
 		const seen = new Set<string>();

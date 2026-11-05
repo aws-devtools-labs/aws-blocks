@@ -5,7 +5,7 @@
  * Session and auto-sign-in cookies.
  *
  * **Byte-compatible with `AuthCognito`** (ported from
- * `bb-auth-cognito/src/cookies.ts` as fixed by B6), because an app that
+ * `bb-auth-cognito/src/cookies.ts` with its security fixes), because an app that
  * switches `AuthCognito` → `Auth` with the same id must keep its users signed
  * in:
  *
@@ -71,7 +71,7 @@ function autoSignInCookieName(fullId: string): string {
  * response. `Headers.set('Set-Cookie', …)` replaces EVERY `Set-Cookie` value,
  * so a plain `set` would silently drop a cookie written earlier in the same
  * request — e.g. the auto-sign-in bridge clear that `autoSignIn` appends just
- * before the session cookie is issued (B6). Only an earlier line for the same
+ * before the session cookie is issued. Only an earlier line for the same
  * cookie name is replaced (the newest write wins, as a browser would apply it).
  *
  * The new line is written with `set` and the survivors re-appended after it,
@@ -312,7 +312,7 @@ export function readAutoSignInCookie(ctx: BlocksContext, fullId: string): string
 /**
  * Clear the auto-sign-in cookie (`Max-Age=0`). It carries an encrypted
  * password, so it is cleared as soon as it is consumed — and survives the
- * session cookie being written after it on the same response (B6).
+ * session cookie being written after it on the same response.
  *
  * @internal
  */

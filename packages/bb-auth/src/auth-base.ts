@@ -378,13 +378,13 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	private readonly crossDomain: boolean;
 	private readonly resolveSecret: () => Promise<string>;
 	private readonly native?: NativeEngine;
-	/** Verifies pool bearer access tokens; only with `allowBearerAuth` and a user pool (D6c). */
+	/** Verifies pool bearer access tokens; only with `allowBearerAuth` and a user pool. */
 	private readonly poolBearer?: PoolBearerVerifier;
 	private readonly providers: ReadonlyMap<string, { provider: ResolvedProvider; engine: FederationEngine }>;
 	private readonly declaredGroups?: ReadonlySet<string>;
 	/** Per-request dedupe of live group reads (see `memoizePerContext`). */
 	private readonly liveGroupsMemo = new WeakMap<BlocksContext, Map<string, Promise<string[]>>>();
-	/** Front-channel logout URL recorded by `signOut`, for the sign-out route (D6). */
+	/** Front-channel logout URL recorded by `signOut`, for the sign-out route. */
 	private readonly signOutRedirects = new WeakMap<BlocksContext, string>();
 	/**
 	 * The ID token's contact-verification flags of each user `toUser` built,
@@ -427,7 +427,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		};
 		this.native = requiresUserPool(config) ? layer.native(host) : undefined;
 		this.poolBearer = bearerAuthEnabled(config) && this.native ? layer.poolBearer?.(host, this.native) : undefined;
-		// Q10: the pool's PreSignUp trigger (provisioned by the CDK layer only when
+		// The pool's PreSignUp trigger (provisioned by the CDK layer only when
 		// `validateUser` is set) reaches this instance through the layer.
 		if (this.native) {
 			layer.preSignUpTrigger?.({
@@ -451,7 +451,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			providers.set(provider.id, { provider, engine: layer.federation(host, provider) });
 		}
 		this.providers = providers;
-		// The federation HTTP routes (D6a): only when a provider is configured,
+		// The federation HTTP routes: only when a provider is configured,
 		// and only by a layer that serves them (the runtime entries do).
 		if (providers.size > 0) layer.routes?.(this.federationRouteHost());
 	}
@@ -1466,7 +1466,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		return surface;
 	}
 
-	// ── Hooks for the federation routes (D6) ────────────────────────────────
+	// ── Hooks for the federation routes ────────────────────────────────
 
 	/**
 	 * Complete a federated sign-in on the callback route: the provider's engine
@@ -1569,7 +1569,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		return toAuthApiError(e, this.log, flow, {
 			hideAccountState: this.hideAccountState,
 			...(login !== undefined ? { login } : {}),
-			// An imported pool's policy is not ours to describe (L71).
+			// An imported pool's policy is not ours to describe.
 			...(this.config.userPool
 				? {}
 				: { passwordPolicyMessage: passwordPolicyMessage(this.emailPasswordOptions.passwordPolicy) }),
@@ -1578,7 +1578,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 
 	/**
 	 * Hide account existence and state on the public email + password steps
-	 * (`emailPassword.revealExistingUsers` off — the default; R9, FX3).
+	 * (`emailPassword.revealExistingUsers` off — the default).
 	 */
 	private get hideAccountState(): boolean {
 		return this.emailPasswordOptions.revealExistingUsers !== true;
@@ -1590,7 +1590,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * At **warn**: hiding the account state also swallows answers an operator
 	 * needs to see — every `InvalidParameterException`, so a malformed username
 	 * "succeeds" — so the detail must show at the usual operator threshold
-	 * (R2-4). The login is redacted from Cognito's message (`withoutLogin`).
+	 *. The login is redacted from Cognito's message (`withoutLogin`).
 	 */
 	private logHiddenAccountState(method: string, e: unknown, login: string): void {
 		this.log.warn(`[bb-auth] ${method}: answer withheld from the client (account state hidden)`, {
@@ -1638,8 +1638,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		bridgeSession?: string,
 	): Promise<SignInResult<O>> {
 		const native = this.nativeFor('signIn');
-		// The per-call hint wins over the pool default (`users.preferredChallenge`,
-		// L22), as in `AuthCognito`; engines ignore it outside `USER_AUTH`.
+		// The per-call hint wins over the pool default (`users.preferredChallenge`),
+		// as in `AuthCognito`; engines ignore it outside `USER_AUTH`.
 		const preferredChallenge = options?.preferredChallenge ?? this.config.users?.preferredChallenge;
 		let outcome: NativeSignInOutcome;
 		try {
@@ -1679,7 +1679,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		}
 		const user = await this.issueSession(context, { ...outcome.tokens });
 		// A completed sign-in consumes any pending auto-sign-in bridge (it holds
-		// an encrypted password); the clear survives the session cookie (B6).
+		// an encrypted password); the clear survives the session cookie.
 		if (readAutoSignInCookie(context, this.fullId)) clearAutoSignInCookie(context, this.fullId, this.crossDomain);
 		return { status: 'signedIn', user };
 	}
@@ -1774,7 +1774,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	}
 
 	/**
-	 * The in-process half of the sign-up check (Q10): run `validateUser` for an
+	 * The in-process half of the sign-up check: run `validateUser` for an
 	 * email + password sign-up or an admin-created user, then return the
 	 * `ClientMetadata` for the Cognito call — the caller's, plus a signed marker
 	 * telling the pool's PreSignUp trigger that this sign-up was already
@@ -1953,7 +1953,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	}
 
 	/**
-	 * Verify the request's `Authorization: Bearer` token (D6c, `bearer.ts`): the
+	 * Verify the request's `Authorization: Bearer` token (`bearer.ts`): the
 	 * entry's pool verifier for a Cognito access token, else each directly
 	 * federated provider's engine for its IdP's access token. Each verifier
 	 * rejects a foreign issuer before any network call. `null` for no token or
@@ -1983,7 +1983,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 
 	/**
 	 * A direct-OIDC bearer token's identity, projected exactly like a direct
-	 * sign-in (`recordFromFederated`: Q1 identity, profile claims,
+	 * sign-in (`recordFromFederated`: `<iss>:<sub>` identity, profile claims,
 	 * `attributeMapping`), except that freshness is the token's own `auth_time`
 	 * (`0` — never fresh — when it has none).
 	 */
@@ -2333,7 +2333,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	private stateUser(user: AuthenticatedUser<O>): AuthStateUser<O> {
 		// `claims` and `federatedIdentity` are server-side only: they never go on the wire.
 		const { claims: _claims, federatedIdentity: _federated, ...wire } = user;
-		// The ID token's `*_verified` flags are not `attributes` (FX31), so the
+		// The ID token's `*_verified` flags are not `attributes`, so the
 		// display name reads them from the identity this user was built from.
 		const verified = this.contactVerification.get(user);
 		return { ...wire, displayName: displayNameOf({ ...user, ...(verified ? { verified } : {}) }) };
@@ -2555,7 +2555,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					try {
 						await this.wide.signUp(username, password, { attributes }, context);
 					} catch (e) {
-						// R9: unless the app opted in, an existing account answers exactly
+						// Unless the app opted in, an existing account answers exactly
 						// like a new sign-up, so the public form is not an enumeration oracle.
 						if (
 							!this.emailPasswordOptions.revealExistingUsers &&

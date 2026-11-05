@@ -269,7 +269,7 @@ describe('AWS runtime — stubIdp() on a sandbox deployment', () => {
 			`the callback lands, got ${landing.status}: ${await landing.clone().text()}`,
 		);
 		const user = await auth.requireRole(b.context(gw.base), 'admin');
-		assert.strictEqual(user.userId, `${issuer()}:u-1`, 'Q1: <iss>:<sub>, with the gateway issuer');
+		assert.strictEqual(user.userId, `${issuer()}:u-1`, 'userId is <iss>:<sub>, with the gateway issuer');
 		assert.strictEqual(user.signInProvider, 'corp');
 		assert.strictEqual(user.attributes.email, 'alice@example.com');
 	});

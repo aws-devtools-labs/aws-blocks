@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The local layer's {@link PoolBearerVerifier} (`allowBearerAuth`, D6c).
+ * The local layer's {@link PoolBearerVerifier} (`allowBearerAuth`).
  *
  * The local user pool (`engines/native-mock*.ts`) mints Cognito-shaped tokens
  * that are **unsigned** (`alg: 'none'`, `AuthCognito`'s mock format), so

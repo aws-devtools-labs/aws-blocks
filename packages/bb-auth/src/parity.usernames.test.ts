@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock ↔ AWS parity for **usernames** (D5d, L28): what `username` / `userId` /
+ * Mock ↔ AWS parity for **usernames**: what `username` / `userId` /
  * `userSub` and the email attribute are, for the two ways Cognito models
  * `users.signInWith` — driven through the same `Auth` API on the local engine
  * (`./index.mock.js`) and on the AWS entry (`./index.aws.js`, offline through
@@ -76,7 +76,7 @@ const EMAIL_FORMAT = /^[^\s@]+@[^\s@]+$/;
  *   Amazon Cognito automatically generates a username value."
  *   (<https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AdminCreateUser.html>)
  *   The fill of `email` from `Username` is applied as for `SignUp` (inferred:
- *   the docs state it for `SignUp` only — to confirm in a sandbox, L2).
+ *   the docs state it for `SignUp` only — to confirm in a sandbox).
  * - alias attributes: "If you select email address as an alias, Amazon Cognito
  *   doesn't accept a username that matches a valid email address format." /
  *   "Phone numbers and email addresses only become active aliases for a user
@@ -275,7 +275,7 @@ describe("parity: usernames on an email-only pool (signInWith: ['email'])", () =
 		assert.deepStrictEqual(results[0], results[1]);
 	});
 
-	test('admin.createUser: generated username, email filled from Username (L28), sign-in with the email', async () => {
+	test('admin.createUser: generated username, email filled from Username, sign-in with the email', async () => {
 		const mock = mockAuth(EMAIL_ONLY);
 		const aws = makeAwsAuth(EMAIL_ONLY);
 		cognitoDirectory(aws, 'username-attributes');
@@ -385,7 +385,7 @@ describe("parity: usernames on a username + email-alias pool (signInWith: ['user
 		assert.deepStrictEqual(results[0], results[1]);
 	});
 
-	test('admin.createUser: the username is kept and nothing is copied into email (L28)', async () => {
+	test('admin.createUser: the username is kept and nothing is copied into email', async () => {
 		const mock = mockAuth(USERNAME_AND_EMAIL);
 		const aws = makeAwsAuth(USERNAME_AND_EMAIL);
 		cognitoDirectory(aws, 'alias-attributes');

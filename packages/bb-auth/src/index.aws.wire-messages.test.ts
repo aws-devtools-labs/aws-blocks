@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * AWS runtime — Cognito's error text never reaches a client (FX59), against a
+ * AWS runtime — Cognito's error text never reaches a client, against a
  * spied Cognito client (no network). Harness: `test-support/aws-harness.ts`.
  *
  * Ports `AuthCognito` #678 (`bb-auth-cognito` 0.1.11, "stop leaking raw
  * Cognito SDK text in ApiError"): every Cognito failure reaches the client
  * with a BB-authored message chosen by its `AuthErrors` name
  * (`clientMessageFor`), or with the enumeration-masked answer; Cognito's own
- * message goes to the server log only, the login redacted. Before FX59 `Auth`
+ * message goes to the server log only, the login redacted. Before the fixed messages, `Auth`
  * withheld only messages naming an ARN or an account id
  * (`index.aws.errors.test.ts`), so an app moving from `AuthCognito` 0.1.11 to
  * `Auth` would have undone #678.
@@ -67,7 +67,7 @@ const NAMES = [...AUTH_NAMES, 'AccessDeniedException', 'SomeFutureCognitoExcepti
 
 /** The messages a client may see for an error named `name`. */
 function allowedMessages(name: string): string[] {
-	// A weak password describes the block's own policy (L71); these options set none.
+	// A weak password describes the block's own policy; these options set none.
 	if (name === AuthErrors.InvalidPassword) return [passwordPolicyMessage(undefined)];
 	const allowed = AUTH_NAMES.has(name) ? [clientMessageFor(name)] : [];
 	if (name === AuthErrors.NotAuthorized) allowed.push(INCORRECT_CREDENTIALS_MESSAGE);
@@ -306,7 +306,7 @@ function assertAllowedMessage(label: string, observed: unknown): void {
 	}
 }
 
-describe('AWS: no Cognito error text reaches the client, on any path (FX59, #678)', () => {
+describe('AWS: no Cognito error text reaches the client, on any path (#678)', () => {
 	for (const path of PATHS) {
 		test(`${path.label}: every Cognito name → the fixed message; the text is logged`, async () => {
 			for (const name of NAMES) {
@@ -337,7 +337,7 @@ describe('AWS: no Cognito error text reaches the client, on any path (FX59, #678
 	}
 });
 
-describe('AWS: the logged Cognito text has the login redacted (B6)', () => {
+describe('AWS: the logged Cognito text has the login redacted', () => {
 	const LOGIN = 'Alice@Example.com';
 	const echo = `${MARKER}: 1 validation error detected: Value '${LOGIN}' at 'username' failed to satisfy constraint`;
 

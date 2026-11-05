@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `email` (L75): the user pool sends its email (sign-up and reset codes, email
+ * `email`: the user pool sends its email (sign-up and reset codes, email
  * MFA, `EMAIL_OTP`) through the app's own Amazon SES identity instead of
  * Cognito's default sender, which is capped at 50 emails a day.
  *

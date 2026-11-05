@@ -36,7 +36,7 @@ export const auth = new Auth(scope, 'auth', {
 	},
 });
 
-// R10: MFA on without mfaTypes meant SMS only — the codemod writes that out.
+// MFA on without mfaTypes meant SMS only — the codemod writes that out.
 export const smsOnly = new Auth(scope, 'sms-only', { mfa: { mode: 'required', types: ['SMS'] }, emailPassword: { autoSignIn: false } });
 
 export const plain = new Auth(scope, 'plain', { emailPassword: { autoSignIn: false } });

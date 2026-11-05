@@ -4,7 +4,7 @@
 /**
  * User-enumeration safety, shared by every native engine so the mock and the
  * Cognito engine answer an unknown username the same way. Ported from
- * `bb-auth-cognito/src/enumeration.ts` as fixed by B6.
+ * `bb-auth-cognito/src/enumeration.ts` with its security fixes.
  *
  * Rules: sign-in failures are uniform; password reset and
  * code resend always report success with plausible delivery details; confirm-
@@ -13,7 +13,7 @@
  * The public sign-up form does not reveal existing accounts unless
  * `emailPassword.revealExistingUsers` is set (applied in `auth-base.ts`).
  *
- * FX3 (finding A3): with `revealExistingUsers` off, the *state* of an existing
+ * With `revealExistingUsers` off, the *state* of an existing
  * account is hidden too, on the steps that follow the sign-up form — an
  * unknown, an unconfirmed and an already-confirmed user are indistinguishable on
  * `confirmSignUp`, `resendSignUpCode`, `resetPassword` and

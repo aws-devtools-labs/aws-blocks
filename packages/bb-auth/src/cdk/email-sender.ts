@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `AuthOptions.email` (L75) → the user pool's SES email configuration.
+ * `AuthOptions.email` → the user pool's SES email configuration.
  *
  * {@link assertEmailSender} refuses, at synth, a sender Cognito could never use
  * (with the reason, instead of a failed deploy or silent fallback);

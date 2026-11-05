@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `AuthState.user.displayName` (D7b): what the sign-in UI shows the signed-in
+ * `AuthState.user.displayName`: what the sign-in UI shows the signed-in
  * user. On a pool whose users sign in with their email or phone, `username`
  * is a generated id equal to `userSub`, so the UI would otherwise show a UUID.
  *
@@ -136,7 +136,7 @@ describe('displayNameOf', () => {
 		);
 	});
 
-	test('the ID token’s boolean flags (`verified`) decide, and win over a string flag in `attributes` (FX31)', () => {
+	test('the ID token’s boolean flags (`verified`) decide, and win over a string flag in `attributes`', () => {
 		const user = {
 			username: 'sub-1',
 			userSub: 'sub-1',
@@ -164,9 +164,9 @@ describe('displayNameOf', () => {
 				...base,
 				username: 'Google_1098',
 				signInProvider: 'google',
-				attributes: { email: 'alice@gmail.com', preferred_username: 'ali' },
+				attributes: { email: 'alice@example.org', preferred_username: 'ali' },
 			}),
-			'alice@gmail.com',
+			'alice@example.org',
 		);
 		assert.strictEqual(
 			displayNameOf({
@@ -253,7 +253,7 @@ describe('AuthState.user.displayName through createApi() (local pool)', () => {
 	});
 });
 
-describe('AuthState.user.displayName for a directly federated OIDC user (FX31)', () => {
+describe('AuthState.user.displayName for a directly federated OIDC user', () => {
 	let server: RouteServer;
 	before(async () => {
 		server = await startRouteServer();

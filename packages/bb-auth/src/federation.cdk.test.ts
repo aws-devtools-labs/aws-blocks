@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Hosted-UI federation infrastructure (D3b): what `Auth` provisions for social,
+ * Hosted-UI federation infrastructure: what `Auth` provisions for social,
  * SAML and Cognito-federated OIDC providers (`type: 'oidc'` on the default
  * `store: 'cognito'`), and — just as important — that it provisions nothing new
  * otherwise (including for a `store: 'builtin'` block).
@@ -11,8 +11,8 @@
  * the synth-time checks run in process, like `index.cdk.test.ts`.
  *
  * The default template's byte-identity with `AuthCognito` is proven by
- * `resource-identity.cdk.test.ts` (B1's fixture) and
- * `property-snapshot.cdk.test.ts` (D3a's snapshot), both unchanged by D3b.
+ * `resource-identity.cdk.test.ts` (`AuthCognito`'s fixture) and
+ * `property-snapshot.cdk.test.ts` (the base snapshot), both unchanged by federation.
  */
 
 import assert from 'node:assert';
@@ -313,9 +313,9 @@ describe('Auth federation — provisioning matrix', () => {
 	});
 });
 
-// ── Coexistence with the immutability guard (D4) ─────────────────────────────
+// ── Coexistence with the immutability guard ─────────────────────────────
 
-describe('Auth federation — coexists with the immutability guard (D4)', () => {
+describe('Auth federation — coexists with the immutability guard', () => {
 	for (const name of ['socialOnly', 'samlOnly', 'cognitoOidcOnly', 'mixed'] as const) {
 		test(`${name}: the pool guard and the federation resources are synthesized together`, () => {
 			const { template } = synth(CONFIGS[name]);

@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock ↔ AWS parity for **the weak-password message** (L71, decided by the
+ * Mock ↔ AWS parity for **the weak-password message** (decided by the
  * maintainer on 2026-10-12): a client that sends a password the policy
  * rejects gets one message built from the block's own
  * `emailPassword.passwordPolicy` (`passwordPolicyMessage`), the same on the
  * local engine (`./index.mock.js`) and on the AWS entry (`./index.aws.js`,
  * offline through `test-support/aws-harness.ts`). Cognito's text — "Password
- * did not conform with policy: …" — never reaches the client (FX59), and nor
+ * did not conform with policy: …" — never reaches the client, and nor
  * does the local engine's own list of what was missing.
  *
  * An imported pool (`userPool: Auth.fromExisting(…)`) has a policy the block
@@ -59,7 +59,7 @@ const POLICIES: { label: string; policy: PasswordPolicy | undefined }[] = [
 	{ label: 'a custom policy', policy: { minLength: 12, requireSymbols: false, requireUppercase: false } },
 ];
 
-describe('parity: a weak password gets the message for the block’s own policy (L71)', () => {
+describe('parity: a weak password gets the message for the block’s own policy', () => {
 	for (const { label, policy } of POLICIES) {
 		const options: CognitoAuthOptions = policy ? { emailPassword: { passwordPolicy: policy } } : {};
 		const expected = passwordPolicyMessage(policy);

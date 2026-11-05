@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The AWS layer's {@link PoolBearerVerifier} (`allowBearerAuth`, D6c): accepts
+ * The AWS layer's {@link PoolBearerVerifier} (`allowBearerAuth`): accepts
  * a Cognito **access token** issued by this block's user pool, verified with
  * `aws-jwt-verify` — RS256 signature against the pool's JWKS, issuer = the
  * pool, `token_use: access`, `client_id` = the native app client, the

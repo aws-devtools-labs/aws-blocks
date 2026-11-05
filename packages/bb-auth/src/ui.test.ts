@@ -7,7 +7,7 @@ import * as shared from '@aws-blocks/auth-common/ui';
 import * as ui from './ui.js';
 
 describe('@aws-blocks/bb-auth/ui', () => {
-	test('R1/S1: re-exports the shared renderer, notifier and store — the same functions, so one store per api', () => {
+	test('re-exports the shared renderer, notifier and store — the same functions, so one store per api', () => {
 		for (const name of [
 			'Authenticator',
 			'AuthenticatedContent',

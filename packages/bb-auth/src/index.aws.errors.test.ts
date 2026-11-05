@@ -7,20 +7,20 @@
  * no SDK metadata, ARNs or account ids on the wire. User-enumeration safety
  * lives in `index.aws.enumeration.test.ts`. Harness: `test-support/aws-harness.ts`.
  *
- * Ported from `bb-auth-cognito/src/index.aws.errors.test.ts` (B5/B6). Where an
+ * Ported from `bb-auth-cognito/src/index.aws.errors.test.ts`. Where an
  * expectation differs it says why, inline (`Auth:`). Two systematic changes:
  *
- * - **Vehicle.** B5 drove the mapping table through `admin.deleteUser` (no
- *   enumeration masking). `admin.*` is D5c2's, so these tests use
+ * - **Vehicle.** The ported tests drove the mapping table through `admin.deleteUser` (no
+ *   enumeration masking). `admin.*` came later, so these tests use
  *   `signUp()` — also unmasked: a server-side `signUp` is inside the trust
- *   boundary (R9) and maps every Cognito name straight through. The admin
- *   paths were kept as `todo` until D5c2; they now run too (the table is also
+ *   boundary and maps every Cognito name straight through. The admin
+ *   paths were kept as `todo` until the engine had them; they now run too (the table is also
  *   driven through `admin.deleteUser`).
- * - **L10.** Every client-visible name is an `AuthErrors` member: a Cognito
+ * - **Vocabulary-only names.** Every client-visible name is an `AuthErrors` member: a Cognito
  *   name outside the vocabulary, an AWS access error and a non-`Error` throw
  *   all become `InternalErrorException` (500, retriable, generic message),
  *   where `AuthCognito` passed the raw name through.
- * - **FX59** (ports `AuthCognito` #678). The message is never Cognito's: each
+ * - **Fixed messages** (ports `AuthCognito` #678). The message is never Cognito's: each
  *   name gets the fixed, BB-authored `clientMessageFor(name)`; Cognito's text
  *   goes to the server log only. Every path is scanned in
  *   `index.aws.wire-messages.test.ts`.
@@ -57,7 +57,7 @@ const MFA_ALL = { mfa: { mode: 'optional', types: ['SMS', 'TOTP', 'EMAIL'] } } a
 /**
  * The message a client gets for an engine error named `name`: the name's fixed
  * message, except a weak password, which describes the block's own policy
- * (L71). These tests configure no `passwordPolicy`, so it's the default one.
+ *. These tests configure no `passwordPolicy`, so it's the default one.
  */
 function expectedMessage(name: string): string {
 	return name === AuthErrors.InvalidPassword ? passwordPolicyMessage(undefined) : clientMessageFor(name);
@@ -125,13 +125,13 @@ describe('AWS error mapping: Cognito exception → client-visible ApiError', () 
 			const e = await viaSignUp(cognitoError(name, `msg for ${name}`));
 			assert.ok(e instanceof ApiError);
 			assert.ok(isBlocksError(e, name), 'matchable by name with isBlocksError');
-			// FX59 (#678): the name's fixed message, never Cognito's text.
+			// the name's fixed message, never Cognito's text.
 			assert.deepStrictEqual(wireView(e), { code: status, message: expectedMessage(name), name, retriable });
 		});
 	}
 
 	test('a name outside the AuthErrors vocabulary → 500 InternalErrorException, retriable, generic message', async () => {
-		// Auth (L10): AuthCognito passed unlisted names through as 400 with the
+		// Auth: AuthCognito passed unlisted names through as 400 with the
 		// Cognito name and message; Auth never puts a name outside AuthErrors on
 		// the wire. The original is logged server-side.
 		const { logger, entries } = captureLogger();
@@ -150,7 +150,7 @@ describe('AWS error mapping: Cognito exception → client-visible ApiError', () 
 		assert.ok(entries.some((x) => x.level === 'error' && x.context?.error === 'SomeFutureCognitoException'));
 	});
 
-	test('a useful Cognito name outside the vocabulary (CodeDeliveryFailureException) is also InternalError (L10)', async () => {
+	test('a useful Cognito name outside the vocabulary (CodeDeliveryFailureException) is also InternalError', async () => {
 		const e = await viaSignUp(cognitoError('CodeDeliveryFailureException', 'Unable to deliver the code'));
 		assert.strictEqual(wireView(e).name, AuthErrors.InternalError);
 		assert.strictEqual(wireView(e).code, 500);
@@ -161,7 +161,7 @@ describe('AWS error mapping: Cognito exception → client-visible ApiError', () 
 		// Matches the block's other upstream-failure status ("Cognito returned no tokens" → 500).
 		assert.deepStrictEqual(wireView(e), {
 			code: 500,
-			// FX59 (#678): the fixed message, not Cognito's 'Internal server error.'.
+			// the fixed message, not Cognito's 'Internal server error.'.
 			message: INTERNAL_ERROR_MESSAGE,
 			name: 'InternalErrorException',
 			retriable: true,
@@ -230,7 +230,7 @@ describe('AWS error mapping: Cognito exception → client-visible ApiError', () 
 		const e = await viaSignUp('socket hang up');
 		assert.ok(e instanceof ApiError);
 		assert.strictEqual(e.status, 500);
-		// Auth (L10): the generic message and the InternalError name (was 'Unknown error' with the default name).
+		// Auth: the generic message and the InternalError name (was 'Unknown error' with the default name).
 		assert.strictEqual(e.message, INTERNAL_ERROR_MESSAGE);
 		assert.strictEqual(e.name, AuthErrors.InternalError);
 	});
@@ -251,7 +251,7 @@ describe('AWS error mapping: Cognito exception → client-visible ApiError', () 
 		assert.deepStrictEqual(h.sent, []);
 	});
 
-	test('[admin.deleteUser] the mapping table driven through admin.* (the B5 vehicle, restored by D5c2)', async () => {
+	test('[admin.deleteUser] the mapping table driven through admin.* (the original vehicle, restored)', async () => {
 		for (const [name, status, retriable] of table) {
 			const e = await thrownBy(
 				'AdminDeleteUserCommand',
@@ -311,7 +311,7 @@ describe('AWS error mapping: no SDK metadata reaches the client', () => {
 			);
 		const view = wireView(e);
 		assert.strictEqual(view.code, 500);
-		// Auth (L10): the function role's IAM failure is reported as the retriable
+		// Auth: the function role's IAM failure is reported as the retriable
 		// InternalErrorException (AuthCognito: 'AccessDeniedException', not retriable).
 		assert.strictEqual(view.name, AuthErrors.InternalError);
 		assert.strictEqual(view.retriable, true);
@@ -407,7 +407,7 @@ describe('AWS error mapping: no ARN or account id can reach the client', () => {
 			run: (h) => h.auth.confirmResetPassword('a', '1', 'Password!1'),
 		},
 		{
-			// Auth: replaces B5's fetchUserAttributes path (D5c2) — the same
+			// Auth: replaces the ported fetchUserAttributes path — the same
 			// access-token-bearing shape.
 			label: 'updatePassword',
 			command: 'ChangePasswordCommand',
@@ -451,7 +451,7 @@ describe('AWS error mapping: no ARN or account id can reach the client', () => {
 				return { session: '' };
 			},
 		},
-		// D5c2: the account + admin paths B5 drove (were `todo` until the engine had them).
+		// The account + admin paths the ported tests drove (were `todo` until the engine had them).
 		{ label: 'admin.getUser', command: 'AdminGetUserCommand', run: (h) => h.auth.admin.getUser('bob') },
 		{
 			label: 'admin.scan',
@@ -461,7 +461,7 @@ describe('AWS error mapping: no ARN or account id can reach the client', () => {
 			},
 		},
 		{
-			// Auth: `fetchUserAttributes` is `getUserAttributes` (D3 rename).
+			// Auth: `fetchUserAttributes` is `getUserAttributes` (renamed).
 			label: 'fetchUserAttributes',
 			command: 'GetUserCommand',
 			run: (h, b) => b.request((c) => h.auth.getUserAttributes(c)),
@@ -515,8 +515,8 @@ describe('AWS error mapping: no ARN or account id can reach the client', () => {
 		}
 	});
 
-	test('ordinary Cognito messages are replaced by the name’s fixed message too (FX59, #678)', async () => {
-		// Before FX59 this pinned the opposite: only ARN / account-id text was
+	test('ordinary Cognito messages are replaced by the name’s fixed message too (#678)', async () => {
+		// Before the fixed messages, this pinned the opposite: only ARN / account-id text was
 		// withheld and Cognito's own message reached the client. `AuthCognito`
 		// 0.1.11 (#678) sends a BB-authored message per name; `Auth` matches it.
 		const { logger, entries } = captureLogger();
@@ -536,7 +536,7 @@ describe('AWS error mapping: no ARN or account id can reach the client', () => {
 
 describe('AWS createApi error surface (Authenticator state machine)', () => {
 	test('a non-retriable error returns a signed-out state carrying error + errorName (no throw)', async () => {
-		// Auth (R9): the public sign-up form masks an existing account by default,
+		// Auth: the public sign-up form masks an existing account by default,
 		// so this pins the opted-in behaviour; the default is the next test.
 		const h = makeAwsAuth({ emailPassword: { revealExistingUsers: true } });
 		h.on('SignUpCommand', () => {
@@ -551,7 +551,7 @@ describe('AWS createApi error surface (Authenticator state machine)', () => {
 		assert.ok(!JSON.stringify(s).includes('$metadata'));
 	});
 
-	test('by default an existing account on the sign-up form answers like a new sign-up (added for Auth: R9)', async () => {
+	test('by default an existing account on the sign-up form answers like a new sign-up (added for Auth)', async () => {
 		const existing = makeAwsAuth();
 		existing.on('SignUpCommand', () => {
 			throw cognitoError('UsernameExistsException', 'User already exists');
@@ -581,7 +581,7 @@ describe('AWS createApi error surface (Authenticator state machine)', () => {
 		assert.deepStrictEqual(s, {
 			state: 'signedOut',
 			actions: [],
-			// FX59 (#678): the fixed wrong-code message, not Cognito's text.
+			// the fixed wrong-code message, not Cognito's text.
 			error: WRONG_CODE_MESSAGE,
 			retriable: true,
 			errorName: 'CodeMismatchException',

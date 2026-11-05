@@ -6,7 +6,7 @@
  * local engine (through `mock-attribute-schema.ts`) and the Cognito engine
  * (`native-cognito.ts`, `native-cognito-admin.ts`,
  * `native-cognito-challenges.ts`), so both runtimes reject the same writes
- * with the same canonical error (FX43, R78).
+ * with the same canonical error.
  *
  * Why the Cognito engine checks these itself: an untyped client (JSON-RPC, a
  * native app) can send any JSON as a value, and the AWS JS SDK validates
@@ -35,7 +35,7 @@
  * (`MockAttributeSchema`), and on AWS Cognito knows the deployed one and
  * answers `InvalidParameterException`, which reaches the client as is.
  *
- * **Precedence** (FX44, R79). When one write breaks several rules, both
+ * **Precedence**. When one write breaks several rules, both
  * engines answer with the same error because they apply the rules in the same
  * order, each over the **whole write** before the next:
  *
@@ -53,7 +53,7 @@
  * comes before the work it authorizes. It is also the only order in which
  * the AWS engine's answer never depends on the schema, which it cannot see
  * (an external pool's least of all): the schema rules all give the same
- * error, and come last. Before FX44 each attribute was checked in turn, so a
+ * error, and come last. Before the shared precedence order, each attribute was checked in turn, so a
  * write naming an undeclared `custom:` attribute before `email_verified` was
  * 400 locally and 401 on AWS. Before any attribute rule, `signUp` checks that
  * the pool allows self-service sign-up at all ({@link signUpNotPermitted}).
@@ -99,7 +99,7 @@ function rejection(name: string, message: string): Error {
  * (`AllowAdminCreateUserOnly`, which the CDK layer sets for
  * `emailPassword: { selfSignUp: false }`; see `selfSignUpEnabled` in
  * `cdk/contract.ts`). The operation itself is refused, so both engines
- * throw this before any attribute rule (FX44, R79): "If you do not enable
+ * throw this before any attribute rule: "If you do not enable
  * self-registration, new users must be created by administrative API
  * actions" (developer guide, "Creating user accounts as administrator").
  *
@@ -129,7 +129,7 @@ export function immutableAttributeError(name: string): Error {
  * `undefined` value is skipped: it is absent on the wire.
  *
  * The rules apply in the module's precedence order, each over every
- * attribute before the next (FX44): a non-string value anywhere wins over a
+ * attribute before the next: a non-string value anywhere wins over a
  * value over 2,048 characters, which wins over a verified flag through the
  * app client (`signUp`, `update`; `adminCreateUser` may write them), which
  * wins over `sub`. Within one rule, the first attribute in input order is

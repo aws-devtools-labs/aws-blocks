@@ -78,9 +78,9 @@ type TotpActionName = 'setUpTotp' | 'verifyTotpSetup';
 type MfaPreferenceActionName = 'getMfaPreference' | 'updateMfaPreference';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// (1) One OIDC provider and no email + password (`store: 'builtin'`) — the
-//     reviewer's repro. The password actions are compile errors; signOut is
-//     the only action. `emailPassword: false` on the Cognito store is the same.
+// (1) One OIDC provider and no email + password (`store: 'builtin'`).
+//     Repro: the password actions are compile errors; signOut is the only
+//     action. `emailPassword: false` on the Cognito store is the same.
 // ─────────────────────────────────────────────────────────────────────────────
 async function oidcOnly() {
 	const auth = new Auth(scope, 'oidc-only', { store: 'builtin', providers: { okta } });

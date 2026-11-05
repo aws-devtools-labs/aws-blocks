@@ -105,12 +105,12 @@ export interface MockPasskeyRecord {
 	friendlyName?: string;
 	createdAt: number;
 	/**
-	 * `Auth` only (L22) — the registration credential's `response.transports`,
+	 * `Auth` only — the registration credential's `response.transports`,
 	 * which Cognito records as `AuthenticatorTransports`. Absent in
 	 * `AuthCognito`'s files.
 	 */
 	transports?: string[];
-	/** `Auth` only (L22) — the registration credential's `authenticatorAttachment` (Cognito's `AuthenticatorAttachment`). */
+	/** `Auth` only — the registration credential's `authenticatorAttachment` (Cognito's `AuthenticatorAttachment`). */
 	authenticatorAttachment?: string;
 }
 
@@ -445,7 +445,7 @@ const VERIFIED_FLAGS = ['email_verified', 'phone_number_verified'] as const;
  * number and `address` the OIDC address object `{ formatted }` (OIDC Core
  * §5.1; Cognito types these four claims itself — a pre-token-generation
  * trigger can't make any of them a complex object), so neither is a string
- * attribute either (FX31).
+ * attribute either.
  */
 function idTokenAttributeClaims(attributes: Record<string, string>): Record<string, unknown> {
 	const claims: Record<string, unknown> = { ...attributes };
@@ -582,10 +582,10 @@ export class MockStore {
 	 * `Username` parameter: the username itself first; otherwise, on a
 	 * username-attribute pool, the user whose `email` / `phone_number` it is
 	 * (verified or not); on an alias pool, the user whose **verified** `email` /
-	 * `phone_number` it is. Both runtimes keep that user unique (FX49: an alias
+	 * `phone_number` it is. Both runtimes keep that user unique (an alias
 	 * is verified on one account only, and a username-attribute pool's email /
 	 * phone is in use by one user only — {@link aliasHolders}); a state file
-	 * written before FX49 may still hold duplicates, and then the last match wins.
+	 * written before alias uniqueness was enforced may still hold duplicates, and then the last match wins.
 	 */
 	resolve(login: string): { username: string; user: MockUserRecord } | undefined {
 		const username = this.usernameOf(login);
@@ -618,14 +618,14 @@ export class MockStore {
 
 	/**
 	 * The users other than `except` who hold `value` as their `attribute` sign-in
-	 * attribute, as Cognito keeps it unique (FX49; developer guide, "Customizing
+	 * attribute, as Cognito keeps it unique (developer guide, "Customizing
 	 * sign-in attributes"): on a username-attribute pool, whoever has that
 	 * email / phone, verified or not ("The email address or phone number must be
 	 * unique … It doesn't have to be verified"); on an alias pool, whoever has
 	 * it **verified** ("the value that you provide can be in a verified state in
 	 * only one account"). Empty when nobody does, or when `attribute` is not a
 	 * sign-in attribute of the pool; more than one only in a state file written
-	 * before FX49.
+	 * before alias uniqueness was enforced.
 	 */
 	aliasHolders(attribute: ContactAttribute, value: string, except?: string): string[] {
 		const { usernameAttributes, aliasAttributes } = this.opts.signInMode;
@@ -756,7 +756,7 @@ export class MockStore {
 	 * flows); an expired one is `ExpiredCodeException` and is discarded.
 	 *
 	 * `beforeConsume` runs once the code has matched, before it is consumed: a
-	 * throw from it rejects the call and leaves the code valid (FX49: a
+	 * throw from it rejects the call and leaves the code valid (a
 	 * confirmation the code allows but the pool refuses, such as an alias
 	 * another user holds).
 	 */

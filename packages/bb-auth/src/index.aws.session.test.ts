@@ -6,11 +6,11 @@
  * Cognito client (no network): cookie → verify → record lookup → access-token
  * expiry → `REFRESH_TOKEN_AUTH` → (re-issue | delete + clear cookie).
  *
- * Ported from `bb-auth-cognito/src/index.aws.session.test.ts` (B5/B6). Where an
+ * Ported from `bb-auth-cognito/src/index.aws.session.test.ts`. Where an
  * expectation differs it says why, inline (`Auth:`). Renames: `fetchAuthSession`
- * → `getAuthSession` (D3). The "token-bearing call" these tests drive is
+ * → `getAuthSession`. The "token-bearing call" these tests drive is
  * `updatePassword` (`ChangePassword`), not `fetchUserAttributes`: attribute
- * reads are D5c2's, and `updatePassword` exercises the same refresh-then-use
+ * reads came later, and `updatePassword` exercises the same refresh-then-use
  * path. Harness: `test-support/aws-harness.ts`.
  */
 
@@ -74,7 +74,7 @@ describe('AWS session lookup (unexpired access token)', () => {
 		assert.deepStrictEqual(h.sessionWrites, []);
 	});
 
-	test('a disabled or deleted user is not seen until the access token expires (added for Auth: L14)', async () => {
+	test('a disabled or deleted user is not seen until the access token expires (added for Auth)', async () => {
 		// requireAuth makes no per-request liveness call: with an unexpired access
 		// token the session is served from the record whatever Cognito would say.
 		// The user is detected at the next refresh (see "a rejected refresh" below).
@@ -196,7 +196,7 @@ describe('AWS session refresh (expired access token)', () => {
 		assert.deepStrictEqual(h.sent, []);
 	});
 
-	test('a disabled or deleted user is signed out at the refresh (added for Auth: L14)', async () => {
+	test('a disabled or deleted user is signed out at the refresh (added for Auth)', async () => {
 		for (const err of [
 			cognitoError('NotAuthorizedException', 'User is disabled.'),
 			cognitoError('UserNotFoundException', 'User does not exist.'),
@@ -216,9 +216,9 @@ describe('AWS session refresh (expired access token)', () => {
 		}
 	});
 
-	test('a transient refresh failure keeps the session and is a retriable 5xx (added for Auth: L15)', async () => {
+	test('a transient refresh failure keeps the session and is a retriable 5xx (added for Auth)', async () => {
 		// Auth: AuthCognito signed the user out on ANY refresh failure; Auth keeps
-		// the session for a Cognito blip (throttling, 5xx, network) — L15.
+		// the session for a Cognito blip (throttling, 5xx, network).
 		for (const err of [
 			cognitoError('TooManyRequestsException', 'Rate exceeded'),
 			cognitoError('InternalErrorException', 'Internal server error.', 500),
@@ -261,7 +261,7 @@ describe('AWS session refresh (expired access token)', () => {
 
 	test('a session whose access token does not decode is signed out', async () => {
 		// Auth: AuthCognito treated an unreadable access token as "expired" and
-		// refreshed it. Auth's row parser (sessions.ts, D5a) rejects a pool row
+		// refreshed it. Auth's row parser (sessions.ts) rejects a pool row
 		// whose ID or access token does not decode as one it did not write:
 		// signed out, cookie cleared, no Cognito call. Cognito never issues a
 		// non-JWT access token, so only a corrupted row can reach this.

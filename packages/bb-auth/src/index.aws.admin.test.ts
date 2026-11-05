@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * AWS runtime — the `auth.admin` engine (D5c2) beyond the command shapes B5
+ * AWS runtime — the `auth.admin` engine beyond the command shapes the ported
  * pinned (`index.aws.groups.test.ts`): every lifecycle command's exact input,
  * pagination of `listUsersInGroup` / `scan`, `getUser` → `null` (never
  * `UserNotFoundException`), group narrowing, `revokeUserSessions`' session-row
@@ -92,7 +92,7 @@ describe('AWS admin — lifecycle command shapes', () => {
 		const e = await rejection(h.auth.admin.createUser('bob'));
 		assert.deepStrictEqual(wireView(e), {
 			code: 409,
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			message: clientMessageFor(AuthErrors.UserAlreadyExists),
 			name: AuthErrors.UserAlreadyExists,
 			retriable: false,
@@ -142,7 +142,7 @@ describe('AWS admin — getUser', () => {
 		assert.ok(e instanceof ApiError);
 		assert.deepStrictEqual(wireView(e), {
 			code: 429,
-			// FX59 (#678): the name's fixed message; Cognito's text is logged server-side.
+			// the name's fixed message; Cognito's text is logged server-side.
 			message: clientMessageFor(AuthErrors.TooManyRequests),
 			name: AuthErrors.TooManyRequests,
 			retriable: false,
@@ -252,7 +252,7 @@ describe('AWS admin — scan filter is checked once and then frozen', () => {
 });
 
 describe('AWS admin — revokeUserSessions', () => {
-	test('revokes upstream, then deletes only that user’s session rows (immediate, L24)', async () => {
+	test('revokes upstream, then deletes only that user’s session rows (immediate)', async () => {
 		const h = makeAwsAuth({ admin: {} });
 		const alice = new Browser();
 		const carol = new Browser();

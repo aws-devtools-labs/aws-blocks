@@ -632,7 +632,7 @@ async function signIdToken(
  * A JWT access token, so `/userinfo` (and a bearer verifier) can validate it.
  * Carries the user's `extra` claims too (e.g. `groups`), so `requireRole` with
  * an `allowBearerAuth` bearer token sees the same `groupsClaim` locally that an
- * IdP configured to put groups in its access tokens sends (D6c).
+ * IdP configured to put groups in its access tokens sends.
  */
 async function signAccessToken(
 	keys: KeyMaterial,

@@ -5,7 +5,7 @@
  * The `AuthCognito` → `Auth` configuration pairs the property-level snapshot
  * compares (test-only). The `AuthCognito` side was synthesized from the real
  * block and frozen into `__fixtures__/authcognito-templates.json` before the
- * package was deleted (F1b); `property-snapshot.cdk.test.ts` asserts each
+ * package was deleted; `property-snapshot.cdk.test.ts` asserts each
  * fixture entry was captured from exactly the `cognito` string below.
  */
 
@@ -22,7 +22,7 @@ export const PAIRS: Record<string, Pair> = {
 		cognito: "new AuthCognito(stack, 'auth')",
 		auth: "new Auth(stack, 'auth')",
 	},
-	// B1's `configured` variant.
+	// The fixture's `configured` variant.
 	configured: {
 		cognito:
 			"new AuthCognito(stack, 'auth', { groups: ['admins', { name: 'readers', description: 'Read-only', precedence: 2 }], selfSignUp: false, signInWith: 'email', mfa: 'optional', mfaTypes: ['TOTP'], removalPolicy: 'retain' })",
@@ -54,7 +54,7 @@ export const PAIRS: Record<string, Pair> = {
 		cognito: "new AuthCognito(stack, 'auth', { admin: {}, featurePlan: 'lite', selfSignUp: true })",
 		auth: "new Auth(stack, 'auth', { admin: {}, featurePlan: 'lite', emailPassword: { selfSignUp: true } })",
 	},
-	// L22 (D5c2): the pool-wide first-factor hint, restored as `users.preferredChallenge`.
+	// the pool-wide first-factor hint, restored as `users.preferredChallenge`.
 	// The OTP hints also enable that first factor in `AllowedFirstAuthFactors`.
 	// 'EMAIL_OTP' needs an SES sender, so `Auth` accepts it only on a wrapped pool
 	// (`AuthCognito` also synthesized it on a created one — a pool Cognito cannot

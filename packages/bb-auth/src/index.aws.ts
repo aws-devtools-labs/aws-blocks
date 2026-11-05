@@ -6,11 +6,11 @@
  *
  * `Auth` is the real engine-agnostic `AuthBase` (sessions,
  * cookies, guards, the `createApi()` state machine) over the Cognito SDK
- * user-pool engine (`engines/native-cognito.ts`: the sign-in core from D5c,
- * the account + admin surface from D5c2), and the direct
- * federation engine (D6a: OIDC and bare OAuth 2.0 providers, HTTPS only).
+ * user-pool engine (`engines/native-cognito.ts`: the sign-in core and
+ * the account + admin surface), and the direct
+ * federation engine (OIDC and bare OAuth 2.0 providers, HTTPS only).
  * Hosted-UI providers (a `'cognito'` block's social, SAML and OIDC `providers`) sign in through
- * Cognito managed login (`engines/federation-hosted-ui.ts`, D6b); a `stubIdp()`
+ * Cognito managed login (`engines/federation-hosted-ui.ts`); a `stubIdp()`
  * provider answers 501 outside a sandbox.
  *
  * A `stubIdp()` provider runs in local development and sandbox deployments
@@ -93,7 +93,7 @@ function deployedStubIdp(
  * — the same construct id, and so the same SSM parameter, `AuthCognito` uses —
  * so existing sessions keep verifying after the switch. The native engine
  * drives Cognito through the SDK; it is built only when the configuration has a
- * user pool (Q6), and creates its SDK client lazily.
+ * user pool, and creates its SDK client lazily.
  */
 const AWS_LAYER: AuthLayer = {
 	sessionSecret(auth) {
@@ -131,9 +131,9 @@ const AWS_LAYER: AuthLayer = {
 	routes: (host) => mountFederationRoutes(host),
 	// `allowBearerAuth`: Cognito-signed access tokens only (never `alg: none`).
 	poolBearer: (host) => new CognitoAccessTokenVerifier(host),
-	// Q10: when `validateUser` is set on a pool this block creates, the CDK layer
+	// When `validateUser` is set on a pool this block creates, the CDK layer
 	// points the pool's PreSignUp trigger at this Lambda; core routes the event by
-	// user pool id. R2-1: registered only by the block the CDK layer wired the
+	// user pool id. Registered only by the block the CDK layer wired the
 	// trigger for — it says so with the `preSignUpTriggerConfigKey` flag — never
 	// inferred here from the pool id alone. Otherwise a second `Auth` wrapping the
 	// same pool (`userPool: Auth.fromExisting(…)`, e.g. for `admin`) would claim

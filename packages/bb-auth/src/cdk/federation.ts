@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Hosted-UI federation infrastructure for `Auth` (D3b): the `UserPoolDomain`,
+ * Hosted-UI federation infrastructure for `Auth`: the `UserPoolDomain`,
  * a separate hosted-UI app client, and one identity-provider registration per
  * social / SAML / `federateVia: 'cognito'` provider.
  *
  * Provisioned **only** when at least one Cognito-federated provider is
- * configured; otherwise nothing here runs, and the template is exactly D3a's.
+ * configured; otherwise nothing here runs, and the template is exactly the one without federation.
  *
  * New child construct ids (all under the block, none of them frozen-contract
  * ids, all stable from the first deploy that adds them):
@@ -429,7 +429,7 @@ function registrationServiceToken(
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		}),
 	});
-	// Its roles may not recreate the owned log groups after `destroy()` (L80).
+	// Its roles may not recreate the owned log groups after `destroy()`.
 	keepProviderLogGroupsOwned(fn, provider);
 	return provider.serviceToken;
 }

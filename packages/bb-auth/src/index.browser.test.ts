@@ -16,7 +16,7 @@
  *   browser entries failed exactly like that, on `ApiNamespace`).
  * - Checks the browser entry is a named-export superset of the default entry
  *   and that every runtime method throws a "server-side" error.
- * - Requirement R15: nothing in `bb-auth`'s source broadcasts auth changes
+ * - Nothing in `bb-auth`'s source broadcasts auth changes
  *   itself; `submitAuthAction` in the shared UI is the only notifier.
  */
 
@@ -232,7 +232,7 @@ describe('Auth browser entry', () => {
 	});
 });
 
-describe('R15: no second auth bridge in bb-auth', () => {
+describe('no second auth bridge in bb-auth', () => {
 	test('no bb-auth source calls broadcastAuthChange — submitAuthAction is the only notifier', () => {
 		const srcDir = join(packageRoot, 'src');
 		const offenders: string[] = [];

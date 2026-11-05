@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Bearer-token authentication for the guards (`allowBearerAuth`, task D6c).
+ * Bearer-token authentication for the guards (`allowBearerAuth`).
  *
  * The native SDKs (Dart's `BlocksClient` with an `AuthProvider`, or app code
  * on Swift / Kotlin) send `Authorization: Bearer <access token>` instead of a
@@ -16,7 +16,7 @@
  *   returns as `accessToken` and `/exchange/refresh` renews — verified by the
  *   provider's engine against the IdP's JWKS (issuer, `aud` = client id,
  *   expiry, asymmetric algorithms only): {@link FederationEngine.verifyBearer}.
- *   Identity is `` `${iss}:${sub}` `` (Q1); groups come from `groupsClaim`.
+ *   Identity is `` `${iss}:${sub}` ``; groups come from `groupsClaim`.
  * - **Pool users** (email + password, or federated through Cognito): the
  *   Cognito access token, verified by the entry's {@link PoolBearerVerifier}
  *   (AWS: `aws-jwt-verify`, `token_use: access`, the native or the hosted-UI

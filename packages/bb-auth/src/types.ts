@@ -1344,7 +1344,7 @@ export interface UserPoolOptions {
 	 * choice). The per-call override on `auth.signIn` takes precedence.
 	 *
 	 * @remarks Carried over from `AuthCognito`'s top-level `preferredChallenge`
-	 * (D3 rename: it sits next to `authFlow`). As there, `'EMAIL_OTP'` /
+	 * (renamed: it sits next to `authFlow`). As there, `'EMAIL_OTP'` /
 	 * `'SMS_OTP'` also enable that factor in the pool's `USER_AUTH`
 	 * `AllowedFirstAuthFactors`, alongside the factors `mfa.types` lists.
 	 * Cognito sends the `'EMAIL_OTP'` code only through Amazon SES, so under
@@ -3100,12 +3100,12 @@ export interface ResetPasswordResult {
  * parameter; methods marked *federated* end in a {@link FederationGate}. On a
  * configuration where the mode is off, calling them is a compile error.
  *
- * This is the surface tasks D1/D2 pin, plus `confirmSignIn` / `autoSignIn`
- * (D5a, which the sign-in UI's state machine needs), plus the native account
- * surface carried over from `AuthCognito` (D5b): user attributes,
+ * This is the gated surface, plus `confirmSignIn` / `autoSignIn`
+ * (which the sign-in UI's state machine needs), plus the native account
+ * surface carried over from `AuthCognito`: user attributes,
  * `deleteUser`, MFA ({@link MfaGate}), devices, passkeys ({@link PasskeyGate})
  * and the opt-in `auth.admin` handle ({@link AdminGetterOf}). The federated
- * exchange/refresh methods land with D6, on the same gates.
+ * exchange/refresh methods use the same gates.
  *
  * Renamed from `AuthCognito` (G14 — avoid `fetch`): `fetchAuthSession` →
  * `getAuthSession`, `fetchUserAttributes` → `getUserAttributes`,
@@ -3547,7 +3547,7 @@ export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAu
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Browser redirect client (`@aws-blocks/bb-auth/browser-client`, L69)
+// Browser redirect client (`@aws-blocks/bb-auth/browser-client`)
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**

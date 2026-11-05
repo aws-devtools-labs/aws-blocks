@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Layer 1 of the immutability guard (decision Q5): a **committed baseline
+ * Layer 1 of the immutability guard: a **committed baseline
  * file** per block, diffed at synth.
  *
  * Where it lives: `<app>/aws-blocks/baselines/<stack>/<fullId>.auth-pool.json`
@@ -27,7 +27,7 @@
  * — no block reads it. While it records an owned pool it carries a
  * `removalGuard`, and `@aws-blocks/core`'s stack-level check (on every
  * `BlocksStack` / `BlocksBackend`) fails synth for it; that check deletes it
- * on `BLOCKS_AUTH_REBASELINE=<that fullId>` (task D4b).
+ * on `BLOCKS_AUTH_REBASELINE=<that fullId>`.
  *
  * Node `fs` only — runs inside the app's synth process.
  *
@@ -64,7 +64,7 @@ export const BASELINE_WRITE_VERSION = 1;
 
 /** What the current synth provisions for one block. */
 export interface PoolState {
-	/** The block creates (owns) an `AWS::Cognito::UserPool`. `false` for a pool-less (Q6) or wrapped (`userPool`) config. */
+	/** The block creates (owns) an `AWS::Cognito::UserPool`. `false` for a pool-less or wrapped (`userPool`) config. */
 	ownsPool: boolean;
 	/** The four properties; `null` exactly when `ownsPool` is `false`. */
 	pool: PoolImmutables | null;
@@ -269,7 +269,7 @@ export function checkBaseline(input: {
 	/**
 	 * `false` holds back writing a baseline that does not exist yet (status
 	 * `deferred`): the stack's synth fails on an orphaned baseline, and after a
-	 * rename this new file would be the renamed block's (task D4b).
+	 * rename this new file would be the renamed block's.
 	 * @default true
 	 */
 	mayCreate?: boolean;

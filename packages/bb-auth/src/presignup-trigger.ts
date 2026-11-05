@@ -3,7 +3,7 @@
 
 /**
  * `validateUser` on the sign-up path, both in-process and as a Cognito
- * PreSignUp trigger (decision Q10).
+ * PreSignUp trigger.
  *
  * **Why a trigger.** `auth.signUp()` / `auth.admin.createUser()` run
  * `validateUser` in-process, but Cognito also creates pool users that never
@@ -14,7 +14,7 @@
  * pool's PreSignUp trigger to the app's shared backend Lambda; core's handler
  * routes the event here by user pool id
  * (`EventSourceMapping.COGNITO_USER_POOL`). Only the block the trigger was
- * wired for registers that route (the CDK layer flags it; R2-1), so another
+ * wired for registers that route (the CDK layer flags it), so another
  * `Auth` wrapping the same pool cannot take the trigger over.
  *
  * **Order and idempotency.** On the in-process path `validateUser` runs
@@ -210,7 +210,7 @@ export function candidateFromTrigger(options: ResolvedAuthOptions, event: PreSig
  * The marker's HMAC key: HKDF-derived from the session secret with its own
  * `info` label ({@link MARKER_KEY_INFO}), so a marker and a session cookie —
  * both HMAC-SHA256 tags — are made under unrelated keys, not merely over
- * differently formatted messages (R2-5).
+ * differently formatted messages.
  *
  * Markers minted before this key was introduced were HMAC-ed with the raw
  * secret and no longer verify. That is safe: a marker lives five minutes, and

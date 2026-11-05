@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The client-visible error policy (L10, B6): vocabulary-only names, no AWS
+ * The client-visible error policy: vocabulary-only names, no AWS
  * identifiers, no SDK metadata, a non-enumerable `cause`, enumeration masking.
  */
 
@@ -70,7 +70,7 @@ describe('toAuthApiError', () => {
 		});
 	}
 
-	test('L10: a name outside AuthErrors becomes InternalErrorException, 500, retriable; the detail is logged only', () => {
+	test('a name outside AuthErrors becomes InternalErrorException, 500, retriable; the detail is logged only', () => {
 		const { logger, entries } = captureLogger();
 		for (const raw of [
 			sdkError('CodeDeliveryFailureException', 'Unable to deliver to +15555550100'),
@@ -115,7 +115,7 @@ describe('toAuthApiError', () => {
 		for (const message of [`Role ${ARN} cannot do that`, 'Account 123456789012 is over its limit']) {
 			const { logger, entries } = captureLogger();
 			const e = toAuthApiError(sdkError('LimitExceededException', message), logger);
-			// FX59: every engine error now gets its name's fixed message (#678),
+			// Every engine error now gets its name's fixed message (#678),
 			// not only the ones that name AWS resources.
 			assert.strictEqual(e.message, clientMessageFor(AuthErrors.LimitExceeded));
 			assert.strictEqual(e.name, AuthErrors.LimitExceeded);
@@ -179,7 +179,7 @@ describe('toAuthApiError', () => {
 	});
 });
 
-describe('wire-safe messages: Cognito text never reaches a client (FX59, ports bb-auth-cognito #678)', () => {
+describe('wire-safe messages: Cognito text never reaches a client (ports bb-auth-cognito #678)', () => {
 	/** Cognito-shaped text that must stay server-side: an ARN, an account id, an endpoint, the user's login. */
 	const RAW =
 		'User: arn:aws:sts::123456789012:assumed-role/app-role/session is not authorized at ' +
@@ -228,7 +228,7 @@ describe('wire-safe messages: Cognito text never reaches a client (FX59, ports b
 		assert.ok(!JSON.stringify(e).includes('req-0000-1111'));
 	});
 
-	test('the raw text is logged, the login redacted (B6); nothing is logged when nothing was withheld', () => {
+	test('the raw text is logged, the login redacted; nothing is logged when nothing was withheld', () => {
 		const { logger, entries } = captureLogger();
 		toAuthApiError(
 			sdkError(AuthErrors.InvalidParameter, "1 validation error: username 'Alice@Example.com'"),
@@ -249,7 +249,7 @@ describe('wire-safe messages: Cognito text never reaches a client (FX59, ports b
 		assert.deepStrictEqual(quiet.entries, []);
 	});
 
-	test('FX60: the AWS-access and out-of-vocabulary log lines redact the login too', () => {
+	test('the AWS-access and out-of-vocabulary log lines redact the login too', () => {
 		const login = 'ada@example.com';
 		// An unmapped name can quote the delivery destination; an access error echoes
 		// the call it refused, which names the user it was made for.
@@ -278,7 +278,7 @@ describe('wire-safe messages: Cognito text never reaches a client (FX59, ports b
 		assert.strictEqual(entries[0]?.context?.message, 'Internal server error.');
 	});
 
-	test('a wrong code reads the same whether Cognito sent it or the enumeration masking did (FX3)', () => {
+	test('a wrong code reads the same whether Cognito sent it or the enumeration masking did', () => {
 		const real = toAuthApiError(
 			sdkError(AuthErrors.CodeMismatch, 'Invalid code received for user'),
 			captureLogger().logger,
@@ -328,7 +328,7 @@ describe('status and retriable tables', () => {
 	});
 });
 
-describe("weak password: the message describes the block's own policy (L71)", () => {
+describe("weak password: the message describes the block's own policy", () => {
 	test("the default policy is Cognito's: 8 characters, all four character classes", () => {
 		assert.strictEqual(
 			passwordPolicyMessage(undefined),

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * RENAMING OR REMOVING AN `Auth` BLOCK (task D4b, later-discussion L16).
+ * RENAMING OR REMOVING AN `Auth` BLOCK.
  *
- * D4's baseline is keyed by the block's `fullId` and checked by the block that
+ * The guard's baseline is keyed by the block's `fullId` and checked by the block that
  * owns it. Rename the block (`'auth'` → `'users'`) or delete it, and nothing
  * reads the old baseline: CloudFormation deletes the pool and every user, with
  * no warning — and the deploy-time guard is removed with the last pool.

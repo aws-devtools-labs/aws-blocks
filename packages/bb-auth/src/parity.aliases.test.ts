@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock ↔ AWS parity for **alias uniqueness** (FX49, L36(a)): two users with the
+ * Mock ↔ AWS parity for **alias uniqueness**: two users with the
  * same email / phone, driven through the same `Auth` API on the local engine
  * (`./index.mock.js`) and on the AWS entry (`./index.aws.js`, offline through
  * `test-support/aws-harness.ts`). What a caller observes — success, or the
@@ -11,7 +11,7 @@
  *
  * On the AWS side the harness answers as {@link cognitoPool}, a stateful
  * stand-in for one Cognito user pool that implements exactly the documented
- * rules (quotes and URLs on each). Before FX49 the local pool enforced none of
+ * rules (quotes and URLs on each). Before alias uniqueness was enforced, the local pool enforced none of
  * them: any number of local users could verify one email, and sign-in with it
  * picked the last.
  */
@@ -104,7 +104,7 @@ interface PoolUser {
  * already in use, it becomes the new username" — the exception for one in use
  * is not named; `UpdateUserAttributes` lists `AliasExistsException` ("an
  * account with this email address or phone already exists"), which the
- * stand-in takes (inferred: to confirm in a sandbox, L2).
+ * stand-in takes (inferred: to confirm in a sandbox).
  */
 function cognitoPool(h: Pick<AwsAuthHarness<CognitoAuthOptions>, 'on' | 'idp'>, signInWith: SignInWith) {
 	const contacts: Contact[] = [];

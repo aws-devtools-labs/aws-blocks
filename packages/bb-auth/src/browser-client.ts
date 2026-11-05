@@ -3,8 +3,7 @@
 
 /**
  * `@aws-blocks/bb-auth/browser-client` — redirect sign-in for a web frontend
- * served from a **different origin** than the `Auth` block's API (decision
- * L69). It replaces `AuthOIDC`'s `getClient()` browser PKCE client.
+ * served from a **different origin** than the `Auth` block's API. It replaces `AuthOIDC`'s `getClient()` browser PKCE client.
  *
  * It speaks the block's existing routes, so there is no new server protocol
  * for sign-in. It is the browser twin of the native SDKs' relay sign-in:

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Layer 2 of the immutability guard (decision Q5): the deploy-time
+ * Layer 2 of the immutability guard: the deploy-time
  * custom-resource handler (`onEvent` of a `cr.Provider`).
  *
  * Every user pool the stack's `Auth` blocks own **depends on** this custom

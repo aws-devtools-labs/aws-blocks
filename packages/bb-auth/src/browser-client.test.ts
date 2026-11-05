@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `@aws-blocks/bb-auth/browser-client` (L69) — a web frontend on another
+ * `@aws-blocks/bb-auth/browser-client` — a web frontend on another
  * origin signs in through the block's existing relay transport, then reads
  * `GET <base>/session` and signs out with `POST <base>/signout?format=json`.
  *

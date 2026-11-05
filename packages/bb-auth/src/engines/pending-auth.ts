@@ -10,7 +10,7 @@
  * `redirect_uri`, and where to land afterwards. **Every engine writes it with
  * {@link writePendingAuth}**, because the callback route reads `provider` from
  * it to pick the engine that completes the sign-in — one callback URL serves
- * every provider. A hosted-UI engine (D6b) plugs in by doing the same.
+ * every provider. A hosted-UI engine plugs in by doing the same.
  *
  * Its presence is also how the callback dispatcher tells a server-initiated
  * callback (cookie present) from a native relay (no cookie; the `state` is a
@@ -128,7 +128,7 @@ export function writePendingAuth(
  * the same, public, length.)
  *
  * Every engine's server-initiated callback checks `state` with this, before
- * it looks at anything else the IdP returned (R2-2).
+ * it looks at anything else the IdP returned.
  */
 export function pendingStateMatches(returned: string | null | undefined, pending: PendingAuth): boolean {
 	if (typeof returned !== 'string' || returned.length === 0 || pending.state.length === 0) return false;

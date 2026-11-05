@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * AWS runtime — the core flows B5 did not cover, against a spied Cognito
+ * AWS runtime — the core flows the ported tests did not cover, against a spied Cognito
  * client (no network): every sign-in challenge the engine maps, the MFA-setup
  * and USER_AUTH multi-step ceremonies, passkey sign-in and management,
  * password reset / change command shapes, and the engine's construction
@@ -773,10 +773,10 @@ describe('AWS engine construction contract', () => {
 		assert.ok(Array.isArray(chain) && chain.length > 0 && chain[0][0] === 'aws-blocks');
 	});
 
-	test('a pool-less configuration (Q6) builds no native engine and reads no pool config key', () => {
+	test('a pool-less configuration builds no native engine and reads no pool config key', () => {
 		const id = fresh();
-		const root = { id: 'q6' };
-		const keys = cognitoConfigKeys(`q6-${id}`);
+		const root = { id: 'poolless' };
+		const keys = cognitoConfigKeys(`poolless-${id}`);
 		// Even if keys were (wrongly) present, nothing reads them.
 		process.env[keys.USER_POOL_ID] = TEST_POOL_ID;
 		process.env[keys.CLIENT_ID] = TEST_CLIENT_ID;
@@ -785,7 +785,7 @@ describe('AWS engine construction contract', () => {
 				store: 'builtin',
 				providers: { okta: { type: 'oidc', issuer: 'https://example.okta.com', clientId: 'okta-client' } },
 			});
-			assert.strictEqual(auth.fullId, `q6-${id}`);
+			assert.strictEqual(auth.fullId, `poolless-${id}`);
 			assert.strictEqual(Reflect.get(auth, 'native'), undefined);
 			assert.deepStrictEqual(getSdkIdentifiers(auth), {}, 'no Cognito identifiers registered');
 		} finally {

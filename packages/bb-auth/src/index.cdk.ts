@@ -14,10 +14,10 @@
  * fixture, and `property-snapshot.cdk.test.ts` compares the full templates.
  *
  * Two deliberate differences from `AuthCognito`:
- * - **Q4:** the pool's removal policy and deletion protection follow the
+ * - **Durability:** the pool's removal policy and deletion protection follow the
  *   stack defaults when the per-block option is unset (`AuthCognito`'s pool is
  *   `DESTROY` even under `BlocksPresets.production`).
- * - **Q6:** a `store: 'builtin'` configuration (no email + password, and only
+ * - **No pool when none is needed:** a `store: 'builtin'` configuration (no email + password, and only
  *   backend-verified OIDC, OAuth 2.0 or stub providers) synthesizes no Cognito
  *   resources at all.
  *
@@ -124,7 +124,7 @@ export type * from './types.js';
  * Grants the shared execution role the client-facing `cognito-idp:*` actions on
  * the pool (and the `Admin*`/`List*` set only when `admin` is set).
  *
- * Only when `validateUser` is set and the block owns its pool (decision Q10):
+ * Only when `validateUser` is set and the block owns its pool:
  * - The pool's Cognito **PreSignUp trigger** (`LambdaConfig.PreSignUp`) → the
  *   app's shared backend Lambda, which runs `validateUser`.
  * - `AWS::Lambda::Permission` (`pre-sign-up-permission`): `cognito-idp.amazonaws.com`
@@ -134,7 +134,7 @@ export type * from './types.js';
  *   See `src/cdk/pre-sign-up.ts`.
  */
 export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlockScope {
-	/** The user pool — provisioned, or wrapped via `userPool`. `undefined` when the configuration needs no pool (Q6). */
+	/** The user pool — provisioned, or wrapped via `userPool`. `undefined` when the configuration needs no pool. */
 	public readonly userPool?: cognito.IUserPool;
 	/** The native app client (`client`). `undefined` exactly when {@link Auth.userPool} is. */
 	public readonly userPoolClient?: cognito.IUserPoolClient;
@@ -172,7 +172,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		const preferredChallenge = opts.users?.preferredChallenge;
 		const emailPassword = emailPasswordEnabled(opts);
 		const emailPasswordOpts = typeof opts.emailPassword === 'object' ? opts.emailPassword : undefined;
-		// Q10: `validateUser` on a pool this block creates gets a PreSignUp trigger.
+		// `validateUser` on a pool this block creates gets a PreSignUp trigger.
 		const preSignUpTrigger = ownsPreSignUpTrigger(opts);
 
 		validateOptions(opts, {
@@ -191,7 +191,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			assertRedirectPaths(opts);
 			claimAuthRoutes(this, id, opts);
 		}
-		// The SES sender (L75): only for a pool this block creates, and well-formed.
+		// The SES sender: only for a pool this block creates, and well-formed.
 		assertEmailSender(this.fullId, opts, needsPool);
 		// Extra bearer clients: literal Cognito client ids. (A pool-less `store: 'builtin'` block cannot set
 		// them: assertKnownAuthOptions refuses `allowBearerAuth` as an object there.)
@@ -199,7 +199,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 
 		// Cognito caps UserPool names at 128 chars. Fail loudly at synth rather
 		// than truncating (two long fullIds differing past 128 would collide).
-		// Checked even when no pool is provisioned (Q6), so enabling a pool-backed
+		// Checked even when no pool is provisioned, so enabling a pool-backed
 		// sign-in method later never forces a rename of the block — which would
 		// replace `sessions` and sign everyone out.
 		if (this.fullId.length > 128) {
@@ -209,14 +209,14 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		}
 
 		if (needsPool) {
-			// Email MFA on a BB-created pool needs an SES sender (`email`, L75).
+			// Email MFA on a BB-created pool needs an SES sender (`email`).
 			// Only trips when EMAIL would actually be advertised.
 			if (mfa.mode !== 'off' && mfa.types.includes('EMAIL') && !opts.userPool && !opts.email) {
 				throw new Error(
 					"Auth: Email MFA on a BB-created pool requires an SES sender: set `email: { fromAddress }` to a verified SES identity. Alternatives: (a) omit 'EMAIL' from `mfa.types` and use TOTP / SMS, or (b) bring a pool you configure yourself via `Auth.fromExisting(userPoolId)`.",
 				);
 			}
-			// The same rule for the passwordless email one-time code (L22): Cognito
+			// The same rule for the passwordless email one-time code: Cognito
 			// sends a USER_AUTH `EMAIL_OTP` first factor only through SES. Only trips
 			// when the factor would actually be enabled (USER_AUTH on a created pool).
 			if (preferredChallenge === 'EMAIL_OTP' && authFlow === 'USER_AUTH' && !opts.userPool && !opts.email) {
@@ -256,12 +256,12 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 							: undefined,
 						// Pinned explicitly — see `mapFeaturePlan`.
 						featurePlan: mapFeaturePlan(opts.featurePlan),
-						// L75: SES sender. Unset emits no `EmailConfiguration` (Cognito's
+						// SES sender. Unset emits no `EmailConfiguration` (Cognito's
 						// default sender), so the zero-config pool stays `AuthCognito`'s.
 						email: mapEmailSender(opts.email, cdk.Stack.of(this).region),
 						// USER_AUTH first factors. As in `AuthCognito`, the OTP factors
 						// follow the second factors the caller *listed* (not the defaulted
-						// `mfa.types`), plus the pool's `users.preferredChallenge` (L22,
+						// `mfa.types`), plus the pool's `users.preferredChallenge` (
 						// `AuthCognito`'s `preferredChallenge`). Unset, the template is
 						// byte-identical to `AuthCognito`'s.
 						signInPolicy:
@@ -288,9 +288,9 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 											: cognito.PasskeyUserVerification.PREFERRED,
 								}
 							: {}),
-						// Q4: follow the stack defaults when unset (AuthCognito: DESTROY).
+						// Follow the stack defaults when unset (AuthCognito: DESTROY).
 						removalPolicy: resolveRemovalPolicy(opts.removalPolicy, this.defaults.removalPolicy),
-						// L20: emitted only when it resolves to ACTIVE. Unset is already
+						// Emitted only when it resolves to ACTIVE. Unset is already
 						// inactive (Cognito's default), and it is what `AuthCognito` emits, so
 						// writing `INACTIVE` would turn every sandbox upgrade into a no-op
 						// `UpdateUserPool` (and its rollback risk). Dropping it from a pool
@@ -299,7 +299,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					});
 			this.userPool = pool;
 
-			// ── 1b. validateUser's PreSignUp trigger (Q10) ────────────────────
+			// ── 1b. validateUser's PreSignUp trigger ────────────────────
 			// Only when the option is set and the pool is ours; otherwise nothing
 			// is added and the template is unchanged. See src/cdk/pre-sign-up.ts.
 			if (preSignUpTrigger) {
@@ -332,7 +332,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 				},
 			});
 
-			// ── D3b: hosted-UI federation ────────────────────────────────────
+			// ── Hosted-UI federation ────────────────────────────────────────
 			// Only when a provider federates through Cognito (social, SAML,
 			// `federateVia: 'cognito'` OIDC); otherwise nothing is added and the
 			// template is exactly the email + password one. Adds a `UserPoolDomain`,
@@ -359,7 +359,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			}
 		}
 
-		// ── Immutability guard (Q5) — see src/cdk/immutability-guard.ts ─────
+		// ── Immutability guard — see src/cdk/immutability-guard.ts ─────
 		// Refuses, at synth and again at deploy, a change Cognito cannot apply to
 		// the existing pool (sign-in attributes, case sensitivity, required or
 		// existing custom attributes) and, at synth, a change that drops the pool.
@@ -385,7 +385,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		}
 		if (deployedStubs.length > 0) {
 			// Without the gateway URL the deployed issuer would fall back to the
-			// request `Host` (FX10): refuse the synth instead. The shared gateway
+			// request `Host`: refuse the synth instead. The shared gateway
 			// is built by `create()` after this constructor, so the URL is a lazy
 			// token and the refusal happens when synthesis resolves it.
 			const stubIds = deployedStubs.map((s) => s.id).join(', providers.');
@@ -423,7 +423,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			registerConfig(this, keys.USER_POOL_ID, this.userPool.userPoolId);
 			registerConfig(this, keys.CLIENT_ID, this.userPoolClient.userPoolClientId);
 			registerConfig(this, keys.REGION, cdk.Stack.of(this).region);
-			// R2-1: tell the runtime this block owns the trigger it just wired, so it —
+			// Tell the runtime this block owns the trigger it just wired, so it —
 			// and no other block on the same pool (a second `Auth` wrapping it with
 			// `userPool`) — registers the trigger's Lambda event handler. Only with the
 			// trigger: without `validateUser` the config is unchanged.
@@ -438,7 +438,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			this.grantCognitoPermissions(this.userPool.userPoolArn, opts, preSignUpTrigger);
 		}
 
-		// Q10: a wrapped pool's triggers are its owner's. `validateUser` still runs
+		// A wrapped pool's triggers are its owner's. `validateUser` still runs
 		// in-process (sign-up, admin-created users, every sign-in), but a sign-up
 		// made directly against Cognito, or a federated first sign-in, is not seen.
 		if (opts.userPool && opts.validateUser !== undefined) {
@@ -452,7 +452,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 			);
 		}
 
-		// Q4: an unset `removalPolicy` on a pool we own is legal (the stack default
+		// An unset `removalPolicy` on a pool we own is legal (the stack default
 		// applies) but deserves a nudge: the pool holds every user.
 		if (this.userPool && !opts.userPool && opts.removalPolicy === undefined) {
 			const resolved = this.defaults.removalPolicy === cdk.RemovalPolicy.RETAIN ? 'retain' : 'destroy';
@@ -495,7 +495,7 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	// ── IAM ─────────────────────────────────────────────────────────────────
 
 	/**
-	 * @param detached - With the PreSignUp trigger (Q10): put the grants in a
+	 * @param detached - With the PreSignUp trigger: put the grants in a
 	 * separate `iam.Policy` (`pool-access`) on the shared role instead of its
 	 * default policy, which the trigger's Lambda depends on (see
 	 * `src/cdk/pre-sign-up.ts`). Same statements, same role, same pool scope.
@@ -692,7 +692,7 @@ function claimAuthRoutes(block: Auth, id: string, opts: ResolvedAuthOptions): vo
 	for (const { route } of routes) claims.set(route, block.fullId);
 }
 
-/** Per-block `'destroy' | 'retain'` wins; unset falls back to the stack default (Q4). */
+/** Per-block `'destroy' | 'retain'` wins; unset falls back to the stack default. */
 function resolveRemovalPolicy(
 	option: 'destroy' | 'retain' | undefined,
 	stackDefault: cdk.RemovalPolicy,
@@ -716,7 +716,7 @@ function validateOptions(
 	// The stub IdP is a local and sandbox development aid: its account picker
 	// signs anyone in. Fail the synth of any other deployment instead of
 	// deploying an open sign-in (or a sign-in button that answers 501).
-	// (FX8: the keys derive from the session secret, so a sandbox can serve it;
+	// (The keys derive from the session secret, so a sandbox can serve it;
 	// `AuthOIDC`'s stub is sandbox-only too.)
 	const stubIds = stubProviders(opts).map((s) => s.id);
 	if (stubIds.length > 0 && !ctx.sandbox) {

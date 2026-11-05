@@ -6,7 +6,7 @@
  * options object, and the names every layer derives from `fullId`.
  *
  * Pure and dependency-free (no `aws-cdk-lib`, no SDK), so the runtime layers
- * (D5/D6) import the same functions the CDK layer uses. Each layer computes
+ * import the same functions the CDK layer uses. Each layer computes
  * these independently from the same inputs — the CDK layer does not hand them
  * to the runtime — so they must never diverge.
  *
@@ -58,7 +58,7 @@ export function stubIdpConfigKeys(fullId: string) {
 /**
  * The session cookie name — `auth_<fullId>`, the same as `AuthCognito`, so a
  * signed-in session survives the switch. The runtime's cookie writer and reader
- * (D5) must derive the name from here.
+ * must derive the name from here.
  *
  * @internal
  */
@@ -107,12 +107,12 @@ export function emailPasswordEnabled(options: ResolvedAuthOptions | undefined): 
  * provisions the pool with `selfSignUpEnabled` set to this
  * (`AllowAdminCreateUserOnly` is its negation), and both engines refuse
  * `signUp` with `NotAuthorizedException` when it is `false`, before any
- * attribute rule (FX44, R79) — on a wrapped pool too, where the option is the
+ * attribute rule — on a wrapped pool too, where the option is the
  * app's promise that "users are created only through `auth.admin`".
  *
  * Only `false` disables it, so a non-boolean `selfSignUp` (`0`) would enable
  * it: every entry's option validator rejects one at construction, before this
- * is read (`option-validation.ts`, FX53, R85).
+ * is read (`option-validation.ts`).
  *
  * @internal
  */
@@ -123,7 +123,7 @@ export function selfSignUpEnabled(options: ResolvedAuthOptions | undefined): boo
 }
 
 /**
- * Whether options need a Cognito user pool (decision Q6).
+ * Whether options need a Cognito user pool.
  *
  * Never for `store: 'builtin'`. Otherwise `true` when email + password is enabled (the default), when any provider
  * federates through Cognito (see {@link cognitoFederatedProviderIds}), or when
@@ -150,7 +150,7 @@ export function requiresUserPool(options: ResolvedAuthOptions | undefined): bool
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// validateUser's PreSignUp trigger (Q10, R2-1)
+// validateUser's PreSignUp trigger
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -174,7 +174,7 @@ export function ownsPreSignUpTrigger(options: ResolvedAuthOptions | undefined): 
  * {@link ownsPreSignUpTrigger} holds, so the runtime registers the trigger's
  * Lambda event handler (keyed by user pool id) for exactly the block the
  * trigger was wired for — never for a second `Auth` wrapping the same pool,
- * which would otherwise take the handler over (R2-1).
+ * which would otherwise take the handler over.
  *
  * Kept apart from {@link cognitoConfigKeys}, whose three keys are pinned
  * against `AuthCognito`.
@@ -187,7 +187,7 @@ export function preSignUpTriggerConfigKey(fullId: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Bearer tokens (D6c)
+// Bearer tokens
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -302,7 +302,7 @@ export function assertBearerClientIds(fullId: string, options: ResolvedAuthOptio
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Hosted-UI federation (D3b)
+// Hosted-UI federation
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -324,7 +324,7 @@ export const DEFAULT_SIGNOUT_PATH = `${AUTH_ROUTE_PREFIX}/signout`;
 /**
  * The callback and sign-out paths, with defaults applied. The CDK layer
  * registers `<front door><path>` on the hosted-UI app client as its callback /
- * logout URLs; the runtime (D6) must send exactly these as `redirect_uri` /
+ * logout URLs; the runtime must send exactly these as `redirect_uri` /
  * `logout_uri`, or Cognito rejects the request.
  *
  * @internal

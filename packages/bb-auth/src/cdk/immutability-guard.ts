@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Wires both layers of the user-pool immutability guard (decision Q5, task
- * D4) onto an `Auth` block. One call from the constructor: {@link guardUserPool}.
+ * Wires both layers of the user-pool immutability guard
+ * onto an `Auth` block. One call from the constructor: {@link guardUserPool}.
  *
  * **Layer 1 — the committed baseline, at synth** (`immutability-baseline.ts`).
  * A construct validation on the block, so it reads the pool's *final* L1
@@ -13,11 +13,11 @@
  * `BlocksBackend` (which gives the app directory). The block claims its file
  * (`claimBaseline`), so the stack-level check in `@aws-blocks/core` — which
  * fails synth for a pool-owning baseline no block claims, i.e. a renamed or
- * removed block (task D4b) — leaves it to this one.
+ * removed block — leaves it to this one.
  *
  * **Layer 2 — the deploy-time guard** (`immutability-guard-lambda.ts`). One
  * per stack, shared by every `Auth` block that owns a pool, and created only
- * when one does (Q6): a Lambda, its `cr.Provider`, and one
+ * when one does: a Lambda, its `cr.Provider`, and one
  * `Custom::BlocksAuthPoolGuard` whose `Pools` property carries each pool's
  * logical id and snapshot. **Each owned pool `DependsOn` the guard** — the
  * reverse of a `Ref` — so CloudFormation runs the guard first and never
@@ -104,7 +104,7 @@ const guards = new WeakMap<cdk.Stack, GuardState>();
 /**
  * Guard `block`'s user pool. `pool` is the block's `userPool`: an owned
  * `UserPool` gets both layers; a wrapped one (`UserPool.fromUserPoolId`) or
- * none (Q6) gets only the baseline, which records that the block owns no pool.
+ * none gets only the baseline, which records that the block owns no pool.
  */
 export function guardUserPool(block: BuildingBlockScope, pool: cognito.IUserPool | undefined): void {
 	const child = pool?.node.defaultChild;
@@ -136,7 +136,7 @@ function addBaselineCheck(block: BuildingBlockScope, cfnPool: cognito.CfnUserPoo
 	const fullId = block.fullId;
 	const file = baselinePath(location.appDir, location.stack, fullId);
 	// This block reads its own baseline, so the stack-level orphan check
-	// (core, task D4b) must not report it. Claimed at construction, so every
+	// (core) must not report it. Claimed at construction, so every
 	// claim is in before any validation runs.
 	claimBaseline({ scope: block, file });
 	block.node.addValidation({
@@ -254,7 +254,7 @@ function createGuardResource(
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		}),
 	});
-	// Its roles may not recreate the owned log groups after `destroy()` (L80).
+	// Its roles may not recreate the owned log groups after `destroy()`.
 	keepProviderLogGroupsOwned(fn, provider);
 	return new cdk.CustomResource(stack, GUARD_IDS.resource, {
 		serviceToken: provider.serviceToken,

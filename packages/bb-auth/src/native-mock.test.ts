@@ -228,7 +228,7 @@ describe('mock engine — sign-up, sign-in, codes', () => {
 		assert.strictEqual(done.status, 'signedIn');
 	});
 
-	test('USER_AUTH: the pool-wide users.preferredChallenge requests that factor; the per-call hint wins (L22)', async () => {
+	test('USER_AUTH: the pool-wide users.preferredChallenge requests that factor; the per-call hint wins', async () => {
 		const sink = codeSink();
 		const auth = new Auth(root(), 'auth', {
 			users: { authFlow: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' },
@@ -249,7 +249,7 @@ describe('mock engine — sign-up, sign-in, codes', () => {
 		assert.ok(override.status === 'continueSignIn' && override.nextStep.name === 'CONFIRM_SIGN_IN_WITH_PASSWORD');
 	});
 
-	test('USER_PASSWORD_AUTH ignores users.preferredChallenge (L22)', async () => {
+	test('USER_PASSWORD_AUTH ignores users.preferredChallenge', async () => {
 		const sink = codeSink();
 		const auth = new Auth(root(), 'auth', {
 			users: { preferredChallenge: 'EMAIL_OTP' },
@@ -733,7 +733,7 @@ describe('mock engine — passkeys', () => {
 		assert.deepStrictEqual(await b.request((ctx) => auth.listPasskeys(ctx)), []);
 	});
 
-	test('registration records transports and authenticatorAttachment, as Cognito does (L22)', async () => {
+	test('registration records transports and authenticatorAttachment, as Cognito does', async () => {
 		const sink = codeSink();
 		const auth = new Auth(root(), 'auth', {
 			users: { authFlow: 'USER_AUTH' },
@@ -1185,7 +1185,7 @@ describe('mock engine — persistence, tolerant loading, AuthCognito compatibili
 	});
 });
 
-describe('mock engine — the sign-up code verifies only the contact it was sent to (R67, FX34)', () => {
+describe('mock engine — the sign-up code verifies only the contact it was sent to', () => {
 	const EMAIL = 'una@example.com';
 	const PHONE = '+15555550100';
 

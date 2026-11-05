@@ -4,7 +4,7 @@
 /**
  * Resource-identity extraction for the CDK tests (test-only).
  *
- * The extraction is the same as B1's `bb-auth-cognito/src/resource-identity.cdk.test.ts`
+ * The extraction is the same as in `bb-auth-cognito/src/resource-identity.cdk.test.ts`
  * (copied, since packages can't share test sources; `bb-auth-cognito` was deleted
  * at the cutover), so an `Auth` identity is directly comparable with the
  * `AuthCognito` golden fixture.
@@ -129,7 +129,7 @@ function describeResource(logicalId: string, r: PinnedResource): string {
 	return `${logicalId}  (${r.Type}, construct path ${r.path}, physicalName ${JSON.stringify(r.physicalName)})`;
 }
 
-/** Human-readable, per-resource identity diff (B1's format). Empty when identical. `construct` is a label and is ignored. */
+/** Human-readable, per-resource identity diff (the original test's format). Empty when identical. `construct` is a label and is ignored. */
 export function diffIdentity(expected: VariantIdentity, actual: VariantIdentity): string[] {
 	const lines: string[] = [];
 	for (const field of ['fullId', 'userPoolName', 'sessionCookieName'] as const) {

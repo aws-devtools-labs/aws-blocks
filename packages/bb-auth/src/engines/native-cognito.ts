@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The Cognito user-pool engine (task D5c): the {@link NativeEngine} the
+ * The Cognito user-pool engine: the {@link NativeEngine} the
  * `aws-runtime` entry wires, driving Amazon Cognito through
  * `@aws-sdk/client-cognito-identity-provider`.
  *
- * D5c ported the sign-in core; D5c2 completed the full `NativeEngine`: the
+ * It implements the full `NativeEngine`: the sign-in core, the
  * signed-in user's account (attributes, `deleteUser`, TOTP, MFA preference,
  * devices) and the admin surface (`native-cognito-admin.ts`). `rememberDevice`
- * stays a 501 (L25, as in `AuthCognito`).
+ * stays a 501 (as in `AuthCognito`).
  *
- * Ported from `bb-auth-cognito/src/index.aws.ts` (with B6's fixes). What moved
+ * Ported from `bb-auth-cognito/src/index.aws.ts` (with its security fixes). What moved
  * out: everything engine-agnostic — cookies, the session store, guards, the
  * auto-sign-in bridge, the `createApi()` state machine and the error policy —
  * lives in `AuthBase`. This engine only talks to Cognito and returns data.
@@ -28,13 +28,13 @@
  * then throws `userPoolNotProvisioned()` (500 for the client, the actionable
  * detail in the log) before any Cognito call.
  *
- * A configuration with no user pool (Q6) never constructs this engine — see
+ * A configuration with no user pool never constructs this engine — see
  * `engines/types.ts` — so nothing reads the pool keys in that mode.
  *
  * ## Tokens are verified before they are returned
  *
  * Every ID token Cognito issues — on sign-in, on every challenge answer, and on
- * every `REFRESH_TOKEN_AUTH` (B6 fix 3) — is verified with `aws-jwt-verify`
+ * every `REFRESH_TOKEN_AUTH` — is verified with `aws-jwt-verify`
  * (signature against the pool's JWKS, issuer, audience = the app client,
  * `token_use: id`, expiry) before it reaches `AuthBase`, which stores it and
  * trusts it on later reads.
@@ -226,7 +226,7 @@ const LIST_DEVICES_LIMIT = 60;
 
 /**
  * Why `rememberDevice` is a 501 on AWS — a known gap carried over from
- * `AuthCognito`, not pending work (`DESIGN.md`, "Known gaps"; L25).
+ * `AuthCognito`, not pending work (`DESIGN.md`, "Known gaps").
  */
 function rememberDeviceUnsupported(): ApiError {
 	return new ApiError(
@@ -245,8 +245,8 @@ function regionOfPool(userPoolId: string): string {
 }
 
 /**
- * The Cognito {@link NativeEngine}: the sign-in core (D5c), the signed-in
- * user's account and the admin surface (D5c2). See the module documentation.
+ * The Cognito {@link NativeEngine}: the sign-in core, the signed-in
+ * user's account and the admin surface. See the module documentation.
  *
  * @internal
  */
@@ -335,12 +335,12 @@ export class NativeCognitoEngine implements NativeEngine {
 
 	async signUp(input: NativeSignUpInput): Promise<NativeSignUpOutcome> {
 		// A pool with `AllowAdminCreateUserOnly` refuses the operation itself, so
-		// this comes before any attribute rule, as on the local engine (FX44):
+		// this comes before any attribute rule, as on the local engine:
 		// otherwise an invalid attribute would answer 400 here and 401 there.
 		if (!selfSignUpEnabled(this.host.options)) throw signUpNotPermitted();
 		const { clientId } = this.ids();
 		// The schema-independent rules, before the SDK serializes a wrong-typed
-		// value as-is (FX43): the same 400 as the local engine, and no call.
+		// value as-is: the same 400 as the local engine, and no call.
 		checkAttributeValues(input.attributes, 'signUp');
 		const resp = await this.client.send(
 			new SignUpCommand({
@@ -356,7 +356,7 @@ export class NativeCognitoEngine implements NativeEngine {
 			...(resp.UserSub ? { userSub: resp.UserSub } : {}),
 			...(resp.CodeDeliveryDetails ? { codeDeliveryDetails: mapCodeDelivery(resp.CodeDeliveryDetails) } : {}),
 			// SignUp's Session lets ConfirmSignUp + InitiateAuth skip a second
-			// proof of contact ownership — the auto-sign-in bridge (Q2).
+			// proof of contact ownership — the auto-sign-in bridge.
 			...(resp.Session ? { bridgeSession: resp.Session } : {}),
 		};
 	}
@@ -731,7 +731,7 @@ export class NativeCognitoEngine implements NativeEngine {
 		}
 		if (!result?.IdToken || !result.AccessToken) return null;
 		try {
-			// B6 fix 3: the refreshed ID token is verified exactly like a sign-in's
+			// The refreshed ID token is verified exactly like a sign-in's
 			// before it is stored — the row is trusted on later reads.
 			await this.verifier.verify(result.IdToken);
 		} catch (e) {
@@ -813,7 +813,7 @@ export class NativeCognitoEngine implements NativeEngine {
 					credentialId: c.CredentialId ?? '',
 					...(c.FriendlyCredentialName ? { friendlyName: c.FriendlyCredentialName } : {}),
 					...(c.CreatedAt instanceof Date ? { createdAt: c.CreatedAt.toISOString() } : {}),
-					// L22: restored from `AuthCognito` (D5c had dropped them).
+					// Restored from `AuthCognito` (an earlier port had dropped them).
 					...(c.AuthenticatorTransports?.length ? { transports: [...c.AuthenticatorTransports] } : {}),
 					...(c.AuthenticatorAttachment ? { authenticatorAttachment: c.AuthenticatorAttachment } : {}),
 				});
@@ -830,7 +830,7 @@ export class NativeCognitoEngine implements NativeEngine {
 		);
 	}
 
-	// ── The signed-in user's account (D5c2) ─────────────────────────────────
+	// ── The signed-in user's account ─────────────────────────────────
 	//
 	// Every call is an access-token API: Cognito authorizes it with the token,
 	// and the CDK layer's base statement (`CLIENT_IAM_ACTIONS`) already lists
@@ -848,7 +848,7 @@ export class NativeCognitoEngine implements NativeEngine {
 		attributes: Record<string, string>,
 	): Promise<Record<string, UpdateAttributeOutcome>> {
 		this.ids();
-		// As in `signUp`: a rejected write sends nothing (FX43).
+		// As in `signUp`: a rejected write sends nothing.
 		checkAttributeValues(attributes, 'update');
 		const resp = await this.client.send(
 			new UpdateUserAttributesCommand({ AccessToken: accessToken, UserAttributes: attrsToList(attributes) }),
@@ -973,7 +973,7 @@ export class NativeCognitoEngine implements NativeEngine {
 	}
 
 	/**
-	 * Not supported on AWS (L25, as in `AuthCognito`): see
+	 * Not supported on AWS (as in `AuthCognito`): see
 	 * {@link rememberDeviceUnsupported} and `DESIGN.md` "Known gaps". Rejects
 	 * before any Cognito call.
 	 */

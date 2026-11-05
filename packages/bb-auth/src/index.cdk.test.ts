@@ -151,7 +151,7 @@ describe('Auth (CDK) — createApi and fromExisting', () => {
 	});
 });
 
-describe('Auth (CDK) — requiresUserPool (Q6)', () => {
+describe('Auth (CDK) — requiresUserPool', () => {
 	const secret = { fullId: 's', get: async () => 'x' };
 	const cases: [string, AuthOptions | undefined, boolean][] = [
 		['zero-config (email + password default)', undefined, true],
@@ -259,7 +259,7 @@ describe('Auth (CDK) — synth-time option checks', () => {
 		assert.match(message, /Auth\.fromExisting/);
 	});
 
-	describe('email (SES sender, L75)', () => {
+	describe('email (SES sender)', () => {
 		const sender = { fromAddress: 'no-reply@example.com' };
 
 		test('refused on a wrapped pool: its email configuration belongs to its owner', () => {

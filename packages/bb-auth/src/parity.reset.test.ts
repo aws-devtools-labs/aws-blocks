@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Mock ↔ AWS parity for **where a password-reset code goes** (FX39, R75; from
- * R67's "Open"): `resetPassword` on the local engine (`./index.mock.js`) and on
+ * Mock ↔ AWS parity for **where a password-reset code goes**:
+ * `resetPassword` on the local engine (`./index.mock.js`) and on
  * the AWS entry (`./index.aws.js`, offline through
  * `test-support/aws-harness.ts`) must report the same delivery, or the same
  * masked answer, for a user in the same state.
@@ -11,7 +11,7 @@
  * The local user is put into each state through the public API (sign-up,
  * attribute verification, MFA preference); the AWS side's `ForgotPassword` is
  * answered by {@link cognitoForgotPassword}, a stand-in that applies the
- * documented rule to that same state. Before FX39 the mock sent the code to
+ * documented rule to that same state. Before this fix the mock sent the code to
  * the email if there was one, else the phone, verified or not, and sent a
  * local code to a user with no verified contact at all.
  */
@@ -150,7 +150,7 @@ async function bothRuntimes<const O extends AuthOptions>(options: O, contact: Re
 const SMS = { deliveryMedium: 'SMS', attributeName: 'phone_number' } as const;
 const EMAIL_DELIVERY = { deliveryMedium: 'EMAIL', attributeName: 'email' } as const;
 
-describe('parity: resetPassword sends the code to a verified contact, by the pool’s recovery priority (R75)', () => {
+describe('parity: resetPassword sends the code to a verified contact, by the pool’s recovery priority', () => {
 	test('the default pool, a verified email only: by email', async () => {
 		const r = await bothRuntimes({}, { email: EMAIL });
 		assert.deepStrictEqual(r.mock, EMAIL_DELIVERY, 'mock');
@@ -159,7 +159,7 @@ describe('parity: resetPassword sends the code to a verified contact, by the poo
 	});
 
 	test('the default pool, a verified email and an unverified phone: by email, not to the phone', async () => {
-		// The sign-up code verifies the email only (R67); the phone stays unverified.
+		// The sign-up code verifies the email only; the phone stays unverified.
 		const r = await bothRuntimes({}, { email: EMAIL, phone_number: PHONE });
 		assert.deepStrictEqual(r.mock, EMAIL_DELIVERY, 'mock');
 		assert.deepStrictEqual(r.aws, EMAIL_DELIVERY, 'aws');

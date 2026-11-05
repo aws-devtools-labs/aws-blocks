@@ -4,7 +4,7 @@
 /**
  * The federation HTTP routes — one `RawRoute` per path, shared by every
  * runtime layer and every federation engine (direct, stub IdP, and the
- * hosted-UI engine of D6b, which plugs in through the same
+ * hosted-UI engine, which plugs in through the same
  * {@link FederationEngine} contract and the shared pending-auth cookie).
  *
  * ## The route table
@@ -387,13 +387,13 @@ export async function dispatchCallback(host: FederationRouteHost, ctx: BlocksCon
 	// Forward an IdP error so the SDK does not wait for a code that never comes.
 	// Only reached with a `state` this backend signed (verified above), as RFC
 	// 6749 §4.1.2.1 has it on error responses; a server-initiated error is
-	// checked against the pending state by the engine before it is honoured (R2-2).
-	// FX60 deliberately leaves `error_description` verbatim here, unlike the two
+	// checked against the pending state by the engine before it is honoured.
+	// This deliberately leaves `error_description` verbatim here, unlike the two
 	// engine callbacks: this is the OAuth error response itself being handed back
 	// to the native / CLI app that started the sign-in (`relayTo`, signed into the
 	// state envelope and re-validated above), not a message rendered to a browser —
 	// the 302 answers with an empty body, so a browser only ever carries the
-	// parameters on to that app. See L71.
+	// parameters on to that app.
 	const idpError = params.get('error');
 	if (idpError) {
 		return {

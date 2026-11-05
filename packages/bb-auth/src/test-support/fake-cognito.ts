@@ -20,7 +20,7 @@
  * - `GET /<poolId>/.well-known/jwks.json` — the pool's JWKS.
  *
  * With {@link FakeCognito.preSignUp} set it also plays the pool's PreSignUp
- * trigger (decision Q10): a federated user's **first** authorize invokes it
+ * trigger: a federated user's **first** authorize invokes it
  * with a `PreSignUp_ExternalProvider` event, as Cognito does before creating
  * the pool user; a throw becomes Cognito's redirect with `error=invalid_request`
  * and `error_description=PreSignUp failed with error <message>. `.
@@ -37,10 +37,10 @@ import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 export const FAKE_REGION = 'us-east-1';
-export const FAKE_POOL_ID = 'us-east-1_D6bHostedUi';
-export const FAKE_HOSTED_UI_CLIENT_ID = 'd6bhosteduiclient0000000';
-export const FAKE_NATIVE_CLIENT_ID = 'd6bnativeclient000000000';
-const KID = 'd6b-fake-kid';
+export const FAKE_POOL_ID = 'us-east-1_HostedUiPool';
+export const FAKE_HOSTED_UI_CLIENT_ID = 'hosteduiclient0000000000';
+export const FAKE_NATIVE_CLIENT_ID = 'nativeclient000000000000';
+const KID = 'fake-cognito-kid';
 /** The managed-login session cookie name. */
 export const MANAGED_LOGIN_COOKIE = 'cognito';
 
@@ -100,7 +100,7 @@ export class FakeCognito {
 	readonly issuer = `https://cognito-idp.${FAKE_REGION}.amazonaws.com/${FAKE_POOL_ID}`;
 	readonly requests: FakeCognitoRequest[] = [];
 	readonly revoked: string[] = [];
-	/** The client's registered callback / logout URLs (D3b's front doors). */
+	/** The client's registered callback / logout URLs (the CDK layer's front doors). */
 	callbackUrls: string[] = [];
 	logoutUrls: string[] = [];
 	/** `SupportedIdentityProviders` of the hosted-UI client. */
