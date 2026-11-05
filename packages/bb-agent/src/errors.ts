@@ -64,14 +64,14 @@ export function agentErrorFromChunk(chunk: { error?: string; errorName?: string 
 
 /**
  * The failure recorded by a history row, if it is the row a failed turn persists: an
- * empty-content assistant row whose metadata carries `error`. The chat clients read it on
- * reconnect, because the turn's `error` chunk is lost if it was published while the socket
- * was down.
+ * assistant row whose metadata carries `error`. Its content is empty when the turn threw, and
+ * holds the partial text when a runaway cap stopped it. The chat clients read it on reconnect,
+ * because the turn's `error` chunk is lost if it was published while the socket was down.
  */
 export function persistedTurnError(
 	row: { role: string; content: string; metadata?: unknown } | undefined,
 ): { error: string; errorName?: string } | undefined {
-	if (!row || row.role !== 'assistant' || row.content) return undefined;
+	if (!row || row.role !== 'assistant') return undefined;
 	const meta = row.metadata;
 	if (typeof meta !== 'object' || meta === null || !('error' in meta) || typeof meta.error !== 'string') return undefined;
 	const errorName = 'errorName' in meta && typeof meta.errorName === 'string' ? meta.errorName : undefined;

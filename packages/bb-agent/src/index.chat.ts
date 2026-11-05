@@ -378,9 +378,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 	 * - If the turn completed server-side (history ends with a non-empty assistant
 	 *   message), adopt that final text into the in-flight bubble and clear loading —
 	 *   the `done` chunk was lost in the gap.
-	 * - If the turn failed server-side (history ends with the error row a failed turn
-	 *   persists), end it as failed and report the recorded error — the `error` chunk
-	 *   was lost in the gap.
+	 * - If the turn failed server-side (history ends with an assistant row recording
+	 *   `metadata.error`), adopt any partial text it carries, end the turn as failed and
+	 *   report the recorded error — the `error` chunk was lost in the gap.
 	 * - If the turn is still running (no final assistant message yet), keep loading
 	 *   true and wait for the terminal chunk on the resubscribed channel, arming a
 	 *   bounded failsafe so the spinner can't hang if that chunk is also lost.
@@ -409,12 +409,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 			// ignore this — possibly stale — DB result rather than clobber a live outcome.
 			const stillSameInFlightTurn = assistantId !== null && assistantId === turnAtStart && loading;
 
-			if (failure && stillSameInFlightTurn) {
-				// The turn failed while we were disconnected and its `error` chunk was lost. A
-				// previous turn's error row can only be `last` if the read misses this turn's user
-				// row, which the backend writes before the turn starts.
-				failTurn(failure);
-			} else if (turnComplete && stillSameInFlightTurn) {
+			if (turnComplete && stillSameInFlightTurn) {
 				// Adopt the persisted final text ONLY if it extends what we've already
 				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
 				// persisted text). If it does NOT extend our stream, `last` is a stale /
@@ -440,14 +435,25 @@ export function createChat(options: CreateChatOptions): ChatController {
 					assistantText = last.content;
 					messages = messages.map((m) => (m.id === assistantId ? { ...m, content: last.content } : m));
 					options.onMessagesChange?.(messages);
-					assistantId = null;
-					clearFailsafe();
-					setLoading(false);
+					if (failure) {
+						// A turn stopped by a runaway cap keeps its partial text and records why it
+						// stopped; its terminal chunk was an `error`, so report it like one.
+						failTurn(failure);
+					} else {
+						assistantId = null;
+						clearFailsafe();
+						setLoading(false);
+					}
 				} else {
 					// Snapshot doesn't extend our stream — keep waiting for the terminal chunk,
 					// guarded by the bounded failsafe.
 					armFailsafe();
 				}
+			} else if (failure && stillSameInFlightTurn) {
+				// The turn failed before producing text and its `error` chunk was lost. A previous
+				// turn's error row can only be `last` if the read misses this turn's user row,
+				// which the backend writes before the turn starts.
+				failTurn(failure);
 			} else if (stillSameInFlightTurn) {
 				// Turn still running server-side (no final assistant message yet) — do NOT clear
 				// loading. Wait for the terminal chunk on the resubscribed channel, guarded by
