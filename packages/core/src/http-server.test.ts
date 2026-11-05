@@ -57,6 +57,48 @@ function rawRequest(port: number, text: string): Promise<string> {
   });
 }
 
+interface RawResponse {
+  statusLine: string;
+  /** Header lines as sent, names lower-cased; repeats keep every value. */
+  headers: Array<[string, string]>;
+  body: string;
+}
+
+/**
+ * Write `text` on one connection and parse every response the server sends back
+ * before closing it, framing each body by its Content-Length — as a keep-alive
+ * client does.
+ */
+function rawExchange(port: number, text: string): Promise<RawResponse[]> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1');
+    let data = Buffer.alloc(0);
+    socket.on('data', (d: Buffer) => {
+      data = Buffer.concat([data, d]);
+    });
+    socket.on('close', () => {
+      const responses: RawResponse[] = [];
+      let rest = data;
+      while (rest.length > 0) {
+        const end = rest.indexOf('\r\n\r\n');
+        if (end === -1) throw new Error(`incomplete response head: ${rest.toString()}`);
+        const [statusLine, ...lines] = rest.subarray(0, end).toString('latin1').split('\r\n');
+        const headers = lines.map((line): [string, string] => {
+          const colon = line.indexOf(':');
+          return [line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim()];
+        });
+        const length = Number(headers.find(([name]) => name === 'content-length')?.[1] ?? 0);
+        const bodyStart = end + 4;
+        responses.push({ statusLine, headers, body: rest.subarray(bodyStart, bodyStart + length).toString('utf-8') });
+        rest = rest.subarray(bodyStart + length);
+      }
+      resolve(responses);
+    });
+    socket.on('error', reject);
+    socket.write(text);
+  });
+}
+
 /** Poll until `predicate` holds; fail (instead of hanging) after `timeoutMs`. */
 async function waitFor(predicate: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -127,6 +169,11 @@ const backend = {
       ctx.response.headers.append('Set-Cookie', 'gone=; Path=/; Max-Age=0');
       throw new Error('signed out');
     },
+    async badStatus(status: number) {
+      ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
+      ctx.response.status = status;
+      return { ok: true };
+    },
   }),
 };
 
@@ -175,6 +222,15 @@ function registerRoutes() {
     handler: async (ctx) => {
       const bytes = ctx.request.body ? new Uint8Array(await new Response(ctx.request.body).arrayBuffer()) : new Uint8Array();
       ctx.response.send({ bytes: [...bytes] });
+    },
+  });
+  registerRoute({
+    method: 'GET',
+    path: '/bad-status',
+    handler: async (ctx) => {
+      ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
+      ctx.response.status = Number(ctx.request.url.searchParams.get('status'));
+      ctx.response.send({ ok: true });
     },
   });
   registerRoute({
@@ -565,6 +621,38 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     }
   });
 
+  // 1000 is out of range; 101 and 103 are interim statuses Node sends with no body.
+  for (const status of [1000, 101, 103]) {
+    for (const [name, first] of [
+      ['a RawRoute', `GET /bad-status?status=${status} HTTP/1.1\r\nHost: x\r\n\r\n`],
+      [
+        'an RPC method',
+        `POST /aws-blocks/api HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(rpc('api.badStatus', [status]))}\r\n\r\n${rpc('api.badStatus', [status])}`,
+      ],
+    ] as const) {
+      it(`answers status ${status} from ${name} with a plain 500, keeping the next response intact`, async () => {
+        const server = await start();
+        try {
+          const [error, next, ...more] = await rawExchange(
+            server.port,
+            `${first}GET /text HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
+          );
+          assert.strictEqual(error.statusLine, 'HTTP/1.1 500 Internal Server Error');
+          assert.deepStrictEqual(JSON.parse(error.body), { error: 'Internal Server Error' });
+          assert.ok(!error.headers.some(([n]) => n === 'set-cookie'), 'no handler cookie on the 500');
+          const length = error.headers.find(([n]) => n === 'content-length')?.[1];
+          assert.strictEqual(Number(length), Buffer.byteLength(error.body), 'Content-Length frames the 500 body');
+          assert.strictEqual(next?.statusLine, 'HTTP/1.1 200 OK');
+          assert.strictEqual(next?.body, 'plain text');
+          assert.strictEqual(more.length, 0);
+        } finally {
+          await server.close();
+        }
+      });
+    }
+  }
+
+
   it('aborts the request signal when the client disconnects', async () => {
     const server = await start();
     const req = http.request({ host: '127.0.0.1', port: server.port, method: 'GET', path: '/wait-for-abort', agent: false });
@@ -605,6 +693,7 @@ describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => 
     ['a list of hosts', [`x-blocks-forwarded-host: attacker.example, ${API_HOST}`]],
     ['two stages', [`x-blocks-forwarded-host: ${API_HOST}`, 'X-Blocks-Forwarded-Stage: evil', 'x-blocks-forwarded-stage: prod']],
     ['a stage with a path', [`x-blocks-forwarded-host: ${API_HOST}`, 'x-blocks-forwarded-stage: prod/evil']],
+    ['a host with an out-of-range port', ['x-blocks-forwarded-host: a.example:99999']],
   ] as const) {
     it(`refuses ${name} with 400`, async () => {
       const server = await start({ trustForwardedHeaders: true });
@@ -615,6 +704,16 @@ describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => 
       }
     });
   }
+
+  it('accepts a stamped host with the highest valid port', async () => {
+    const server = await start({ trustForwardedHeaders: true });
+    try {
+      const reply = await send(server.port, 'GET', '/url', { 'x-blocks-forwarded-host': 'a.example:65535' });
+      assert.deepStrictEqual(JSON.parse(reply.body), { url: 'https://a.example:65535/url' });
+    } finally {
+      await server.close();
+    }
+  });
 
   it('ignores stamped headers it does not trust', async () => {
     const server = await start();
@@ -712,6 +811,58 @@ describe('serveHttp — initialization and request targets', { timeout: 30_000 }
     }
   });
 
+  for (const [name, options, message] of [
+    ['a NaN maxBodyBytes', { maxBodyBytes: Number.NaN }, /maxBodyBytes must be a non-negative integer/],
+    ['a negative maxBodyBytes', { maxBodyBytes: -1 }, /maxBodyBytes must be a non-negative integer/],
+    ['a fractional maxBodyBytes', { maxBodyBytes: 1.5 }, /maxBodyBytes must be a non-negative integer/],
+    ['a NaN drainTimeoutMs', { drainTimeoutMs: Number.NaN }, /drainTimeoutMs must be a number/],
+    ['a negative drainTimeoutMs', { drainTimeoutMs: -1 }, /drainTimeoutMs must be a number/],
+    ['an infinite drainTimeoutMs', { drainTimeoutMs: Number.POSITIVE_INFINITY }, /drainTimeoutMs must be a number/],
+    ['an out-of-range port', { port: 65_536 }, /port must be an integer from 0 to 65535/],
+    ['a fractional port', { port: 80.5 }, /port must be an integer from 0 to 65535/],
+    ['a negative healthPort', { healthPort: -1 }, /healthPort must be an integer from 0 to 65535/],
+    ['a NaN healthPort', { healthPort: Number.NaN }, /healthPort must be an integer from 0 to 65535/],
+    ['a healthPort equal to the port', { port: 18_080, healthPort: 18_080 }, /The request port and healthPort must differ/],
+  ] as const) {
+    it(`fails fast on ${name}`, async () => {
+      let started: HttpServerHandle | undefined;
+      try {
+        await assert.rejects(async () => {
+          started = await start(options);
+        }, message);
+      } finally {
+        await started?.close();
+      }
+    });
+  }
+
+  it('builds the request URL from localhost when the Host header cannot form a URL', async () => {
+    const server = await start();
+    try {
+      const [reply] = await rawExchange(server.port, 'GET /url HTTP/1.1\r\nHost: a b\r\nConnection: close\r\n\r\n');
+      assert.strictEqual(reply.statusLine, 'HTTP/1.1 200 OK');
+      assert.deepStrictEqual(JSON.parse(reply.body), { url: 'http://localhost/url' });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('keeps userinfo in the Host header out of the request URL', async () => {
+    const server = await start();
+    try {
+      const [reply] = await rawExchange(
+        server.port,
+        'GET /url HTTP/1.1\r\nHost: user:pw@example.com\r\nConnection: close\r\n\r\n',
+      );
+      const url = new URL(JSON.parse(reply.body).url);
+      assert.strictEqual(url.username, '');
+      assert.strictEqual(url.password, '');
+      assert.strictEqual(url.href, 'http://localhost/url');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('answers a preflight even when the Host header cannot form a URL', async () => {
     const server = await start();
     try {
@@ -799,6 +950,22 @@ describe('buildRequestUrl', () => {
   it('falls back to the Host header over plain HTTP', () => {
     const url = buildRequestUrl(incoming('/x', { host: 'localhost:8080' }));
     assert.strictEqual(url.href, 'http://localhost:8080/x');
+  });
+
+  it('accepts a bracketed IPv6 Host header', () => {
+    const url = buildRequestUrl(incoming('/x', { host: '[::1]:8080' }));
+    assert.strictEqual(url.href, 'http://[::1]:8080/x');
+  });
+
+  it('keeps a Host header with an underscore in its name', () => {
+    const url = buildRequestUrl(incoming('/x', { host: 'my_service:8080' }));
+    assert.strictEqual(url.href, 'http://my_service:8080/x');
+  });
+
+  it('falls back to localhost for a Host header that is not a host[:port]', () => {
+    for (const host of ['a b', 'user:pw@example.com', 'example.com/path', 'a, b', 'example.com:99999', '[zz]']) {
+      assert.strictEqual(buildRequestUrl(incoming('/x', { host })).href, 'http://localhost/x', host);
+    }
   });
 
   it('falls back to localhost for an empty Host header', () => {

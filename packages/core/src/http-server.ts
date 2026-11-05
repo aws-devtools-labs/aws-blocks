@@ -63,8 +63,10 @@ export interface HttpServerHandle {
   readonly healthPort: number;
   /**
    * Stop accepting requests and report not-ready, wait up to `drainTimeoutMs` for
-   * in-flight requests (until their handlers settle), then close any remaining
-   * connections. Repeated calls return the same promise.
+   * in-flight requests (until their handlers settle and their responses have been
+   * written), then close any remaining connections. A request whose client
+   * disconnects before the response is fully delivered also counts as complete
+   * once its connection closes. Repeated calls return the same promise.
    */
   close(): Promise<void>;
 }
@@ -102,6 +104,16 @@ const STAGE_PATTERN = /^[A-Za-z0-9_-]+$/;
  */
 const STAMPED_HOST_PATTERN = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
 
+/**
+ * A request's own `Host` header: a name of letters, digits, `.`, `-` and `_`
+ * (as in docker-compose service names like `my_service`), or a bracketed IPv6
+ * address (`[::1]:8080`), with an optional port.
+ */
+const REQUEST_HOST_PATTERN = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+
+/** Largest delay `setTimeout` honors; a longer one fires immediately. */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 interface RequestEnv {
   dispatch: Dispatcher;
   maxBodyBytes: number;
@@ -120,16 +132,31 @@ interface RequestEnv {
  */
 export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}): Promise<HttpServerHandle> {
   const host = options.host ?? '127.0.0.1';
-  const port = options.port ?? portFromEnv();
-  const healthPort = options.healthPort ?? DEFAULT_HEALTH_PORT;
+  const port = options.port === undefined ? portFromEnv() : validPortOption('port', options.port);
+  const healthPort =
+    options.healthPort === undefined ? DEFAULT_HEALTH_PORT : validPortOption('healthPort', options.healthPort);
+  if (port !== 0 && port === healthPort) {
+    throw new Error(`[Blocks] The request port and healthPort must differ, both are ${port}`);
+  }
   const drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+  if (!Number.isFinite(drainTimeoutMs) || drainTimeoutMs < 0 || drainTimeoutMs > MAX_TIMER_DELAY_MS) {
+    throw new Error(
+      `[Blocks] drainTimeoutMs must be a number from 0 to ${MAX_TIMER_DELAY_MS}, got ${String(drainTimeoutMs)}`,
+    );
+  }
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_RPC_BODY_BYTES;
+  // A non-integer limit (NaN in particular) would fail every size comparison and
+  // so disable the limit altogether.
+  if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 0) {
+    throw new Error(`[Blocks] maxBodyBytes must be a non-negative integer, got ${String(maxBodyBytes)}`);
+  }
   const publicOrigin = options.publicOrigin ?? process.env.BLOCKS_PUBLIC_ORIGIN;
   if (publicOrigin && !URL.canParse(publicOrigin)) {
     throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
   }
   const env: RequestEnv = {
-    dispatch: createDispatcher(backend),
-    maxBodyBytes: options.maxBodyBytes ?? MAX_RPC_BODY_BYTES,
+    dispatch: createDispatcher(backend, { rpcErrorLabel: 'HTTP Server RPC Error:' }),
+    maxBodyBytes,
     publicOrigin,
     trustForwardedHeaders: options.trustForwardedHeaders ?? false,
   };
@@ -147,17 +174,28 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     inFlight++;
     const socket = req.socket;
     busy.set(socket, (busy.get(socket) ?? 0) + 1);
-    // While draining, close each connection once its response is written.
+    // A request that arrives while draining closes its connection once its
+    // response is written. This flag only reaches requests that start after the
+    // drain began: a keep-alive connection whose request was already in flight
+    // is closed by the drain sweep (once idle) or by the final
+    // closeAllConnections() in drainAndClose.
     if (draining) res.shouldKeepAlive = false;
     const handled = handleRequest(req, res, env).catch((error: unknown) => {
       // The client went away mid-request (e.g. an aborted upload): nothing to answer.
       if ((error as NodeJS.ErrnoException | undefined)?.code === 'ECONNRESET') return;
       console.error('HTTP server error:', error);
       if (res.destroyed) return;
-      if (!res.headersSent) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
+      if (res.headersSent) {
+        // Defensive: every response is written with a single res.end, so headers
+        // only go out together with the whole body and this branch isn't reached
+        // today. It guards a future streaming or multi-write response.
+        // Part of a response is already on the wire and its framing can't be
+        // completed correctly: drop the connection so a keep-alive client never
+        // reads the next response out of a misframed one.
+        res.destroy();
+        return;
       }
-      res.end(JSON.stringify({ error: 'Internal Server Error' }));
+      writeInternalServerError(res);
     });
     // The response is done once it is handed to the OS (or the client is gone).
     const responded = new Promise<void>((resolve) => res.once('close', resolve));
@@ -207,7 +245,9 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     // the response short.
     net.Server.prototype.close.call(server);
     // Idle keep-alive connections would otherwise hold the drain open until they
-    // time out; one with a response in progress closes once it is written.
+    // time out, so close them now. A connection with a response in progress is
+    // left alone: it closes once written if its request arrived after the drain
+    // began, and otherwise at the final closeAllConnections() below.
     for (const socket of sockets) {
       if (!busy.has(socket)) socket.destroy();
     }
@@ -248,6 +288,14 @@ function portFromEnv(): number {
   return port;
 }
 
+/** A port option: an integer from 0 (any free port) to 65535. An invalid value fails fast. */
+function validPortOption(name: 'port' | 'healthPort', value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value > 65_535) {
+    throw new Error(`[Blocks] ${name} must be an integer from 0 to 65535, got ${String(value)}`);
+  }
+  return value;
+}
+
 function listen(server: http.Server, port: number, host: string): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -274,6 +322,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   const body = await readBody(req, bodyLimit);
   if (body === undefined) {
+    // Lingering holds the connection for a bounded time so the 413 arrives intact
+    // instead of being lost to a reset; it runs before the stamped-header check by
+    // design, since the body must be drained before any response is written.
     await discardRemainingBody(req);
     // Still uploading after the linger window: answer, then drop the connection.
     if (!req.complete) res.setHeader('Connection', 'close');
@@ -355,6 +406,17 @@ function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
 }
 
 function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse, 'kind'>): void {
+  // A handler can set any number as `ctx.response.status`. Only a final status
+  // is sent: Node refuses an out-of-range one only while ending the response,
+  // after the handler's headers and Content-Length are recorded, and sends a 1xx
+  // as an interim response with no body, so a keep-alive client would read the
+  // next response as the answer. Check it up front and answer an out-of-range or
+  // interim status with a plain 500, without the handler's headers or cookies.
+  if (!isValidStatus(response.status)) {
+    console.error('HTTP server error: invalid response status', response.status);
+    writeInternalServerError(res);
+    return;
+  }
   res.statusCode = response.status;
   for (const [name, value] of Object.entries(response.headers)) {
     res.setHeader(name, value);
@@ -363,6 +425,23 @@ function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse
     res.setHeader('Set-Cookie', response.cookies);
   }
   res.end(response.body);
+}
+
+/** Whether `status` is a final HTTP status, 200 to 599. */
+function isValidStatus(status: number): boolean {
+  return Number.isInteger(status) && status >= 200 && status <= 599;
+}
+
+/**
+ * Answer a plain 500. Every header set so far is removed first, so the error
+ * response carries no stale Content-Length (which would misframe the next
+ * response on a keep-alive connection) and none of the handler's cookies.
+ */
+function writeInternalServerError(res: http.ServerResponse): void {
+  for (const name of res.getHeaderNames()) res.removeHeader(name);
+  const body = JSON.stringify({ error: 'Internal Server Error' });
+  res.writeHead(500, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  res.end(body);
 }
 
 /**
@@ -431,7 +510,7 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
   } else if (publicOrigin) {
     url = new URL(publicOrigin);
   } else {
-    url = new URL(`http://${header(req, 'host') || 'localhost'}`);
+    url = new URL(`http://${requestHost(req)}`);
   }
   // Assign the path rather than resolving the target against the origin.
   url.pathname = `${stage}${pathname}`;
@@ -442,13 +521,31 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
 }
 
 /**
+ * The request's own `Host`, or `localhost` when it is missing or isn't a plain
+ * host[:port] (see {@link REQUEST_HOST_PATTERN}). Falling back rather than
+ * answering 400 keeps a request that never reads its URL working, and keeps
+ * userinfo, a path or a second host out of `ctx.request.url`.
+ */
+function requestHost(req: http.IncomingMessage): string {
+  const host = header(req, 'host');
+  if (host && REQUEST_HOST_PATTERN.test(host) && URL.canParse(`http://${host}`)) return host;
+  return 'localhost';
+}
+
+/**
  * Whether the front-door-stamped headers, where present, are one well-formed
  * value each: {@link FORWARDED_HOST_HEADER} a host (see
- * {@link STAMPED_HOST_PATTERN}), {@link FORWARDED_STAGE_HEADER} a stage name.
+ * {@link STAMPED_HOST_PATTERN}) that also forms a valid `https://` URL (so its
+ * port is in range), {@link FORWARDED_STAGE_HEADER} a stage name.
  */
 function hasValidStampedHeaders(req: http.IncomingMessage): boolean {
   const host = req.headersDistinct[FORWARDED_HOST_HEADER];
-  if (host && (host.length !== 1 || !STAMPED_HOST_PATTERN.test(host[0]))) return false;
+  if (
+    host &&
+    (host.length !== 1 || !STAMPED_HOST_PATTERN.test(host[0]) || !URL.canParse(`https://${host[0]}`))
+  ) {
+    return false;
+  }
   const stage = req.headersDistinct[FORWARDED_STAGE_HEADER];
   if (stage && (stage.length !== 1 || !STAGE_PATTERN.test(stage[0]))) return false;
   return true;
