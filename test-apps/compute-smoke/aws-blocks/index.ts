@@ -13,6 +13,9 @@
  * - API namespace on its own compute: `reports` runs on a serverless `Compute`
  *   (512 MB), so a call through the front door must be served by that function,
  *   while `api` stays on the default compute.
+ * - API namespace on a container compute: `containerApi` is served by the
+ *   `worker` container's tasks (which also run the container AsyncJob and
+ *   CronJob), behind the same front door as the Lambda-hosted namespaces.
  * - Scope-level compute: everything created under the `placed` scope, with no
  *   `compute` of its own — an API namespace, an AsyncJob, a CronJob, and an API
  *   namespace in a child scope — runs on the scope's serverless `Compute`
@@ -35,7 +38,7 @@
  * set, the Lambda computes run in it too.
  */
 
-import { ApiNamespace, Scope } from '@aws-blocks/core';
+import { ApiNamespace, type BlocksContext, Scope } from '@aws-blocks/core';
 import { Compute, CronJob } from '@aws-blocks/blocks';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -156,11 +159,20 @@ const scaleFromZeroJob = new AsyncJob(scope, 'scale-from-zero-job', {
 
 // ── Serverless compute — an API namespace on its own function ─────────────
 
-/** Which function served the call — what the API-namespace scenario asserts on. */
-function whereAmI() {
+/**
+ * Which compute served the call, and the request URL its handler saw — what the
+ * API-namespace scenarios assert on. On Lambda the function env vars are set; on
+ * a container task Blocks stamps `BLOCKS_SERVICE_MODE=worker` and Fargate sets
+ * the task metadata endpoint.
+ */
+function whereAmI(context?: BlocksContext) {
   return {
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
     memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    serviceMode: process.env.BLOCKS_SERVICE_MODE ?? null,
+    onEcsTask: process.env.ECS_CONTAINER_METADATA_URI_V4 !== undefined,
+    // A job or CronJob handler has no request, so no context.
+    requestUrl: context?.request.url.href ?? null,
   };
 }
 
@@ -171,12 +183,28 @@ const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memor
 export const reports = new ApiNamespace(
   scope,
   'reportsApi',
-  () => ({
+  (context) => ({
     async whereAmI() {
-      return whereAmI();
+      return whereAmI(context);
     },
   }),
   { compute: reportsCompute },
+);
+
+// ── Container compute — an API namespace served by the `worker` tasks ───────
+
+// The `worker` compute already keeps a task running (`scaling.minInstances: 1`),
+// which a container that serves API namespaces needs, so the namespace shares it
+// with the container AsyncJob and CronJob instead of adding a service.
+export const containerApi = new ApiNamespace(
+  scope,
+  'containerApi',
+  (context) => ({
+    async whereAmI() {
+      return whereAmI(context);
+    },
+  }),
+  { compute: worker },
 );
 
 // ── Scope-level compute — everything under `placed` runs on its compute ────
@@ -186,9 +214,9 @@ const placedCompute = new Compute(scope, 'placed-compute', { type: 'serverless',
 const placed = new Scope('placed', { parent: scope, compute: placedCompute });
 
 // Placed by its scope: neither block passes `compute` itself.
-export const placedApi = new ApiNamespace(placed, 'placed', () => ({
+export const placedApi = new ApiNamespace(placed, 'placed', (context) => ({
   async whereAmI() {
-    return whereAmI();
+    return whereAmI(context);
   },
 }));
 
@@ -207,9 +235,9 @@ const placedJob = new AsyncJob(placed, 'placed-job', {
 
 // A child scope inherits its parent scope's compute.
 const placedChild = new Scope('child', { parent: placed });
-export const placedChildApi = new ApiNamespace(placedChild, 'placed-child', () => ({
+export const placedChildApi = new ApiNamespace(placedChild, 'placed-child', (context) => ({
   async whereAmI() {
-    return whereAmI();
+    return whereAmI(context);
   },
 }));
 
@@ -217,9 +245,9 @@ export const placedChildApi = new ApiNamespace(placedChild, 'placed-child', () =
 export const placedOverrideApi = new ApiNamespace(
   placed,
   'placed-override',
-  () => ({
+  (context) => ({
     async whereAmI() {
-      return whereAmI();
+      return whereAmI(context);
     },
   }),
   { compute: reportsCompute },
@@ -237,9 +265,9 @@ new CronJob(scope, 'tick-own', {
 
 // ── API (operations the tests call via RPC) — on the default compute ───────
 
-export const api = new ApiNamespace(scope, 'api', (_context) => ({
+export const api = new ApiNamespace(scope, 'api', (context) => ({
   async whereAmI() {
-    return whereAmI();
+    return whereAmI(context);
   },
 
   async containerJobSubmit(key: string, value: string) {
