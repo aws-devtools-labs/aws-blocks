@@ -48,7 +48,16 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: { ...BlocksPresets.sandbox, permissionsBoundary },
+  //
+  // Outside sandbox mode (E2E Production), store the keys Blocks generates in
+  // Secrets Manager, as the production preset does, so that job deploys and
+  // exercises that path. The framework key secrets are deleted with the stack,
+  // so the stack stays fully deletable.
+  defaults: {
+    ...BlocksPresets.sandbox,
+    ...(sandboxMode ? {} : { secretsStore: 'secrets-manager' as const }),
+    permissionsBoundary,
+  },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
