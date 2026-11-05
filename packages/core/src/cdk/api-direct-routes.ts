@@ -41,9 +41,26 @@ export const DIRECT_ROUTES_WITHOUT_PUBLIC_SUBNETS_WARNING = 'blocks:api:direct-r
 
 /**
  * CloudFront's default quota of cache behaviors per distribution, the default
- * behavior included ("Cache behaviors per distribution", adjustable).
+ * behavior included ("Cache behaviors per distribution", 75, adjustable).
  */
-export const DEFAULT_CACHE_BEHAVIOR_LIMIT = 25;
+export const DEFAULT_CACHE_BEHAVIOR_LIMIT = 75;
+
+/**
+ * The cache-behavior quota a distribution's direct routes are checked against,
+ * and who built the distribution — which decides the remedy synth names.
+ *
+ * @internal
+ */
+export interface DirectRouteBehaviorQuota {
+	/** The quota, the default behavior included. Default: {@link DEFAULT_CACHE_BEHAVIOR_LIMIT}. */
+	readonly limit?: number;
+	/**
+	 * `hosting`: Hosting's distribution, whose `frontDoor.features.quotas.cacheBehaviors`
+	 * sets `limit`. `managed`: the backend's managed distribution, which has no
+	 * setting for it and uses CloudFront's default.
+	 */
+	readonly source: 'hosting' | 'managed';
+}
 
 /**
  * Viewer-request function on every direct behavior: stamp the host the viewer
@@ -95,7 +112,8 @@ export function cloudFrontReachableRoutes(
 			`CloudFront reaches the container API namespaces ${kept.join(', ')} through the API gateway, not ` +
 				"directly: their load balancer's VPC has no public subnets, and a CloudFront VPC origin needs the VPC " +
 				"to have an internet gateway. Their calls keep the gateway's ~29-second limit. Give the VPC public " +
-				'subnets (an internet gateway) to route them straight to the load balancer.',
+				'subnets (an internet gateway) to route them straight to the load balancer. For an imported VPC ' +
+				"(`Vpc.fromVpcAttributes`), list its `publicSubnetIds`: this check reads the VPC's public subnets.",
 		);
 	}
 	return reachable;
@@ -117,23 +135,24 @@ export function cloudFrontReachableRoutes(
  *
  * Each route is a cache behavior of its own, added after the distribution was
  * built, so a construction-time behavior count doesn't see it: synth fails when
- * the distribution's behaviors, the default included, exceed
- * `cacheBehaviorLimit`, naming the container namespaces.
+ * the distribution's behaviors, the default included, exceed `quota.limit`,
+ * naming the container namespaces and a remedy that fits `quota.source`.
  *
  * @param behaviorOptions the options of the distribution's other API behaviors
  *   (caching off, all methods, viewer headers forwarded except `Host`)
- * @param cacheBehaviorLimit the distribution's cache-behavior quota, the default
- *   behavior included (Hosting's `quotas.cacheBehaviors` where Hosting builds it)
+ * @param quota the distribution's cache-behavior quota, the default behavior
+ *   included (Hosting's `quotas.cacheBehaviors` where Hosting builds it), and
+ *   which front door built the distribution
  * @internal
  */
 export function addDirectApiBehaviors(
 	distribution: cloudfront.Distribution,
 	routes: readonly ApiDirectRoute[],
 	behaviorOptions: cloudfront.AddBehaviorOptions,
-	cacheBehaviorLimit: number = DEFAULT_CACHE_BEHAVIOR_LIMIT,
+	quota: DirectRouteBehaviorQuota,
 ): void {
 	if (routes.length === 0) return;
-	validateCacheBehaviorCount(distribution, routes, cacheBehaviorLimit);
+	validateCacheBehaviorCount(distribution, routes, quota);
 	if (!hasWebAcl(distribution)) {
 		cdk.Annotations.of(distribution).addWarningV2(
 			DIRECT_ROUTES_WITHOUT_WAF_WARNING,
@@ -171,28 +190,38 @@ export function addDirectApiBehaviors(
 
 /**
  * Fail synth when `distribution` ends up with more cache behaviors than
- * `limit`. Counted once, from the rendered distribution, after every behavior
- * (construction-time or added later) is in.
+ * `quota.limit`. Counted once, from the rendered distribution, after every
+ * behavior (construction-time or added later) is in.
  */
 function validateCacheBehaviorCount(
 	distribution: cloudfront.Distribution,
 	routes: readonly ApiDirectRoute[],
-	limit: number,
+	quota: DirectRouteBehaviorQuota,
 ): void {
+	const limit = quota.limit ?? DEFAULT_CACHE_BEHAVIOR_LIMIT;
 	distribution.node.addValidation({
 		validate: (): string[] => {
 			const cfn = distribution.node.defaultChild as cloudfront.CfnDistribution;
-			const config = cdk.Stack.of(distribution).resolve(cfn.distributionConfig) as { cacheBehaviors?: unknown[] };
-			const additional = config.cacheBehaviors?.length ?? 0;
+			const config = cfn.distributionConfig as cloudfront.CfnDistribution.DistributionConfigProperty;
+			// Only the behavior list: the rest of the config needn't resolve here.
+			const behaviors: unknown = cdk.Stack.of(distribution).resolve(config.cacheBehaviors);
+			const additional = Array.isArray(behaviors) ? behaviors.length : 0;
 			const total = 1 + additional;
 			if (total <= limit) return [];
 			const namespaces = routes.map((route) => `'${namespaceOf(route)}'`).join(', ');
+			const remedy =
+				quota.source === 'hosting'
+					? 'Move some of those namespaces onto a Lambda compute (the gateway serves them), or, if AWS raised ' +
+						'your account\'s "Cache behaviors per distribution" quota, set Hosting\'s ' +
+						'`frontDoor.features.quotas.cacheBehaviors` to it.'
+					: "The backend's managed distribution is checked against CloudFront's default quota and has no " +
+						'setting to raise it. Move some of those namespaces onto a Lambda compute (the gateway serves them), ' +
+						'or request a higher "Cache behaviors per distribution" quota and serve the API through Hosting, ' +
+						'with `frontDoor.features.quotas.cacheBehaviors` set to it.';
 			return [
 				`This CloudFront distribution needs ${total} cache behaviors (the default and ${additional} more, ` +
 					`${routes.length} of them for the container API namespaces ${namespaces}), exceeding the limit of ` +
-					`${limit} per distribution. Move some of those namespaces onto a Lambda compute (the gateway serves ` +
-					'them), or, if AWS raised your account\'s "Cache behaviors per distribution" quota, set Hosting\'s ' +
-					'`frontDoor.features.quotas.cacheBehaviors` to it.',
+					`${limit} per distribution. ${remedy}`,
 			];
 		},
 	});

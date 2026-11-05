@@ -314,7 +314,7 @@ class ApiFrontDoorAspect implements cdk.IAspect {
 		});
 		// A namespace on a container compute skips the gateway: its exact path goes
 		// straight to the container's load balancer.
-		addDirectApiBehaviors(distribution, this.owner._apiDirectRoutes ?? [], behaviorOptions);
+		addDirectApiBehaviors(distribution, this.owner._apiDirectRoutes ?? [], behaviorOptions, { source: 'managed' });
 
 		// Record the resolved origin on the owner so `publicApiUrl` (and the `ApiUrl`
 		// output) resolve to the CloudFront URL. No separate CloudFront-domain

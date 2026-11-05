@@ -138,8 +138,10 @@ with readiness on port **8081** (503 while draining).
   - CloudFront forwards the viewer's `Host` to a VPC origin with the origin port
     appended (`<domain>:10000`), so a viewer-request CloudFront Function stamps
     the bare viewer host as `x-blocks-forwarded-host` and drops
-    `x-blocks-forwarded-stage`, overwriting client values: `ctx.request.url` is
-    the public URL, custom domain included. (A namespace on a Lambda compute,
+    `x-blocks-forwarded-stage`, overwriting client values. It also drops a
+    client-sent `x-forwarded-host`, which the container would take ahead of the
+    stamped host when it is a loopback value (the local-dev path): `ctx.request.url`
+    is the public URL, custom domain included. (A namespace on a Lambda compute,
     which CloudFront reaches through the gateway, reports the gateway's
     `execute-api` URL instead.)
   - The load balancer admits CloudFront's origin-facing prefix list on the
@@ -158,11 +160,13 @@ with readiness on port **8081** (503 while draining).
     namespace whose load balancer's VPC has no public subnets (an isolated VPC,
     owned or looked up) stays on the gateway's VPC link — no VPC origin, no
     CloudFront rule — and synth warns (`blocks:api:direct-routes-without-public-subnets`)
-    naming it.
+    naming it. The check reads the VPC's public subnets, so an imported VPC
+    (`Vpc.fromVpcAttributes`) lists its `publicSubnetIds`.
   - Each direct path is a cache behavior of the distribution, added after it is
     built, so synth counts the distribution's behaviors (the default included)
-    once they are all in and fails above the quota — 25, or `Hosting`'s
-    `quotas.cacheBehaviors` — naming the container namespaces.
+    once they are all in and fails above the quota — CloudFront's default of
+    75, or `Hosting`'s `quotas.cacheBehaviors` — naming the container namespaces
+    and a remedy for the distribution that has them.
 - **Moving a live namespace onto a container.** CloudFormation switches the
   namespace's route to the load balancer without waiting for the new tasks to
   become healthy (making the gateway wait on the ECS service would be a

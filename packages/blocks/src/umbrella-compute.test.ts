@@ -130,7 +130,7 @@ before(() => {
 			"export const renderJob = new AsyncJob(scope, 'render-job', { compute: renderCompute, handler: async () => {} });\n" +
 			"export const batchJob = new AsyncJob(scope, 'batch-job', { compute: batchCompute, handler: async () => {} });\n",
 	);
-	// 25 namespaces on one container: with the default behavior, one cache
+	// 75 namespaces on one container: with the default behavior, one cache
 	// behavior more than CloudFront's default quota.
 	manyContainerNamespacesBackendPath = join(tmpDir, 'backend-container-many.mjs');
 	writeFileSync(
@@ -140,7 +140,7 @@ before(() => {
 			"const wide = new Compute(scope, 'wide', { type: 'container' });\n" +
 			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
 			Array.from(
-				{ length: 25 },
+				{ length: 75 },
 				(_, i) =>
 					`export const ns${i} = new ApiNamespace(scope, 'ns${i}', () => ({ async ping() { return 'ok'; } }), { compute: wide });\n`,
 			).join(''),
@@ -987,7 +987,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		});
 		assert.throws(
 			() => Template.fromStack(stack),
-			/needs 26 cache behaviors .*'ns0'.*'ns24'.*exceeding the limit of 25/s,
+			/needs 76 cache behaviors .*'ns0'.*'ns74'.*exceeding the limit of 75 .*managed distribution .*no setting to raise it/s,
 		);
 	});
 

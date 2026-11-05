@@ -1795,7 +1795,10 @@ export class Hosting extends Construct {
     // Added before `/aws-blocks/api/*`, which would otherwise match first. Synth
     // checks the distribution's final behavior count against the door's
     // `quotas.cacheBehaviors` (the construction-time check can't see these).
-    addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions, cacheBehaviorLimit);
+    addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions, {
+      limit: cacheBehaviorLimit,
+      source: 'hosting',
+    });
 
     distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
     distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);

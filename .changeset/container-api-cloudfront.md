@@ -14,5 +14,5 @@ On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace
 - On the `apigateway` tier nothing changes: container namespaces go through the gateway, behind `Hosting` too.
 - A container namespace whose load balancer's VPC has no public subnets (an isolated VPC; a CloudFront VPC origin needs an internet gateway) stays on the gateway, and synth warns naming it.
 - `Hosting`'s `stacked` door keeps container namespaces on the gateway, through its ALB router.
-- Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (25, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
+- Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (CloudFront's default of 75, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
 - The CloudFront Function also drops a client-sent `X-Forwarded-Host`, so it cannot change `ctx.request.url`.

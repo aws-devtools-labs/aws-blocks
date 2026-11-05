@@ -573,7 +573,11 @@ describe('Hosting', () => {
       assert.doesNotThrow(() => hostingWithDirectRoute('HostingDirectRouteAtLimit', total));
       assert.throws(
         () => hostingWithDirectRoute('HostingDirectRouteOverLimit', total - 1),
-        new RegExp(`needs ${total} cache behaviors .*'render'.*exceeding the limit of ${total - 1}`, 's'),
+        new RegExp(
+          `needs ${total} cache behaviors .*'render'.*exceeding the limit of ${total - 1} .*Hosting's ` +
+            '`frontDoor\\.features\\.quotas\\.cacheBehaviors`',
+          's',
+        ),
       );
     });
 
