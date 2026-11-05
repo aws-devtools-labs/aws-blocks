@@ -200,6 +200,14 @@ Stable per-human-per-IdP. Use this as a foreign key in your own tables. Signing 
 
 Sessions outlive the IdP's ID token — users won't get kicked out every hour. The BB provisions the session storage it needs automatically (no configuration), refreshes the access token in the background when it expires, and coordinates concurrent refreshes across containers via a compare-and-swap protocol so a request burst doesn't pile up on the IdP's token endpoint. Sign-out invalidates the session server-side, not just client-side.
 
+Sign-out deletes the session row (a replayed copy of the cookie stops authenticating) and best-effort revokes the refresh token at the IdP. The session cookie is always cleared, so the device is signed out either way. If the row delete fails (for example a transient session-store error), sign-out reports `SignOutIncompleteException` (503) instead of success, because the server-side session was not invalidated and a copy of the cookie keeps authenticating until the session expires:
+
+- `POST /aws-blocks/auth/signout` returns `503` with `{"error":"...","name":"SignOutIncompleteException"}` instead of `204`.
+- `auth.signOut(ctx)` rejects with that error; `setAuthState({ action: 'signOut' })` returns a signed-out state with `errorName: 'SignOutIncompleteException'`.
+- The browser client's `auth.signOut()` rejects with the same `ApiError` (`name`, `status`) and does not notify listeners or reload, so you can tell the user.
+
+The refresh token is still revoked at the IdP when possible (the token is read before the delete is attempted); when that revocation succeeds, the leftover session cannot refresh past its current access-token lifetime. Because the cookie is already cleared, repeating the sign-out from the same browser does not delete the row.
+
 ### Provider helpers
 
 - `google({ clientId, clientSecret, scopes? })` — OIDC.
@@ -329,11 +337,13 @@ catch (e) {
 }
 ```
 
-`NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
+`NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`, `SignOutIncomplete`.
+
+`SignOutIncomplete` (503) means sign-out cleared the session cookie but could not invalidate the session server-side; see [Session management](#session-management).
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
-Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
+Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path for sign-in — react to errors on the imperative API with `isBlocksError` as shown above. The one exception is `setAuthState({ action: 'signOut' })`, which reports `SignOutIncomplete` on the returned state's `errorName` (for the returned-`AuthState` idiom, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs).
 
 ## Cognito-mediated federation
 

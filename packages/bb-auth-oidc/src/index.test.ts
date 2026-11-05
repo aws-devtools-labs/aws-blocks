@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
+import type { AuthActionInput, AuthState } from '@aws-blocks/auth-common';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
 import {
 	handleDiscovery,
@@ -24,6 +25,7 @@ import { buildExchangeUrl } from './engines/oidc-client-engine.js';
 import { SignJWT, generateKeyPair, exportJWK } from 'jose';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
+import type { SessionRow } from './types.js';
 
 const ROOT = { id: 'test-app' } as any;
 
@@ -1382,5 +1384,176 @@ describe('alg:none rejection', () => {
 
 		const user = await auth.getCurrentUser(ctx);
 		assert.strictEqual(user, null, 'alg:none with valid claims must still be rejected');
+	});
+});
+
+describe('signOut — session-store failures must not report a completed sign-out', () => {
+	// Raw store error text shaped like a DynamoDB SDK failure: it must never reach
+	// the wire (no ARN / account id / operation name in the thrown message).
+	const RAW_STORE_ERROR =
+		'ThrottlingException: Rate exceeded for arn:aws:dynamodb:us-east-1:123456789012:table/sessions (DeleteItem)';
+	const NO_LEAK = /arn:aws|123456789012|DeleteItem|GetItem|Throttling/;
+
+	type SignOutProbe = { engine: { sessionManager: SessionManager } };
+
+	function makeAuth() {
+		return new AuthOIDC(ROOT, unique('signout'), { providers: [stubIdp({ name: 'google' })] });
+	}
+
+	function sessionManagerOf(auth: AuthOIDC): SessionManager {
+		return (auth as unknown as SignOutProbe).engine.sessionManager;
+	}
+
+	function withCookie(cookie: string): BlocksContext {
+		const ctx = freshContext();
+		ctx.request.headers.set('cookie', cookie);
+		return ctx;
+	}
+
+	/** Write a live stateful session (as a completed sign-in would) and return its cookie. */
+	async function signedInCookie(sm: SessionManager): Promise<string> {
+		const ctx = freshContext();
+		const exp = Math.floor(Date.now() / 1000) + 3600;
+		await sm.writeStatefulSession({
+			userId: 'https://issuer.example:u1',
+			username: 'u1',
+			provider: 'google',
+			sub: 'u1',
+			iss: 'https://issuer.example',
+			email: null,
+			name: null,
+			claims: { sub: 'u1', iss: 'https://issuer.example', exp },
+		}, 'RT-1', ctx);
+		const [setCookie] = ctx.response.headers.getSetCookie();
+		return setCookie.split(';')[0];
+	}
+
+	function assertCookiesCleared(ctx: BlocksContext): void {
+		const cleared = ctx.response.headers.getSetCookie();
+		assert.ok(cleared.some((c) => /_session=;/.test(c) && /Max-Age=0/i.test(c)), `session cookie cleared: ${cleared}`);
+		assert.ok(cleared.some((c) => /_pending=;/.test(c)), `pending cookie cleared: ${cleared}`);
+	}
+
+	test('a successful sign-out invalidates the session server-side (replayed cookie rejected)', async () => {
+		const auth = makeAuth();
+		const cookie = await signedInCookie(sessionManagerOf(auth));
+		assert.ok(await auth.getCurrentUser(withCookie(cookie)), 'precondition: the cookie authenticates');
+
+		const ctx = withCookie(cookie);
+		await auth.signOut(ctx);
+
+		assertCookiesCleared(ctx);
+		assert.strictEqual(await auth.getCurrentUser(withCookie(cookie)), null, 'replayed cookie no longer authenticates');
+	});
+
+	test('a failed session delete clears cookies and throws SignOutIncomplete (503, no store-error leak)', async () => {
+		const auth = makeAuth();
+		const sm = sessionManagerOf(auth);
+		const cookie = await signedInCookie(sm);
+		const store = sm.sessionStore;
+		const realDelete = store.delete.bind(store);
+		store.delete = async () => { throw new Error(RAW_STORE_ERROR); };
+		try {
+			const ctx = withCookie(cookie);
+			await assert.rejects(() => auth.signOut(ctx), (e: unknown) => {
+				assert.ok(e instanceof ApiError, `expected ApiError, got ${String(e)}`);
+				assert.strictEqual(e.name, AuthOIDCErrors.SignOutIncomplete);
+				assert.strictEqual(e.status, 503);
+				assert.doesNotMatch(e.message, NO_LEAK);
+				return true;
+			});
+			// This device is still signed out: the cookies are cleared even though
+			// the server-side row could not be deleted.
+			assertCookiesCleared(ctx);
+
+			// Through the createApi state machine the Authenticator sees a
+			// signed-out state carrying the stable error name, not a silent success.
+			const api = (auth.createApi() as unknown as (c: BlocksContext) => {
+				setAuthState(input: AuthActionInput): Promise<AuthState>;
+			})(withCookie(cookie));
+			const next = await api.setAuthState({ action: 'signOut' });
+			assert.strictEqual(next.state, 'signedOut');
+			assert.strictEqual(next.errorName, AuthOIDCErrors.SignOutIncomplete);
+			assert.doesNotMatch(next.error ?? '', NO_LEAK);
+		} finally {
+			store.delete = realDelete;
+		}
+	});
+
+	test('a failed session read still deletes the row, so a replayed cookie is rejected', async () => {
+		const auth = makeAuth();
+		const sm = sessionManagerOf(auth);
+		const cookie = await signedInCookie(sm);
+		const store = sm.sessionStore;
+		const realGet = store.get.bind(store);
+		let failNextGet = true;
+		store.get = async (key: string) => {
+			if (failNextGet) {
+				failNextGet = false;
+				throw new Error(RAW_STORE_ERROR);
+			}
+			return realGet(key);
+		};
+		try {
+			const ctx = withCookie(cookie);
+			await auth.signOut(ctx);
+			assertCookiesCleared(ctx);
+			assert.strictEqual(await auth.getCurrentUser(withCookie(cookie)), null, 'replayed cookie no longer authenticates');
+		} finally {
+			store.get = realGet;
+		}
+	});
+
+	test('Cognito engine: upstream revocation still runs with the stored refresh token when the delete fails', async () => {
+		const rows = new Map<string, SessionRow>();
+		const sm = new SessionManager({
+			sessionStore: {
+				get: async (k) => rows.get(k) ?? null,
+				put: async (k, v) => { rows.set(k, v); },
+				delete: async () => { throw new Error(RAW_STORE_ERROR); },
+			},
+			cookieSecret: 'test-secret',
+			cookieNamePrefix: 'test',
+			cookieAttributes: { secure: false, partitioned: false, sameSite: 'Lax', path: '/' },
+		});
+		const engine = new CognitoFederationEngine({
+			providers: [{
+				name: 'google',
+				kind: 'cognito-federated',
+				cognitoDomain: 'myapp',
+				region: 'us-east-1',
+				identityProvider: 'Google',
+				clientId: () => 'test-client-id',
+				clientSecret: () => 'test-client-secret',
+				scopes: ['openid', 'email', 'profile'],
+				idpClientId: { fullId: 'test', get: async () => 'test' },
+				idpClientSecret: { fullId: 'test', get: async () => 'test' },
+			}],
+			sessionManager: sm,
+			cognitoClientId: () => 'test-client-id',
+			cognitoClientSecret: () => 'test-client-secret',
+			cognitoUserPoolId: () => 'us-east-1_Pool',
+		});
+		const cookie = await signedInCookie(sm);
+
+		const revoked: string[] = [];
+		const realFetch = globalThis.fetch;
+		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+			if (String(url).endsWith('/oauth2/revoke')) {
+				revoked.push(new URLSearchParams(String(init?.body)).get('token') ?? '');
+			}
+			return new Response(null, { status: 200 });
+		}) as typeof globalThis.fetch;
+		try {
+			const ctx = withCookie(cookie);
+			await assert.rejects(
+				() => engine.signOut(ctx),
+				(e: unknown) => e instanceof ApiError && e.name === AuthOIDCErrors.SignOutIncomplete,
+			);
+			assertCookiesCleared(ctx);
+			assert.deepStrictEqual(revoked, ['RT-1'], 'the refresh token read before the failed delete was revoked upstream');
+		} finally {
+			globalThis.fetch = realFetch;
+		}
 	});
 });

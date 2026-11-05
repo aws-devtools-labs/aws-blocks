@@ -6,7 +6,7 @@
  * injecting their own `AuthEngine`.
  */
 
-import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX, brandBlocksError } from '@aws-blocks/core';
+import { Scope, type ScopeParent, type BlocksContext, ApiNamespace, ApiError, BLOCKS_AUTH_PREFIX, brandBlocksError, isBlocksError } from '@aws-blocks/core';
 import type { AuthActionInput, AuthState, AuthAction, BlocksAuth } from '@aws-blocks/auth-common';
 import type { AuthEngine, ExchangeInput, ExchangeResult, AuthorizeParams, AuthorizeParamsRequest, BearerRefreshResult } from './engine.js';
 import type {
@@ -21,6 +21,7 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { decodeState } from './state.js';
 import { validateRelay } from './relay.js';
+import { AuthOIDCErrors } from './errors.js';
 /** Default paths for the routes `AuthOIDC` owns. All live under the reserved
  * `/aws-blocks/auth` subtree so Hosting proxies the whole flow through one
  * CloudFront behavior (and so they never collide with a customer's `/auth/*`). */
@@ -401,6 +402,16 @@ export class AuthOIDC<
 	/**
 	 * Clear the session. If `onSignOut` is configured, it fires before
 	 * clearing state. Hook errors are logged but don't prevent sign-out.
+	 *
+	 * Deletes the server-side session row, so a replayed copy of the cookie
+	 * stops authenticating, and best-effort revokes the refresh token at the
+	 * IdP. The session cookie is ALWAYS cleared, so this device is signed out
+	 * even when the row delete fails.
+	 *
+	 * @throws {AuthOIDCErrors.SignOutIncomplete} (503) If the session row could
+	 * not be deleted (e.g. a transient session-store failure): the cookie was
+	 * cleared, but the server-side session was NOT invalidated, so a copy of the
+	 * cookie keeps authenticating until the session expires.
 	 */
 	async signOut(ctx: BlocksContext): Promise<void> {
 		if (this.options.onSignOut) {
@@ -437,7 +448,14 @@ export class AuthOIDC<
 			},
 			setAuthState: async (input: AuthActionInput): Promise<AuthState> => {
 				if (input.action === 'signOut') {
-					await this.signOut(ctx);
+					try {
+						await this.signOut(ctx);
+					} catch (e) {
+						// The cookie is always cleared, so report signed-out — but carry the
+						// stable error so the caller knows the session was not invalidated.
+						if (!isBlocksError(e, AuthOIDCErrors.SignOutIncomplete)) throw e;
+						return { ...this.signedOutState(ctx), error: e.message, errorName: e.name };
+					}
 					return this.signedOutState(ctx);
 				}
 				// External actions (IdP redirect sign-in) don't reach here — the

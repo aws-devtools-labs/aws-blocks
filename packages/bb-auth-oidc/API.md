@@ -34,6 +34,7 @@ export const AuthOIDCErrors: {
     readonly IdpError: "IdpErrorException";
     readonly InvalidRelay: "InvalidRelayException";
     readonly SdkOutdated: "SdkOutdatedException";
+    readonly SignOutIncomplete: "SignOutIncompleteException";
 };
 
 // Warning: (ae-forgotten-export) The symbol "CognitoFederatedOpts" needs to be exported by the entry point index.aws.d.ts
@@ -87,7 +88,6 @@ export interface OIDCClient<Provider extends string = string> {
         state?: string;
         redirectPath?: string;
     }): Promise<void>;
-    // (undocumented)
     signOut(): Promise<void>;
     // Warning: (ae-forgotten-export) The symbol "OIDCClientDescriptor" needs to be exported by the entry point index.aws.d.ts
     //

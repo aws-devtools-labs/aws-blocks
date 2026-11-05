@@ -434,10 +434,26 @@ export class AuthOIDCClient<
 		}
 	}
 
-	/** Sign out and reload the page. */
+	/**
+	 * Sign out and reload the page.
+	 *
+	 * Rejects with an `ApiError` carrying the server's status and error name when
+	 * the sign-out request fails — e.g. `SignOutIncompleteException` (503) when the
+	 * server cleared the cookie but could not invalidate the session server-side.
+	 * On rejection no signed-out notification or broadcast is sent and the page is
+	 * not reloaded, so the caller can surface the error.
+	 */
 	async signOut(): Promise<void> {
 		const baseUrl = await _getBaseUrl();
-		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
+		const resp = await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
+		if (!resp.ok) {
+			const body = await resp.json().catch(() => ({})) as { error?: unknown; name?: unknown };
+			throw new ApiError(
+				typeof body.error === 'string' ? body.error : `AuthOIDC sign-out failed (${resp.status})`,
+				resp.status,
+				{ name: typeof body.name === 'string' ? body.name : undefined },
+			);
+		}
 		lastUser = null;
 		notify(null, null);
 		// Bridge the sign-out into @aws-blocks/auth-common too, symmetrically with

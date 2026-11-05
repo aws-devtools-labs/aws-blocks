@@ -30,6 +30,12 @@ export const AuthOIDCErrors = {
 	IdpError: 'IdpErrorException',
 	InvalidRelay: 'InvalidRelayException',
 	SdkOutdated: 'SdkOutdatedException',
+	/**
+	 * `signOut` cleared the session cookie but could not delete the server-side
+	 * session row (e.g. a transient session-store failure); HTTP 503. A copy of
+	 * the cookie may still authenticate until the session expires.
+	 */
+	SignOutIncomplete: 'SignOutIncompleteException',
 } as const;
 
 /**
