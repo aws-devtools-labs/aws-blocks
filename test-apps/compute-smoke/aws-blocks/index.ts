@@ -13,6 +13,9 @@
  * - API namespace on its own compute: `reports` runs on a serverless `Compute`
  *   (512 MB), so a call through the front door must be served by that function,
  *   while `api` stays on the default compute.
+ * - API namespace on a container compute: `containerApi` is served by the
+ *   `worker` container's tasks (which also run the container AsyncJob), behind
+ *   the same front door as the Lambda-hosted namespaces.
  *
  * The front door is the suite's variant axis: each CI leg deploys this same app
  * with one `COMPUTE_API_FRONT_DOOR` value (see `index.cdk.ts`).
@@ -24,7 +27,7 @@
  * set, the Lambda computes run in it too.
  */
 
-import { ApiNamespace, Scope } from '@aws-blocks/core';
+import { ApiNamespace, type BlocksContext, Scope } from '@aws-blocks/core';
 import { Compute } from '@aws-blocks/blocks';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { KVStore } from '@aws-blocks/bb-kv-store';
@@ -104,11 +107,19 @@ const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
 
 // ── Serverless compute — an API namespace on its own function ─────────────
 
-/** Which function served the call — what the API-namespace scenario asserts on. */
-function whereAmI() {
+/**
+ * Which compute served the call, and the request URL its handler saw — what the
+ * API-namespace scenarios assert on. On Lambda the function env vars are set; on
+ * a container task Blocks stamps `BLOCKS_SERVICE_MODE=worker` and Fargate sets
+ * the task metadata endpoint.
+ */
+function whereAmI(context: BlocksContext) {
   return {
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
     memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
+    serviceMode: process.env.BLOCKS_SERVICE_MODE ?? null,
+    onEcsTask: process.env.ECS_CONTAINER_METADATA_URI_V4 !== undefined,
+    requestUrl: context.request.url.href,
   };
 }
 
@@ -119,19 +130,35 @@ const reportsCompute = new Compute(scope, 'reports', { type: 'serverless', memor
 export const reports = new ApiNamespace(
   scope,
   'reportsApi',
-  () => ({
+  (context) => ({
     async whereAmI() {
-      return whereAmI();
+      return whereAmI(context);
     },
   }),
   { compute: reportsCompute },
 );
 
+// ── Container compute — an API namespace served by the `worker` tasks ───────
+
+// The `worker` compute already keeps a task running (`scaling.minInstances: 1`),
+// which a container that serves API namespaces needs, so the namespace shares it
+// with the container AsyncJob instead of adding a service.
+export const containerApi = new ApiNamespace(
+  scope,
+  'containerApi',
+  (context) => ({
+    async whereAmI() {
+      return whereAmI(context);
+    },
+  }),
+  { compute: worker },
+);
+
 // ── API (operations the tests call via RPC) — on the default compute ───────
 
-export const api = new ApiNamespace(scope, 'api', (_context) => ({
+export const api = new ApiNamespace(scope, 'api', (context) => ({
   async whereAmI() {
-    return whereAmI();
+    return whereAmI(context);
   },
 
   async containerJobSubmit(key: string, value: string) {
