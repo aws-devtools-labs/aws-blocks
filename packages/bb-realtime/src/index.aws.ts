@@ -154,12 +154,34 @@ let _tokenSecret: FrameworkKey | null = null;
 let cachedSecret: string | null = null;
 let secretPromise: Promise<string> | null = null;
 
+/**
+ * The token secret, read once per container and then cached. Concurrent callers
+ * share one in-flight read. A failed read is NOT cached: the in-flight promise
+ * is cleared on rejection, so a transient failure at cold start (throttling, a
+ * network blip, IAM still propagating) is retried by the next caller instead of
+ * breaking the container for its lifetime.
+ */
 async function getTokenSecret(): Promise<string> {
 	if (cachedSecret) return cachedSecret;
 	if (secretPromise) return secretPromise;
 	if (!_tokenSecret) throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret not initialized');
-	secretPromise = _tokenSecret.get().then(value => { cachedSecret = value; return value; });
-	return secretPromise;
+	const pending = _tokenSecret.get().then(
+		(value) => {
+			cachedSecret = value;
+			return value;
+		},
+		(err: unknown) => {
+			if (secretPromise === pending) secretPromise = null;
+			throw err;
+		},
+	);
+	secretPromise = pending;
+	return pending;
+}
+
+/** {@link getTokenSecret}, resolving to `null` instead of rejecting (e.g. during codegen). */
+function getTokenSecretOrNull(): Promise<string | null> {
+	return getTokenSecret().catch(() => null);
 }
 
 // ── DistributedTable helpers ────────────────────────────────────────────────
@@ -306,7 +328,6 @@ export const Realtime: {
 } = class Realtime extends Scope {
 	private _namespaces: Map<string, { schema: StandardSchemaV1<any>; prefix: string }>;
 	private _localEmitter = new EventEmitter();
-	private _cachedSecretPromise: Promise<string | null>;
 	private _customUserAgent: [string, string][];
 
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
@@ -340,9 +361,10 @@ export const Realtime: {
 			console.warn(`[Realtime] BLOCKS_RT_WS_URL not set — getChannel() will return incomplete descriptors`);
 		}
 
-		// Pre-warm secret fetch. Resolves to null when the store is unreachable (e.g., codegen).
-		// Callers must treat null as "secret unavailable" and fail explicitly.
-		this._cachedSecretPromise = getTokenSecret().catch(() => null);
+		// Pre-warm secret fetch. A failure is ignored here (e.g. codegen, where the
+		// store is unreachable) and retried by the next read, which treats null as
+		// "secret unavailable" and fails explicitly.
+		void getTokenSecretOrNull();
 
 		this._namespaces = new Map();
 		for (const [name, config] of Object.entries(options.namespaces)) {
@@ -398,7 +420,7 @@ export const Realtime: {
 		const { wsUrl } = getSdkIdentifiers(this);
 		if (wsUrl) {
 			const fullId = this.fullId;
-			this._cachedSecretPromise.then(secret => {
+			getTokenSecretOrNull().then(secret => {
 				if (!secret) return; // secret store unavailable (e.g., codegen)
 				const channelToken = mintChannelToken(fullChannel, secret);
 				const connectToken = mintConnectToken(fullId, secret);
@@ -415,7 +437,7 @@ export const Realtime: {
 		const ns = this._ns(namespace);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
-		const secret = await this._cachedSecretPromise;
+		const secret = await getTokenSecretOrNull();
 		if (!secret) {
 			throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret unavailable — cannot issue channel credentials');
 		}
