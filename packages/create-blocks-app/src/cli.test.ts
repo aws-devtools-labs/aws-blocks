@@ -245,6 +245,7 @@ describe('create-blocks-app template metadata', () => {
       sql: { port: 3001, frontend: false },
       nextjs: frontend,
       'auth-cognito': frontend,
+      'auth-oidc': frontend,
       bare: frontend,
       default: frontend,
       demo: frontend,
@@ -268,7 +269,7 @@ describe('create-blocks-app template metadata', () => {
     const vite = (port: number) => `npx vite --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, 'auth-cognito': vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, 'auth-cognito': vite, 'auth-oidc': vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {
