@@ -12,8 +12,10 @@ import {
 	profileArg,
 	profileName,
 } from './credential-guidance.js';
+import { classifyDenialError, denialGuidance } from './denial-guidance.js';
 import {
 	type DeploymentTargetOptions,
+	deploymentCredentialsEnv,
 	environmentAccessKeys,
 	REGION_CODE,
 	resolveDeploymentTarget,
@@ -39,6 +41,10 @@ import { type BootstrapVersionReader, cdkBootstrapFailure } from './preflight-bo
  * On a credential failure, the message names the credential source (for example
  * an SSO or `aws login` profile, or access keys in the environment) and the
  * command that fixes it. The check never prompts, signs in, or changes credentials.
+ *
+ * When AWS denies the check (for example a role that the profile assumes), it warns
+ * and continues. The warning says whether an AWS Organizations policy explicitly
+ * denied the request, without the error details.
  *
  * Before the deploy continues, the check prints the deployment target: the
  * credentials that CDK deploys with (a profile, environment access keys or
@@ -316,8 +322,18 @@ export async function assertAwsCredentials({
 		const label = credentialErrorLabel(error);
 		const failure = classifyCredentialError(label);
 
-		// Not a credential problem: don't block a deploy that might still work.
-		if (failure === 'network') {
+		// Denied, which does not prove that the deployment credentials are invalid.
+		const denial = classifyDenialError(error);
+		if (denial) {
+			log.warn(
+				[
+					`⚠️  AWS denied access while checking credentials for \`npm run ${command}\` (${label}); ` +
+						'continuing — the deploy will report the error if it is denied too.',
+					...denialGuidance(denial).map((line) => `  ${line}`),
+				].join('\n'),
+			);
+		} else if (failure === 'network') {
+			// Not a credential problem: don't block a deploy that might still work.
 			log.warn(
 				`⚠️  Could not reach AWS to verify credentials for \`${invocation}\` (${label}); ` +
 					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
@@ -334,10 +350,12 @@ export async function assertAwsCredentials({
 					invocation,
 					errorName: label,
 					failure,
-					// The guidance follows the deploy: with environment keys, no profile is used.
-					env: guidanceEnv(env, environmentKeys),
+					// The guidance follows the deploy: with environment keys, no profile is used, and
+					// the keys are passed under the AWS_ names that the guidance reads.
+					env: deploymentCredentialsEnv(env, environmentKeys),
 					profile,
 					readAwsCliVersion,
+					region,
 				}),
 			);
 		}
@@ -367,22 +385,6 @@ export async function assertAwsCredentials({
 	console.log(targetSummary(target, region, metadata));
 	const failure = await bootstrapFailure;
 	if (failure) throw new Error(failure);
-}
-
-/**
- * The environment that the failure guidance reads. With environment keys, no
- * profile is used, and the keys are passed under the AWS_ names that the guidance reads.
- */
-function guidanceEnv(env: NodeJS.ProcessEnv, environmentKeys: AwsCredentialIdentity | undefined): NodeJS.ProcessEnv {
-	if (!environmentKeys) return env;
-	return {
-		...env,
-		AWS_PROFILE: undefined,
-		AWS_DEFAULT_PROFILE: undefined,
-		AWS_ACCESS_KEY_ID: environmentKeys.accessKeyId,
-		AWS_SECRET_ACCESS_KEY: environmentKeys.secretAccessKey,
-		AWS_SESSION_TOKEN: environmentKeys.sessionToken,
-	};
 }
 
 /** The AWS identity and Region that the deploy commands use, from {@link readAwsIdentity}. */
@@ -476,7 +478,7 @@ export async function readAwsIdentity({
 				invocation,
 				errorName: label,
 				failure,
-				env: guidanceEnv(env, environmentKeys),
+				env: deploymentCredentialsEnv(env, environmentKeys),
 				profile,
 				readAwsCliVersion,
 			}),
