@@ -23,6 +23,11 @@
  * - `deterministicBuildId` — pin the framework's build id (Next.js
  *   `generateBuildId`), so an unchanged build produces byte-identical static
  *   assets and a re-deploy skips the asset re-upload.
+ * - `reuseBuild` — don't run the framework build; use the output a previous
+ *   build left. `'required'`: the caller asked for it explicitly, so a missing
+ *   output is the adapter's usual error. `'if-present'`: the synth won't deploy
+ *   the frontend (a destroy), so reuse an existing output and build only when
+ *   there is none. See {@link shouldSkipBuild}.
  *
  * The caller that knows these choices (core `Hosting`: the front door and the
  * preview mode) wraps the adapter run in {@link withBuildProfile}; adapters
@@ -37,6 +42,7 @@ export type BuildProfile = {
   skipIsr?: boolean;
   skipImageOptimization?: boolean;
   deterministicBuildId?: string;
+  reuseBuild?: 'if-present' | 'required';
 };
 
 /** @internal */
@@ -58,7 +64,8 @@ export const buildProfile = (): BuildProfile => {
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
   const value: Record<string, unknown> = { ...parsed };
-  const { serverInvoke, lambdaWebAdapter, edgeToRegional, skipIsr, skipImageOptimization, deterministicBuildId } = value;
+  const { serverInvoke, lambdaWebAdapter, edgeToRegional, skipIsr, skipImageOptimization, deterministicBuildId, reuseBuild } =
+    value;
   return {
     ...(serverInvoke === 'default' || serverInvoke === 'http-api' ? { serverInvoke } : {}),
     ...(typeof lambdaWebAdapter === 'boolean' ? { lambdaWebAdapter } : {}),
@@ -66,7 +73,22 @@ export const buildProfile = (): BuildProfile => {
     ...(typeof skipIsr === 'boolean' ? { skipIsr } : {}),
     ...(typeof skipImageOptimization === 'boolean' ? { skipImageOptimization } : {}),
     ...(typeof deterministicBuildId === 'string' ? { deterministicBuildId } : {}),
+    ...(reuseBuild === 'if-present' || reuseBuild === 'required' ? { reuseBuild } : {}),
   };
+};
+
+/**
+ * Whether an adapter skips its own framework build. An explicit `skipBuild`
+ * option wins; otherwise the profile's `reuseBuild` decides: `'required'`
+ * always skips, `'if-present'` skips only when `builtOutputExists()` (the
+ * adapter's marker for a finished build) is true.
+ */
+export const shouldSkipBuild = (explicit: boolean | undefined, builtOutputExists: () => boolean): boolean => {
+  if (explicit !== undefined) return explicit;
+  const { reuseBuild } = buildProfile();
+  if (reuseBuild === 'required') return true;
+  if (reuseBuild === 'if-present') return builtOutputExists();
+  return false;
 };
 
 /** Run `fn` (an adapter invocation) with `profile`, restoring the previous value after. */

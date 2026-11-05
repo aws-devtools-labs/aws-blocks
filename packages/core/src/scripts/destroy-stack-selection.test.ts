@@ -90,6 +90,8 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     assert.strictEqual(argv[argv.indexOf(projectRoot) - 1], '--context', `expected --context ${projectRoot} in: ${argv.join(' ')}`);
     // The retry reads the stacks this attempt selected from the assembly it synthesized.
     assert.strictEqual(argv[argv.indexOf('--output') + 1], '.blocks-sandbox/sandbox-destroy.out', `expected --output in: ${argv.join(' ')}`);
+    // A destroy doesn't deploy the frontend, so Hosting reuses an existing build.
+    assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
   });
 
   it('destroySandbox clears a stale assembly first and removes the one CDK wrote after a successful destroy', () => {
@@ -112,6 +114,8 @@ describe('destroy selects the stacks its deploy creates', { skip }, () => {
     try {
       const argv = recordDestroyArgv('./destroy.js', `mod.destroy({ cdkAppPath: 'aws-blocks/index.cdk.ts', projectRoot: ${JSON.stringify(root)} })`);
       assert.ok(argv.includes('destroy'), `expected a cdk destroy, got: ${argv.join(' ')}`);
+      // A destroy doesn't deploy the frontend, so Hosting reuses an existing build.
+      assert.strictEqual(argv[argv.indexOf('reuseFrontendBuild=true') - 1], '--context', `expected --context reuseFrontendBuild=true in: ${argv.join(' ')}`);
       // cdk destroy synthesizes the app with the production environment.
       assert.match(readFileSync(cdkLog, 'utf-8'), /^stage=production mark=from-env-production$/m);
     } finally {

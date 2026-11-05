@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
@@ -1313,6 +1314,9 @@ export function sandboxDestroyDeps(
     // resolve the same stack names.
     "--context", "sandboxMode=true",
     "--context", `projectRoot=${process.cwd()}`,
+    // A destroy doesn't deploy the frontend: reuse an existing frontend build
+    // (see common/frontend-build.ts).
+    "--context", `${REUSE_FRONTEND_BUILD_CONTEXT}=true`,
     // Quote backendPath: CDK re-runs the --app string through a shell, so an
     // unquoted path containing a space would split. quoteCdkAppPath picks the
     // quoting that shell understands — cmd.exe keeps a literal single quote.

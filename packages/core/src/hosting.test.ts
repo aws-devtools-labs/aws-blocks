@@ -3839,3 +3839,63 @@ const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
   { kind: 'apiGateway', features: { waf: { enabled: true } } },
 ];
 void _blocksFrontDoorTypes;
+
+// `Hosting` runs `buildCommand` on every synth. A destroy reuses an existing
+// build (context `reuseFrontendBuild=true`), and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+// makes a deploy reuse one; see common/frontend-build.ts.
+describe('Hosting — skipping the frontend build', () => {
+  let tmpDir: string;
+  const savedSkip = process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  // Records that it ran, then writes the SPA output a real build would.
+  const BUILD = `node -e "const f=require('fs');f.writeFileSync('built.txt','1');f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','<html></html>')"`;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-skipbuild-'));
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'skip', dependencies: { react: '^18' } }));
+    delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedSkip === undefined) delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+    else process.env.BLOCKS_SKIP_FRONTEND_BUILD = savedSkip;
+  });
+
+  const synth = (context?: Record<string, string>) => {
+    const stack = new Stack(new App(context ? { context } : undefined), 'SkipBuildStack');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: BUILD });
+  };
+  const built = () => fs.existsSync(path.join(tmpDir, 'built.txt'));
+
+  it('runs buildCommand on a normal synth', () => {
+    synth();
+    assert.ok(built(), 'buildCommand should run');
+  });
+
+  it('a destroy synth reuses an existing build instead of running buildCommand', () => {
+    createSpaBuildOutput(tmpDir);
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(!built(), 'buildCommand should not run when dist/ exists');
+  });
+
+  it('a destroy synth still builds when there is no build to reuse', () => {
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(built(), 'buildCommand should run when dist/ is missing');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 deploys the existing build without running buildCommand', () => {
+    createSpaBuildOutput(tmpDir);
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    synth();
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 with no build output fails and names the variable', () => {
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    assert.throws(() => synth(), (err: Error) => {
+      assert.match(err.message, /Build output directory not found/);
+      assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD=1 skips the frontend build/);
+      return true;
+    });
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+});

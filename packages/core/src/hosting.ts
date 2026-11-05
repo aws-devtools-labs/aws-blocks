@@ -62,6 +62,7 @@ import {
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
 import { writeFrameworkSink } from './telemetry/framework-sink.js';
+import { REUSE_FRONTEND_BUILD_CONTEXT, SKIP_FRONTEND_BUILD_ENV, frontendBuildReuse } from './common/frontend-build.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -223,6 +224,11 @@ export interface HostingProps {
    * When provided, it is executed during CDK synth with `BLOCKS_API_URL`
    * injected into the environment.
    * Omit if the app is already pre-built.
+   *
+   * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
+   * build output already exists, or on any synth with
+   * `BLOCKS_SKIP_FRONTEND_BUILD=1`, which deploys the existing build output
+   * as is. The framework adapter's own build is skipped the same way.
    */
   buildCommand?: string;
 
@@ -1081,7 +1087,23 @@ export class Hosting extends Construct {
     writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
-    if (props.buildCommand) {
+    // A destroy reuses an existing build, and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+    // makes a deploy reuse it (see common/frontend-build.ts). The adapter gets
+    // the same decision through the build profile below.
+    const reuseBuild = frontendBuildReuse(this.node.tryGetContext(REUSE_FRONTEND_BUILD_CONTEXT));
+    const expectedOutputDir = props.buildOutputDir
+      ? resolve(root, props.buildOutputDir)
+      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
+    const skipBuildCommand =
+      reuseBuild === 'required' || (reuseBuild === 'if-present' && existsSync(expectedOutputDir));
+    if (props.buildCommand && skipBuildCommand) {
+      console.log(
+        reuseBuild === 'required'
+          ? `⏭️  Skipping frontend build (${SKIP_FRONTEND_BUILD_ENV}=1): using ${relative(root, expectedOutputDir) || '.'}`
+          : `⏭️  Skipping frontend build: this synth doesn't deploy the frontend, reusing ${relative(root, expectedOutputDir) || '.'}`,
+      );
+    }
+    if (props.buildCommand && !skipBuildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
       // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
@@ -1108,17 +1130,15 @@ export class Hosting extends Construct {
       }
     }
 
-    // ── 3. Resolve build output dir (for validation only) ────────
+    // ── 3. Validate the build output dir ─────────────────────────
     const buildOutputDir = props.buildOutputDir;
-
-    const expectedOutputDir = buildOutputDir
-      ? resolve(root, buildOutputDir)
-      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
 
     if (!existsSync(expectedOutputDir)) {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
-          `Provide a buildCommand or ensure the directory exists before synthesis.`,
+          (reuseBuild === 'required'
+            ? `${SKIP_FRONTEND_BUILD_ENV}=1 skips the frontend build, so build the frontend first or unset it.`
+            : `Provide a buildCommand or ensure the directory exists before synthesis.`),
       );
     }
 
@@ -1152,6 +1172,7 @@ export class Hosting extends Construct {
           ...(props.incrementalRegeneration === false ? { skipIsr: true } : {}),
           ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
           ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),
+          ...(reuseBuild ? { reuseBuild } : {}),
         },
         () => adapter(root),
       ),

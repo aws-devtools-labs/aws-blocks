@@ -9,6 +9,7 @@ import { assertAwsCredentials } from './preflight-credentials.js';
 import { createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
 import { runCapture } from './run-command.js';
+import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { type DestroyRetryDeps, destroyWasThrottled, emptySandboxBuckets, runDestroyWithRetries } from './sandbox.js';
 
 export interface DestroyOptions {
@@ -99,6 +100,13 @@ export function cdkListedStacks(out: string): string[] {
 }
 
 /**
+ * CDK context every synth of a destroy passes: a destroy doesn't deploy the
+ * frontend, so `Hosting` reuses an existing frontend build instead of running
+ * `buildCommand` and the framework build (see common/frontend-build.ts).
+ */
+export const DESTROY_SYNTH_CONTEXT: readonly string[] = ['--context', `${REUSE_FRONTEND_BUILD_CONTEXT}=true`];
+
+/**
  * Resolve the production app's stack names via `cdk ls` (best-effort; [] on
  * error). Mirrors the sandbox resolver but without `sandboxMode` — it drives
  * the pre-retry bucket-emptying in {@link runDestroyWithRetries}, so a failure
@@ -109,7 +117,7 @@ function listProductionStackNames(options: DestroyOptions, cdkEnv: NodeJS.Proces
   try {
     const out = runCapture(
       'npx',
-      ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`],
+      ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`, ...DESTROY_SYNTH_CONTEXT],
       // runCapture captures stderr so a genuine synth/`cdk ls` failure is logged
       // below rather than being indistinguishable from "app has zero stacks".
       { cwd: options.projectRoot, env: cdkEnv },
@@ -134,7 +142,7 @@ function assertAppDefinesStack(options: DestroyOptions, stackName: string, cdkEn
   let out: string;
   try {
     // runCapture (cross-platform, captures stderr) as listProductionStackNames uses.
-    out = runCapture('npx', ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`], {
+    out = runCapture('npx', ['cdk', 'ls', '--context', `projectRoot=${options.projectRoot}`, ...DESTROY_SYNTH_CONTEXT], {
       cwd: options.projectRoot,
       env: cdkEnv,
     });
@@ -211,6 +219,7 @@ export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.Pr
     'cdk', 'destroy',
     '--force',
     '--context', `projectRoot=${options.projectRoot}`,
+    ...DESTROY_SYNTH_CONTEXT,
   ];
   // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
   // the retry loop prints it once the destroy finally fails.

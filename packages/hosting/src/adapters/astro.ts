@@ -39,7 +39,7 @@ import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
 import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
 import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import type { DeployManifest, Redirect, RemotePattern, RouteBehavior } from '../manifest/types.js';
-import { buildProfile } from './shared/build_profile.js';
+import { buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 
 export type AstroAdapterOptions = {
   /** Project root directory (absolute). */
@@ -128,7 +128,9 @@ exec node entry.mjs
  * @returns the generated DeployManifest
  */
 export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
-  const { projectDir, skipBuild, buildCommand } = options;
+  const { projectDir, buildCommand } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () => fs.existsSync(path.join(projectDir, 'dist')));
   const bodySizeLimit = options.bodySizeLimit ?? DEFAULT_BODY_SIZE_LIMIT_BYTES;
 
   assertAstroVersion(projectDir);

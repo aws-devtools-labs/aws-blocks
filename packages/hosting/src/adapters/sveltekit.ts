@@ -26,6 +26,7 @@
  *   - `build/prerendered/`  — prerendered HTML pages
  *   - `build/server/`       — the SSR bundle
  */
+import { shouldSkipBuild } from './shared/build_profile.js';
 import { spawn } from './spawn.js';
 import { normalizeBasePath } from './shared/basepath.js';
 import { warnIfVercelCron } from './shared/feature_warnings.js';
@@ -129,7 +130,9 @@ const BRIDGE_BACKUP_BASENAME = 'svelte.config.blocks-original';
 export const sveltekitAdapter = (
   options: SveltekitAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, skipBuild, buildCommand } = options;
+  const { projectDir, buildCommand } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () => fs.existsSync(path.join(projectDir, 'build')));
   const bodySizeLimit = options.bodySizeLimit ?? DEFAULT_BODY_SIZE_LIMIT_BYTES;
 
   assertSvelteKitVersion(projectDir);

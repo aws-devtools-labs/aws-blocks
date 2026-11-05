@@ -1220,3 +1220,45 @@ void describe('nitroAdapter — a public folder under an ISR/SWR rule', () => {
   });
 });
 
+
+// The deploy profile's `reuseBuild` (set by core Hosting on a destroy, or by
+// BLOCKS_SKIP_FRONTEND_BUILD=1) skips the Nitro build without an explicit
+// `skipBuild` option. `spawn.sync` is the build call.
+void describe('nitroAdapter — reuseBuild from the build profile', () => {
+  let tmpDir: string;
+  let builds: number;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-reuse-'));
+    builds = 0;
+    mock.method(spawn, 'sync', () => {
+      builds++;
+      return undefined;
+    });
+    writeMinimalNitroOutput(tmpDir, { bundledRouteRules: {} });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+  });
+
+  void it('builds when the profile asks for nothing', () => {
+    // A real build clears .output first; the stubbed build doesn't recreate it,
+    // so the adapter then reports it missing. The build ran, which is the point.
+    assert.throws(() => withBuildProfile({}, () => nitroAdapter({ projectDir: tmpDir })), /\.output\/ not found/);
+    assert.ok(builds > 0, 'expected the Nitro build to run');
+  });
+
+  void it("reuses an existing .output under reuseBuild: 'if-present'", () => {
+    const manifest = withBuildProfile({ reuseBuild: 'if-present' }, () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(builds, 0, 'expected no build');
+    assert.ok(manifest.routes.length > 0, 'the manifest comes from the existing output');
+  });
+
+  void it("skips the build under reuseBuild: 'required'", () => {
+    withBuildProfile({ reuseBuild: 'required' }, () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(builds, 0, 'expected no build');
+  });
+});
