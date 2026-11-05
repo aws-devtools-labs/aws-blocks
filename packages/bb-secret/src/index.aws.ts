@@ -166,6 +166,14 @@ class SecretImpl<T = string> extends Scope {
 	 * out-of-band change.
 	 */
 	private cacheTtlMs: number;
+	/**
+	 * Invalidation generation for {@link readCache}, incremented whenever the
+	 * cache is cleared by `put()`. `get()` captures it before fetching and stores
+	 * the result only if it is unchanged when the fetch settles, so a read that
+	 * was in flight across a `put()` can't re-cache the pre-write value or
+	 * overwrite an entry a post-write read already stored.
+	 */
+	private cacheGeneration = 0;
 
 	/**
 	 * Update the secret value — **present only when the secret was constructed
@@ -175,7 +183,9 @@ class SecretImpl<T = string> extends Scope {
 	 *
 	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
 	 * it, and serializes to JSON before storing. Clears this instance's read
-	 * cache on success.
+	 * cache on success, including against a `get()` that was already in flight:
+	 * that read still returns what it fetched but does not cache it, so the next
+	 * `get()` sees the new value.
 	 *
 	 * @param value - The new secret value.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
@@ -290,6 +300,10 @@ class SecretImpl<T = string> extends Scope {
 			// 'current' (default) → omit (AWSCURRENT); 'previous' → AWSPREVIOUS stage;
 			// a SecretVersion → its versionId.
 			const selector = versionSelector(options?.version);
+			// Snapshot the invalidation generation: if a put() clears the cache while
+			// this fetch is in flight, the result predates the write and is returned
+			// to this caller but not cached.
+			const generation = this.cacheGeneration;
 			try {
 				const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn, ...selector }));
 				cached = { raw: result.SecretString ?? null, fetchedAt: Date.now() };
@@ -300,7 +314,7 @@ class SecretImpl<T = string> extends Scope {
 					throw err;
 				}
 			}
-			this.readCache.set(key, cached);
+			if (generation === this.cacheGeneration) this.readCache.set(key, cached);
 		}
 
 		if (cached.raw === null) return null;
@@ -384,8 +398,11 @@ class SecretImpl<T = string> extends Scope {
 
 		// A write advances the AWSCURRENT/AWSPREVIOUS labels, so every cached read
 		// (current, previous, and any specific version) is now potentially stale —
-		// drop them all; the next get() re-fetches and repopulates.
+		// drop them all; the next get() re-fetches and repopulates. Bumping the
+		// generation also stops a get() already in flight from caching its
+		// pre-write result after this clear.
 		this.readCache.clear();
+		this.cacheGeneration++;
 	}
 }
 

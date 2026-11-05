@@ -100,6 +100,79 @@ describe('AWS runtime read cache', () => {
 	});
 });
 
+/**
+ * Stub a secret that holds a current + previous value, where GetSecretValue
+ * reads can be held in flight: while `state.hold` is set, a read snapshots the
+ * stored value when it is sent but resolves only on `release()`. A
+ * PutSecretValue commits immediately and moves current → previous, like
+ * Secrets Manager's AWSCURRENT/AWSPREVIOUS labels.
+ */
+function stubHeldReads(initial: { current: string; previous: string }) {
+	const state = { ...initial, hold: false };
+	const held: Array<() => void> = [];
+	const stub = stubSend((cmd) => {
+		if (cmd.constructor.name === 'PutSecretValueCommand') {
+			state.previous = state.current;
+			state.current = cmd.input.SecretString;
+			return {};
+		}
+		const response = { SecretString: cmd.input.VersionStage === 'AWSPREVIOUS' ? state.previous : state.current };
+		if (!state.hold) return response;
+		return new Promise((resolve) => held.push(() => resolve(response)));
+	});
+	const release = () => {
+		for (const resolve of held.splice(0)) resolve();
+	};
+	return { ...stub, state, release };
+}
+
+describe('AWS runtime read cache — reads in flight across put()', () => {
+	test('a read started before put() does not re-cache the pre-put value', async () => {
+		const { commands, state, release, restore } = stubHeldReads({ current: 'sk-old', previous: 'sk-older' });
+		try {
+			const secret = new Secret(new Scope('app'), 'race-recache', {
+				secret: Secret.fromExisting(TEST_ARN),
+				allowRuntimeWrite: true,
+			});
+			state.hold = true;
+			const current = secret.get(); // cache miss: fetch sent, snapshots 'sk-old'
+			const previous = secret.get({ version: 'previous' }); // snapshots 'sk-older'
+			state.hold = false;
+			await secret.put('sk-new'); // commits and clears the cache
+			release();
+			await Promise.all([current, previous]); // the pre-put reads land after the clear
+
+			assert.strictEqual(await secret.get(), 'sk-new');
+			assert.strictEqual(await secret.get({ version: 'previous' }), 'sk-old');
+			assert.strictEqual(getCalls(commands).length, 4, 'both post-put reads must re-fetch');
+		} finally {
+			restore();
+		}
+	});
+
+	test('a slow pre-put read does not overwrite the entry a post-put read cached', async () => {
+		const { commands, state, release, restore } = stubHeldReads({ current: 'sk-old', previous: 'sk-older' });
+		try {
+			const secret = new Secret(new Scope('app'), 'race-overwrite', {
+				secret: Secret.fromExisting(TEST_ARN),
+				allowRuntimeWrite: true,
+			});
+			state.hold = true;
+			const slow = secret.get(); // snapshots 'sk-old', held in flight
+			state.hold = false;
+			await secret.put('sk-new');
+			assert.strictEqual(await secret.get(), 'sk-new'); // fresh fetch, cached
+			release();
+			await slow; // the stale response lands last
+
+			assert.strictEqual(await secret.get(), 'sk-new');
+			assert.strictEqual(getCalls(commands).length, 2, 'the post-put entry must still serve reads from cache');
+		} finally {
+			restore();
+		}
+	});
+});
+
 describe('AWS runtime read cache — cacheTtlSeconds', () => {
 	test('within the TTL the cache is reused (no second call)', async () => {
 		mock.timers.enable({ apis: ['Date'] });
