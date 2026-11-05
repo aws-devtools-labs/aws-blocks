@@ -11,6 +11,7 @@ import {
   buildSandboxCdkEnv,
   buildDevServerSpawn,
   buildSandboxDeployArgs,
+  buildSandboxDestroyArgs,
   buildSandboxSynthArgs,
   buildSandboxWatchArgs,
   sandboxIsDeployOnly,
@@ -239,6 +240,10 @@ describe('quoteCdkAppPath', () => {
   it('escapes a single quote inside a POSIX path', () => {
     assert.strictEqual(quoteCdkAppPath("/tmp/bob's app/index.cdk.ts", 'darwin'), "'/tmp/bob'\\''s app/index.cdk.ts'");
   });
+
+  it('refuses a double quote on Windows, where it would end the cmd.exe quoting early', () => {
+    assert.throws(() => quoteCdkAppPath('D:\\a\\x" & echo hi & "\\index.cdk.ts', 'win32'), /contains a double quote/);
+  });
 });
 
 describe('buildDevServerSpawn', () => {
@@ -381,5 +386,32 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
     );
     assert.strictEqual(previewRemovalWarning(join(tmpdir(), 'no-such-dir', 'outputs.json'), false), undefined);
     assert.strictEqual(previewRemovalWarning(outputsWith('{not json'), false), undefined);
+  });
+});
+
+// The destroy `--app` string was behind the Windows `sandbox:destroy` failure:
+// single quotes, which cmd.exe keeps as part of the path. It is asserted with a
+// literal for both shells, so a revert to `'${backendPath}'` (or to an
+// unescaped POSIX quote) fails here.
+describe('buildSandboxDestroyArgs', () => {
+  it('runs `cdk destroy` in sandbox mode', () => {
+    const args = buildSandboxDestroyArgs('/tmp/app/index.cdk.ts', 'linux');
+    assert.deepStrictEqual(args.slice(0, 4), ['exec', 'cdk', '--', 'destroy']);
+    assert.ok(args.includes('sandboxMode=true'), `expected sandboxMode=true in: ${args.join(' ')}`);
+    assert.ok(args.includes('--force'), `expected --force in: ${args.join(' ')}`);
+  });
+
+  it('double-quotes the --app path on Windows', () => {
+    assert.strictEqual(
+      valueAfter(buildSandboxDestroyArgs('D:\\a\\my app\\aws-blocks\\index.cdk.ts', 'win32'), '--app'),
+      'npm exec tsx -- -C cdk "D:\\a\\my app\\aws-blocks\\index.cdk.ts"',
+    );
+  });
+
+  it('single-quotes and escapes the --app path on POSIX', () => {
+    assert.strictEqual(
+      valueAfter(buildSandboxDestroyArgs("/tmp/bob's app/index.cdk.ts", 'linux'), '--app'),
+      "npm exec tsx -- -C cdk '/tmp/bob'\\''s app/index.cdk.ts'",
+    );
   });
 });

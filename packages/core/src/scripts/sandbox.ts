@@ -869,9 +869,16 @@ export async function emptySandboxBuckets(stacks: AssemblyStack[], clients: Empt
  * through a shell, so an unquoted path containing a space would split. cmd.exe
  * (Windows) does not treat single quotes as quoting and would keep them in the
  * path, so Windows gets double quotes; POSIX shells get single quotes.
+ *
+ * @throws Error on Windows when `backendPath` contains `"`, which no Windows
+ * file name can contain and which would end the cmd.exe quoting early.
  */
 export function quoteCdkAppPath(backendPath: string, platform: NodeJS.Platform = process.platform): string {
-	if (platform === 'win32') return `"${backendPath}"`;
+	if (platform === 'win32') {
+		// `"` cannot appear in a Windows file name; refusing it keeps the cmd.exe string well-formed.
+		if (backendPath.includes('"')) throw new Error(`Invalid backend path (contains a double quote): ${backendPath}`);
+		return `"${backendPath}"`;
+	}
 	return `'${backendPath.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -1286,6 +1293,30 @@ export async function destroySandbox(backendPath: string, options: { invocation?
   });
 }
 
+/** `npm` argv for the `cdk destroy` that `sandbox:destroy` runs. */
+export function buildSandboxDestroyArgs(backendPath: string, platform: NodeJS.Platform = process.platform): string[] {
+	return [
+		"exec", "cdk", "--", "destroy",
+		// `--all`, like the deploy (see buildSandboxDeployArgs): without it CDK
+		// refuses an app with more than one stack (a Lambda@Edge
+		// `edge-lambda-stack-*` outside us-east-1, a VPC lookup stack), so the
+		// destroy can never succeed. CDK deletes dependent stacks first.
+		"--all",
+		"--force",
+		"--output", SANDBOX_DESTROY_ASSEMBLY_DIR,
+		// sandboxMode=true is what makes the app name this sandbox's stacks;
+		// without it the app names its production stacks, and `--all --force`
+		// would delete those. projectRoot matches the sandbox deploy, so both
+		// resolve the same stack names.
+		"--context", "sandboxMode=true",
+		"--context", `projectRoot=${process.cwd()}`,
+		// Quote backendPath: CDK re-runs the --app string through a shell, so an
+		// unquoted path containing a space would split. quoteCdkAppPath picks the
+		// quoting that shell understands — cmd.exe keeps a literal single quote.
+		"--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath, platform)}`,
+	];
+}
+
 /**
  * The {@link runDestroyWithRetries} dependencies `destroySandbox` runs with.
  * A separate function so a test can pin the wiring (throttle detection, bucket
@@ -1298,26 +1329,7 @@ export function sandboxDestroyDeps(
   clients: Required<EmptyBucketsClients>,
   rerunCommand?: string,
 ): DestroyRetryDeps {
-  const cdkArgs = [
-    "exec", "cdk", "--", "destroy",
-    // `--all`, like the deploy (see buildSandboxDeployArgs): without it CDK
-    // refuses an app with more than one stack (a Lambda@Edge
-    // `edge-lambda-stack-*` outside us-east-1, a VPC lookup stack), so the
-    // destroy can never succeed. CDK deletes dependent stacks first.
-    "--all",
-    "--force",
-    "--output", SANDBOX_DESTROY_ASSEMBLY_DIR,
-    // sandboxMode=true is what makes the app name this sandbox's stacks;
-    // without it the app names its production stacks, and `--all --force`
-    // would delete those. projectRoot matches the sandbox deploy, so both
-    // resolve the same stack names.
-    "--context", "sandboxMode=true",
-    "--context", `projectRoot=${process.cwd()}`,
-    // Quote backendPath: CDK re-runs the --app string through a shell, so an
-    // unquoted path containing a space would split. quoteCdkAppPath picks the
-    // quoting that shell understands — cmd.exe keeps a literal single quote.
-    "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
-  ];
+  const cdkArgs = buildSandboxDestroyArgs(backendPath);
   // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and retained;
   // the retry loop prints it once the destroy finally fails.
   const cdkOutput = createCdkOutput({ label: 'cdk destroy', verb: 'destroy' });
