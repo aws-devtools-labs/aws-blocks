@@ -53,6 +53,10 @@ const backend = {
       ctx.response.headers.append('Set-Cookie', 'gone=; Path=/; Max-Age=0');
       throw new ApiError('Unauthorized', 401);
     },
+    async signInAndFail() {
+      ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
+      throw new ApiError('Unavailable', 503);
+    },
     async body() {
       return { text: await ctx.request.text(), hasStream: ctx.request.body !== null };
     },
@@ -88,6 +92,14 @@ function registerRoutes() {
     path: '/boom',
     handler: async () => {
       throw new Error('raw boom: internal detail');
+    },
+  });
+  registerRoute({
+    method: 'GET',
+    path: '/cookie-boom',
+    handler: async (ctx) => {
+      ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
+      throw new Error('raw cookie boom: internal detail');
     },
   });
   registerRoute({
@@ -238,6 +250,8 @@ const CASES: Record<string, Case> = {
   },
   'raw route text body': { event: getEvent('/text') },
   'raw route throws': { event: getEvent('/boom') },
+  'raw route sets a cookie then throws': { event: getEvent('/cookie-boom') },
+  'rpc method sets a live cookie then throws': { event: rpcEvent({ body: rpcBody('api.signInAndFail') }) },
   'raw route POST body': {
     event: getEvent('/echo-body', { httpMethod: 'POST', body: JSON.stringify({ x: 1 }) }),
   },
@@ -265,6 +279,18 @@ const CASES: Record<string, Case> = {
       headers: { 'content-type': 'application/json', host: API_HOST },
       requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
       body: rpcBody('api.signOutAndFail'),
+      isBase64Encoded: false,
+    },
+  },
+  'payload v2 raw route sets a cookie then throws': {
+    event: { version: '2.0', headers: { host: API_HOST }, requestContext: { http: { method: 'GET', path: '/cookie-boom' } } },
+  },
+  'payload v2 rpc sets a live cookie then throws': {
+    event: {
+      version: '2.0',
+      headers: { 'content-type': 'application/json', host: API_HOST },
+      requestContext: { http: { method: 'POST', path: '/aws-blocks/api' } },
+      body: rpcBody('api.signInAndFail'),
       isBase64Encoded: false,
     },
   },
@@ -687,6 +713,33 @@ const EXPECTED: Record<string, unknown> = {
     },
     "body": "{\"error\":\"Internal error\"}"
   },
+  "raw route sets a cookie then throws": {
+    "statusCode": 500,
+    "headers": {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "multiValueHeaders": {
+      "Set-Cookie": [
+        "sid=live; Path=/"
+      ]
+    },
+    "body": "{\"error\":\"Internal error\"}"
+  },
+  "rpc method sets a live cookie then throws": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Vary": "Origin",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    },
+    "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":503,\"message\":\"Unavailable\"},\"id\":1}"
+  },
   "raw route POST body": {
     "statusCode": 200,
     "headers": {
@@ -816,6 +869,31 @@ const EXPECTED: Record<string, unknown> = {
       "gone=; Path=/; Max-Age=0"
     ],
     "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":401,\"message\":\"Unauthorized\"},\"id\":1}"
+  },
+  "payload v2 raw route sets a cookie then throws": {
+    "statusCode": 500,
+    "headers": {
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [
+      "sid=live; Path=/"
+    ],
+    "body": "{\"error\":\"Internal error\"}"
+  },
+  "payload v2 rpc sets a live cookie then throws": {
+    "statusCode": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Vary": "Origin",
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0"
+    },
+    "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":503,\"message\":\"Unavailable\"},\"id\":1}"
   },
   "payload v2 raw route with cookies": {
     "statusCode": 201,
