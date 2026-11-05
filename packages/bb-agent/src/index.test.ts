@@ -11,7 +11,7 @@ import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
-import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
+import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
@@ -170,6 +170,27 @@ describe('agentErrorFromChunk', () => {
 	test('falls back to StreamFailed when errorName is absent or unrecognised', () => {
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom' }), AgentErrors.StreamFailed));
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom', errorName: 'SomethingElse' }), AgentErrors.StreamFailed));
+	});
+});
+
+describe('persistedTurnError', () => {
+	test('reads the error row a failed turn persists', () => {
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'denied', errorName: AgentErrors.ModelUnavailable } }),
+			{ error: 'denied', errorName: AgentErrors.ModelUnavailable },
+		);
+		assert.deepStrictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'boom' } }), { error: 'boom' });
+	});
+
+	test('ignores rows that are not a failed turn', () => {
+		// A stopped turn keeps its partial text alongside metadata.error; reconnect adopts it as completed.
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: 'partial', metadata: { error: 'stopped' } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'user', content: '', metadata: { error: 'x' } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: {} }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 42 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: '{"error":"x"}' }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '' }), undefined);
+		assert.strictEqual(persistedTurnError(undefined), undefined);
 	});
 });
 

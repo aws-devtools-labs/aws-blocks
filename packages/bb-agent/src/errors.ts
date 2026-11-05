@@ -62,6 +62,22 @@ export function agentErrorFromChunk(chunk: { error?: string; errorName?: string 
 	return blocksAgentError(name, chunk.error ?? 'Agent error');
 }
 
+/**
+ * The failure recorded by a history row, if it is the row a failed turn persists: an
+ * empty-content assistant row whose metadata carries `error`. The chat clients read it on
+ * reconnect, because the turn's `error` chunk is lost if it was published while the socket
+ * was down.
+ */
+export function persistedTurnError(
+	row: { role: string; content: string; metadata?: unknown } | undefined,
+): { error: string; errorName?: string } | undefined {
+	if (!row || row.role !== 'assistant' || row.content) return undefined;
+	const meta = row.metadata;
+	if (typeof meta !== 'object' || meta === null || !('error' in meta) || typeof meta.error !== 'string') return undefined;
+	const errorName = 'errorName' in meta && typeof meta.errorName === 'string' ? meta.errorName : undefined;
+	return { error: meta.error, ...(errorName && { errorName }) };
+}
+
 /** Maximum number of levels (the error itself plus its causes) {@link walkCauseChain} visits. */
 const MAX_CAUSE_DEPTH = 5;
 

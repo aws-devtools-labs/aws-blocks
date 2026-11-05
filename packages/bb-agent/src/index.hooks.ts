@@ -17,7 +17,7 @@
 import type { DisconnectReason, RealtimeChannelDescriptor } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, JSONValue } from './types.js';
 import type { ApprovalMetadata, ChatMessage } from './index.chat.js';
-import { agentErrorFromChunk } from './errors.js';
+import { agentErrorFromChunk, persistedTurnError } from './errors.js';
 
 export type { AgentStreamChunk } from './types.js';
 /** Re-exported so customers can type conversation `metadata` (and other JSON payloads) on the client. */
@@ -351,6 +351,33 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	}
 
 	/**
+	 * End the in-flight turn as failed: from a live `error` chunk, or from the error row a
+	 * reconnect re-sync finds when that chunk was missed.
+	 */
+	function failTurn(failure: { error?: string; errorName?: string }) {
+		// Drop the empty assistant placeholder if the error arrived before any text
+		// (mirror the interrupt branch / createChat), so a failed-before-first-token
+		// turn leaves no blank assistant bubble.
+		if (assistantId) {
+			const assistant = messages.find(m => m.id === assistantId);
+			if (assistant && !assistant.content) {
+				messages = messages.filter(m => m.id !== assistantId);
+				options.onMessagesChange?.(messages);
+			}
+		}
+		// Null assistantId (mirroring done/interrupt) so a later reconnect re-sync treats
+		// the turn as resolved and won't clobber the bubble with a stale getConversation read.
+		assistantId = null;
+		clearFailsafe();
+		loading = false;
+		options.onLoadingChange?.(loading);
+		// Report at most once per turn: a prior send-rejection may have already surfaced
+		// onError for this same (server-started) turn. A server-classified failure (errorName)
+		// also passes the branded error as `cause`, so call sites can isBlocksError() on it.
+		reportError(failure.error ?? 'Unknown error', failure.errorName ? agentErrorFromChunk(failure) : undefined);
+	}
+
+	/**
 	 * Shared handler for a rejected send path (api.sendMessage / api.resume): reset
 	 * loading, drop the dangling empty placeholder, and surface the error via onError
 	 * (swallowed, matching how the `error` chunk is handled — no re-throw).
@@ -374,6 +401,9 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	 * - If the turn completed server-side (history ends with a non-empty assistant
 	 *   message), adopt that final text into the in-flight bubble and clear loading —
 	 *   the `done` chunk was lost in the gap.
+	 * - If the turn failed server-side (history ends with the error row a failed turn
+	 *   persists), end it as failed and report the recorded error — the `error` chunk
+	 *   was lost in the gap.
 	 * - If the turn is still running (no final assistant message yet), keep loading
 	 *   true and wait for the terminal chunk on the resubscribed channel, arming a
 	 *   bounded failsafe so the spinner can't hang if that chunk is also lost.
@@ -393,6 +423,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			if (destroyed) return;
 			const last = history[history.length - 1];
 			const turnComplete = !!last && last.role === 'assistant' && !!last.content;
+			const failure = persistedTurnError(last);
 
 			// Turn-identity + liveness guard: only act on the persisted read if the turn we
 			// captured is STILL the in-flight one and we're still loading. If a terminal
@@ -401,7 +432,12 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			// ignore this — possibly stale — DB result rather than clobber a live outcome.
 			const stillSameInFlightTurn = assistantId !== null && assistantId === turnAtStart && loading;
 
-			if (turnComplete && stillSameInFlightTurn) {
+			if (failure && stillSameInFlightTurn) {
+				// The turn failed while we were disconnected and its `error` chunk was lost. A
+				// previous turn's error row can only be `last` if the read misses this turn's user
+				// row, which the backend writes before the turn starts.
+				failTurn(failure);
+			} else if (turnComplete && stillSameInFlightTurn) {
 				// Adopt the persisted final text ONLY if it extends what we've already
 				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
 				// persisted text). If it does NOT extend our stream, `last` is a stale /
@@ -524,28 +560,7 @@ export function useChat(options: UseChatOptions): ChatInstance {
 			options.onLoadingChange?.(loading);
 		}
 
-		if (chunk.type === 'error') {
-			// Drop the empty assistant placeholder if the error arrived before any text
-			// (mirror the interrupt branch / createChat), so a failed-before-first-token
-			// turn leaves no blank assistant bubble.
-			if (assistantId) {
-				const assistant = messages.find(m => m.id === assistantId);
-				if (assistant && !assistant.content) {
-					messages = messages.filter(m => m.id !== assistantId);
-					options.onMessagesChange?.(messages);
-				}
-			}
-			// Null assistantId (mirroring done/interrupt) so a later reconnect re-sync treats
-			// the turn as resolved and won't clobber the bubble with a stale getConversation read.
-			assistantId = null;
-			clearFailsafe();
-			loading = false;
-			options.onLoadingChange?.(loading);
-			// Report at most once per turn: a prior send-rejection may have already surfaced
-			// onError for this same (server-started) turn. A server-classified failure (errorName)
-			// also passes the branded error as `cause`, so call sites can isBlocksError() on it.
-			reportError(chunk.error ?? 'Unknown error', chunk.errorName ? agentErrorFromChunk(chunk) : undefined);
-		}
+		if (chunk.type === 'error') failTurn(chunk);
 
 		if (chunk.type === 'interrupt' && chunk.interrupts) {
 			// Remove empty assistant placeholder (no text was generated before interrupt)
