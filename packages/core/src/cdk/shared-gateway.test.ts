@@ -362,6 +362,32 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		);
 	});
 
+	test("names the namespaces when a compute's ingress refuses them", () => {
+		const { stack, defaultCompute } = fanOut('FanOutRefuse');
+		/** A compute whose ingress throws, like a container that may scale to zero. */
+		class RefusingCompute extends StubCompute {
+			override apiIngress(): never {
+				throw new Error('needs a running task');
+			}
+		}
+		const refuseScope = new Scope('RefuseCompute', { parent: stack as never });
+		const refuseCompute = new RefusingCompute(refuseScope, 'backing', makeFn(stack, 'RefuseFn'));
+		const backendModule = {
+			render: namespaceOn(stack, refuseCompute, 'render'),
+			preview: namespaceOn(stack, refuseCompute, 'preview'),
+		};
+
+		assert.throws(
+			() =>
+				createSharedGateway(stack, {
+					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
+					defaultCompute,
+					defaults: BlocksPresets.production,
+				}),
+			/^Error: API namespaces \(render, preview\) on compute 'FanOutRefuse\/RefuseCompute\/backing': needs a running task$/,
+		);
+	});
+
 	test('rejects an export name API Gateway cannot use as a path segment', () => {
 		const { stack, defaultCompute } = fanOut('FanOutBadName');
 		const cafeScope = new Scope('CafeCompute', { parent: stack as never });

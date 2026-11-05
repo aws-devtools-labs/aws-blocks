@@ -107,10 +107,11 @@ const MAX_PATH_PATTERN_LENGTH = 128;
 
 /**
  * How long the load balancer lets a stopping task's in-flight requests finish
- * before ECS sends it SIGTERM: past the longest call a front door allows (a
- * CloudFront VPC origin's 60 s), so a deploy or scale-in never cuts one short.
+ * before ECS sends it SIGTERM. Only the API Gateway VPC link reaches this load
+ * balancer, and API Gateway cuts every call off at its 29 s integration timeout,
+ * so 29 s plus a margin means a deploy or scale-in never cuts a call short.
  */
-const API_DEREGISTRATION_DELAY = cdk.Duration.seconds(65);
+const API_DEREGISTRATION_DELAY = cdk.Duration.seconds(35);
 
 /** Per-root registry keys for the shared API load balancer, its RPC listener, and the rule priorities taken on it. */
 const API_LOAD_BALANCER: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_LOAD_BALANCER');
@@ -421,8 +422,9 @@ export class ContainerCompute extends ComputeBase {
 			// on a request: with none, every call would get a 503.
 			if (this.scalingConfig?.minInstances === 0) {
 				throw new Error(
-					`Compute '${this.node.id}' serves API namespaces, so it needs a running task: set scaling.minInstances ` +
-						'to 1 or more (a container compute does not start a task for an incoming request).',
+					`Compute '${this.node.path}' serves API namespaces, so it needs a running task: set scaling.minInstances ` +
+						'to 1 or more, or give the namespace its own compute (or create it outside the scope that sets this ' +
+						'one); a container compute does not start a task for an incoming request.',
 				);
 			}
 			this.apiIngressInfo = this.provisionApiIngress(this.service, this.container, vpcContext.vpc, vpcContext.computeSubnets);
@@ -483,7 +485,7 @@ export class ContainerCompute extends ComputeBase {
 			},
 			// ECS deregisters a stopping task and lets in-flight requests finish for
 			// this long before it sends SIGTERM (then the container drains for up to
-			// 25 s within ECS's 30 s stop timeout).
+			// DRAIN_GRACE_SECONDS within the STOP_TIMEOUT_SECONDS stop timeout).
 			deregistrationDelay: API_DEREGISTRATION_DELAY,
 		});
 
@@ -563,7 +565,7 @@ export class ContainerCompute extends ComputeBase {
 	 * listener passes the load balancer's default rule quota.
 	 */
 	private allocateRulePriority(path: string, listener: elbv2.ApplicationListener): number {
-		// Each priority keeps the path holding it and the id of the compute that routed it,
+		// Each priority keeps the path holding it and the path of the compute that routed it,
 		// so a collision names both namespaces and where each one runs.
 		const taken = getOrCreateOnRoot(
 			this,
@@ -574,11 +576,11 @@ export class ContainerCompute extends ComputeBase {
 		const holder = taken.get(priority);
 		if (holder !== undefined) {
 			throw new Error(
-				`API paths '${holder.path}' (compute '${holder.compute}') and '${path}' (compute '${this.node.id}') map to ` +
+				`API paths '${holder.path}' (compute '${holder.compute}') and '${path}' (compute '${this.node.path}') map to ` +
 					`the same load balancer rule priority (${priority}). Rename one of the two namespace exports.`,
 			);
 		}
-		taken.set(priority, { path, compute: this.node.id });
+		taken.set(priority, { path, compute: this.node.path });
 		if (taken.size === DEFAULT_RULES_PER_LOAD_BALANCER + 1) {
 			cdk.Annotations.of(listener).addWarningV2(
 				'@aws-blocks/bb-container-compute:api-rule-quota',

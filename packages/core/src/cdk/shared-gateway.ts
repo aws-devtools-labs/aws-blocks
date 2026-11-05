@@ -11,7 +11,7 @@ import { isDispatchableExport } from '../rpc-dispatch.js';
 import { ensureApiGatewayAccount } from './apigateway-account.js';
 import { addLoadBalancerMethod } from './api-vpc-link.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
-import type { ComputeBase } from './compute/compute.js';
+import type { ComputeApiIngress, ComputeBase } from './compute/compute.js';
 
 /**
  * Characters API Gateway allows in a literal resource path part — the same set
@@ -213,7 +213,15 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 
 	// Fan out: route each non-default compute's namespaces to its own ingress.
 	for (const [compute, exportNames] of namespaceRoutes) {
-		const ingress = compute.apiIngress();
+		// A compute can refuse API traffic (a container that may scale to zero
+		// tasks); only this loop knows which namespaces sent it here, so name them.
+		let ingress: ComputeApiIngress | undefined;
+		try {
+			ingress = compute.apiIngress();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			throw new Error(`API namespaces (${exportNames.join(', ')}) on compute '${compute.node.path}': ${message}`);
+		}
 		if (!ingress) {
 			throw new Error(
 				`Compute '${compute.node.path}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic. ` +

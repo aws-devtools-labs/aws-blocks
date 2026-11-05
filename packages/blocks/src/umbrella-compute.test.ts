@@ -619,7 +619,7 @@ describe('ApiNamespace on a container compute', () => {
 			assert.strictEqual(tg.HealthCheckPath, '/');
 			// Past the longest call a front door allows (60 s), so a deploy or scale-in never cuts one short.
 			const attributes = Object.fromEntries(tg.TargetGroupAttributes.map((a: { Key: string; Value: string }) => [a.Key, a.Value]));
-			assert.strictEqual(attributes['deregistration_delay.timeout_seconds'], '65');
+			assert.strictEqual(attributes['deregistration_delay.timeout_seconds'], '35');
 		}
 		const services = ofType(resources, 'AWS::ECS::Service');
 		const withLb = services.filter(([, s]) => s.Properties.LoadBalancers.length > 0);
@@ -824,6 +824,28 @@ describe('Scope-level compute', () => {
 		assert.strictEqual(method?.Properties.Integration.ConnectionType, 'VPC_LINK');
 	});
 
+	test('a namespace placed by its scope on a container that scales to zero fails synth, naming it and the compute', async () => {
+		// The AsyncJob keeps scale-to-zero valid on its own, so only the namespace is refused.
+		const backendCDKPath = join(tmpDir, 'backend-container-scope-api-min-zero.mjs');
+		writeFileSync(
+			backendCDKPath,
+			"import { ApiNamespace, AsyncJob, Compute, Scope } from '@aws-blocks/blocks';\n" +
+				"const scope = new Scope('app');\n" +
+				"const worker = new Compute(scope, 'worker', { type: 'container', scaling: { minInstances: 0, maxInstances: 2 } });\n" +
+				"const jobs = new Scope('jobs', { parent: scope, compute: worker });\n" +
+				"export const jobsApi = new ApiNamespace(jobs, 'jobs', () => ({ async go() { return 'ok'; } }));\n" +
+				"export const jobsJob = new AsyncJob(jobs, 'jobs-job', { handler: async () => {} });\n",
+		);
+		await assert.rejects(
+			BlocksStack.create(new cdk.App(), 'ContainerScopeMinZeroStack', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath,
+				defaults: BlocksPresets.production,
+			}),
+			/API namespaces \(jobsApi\) on compute 'ContainerScopeMinZeroStack\/app\/worker\/backing': Compute 'ContainerScopeMinZeroStack\/app\/worker\/backing' serves API namespaces, so it needs a running task: set scaling\.minInstances to 1 or more, or give the namespace its own compute \(or create it outside the scope that sets this one\)/,
+		);
+	});
+
 	test('a container scope places a CronJob on the container, through its runner queue', async () => {
 		const stack = await BlocksStack.create(new cdk.App(), 'ContainerScopeCronStack', {
 			backendHandlerPath: handlerPath,
@@ -936,4 +958,5 @@ function _apiNamespaceComputeTypeChecks(scope: InstanceType<typeof Scope>) {
 
 	const container = new Compute(scope, 'container', { type: 'container' });
 	new ApiNamespace(scope, 'onContainer', () => ({}), { compute: container });
-}void _apiNamespaceComputeTypeChecks;
+}
+void _apiNamespaceComputeTypeChecks;

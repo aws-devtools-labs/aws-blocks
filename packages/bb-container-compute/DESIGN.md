@@ -86,9 +86,11 @@ with readiness on port **8081** (503 while draining).
   `10000–10999` range is one security group rule per source, so adding a
   listener never adds a rule.
 - **Target group** on task port 8080, health-checked on 8081. A stopping task
-  is deregistered first — with a 65 s delay, past the longest call a front door
-  allows (60 s), so in-flight requests finish — then gets SIGTERM and drains for
-  up to 25 s within ECS's 30 s stop timeout.
+  is deregistered first — with a 35 s delay, past API Gateway's 29 s integration
+  timeout (the VPC link is the only path to the load balancer), so in-flight
+  requests finish — then gets SIGTERM and drains for up to 110 s
+  (`DRAIN_GRACE_SECONDS`, passed as `BLOCKS_DRAIN_GRACE_SECONDS`) within the
+  120 s stop timeout (`STOP_TIMEOUT_SECONDS`).
 - **Load balancers on the service.** The service is registered with its target
   group at the CloudFormation level, because the L2 route would open the load
   balancer to every group on the service. Its `LoadBalancers` property is always

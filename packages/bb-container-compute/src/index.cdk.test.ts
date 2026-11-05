@@ -611,7 +611,7 @@ describe('ContainerCompute — API ingress', () => {
 		render.routePath('/aws-blocks/api/orders428');
 		assert.throws(
 			() => preview.routePath('/aws-blocks/api/orders842'),
-			/'\/aws-blocks\/api\/orders428' \(compute 'render'\) and '\/aws-blocks\/api\/orders842' \(compute 'preview'\) map to the same load balancer rule priority/,
+			/'\/aws-blocks\/api\/orders428' \(compute 'ApiIngressrenderpreview\/render'\) and '\/aws-blocks\/api\/orders842' \(compute 'ApiIngressrenderpreview\/preview'\) map to the same load balancer rule priority/,
 		);
 	});
 
@@ -649,7 +649,10 @@ describe('ContainerCompute — API ingress', () => {
 			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
 		} as never);
 		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 2 } });
-		assert.throws(() => compute.apiIngress(), /serves API namespaces, so it needs a running task: set scaling\.minInstances/);
+		assert.throws(
+			() => compute.apiIngress(),
+			/Compute 'ApiIngressMinZero\/render' serves API namespaces, so it needs a running task: set scaling\.minInstances to 1 or more, or give the namespace its own compute/,
+		);
 	});
 
 	test('a compute that serves API traffic and drains a queue scales on CPU, and the queue only adds tasks', async () => {
