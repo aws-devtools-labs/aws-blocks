@@ -825,11 +825,7 @@ describe('parity: displayName honours the ID token’s `*_verified` flags', () =
 			await browser.request((ctx) => auth.getAuthSession(ctx, { forceRefresh: true }));
 			const user = await browser.request((ctx) => auth.requireAuth(ctx));
 			assert.strictEqual(user.attributes.email, 'new@example.com', `${label}: the session carries the new email`);
-			assert.strictEqual(
-				user.attributes.email_verified,
-				undefined,
-				`${label}: no \`*_verified\` attribute`,
-			);
+			assert.strictEqual(user.attributes.email_verified, undefined, `${label}: no \`*_verified\` attribute`);
 			const s = await state();
 			assert.strictEqual(s.user?.displayName, 'ali', `${label}: the unverified email is skipped`);
 		}

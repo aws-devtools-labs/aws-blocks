@@ -73,7 +73,7 @@ describe('Set-Cookie writing', () => {
 		);
 	});
 
-	test('clear is a Max-Age=0 clearing cookie (forwarded on error responses, A1c)', () => {
+	test('clear is a Max-Age=0 clearing cookie (forwarded on error responses)', () => {
 		const ctx = makeContext();
 		clearSessionCookie(ctx, 'app-auth');
 		assert.deepStrictEqual(ctx.response.headers.getSetCookie(), [

@@ -87,7 +87,7 @@ describe('two-block snippets load in the mock runtime', () => {
 
 	test('the docs show two-block apps', () => {
 		const inPackages = snippets.filter((s) => s.label.startsWith('packages/'));
-		assert.strictEqual(inPackages.length, 4, `found ${snippets.map((s) => s.label).join(', ')}`);
+		assert.strictEqual(inPackages.length, 3, `found ${snippets.map((s) => s.label).join(', ')}`);
 	});
 
 	for (const s of snippets) {

@@ -162,7 +162,7 @@ export function setSessionCookie(
 
 /**
  * Clear the session cookie (`Max-Age=0`). A *clearing* cookie, so core forwards
- * it on error responses too (A1c) — a `requireAuth` 401 can drop a dead
+ * it on error responses too — a `requireAuth` 401 can drop a dead
  * session. Other cookies already set on the response are preserved.
  *
  * @internal

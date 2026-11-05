@@ -58,7 +58,7 @@ export class Browser {
 		return [...this.jar].map(([k, v]) => `${k}=${v}`).join('; ');
 	}
 
-	/** Run `fn` as one request; apply its `Set-Cookie` lines even when it throws (A1c). */
+	/** Run `fn` as one request; apply its `Set-Cookie` lines even when it throws, as core does for clearing cookies. */
 	async request<T>(fn: (ctx: BlocksContext) => Promise<T>): Promise<T> {
 		const ctx = makeContext(this.cookieHeader());
 		try {

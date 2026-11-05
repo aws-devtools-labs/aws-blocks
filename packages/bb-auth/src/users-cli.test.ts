@@ -220,7 +220,10 @@ describe('users CLI: local pool', () => {
 		const byUsername = await cli(['add-to-group', '--username=boss@example.org', 'admin']);
 		assert.strictEqual(byUsername.code, 0, byUsername.err);
 		assert.deepStrictEqual(admins(), ['owner', 'boss@example.org']);
-		assert.match((await cli(['list-groups', '--email', 'boss@example.org'])).out, /\(username owner\) is in: admin/);
+		assert.match(
+			(await cli(['list-groups', '--email', 'boss@example.org'])).out,
+			/\(username owner\) is in: admin/,
+		);
 		// --email takes a verified email only; --username a username only.
 		assert.match((await cli(['list-groups', '--email', 'eve@example.com'])).err, /has not verified it/);
 		assert.match((await cli(['list-groups', '--username', 'nobody'])).err, /No user with the username 'nobody'/);

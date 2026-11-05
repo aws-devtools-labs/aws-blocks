@@ -347,7 +347,7 @@ export interface ErrorKeyRule {
 }
 
 /**
- * `<Old>Errors.<key>` → `AuthErrors.<key>`, per block (C1's mapping table).
+ * `<Old>Errors.<key>` → `AuthErrors.<key>`, per block (the mapping table in `auth-common/DESIGN.md`).
  * Keys absent here are kept as they are (Cognito's and OIDC's all are).
  */
 export const ERROR_KEY_RULES: Readonly<Record<OldBlock, Readonly<Record<string, ErrorKeyRule>>>> = {

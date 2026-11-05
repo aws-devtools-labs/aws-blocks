@@ -645,7 +645,7 @@ describe('the baseline file', () => {
 		assert.strictEqual(readFileSync(defaultBaselineFile(dir), 'utf8'), before);
 	});
 
-	// A4: an `AuthCognito` app has no baseline, so the first `Auth` synth cannot
+	// An `AuthCognito` app has no baseline, so the first `Auth` synth cannot
 	// refuse a config that drops the pool — it can only warn, loudly.
 	const POOL_DELETE_WARNING =
 		/If this stack previously had a user pool for this block \(e\.g\. from `AuthCognito`\), this deploy will delete it/;

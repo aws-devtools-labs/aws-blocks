@@ -496,7 +496,7 @@ describe('parity: userAttributes on the new-password challenge (RespondToAuthCha
 describe('parity: precedence when one write breaks several rules', () => {
 	const SIGN_UP: readonly [label: string, attributes: Record<string, unknown>, expected: unknown][] = [
 		[
-			"an undeclared `custom:` attribute, then `email_verified` (the documented example)",
+			'an undeclared `custom:` attribute, then `email_verified` (the documented example)',
 			{ 'custom:undeclared': 'x', email_verified: 'true' },
 			UNAUTHORIZED,
 		],

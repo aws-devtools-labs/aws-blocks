@@ -147,7 +147,7 @@ describe('bb-auth migrate — TODOs where a person must decide', () => {
 		});
 	});
 
-	// A4: the obvious fix for EMAIL_OTP — wrapping the block's own pool with
+	// The obvious fix for EMAIL_OTP — wrapping the block's own pool with
 	// `Auth.fromExisting` — removes the pool from the stack and deletes it.
 	test("preferredChallenge 'EMAIL_OTP': the TODO and the printed summary warn against wrapping the block's own pool", async () => {
 		const dir = mkdtempSync(join(tmpdir(), 'bb-auth-migrate-email-otp-'));
