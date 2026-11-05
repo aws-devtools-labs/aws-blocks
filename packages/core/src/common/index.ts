@@ -8,6 +8,7 @@ import { CORE_VERSION } from '../version.js';
 import { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 export { OFFICIAL_BB_NAMES } from './official-bb-names.generated.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from './lambda-event-handlers.js';
+import { claimScopeFullId, type ScopePath } from './scope-fullid-claims.js';
 
 /** Postgres caps `application_name` at `NAMEDATALEN - 1` bytes. */
 const PG_APPLICATION_NAME_MAX_BYTES = 63;
@@ -158,6 +159,9 @@ export type ScopeParent = Scope | { id: string };
  * 
  * - Use one scope per application or major feature boundary
  * - Give scopes descriptive IDs (e.g., 'user-service', 'orders')
+ * - Scope IDs are joined with '-' into each block's `fullId`, which names its resources. Two scope paths that
+ *   join to the same string (`'user-service' > 'sessions'` and `'user' > 'service-sessions'`) are rejected
+ *   when the second is constructed.
  * - Nest scopes for complex applications using the `parent` option
  * - Always use Building Blocks for storage - never create your own in-memory Maps or custom storage
  */
@@ -185,6 +189,13 @@ const bbRegistry: {
   defaultBlock: { name: string; version: string } | undefined;
 } = { blocks: new Map(), defaultBlock: undefined };
 
+/**
+ * `fullId` → the scope path that claimed it, for every scope constructed in this
+ * process. Process-wide, like the SDK identifier registry and the `.bb-data`
+ * directory it protects. See `./scope-fullid-claims.ts`.
+ */
+const fullIdClaims = new Map<string, ScopePath>();
+
 export class Scope {
   public readonly id: string;
   public readonly parent: ScopeParent;
@@ -198,11 +209,21 @@ export class Scope {
   /** Framework read from the synth sink for the process's telemetry event. */
   private static _framework: string | undefined;
 
+  /**
+   * @param id - This scope's id, unique among its siblings.
+   * @param options - Parent scope and Building Block metadata.
+   * @throws {Error} When a different scope path already resolves to the same
+   *   `fullId` in this process (ids are joined with `-`, so `'user-service' >
+   *   'sessions'` and `'user' > 'service-sessions'` collide). Constructing the
+   *   same path again is accepted.
+   */
   constructor(id: string, options?: ScopeOptions) {
     this.id = id;
     this.parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK || {
       id: typeof process !== 'undefined' ? process.env?.BLOCKS_STACK_NAME : undefined
     };
+    // computeScopeFullId, not this.fullId: a subclass getter may read fields it has not set yet.
+    claimScopeFullId(fullIdClaims, this, computeScopeFullId(this));
 
     if (options?.bbName) {
       this.bbName = options.bbName;

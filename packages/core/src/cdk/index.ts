@@ -39,6 +39,7 @@ import {
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
+import { claimScopeFullId, type ScopePath } from '../common/scope-fullid-claims.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
@@ -346,6 +347,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 /** Per backend root: Lambda event key → the `fullId` of the block that claimed it at synth. */
 const LAMBDA_EVENT_HANDLER_CLAIMS = Symbol.for('blocks:LambdaEventHandlerClaims');
 
+/** Per backend root: `fullId` → the scope path that claimed it at synth. See `../common/scope-fullid-claims.ts`. */
+const SCOPE_FULLID_CLAIMS = Symbol.for('blocks:ScopeFullIdClaims');
+
 export class Scope extends Construct {
 	public readonly id: string;
 	public readonly parent: ScopeParent;
@@ -371,12 +375,23 @@ export class Scope extends Construct {
 	 */
 	_compute?: ComputeBase;
 
+	/**
+	 * @param id - This scope's construct id, unique among its siblings.
+	 * @param options - Parent scope, Building Block metadata and compute.
+	 * @throws {Error} When a different scope path on the same backend root already
+	 *   resolves to the same `fullId` (ids are joined with `-`, so `'user-service' >
+	 *   'sessions'` and `'user' > 'service-sessions'` collide), so `cdk synth` fails
+	 *   instead of producing two resources with one physical name.
+	 */
 	constructor(id: string, options?: ScopeOptions) {
 		const parent = options?.parent || (globalThis as any).CURRENT_BLOCKS_STACK;
 		super(parent, id);
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		// computeScopeFullId, not this.fullId: a subclass getter may read fields it has not set yet.
+		const claims = getOrCreateOnRoot(this, SCOPE_FULLID_CLAIMS, () => new Map<string, ScopePath>());
+		claimScopeFullId(claims, this, computeScopeFullId(this));
 		if (options?.bbName) {
 			this.bbName = options.bbName;
 			this.bbVersion = options.bbVersion;
