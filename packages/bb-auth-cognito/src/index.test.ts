@@ -1,13 +1,24 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { isBlocksError, hasAuthError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import type { AuthStateApi, AuthField } from '@aws-blocks/auth-common';
 import { AuthCognito, AuthCognitoErrors } from './index.js';
+import { signSessionId } from './cookies.js';
+import type { SessionRecord } from './sessions.js';
+
+/** Test seam: the mock keeps its session store (and that store's KVStore) and HMAC secret private. */
+interface MockSessionInternals {
+	sessions: {
+		kv: { put: (...args: unknown[]) => Promise<void> };
+		createSession(record: SessionRecord): Promise<string>;
+	};
+	state: { sessionSecret: string };
+}
 
 // `createApi()` returns a context-bound `ApiNamespace` callable; narrow it to
 // the public `AuthStateApi` surface instead of `as any`.
@@ -339,6 +350,74 @@ describe('fetchAuthSession', () => {
 		const auth2 = new AuthCognito(ROOT, (auth as any).fullId, { passwordPolicy: { minLength: 8 } });
 		const session = await auth2.fetchAuthSession(ctx);
 		assert.strictEqual(session.tokens, undefined);
+	});
+
+	test('signOut while a forceRefresh is writing stays signed out', async () => {
+		const { auth, ctx } = await signedInAs('dora');
+		const cookie = ctx.request.headers.get('cookie') ?? '';
+		const requestWithCookie = () => {
+			const next = freshContext().ctx;
+			next.request.headers.set('cookie', cookie);
+			return next;
+		};
+
+		// Test seam: hold the refreshed record's write open and sign out meanwhile.
+		const internals = auth as unknown as MockSessionInternals;
+		const kv = internals.sessions.kv;
+		const realPut = kv.put.bind(kv);
+		let reachedWrite!: () => void;
+		const atWrite = new Promise<void>((r) => { reachedWrite = r; });
+		let releaseWrite!: () => void;
+		const writeReleased = new Promise<void>((r) => { releaseWrite = r; });
+		kv.put = async (...args: unknown[]) => {
+			kv.put = realPut;
+			reachedWrite();
+			await writeReleased;
+			return realPut(...args);
+		};
+		const pending = auth.fetchAuthSession(requestWithCookie(), { forceRefresh: true });
+		await atWrite;
+		await auth.signOut(requestWithCookie());
+		releaseWrite();
+		await pending;
+
+		assert.strictEqual((await auth.fetchAuthSession(requestWithCookie())).tokens, undefined, 'the signed-out session must not be recreated');
+		assert.strictEqual(await auth.getCurrentUser(requestWithCookie()), null);
+	});
+
+	test('a session is expired from the instant now reaches the access token exp', async () => {
+		const auth = new AuthCognito(ROOT, unique('sess-exp'));
+		const internals = auth as unknown as MockSessionInternals;
+		const exp = Math.floor(Date.now() / 1000) + 600;
+		// A token exp well inside the record's retention TTL, so this exercises the
+		// runtime's own exp comparison rather than the store's TTL filter.
+		const jwt = (claims: Record<string, unknown>) =>
+			['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.');
+		const requestFor = async () => {
+			const id = await internals.sessions.createSession({
+				idToken: jwt({ 'cognito:username': 'erin', sub: 'sub-erin', token_use: 'id', exp }),
+				accessToken: jwt({ sub: 'sub-erin', username: 'erin', token_use: 'access', exp }),
+				refreshToken: 'refresh-token-erin',
+			});
+			const { ctx } = freshContext();
+			ctx.request.headers.set('cookie', `auth_${auth.fullId}=${signSessionId(id, internals.state.sessionSecret)}`);
+			return ctx;
+		};
+		const at = async <T>(nowMs: number, run: () => Promise<T>): Promise<T> => {
+			const clock = mock.method(Date, 'now', () => nowMs);
+			try {
+				return await run();
+			} finally {
+				clock.mock.restore();
+			}
+		};
+
+		const before = await requestFor();
+		assert.strictEqual((await at(exp * 1000 - 1, () => auth.getCurrentUser(before)))?.username, 'erin');
+		assert.ok((await at(exp * 1000 - 1, () => auth.fetchAuthSession(before))).tokens);
+
+		assert.strictEqual(await at(exp * 1000, async () => auth.getCurrentUser(await requestFor())), null);
+		assert.strictEqual((await at(exp * 1000, async () => auth.fetchAuthSession(await requestFor()))).tokens, undefined);
 	});
 });
 

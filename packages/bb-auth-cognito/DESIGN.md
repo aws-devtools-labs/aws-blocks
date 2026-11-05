@@ -71,11 +71,13 @@ Everything else (`username`, `userSub`, `groups`, `attributes`) is derived on re
 
 **On sign-in / confirm-sign-in.** Verify Cognito's ID token **once** via `aws-jwt-verify`. Create the session record. Mint a random session ID. Sign with HMAC using the SSM-backed secret. Set the cookie.
 
-**On `requireAuth` / `getCurrentUser`.** Read the cookie → HMAC-verify the session ID → look up the `SessionRecord` in KVStore. If the record exists and the ID token's `exp` is in the future, derive the `CognitoUser` from the ID token claims and return it. No per-request JWKS fetch; no per-request JWT signature verification.
+**On `requireAuth` / `getCurrentUser`.** Read the cookie → HMAC-verify the session ID → look up the `SessionRecord` in KVStore. If the record exists and the access token's `exp` is in the future (strictly — a token is expired from the instant the clock reaches `exp`, per RFC 7519 §4.1.4), derive the `CognitoUser` from the ID token claims and return it. No per-request JWKS fetch; no per-request JWT signature verification.
 
 **Dead-cookie cleanup.** If the session ID verifies but the record is missing (TTL'd, explicitly deleted, or the table got wiped), the runtime clears the cookie on the response so the browser stops sending it.
 
-**Token refresh.** When the ID token's `exp` is in the past but the refresh token is still valid, call `InitiateAuthCommand({ AuthFlow: 'REFRESH_TOKEN_AUTH' })` transparently, update the `SessionRecord`, and the cookie's `Max-Age` sliding window stays aligned. A failed refresh clears the cookie.
+**Token refresh.** When the access token's `exp` has been reached but the refresh token is still valid, call `InitiateAuthCommand({ AuthFlow: 'REFRESH_TOKEN_AUTH' })` transparently, update the `SessionRecord`, and the cookie's `Max-Age` sliding window stays aligned. A refresh the user pool rejects (`NotAuthorizedException` — refresh token expired or revoked, user disabled — or `UserNotFoundException`) deletes the record and clears the cookie. Any other failure (throttling, network or service errors) is transient: that request is unauthenticated, but the record and cookie are kept so the next request retries.
+
+**Concurrent refresh and sign-out.** Parallel requests can refresh the same session, and `signOut` can delete it mid-refresh. Every write on the refresh path is conditional on the record that request read (KVStore `ifValueEquals`), so the outcome never depends on which request lands last: a refresh whose session was deleted writes nothing — the session stays signed out and that response clears the cookie — and a request whose session another request already refreshed serves the newer record instead of overwriting it, or, after a rejected refresh, deleting it. The mock applies the same conditional writes on `fetchAuthSession({ forceRefresh: true })` and on expiry.
 
 **Session lifetime.** Currently bounded by the cookie's `Max-Age` (configurable via `sessionTtlSeconds`, defaults to 400 days) and by the refresh token's TTL at the pool level. Because the server is authoritative, operators can invalidate a session by deleting its KVStore entry — no need to rotate the HMAC secret.
 
