@@ -456,14 +456,16 @@ function createHandler(backend: any) {
       return handleCognitoTrigger(event);
     }
 
-    // ── HTTP (API Gateway REST) ──
+    // ── HTTP (API Gateway REST / HTTP API) ──
     return toApiGatewayResult(event, await dispatch(toDispatchRequest(event, signal)));
   };
 }
 
 /**
- * Translate an API Gateway REST proxy event into a transport-neutral
- * {@link DispatchRequest}.
+ * Translate an API Gateway proxy event, REST (payload v1) or HTTP API /
+ * Function URL (payload v2), into a transport-neutral {@link DispatchRequest}.
+ * `requestId` is left unset: Lambda log lines already carry the invocation
+ * request ID.
  */
 function toDispatchRequest(event: any, signal?: AbortSignal): DispatchRequest {
   return {

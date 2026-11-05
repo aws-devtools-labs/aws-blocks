@@ -165,6 +165,7 @@ export type {
 	DeleteOptions as DTDeleteOptions,
 	DistributedTableOptions,
 	ExternalKmsKeyRef as DTExternalKmsKeyRef,
+	GetOptions as DTGetOptions,
 	PutOptions as DTPutOptions,
 	QueryOptions as DTQueryOptions,
 	ReadValidationMode,

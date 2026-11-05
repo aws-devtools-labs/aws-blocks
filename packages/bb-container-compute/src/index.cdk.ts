@@ -77,6 +77,9 @@ const CPU_UNITS_PER_VCPU = 1024;
 const DEFAULT_VCPU = 0.5;
 const DEFAULT_MEMORY_MB = 1024;
 
+/** Wake policy cooldown: longer than a task's start-up, so one waiting job starts one task. */
+const WAKE_COOLDOWN_MINUTES = 5;
+
 /**
  * Container port the runtime's HTTP server listens on: the backend's API when the
  * compute hosts an API namespace, a health check otherwise (see `runContainer`).
@@ -115,6 +118,19 @@ const API_RPC_LISTENER: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_RPC_LIS
 const API_RULE_PRIORITIES: unique symbol = Symbol.for('BLOCKS_CONTAINER_API_RULE_PRIORITIES');
 
 /**
+ * How long ECS waits after SIGTERM before force-killing the container: the Fargate
+ * maximum. The runtime exits as soon as its in-flight jobs finish (and a job can't
+ * outlive its own `timeoutSeconds`), so the full window is only used while a job
+ * is still running.
+ */
+const STOP_TIMEOUT_SECONDS = 120;
+/**
+ * How long the runtime waits for in-flight jobs on SIGTERM. A margin under
+ * {@link STOP_TIMEOUT_SECONDS} so it exits cleanly before ECS force-kills it.
+ */
+const DRAIN_GRACE_SECONDS = STOP_TIMEOUT_SECONDS - 10;
+
+/**
  * Default container image when the workload didn't set `image`. A stock, public,
  * AWS-hosted Node image on the SAME Node major as the Lambda runtime
  * ({@link DEFAULT_NODE_RUNTIME}, Node 24), so container and function behavior
@@ -138,6 +154,57 @@ function hashPath(value: string): number {
 		hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0;
 	}
 	return hash;
+}
+
+/**
+ * `minInstances: 0` is safe only when something wakes the service and scale-in
+ * can see running jobs. Only the wake policy can start the first task, and it
+ * watches the compute's queues, so a compute with no queues would never start.
+ * Only queue-depth scaling counts in-flight messages, so a CPU or memory policy
+ * could scale in to zero under a job that is waiting on I/O. Checked at
+ * finalize, once every job has registered its queue.
+ */
+function assertSafeScaleToZero(path: string, cfg: ContainerScaling, queueCount: number): void {
+	if (queueCount === 0) {
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances is 0, but no AsyncJob or CronJob runs on this ` +
+				'compute, so nothing would ever start a task. Set minInstances to 1 or more, or assign a job to it.',
+		);
+	}
+	const signals = cfg.strategy === undefined ? [] : Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
+	const other = signals.find((s) => s.on !== 'queue-depth');
+	if (other) {
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances is 0 with a '${other.on}' scaling strategy, which can ` +
+				'scale in to zero while a job is still running. Use the default strategy (omit it) or queue-depth, or ' +
+				'set minInstances to 1 or more.',
+		);
+	}
+}
+
+/**
+ * Reject instance bounds Application Auto Scaling or ECS would refuse at deploy
+ * time, so the failure names the compute at synth instead of surfacing minutes
+ * into a CloudFormation deploy. `minInstances: 0` is allowed: the service then
+ * scales to zero between jobs (see `ContainerCompute.finalize`).
+ */
+function validateScaling(path: string, scaling: ContainerScaling): void {
+	const { minInstances, maxInstances } = scaling;
+	if (!Number.isInteger(minInstances) || minInstances < 0) {
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances must be an integer of 0 or more, got: ${minInstances}`,
+		);
+	}
+	if (!Number.isInteger(maxInstances) || maxInstances < 1) {
+		throw new Error(
+			`Container compute '${path}': scaling.maxInstances must be an integer of 1 or more, got: ${maxInstances}`,
+		);
+	}
+	if (minInstances > maxInstances) {
+		throw new Error(
+			`Container compute '${path}': scaling.minInstances (${minInstances}) must not exceed maxInstances (${maxInstances})`,
+		);
+	}
 }
 
 export class ContainerCompute extends ComputeBase {
@@ -177,6 +244,7 @@ export class ContainerCompute extends ComputeBase {
 		const size = options?.size;
 		this.vcpu = size?.vcpu ?? DEFAULT_VCPU;
 		this.scalingConfig = options?.scaling;
+		if (this.scalingConfig) validateScaling(this.node.path, this.scalingConfig);
 
 		// A Fargate service needs a VPC. Declare the requirement centrally (so a
 		// census of the app still shows a VPC is needed), then resolve one now —
@@ -291,12 +359,25 @@ export class ContainerCompute extends ComputeBase {
 				BLOCKS_CODE_PKG_KEY: pkgAsset.s3ObjectKey,
 			},
 			portMappings: [{ containerPort: CONTAINER_PORT }],
+			stopTimeout: cdk.Duration.seconds(STOP_TIMEOUT_SECONDS),
 		});
+		this.container.addEnvironment('BLOCKS_DRAIN_GRACE_SECONDS', String(DRAIN_GRACE_SECONDS));
+
+		// Leave DesiredCount out of the template when autoscaling owns the task
+		// count. CloudFormation sends a declared DesiredCount on every update of the
+		// service, and nearly every deploy updates it (new code means a new task
+		// definition), so a declared count would reset the autoscaled count on each
+		// deploy and stop tasks that are running jobs. Without it, a new service
+		// starts one task and autoscaling takes over; an update leaves the count
+		// alone. A fixed-size service keeps its declared count. Same condition as
+		// finalize() uses to wire autoscaling.
+		const cfg = this.scalingConfig;
+		const autoscaled = cfg !== undefined && (cfg.maxInstances > 1 || cfg.minInstances === 0);
 
 		this.service = new ecs.FargateService(this, 'Service', {
 			cluster: this.getOrCreateCluster(vpcContext.vpc),
 			taskDefinition: this.taskDefinition,
-			desiredCount: this.scalingConfig?.minInstances ?? 1,
+			desiredCount: autoscaled ? undefined : (cfg?.minInstances ?? 1),
 			vpcSubnets: vpcContext.computeSubnets,
 			securityGroups: [vpcContext.computeSecurityGroup],
 			minHealthyPercent: 100,
@@ -525,6 +606,10 @@ export class ContainerCompute extends ComputeBase {
 	 * Overrides the base finalize hook so queue-depth scaling can see every
 	 * AsyncJob queue registered via {@link registerOwnedQueue} during the backend
 	 * import. No-op when scaling is absent or bounded to a single instance.
+	 *
+	 * With `minInstances: 0` the service can sit at zero tasks, where nothing
+	 * polls the owned queues. A separate wake policy then adds a task whenever
+	 * messages are waiting to be received (see {@link wakeOnWaitingMessages}).
 	 */
 	override finalize(): void {
 		// Order the service after the config upload: the container parent loads
@@ -539,7 +624,11 @@ export class ContainerCompute extends ComputeBase {
 		}
 
 		const cfg = this.scalingConfig;
-		if (!this.service || !cfg || cfg.maxInstances <= 1) return;
+		if (!this.service || !cfg) return;
+		// A single fixed instance needs no autoscaling. `minInstances: 0` always
+		// does, even with `maxInstances: 1`: something has to start the first task.
+		const scalesToZero = cfg.minInstances === 0;
+		if (cfg.maxInstances <= 1 && !scalesToZero) return;
 
 		const scalable = this.service.autoScaleTaskCount({
 			minCapacity: cfg.minInstances,
@@ -555,6 +644,7 @@ export class ContainerCompute extends ComputeBase {
 		const servesApi = (this.apiIngressInfo?.routedPaths.length ?? 0) > 0;
 		let signals: ScalingSignal[];
 		let queueScaleIn = true;
+		if (scalesToZero) assertSafeScaleToZero(this.node.path, cfg, ownedQueues.length);
 		if (cfg.strategy) {
 			signals = Array.isArray(cfg.strategy) ? cfg.strategy : [cfg.strategy];
 		} else if (ownedQueues.length > 0 && servesApi) {
@@ -620,6 +710,55 @@ export class ContainerCompute extends ComputeBase {
 				});
 			}
 		}
+
+		if (scalesToZero && ownedQueues.length > 0) {
+			this.wakeOnWaitingMessages(scalable, ownedQueues);
+		}
+	}
+
+	/**
+	 * Add a task whenever messages are waiting to be received, so a service at
+	 * zero tasks wakes for its first message.
+	 *
+	 * The queue-depth policy above can't do this: its steps are relative to the
+	 * current task count and only add capacity past `backlogPerInstance`, so a
+	 * small backlog at zero tasks changes the count by 0 and the service stays at
+	 * zero. This policy watches only Visible messages (waiting, not in flight):
+	 * while a task is running and has capacity it receives a message within
+	 * seconds, so Visible stays at 0 and the policy is idle. At zero tasks, or
+	 * when every task is busy, messages wait and it adds a task per cooldown (5
+	 * minutes) up to `maxInstances`. Scale-in stays with the queue-depth policy, which counts
+	 * in-flight messages and so never removes the last task from a running job.
+	 *
+	 * Wiring only applies with `minInstances: 0`, so services that keep at least
+	 * one task synthesize the same policies as before.
+	 */
+	private wakeOnWaitingMessages(scalable: cdk.aws_ecs.ScalableTaskCount, ownedQueues: sqs.IQueue[]): void {
+		const using: Record<string, cloudwatch.IMetric> = {};
+		ownedQueues.forEach((q, i) => {
+			using[`v${i}`] = q.metricApproximateNumberOfMessagesVisible();
+		});
+		const waiting = new cloudwatch.MathExpression({
+			expression: Object.keys(using).join(' + '),
+			usingMetrics: using,
+			label: 'Waiting',
+			period: cdk.Duration.minutes(1),
+		});
+		scalable.scaleOnMetric('WakeOnWaitingMessages', {
+			metric: waiting,
+			// One alarm: at or above 1 waiting message, add a task. The `change: 0`
+			// interval below it means no scale-in action from this policy.
+			scalingSteps: [
+				{ upper: 1, change: 0 },
+				{ lower: 1, change: +1 },
+			],
+			adjustmentType: cdk.aws_applicationautoscaling.AdjustmentType.CHANGE_IN_CAPACITY,
+			// Longer than a task takes to start and begin polling (about 3 minutes in
+			// the compute-smoke e2e). The alarm stays in ALARM until the new task
+			// picks the message up; a shorter cooldown would add a task each minute
+			// meanwhile, so one waiting message could start up to `maxInstances`.
+			cooldown: cdk.Duration.minutes(WAKE_COOLDOWN_MINUTES),
+		});
 	}
 
 	/**

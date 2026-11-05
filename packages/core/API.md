@@ -130,9 +130,7 @@ export type ContainerPollerStarter = () => ContainerPollerHandle;
 
 // @public
 export interface ContainerScaling {
-    // (undocumented)
     maxInstances: number;
-    // (undocumented)
     minInstances: number;
     // (undocumented)
     strategy?: ScalingSignal | ScalingSignal[];
@@ -405,6 +403,11 @@ export interface ScopeOptions {
     bbName?: string;
     // (undocumented)
     bbVersion?: string;
+    compute?: {
+        resolve(): {
+            readonly type: 'serverless' | 'container';
+        };
+    };
     // (undocumented)
     parent?: ScopeParent;
 }

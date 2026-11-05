@@ -216,13 +216,14 @@ export function createSharedGateway(scope: Construct, props: SharedGatewayProps)
 		const ingress = compute.apiIngress();
 		if (!ingress) {
 			throw new Error(
-				`Compute '${compute.node.id}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic.`,
+				`Compute '${compute.node.path}' hosts API namespaces (${exportNames.join(', ')}) but accepts no API traffic. ` +
+					'Give each one a serverless or container `compute`, or create it outside the scope that sets this compute.',
 			);
 		}
 		for (const name of exportNames) {
 			if (!API_GATEWAY_PATH_PART.test(name)) {
 				throw new Error(
-					`API namespace export '${name}' can't be routed to compute '${compute.node.id}': ` +
+					`API namespace export '${name}' can't be routed to compute '${compute.node.path}': ` +
 						'API Gateway path segments allow only letters, digits and : . _ - $. Rename the export.',
 				);
 			}

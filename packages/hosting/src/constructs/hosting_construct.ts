@@ -56,6 +56,9 @@ import {
 import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
+import { routeSpecificity } from '../plan/route-table.js';
+import { removeUnusedAwsCliLayers } from './aws_cli_layers.js';
+import { prependBasePath } from '../adapters/shared/basepath.js';
 import { albDoor } from './alb_door.js';
 import { AlbConstruct } from './alb_construct.js';
 import {
@@ -533,6 +536,42 @@ export type HostingConstructProps = {
      */
     paths?: readonly string[];
   };
+
+  /**
+   * Build no image-optimization function, even when the manifest declares
+   * one. On the API Gateway HTTP door the framework image endpoints
+   * (`/_next/image`, `/_ipx/*`, `/_image`) are then answered by the asset
+   * proxy with the source image, unoptimized; a remote source is redirected
+   * to itself when its host is in the manifest's image allowlist
+   * (`imageOptimization.domains` / `remotePatterns`), else 404. Set by core
+   * `Hosting` for `imageOptimization: false` (`HostingPresets.preview`).
+   * @default false
+   */
+  skipImageOptimization?: boolean;
+
+  /**
+   * The manifest's `buildId` stays the same while the build is unchanged
+   * (core `Hosting` `buildId: 'fixed'` keys it on the build's content,
+   * `HostingPresets.preview`), so a re-deploy uploads under the
+   * `builds/<buildId>/` prefix the door already serves.
+   *
+   * There is then no switch-over to a new build, so the door's
+   * `FrontDoorResult.cutover` constructs (the ALB and API Gateway asset
+   * proxies, whose environment names the prefix) are not ordered after the
+   * asset uploads or after the uploads registered later through
+   * {@link HostingConstruct.addBuildAssetDependency}. CloudFormation creates
+   * them alongside the uploads, which takes the proxy (its role, policy and
+   * function) off the end of a first deploy. A door's `onUpload` resources
+   * still run after every upload.
+   *
+   * Use it only for throwaway environments: while a deploy that changes the
+   * build runs, the door can serve the new prefix before its files are
+   * uploaded. The CloudFront door
+   * ignores it (its edge cache would keep serving the overwritten files; core
+   * `Hosting` rejects `buildId: 'fixed'` behind it).
+   * @default false
+   */
+  inPlaceBuild?: boolean;
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
   // the origin directly); `s3-website` is the internal door name
@@ -767,6 +806,12 @@ export class HostingConstruct extends Construct {
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    assertEdgeRoutesReachableByDoor(
+      manifest,
+      resolved.kind,
+      stackedRouter ? 'stacked' : resolved.kind,
+      typeof props.frontDoor === 'object' && props.frontDoor?.kind === 'apiGateway' && (props.frontDoor.api ?? 'http') === 'http',
+    );
     this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
     assertServerReachableByDoor(
       manifest,
@@ -1139,7 +1184,7 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 4. Image optimization Lambda ----
-    if (manifest.imageOptimization) {
+    if (manifest.imageOptimization && !props.skipImageOptimization) {
       const imageConstruct = new ComputeConstruct(this, 'ImageOptimization', {
         name: 'image-optimization',
         computeResource: {
@@ -1944,6 +1989,10 @@ export class HostingConstruct extends Construct {
             apiGateway: {
               ...common,
               errorPages: this.doorInput.app.errorPages,
+              computeRoutes: directComputeRoutes(manifest, this.computeFunctions, serverName),
+              ...(props.skipImageOptimization
+                ? { imageFallback: { hosts: imageRemoteHosts(manifest), pathPrefixes: imagePathEndpoints(manifest) } }
+                : {}),
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -2388,7 +2437,9 @@ export class HostingConstruct extends Construct {
     // upload here, and — recorded with the post-upload constructs — for the
     // uploads declared later (`addBuildAssetDependency`, e.g. the resolved
     // runtime config), so the previous build serves until the new one is whole.
-    for (const c of cutover) {
+    // An in-place build (`inPlaceBuild`) has no new build to switch to: the
+    // prefix never changes, so the cutover is created alongside the uploads.
+    for (const c of props.inPlaceBuild ? [] : cutover) {
       for (const dep of buildAssetDeployments) c.node.addDependency(dep);
       this.postUploadConstructs.push(c);
     }
@@ -2470,6 +2521,11 @@ export class HostingConstruct extends Construct {
         return [];
       },
     });
+
+    // An in-place build behind a door without CloudFront drops the AWS CLI
+    // layers no upload handler uses (see `aws_cli_layers.ts`). The CloudFront
+    // door ignores `inPlaceBuild`, and every other build keeps its layers.
+    if (props.inPlaceBuild && !cdn) removeUnusedAwsCliLayers(this);
   }
 
   /**
@@ -2698,6 +2754,64 @@ export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor'
 };
 
 /**
+ * The routes a regional door sends straight to a compute other than the
+ * server and the image function (e.g. a Next.js `runtime: 'edge'` route built
+ * as a regional function): the route table lists them as server routes.
+ * Lambda@Edge functions are reached only through CloudFront and are skipped.
+ *
+ * @param manifest the deploy manifest.
+ * @param computeFunctions the functions built for the manifest's compute.
+ * @param serverName the server compute's name, if any.
+ * @returns `{ pattern, computeName }` (basePath-prefixed), most-specific first.
+ */
+const directComputeRoutes = (
+  manifest: DeployManifest,
+  computeFunctions: ReadonlyMap<string, unknown>,
+  serverName: string | undefined,
+): { pattern: string; computeName: string }[] =>
+  manifest.routes
+    .filter(
+      (r) =>
+        r.target !== serverName &&
+        r.target !== 'image-optimization' &&
+        computeFunctions.has(r.target) &&
+        manifest.compute[r.target]?.type !== 'edge',
+    )
+    .map((r) => ({ pattern: prependBasePath(manifest.basePath, r.pattern), computeName: r.target }))
+    .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+/**
+ * The path-form image endpoints the manifest routes to the image function
+ * (Nuxt IPX: `/_ipx/*` by default, or a custom `runtimeConfig.ipx.baseURL`),
+ * as basePath-relative prefixes. The query-form endpoints (`/_next/image`,
+ * `/_image`) are matched by name.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the prefixes, e.g. `['/img']`.
+ */
+const imagePathEndpoints = (manifest: DeployManifest): string[] =>
+  manifest.routes
+    .filter((r) => r.target === 'image-optimization' && r.pattern.endsWith('/*'))
+    .map((r) => `/${r.pattern.slice(0, -2).replace(/^\/+/, '')}`)
+    .filter((p) => !p.startsWith('/_next/') && p !== '/_image');
+
+/**
+ * The remote image hosts the app allows its image optimizer to fetch: the
+ * manifest's `imageOptimization.domains` and `remotePatterns` hostnames, or,
+ * with no image function, its `imageRemoteSources`.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the hosts (may carry a `*.` / `**.` wildcard prefix).
+ */
+const imageRemoteHosts = (manifest: DeployManifest): string[] => [
+  ...(manifest.imageOptimization?.domains ?? []),
+  ...(manifest.imageOptimization?.remotePatterns ?? []).map((p) => p.hostname),
+  ...(manifest.imageRemoteSources?.domains ?? []),
+  ...(manifest.imageRemoteSources?.remotePatterns ?? []).map((p) => p.hostname),
+];
+
+
+/**
  * How the selected front door invokes the server-rendering compute. Known
  * before the compute is built, so the server answers in a form the door can
  * carry (see `DoorCapabilities.streaming`).
@@ -2864,6 +2978,42 @@ const assertMiddlewareReachableByDoor = (manifest: DeployManifest, kind: string,
     resolution:
       "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or move the middleware's logic into the pages " +
       'or route handlers before choosing another door.',
+  });
+};
+
+/**
+ * Fail synth for a Lambda@Edge compute (`type: 'edge'`, for example a Next.js
+ * `runtime: 'edge'` route) behind a door other than CloudFront: only a
+ * CloudFront distribution invokes Lambda@Edge, so the route would never reach
+ * its function.
+ *
+ * The resolution depends on the door: only the API Gateway HTTP API door can
+ * run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`),
+ * so behind any other door the fix is to change the door.
+ *
+ * @param httpApi whether the door is the API Gateway HTTP API door.
+ * @throws HostingError('EdgeRouteNeedsCloudFrontDoorError') naming the computes and the door.
+ */
+const assertEdgeRoutesReachableByDoor = (
+  manifest: DeployManifest,
+  kind: string,
+  label: string = kind,
+  httpApi = false,
+): void => {
+  if (kind === 'cloudfront') return;
+  const edge = Object.entries(manifest.compute)
+    .filter(([, resource]) => resource.type === 'edge')
+    .map(([name]) => name);
+  if (edge.length === 0) return;
+  throw new HostingError('EdgeRouteNeedsCloudFrontDoorError', {
+    message:
+      `The app has Lambda@Edge computes (${edge.join(', ')}), which only the CloudFront door invokes; the '${label}' ` +
+      'front door would deploy them with no route reaching them.',
+    resolution: httpApi
+      ? "Run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`, the default behind this door), " +
+        'or use the CloudFront door.'
+      : "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or the API Gateway HTTP API door " +
+        "(`frontDoor: { kind: 'apiGateway' }`), which runs them as regional functions.",
   });
 };
 

@@ -142,7 +142,41 @@ wires Application Auto Scaling from `scaling`:
   backlog only adds it (no scale-in step) — a queue-depth scale-in step would
   remove tasks the API still needs whenever the queue is empty. With I/O-bound
   jobs, CPU tracking can scale in while a backlog remains, and the queue step adds
-  the task back. `maxInstances ≤ 1` wires no policy.
+  the task back. `maxInstances ≤ 1` wires no policy, unless `minInstances` is 0.
+
+### Scaling to zero (`minInstances: 0`)
+
+`minInstances: 0` is for long-running jobs that can tolerate high start-up
+latency; `1` or more is recommended otherwise. `finalize()` rejects it on a
+compute that drains no queue (nothing would start a task) or whose strategy
+includes `cpu`/`memory` (those policies can't see in-flight jobs, so they could
+scale in to zero under one). A compute that serves API namespaces can't use it
+either: nothing starts a task for an incoming request, so `apiIngress()` rejects
+it when the gateway routes the first namespace there, before `finalize()` runs.
+With `0` the service can scale in to zero tasks, where nothing polls the owned queues. The queue-depth policy
+can't wake it: [step adjustments](https://docs.aws.amazon.com/autoscaling/application/userguide/step-scaling-policy-overview.html)
+are relative to the current task count, and a backlog under `backlogPerInstance`
+falls in the `change: 0` step, so 0 tasks stay 0 tasks and the message is never
+read.
+
+So a min-0 compute that drains queues gets one more step policy,
+`WakeOnWaitingMessages`: an alarm on the sum of `ApproximateNumberOfMessagesVisible`
+(waiting, not in flight) across its queues adds one task when the sum is 1 or
+more, with a 5-minute cooldown (longer than a task's start-up, so one waiting
+message starts one task rather than one per minute). While a task with free capacity is running it receives messages within
+seconds, so Visible stays at 0 and the policy is idle; when every task is busy
+it also adds capacity up to `maxInstances`. Scale-in is left to the queue-depth
+policy, which counts in-flight messages and so never removes the last task from
+under a running job. Computes with `minInstances ≥ 1` synthesize exactly the
+policies they did before.
+
+Waking takes minutes, not seconds: SQS publishes queue metrics to CloudWatch
+once a minute, the alarm evaluates a one-minute period, and the new task then
+starts and fetches the app code, so a wake usually takes a few minutes (232s in
+the compute-smoke e2e). A queue idle for more than six hours
+[stops publishing metrics](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/monitoring-using-cloudwatch.html),
+and when a message arrives they take up to 15 minutes to resume, so a job that
+runs less often than that can wait up to about 20 minutes to start.
 
 ## Runtime (worker isolation)
 

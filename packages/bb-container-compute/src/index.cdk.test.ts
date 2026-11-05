@@ -291,6 +291,216 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 	});
 });
 
+describe('ContainerCompute — scale from zero (minInstances: 0)', () => {
+	async function makeScalingStack(id: string) {
+		const app = new cdk.App();
+		return BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+	}
+
+	/** Build a compute that drains one queue, finalize it, and return the template. */
+	async function synthWithQueue(id: string, scaling: { minInstances: number; maxInstances: number }) {
+		const stack = await makeScalingStack(id);
+		const compute = new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.25, memory: 512 }, scaling });
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		compute.finalize();
+		return Template.fromStack(stack as unknown as cdk.Stack);
+	}
+
+	/** Alarms whose metric math reads only the Visible count: the wake policy's alarm. */
+	function wakeAlarms(template: Template) {
+		return Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+			.map((a) => (a as { Properties: Record<string, unknown> }).Properties)
+			.filter((p) => {
+				const s = JSON.stringify(p.Metrics ?? []);
+				return s.includes('ApproximateNumberOfMessagesVisible') && !s.includes('NotVisible');
+			});
+	}
+
+	test('deploys at zero tasks and adds a task when a message is waiting', async () => {
+		const template = await synthWithQueue('ContainerScaleFromZero', { minInstances: 0, maxInstances: 2 });
+
+		// Autoscaling owns the count, so the template declares none (see below).
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: Match.absent() });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 0,
+			MaxCapacity: 2,
+		});
+
+		// The wake alarm fires at one or more waiting (Visible) messages. It must
+		// not count in-flight messages, or a running job would keep adding tasks.
+		const alarms = wakeAlarms(template);
+		assert.strictEqual(alarms.length, 1, `one wake alarm; got ${JSON.stringify(alarms)}`);
+		assert.strictEqual(alarms[0].ComparisonOperator, 'GreaterThanOrEqualToThreshold');
+		assert.strictEqual(alarms[0].Threshold, 1);
+
+		// Its policy adds one task.
+		const policies = Object.values(template.findResources('AWS::ApplicationAutoScaling::ScalingPolicy')).map(
+			(p) => (p as { Properties: Record<string, any> }).Properties,
+		);
+		const wake = policies.find((p) => String(p.PolicyName).includes('WakeOnWaitingMessages'));
+		assert.ok(wake, `a wake policy exists; got ${policies.map((p) => p.PolicyName).join(', ')}`);
+		assert.deepStrictEqual(
+			wake.StepScalingPolicyConfiguration.StepAdjustments.map(
+				(s: { ScalingAdjustment: number }) => s.ScalingAdjustment,
+			),
+			[1],
+		);
+	});
+
+	test('wires autoscaling for minInstances 0 even when maxInstances is 1', async () => {
+		const template = await synthWithQueue('ContainerScaleFromZeroMaxOne', { minInstances: 0, maxInstances: 1 });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 0,
+			MaxCapacity: 1,
+		});
+		assert.strictEqual(wakeAlarms(template).length, 1);
+	});
+
+	test('a compute that keeps at least one task gets no wake policy', async () => {
+		const template = await synthWithQueue('ContainerNoWake', { minInstances: 1, maxInstances: 3 });
+		assert.strictEqual(wakeAlarms(template).length, 0);
+	});
+
+	test('a single fixed instance still gets no autoscaling', async () => {
+		const template = await synthWithQueue('ContainerFixedOne', { minInstances: 1, maxInstances: 1 });
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 0);
+	});
+
+	test('rejects instance bounds that would fail at deploy', async () => {
+		const stack = await makeScalingStack('ContainerBadBounds');
+		const cases: Array<[{ minInstances: number; maxInstances: number }, RegExp]> = [
+			[{ minInstances: -1, maxInstances: 2 }, /minInstances must be an integer of 0 or more/],
+			[{ minInstances: 0.5, maxInstances: 2 }, /minInstances must be an integer of 0 or more/],
+			[{ minInstances: 0, maxInstances: 0 }, /maxInstances must be an integer of 1 or more/],
+			[{ minInstances: 3, maxInstances: 2 }, /minInstances \(3\) must not exceed maxInstances \(2\)/],
+		];
+		cases.forEach(([scaling, message], i) => {
+			assert.throws(() => new ContainerCompute(stack as never, `bad${i}`, { scaling }), message);
+		});
+	});
+});
+
+describe('ContainerCompute — deploys leave running jobs alone where they can', () => {
+	async function synth(id: string, scaling?: { minInstances: number; maxInstances: number }) {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.25, memory: 512 }, scaling });
+		compute.finalize();
+		return Template.fromStack(stack as unknown as cdk.Stack);
+	}
+
+	// CloudFormation re-sends a declared DesiredCount on every update of the
+	// service, and new code means a new task definition, so a declared count would
+	// reset the autoscaled count on nearly every deploy.
+	test('an autoscaled service declares no DesiredCount', async () => {
+		const template = await synth('ContainerAutoscaledCount', { minInstances: 1, maxInstances: 4 });
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: Match.absent() });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 1,
+			MaxCapacity: 4,
+		});
+	});
+
+	test('a fixed-size service keeps its declared DesiredCount', async () => {
+		// maxInstances 1 with minInstances 1 is a single fixed task: nothing scales it.
+		const template = await synth('ContainerFixedCount', { minInstances: 1, maxInstances: 1 });
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 0);
+	});
+
+	test('a service with no scaling declares one task', async () => {
+		const template = await synth('ContainerDefaultCount');
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
+	});
+
+	test('the container gets the Fargate maximum stopTimeout, and the runtime drains just under it', async () => {
+		const template = await synth('ContainerStopTimeout');
+		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+			ContainerDefinitions: Match.arrayWith([
+				Match.objectLike({
+					StopTimeout: 120,
+					Environment: Match.arrayWith([{ Name: 'BLOCKS_DRAIN_GRACE_SECONDS', Value: '110' }]),
+				}),
+			]),
+		});
+	});
+});
+
+describe('ContainerCompute — review: scale-to-zero guards, wake cooldown, error naming', () => {
+	async function stackFor(id: string) {
+		const app = new cdk.App();
+		return BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+	}
+
+	test('minInstances 0 with no queue fails at finalize, naming the compute', async () => {
+		const stack = await stackFor('ContainerZeroNoQueue');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2 },
+		});
+		assert.throws(
+			() => compute.finalize(),
+			/Container compute 'ContainerZeroNoQueue\/worker': scaling\.minInstances is 0, but no AsyncJob or CronJob runs on this compute/,
+		);
+	});
+
+	test('minInstances 0 with a cpu strategy fails at finalize', async () => {
+		const stack = await stackFor('ContainerZeroCpu');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2, strategy: { on: 'cpu', targetPercent: 60 } },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		assert.throws(() => compute.finalize(), /minInstances is 0 with a 'cpu' scaling strategy/);
+	});
+
+	test('minInstances 0 with an explicit queue-depth strategy is allowed', async () => {
+		const stack = await stackFor('ContainerZeroQueueDepth');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2, strategy: { on: 'queue-depth', backlogPerInstance: 50 } },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		assert.doesNotThrow(() => compute.finalize());
+	});
+
+	test('the wake policy waits 5 minutes between adding tasks', async () => {
+		const stack = await stackFor('ContainerWakeCooldown');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 3 },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		compute.finalize();
+		const policies = Object.values(
+			Template.fromStack(stack as unknown as cdk.Stack).findResources(
+				'AWS::ApplicationAutoScaling::ScalingPolicy',
+			),
+		).map(
+			(p) =>
+				(p as { Properties: { PolicyName: string; StepScalingPolicyConfiguration?: { Cooldown?: number } } })
+					.Properties,
+		);
+		const wake = policies.find((p) => p.PolicyName.includes('WakeOnWaitingMessages'));
+		assert.strictEqual(wake?.StepScalingPolicyConfiguration?.Cooldown, 300);
+	});
+});
+
 describe('ContainerCompute — API ingress', () => {
 	async function stackWith(ids: string[], stackId = `ApiIngress${ids.join('')}`) {
 		const app = new cdk.App();
@@ -439,18 +649,6 @@ describe('ContainerCompute — API ingress', () => {
 			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
 		} as never);
 		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 2 } });
-		assert.throws(() => compute.apiIngress(), /serves API namespaces, so it needs a running task: set scaling\.minInstances/);
-	});
-
-	test('a compute that serves API traffic with no tasks at all also needs a running task', async () => {
-		const app = new cdk.App();
-		const stack = await BlocksStack.create(app, 'ApiIngressMaxZero', {
-			backendHandlerPath: handlerPath,
-			backendCDKPath: backendPath,
-			defaults: BlocksPresets.production,
-			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
-		} as never);
-		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 0 } });
 		assert.throws(() => compute.apiIngress(), /serves API namespaces, so it needs a running task: set scaling\.minInstances/);
 	});
 

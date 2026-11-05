@@ -123,7 +123,11 @@ const flags = await getConfig('FEATURE_FLAGS'); // SSM
 ```
 
 Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
-the value in a `.env` file. On a deployed function it fetches + decrypts from its
+the value in `.env.local`. That is the file the Blocks dev server (`npm run dev`)
+and the sandbox (`npm run sandbox`) load into the backend; they don't load `.env`,
+so a value only in `.env` isn't seen there and the getter throws
+`no config reference found`. (Next.js SSR code under `next dev` also reads `.env`,
+because Next loads it.) On a deployed function it fetches + decrypts from its
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
 
@@ -301,15 +305,15 @@ The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
 build doesn't download it:
 
 ```bash
-npm install --save-dev @opennextjs/aws@~4.0.3
+npm install --save-dev @opennextjs/aws@~4.1.14
 ```
 
-- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.1.0`.
+- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`.
   Outside that range the build warns and continues.
 - If the app doesn't declare OpenNext, the adapter builds with
-  `@opennextjs/aws@4.0.3` and prints a warning.
+  `@opennextjs/aws@4.1.14` and prints a warning.
 - OpenNext declares the Next.js versions it supports as a `next` peer range
-  (4.0.3: `>=15.5.18 <16 || >=16.2.6`). When your `next` version is outside
+  (4.1.14: `>=15.5.28 <16 || >=16.4.1`). When your `next` version is outside
   it, the build prints a warning. Upgrade `next` within its major version to
   one that range accepts.
 - A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
@@ -499,13 +503,17 @@ Some apps need the CloudFront door:
   only on the CloudFront door. Behind any other door synth fails with
   `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
   middleware (and any route gating it does) skipped.
-- A streaming server (Next.js through OpenNext, or Nitro with
-  `awsLambda.streaming: true`) answers only through a door that streams: the
-  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. The ALB door, the
-  stacked door (its router is an ALB) and the HTTP API invoke the server
-  without streaming, so synth fails with
-  `StreamingServerNeedsStreamingDoorError` instead of deploying an app whose
-  pages never answer.
+- A streaming server handler answers only through a door that streams: the
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Behind the HTTP
+  API the Next.js and Nitro adapters build a buffered server instead (see
+  "The server behind the HTTP API"). The ALB door and the stacked door (its
+  router is an ALB) invoke the server without streaming, so with Next.js
+  through OpenNext, or Nitro with `awsLambda.streaming: true` on the
+  `aws-lambda` preset, synth fails with `StreamingServerNeedsStreamingDoorError`
+  instead of deploying an app whose pages never answer. Behind the HTTP API it
+  fails the same way only when the app forces a streaming build (a Nitro
+  `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
+  `open-next.config.ts` with a streaming wrapper).
 
 ### Settings per door kind
 
@@ -585,10 +593,12 @@ a Lambda Web Adapter server that reads its host from `x-forwarded-host` through
 sent, so don't configure it to trust `x-forwarded-host` behind these doors.
 
 A door that invokes the server without streaming (the ALB, the stacked door's
-ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next.js
-is the exception: its OpenNext build targets a streaming API Gateway REST
-integration, so serve Next.js through CloudFront, the `'rest'` door, or a door
-that streams.
+ALB router, the API Gateway HTTP API) gets a server built in buffered mode.
+Behind the HTTP API that includes Next.js, which the adapter builds with
+OpenNext's buffered `aws-apigw-v2` handler. Behind the ALB and the stacked door,
+Next.js is the exception: its OpenNext build targets a streaming API Gateway
+REST integration, so serve it there through CloudFront, an API Gateway door, or
+a door that streams.
 
 Behind the ALB, the server's target group sends and expects multi-value
 headers, so several `Set-Cookie` headers survive. A Lambda Web Adapter server
@@ -708,6 +718,30 @@ build's hashed assets: a tab opened before a deploy that then lazy-loads one of
 its chunks gets a 404 (the website's error document) and needs a reload. The page is plain HTTP and the
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
+
+**The server behind the HTTP API.** An HTTP API Lambda integration sends the
+payload format 2.0 event and can't stream, so the server is built for it: the
+Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
+`aws-lambda` wrapper (a hand-written `open-next.config.ts` must use the same
+pair), and the Nitro adapter builds the `node-server` preset (a Lambda Web
+Adapter server, run buffered) when the app sets no preset and the stack's
+region is pinned to one with a Lambda Web Adapter layer
+(`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
+`@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
+Nitro keeps the `aws-lambda` preset, which
+the HTTP API serves while `awsLambda.streaming` is off. A route served by
+a compute other than the server (for example a Next.js `runtime: 'edge'` route
+built as a regional function) gets its own route to that function. A
+Lambda@Edge compute behind any door other than CloudFront fails synth
+(`EdgeRouteNeedsCloudFrontDoorError`), since only CloudFront invokes it.
+
+**No image function.** With `imageOptimization: false` on core `Hosting`
+(which `HostingPresets.preview` sets) no image function is built, and the HTTP API routes the framework
+image endpoints (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to
+the asset proxy, which serves the source image unoptimized. A remote source is
+redirected (302) to itself only when its host is in the manifest's image
+allowlist (`imageOptimization.domains`, `remotePatterns` hostnames); anything
+else is a 404. The proxy never fetches a remote URL.
 
 ### The stacked door
 

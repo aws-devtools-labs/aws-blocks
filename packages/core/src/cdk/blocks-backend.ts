@@ -170,17 +170,35 @@ function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDef
  * by a compute: the shared execution role, resource groups, and console-redirect
  * routes.
  */
+/** Guide for apps scaffolded from older templates; linked from the missing-`defaults` error. */
+export const UPGRADE_GUIDE_URL =
+	'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md';
+
+/**
+ * Fail fast with an actionable message if `defaults` is missing. TypeScript
+ * callers get a compile error, but `cdk` runs `aws-blocks/index.cdk.ts` through a
+ * loader that doesn't type-check, so an app scaffolded before `defaults` became
+ * required (or a plain-JS caller, `as any`, or a dynamically built props object)
+ * reaches the constructors without it, which then throw a cryptic
+ * `Cannot read properties of undefined (reading 'vpc')`. Called at the top of
+ * `BlocksStack.create()` and `BlocksBackend.create()`, before either constructs.
+ *
+ * @internal
+ */
+export function assertBlocksDefaults(props: { defaults?: unknown }, kind: 'BlocksStack' | 'BlocksBackend'): void {
+	if (props.defaults) return;
+	throw new Error(
+		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
+			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
+			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
+			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
+			`aws-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
+	);
+}
+
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
-	// Fail fast with an actionable message at the create() call site if `defaults`
-	// is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
-	// object) — otherwise the first Building Block to read `scope.defaults` throws
-	// a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
-	if (!props.defaults) {
-		throw new Error(
-			'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
-				'`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
-		);
-	}
+	// Belt and braces for callers that reach here without create().
+	assertBlocksDefaults(props, 'BlocksBackend');
 
 	// Surface the audit-trail tradeoff at synth when running a durable posture
 	// with access logging off. Non-fatal: warning only.
@@ -605,6 +623,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksBackend');
 		// Stack-level children before this backend exists, so the boundary can also
 		// cap the per-stack CDK singletons its blocks add (see the end of create()).
 		const stackChildrenBefore = snapshotChildren(cdk.Stack.of(scope));

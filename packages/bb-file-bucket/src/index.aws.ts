@@ -15,6 +15,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Scope, registerSdkIdentifiers, getSdkIdentifiers, blocksError, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
+import { validatePresignedUrlExpiry } from './presigned-url.js';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
 	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
@@ -169,20 +170,22 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	async getUrl(path: string, options?: GetUrlOptionsFor<O>): Promise<string> {
 		assertValidKey(path);
 		const opts = options as any;
+		const expiresIn = validatePresignedUrlExpiry(opts?.expiresIn ?? 3600);
 		return getSignedUrl(this.s3, new GetObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path,
 			...(opts?.versionId ? { VersionId: opts.versionId } : {}),
 		}), {
-			expiresIn: opts?.expiresIn ?? 3600,
+			expiresIn,
 		});
 	}
 
 	async putUrl(path: string, options?: PutUrlOptions): Promise<string> {
 		assertValidKey(path);
 		this.assertPresignedUploadSupported();
+		const expiresIn = validatePresignedUrlExpiry(options?.expiresIn ?? 3600);
 		return getSignedUrl(this.s3, new PutObjectCommand({
 			Bucket: getSdkIdentifiers(this).bucketName, Key: path, ContentType: options?.contentType,
-		}), { expiresIn: options?.expiresIn ?? 3600 });
+		}), { expiresIn });
 	}
 
 	async getFileHandle(path: string, options?: GetUrlOptionsFor<O>): Promise<FileDownloadClient> {

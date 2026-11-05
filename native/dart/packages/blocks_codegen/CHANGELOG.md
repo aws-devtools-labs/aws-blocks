@@ -15,6 +15,13 @@
   flag, which exclude a logical package identity from binding resolution.
 - Warn with `AWSBLOCKS-NATIVE-003` for a declared native package that no binding
   references, since nothing imports it.
+- Warn with `AWSBLOCKS-NATIVE-004` for a binding whose `kind` schema 1 does not
+  define. It was skipped in silence, so a typo in `kind` was indistinguishable
+  from a binding that applied.
+- **Breaking:** `NativeBinding` gains a required `id`, which the new diagnostic names.
+  It is exported, so every external construction must add the field.
+- **A binding entry with a missing or empty `id` is now a spec error.** The
+  field was never read before, so such an entry generated.
 - Warn with `AWSBLOCKS-NATIVE-006` when an opt-out names a package the spec does
   not declare. A misspelled identity used to opt nothing out in silence,
   indistinguishable from a working opt-out.
@@ -54,6 +61,10 @@
 - Reject a binding whose `export` is not a delimited run of alphanumeric
   segments starting with a letter, since the generator upper-camel-cases it into
   a type name in the generated client.
+- Name the accepted separators `-`, `_` and `.` in that rejection, which used to
+  report only that the export does not name a public Dart type.
+- Reject an export declared at two generic arities in one package, which used to
+  generate `APILink` and `APILink<T>` side by side from a single `show` import.
 - Escape line terminators in `info.title` and `info.version` so a spec cannot
   place a declaration in the generated file's header comment.
 - Generate `UnknownTransferable` (with an `AWSBLOCKS-NATIVE-001` diagnostic) for

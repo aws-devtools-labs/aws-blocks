@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
+import { describe, it, before, after, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import * as http from 'node:http';
 import * as net from 'node:net';
@@ -39,6 +39,26 @@ function send(
     });
     req.on('error', reject);
     if (body !== undefined) req.write(body);
+    req.end();
+  });
+}
+
+/**
+ * POST `parts` as separate writes: with a Content-Length for their total when
+ * `withLength` is set, else chunked (one chunk per part).
+ */
+function postInParts(port: number, target: string, parts: string[], withLength: boolean): Promise<Reply> {
+  const headers: Record<string, string> = withLength
+    ? { 'Content-Length': String(Buffer.byteLength(parts.join(''))) }
+    : { 'Transfer-Encoding': 'chunked' };
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, method: 'POST', path: target, headers, agent: false }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf-8') }));
+    });
+    req.on('error', reject);
+    for (const part of parts) req.write(part);
     req.end();
   });
 }
@@ -148,6 +168,20 @@ function lambdaEvent(method: string, target: string, headers: Record<string, str
 
 // ── Backend under test ──────────────────────────────────────────────────────
 
+/** Yield for a random 0-4 ms, so overlapping requests interleave. */
+function randomPause(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.floor(Math.random() * 5)));
+}
+
+/** Read the request cookie and client user agent stores twice, across awaits. */
+async function readStoresAcrossAwaits() {
+  await randomPause();
+  const first = { cookie: requestCookies.getStore(), userAgent: requestClientUserAgent.getStore() };
+  await randomPause();
+  const second = { cookie: requestCookies.getStore(), userAgent: requestClientUserAgent.getStore() };
+  return { first, second };
+}
+
 const backend = {
   api: (ctx: BlocksContext) => ({
     async echo(msg: string) {
@@ -173,6 +207,9 @@ const backend = {
       ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
       ctx.response.status = status;
       return { ok: true };
+    },
+    async stores() {
+      return readStoresAcrossAwaits();
     },
   }),
 };
@@ -238,6 +275,13 @@ function registerRoutes() {
     path: '/url',
     handler: async (ctx) => {
       ctx.response.send({ url: ctx.request.url.href });
+    },
+  });
+  registerRoute({
+    method: 'GET',
+    path: '/stores',
+    handler: async (ctx) => {
+      ctx.response.send(await readStoresAcrossAwaits());
     },
   });
   registerRoute({
@@ -322,6 +366,7 @@ const PARITY: Array<{ name: string; method: string; target: string; headers?: Re
   { name: 'RPC invalid JSON', method: 'POST', target: '/aws-blocks/api', headers: json, body: '{nope' },
   { name: 'RPC path/body namespace mismatch', method: 'POST', target: '/aws-blocks/api/other', headers: json, body: rpc('api.echo', ['x']) },
   { name: 'preflight from an allowed origin', method: 'OPTIONS', target: '/aws-blocks/api', headers: { origin: ALLOWED_ORIGIN } },
+  { name: 'preflight from a disallowed origin', method: 'OPTIONS', target: '/aws-blocks/api', headers: { origin: 'https://other.example' } },
   { name: 'cross-origin rejection', method: 'POST', target: '/aws-blocks/api', headers: { ...json, origin: 'https://evil.example' }, body: rpc('api.echo', ['x']) },
   { name: 'RawRoute with params, repeated query and cookies', method: 'GET', target: '/users/42?q=a&q=b', headers: { origin: ALLOWED_ORIGIN, cookie: 'sid=abc' } },
   { name: 'RawRoute text body', method: 'GET', target: '/text' },
@@ -543,6 +588,23 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     }
   });
 
+  for (const chunked of [false, true]) {
+    const framing = chunked ? 'a chunked body' : 'a body with a Content-Length';
+    for (const [size, status] of [[16, 200], [17, 413]] as const) {
+      it(`answers ${status} for ${framing} of ${size} bytes against a 16-byte limit`, async () => {
+        const server = await start({ maxBodyBytes: 16 });
+        try {
+          const body = 'x'.repeat(size);
+          const reply = await postInParts(server.port, '/echo-body', [body.slice(0, 8), body.slice(8)], !chunked);
+          assert.strictEqual(reply.status, status);
+          if (status === 200) assert.deepStrictEqual(JSON.parse(reply.body), { text: body });
+        } finally {
+          await server.close();
+        }
+      });
+    }
+  }
+
   it('delivers the 413 for a multi-MiB body instead of resetting the connection', async () => {
     const server = await start({ maxBodyBytes: 16 });
     try {
@@ -667,6 +729,112 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
       await server.close();
     }
   });
+});
+
+describe('serveHttp — request stores under concurrency', { timeout: 30_000 }, () => {
+  it('keeps each request\'s cookie and client user agent across awaits on shared keep-alive sockets', async () => {
+    const server = await start();
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 4 });
+    try {
+      const replies = await Promise.all(
+        Array.from({ length: 50 }, (_, i) => {
+          const viaRpc = i % 2 === 0;
+          const headers = { cookie: `sid=${i}`, 'x-blocks-user-agent': `aws-blocks-swift/1.0.${i}`, ...(viaRpc ? json : {}) };
+          return new Promise<{ i: number; viaRpc: boolean; body: string }>((resolve, reject) => {
+            const req = http.request(
+              {
+                host: '127.0.0.1',
+                port: server.port,
+                method: viaRpc ? 'POST' : 'GET',
+                path: viaRpc ? '/aws-blocks/api' : '/stores',
+                headers,
+                agent,
+              },
+              (res) => {
+                const chunks: Buffer[] = [];
+                res.on('data', (c: Buffer) => chunks.push(c));
+                res.on('end', () => resolve({ i, viaRpc, body: Buffer.concat(chunks).toString('utf-8') }));
+              },
+            );
+            req.on('error', reject);
+            req.end(viaRpc ? rpc('api.stores') : undefined);
+          });
+        }),
+      );
+      for (const { i, viaRpc, body } of replies) {
+        const parsed = JSON.parse(body);
+        const reads = viaRpc ? parsed.result : parsed;
+        const own = { cookie: `sid=${i}`, userAgent: `client/swift/1.0.${i}` };
+        assert.deepStrictEqual(reads, { first: own, second: own }, `request ${i} (${viaRpc ? 'RPC' : 'RawRoute'})`);
+      }
+      assert.strictEqual(requestCookies.getStore(), undefined);
+      assert.strictEqual(requestClientUserAgent.getStore(), undefined);
+    } finally {
+      agent.destroy();
+      await server.close();
+    }
+  });
+});
+
+describe('serveHttp — request IDs in error logs', { timeout: 30_000 }, () => {
+  const TRACE_ID = 'Root=1-67891233-abcdef012345678912345678';
+  const UUID_TAG = /^\[request [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\]$/;
+
+  /** Send one request with console.error stubbed; returns the logged calls' arguments. */
+  async function logged(method: string, target: string, headers: Record<string, string>, body?: string): Promise<unknown[][]> {
+    const server = await start();
+    const error = mock.method(console, 'error', () => {});
+    try {
+      await send(server.port, method, target, headers, body);
+      return error.mock.calls.map((call) => call.arguments);
+    } finally {
+      error.mock.restore();
+      await server.close();
+    }
+  }
+
+  const sources = [
+    ['an RPC method that throws', 'HTTP Server RPC Error:', 'POST', '/aws-blocks/api', json, rpc('api.fail')],
+    ['a RawRoute that throws', 'RawRoute Error:', 'GET', '/boom', {}, undefined],
+    ['an invalid response status', 'HTTP server error:', 'GET', '/bad-status?status=1000', {}, undefined],
+  ] as const;
+
+  for (const [name, label, method, target, headers, body] of sources) {
+    it(`tags the log line for ${name} with the load balancer trace ID`, async () => {
+      const calls = await logged(method, target, { ...headers, 'x-amzn-trace-id': TRACE_ID }, body);
+      const line = calls.find((args) => args[0] === label);
+      assert.ok(line, `a "${label}" line was logged`);
+      assert.strictEqual(line[1], `[request ${TRACE_ID}]`);
+    });
+
+    it(`tags the log line for ${name} with a generated ID when no trace ID is sent`, async () => {
+      const calls = await logged(method, target, { ...headers }, body);
+      const line = calls.find((args) => args[0] === label);
+      assert.ok(line, `a "${label}" line was logged`);
+      assert.match(String(line[1]), UUID_TAG);
+    });
+  }
+
+  it('tags the unmatched-route log line with the load balancer trace ID', async () => {
+    const calls = await logged('GET', '/no-such-route', { 'x-amzn-trace-id': TRACE_ID });
+    const line = calls.find((args) => String(args[0]).startsWith('No RawRoute matched GET /no-such-route'));
+    assert.ok(line, 'a "No RawRoute matched" line was logged');
+    assert.ok(String(line[0]).endsWith(` [request ${TRACE_ID}]`));
+  });
+
+  for (const [name, traceId] of [
+    ['a space', 'Root=1-abc Self=1-def'],
+    ['a tab', 'Root=1-abc\tSelf=1-def'],
+    ['more than 256 characters', `Root=1-${'a'.repeat(256)}`],
+  ] as const) {
+    it(`generates an ID instead of using a trace ID with ${name}`, async () => {
+      const calls = await logged('GET', '/boom', { 'x-amzn-trace-id': traceId });
+      const line = calls.find((args) => args[0] === 'RawRoute Error:');
+      assert.ok(line);
+      assert.match(String(line[1]), UUID_TAG);
+      assert.ok(!calls.flat().some((arg) => String(arg).includes(traceId)), 'the trace ID is not logged');
+    });
+  }
 });
 
 describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => {

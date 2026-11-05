@@ -12,42 +12,49 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "spec": "blocks-generate-spec",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
-    "dev:stop": "tsx aws-blocks/scripts/stop.ts",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
-    "prebuild": "blocks-generate-client",
+    "spec": "cdk-blocks generate spec",
+    "dev:server": "cdk-blocks dev",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:preview": "cdk-blocks sandbox preview",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "prebuild": "cdk-blocks generate client",
     "build": "next build",
     "start": "next start",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
-    "secret": "tsx aws-blocks/scripts/secret.ts",
-    "typegen": "tsx aws-blocks/scripts/typegen.ts",
-    "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "vendorize": "blocks-vendorize"
+    "deploy": "cdk-blocks deploy",
+    "destroy": "cdk-blocks destroy",
+    "secret": "cdk-blocks secret",
+    "config": "cdk-blocks config",
+    "typegen": "cdk-blocks generate types",
+    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
+    "vendorize": "cdk-blocks vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "frontendPort": 3100
+    }
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
     "@aws-blocks/hosting": "*",
-    "next": "^16.4.2",
+    "next": "^16.4.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
-    "@opennextjs/aws": "~4.0.3",
+    "@opennextjs/aws": "~4.1.14",
     "@types/node": "^20.19.43",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
     "esbuild": "^0.28.2",
-    "aws-cdk": "^2.1145.0",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk": "^2.1147.0",
+    "aws-cdk-lib": "^2.275.0",
     "constructs": "^10.8.1"
   }
 }

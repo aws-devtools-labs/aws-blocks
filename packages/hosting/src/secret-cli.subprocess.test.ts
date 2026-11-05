@@ -27,6 +27,7 @@ interface StoreCall {
 let server: Server;
 let endpoint: string;
 let calls: StoreCall[] = [];
+let described: string[] = [];
 
 before(async () => {
 	server = createServer((req, res) => {
@@ -36,7 +37,10 @@ before(async () => {
 		});
 		req.on('end', () => {
 			const body = (raw ? JSON.parse(raw) : {}) as Record<string, unknown>;
-			calls.push({ target: String(req.headers['x-amz-target'] ?? ''), body });
+			const target = String(req.headers['x-amz-target'] ?? '');
+			// A forced delete first checks that the secret exists; record only the calls that change the store.
+			if (target.endsWith('.DescribeSecret')) described.push(String(body.SecretId));
+			else calls.push({ target, body });
 			res.writeHead(200, { 'content-type': 'application/x-amz-json-1.1' });
 			res.end(
 				JSON.stringify({ ARN: 'arn:aws:secretsmanager:us-east-1:000000000000:secret:x', Name: body.SecretId }),
@@ -52,17 +56,19 @@ after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 beforeEach(() => {
 	calls = [];
+	described = [];
 });
 
-function runBin(args: string[]): Promise<{ code: number | null; stdout: string; stderr: string }> {
+function runBin(args: string[], bin = BIN): Promise<{ code: number | null; stdout: string; stderr: string }> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(process.execPath, [BIN, ...args], {
+		const child = spawn(process.execPath, [bin, ...args], {
 			env: {
 				PATH: process.env.PATH ?? '',
 				AWS_REGION: 'us-east-1',
 				AWS_ACCESS_KEY_ID: 'test',
 				AWS_SECRET_ACCESS_KEY: 'test',
 				AWS_ENDPOINT_URL_SECRETS_MANAGER: endpoint,
+				AWS_ENDPOINT_URL_SSM: endpoint,
 				AWS_CONFIG_FILE: join(dirname(BIN), 'no-such-aws-config'),
 				AWS_SHARED_CREDENTIALS_FILE: join(dirname(BIN), 'no-such-aws-credentials'),
 			},
@@ -107,6 +113,7 @@ void describe('hosting-secret remove --force (subprocess, loopback Secrets Manag
 		assert.match(calls[0].target, /DeleteSecret$/);
 		assert.strictEqual(calls[0].body.ForceDeleteWithoutRecovery, true);
 		assert.match(String(calls[0].body.SecretId), /\/prod\/DB_PASSWORD$/);
+		assert.deepStrictEqual(described, [calls[0].body.SecretId], 'the secret is looked up before it is deleted');
 	});
 
 	void it('-y on the shared namespace: warns that every stage shares it, then force-deletes', async () => {
@@ -133,5 +140,62 @@ void describe('hosting-secret remove --force (subprocess, loopback Secrets Manag
 		assert.doesNotMatch(r.stderr, /Force-deleting/);
 		assert.strictEqual(calls.length, 1);
 		assert.strictEqual(calls[0].body.ForceDeleteWithoutRecovery, undefined);
+	});
+});
+
+const CONFIG_BIN = join(dirname(BIN), 'config-cli-bin.js');
+
+void describe('hosting-secret and hosting-config --help (subprocess, loopback stores)', () => {
+	for (const [bin, args] of [
+		[BIN, ['remove', 'DB_PASSWORD', '--help']],
+		[BIN, ['remove', 'DB_PASSWORD', '--force', '--yes', '-h']],
+		[BIN, ['--help', 'remove', 'DB_PASSWORD']],
+		[BIN, ['set', 'API_KEY', '--value-stdin', '--help']],
+		[BIN, ['list', '--stage', 'prod', '-h']],
+		[BIN, ['--stage', '--help']],
+		[CONFIG_BIN, ['remove', 'FLAG', '--help']],
+		[CONFIG_BIN, ['set', 'FLAG', 'on', '--help']],
+	] as const) {
+		void it(`${bin === BIN ? 'hosting-secret' : 'hosting-config'} ${args.join(' ')}: usage, exit 0, nothing sent`, async () => {
+			const r = await runBin([...args], bin);
+			assert.strictEqual(r.code, 0, r.stderr);
+			assert.match(r.stdout, /^Usage: hosting-(secret|config) /);
+			assert.match(r.stdout, /-h, --help|--help" for the options/);
+			assert.deepStrictEqual(calls, []);
+		});
+	}
+
+	void it('secret remove --help documents --force/--yes, --stage, --prefix and --region as implemented', async () => {
+		const r = await runBin(['remove', '--help']);
+		assert.strictEqual(r.code, 0, r.stderr);
+		assert.match(
+			r.stdout,
+			/^Usage: hosting-secret remove <KEY> \[--force --yes\] \[--stage <name>\] \[--prefix <path>\] \[--region <name>\]/,
+		);
+		assert.match(r.stdout, /recovery\s+window/);
+		assert.match(r.stdout, /--force {12}Delete at once, with no recovery window\. Requires --yes\./);
+		// Secrets Manager names drop the leading slash of the prefix.
+		assert.match(
+			r.stdout,
+			/--stage <name> {5}Use the store name hosting\/secrets\/<name>\/<KEY> instead of hosting\/secrets\/<KEY>\./,
+		);
+		assert.match(r.stdout, /no fixed list/);
+		assert.match(r.stdout, /--prefix <path> {4}Store prefix \(default: \/hosting\/secrets\)/);
+		assert.match(r.stdout, /--region <name>/);
+	});
+
+	void it('config set --help shows the SSM path and the positional value', async () => {
+		const r = await runBin(['set', '--help'], CONFIG_BIN);
+		assert.strictEqual(r.code, 0, r.stderr);
+		assert.match(r.stdout, /^Usage: hosting-config set <KEY> \[<value>\] \[--value-stdin\]/);
+		assert.match(r.stdout, /\/hosting\/config\/<name>\/<KEY> instead of \/hosting\/config\/<KEY>/);
+		assert.doesNotMatch(r.stdout, /--force/);
+	});
+
+	void it('without --help, the commands still run: config remove reaches the store', async () => {
+		const r = await runBin(['remove', 'FLAG'], CONFIG_BIN);
+		assert.strictEqual(r.code, 0, r.stderr);
+		assert.strictEqual(calls.length, 1);
+		assert.match(calls[0].target, /DeleteParameter$/);
 	});
 });

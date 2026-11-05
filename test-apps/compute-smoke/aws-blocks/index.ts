@@ -14,8 +14,19 @@
  *   (512 MB), so a call through the front door must be served by that function,
  *   while `api` stays on the default compute.
  * - API namespace on a container compute: `containerApi` is served by the
- *   `worker` container's tasks (which also run the container AsyncJob), behind
- *   the same front door as the Lambda-hosted namespaces.
+ *   `worker` container's tasks (which also run the container AsyncJob and
+ *   CronJob), behind the same front door as the Lambda-hosted namespaces.
+ * - Scope-level compute: everything created under the `placed` scope, with no
+ *   `compute` of its own — an API namespace, an AsyncJob, a CronJob, and an API
+ *   namespace in a child scope — runs on the scope's serverless `Compute`
+ *   (640 MB); a namespace that passes its own `compute` runs on that one instead.
+ * - CronJob on its own compute: `tick-own` passes `compute` (the reports
+ *   compute). With the scope's CronJob on a third function, the two jobs also
+ *   show that the shared scheduler role may invoke every job's target.
+ * - Container `CronJob`: a `rate(1 minute)` CronJob on the container compute;
+ *   its ticks must run on the container.
+ * - Scale from zero: an AsyncJob on a container compute with `minInstances: 0`
+ *   must still complete — autoscaling has to start a task for it.
  *
  * The front door is the suite's variant axis: each CI leg deploys this same app
  * with one `COMPUTE_API_FRONT_DOOR` value (see `index.cdk.ts`).
@@ -28,7 +39,7 @@
  */
 
 import { ApiNamespace, type BlocksContext, Scope } from '@aws-blocks/core';
-import { Compute } from '@aws-blocks/blocks';
+import { Compute, CronJob } from '@aws-blocks/blocks';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
@@ -105,6 +116,47 @@ const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
   },
 });
 
+// A CronJob on the container compute. Each tick is delivered to the container
+// (through the CronJob's internal AsyncJob queue) and records where it ran, so
+// the test can assert the tick reached the container. `rate(1 minute)` is the
+// shortest schedule, so a tick lands within a couple of minutes of deploy.
+new CronJob(scope, 'container-cron', {
+  schedule: 'rate(1 minute)',
+  compute: worker,
+  timeoutSeconds: 1800,
+  input: { marker: 'from-container-cron' },
+  handler: async (event) => {
+    await jobResults.put(
+      'container-cron:last',
+      JSON.stringify({
+        marker: event.input.marker,
+        jobName: event.jobName,
+        scheduledTime: event.scheduledTime,
+        runtime: process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
+      }),
+    );
+  },
+});
+
+// A container compute that scales to zero between jobs (`minInstances: 0`).
+// Nothing is running when the test submits a job, so the job only completes if
+// autoscaling starts a task for it.
+const idleWorker = new Compute(scope, 'idle-worker', {
+  type: 'container',
+  size: { vcpu: 0.25, memory: 512 },
+  scaling: { minInstances: 0, maxInstances: 2 },
+});
+
+const scaleFromZeroJob = new AsyncJob(scope, 'scale-from-zero-job', {
+  compute: idleWorker,
+  handler: async (payload: { key: string }) => {
+    await jobResults.put(
+      `scale-from-zero:${payload.key}`,
+      process.env.BLOCKS_SERVICE_MODE === 'worker' ? 'container' : 'local-or-lambda',
+    );
+  },
+});
+
 // ── Serverless compute — an API namespace on its own function ─────────────
 
 /**
@@ -113,13 +165,14 @@ const containerTimeoutJob = new AsyncJob(scope, 'container-timeout-job', {
  * a container task Blocks stamps `BLOCKS_SERVICE_MODE=worker` and Fargate sets
  * the task metadata endpoint.
  */
-function whereAmI(context: BlocksContext) {
+function whereAmI(context?: BlocksContext) {
   return {
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
     memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
     serviceMode: process.env.BLOCKS_SERVICE_MODE ?? null,
     onEcsTask: process.env.ECS_CONTAINER_METADATA_URI_V4 !== undefined,
-    requestUrl: context.request.url.href,
+    // A job or CronJob handler has no request, so no context.
+    requestUrl: context?.request.url.href ?? null,
   };
 }
 
@@ -142,7 +195,7 @@ export const reports = new ApiNamespace(
 
 // The `worker` compute already keeps a task running (`scaling.minInstances: 1`),
 // which a container that serves API namespaces needs, so the namespace shares it
-// with the container AsyncJob instead of adding a service.
+// with the container AsyncJob and CronJob instead of adding a service.
 export const containerApi = new ApiNamespace(
   scope,
   'containerApi',
@@ -153,6 +206,62 @@ export const containerApi = new ApiNamespace(
   }),
   { compute: worker },
 );
+
+// ── Scope-level compute — everything under `placed` runs on its compute ────
+
+// A different id from the scope below: both are children of `scope`.
+const placedCompute = new Compute(scope, 'placed-compute', { type: 'serverless', memory: 640 });
+const placed = new Scope('placed', { parent: scope, compute: placedCompute });
+
+// Placed by its scope: neither block passes `compute` itself.
+export const placedApi = new ApiNamespace(placed, 'placed', (context) => ({
+  async whereAmI() {
+    return whereAmI(context);
+  },
+}));
+
+new CronJob(placed, 'tick', {
+  schedule: 'rate(1 minute)',
+  handler: async () => {
+    await jobResults.put('cron:placed', JSON.stringify(whereAmI()));
+  },
+});
+
+const placedJob = new AsyncJob(placed, 'placed-job', {
+  handler: async (payload: { key: string }) => {
+    await jobResults.put(`placed-job:${payload.key}`, JSON.stringify(whereAmI()));
+  },
+});
+
+// A child scope inherits its parent scope's compute.
+const placedChild = new Scope('child', { parent: placed });
+export const placedChildApi = new ApiNamespace(placedChild, 'placed-child', (context) => ({
+  async whereAmI() {
+    return whereAmI(context);
+  },
+}));
+
+// A block's own `compute` wins over its scope's.
+export const placedOverrideApi = new ApiNamespace(
+  placed,
+  'placed-override',
+  (context) => ({
+    async whereAmI() {
+      return whereAmI(context);
+    },
+  }),
+  { compute: reportsCompute },
+);
+
+// ── CronJob on its own compute ──────────────────────────────────────────────
+
+new CronJob(scope, 'tick-own', {
+  schedule: 'rate(1 minute)',
+  compute: reportsCompute,
+  handler: async () => {
+    await jobResults.put('cron:own', JSON.stringify(whereAmI()));
+  },
+});
 
 // ── API (operations the tests call via RPC) — on the default compute ───────
 
@@ -186,5 +295,43 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async containerTimeoutJobGetResult(key: string) {
     const raw = await jobResults.get(`container-timeout:${key}`);
     return raw ? { value: raw } : null;
+  },
+
+  async containerCronGetLast() {
+    const raw = await jobResults.get('container-cron:last');
+    return raw ? JSON.parse(raw) : null;
+  },
+
+  async scaleFromZeroJobSubmit(key: string) {
+    const { jobId } = await scaleFromZeroJob.submit({ key });
+    return { jobId };
+  },
+
+  async scaleFromZeroJobGetResult(key: string) {
+    const raw = await jobResults.get(`scale-from-zero:${key}`);
+    return raw ? { runtime: raw } : null;
+  },
+
+  /** Where the `placed` scope's CronJob last ran, or null before its first run. */
+  async placedCronRan() {
+    const raw = await jobResults.get('cron:placed');
+    return raw ? JSON.parse(raw) : null;
+  },
+
+  /** Where the CronJob on its own compute last ran, or null before its first run. */
+  async ownCronRan() {
+    const raw = await jobResults.get('cron:own');
+    return raw ? JSON.parse(raw) : null;
+  },
+
+  async placedJobSubmit(key: string) {
+    const { jobId } = await placedJob.submit({ key });
+    return { jobId };
+  },
+
+  /** Where the `placed` scope's AsyncJob ran for `key`, or null until it has. */
+  async placedJobRan(key: string) {
+    const raw = await jobResults.get(`placed-job:${key}`);
+    return raw ? JSON.parse(raw) : null;
   },
 }));
