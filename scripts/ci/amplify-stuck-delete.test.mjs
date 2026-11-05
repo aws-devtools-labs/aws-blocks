@@ -243,7 +243,7 @@ function stepScript() {
  * Runs the step against `files`, with the root listed, tagged and `status`.
  * `cwd` replaces the repo root the step runs scripts/ci/ from.
  */
-function runStep(files, { status = 'DELETE_FAILED', created = '2026-10-19T14:48:22.894Z', cwd } = {}) {
+function runStep(files, { status = 'DELETE_FAILED', created = '2026-10-19T14:48:22.894Z', cwd, env = {} } = {}) {
 	const dir = fixture({
 		'stacks.txt': `${ROOT}\n`,
 		[`info-${key(ROOT)}.txt`]: `sandbox\t${status}\t${created}\n`,
@@ -251,7 +251,9 @@ function runStep(files, { status = 'DELETE_FAILED', created = '2026-10-19T14:48:
 	});
 	const file = join(dir, 'step.sh');
 	writeFileSync(file, stepScript());
-	return run(dir, [file], { AMPLIFY_RETAINED_FILE: '' }, cwd);
+	// The step waits for each plain delete (polling describe-stacks); no real
+	// sleeps in tests.
+	return run(dir, [file], { AMPLIFY_RETAINED_FILE: '', AMPLIFY_SWEEP_POLL_SECONDS: '0', ...env }, cwd);
 }
 
 const NO_ACCOUNT = /123456789012/;
@@ -805,6 +807,52 @@ describe(`cleanup-stacks.yml "${STEP}" step`, { skip: !GNU_DATE && 'needs GNU da
 		assert.match(r.stdout, /^::warning::1 DynamoDB table\(s\) retained by earlier sweeps may still exist/m);
 		assert.match(r.summary, new RegExp(`^- leftover: TodoTable .* delete DynamoDB table ${REAL_TABLE} by hand`, 'm'));
 		assert.doesNotMatch(r.summary, NO_ACCOUNT);
+	});
+
+	// The step deletes one sandbox at a time and defers the rest once its wait
+	// budget is spent or a delete is still running. The nested retain runs behind
+	// that gate, and its deferred roots are counted on their own line.
+	const NORMAL = 'amplify-amplifygen2-amp716639251-sandbox-1111111111';
+	const two = (over = {}) =>
+		sandbox({
+			'stacks.txt': `${ROOT}\n${NORMAL}\n`,
+			[`info-${key(NORMAL)}.txt`]: 'sandbox\tROLLBACK_COMPLETE\t2026-10-19T14:48:22.894Z\n',
+			...over,
+		});
+
+	it('defers a stuck root on its own count, then deletes a normal sandbox and waits for it', () => {
+		const r = runStep(two());
+		assert.equal(r.status, 0, r.stdout);
+		assert.deepEqual(r.deletes, [RETAIN_TODO, `cloudformation delete-stack --stack-name ${NORMAL}`]);
+		assert.match(r.summary, /^- Root delete deferred \(nested stack delete started\): 1$/m);
+		assert.match(r.summary, /^- Deferred to the next run: 0$/m);
+		assert.match(r.summary, /^- Deleted \(confirmed\): 1$/m);
+	});
+
+	it('starts no nested delete once the wait budget is spent', () => {
+		const r = runStep(two(), { env: { AMPLIFY_SWEEP_WAIT_BUDGET_SECONDS: '0' } });
+		assert.equal(r.status, 0, r.stdout);
+		assert.deepEqual(r.deletes, []);
+		assert.match(r.summary, /^- Deferred to the next run: 2$/m);
+		assert.match(r.summary, /^- Root delete deferred \(nested stack delete started\): 0$/m);
+	});
+
+	it('starts no nested delete while an earlier sandbox is still deleting', () => {
+		// The normal sandbox comes first, and every poll in its 1-second wait
+		// reads DELETE_IN_PROGRESS.
+		const r = runStep(
+			two({
+				'stacks.txt': `${NORMAL}\n${ROOT}\n`,
+				[`status-${key(NORMAL)}.txt`]: 'DELETE_IN_PROGRESS\n',
+			}),
+			{ env: { AMPLIFY_SWEEP_STACK_WAIT_SECONDS: '1', AMPLIFY_SWEEP_POLL_SECONDS: '0.2' } },
+		);
+		assert.equal(r.status, 0, r.stdout);
+		assert.match(r.calls, new RegExp(`describe-stacks --stack-name ${NORMAL} --query Stacks\\[0\\]\\.StackStatus`));
+		assert.match(r.stdout, new RegExp(`Still deleting: ${NORMAL}`));
+		assert.deepEqual(r.deletes, [`cloudformation delete-stack --stack-name ${NORMAL}`]);
+		assert.match(r.summary, /^- Deferred to the next run: 1$/m);
+		assert.match(r.summary, /^- Root delete deferred \(nested stack delete started\): 0$/m);
 	});
 
 	it('only retries plainly a ROLLBACK_FAILED sandbox (the retain needs DELETE_FAILED)', () => {

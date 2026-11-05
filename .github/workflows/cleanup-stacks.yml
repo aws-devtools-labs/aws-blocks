@@ -408,7 +408,8 @@ jobs:
           # at 40 min and defer the remainder to the next scheduled run.
           DEADLINE=$((SECONDS + 2400)) # 40 minutes
           # Of that, at most 15 minutes waiting on deletes (see the delete loop).
-          # The wait settings are overridable for scripts/ci/amplify-sweep.test.mjs.
+          # The wait settings are overridable for the step tests
+          # (scripts/ci/amplify-sweep.test.mjs, amplify-stuck-delete.test.mjs).
           WAIT_DEADLINE=$((SECONDS + ${AMPLIFY_SWEEP_WAIT_BUDGET_SECONDS:-900}))
           PER_STACK_WAIT=${AMPLIFY_SWEEP_STACK_WAIT_SECONDS:-360}
           POLL=${AMPLIFY_SWEEP_POLL_SECONDS:-15}
@@ -421,7 +422,7 @@ jobs:
           DEFERRED=0
           BLOCKED=""
           TRIGGER_FAILED=0
-          DEFERRED=0
+          NESTED_DEFERRED=0
           SCRIPT_FAILED=0
           RETAINED_FILE=$(mktemp)
 
@@ -564,6 +565,14 @@ jobs:
             # for deletion by hand, on this run and every later one (--leftovers
             # below). The script runs from the job's checkout, which includes
             # scripts/ci on every leg.
+            #
+            # It runs behind the one-at-a-time gate above, so it never starts while
+            # an earlier root delete may still be running. Its own nested delete is
+            # not awaited (so it can overlap a later root delete, or another nested
+            # one): the model stack holds the AppSync resolvers, IAM roles and the
+            # table, but no API Gateway resource, so it doesn't compete for the REST
+            # API delete quota the wait protects. The root, whose `blocks` nested
+            # stack holds the REST API, is deleted (and awaited) on the next run.
             echo "🧹 Emptying nested buckets for $STACK"
             _VISITED_STACKS=""
             empty_stack_buckets "$STACK"
@@ -574,7 +583,7 @@ jobs:
               if [ "$RC" -eq 3 ]; then
                 # Not deleting the root now: its delete would race the nested one.
                 echo "Nested stack delete started for $STACK; root delete deferred to the next run"
-                DEFERRED=$((DEFERRED + 1))
+                NESTED_DEFERRED=$((NESTED_DEFERRED + 1))
                 continue
               elif [ "$RC" -ne 0 ]; then
                 echo "::warning::amplify-stuck-delete.sh exited $RC for $STACK; plain retry only"
@@ -630,7 +639,7 @@ jobs:
           echo "- Deleted (confirmed): $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Deferred to the next run: $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "- Root delete deferred (nested stack delete started): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Root delete deferred (nested stack delete started): $NESTED_DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Nested retain script failed: $SCRIPT_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           # What amplify-stuck-delete.sh retained, this run or earlier (with the
@@ -651,7 +660,7 @@ jobs:
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Each delete is awaited (bounded) before the next; stacks that don't finish (commonly a throttled REST API delete, or the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" != unknown ] && [ "$STILL_FAILED" -gt 0 ]; then
-            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup, nested ones included ($DEFERRED root(s) deferred after a nested retain); AppSync API quota may be at risk"
+            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup, nested ones included ($NESTED_DEFERRED root(s) deferred after a nested retain); AppSync API quota may be at risk"
           fi
 
       - name: Cleanup orphaned API Gateway REST APIs
