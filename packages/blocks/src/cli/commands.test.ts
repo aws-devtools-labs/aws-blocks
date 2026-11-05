@@ -252,6 +252,22 @@ describe('passthrough commands', () => {
 		}
 	});
 
+	it('runs generate declarations for the app backend, and outside an app without failing', async () => {
+		// It is every app's `prepare` script, so a failure here would fail `npm install`.
+		const root = fixtureApp();
+		const inApp = await runCli(['generate', 'declarations'], { cwd: join(root, 'aws-blocks') });
+		assert.strictEqual(inApp.code, 0, inApp.stderr);
+		assert.match(inApp.spawned[0].args[0], /generate-declarations-cli\.js$/);
+		assert.deepStrictEqual(inApp.spawned[0].args.slice(1), [join(root, 'aws-blocks')]);
+		assert.strictEqual(inApp.spawned[0].cwd, root);
+
+		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
+		const noApp = await runCli(['generate', 'declarations'], { cwd: outside });
+		assert.strictEqual(noApp.code, 0, noApp.stderr);
+		assert.doesNotMatch(noApp.stderr, /not inside an AWS Blocks app/);
+		assert.strictEqual(noApp.spawned[0].cwd, outside);
+	});
+
 	it('reports a missing backend the same way for generate client and spec, before anything runs', async () => {
 		const outside = mkdtempSync(join(tmpdir(), 'blocks-cli-outside-'));
 		for (const argv of [

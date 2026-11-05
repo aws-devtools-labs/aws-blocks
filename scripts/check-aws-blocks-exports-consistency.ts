@@ -243,7 +243,7 @@ function checkTemplateTypesTsconfigs(): string[] {
 
 /**
  * Every template that uses the generated declarations must run
- * `blocks-generate-types` as its `prepare` script.
+ * `cdk-blocks generate declarations` as its `prepare` script.
  *
  * `aws-blocks/.types/` is gitignored, so without `prepare` it does not exist
  * after `git clone && npm install` — and `exports["."].types` pointing at a
@@ -259,7 +259,7 @@ function checkTemplateTypesTsconfigs(): string[] {
 function checkTemplatePrepareHooks(): string[] {
   const errors: string[] = [];
   const templatesDir = join(ROOT, "packages/create-blocks-app/templates");
-  const PREPARE = "blocks-generate-types";
+  const PREPARE = "cdk-blocks generate declarations";
 
   let templates: string[];
   try {

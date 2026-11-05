@@ -43,7 +43,11 @@ export type BackendTypesResult =
 	| { status: 'written'; outFile: string; durationMs: number }
 	/** `tsc --build` found the output newer than every input, so it rebuilt nothing. */
 	| { status: 'up-to-date'; outFile: string; durationMs: number }
-	/** The run was aborted (e.g. the dev server restarted). */
+	/**
+	 * Nothing to do: the run was aborted (e.g. the dev server restarted), or the
+	 * backend is not a package (no `package.json`), so nothing resolves its
+	 * `exports["."].types` and there is no fallback to the source to prevent.
+	 */
 	| { status: 'skipped'; reason: string }
 	/** `tsc` reported errors; nothing was written, so the previous output (if any) is kept. */
 	| { status: 'failed'; message: string; diagnostics: string };
@@ -60,17 +64,26 @@ const MIGRATION = [
 	`copy aws-blocks/${BACKEND_TYPES_TSCONFIG} from a newly created app`,
 	'set exports["."].types in aws-blocks/package.json to "./.types/index.d.ts"',
 	'add aws-blocks/.types/ to .gitignore',
+	// Without it the declarations are missing after a clone, and a missing
+	// target falls back to the backend source as silently as the old layout.
+	'add "prepare": "cdk-blocks generate declarations" to the scripts in your package.json',
 ]
 	.map((step, i) => `  ${i + 1}. ${step}`)
 	.join('\n');
 
 /**
- * Returns the `.d.ts` path the workspace's `exports["."].types` points at, or
- * the reason this workspace is not on the generated-types layout.
+ * Returns the `.d.ts` path the workspace's `exports["."].types` points at; or
+ * `skip` when the backend is not a package at all; or the reason this package
+ * is not on the generated-types layout.
  */
-export function backendTypesTarget(awsBlocksDir: string): { outFile: string } | { error: string } {
+export function backendTypesTarget(
+	awsBlocksDir: string,
+): { outFile: string } | { skip: string } | { error: string } {
 	const pkgPath = join(awsBlocksDir, 'package.json');
-	if (!existsSync(pkgPath)) return { error: `no package.json in ${awsBlocksDir}` };
+	// Not a package, so nothing imports it by name and nothing resolves its
+	// `exports`: a frontend can only reach it by relative path, which always
+	// means the source. Generated declarations would have no reader.
+	if (!existsSync(pkgPath)) return { skip: `${awsBlocksDir} has no package.json, so nothing resolves its types` };
 	if (!existsSync(join(awsBlocksDir, BACKEND_TYPES_TSCONFIG))) {
 		return { error: `aws-blocks/${BACKEND_TYPES_TSCONFIG} is missing. To migrate:\n${MIGRATION}` };
 	}
@@ -143,6 +156,7 @@ export async function generateBackendTypes(
 	options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<BackendTypesResult> {
 	const target = backendTypesTarget(awsBlocksDir);
+	if ('skip' in target) return { status: 'skipped', reason: target.skip };
 	if ('error' in target) {
 		return { status: 'failed', message: target.error, diagnostics: '' };
 	}

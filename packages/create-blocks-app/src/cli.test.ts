@@ -872,7 +872,7 @@ describe('create-blocks-app auto-detection', () => {
   // bug generated types exist to prevent. Templates get `prepare` from their
   // own package.json; these two paths only get it from the scaffolder.
   for (const { name, args, fixture, client } of [
-    { name: 'an existing project', args: ['.', '-y', '--skip-install'], fixture: {}, client: 'blocks-generate-client' },
+    { name: 'an existing project', args: ['.', '-y', '--skip-install'], fixture: {}, client: 'cdk-blocks generate client' },
     {
       name: 'an Amplify Gen 2 project',
       args: ['-y', '--skip-install'],
@@ -891,7 +891,7 @@ describe('create-blocks-app auto-detection', () => {
       try {
         assert.strictEqual(run(args, tmpDir).exitCode, 0);
         const pkg = JSON.parse(readFileSync(join(tmpDir, 'package.json'), 'utf-8'));
-        assert.strictEqual(pkg.scripts.prepare, 'blocks-generate-types', 'prepare makes .types/ exist after install');
+        assert.strictEqual(pkg.scripts.prepare, 'cdk-blocks generate declarations', 'prepare makes .types/ exist after install');
         assert.strictEqual(pkg.scripts.prebuild, client, 'prebuild keeps .types/ from going stale before a build');
         assert.strictEqual(pkg.scripts.pretypecheck, client, 'pretypecheck does the same before a typecheck');
         // The generated declarations are built by the app's own tsc.
@@ -914,7 +914,7 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(pkg.scripts.prepare, mine.prepare);
       assert.strictEqual(pkg.scripts.prebuild, mine.prebuild);
       // Still gets the one it had no opinion about.
-      assert.strictEqual(pkg.scripts.pretypecheck, 'blocks-generate-client');
+      assert.strictEqual(pkg.scripts.pretypecheck, 'cdk-blocks generate client');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

@@ -32,7 +32,7 @@
  * (`aws-blocks/.types/`) when the workspace's `exports["."].types` points at
  * them, using the app's own `typescript`. Type errors in the backend fail the
  * command so a build never continues with stale types. That makes this the
- * authoritative freshness gate; `blocks-generate-types`, wired as `prepare`,
+ * authoritative freshness gate; `cdk-blocks generate declarations`, wired as `prepare`,
  * only ensures the declarations exist and never fails an install.
  */
 

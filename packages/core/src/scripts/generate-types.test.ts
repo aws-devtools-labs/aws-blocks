@@ -81,6 +81,17 @@ describe('generateBackendTypes', () => {
 		const result = await generateBackendTypes(dir);
 		assert.strictEqual(result.status, 'failed');
 		assert.match(result.status === 'failed' ? result.message : '', /tsconfig\.types\.json is missing[\s\S]*To migrate:/);
+		// The migration covers the hook too: without `prepare` a clone has no declarations.
+		assert.match(result.status === 'failed' ? result.message : '', /"prepare": "cdk-blocks generate declarations"/);
+	});
+
+	it('skips a backend that is not a package, since nothing resolves its exports', async () => {
+		// e.g. `blocks-generate-client <foundation> <output>` on a bare backend directory.
+		writeFileSync(join(dir, 'index.ts'), 'export const x = 1;\n');
+		assert.ok('skip' in backendTypesTarget(dir));
+		const result = await generateBackendTypes(dir);
+		assert.strictEqual(result.status, 'skipped');
+		assert.ok(!existsSync(join(dir, '.types')), 'writes nothing');
 	});
 
 	it('writes declarations for backend code that uses Node APIs, with inferred return types intact', async () => {

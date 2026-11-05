@@ -24,7 +24,6 @@
   "bin": {
     "cdk-blocks": "./dist/cli/bin.js",
     "blocks-generate-client": "./dist/generate-client-cli.js",
-    "blocks-generate-types": "./dist/generate-types-cli.js",
     "blocks-vendorize": "./dist/vendorize.js"
   },
   "files": [

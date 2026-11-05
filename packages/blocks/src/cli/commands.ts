@@ -954,6 +954,29 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 	});
 }
 
+/**
+ * Writes the backend's declaration files (`aws-blocks/.types/`), the types the
+ * frontend's `import ... from 'aws-blocks'` reads. Every app runs it as its
+ * `prepare` script, so it is on the path of every `npm install` and must never
+ * be the reason one fails: outside an app, or with no backend, there is nothing
+ * to do, and the tool exits 0 for that and for a failed generation alike. The
+ * gate that does fail is `generate client`, from `prebuild`/`pretypecheck`.
+ */
+export function generateDeclarations(ctx: Context, input: CommandInput): Promise<number> {
+	const root = ctx.findRoot() ?? ctx.startDir;
+	const [dirArg] = input.positionals;
+	return runChild(ctx, {
+		operation: 'cdk-blocks generate declarations',
+		tool: 'generate-declarations-cli',
+		command: process.execPath,
+		args: [
+			join(BLOCKS_DIST, 'generate-declarations-cli.js'),
+			dirArg ? resolve(ctx.startDir, dirArg) : join(root, 'aws-blocks'),
+		],
+		cwd: root,
+	});
+}
+
 export function generateSpec(ctx: Context, input: CommandInput): Promise<number> {
 	const [backendArg, outputArg] = input.positionals;
 	// With the backend given, the spec needs no app; its default output sits next to the backend.

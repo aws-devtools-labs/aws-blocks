@@ -532,7 +532,7 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   
   if (!skipInstall) {
     // Writes aws-blocks/.types/ on the way out, via the template's `prepare`
-    // hook (`blocks-generate-types`) — so does the `npm install` the user runs
+    // hook (`cdk-blocks generate declarations`) — so does the `npm install` the user runs
     // themselves with --skip-install, and so does a later clone of this app.
     installDependencies(targetDir, workspaceRoot);
   }
@@ -662,12 +662,12 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // The CLI's `cdk-blocks generate client` has no Amplify preamble (auth middleware and
       // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
-      // See `blocks-generate-types`: `prepare` makes aws-blocks/.types/ exist
+      // See `cdk-blocks generate declarations`: `prepare` makes aws-blocks/.types/ exist
       // after install, the pre-hooks keep it from going stale before a
       // typecheck or build. Existing scripts of the same name are never
       // replaced, so an app that already has one keeps it and only gets
       // `prepare`'s coverage.
-      'prepare': 'blocks-generate-types',
+      'prepare': 'cdk-blocks generate declarations',
       'prebuild': 'npm run blocks:generate-client',
       'pretypecheck': 'npm run blocks:generate-client',
     },
@@ -865,12 +865,12 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'destroy': 'cdk-blocks destroy',
       'dev:server': 'cdk-blocks dev',
       'dev:stop': 'cdk-blocks dev stop',
-      // See `blocks-generate-types`: `prepare` makes aws-blocks/.types/ exist
+      // See `cdk-blocks generate declarations`: `prepare` makes aws-blocks/.types/ exist
       // after install, the pre-hooks keep it from going stale before a
       // typecheck or build. Existing scripts of the same name are never
       // replaced, so an app that already has one keeps it and only gets
       // `prepare`'s coverage.
-      'prepare': 'blocks-generate-types',
+      'prepare': 'cdk-blocks generate declarations',
       'prebuild': 'cdk-blocks generate client',
       'pretypecheck': 'cdk-blocks generate client',
     },

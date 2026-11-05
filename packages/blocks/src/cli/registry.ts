@@ -436,7 +436,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 	{
 		path: ['generate'],
 		group: 'Generate',
-		summary: 'Generate the typed client, the OpenRPC spec or key types',
+		summary: 'Generate the typed client, the OpenRPC spec, backend declarations or key types',
 	},
 	{
 		path: ['generate', 'client'],
@@ -466,6 +466,19 @@ export const COMMANDS: readonly CommandSpec[] = [
 		],
 		examples: [{ command: 'cdk-blocks generate spec', description: 'Write aws-blocks/blocks.spec.json' }],
 		handler: commands.generateSpec,
+	},
+	{
+		path: ['generate', 'declarations'],
+		group: 'Generate',
+		summary: 'Generate the backend declarations the frontend imports (aws-blocks/.types/)',
+		description:
+			'Write the .d.ts files that `import ... from "aws-blocks"` resolves to, using the app\'s own\n' +
+			'tsc and aws-blocks/tsconfig.types.json. Run as the "prepare" script, so they exist after\n' +
+			'every npm install; it never fails, so an install never breaks over a backend type error.\n' +
+			'"generate client" also writes them, and fails on a type error.',
+		args: [{ name: 'backend', description: 'Backend workspace (default: aws-blocks/)' }],
+		examples: [{ command: 'cdk-blocks generate declarations', description: 'Write aws-blocks/.types/' }],
+		handler: commands.generateDeclarations,
 	},
 	{
 		path: ['generate', 'types'],
