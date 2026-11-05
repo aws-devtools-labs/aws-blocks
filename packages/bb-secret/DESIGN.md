@@ -253,36 +253,44 @@ path, change `fullId`, and rename the SSM parameter. The function creates the
   `Name` (CloudFormation generates a unique one), a `GenerateSecretString` of 64
   characters from `[A-Za-z0-9]` (about 381 bits), `removalPolicy: 'destroy'`,
   and only `secretsmanager:GetSecretValue` for the app role. Its ARN goes into
-  config as for any `Secret`, and is also set as an environment variable on
-  every compute (`registerComputeEnv` in `@aws-blocks/core/cdk/internal`). The
-  public `Secret` defaults (fixed name, empty value, removal policy from
+  config through `registerConfig()`, as for any `Secret`. The public `Secret`
+  defaults (fixed name, empty value, removal policy from
   `defaults`, read and list grants) are unchanged.
 - `'ssm'`: `new AppSetting(scope, id, { secret: true })`. When the stack looks
   like production (`sandboxMode` context not `'true'`, `removalPolicy` `RETAIN`,
   or `deletionProtection` on), synth emits the warning
   `@aws-blocks/bb-secret:SsmSecretsStoreOutsideSandbox`.
 
-**Runtime.** The AWS entry checks `process.env` for the key's Secret ARN
-(`BLOCKS_SECRET_ARN_<FULLID>`). If present, the stack was synthesized in
-`'secrets-manager'` mode and the key is read from Secrets Manager; otherwise it
-is read through `AppSetting` from SSM. The choice is made once, at
-construction; a failed read is never retried against the other store.
+**Runtime.** On every `get()`, the AWS entry checks `process.env` (where the
+handler loaded the config) for the key's Secret ARN (`BLOCKS_SECRET_ARN_<FULLID>`).
+If present, the stack was synthesized in `'secrets-manager'` mode and the key is
+read from Secrets Manager; a failure there is rethrown and never retried
+against SSM. Otherwise it is read through `AppSetting` from SSM.
 
-**Why the ARN is also an environment variable.** The S3 config object is
-uploaded by a `BucketDeployment` that CloudFormation does not order before the
-compute update, and the object key does not change between deploys. On the
-upgrade deploy, new code can cold-start while S3 still serves the previous
-config, which has no ARN. Without the environment variable that code would
-choose SSM, whose grant the same deploy removed. The environment variable is
-part of the compute update, so the code and its store choice always arrive
-together. This is a deliberate, small exception to the rule of passing Building
-Block config through `registerConfig()` rather than `addEnvironment()`: one ARN
-(about 100 bytes) per framework key, against Lambda's 4 KB environment limit.
-Making the compute depend on the config deployment instead is expected to create a cycle
-for `Realtime`, whose config holds the WebSocket stage URL while the stage's
-integrations reference the compute. The mock
-entry is the mock `AppSetting`, so local development does not depend on the
-setting.
+**Stale config after an upgrade.** The S3 config object is uploaded by a
+`BucketDeployment` that CloudFormation does not order before the compute update,
+and the object key does not change between deploys. On the upgrade deploy, new
+code can cold-start while S3 still serves the previous config, which has no ARN,
+and the loader caches that for the container's life. That code tries SSM, and
+the read fails (the same deploy removed the SSM grant and the parameter). So
+when an SSM read fails, `get()` calls `refreshConfig()` from
+`@aws-blocks/core/internal`, which re-reads the config from S3 and merges it
+into `process.env` (new keys are added, keys an earlier config load set are
+updated, real environment variables are never touched). Then `get()` decides
+again: if the ARN is now present it reads Secrets Manager, otherwise it
+rethrows the original SSM error. Each `get()` makes at most one reload attempt
+and one retry. `refreshConfig()` shares one in-flight reload per container and
+runs at most once every 5 seconds per container, so a burst of failing reads
+costs one S3 GET, and a steady stream costs at most 12 a minute until the new
+config is readable.
+
+This keeps the rule that Building Block config goes through `registerConfig()`,
+never `addEnvironment()`. Making the compute depend on the config deployment
+instead is expected to create a cycle for `Realtime`, whose config holds the
+WebSocket stage URL while the stage's integrations reference the compute.
+
+The mock entry is the mock `AppSetting`, so local development does not depend on
+the setting.
 
 **Value format.** The SSM path stores 32 random bytes as base64url; the Secrets
 Manager path stores the 64-character generated string. Consumers must use the

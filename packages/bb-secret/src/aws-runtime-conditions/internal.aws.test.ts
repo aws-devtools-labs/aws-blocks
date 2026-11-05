@@ -135,33 +135,151 @@ test('the store is chosen per key: another key without an ARN stays on SSM', asy
 	}
 });
 
-test('upgrade window: the S3 config is the previous one (no ARN) but the env var is set, so get() reads Secrets Manager', async () => {
-	// The compute update carries the env var; the config object it loads at
-	// cold start can still be the previous deploy's, which only names the SSM
-	// parameter.
-	process.env[ENV_KEY] = ARN;
+// ── Stale config: reload once on a failed SSM read ──────────────────────────
+
+const OLD_CONFIG = { BLOCKS_SSM_PARAM_SIGNING_KEY: '/app-signing-key' };
+const NEW_CONFIG = { [ENV_KEY]: ARN };
+
+/**
+ * Simulate deployed compute: config coordinates set, and S3 serving each
+ * `bodies` entry in turn (the last one repeats). Returns the GetObject count.
+ */
+async function deployedWithConfig(...bodies: Record<string, string>[]) {
 	process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
 	process.env.BLOCKS_CONFIG_KEY = 'blocks-config.json';
 	_resetConfigCache();
-	const s3 = mock.method(S3Client.prototype, 'send', async () => ({
-		Body: { transformToString: async () => JSON.stringify({ BLOCKS_SSM_PARAM_SIGNING_KEY: '/app-signing-key' }) },
-	}));
-	const stubs = stubClients({ sm: () => ({ SecretString: 'from-secrets-manager' }) });
+	let gets = 0;
+	const s3 = mock.method(S3Client.prototype, 'send', async () => {
+		const body = bodies[Math.min(gets, bodies.length - 1)];
+		gets += 1;
+		return { Body: { transformToString: async () => JSON.stringify(body) } };
+	});
+	await loadConfigToProcessEnv();
+	return {
+		gets: () => gets,
+		restore: () => {
+			s3.mock.restore();
+			for (const k of [
+				'BLOCKS_CONFIG_BUCKET',
+				'BLOCKS_CONFIG_KEY',
+				...Object.keys(OLD_CONFIG),
+				...Object.keys(NEW_CONFIG),
+			]) {
+				delete process.env[k];
+			}
+			_resetConfigCache();
+		},
+	};
+}
+
+function accessDenied(): Error {
+	const err = new Error('User is not authorized to perform: ssm:GetParameter');
+	err.name = 'AccessDeniedException';
+	return err;
+}
+
+test('stale config: an SSM failure reloads the config, finds the ARN and reads Secrets Manager', async () => {
+	const s3 = await deployedWithConfig(OLD_CONFIG, NEW_CONFIG);
+	const stubs = stubClients({
+		ssm: () => {
+			throw accessDenied();
+		},
+		sm: () => ({ SecretString: 'from-secrets-manager' }),
+	});
 	try {
-		await loadConfigToProcessEnv();
-		assert.strictEqual(process.env.BLOCKS_SSM_PARAM_SIGNING_KEY, '/app-signing-key', 'the old config was loaded');
+		assert.strictEqual(process.env[ENV_KEY], undefined, 'the cold-start config has no ARN');
 		assert.strictEqual(await frameworkKey(new Scope('app'), 'signing-key').get(), 'from-secrets-manager');
+		assert.strictEqual(s3.gets(), 2, 'cold start + one reload');
+		assert.strictEqual(stubs.ssm.length, 1, 'no second SSM call');
 		assert.deepStrictEqual(
 			stubs.sm.map((c) => c.input.SecretId),
 			[ARN],
 		);
-		assert.strictEqual(stubs.ssm.length, 0, 'never falls back to SSM');
+		// Later calls go straight to Secrets Manager.
+		await frameworkKey(new Scope('app'), 'signing-key').get();
+		assert.strictEqual(stubs.ssm.length, 1);
+		assert.strictEqual(s3.gets(), 2);
 	} finally {
 		stubs.restore();
-		s3.mock.restore();
-		delete process.env.BLOCKS_CONFIG_BUCKET;
-		delete process.env.BLOCKS_CONFIG_KEY;
-		delete process.env.BLOCKS_SSM_PARAM_SIGNING_KEY;
-		_resetConfigCache();
+		s3.restore();
+	}
+});
+
+test('stale config: no ARN after the reload rethrows the original SSM error, after exactly one reload', async () => {
+	const s3 = await deployedWithConfig(OLD_CONFIG);
+	const original = accessDenied();
+	const stubs = stubClients({
+		ssm: () => {
+			throw original;
+		},
+	});
+	try {
+		await assert.rejects(frameworkKey(new Scope('app'), 'signing-key').get(), (e: unknown) => e === original);
+		assert.strictEqual(s3.gets(), 2, 'cold start + one reload');
+		assert.strictEqual(stubs.ssm.length, 1, 'one SSM read, no retry');
+		assert.strictEqual(stubs.sm.length, 0);
+	} finally {
+		stubs.restore();
+		s3.restore();
+	}
+});
+
+test('stale config: concurrent failures share one reload, and a failure inside the interval does not reload', async () => {
+	const s3 = await deployedWithConfig(OLD_CONFIG);
+	const stubs = stubClients({
+		ssm: () => {
+			throw accessDenied();
+		},
+	});
+	try {
+		const key = frameworkKey(new Scope('app'), 'signing-key');
+		const results = await Promise.allSettled([
+			key.get(),
+			key.get(),
+			frameworkKey(new Scope('app'), 'signing-key').get(),
+		]);
+		assert.deepStrictEqual(
+			results.map((r) => r.status),
+			['rejected', 'rejected', 'rejected'],
+		);
+		assert.strictEqual(s3.gets(), 2, 'three failing calls, one shared reload');
+
+		await assert.rejects(key.get(), /not authorized/);
+		assert.strictEqual(s3.gets(), 2, 'a failure inside the interval does not reload again');
+	} finally {
+		stubs.restore();
+		s3.restore();
+	}
+});
+
+test('stale config: a successful SSM read never reloads the config', async () => {
+	const s3 = await deployedWithConfig(OLD_CONFIG);
+	const stubs = stubClients({ ssm: () => ({ Parameter: { Value: 'legacy-key' } }) });
+	try {
+		assert.strictEqual(await frameworkKey(new Scope('app'), 'signing-key').get(), 'legacy-key');
+		assert.strictEqual(s3.gets(), 1, 'cold start only');
+	} finally {
+		stubs.restore();
+		s3.restore();
+	}
+});
+
+test('a Secrets Manager failure is rethrown with no reload and no SSM call', async () => {
+	const s3 = await deployedWithConfig(NEW_CONFIG);
+	const stubs = stubClients({
+		sm: () => {
+			const err = new Error('Rate exceeded');
+			err.name = 'ThrottlingException';
+			throw err;
+		},
+	});
+	try {
+		assert.strictEqual(process.env[ENV_KEY], ARN);
+		await assert.rejects(frameworkKey(new Scope('app'), 'signing-key').get(), /Rate exceeded/);
+		assert.strictEqual(s3.gets(), 1, 'no reload');
+		assert.strictEqual(stubs.ssm.length, 0, 'no SSM fallback');
+	} finally {
+		stubs.restore();
+		s3.restore();
 	}
 });

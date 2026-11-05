@@ -189,7 +189,7 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 | `BLOCKS_RT_WS_URL` | `wss://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_RT_CALLBACK_URL` | `https://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting; `'ssm'` mode only) |
-| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). Set both in config and as a real Lambda environment variable, so new code never reads the previous deploy's config without it |
+| `BLOCKS_SECRET_ARN_<REALTIME_FULLID>_TOKEN_SECRET` | Secrets Manager secret ARN (`'secrets-manager'` mode only). If a new container starts with the previous deploy's config (no ARN) and its SSM read fails, it reloads the config once and switches to Secrets Manager |
 
 The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
 
