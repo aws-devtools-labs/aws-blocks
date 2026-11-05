@@ -1,0 +1,51 @@
+{
+  "name": "blocks-cron-app",
+  "version": "0.1.0",
+  "type": "module",
+  "blocksTemplate": "cron",
+  "blocksTemplateDescription": "Backend-only — scheduled CronJobs that record each run, no frontend",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "aws-blocks"
+  ],
+  "scripts": {
+    "build": "npm run typecheck",
+    "typecheck": "tsc --noEmit",
+    "spec": "cdk-blocks generate spec",
+    "prebuild": "cdk-blocks generate client",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "deploy": "cdk-blocks deploy",
+    "secret": "cdk-blocks secret",
+    "config": "cdk-blocks config",
+    "typegen": "cdk-blocks generate types",
+    "destroy": "cdk-blocks destroy",
+    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
+    "vendorize": "cdk-blocks vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "port": 3001,
+      "frontend": false
+    }
+  },
+  "dependencies": {
+    "@aws-blocks/blocks": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.9.3",
+    "tsx": "^4.23.15",
+    "esbuild": "^0.28.2",
+    "aws-cdk": "^2.1147.0",
+    "aws-cdk-lib": "^2.275.0",
+    "constructs": "^10.8.1"
+  }
+}
