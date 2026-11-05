@@ -327,7 +327,7 @@ describe('protectedResources', () => {
 });
 
 describe('compareContinuity', () => {
-	test('recorded AuthCognito → Auth: continuity holds; the Q4 DeletionProtection change is a note', () => {
+	test('recorded AuthCognito → Auth: continuity holds; the DeletionProtection change is a note', () => {
 		const result = compareContinuity(template('auth-cognito'), template('auth'));
 		assert.deepStrictEqual(result.errors, []);
 		assert.ok(

@@ -157,7 +157,7 @@ void main() {
           'required String name}) async {',
         ),
       );
-      // Params are positional, so the wire name isn't sent (FX48).
+      // Params are positional, so the wire name isn't sent.
       expect(
         output,
         contains(
@@ -561,7 +561,7 @@ void main() {
     });
   });
 
-  group('with the generated locals (R62)', () {
+  group('with the generated locals', () {
     test('`_result` is `\$result`, and the local yields past both', () {
       final output = _generate(
         methods: [

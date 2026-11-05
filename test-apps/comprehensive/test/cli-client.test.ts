@@ -157,17 +157,17 @@ export function cliClientTests(getApi: () => typeof apiType) {
       });
     }
 
-    // Regression (L8): these tests shell out to `npx tsx` for several seconds. When that
+    // Regression: these tests shell out to `npx tsx` for several seconds. When that
     // blocked this process's event loop (execFileSync), undici could not run the idle
     // timer that retires a pooled keep-alive socket after the server's advertised
     // `Keep-Alive: timeout=5`. The dev server closed the socket meanwhile, so the next
     // suite's first API call (Tracer › startSegment) reused it and failed with a bare
     // `TypeError: fetch failed` (cause: ECONNRESET) whenever this suite took longer than ~6 s.
     //
-    // Since FX54 the core client resends a call once when its pooled socket turns out to be
+    // The core client now resends a call once when its pooled socket turns out to be
     // closed before any response byte. A deployed API Gateway closes idle sockets without
     // advertising a timeout, and that race failed this test's first `Promise.all` on a sandbox.
-    // The resend would also hide a blocked loop here, so the `ticks` assertion is what pins L8;
+    // The resend would also hide a blocked loop here, so the `ticks` assertion is what pins that regression;
     // `afterGap` pins the customer-visible result against both local and deployed targets.
     test('API calls still succeed after a CLI subprocess outlives the server keep-alive timeout', { timeout: 40_000 }, async () => {
       const api = getApi();

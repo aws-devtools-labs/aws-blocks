@@ -74,8 +74,8 @@ private fun Map<String, String>.shouldDeclareEveryReferencedSerializer() {
  * was always `BlocksJson.decodeFromJsonElement<Payload>(it)`, so a payload that is or holds a
  * transferable through lists and maps only (`RealtimeChannel<List<FileDownloadHandle>>`), which
  * a reified decode can't find a serializer for, threw on every message; and a payload holding an
- * `oidc/client` anywhere threw because plain `BlocksJson` can't bind it to a client (R55, "Not
- * covered"). Separately, an `oidc/client` reached only through a `$ref`'d schema's
+ * `oidc/client` anywhere threw because plain `BlocksJson` can't bind it to a client.
+ * Separately, an `oidc/client` reached only through a `$ref`'d schema's
  * `additionalProperties` wasn't seen, so the operation decoded with plain `BlocksJson` and wasn't
  * gated on a relay target.
  */

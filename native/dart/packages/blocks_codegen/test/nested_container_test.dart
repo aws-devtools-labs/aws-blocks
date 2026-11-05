@@ -526,7 +526,7 @@ void main() {
           '      groups.map((k, v) => MapEntry(k, v.map((e1) => e1.toJson()).toList())),',
         ),
       );
-      // An optional parameter before a required one keeps its slot (FX48).
+      // An optional parameter before a required one keeps its slot.
       expect(
         output,
         contains('      levels?.map((e) => e.toJson()).toList(),'),

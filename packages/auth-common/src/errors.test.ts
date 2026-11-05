@@ -256,7 +256,7 @@ const EXPECTED_EXCLUSIONS = [
  * Every quoted `…Exception` / `…Error` name literal in each replaced block's
  * non-test sources (every `.ts` file under `src/`, excluding `*.test.ts`,
  * `*.types-test.ts` and `test-support/`), as found by scanning them at the
- * cutover (F1b): bb-auth-basic 0.1.9, bb-auth-cognito 0.1.10 and bb-auth-oidc
+ * cutover: bb-auth-basic 0.1.9, bb-auth-cognito 0.1.10 and bb-auth-oidc
  * 0.2.0, deleted then. Frozen; these blocks will never throw a new name.
  */
 const NAMES_IN_SOURCES: Record<Source, readonly string[]> = {
@@ -446,7 +446,7 @@ describe('old-name → canonical mapping table', () => {
 
 	// The table must stay complete: every quoted `…Exception` / `…Error` name
 	// literal in the three auth BBs' non-test sources needs a row. Until the
-	// cutover this scanned those sources; they were deleted at F1b, so the
+	// cutover this scanned those sources; they were deleted then, so the
 	// scan's result is frozen in NAMES_IN_SOURCES (same assertion, no scan).
 	// (Names Cognito returns at runtime are passed through by `AuthCognito`
 	// unchanged; the ones it declares are all in `AuthCognitoErrors`.)

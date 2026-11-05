@@ -33,7 +33,7 @@ export const blocksStack = await BlocksStack.create(app, `bb-test-${suffix}`, {
 	backendCDKPath: join(__dirname, 'index.ts'),
 	// A disposable e2e stack: DESTROY everywhere, no deletion protection, so the
 	// harness's destroy() always removes the user pool too. Both revisions use
-	// the same preset, so `Auth`'s Q4 "pool follows the stack defaults" resolves
+	// the same preset, so `Auth`'s "pool follows the stack defaults" rule resolves
 	// to the same DESTROY policy `AuthCognito` hard-codes.
 	defaults: BlocksPresets.sandbox,
 });

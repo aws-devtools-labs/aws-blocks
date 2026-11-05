@@ -404,7 +404,7 @@ const oidcAuthRelay = new Auth(scope, 'oidc-auth-relay', {
 });
 
 // Fourth OIDC instance — a web frontend on ANOTHER origin than this API signs in
-// with the browser redirect client (`@aws-blocks/bb-auth/browser-client`, L69).
+// with the browser redirect client (`@aws-blocks/bb-auth/browser-client`).
 // It uses the relay transport with `relayTo` = the frontend's return page; a
 // loopback `http://127.0.0.1:<port>` frontend is always allowed, and a deployed
 // frontend's HTTPS origin would go in `allowedRelayOrigins`. Custom paths keep its
@@ -421,7 +421,7 @@ const oidcAuthWeb = new Auth(scope, 'oidc-auth-web', {
   },
 });
 
-// `validateUser` (decision Q10): one policy for every sign-up and sign-in. Only
+// `validateUser`: one policy for every sign-up and sign-in. Only
 // addresses at `@allowed.example` may join, plus the SES mailbox simulator's
 // success address tagged `+allowed-` (`success+allowed-<id>@simulator.amazonses.com`):
 // with `E2E_FROM_EMAIL` the pool sends through SES, whose sandbox delivers only
@@ -1677,7 +1677,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // ------------------------------------------------------------------------
-  // Auth (auth-gated) Tests — validateUser on sign-up and sign-in (Q10)
+  // Auth (auth-gated) Tests — validateUser on sign-up and sign-in
   // ------------------------------------------------------------------------
 
   async gatedSignUp(username: string, password: string, email: string) {

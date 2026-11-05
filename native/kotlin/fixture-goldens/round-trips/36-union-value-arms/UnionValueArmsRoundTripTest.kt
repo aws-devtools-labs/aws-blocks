@@ -116,7 +116,7 @@ class UnionValueArmsRoundTripTest : FunSpec({
             json("""{"__blocks":"file-bucket/download","url":"https://example.com/f"}"""),
         ).shouldBeInstanceOf<GetFile.Result.Variant1>()
         handle.value.url shouldBe "https://example.com/f"
-        // A transferable arm encodes as its descriptor (FX29's toJson), with its tag.
+        // A transferable arm encodes as its descriptor (through its toJson), with its tag.
         BlocksJson.encodeToJsonElement(serializer, handle) shouldBe
             json("""{"__blocks":"file-bucket/download","url":"https://example.com/f"}""")
         roundTrip(serializer, """{"reason":"gone"}""", GetFile.Result.Variant2("gone"))

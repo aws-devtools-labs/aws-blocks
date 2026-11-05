@@ -10,7 +10,7 @@ import XCTest
 
 /// Every spec string the generator writes into a Swift string literal goes through `swiftStringContent`, which
 /// escapes `\` first, then `"`, then line breaks and other control characters, so the literal spells the spec's
-/// text exactly: it neither breaks (`"say "hi""`) nor interpolates (`"x\(1+1)"` would send `"x2"`). FX46 routed
+/// text exactly: it neither breaks (`"say "hi""`) nor interpolates (`"x\(1+1)"` would send `"x2"`). An earlier fix routed
 /// wire keys, enum raw values, discriminators, literal arms, method and server names through it; two sites were
 /// left: a `pattern` constraint (only `\` and `"` were escaped, so a line break in it broke the literal) and a string
 /// `default`, which was written in its JSON spelling (`"a\/b"`, `"\u0001"`), and JSON's escapes aren't Swift's.

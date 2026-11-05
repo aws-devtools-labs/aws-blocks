@@ -138,7 +138,7 @@ final class TransferableModelTests: XCTestCase {
     }
 
     func testOIDCClientInASchemasNestedInlineTypeDecodesWithTheClient() throws {
-        // Two schemas each nest a `Meta` type (R49); only `WithClient.Meta` holds an OIDC client.
+        // Two schemas each nest a `Meta` type; only `WithClient.Meta` holds an OIDC client.
         let output = try generate(schemas: """
         {
             "WithClient": { "type": "object", "properties": {

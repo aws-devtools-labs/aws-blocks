@@ -81,7 +81,7 @@ class GeneratedNameCollisionTest : FunSpec({
     test("an optional parameter named args beside another moves the args local aside") {
         val source = api(method("find", param("args", required = false), param("limit", required = false)))
         source shouldContain "val args_2 = mutableListOf<JsonElement>()"
-        // FX45: a trailing optional argument is sent (as null if unset) when a later one is set.
+        // A trailing optional argument is sent (as null if unset) when a later one is set.
         source shouldContain "if (args != null || limit != null) {\n      args_2.add(if (args != null) JsonPrimitive(args) else JsonNull)"
         source shouldContain "if (limit != null) {\n      args_2.add(JsonPrimitive(limit))"
         source shouldContain "params = args_2,"

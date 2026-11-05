@@ -303,7 +303,7 @@ test('Auth - full purge clears every code record and leaves other keys alone', {
 // https://github.com/aws-devtools-labs/aws-blocks/issues/988.
 oidcAuthTests(() => api);
 
-// The browser redirect client: a frontend on another origin signs in (L69).
+// The browser redirect client: a frontend on another origin signs in.
 browserClientTests();
 
 // Auth createApi() narrowing: typed by the block options, refused at runtime (separate file)
@@ -377,7 +377,7 @@ authCognitoSandboxTests(() => api);
 authCognitoAdminTests(() => api);
 authAdminScanFilterTests();
 
-// Auth validateUser (Q10): one policy for every sign-up and sign-in
+// Auth validateUser: one policy for every sign-up and sign-in
 authValidateUserTests(() => api);
 
 // CronJob tests (separate file)

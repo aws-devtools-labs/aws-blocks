@@ -108,7 +108,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				} catch (e) {
 					assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
 					// The message describes authC's own policy, the same locally and
-					// on AWS, never Cognito's text (L71).
+					// on AWS, never Cognito's text.
 					assert.ok(e instanceof Error);
 					assert.strictEqual(
 						e.message,
@@ -317,7 +317,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 				assert.notStrictEqual(second!.code, first!.code, 'resend should produce a different code');
 			});
 
-			// FX3 — the confirm / resend steps must not reveal that an account
+			// The confirm / resend steps must not reveal that an account
 			// is already confirmed (`revealExistingUsers` is off by default).
 			test('an already-confirmed account: resend sends nothing, re-confirm is a wrong code', async () => {
 				const api = getApi();

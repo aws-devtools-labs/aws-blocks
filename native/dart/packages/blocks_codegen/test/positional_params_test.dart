@@ -11,7 +11,7 @@ import 'package:test/test.dart';
 /// `echoArgs('a', 'c')`: `middle = 'c'`.
 ///
 /// A call now sends its arguments as the TypeScript client does
-/// (`encodeRpcRequest`), and as Kotlin does since FX45 (R81): an array in the
+/// (`encodeRpcRequest`), and as the Kotlin client does: an array in the
 /// spec's parameter order, `null` in the slot of an unset optional that comes
 /// before a set or required argument, and trailing unset optionals left off.
 void main() {

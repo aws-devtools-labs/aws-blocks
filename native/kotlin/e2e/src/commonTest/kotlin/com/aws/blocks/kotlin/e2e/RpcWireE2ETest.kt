@@ -17,7 +17,7 @@ import kotlin.test.Test
  * generated call that leaves out an optional argument before a set one sends `null` in its slot,
  * as the TypeScript client does, so `echoArgs("a", last = "c")` reaches the server as
  * `echoArgs("a", null, "c")`. The base generator sent `["a","c"]`, which the server read as
- * `middle = "c"` (FX45, R81).
+ * `middle = "c"`.
  */
 class RpcWireE2ETest {
 

@@ -155,7 +155,7 @@ final class AuthBasicE2ETests: BlocksE2ETestCase {
 
 /// The Cognito-style `Auth` block's `updateUserAttributes` result is keyed by attribute, each value
 /// discriminated by the boolean `isUpdated`. The server sends JSON `true` / `false`; the generated client
-/// decoded the discriminator as a string, so every call threw (FX35).
+/// decoded the discriminator as a string, so every call threw.
 final class AuthCognitoAttributesE2ETests: BlocksE2ETestCase {
 
     func testUpdateUserAttributesDecodesTheBooleanDiscriminator() async throws {
