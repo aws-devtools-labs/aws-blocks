@@ -97,10 +97,11 @@ const STAGE_PATTERN = /^[A-Za-z0-9_-]+$/;
 const STAMPED_HOST_PATTERN = /^[A-Za-z0-9.-]+(?::\d{1,5})?$/;
 
 /**
- * A request's own `Host` header: a host as {@link STAMPED_HOST_PATTERN} allows,
- * or a bracketed IPv6 address (`[::1]:8080`), with an optional port.
+ * A request's own `Host` header: a name of letters, digits, `.`, `-` and `_`
+ * (as in docker-compose service names like `my_service`), or a bracketed IPv6
+ * address (`[::1]:8080`), with an optional port.
  */
-const REQUEST_HOST_PATTERN = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
+const REQUEST_HOST_PATTERN = /^(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::\d{1,5})?$/;
 
 /** Largest delay `setTimeout` honors; a longer one fires immediately. */
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
@@ -177,6 +178,9 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
       console.error('HTTP server error:', error);
       if (res.destroyed) return;
       if (res.headersSent) {
+        // Defensive: every response is written with a single res.end, so headers
+        // only go out together with the whole body and this branch isn't reached
+        // today. It guards a future streaming or multi-write response.
         // Part of a response is already on the wire and its framing can't be
         // completed correctly: drop the connection so a keep-alive client never
         // reads the next response out of a misframed one.
@@ -394,10 +398,12 @@ function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
 }
 
 function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse, 'kind'>): void {
-  // A handler can set any number as `ctx.response.status`. Node refuses an
-  // out-of-range one only while ending the response, after the handler's headers
-  // and the body's Content-Length are already recorded: check it up front and
-  // answer a plain 500 without any of the handler's headers or cookies.
+  // A handler can set any number as `ctx.response.status`. Only a final status
+  // is sent: Node refuses an out-of-range one only while ending the response,
+  // after the handler's headers and Content-Length are recorded, and sends a 1xx
+  // as an interim response with no body, so a keep-alive client would read the
+  // next response as the answer. Check it up front and answer an out-of-range or
+  // interim status with a plain 500, without the handler's headers or cookies.
   if (!isValidStatus(response.status)) {
     console.error('HTTP server error: invalid response status', response.status);
     writeInternalServerError(res);
@@ -413,9 +419,9 @@ function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse
   res.end(response.body);
 }
 
-/** Whether `status` is a status code Node can send (an integer from 100 to 599). */
+/** Whether `status` is a final HTTP status, 200 to 599. */
 function isValidStatus(status: number): boolean {
-  return Number.isInteger(status) && status >= 100 && status <= 599;
+  return Number.isInteger(status) && status >= 200 && status <= 599;
 }
 
 /**

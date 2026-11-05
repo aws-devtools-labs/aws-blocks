@@ -169,9 +169,9 @@ const backend = {
       ctx.response.headers.append('Set-Cookie', 'gone=; Path=/; Max-Age=0');
       throw new Error('signed out');
     },
-    async badStatus() {
+    async badStatus(status: number) {
       ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
-      ctx.response.status = 1000;
+      ctx.response.status = status;
       return { ok: true };
     },
   }),
@@ -229,7 +229,7 @@ function registerRoutes() {
     path: '/bad-status',
     handler: async (ctx) => {
       ctx.response.headers.append('Set-Cookie', 'sid=live; Path=/');
-      ctx.response.status = 1000;
+      ctx.response.status = Number(ctx.request.url.searchParams.get('status'));
       ctx.response.send({ ok: true });
     },
   });
@@ -621,33 +621,37 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     }
   });
 
-  for (const [name, first] of [
-    ['a RawRoute', 'GET /bad-status HTTP/1.1\r\nHost: x\r\n\r\n'],
-    [
-      'an RPC method',
-      `POST /aws-blocks/api HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(rpc('api.badStatus'))}\r\n\r\n${rpc('api.badStatus')}`,
-    ],
-  ] as const) {
-    it(`answers an out-of-range status from ${name} with a plain 500, keeping the next response intact`, async () => {
-      const server = await start();
-      try {
-        const [error, next, ...more] = await rawExchange(
-          server.port,
-          `${first}GET /text HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
-        );
-        assert.strictEqual(error.statusLine, 'HTTP/1.1 500 Internal Server Error');
-        assert.deepStrictEqual(JSON.parse(error.body), { error: 'Internal Server Error' });
-        assert.ok(!error.headers.some(([n]) => n === 'set-cookie'), 'no handler cookie on the 500');
-        const length = error.headers.find(([n]) => n === 'content-length')?.[1];
-        assert.strictEqual(Number(length), Buffer.byteLength(error.body), 'Content-Length frames the 500 body');
-        assert.strictEqual(next?.statusLine, 'HTTP/1.1 200 OK');
-        assert.strictEqual(next?.body, 'plain text');
-        assert.strictEqual(more.length, 0);
-      } finally {
-        await server.close();
-      }
-    });
+  // 1000 is out of range; 101 and 103 are interim statuses Node sends with no body.
+  for (const status of [1000, 101, 103]) {
+    for (const [name, first] of [
+      ['a RawRoute', `GET /bad-status?status=${status} HTTP/1.1\r\nHost: x\r\n\r\n`],
+      [
+        'an RPC method',
+        `POST /aws-blocks/api HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(rpc('api.badStatus', [status]))}\r\n\r\n${rpc('api.badStatus', [status])}`,
+      ],
+    ] as const) {
+      it(`answers status ${status} from ${name} with a plain 500, keeping the next response intact`, async () => {
+        const server = await start();
+        try {
+          const [error, next, ...more] = await rawExchange(
+            server.port,
+            `${first}GET /text HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
+          );
+          assert.strictEqual(error.statusLine, 'HTTP/1.1 500 Internal Server Error');
+          assert.deepStrictEqual(JSON.parse(error.body), { error: 'Internal Server Error' });
+          assert.ok(!error.headers.some(([n]) => n === 'set-cookie'), 'no handler cookie on the 500');
+          const length = error.headers.find(([n]) => n === 'content-length')?.[1];
+          assert.strictEqual(Number(length), Buffer.byteLength(error.body), 'Content-Length frames the 500 body');
+          assert.strictEqual(next?.statusLine, 'HTTP/1.1 200 OK');
+          assert.strictEqual(next?.body, 'plain text');
+          assert.strictEqual(more.length, 0);
+        } finally {
+          await server.close();
+        }
+      });
+    }
   }
+
 
   it('aborts the request signal when the client disconnects', async () => {
     const server = await start();
@@ -942,8 +946,13 @@ describe('buildRequestUrl', () => {
     assert.strictEqual(url.href, 'http://[::1]:8080/x');
   });
 
+  it('keeps a Host header with an underscore in its name', () => {
+    const url = buildRequestUrl(incoming('/x', { host: 'my_service:8080' }));
+    assert.strictEqual(url.href, 'http://my_service:8080/x');
+  });
+
   it('falls back to localhost for a Host header that is not a host[:port]', () => {
-    for (const host of ['a b', 'user:pw@example.com', 'example.com/evil', 'a, b', 'example.com:99999', '[zz]']) {
+    for (const host of ['a b', 'user:pw@example.com', 'example.com/path', 'a, b', 'example.com:99999', '[zz]']) {
       assert.strictEqual(buildRequestUrl(incoming('/x', { host })).href, 'http://localhost/x', host);
     }
   });
