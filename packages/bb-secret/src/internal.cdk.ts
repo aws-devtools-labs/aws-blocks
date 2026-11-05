@@ -29,8 +29,7 @@ export { type FrameworkKey, SSM_SECRETS_STORE_WARNING_ID } from './internal-shar
  *   name, a CloudFormation-generated 64-character value
  *   (`GenerateSecretString`), `DeletionPolicy: Delete`, and only
  *   `secretsmanager:GetSecretValue` for the app's execution role. The ARN
- *   reaches the runtime as an environment variable on every compute (and in
- *   config), so the store choice arrives with the code update.
+ *   reaches the runtime through config, as for any `Secret`.
  * - `'ssm'`: exactly `new AppSetting(scope, id, { secret: true })`, the
  *   SecureString the blocks created before this option existed. A synth-time
  *   warning fires when the stack looks like production.

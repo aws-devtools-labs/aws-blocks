@@ -3,7 +3,6 @@
 
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
-import { registerComputeEnv } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
@@ -154,19 +153,7 @@ export class Secret extends BuildingBlockScope {
 		// so both instances would read/write a single secret. `fullId` is unique
 		// within the stack, and the runtime derives the identical key from its own
 		// `fullId`.
-		//
-		// A framework key also sets the ARN as an environment variable on every
-		// compute. The S3 config upload is not ordered before the compute update,
-		// so during an upgrade deploy new code can cold-start against the previous
-		// config object; without the ARN it would choose SSM, whose grant the same
-		// deploy removed. The env var arrives with the code. It is one short value
-		// per framework key, an exception to the "registerConfig, not
-		// addEnvironment" rule that the rule's 4 KB budget can afford.
-		if (frameworkKeyMode) {
-			registerComputeEnv(this, secretArnConfigKey(this.fullId), this.secret.secretArn);
-		} else {
-			registerConfig(this, secretArnConfigKey(this.fullId), this.secret.secretArn);
-		}
+		registerConfig(this, secretArnConfigKey(this.fullId), this.secret.secretArn);
 	}
 
 	// ── Runtime methods are not available during CDK synth ────────────────

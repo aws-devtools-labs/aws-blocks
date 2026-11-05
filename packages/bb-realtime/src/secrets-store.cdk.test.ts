@@ -136,25 +136,21 @@ function computeEnvironments(resources: Record<string, CfnResource>): Record<str
 		.filter((vars) => 'BLOCKS_CONFIG_BUCKET' in vars);
 }
 
-const TOKEN_ARN_ENV = 'BLOCKS_SECRET_ARN_RTSTACK_RT_TOKEN_SECRET';
-
-test('production preset: the token secret ARN arrives with the compute update (Lambda environment)', () => {
-	const { resources } = synth('production');
-	const [secretId] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::SecretsManager::Secret') ?? [];
-	const envs = computeEnvironments(resources);
-	assert.ok(envs.length >= 1, 'at least one compute loads the config');
-	for (const vars of envs) assert.deepStrictEqual(vars[TOKEN_ARN_ENV], { Ref: secretId });
-});
-
-test('sandbox preset: no secret ARN environment variable on the compute', () => {
-	const { resources } = synth('sandbox');
-	for (const vars of computeEnvironments(resources)) {
-		assert.deepStrictEqual(
-			Object.keys(vars).filter((k) => k.startsWith('BLOCKS_SECRET_ARN_')),
-			[],
-		);
-	}
-});
+// The ARN reaches the runtime through the config file only (registerConfig),
+// never as a Lambda environment variable.
+for (const preset of ['production', 'sandbox'] as const) {
+	test(`${preset} preset: the compute environment holds only the config coordinates`, () => {
+		const { resources } = synth(preset);
+		const envs = computeEnvironments(resources);
+		assert.ok(envs.length >= 1, 'at least one compute loads the config');
+		for (const vars of envs) {
+			assert.deepStrictEqual(
+				Object.keys(vars).filter((k) => k.startsWith('BLOCKS_SECRET_ARN_')),
+				[],
+			);
+		}
+	});
+}
 
 // Upgrade from an SSM stack: the token key leaves the secret-init custom
 // resource. With other SSM secrets left, its Update handler deletes the names

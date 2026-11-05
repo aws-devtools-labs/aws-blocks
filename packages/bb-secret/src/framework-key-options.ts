@@ -24,9 +24,7 @@ export const FRAMEWORK_KEY = Symbol('aws-blocks.bb-secret.frameworkKey');
  *
  * - leaves `Name` unset, so CloudFormation generates a unique name;
  * - seeds the value from `GenerateSecretString` with {@link FRAMEWORK_KEY_VALUE};
- * - grants the app role only `secretsmanager:GetSecretValue`;
- * - also sets its ARN as an environment variable on every compute, so new code
- *   never reads a stale config object during a deploy.
+ * - grants the app role only `secretsmanager:GetSecretValue`.
  *
  * @internal
  */

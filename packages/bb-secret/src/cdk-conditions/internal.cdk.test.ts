@@ -114,51 +114,22 @@ test('production preset: the app role gets only GetSecretValue on the key', () =
 	assert.deepStrictEqual(actions, ['secretsmanager:GetSecretValue']);
 });
 
-test('production preset: the secret ARN is set as an environment variable on every compute', () => {
+test('production preset: no environment variable is added to the compute (the ARN travels in config only)', () => {
 	const { stack, parent } = setup(BlocksPresets.production);
 	frameworkKey(parent, 'signing-key');
 	// What BlocksStack.create() does once the backend module is loaded.
 	finalizeConfigRegistry(stack, stack.executionRole, [
 		{ setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as unknown as ComputeBase,
 	]);
-	const template = Template.fromStack(stack);
-	const [secretId] = Object.keys(template.findResources('AWS::SecretsManager::Secret'));
-	template.hasResourceProperties('AWS::Lambda::Function', {
-		Environment: {
-			Variables: Match.objectLike({ [secretArnConfigKey('TestStack-app-signing-key')]: { Ref: secretId } }),
-		},
-	});
-});
-
-test('a compute stamped before the key is registered still gets the environment variable', () => {
-	const { stack, parent } = setup(BlocksPresets.production);
-	finalizeConfigRegistry(stack, stack.executionRole, [
-		{ setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as unknown as ComputeBase,
+	const fns = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')) as {
+		Properties: { Environment?: { Variables?: Record<string, unknown> } };
+	}[];
+	const computes = fns.filter((fn) => 'BLOCKS_CONFIG_BUCKET' in (fn.Properties.Environment?.Variables ?? {}));
+	assert.strictEqual(computes.length, 1);
+	assert.deepStrictEqual(Object.keys(computes[0].Properties.Environment?.Variables ?? {}).sort(), [
+		'BLOCKS_CONFIG_BUCKET',
+		'BLOCKS_CONFIG_KEY',
 	]);
-	// App code that builds a block after `create()` resolves.
-	frameworkKey(parent, 'signing-key');
-	Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
-		Environment: {
-			Variables: Match.objectLike({ [secretArnConfigKey('TestStack-app-signing-key')]: Match.anyValue() }),
-		},
-	});
-});
-
-test('sandbox preset: no environment variable is added to the compute', () => {
-	const { stack, parent } = setup(BlocksPresets.sandbox, SANDBOX_CONTEXT);
-	frameworkKey(parent, 'signing-key');
-	finalizeConfigRegistry(stack, stack.executionRole, [
-		{ setEnv: (k: string, v: string) => stack.handler.addEnvironment(k, v) } as unknown as ComputeBase,
-	]);
-	const [fn] = Object.values(
-		Template.fromStack(stack).findResources('AWS::Lambda::Function', {
-			Properties: { Handler: 'index.handler', Code: { ZipFile: Match.anyValue() } },
-		}),
-	) as { Properties: { Environment?: { Variables?: Record<string, unknown> } } }[];
-	const keys = Object.keys(fn.Properties.Environment?.Variables ?? {}).filter((k) =>
-		k.startsWith('BLOCKS_SECRET_ARN_'),
-	);
-	assert.deepStrictEqual(keys, []);
 });
 
 test('a plain options object cannot switch a customer Secret into framework key mode', () => {
