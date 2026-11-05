@@ -541,7 +541,7 @@ describe('Hosting', () => {
   // the container's load balancer, ahead of the `/aws-blocks/api/*` gateway
   // behavior that would otherwise match first.
   describe('container API namespaces', () => {
-    function hostingWithDirectRoute(id: string) {
+    function hostingWithDirectRoute(id: string, cacheBehaviors?: number) {
       createSpaBuildOutput(tmpDir);
       const app = new App();
       const stack = new Stack(app, id);
@@ -557,9 +557,25 @@ describe('Hosting', () => {
           },
         ],
       };
-      new Hosting(stack, 'Hosting', { root: tmpDir, api });
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api,
+        ...(cacheBehaviors === undefined ? {} : { frontDoor: { features: { quotas: { cacheBehaviors } } } }),
+      });
       return Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string; Properties: any }>;
     }
+
+    it("counts the container behaviors against the door's quotas.cacheBehaviors at synth", () => {
+      const resources = hostingWithDirectRoute('HostingDirectRouteCount');
+      const [dist] = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::Distribution');
+      // The default behavior plus every other one, the container path included.
+      const total = 1 + dist.Properties.DistributionConfig.CacheBehaviors.length;
+      assert.doesNotThrow(() => hostingWithDirectRoute('HostingDirectRouteAtLimit', total));
+      assert.throws(
+        () => hostingWithDirectRoute('HostingDirectRouteOverLimit', total - 1),
+        new RegExp(`needs ${total} cache behaviors .*'render'.*exceeding the limit of ${total - 1}`, 's'),
+      );
+    });
 
     it('adds the container path before the gateway API behaviors, to a VPC origin', () => {
       const resources = hostingWithDirectRoute('HostingDirectRoute');

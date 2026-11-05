@@ -23,6 +23,7 @@ import { ApiNamespace, Compute, CronJob, Scope } from '@aws-blocks/blocks';
 import { BlocksBackend, BlocksPresets, BlocksStack, Hosting } from '@aws-blocks/blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let handlerPath: string;
@@ -34,6 +35,7 @@ let containerBackendPath: string;
 let scopeComputeBackendPath: string;
 let containerScopeApiBackendPath: string;
 let containerScopeCronBackendPath: string;
+let manyContainerNamespacesBackendPath: string;
 let tmpDir: string;
 
 before(() => {
@@ -127,6 +129,21 @@ before(() => {
 			"export const preview = new ApiNamespace(scope, 'preview', () => ({ async show() { return 'ok'; } }), { compute: previewCompute });\n" +
 			"export const renderJob = new AsyncJob(scope, 'render-job', { compute: renderCompute, handler: async () => {} });\n" +
 			"export const batchJob = new AsyncJob(scope, 'batch-job', { compute: batchCompute, handler: async () => {} });\n",
+	);
+	// 25 namespaces on one container: with the default behavior, one cache
+	// behavior more than CloudFront's default quota.
+	manyContainerNamespacesBackendPath = join(tmpDir, 'backend-container-many.mjs');
+	writeFileSync(
+		manyContainerNamespacesBackendPath,
+		"import { ApiNamespace, Compute, Scope } from '@aws-blocks/blocks';\n" +
+			"const scope = new Scope('app');\n" +
+			"const wide = new Compute(scope, 'wide', { type: 'container' });\n" +
+			"export const api = new ApiNamespace(scope, 'api', () => ({ async ping() { return 'pong'; } }));\n" +
+			Array.from(
+				{ length: 25 },
+				(_, i) =>
+					`export const ns${i} = new ApiNamespace(scope, 'ns${i}', () => ({ async ping() { return 'ok'; } }), { compute: wide });\n`,
+			).join(''),
 	);
 });
 
@@ -768,6 +785,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		const code: string = functions[0][1].Properties.FunctionCode;
 		assert.match(code, /request\.headers\['x-blocks-forwarded-host'\] = \{ value: request\.headers\.host\.value \}/);
 		assert.match(code, /delete request\.headers\['x-blocks-forwarded-stage'\]/);
+		assert.match(code, /delete request\.headers\['x-forwarded-host'\]/, 'a client X-Forwarded-Host never reaches the container');
 	});
 
 	test('the load balancer admits CloudFront’s origin-facing prefix list on the listener range', () => {
@@ -798,8 +816,12 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		}
 	});
 
-	/** A Hosting (default CloudFront door) fronting a container backend on `apiFrontDoor`. */
-	const withHosting = async (id: string, apiFrontDoor?: 'cloudfront') => {
+	/** A Hosting (the default CloudFront door, unless `frontDoor`) fronting a container backend on `apiFrontDoor`. */
+	const withHosting = async (
+		id: string,
+		apiFrontDoor?: 'cloudfront',
+		frontDoor?: { kind: 'stacked'; edge: 'cloudfront'; router: 'alb' },
+	) => {
 		const root = join(tmpDir, `spa-${id}`);
 		mkdirSync(join(root, 'dist'), { recursive: true });
 		writeFileSync(join(root, 'dist', 'index.html'), '<!DOCTYPE html><html><body>app</body></html>');
@@ -810,7 +832,7 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 			defaults: BlocksPresets.production,
 			...(apiFrontDoor ? { apiFrontDoor } : {}),
 		});
-		new Hosting(stack, 'Hosting', { root, api: stack });
+		new Hosting(stack, 'Hosting', { root, api: stack, ...(frontDoor ? { frontDoor } : {}) });
 		return Template.fromStack(stack).toJSON().Resources as Resources;
 	};
 
@@ -834,6 +856,139 @@ describe('ApiNamespace on a container compute — cloudfront tier', () => {
 		for (const type of ['AWS::CloudFront::VpcOrigin', 'Custom::AWS']) assert.strictEqual(ofType(hosted, type).length, 0, type);
 		const vpcLink = ofType(hosted, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
 		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+	});
+
+	test("behind Hosting's stacked door, container namespaces stay on the gateway through the router", async () => {
+		const hosted = await withHosting('ContainerApiHostingStacked', 'cloudfront', {
+			kind: 'stacked',
+			edge: 'cloudfront',
+			router: 'alb',
+		});
+		const distributions = ofType(hosted, 'AWS::CloudFront::Distribution');
+		assert.strictEqual(distributions.length, 1, "the edge claims the API: no managed distribution");
+		const patterns = distributions[0][1].Properties.DistributionConfig.CacheBehaviors.map(
+			(b: Record<string, any>) => b.PathPattern,
+		);
+		assert.ok(!patterns.includes('/aws-blocks/api/render'), `no direct behavior, got ${patterns.join(', ')}`);
+		const [blocksLbId] = ofType(hosted, 'AWS::ElasticLoadBalancingV2::LoadBalancer').find(
+			([, lb]) => lb.Properties.Scheme === 'internal',
+		) ?? [];
+		assert.ok(blocksLbId, "the containers' internal load balancer");
+		const toBlocksLb = ofType(hosted, 'AWS::CloudFront::VpcOrigin').filter(
+			([, o]) => o.Properties.VpcOriginEndpointConfig.Arn?.Ref === blocksLbId,
+		);
+		assert.deepStrictEqual(toBlocksLb, [], "no VPC origin to the containers' load balancer");
+		const vpcLink = ofType(hosted, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
+		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+		// Created with the gateway, before Hosting picks its door (documented as unused here).
+		const lookups = ofType(hosted, 'Custom::AWS').filter(([, r]) => /DescribeManagedPrefixLists/.test(JSON.stringify(r.Properties)));
+		assert.strictEqual(lookups.length, 1, 'the prefix-list lookup');
+	});
+
+	/** An embedded backend on the `cloudfront` tier, in a VPC of the parent stack built by `vpc`. */
+	const inOwnVpc = async (id: string, vpc: (stack: cdk.Stack) => { network: ec2.IVpc; subnets: ec2.SubnetSelection }) => {
+		const parent = new cdk.Stack(new cdk.App(), id);
+		// A backend id of its own: the backend module is imported once per id.
+		await BlocksBackend.create(parent, `${id}Backend`, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: containerBackendPath,
+			defaults: { ...BlocksPresets.production, vpc: vpc(parent) },
+			apiFrontDoor: 'cloudfront',
+		});
+		return parent;
+	};
+	const isolatedWarning = (stack: cdk.Stack) =>
+		Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('VPC has no public subnets'));
+
+	test('a VPC without public subnets keeps container namespaces on the gateway, and synth warns', async () => {
+		// Private subnets with egress (say, through a transit gateway) and no internet
+		// gateway: the container gets its egress, CloudFront has no way in.
+		const stack = await inOwnVpc('ContainerApiNoIgwVpc', (s) => ({
+			network: ec2.Vpc.fromVpcAttributes(s, 'NoIgw', {
+				vpcId: 'vpc-0123456789abcdef0',
+				availabilityZones: ['us-east-1a', 'us-east-1b'],
+				privateSubnetIds: ['subnet-0123456789abcdef1', 'subnet-0123456789abcdef2'],
+				privateSubnetRouteTableIds: ['rtb-0123456789abcdef1', 'rtb-0123456789abcdef2'],
+			}),
+			subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+		}));
+		const resources = Template.fromStack(stack).toJSON().Resources as Resources;
+		const [, dist] = ofType(resources, 'AWS::CloudFront::Distribution')[0];
+		assert.strictEqual(dist.Properties.DistributionConfig.CacheBehaviors, undefined, 'only the gateway default behavior');
+		for (const type of ['AWS::CloudFront::VpcOrigin', 'AWS::CloudFront::Function', 'Custom::AWS']) {
+			assert.strictEqual(ofType(resources, type).length, 0, type);
+		}
+		const vpcLink = ofType(resources, 'AWS::ApiGateway::Method').filter(([, m]) => m.Properties.Integration?.ConnectionType === 'VPC_LINK');
+		assert.strictEqual(vpcLink.length, 2, "the gateway's VPC link carries render and preview");
+		const warnings = isolatedWarning(stack);
+		assert.strictEqual(warnings.length, 1);
+		assert.match(String(warnings[0].entry.data), /'render', 'preview'|'preview', 'render'/);
+	});
+
+	test('a bring-your-own VPC with public subnets gets the direct routes, without the warning', async () => {
+		const stack = await inOwnVpc('ContainerApiPublicVpc', (s) => ({
+			network: new ec2.Vpc(s, 'WithIgw', { maxAzs: 2, natGateways: 1 }),
+			subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+		}));
+		const resources = Template.fromStack(stack).toJSON().Resources as Resources;
+		assert.strictEqual(ofType(resources, 'AWS::CloudFront::VpcOrigin').length, 1);
+		assert.strictEqual(isolatedWarning(stack).length, 0);
+	});
+
+	test('two backends in one stack each route to their own load balancer', async () => {
+		const parent = new cdk.Stack(new cdk.App(), 'ContainerApiTwoBackends');
+		// Distinct backend ids: each imports its own instance of the backend module.
+		for (const id of ['First', 'Second']) {
+			await BlocksBackend.create(parent, id, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: containerBackendPath,
+				defaults: BlocksPresets.production,
+				apiFrontDoor: 'cloudfront',
+			});
+		}
+		const resources = Template.fromStack(parent).toJSON().Resources as Resources;
+		const lbs = ofType(resources, 'AWS::ElasticLoadBalancingV2::LoadBalancer');
+		assert.strictEqual(lbs.length, 2, 'one load balancer per backend');
+		const vpcOrigins = ofType(resources, 'AWS::CloudFront::VpcOrigin');
+		assert.strictEqual(vpcOrigins.length, 2, 'one VPC origin per backend');
+		const lbOfVpcOrigin = new Map(vpcOrigins.map(([id, o]) => [id, o.Properties.VpcOriginEndpointConfig.Arn.Ref as string]));
+		assert.deepStrictEqual(new Set(lbOfVpcOrigin.values()), new Set(lbs.map(([id]) => id)));
+
+		const ingress = ofType(resources, 'AWS::EC2::SecurityGroupIngress').map(([, r]) => r.Properties);
+		const prefixListRules = ingress.filter((r) => r.SourcePrefixListId);
+		assert.strictEqual(prefixListRules.length, 2, 'one CloudFront rule per load balancer');
+		const lbSgs = lbs.map(([, lb]) => lb.Properties.SecurityGroups[0]['Fn::GetAtt'][0]);
+		assert.deepStrictEqual(new Set(prefixListRules.map((r) => r.GroupId['Fn::GetAtt'][0])), new Set(lbSgs));
+
+		const distributions = ofType(resources, 'AWS::CloudFront::Distribution');
+		assert.strictEqual(distributions.length, 2, 'a managed distribution per backend');
+		const routedLbs = distributions.map(([distId, dist]) => {
+			const config = dist.Properties.DistributionConfig;
+			const render = config.CacheBehaviors.find((b: Record<string, any>) => b.PathPattern === '/aws-blocks/api/render');
+			assert.ok(render, `${distId} routes render directly`);
+			const origin = config.Origins.find((o: Record<string, any>) => o.Id === render.TargetOriginId);
+			const vpcOriginId = origin.VpcOriginConfig.VpcOriginId['Fn::GetAtt'][0];
+			// The distribution's own backend: both live under the same backend construct.
+			const lbId = lbOfVpcOrigin.get(vpcOriginId);
+			assert.ok(lbId, `${distId} targets one of the VPC origins`);
+			const backend = distId.startsWith('First') ? 'First' : 'Second';
+			assert.ok(lbId.startsWith(backend), `${distId} reaches ${backend}'s load balancer, got ${lbId}`);
+			return lbId;
+		});
+		assert.strictEqual(new Set(routedLbs).size, 2, 'each distribution reaches a different load balancer');
+	});
+
+	test('fails synth when the direct behaviors exceed the distribution quota, naming the namespaces', async () => {
+		const stack = await BlocksStack.create(new cdk.App(), 'ContainerApiTooManyBehaviors', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: manyContainerNamespacesBackendPath,
+			defaults: BlocksPresets.production,
+			apiFrontDoor: 'cloudfront',
+		});
+		assert.throws(
+			() => Template.fromStack(stack),
+			/needs 26 cache behaviors .*'ns0'.*'ns24'.*exceeding the limit of 25/s,
+		);
 	});
 
 	test('an embedded BlocksBackend bounds the prefix-list lookup role too', async () => {

@@ -123,7 +123,18 @@ with readiness on port **8081** (503 while draining).
   listener through one CloudFront VPC origin per distribution, ahead of the
   `/aws-blocks/api/*` gateway behavior; the listener's path rule picks the
   compute. On the `apigateway` tier, and behind `Hosting`'s other doors, container
-  namespaces go through the gateway like every other path.
+  namespaces go through the gateway like every other path. The gateway keeps its
+  VPC-link route for every container namespace on both tiers, so a namespace
+  CloudFront doesn't route directly still works.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway: its
+    edge sends `/aws-blocks/*` to its ALB router (which proxies to the gateway)
+    through behaviors it creates with the distribution, and CloudFront matches
+    behaviors in the order they were added, so an exact-path behavior added
+    afterwards would never match. Calls keep the gateway's ~29-second limit. The
+    prefix-list lookup (its custom resource and provider function) and the load
+    balancer's CloudFront rule below still exist, unused: they are created with
+    the gateway, before `Hosting` picks its door, so that the provider's role
+    gets the backend's permissions boundary.
   - CloudFront forwards the viewer's `Host` to a VPC origin with the origin port
     appended (`<domain>:10000`), so a viewer-request CloudFront Function stamps
     the bare viewer host as `x-blocks-forwarded-host` and drops
@@ -143,7 +154,15 @@ with readiness on port **8081** (503 while draining).
     distribution, `Hosting`'s WAF when Hosting fronts the API). Synth warns when
     the distribution has none.
   - A VPC origin needs the VPC to have an internet gateway, and isn't available
-    in a few Availability Zones (see the CloudFront VPC origins docs).
+    in a few Availability Zones (see the CloudFront VPC origins docs). A
+    namespace whose load balancer's VPC has no public subnets (an isolated VPC,
+    owned or looked up) stays on the gateway's VPC link — no VPC origin, no
+    CloudFront rule — and synth warns (`blocks:api:direct-routes-without-public-subnets`)
+    naming it.
+  - Each direct path is a cache behavior of the distribution, added after it is
+    built, so synth counts the distribution's behaviors (the default included)
+    once they are all in and fails above the quota — 25, or `Hosting`'s
+    `quotas.cacheBehaviors` — naming the container namespaces.
 - **Moving a live namespace onto a container.** CloudFormation switches the
   namespace's route to the load balancer without waiting for the new tasks to
   become healthy (making the gateway wait on the ECS service would be a

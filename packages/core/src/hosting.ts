@@ -1382,7 +1382,7 @@ export class Hosting extends Construct {
       // (`new Hosting(stack, 'Hosting', { api: stack })`); when it's a branded
       // BlocksStack/BlocksBackend use its node.path directly, else walk up from
       // this Hosting construct to the owning root.
-      this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api));
+      this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api), doorSettings.quotas?.cacheBehaviors);
     } else if (props.api && cfOverRouter) {
       // The stacked door's CloudFront edge routes the API through its router:
       // a CloudFront distribution fronts the API, so it claims the role and the
@@ -1752,8 +1752,16 @@ export class Hosting extends Construct {
    * The managed `cloudfront` front door and these behaviors forward to the same origin
    * via the same `httpOriginFromEndpoint` + `API_BEHAVIOR_OPTIONS`, so the two
    * paths cannot drift.
+   *
+   * @param cacheBehaviorLimit the door's `quotas.cacheBehaviors` (CloudFront's
+   *   default when unset), checked at synth once the direct routes are added
    */
-  private addApiBehaviors(hosting: HostingConstruct, api: BlocksStackApi, ownerRootId: string): void {
+  private addApiBehaviors(
+    hosting: HostingConstruct,
+    api: BlocksStackApi,
+    ownerRootId: string,
+    cacheBehaviorLimit: number | undefined,
+  ): void {
     // Only called for the CloudFront front door (the caller checks
     // `hosting.frontDoor.service`), so the distribution exists.
     const distribution = hosting.distribution;
@@ -1784,8 +1792,10 @@ export class Hosting extends Construct {
 
     // On the `cloudfront` tier, a namespace on a container compute skips the
     // gateway: its exact path goes straight to the container's load balancer.
-    // Added before `/aws-blocks/api/*`, which would otherwise match first.
-    addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions);
+    // Added before `/aws-blocks/api/*`, which would otherwise match first. Synth
+    // checks the distribution's final behavior count against the door's
+    // `quotas.cacheBehaviors` (the construction-time check can't see these).
+    addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions, cacheBehaviorLimit);
 
     distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
     distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);

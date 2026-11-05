@@ -7,7 +7,8 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as cr from 'aws-cdk-lib/custom-resources';
-import { FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from '../constants.js';
+import type { Construct } from 'constructs';
+import { BLOCKS_RPC_PREFIX, FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from '../constants.js';
 import { API_LISTENER_PORTS, type LoadBalancerIngress } from './api-vpc-link.js';
 
 /**
@@ -35,12 +36,24 @@ const DIRECT_ORIGIN_READ_TIMEOUT = cdk.Duration.seconds(60);
 /** Synth-warning id emitted when a distribution routes container namespaces directly but has no web ACL. */
 export const DIRECT_ROUTES_WITHOUT_WAF_WARNING = 'blocks:api:direct-routes-without-waf';
 
+/** Synth-warning id emitted when container namespaces stay on the gateway because their VPC has no public subnets. */
+export const DIRECT_ROUTES_WITHOUT_PUBLIC_SUBNETS_WARNING = 'blocks:api:direct-routes-without-public-subnets';
+
+/**
+ * CloudFront's default quota of cache behaviors per distribution, the default
+ * behavior included ("Cache behaviors per distribution", adjustable).
+ */
+export const DEFAULT_CACHE_BEHAVIOR_LIMIT = 25;
+
 /**
  * Viewer-request function on every direct behavior: stamp the host the viewer
  * used (the distribution's or the app's custom domain) as the forwarded host, and
  * drop any forwarded stage — CloudFront serves the API from the origin root. Both
  * overwrite whatever the client sent, which is what lets the container trust
- * them (see `serveHttp`'s `trustForwardedHeaders`). The viewer host is read here,
+ * them (see `serveHttp`'s `trustForwardedHeaders`). It also drops the client's
+ * `X-Forwarded-Host`: the container takes a loopback value of it ahead of the
+ * stamped host (the local-dev path), and nothing between the edge and the
+ * container sets one. The viewer host is read here,
  * at the edge: the `Host` CloudFront forwards to a VPC origin carries the origin
  * port (`<domain>:10000`).
  */
@@ -48,11 +61,45 @@ const FORWARDED_HOST_FUNCTION = `function handler(event) {
   var request = event.request;
   request.headers['${FORWARDED_HOST_HEADER}'] = { value: request.headers.host.value };
   delete request.headers['${FORWARDED_STAGE_HEADER}'];
+  delete request.headers['x-forwarded-host'];
   return request;
 }`;
 
-/** Marks a load balancer whose security group already admits CloudFront. */
-const CLOUDFRONT_ADMITTED: unique symbol = Symbol.for('blocks:CloudFrontVpcOriginAdmitted');
+/** Construct id, under the load balancer, of the prefix-list lookup that admits CloudFront. */
+const PREFIX_LIST_LOOKUP_ID = 'CloudFrontOriginFacingPrefixList';
+
+/** The namespace name of a direct route (`/aws-blocks/api/{name}` → `name`). */
+function namespaceOf(route: ApiDirectRoute): string {
+	return route.path.slice(BLOCKS_RPC_PREFIX.length + 1);
+}
+
+/**
+ * The direct routes a CloudFront front door can take: those whose load balancer
+ * is in a VPC with public subnets. A CloudFront VPC origin needs the VPC to have
+ * an internet gateway, and public subnets are how CDK models one — for a VPC the
+ * stack owns and a looked-up one alike. The other routes stay on the gateway,
+ * which reaches them through its VPC link on every tier, and synth warns
+ * (on `scope`) naming them.
+ *
+ * @internal
+ */
+export function cloudFrontReachableRoutes(
+	scope: Construct,
+	routes: readonly ApiDirectRoute[],
+): readonly ApiDirectRoute[] {
+	const reachable = routes.filter((route) => route.ingress.vpc.publicSubnets.length > 0);
+	if (reachable.length < routes.length) {
+		const kept = routes.filter((route) => !reachable.includes(route)).map((route) => `'${namespaceOf(route)}'`);
+		cdk.Annotations.of(scope).addWarningV2(
+			DIRECT_ROUTES_WITHOUT_PUBLIC_SUBNETS_WARNING,
+			`CloudFront reaches the container API namespaces ${kept.join(', ')} through the API gateway, not ` +
+				"directly: their load balancer's VPC has no public subnets, and a CloudFront VPC origin needs the VPC " +
+				"to have an internet gateway. Their calls keep the gateway's ~29-second limit. Give the VPC public " +
+				'subnets (an internet gateway) to route them straight to the load balancer.',
+		);
+	}
+	return reachable;
+}
 
 /**
  * Route each direct API path on `distribution` straight to its compute's load
@@ -68,16 +115,25 @@ const CLOUDFRONT_ADMITTED: unique symbol = Symbol.for('blocks:CloudFrontVpcOrigi
  * A direct call skips the gateway's stage throttling and access logs, so the
  * distribution's web ACL is its only rate control: synth warns when it has none.
  *
+ * Each route is a cache behavior of its own, added after the distribution was
+ * built, so a construction-time behavior count doesn't see it: synth fails when
+ * the distribution's behaviors, the default included, exceed
+ * `cacheBehaviorLimit`, naming the container namespaces.
+ *
  * @param behaviorOptions the options of the distribution's other API behaviors
  *   (caching off, all methods, viewer headers forwarded except `Host`)
+ * @param cacheBehaviorLimit the distribution's cache-behavior quota, the default
+ *   behavior included (Hosting's `quotas.cacheBehaviors` where Hosting builds it)
  * @internal
  */
 export function addDirectApiBehaviors(
 	distribution: cloudfront.Distribution,
 	routes: readonly ApiDirectRoute[],
 	behaviorOptions: cloudfront.AddBehaviorOptions,
+	cacheBehaviorLimit: number = DEFAULT_CACHE_BEHAVIOR_LIMIT,
 ): void {
 	if (routes.length === 0) return;
+	validateCacheBehaviorCount(distribution, routes, cacheBehaviorLimit);
 	if (!hasWebAcl(distribution)) {
 		cdk.Annotations.of(distribution).addWarningV2(
 			DIRECT_ROUTES_WITHOUT_WAF_WARNING,
@@ -113,6 +169,35 @@ export function addDirectApiBehaviors(
 	}
 }
 
+/**
+ * Fail synth when `distribution` ends up with more cache behaviors than
+ * `limit`. Counted once, from the rendered distribution, after every behavior
+ * (construction-time or added later) is in.
+ */
+function validateCacheBehaviorCount(
+	distribution: cloudfront.Distribution,
+	routes: readonly ApiDirectRoute[],
+	limit: number,
+): void {
+	distribution.node.addValidation({
+		validate: (): string[] => {
+			const cfn = distribution.node.defaultChild as cloudfront.CfnDistribution;
+			const config = cdk.Stack.of(distribution).resolve(cfn.distributionConfig) as { cacheBehaviors?: unknown[] };
+			const additional = config.cacheBehaviors?.length ?? 0;
+			const total = 1 + additional;
+			if (total <= limit) return [];
+			const namespaces = routes.map((route) => `'${namespaceOf(route)}'`).join(', ');
+			return [
+				`This CloudFront distribution needs ${total} cache behaviors (the default and ${additional} more, ` +
+					`${routes.length} of them for the container API namespaces ${namespaces}), exceeding the limit of ` +
+					`${limit} per distribution. Move some of those namespaces onto a Lambda compute (the gateway serves ` +
+					'them), or, if AWS raised your account\'s "Cache behaviors per distribution" quota, set Hosting\'s ' +
+					'`frontDoor.features.quotas.cacheBehaviors` to it.',
+			];
+		},
+	});
+}
+
 /** Whether `distribution` has a web ACL — set at construction, as the managed distribution and Hosting do. */
 function hasWebAcl(distribution: cloudfront.Distribution): boolean {
 	const cfn = distribution.node.defaultChild as cloudfront.CfnDistribution;
@@ -135,10 +220,9 @@ function hasWebAcl(distribution: cloudfront.Distribution): boolean {
  * @internal
  */
 export function admitCloudFront(loadBalancer: elbv2.IApplicationLoadBalancer): void {
-	const marked = loadBalancer as unknown as Record<symbol, boolean | undefined>;
-	if (marked[CLOUDFRONT_ADMITTED]) return;
-	marked[CLOUDFRONT_ADMITTED] = true;
-	const lookup = new cr.AwsCustomResource(loadBalancer, 'CloudFrontOriginFacingPrefixList', {
+	// The lookup is the load balancer's child, so its presence marks the rule as added.
+	if (loadBalancer.node.tryFindChild(PREFIX_LIST_LOOKUP_ID)) return;
+	const lookup = new cr.AwsCustomResource(loadBalancer, PREFIX_LIST_LOOKUP_ID, {
 		onUpdate: {
 			service: 'EC2',
 			action: 'DescribeManagedPrefixLists',
