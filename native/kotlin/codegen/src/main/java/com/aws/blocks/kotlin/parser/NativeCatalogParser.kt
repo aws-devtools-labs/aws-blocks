@@ -17,12 +17,13 @@ private const val SCHEMA_VERSION = 1
 private const val TRANSFERABLE_KIND = "transferable"
 private const val TRANSFERABLE_ABI = "blocks-transferable-v1"
 private const val MAX_GENERIC_ARITY = 1
+private const val MAX_EXPORT_LENGTH = 64
 
 /** The only shape `import <kotlinPackage>.<Type>` accepts: dot-separated segments. */
 private val KOTLIN_PACKAGE = Regex("""[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*""")
 
-/** One identifier; a separator always joins two segments, never dangles. */
-private val EXPORT = Regex("""[A-Za-z][A-Za-z0-9]*([_-][A-Za-z0-9]+)*""")
+/** `EXPORT_GRAMMAR` in `validate-native-catalogs.ts` verbatim; `matches()` adds its anchors. */
+private val EXPORT = Regex("""[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*""")
 
 /** Absence is intentional and yields [NativeCatalogs.EMPTY]; malformed presence throws. */
 internal object NativeCatalogParser {
@@ -151,10 +152,16 @@ internal object NativeCatalogParser {
 
     private fun JsonObject.requireExport(path: String, id: String): String {
         val export = requireString("export", path)
+        // Length first: java.util.regex backtracks on the program stack, and EXPORT overflows it.
+        if (export.length > MAX_EXPORT_LENGTH) {
+            throw OpenRpcParseException(
+                "$path (\"${id.forDiagnostic()}\") \"export\" exceeds $MAX_EXPORT_LENGTH characters: ${export.length}",
+            )
+        }
         if (!EXPORT.matches(export)) {
             throw OpenRpcParseException(
-                "$path (\"${id.forDiagnostic()}\") \"export\" is not an identifier: " +
-                    "\"${export.forDiagnostic()}\"",
+                "$path (\"${id.forDiagnostic()}\") \"export\" is not a -, _ or . joined run of " +
+                    "alphanumeric segments starting with a letter: \"${export.forDiagnostic()}\"",
             )
         }
         return export

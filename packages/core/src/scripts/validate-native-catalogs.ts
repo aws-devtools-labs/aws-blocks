@@ -113,8 +113,14 @@ const PLATFORM_FIELD_GRAMMARS: Record<NativePlatform, Readonly<Record<string, Fi
 	},
 };
 
-/** An export must name a public type once a generator upper-camel-cases it. */
+/** An export must name a public type once each segment's first character is raised. */
 const EXPORT_GRAMMAR = /^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$/;
+
+/** Bounds an export before it is interpolated into generated source and diagnostics. */
+const MAX_EXPORT_LENGTH = 64;
+
+/** Keep a diagnostic on one log line even if a spec-supplied value carries a newline. */
+const escapeForDiagnostic = (value: string): string => value.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
 
 /**
  * Every generated Dart client imports this library, so a declared package of
@@ -492,13 +498,23 @@ function validateBindingShape(
 			});
 		}
 	}
-	if (isNonBlankString(binding.export) && !EXPORT_GRAMMAR.test(binding.export)) {
-		errors.push({
-			path: `${path}.export`,
-			message:
-				`Binding "export" must be a delimited run of alphanumeric segments starting with a letter, ` +
-				`got "${binding.export}" (${declaredBy})`,
-		});
+	const exportName = binding.export;
+	if (isNonBlankString(exportName)) {
+		if (exportName.length > MAX_EXPORT_LENGTH) {
+			errors.push({
+				path: `${path}.export`,
+				message:
+					`Binding "export" must be at most ${MAX_EXPORT_LENGTH} characters, ` +
+					`got ${exportName.length} (${declaredBy})`,
+			});
+		} else if (!EXPORT_GRAMMAR.test(exportName)) {
+			errors.push({
+				path: `${path}.export`,
+				message:
+					`Binding "export" must be a -, _ or . joined run of alphanumeric segments ` +
+					`starting with a letter, got "${escapeForDiagnostic(exportName)}" (${declaredBy})`,
+			});
+		}
 	}
 	return validateArity(binding.genericArity, path, declaredBy, errors);
 }

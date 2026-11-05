@@ -128,12 +128,10 @@ export interface FileBucketOptions {
 	 *   emptied, so a teardown would fail. Pass `removalPolicy: 'retain'` to use
 	 *   Object Lock in a sandbox.
 	 *
-	 * Decide at creation time: CloudFormation can only turn Object Lock on when it
-	 * creates the bucket, so adding `objectLock` to an already-deployed
-	 * FileBucket fails the deploy (use a new FileBucket id instead), and S3 can't
-	 * turn Object Lock off once it's on. Once a bucket has Object Lock, changing
-	 * `mode` or `retentionDays` is an in-place update that applies to new
-	 * versions only.
+	 * Adding `objectLock` to an already-deployed FileBucket is an in-place
+	 * update: CloudFormation enables Object Lock on the existing bucket. S3 can't
+	 * turn Object Lock off once it's on. Changing `mode` or `retentionDays` is
+	 * also an in-place update that applies to new versions only.
 	 *
 	 * @example
 	 * ```ts

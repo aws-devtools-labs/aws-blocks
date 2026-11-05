@@ -131,16 +131,17 @@ final class DeclaredBindingParserTests: XCTestCase {
         assertInvalidCatalog(catalogSpec(packages: packagesCatalog(module: "import")), contains: "is not usable as `import <module>`")
     }
 
-    func testExportThatDoesNotPascalCaseToATypeNameIsAnError() {
+    func testExportThatDoesNotMatchTheExportGrammarIsAnError() {
         for export in ["-", "3dHandle", "...", "1"] {
             assertInvalidCatalog(
                 catalogSpec(bindings: bindingsCatalog(binding(export: export))),
-                contains: "declares export '\(export)', which does not name a Swift type"
+                contains: "declares export '\(export)', which is not a -, _ or . joined run of "
+                    + "alphanumeric segments starting with a letter"
             )
         }
     }
 
-    func testExportThatPascalCasesToASwiftKeywordIsAnError() {
+    func testExportResolvingToASwiftKeywordIsAnError() {
         assertInvalidCatalog(catalogSpec(bindings: bindingsCatalog(binding(export: "Self"))), contains: "does not name a Swift type")
     }
 
@@ -195,13 +196,101 @@ final class DeclaredBindingParserTests: XCTestCase {
     }
 
     func testExportSeparatorsAreDroppedForUpperCamelCase() throws {
-        for export in ["device_link", "device-link", "device.link", "DEVICE_LINK"] {
+        for export in ["device_link", "device-link", "device.link"] {
             let model = try parser.parse(data: catalogSpec(bindings: bindingsCatalog(binding(export: export))))
             XCTAssertEqual(
                 model.declaredTransferableBindings["example-iot/device-link"]?.base,
                 "ExampleIotNative.DeviceLink",
                 "export '\(export)' must resolve to upper camel case"
             )
+        }
+    }
+
+    func testOnlyEachSegmentsFirstCharacterIsRaised() throws {
+        for (export, base) in [("iot_API", "IotAPI"), ("iot-API", "IotAPI"), ("DEVICE_LINK", "DEVICELINK")] {
+            let model = try parser.parse(data: catalogSpec(bindings: bindingsCatalog(binding(export: export))))
+            XCTAssertEqual(
+                model.declaredTransferableBindings["example-iot/device-link"]?.base,
+                "ExampleIotNative.\(base)",
+                "export '\(export)' must keep every character after a segment's first verbatim"
+            )
+        }
+    }
+
+    func testExportSeparatedByAColonIsAnError() {
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindingsCatalog(binding(export: "device:link"))),
+            contains: "declares export 'device:link', which is not a -, _ or . joined run of "
+                + "alphanumeric segments starting with a letter"
+        )
+    }
+
+    func testUpperCamelCaseRaisesSegmentsOnlyAtTheExportGrammarSeparators() {
+        XCTAssertEqual(upperCamelCase("device_link"), "DeviceLink")
+        XCTAssertEqual(upperCamelCase("device-link"), "DeviceLink")
+        XCTAssertEqual(upperCamelCase("device.link"), "DeviceLink")
+        // `pascalCase` splits on `:` for Cognito's `custom:email`. This must not:
+        // the separator alphabet is the producer's, and a wider one is dead permissiveness.
+        XCTAssertEqual(upperCamelCase("device:link"), "Device:link")
+    }
+
+    func testEveryExportTheGrammarAdmitsDerivesAValidSwiftIdentifier() {
+        var accepted = 0
+        func walk(_ candidate: String, _ remaining: Int) {
+            if !candidate.isEmpty, candidate.range(of: exportGrammar, options: .regularExpression) != nil {
+                accepted += 1
+                XCTAssertTrue(
+                    isValidSwiftIdentifier(upperCamelCase(candidate)),
+                    "export '\(candidate)' satisfies exportGrammar but derives "
+                        + "'\(upperCamelCase(candidate))', which does not name a Swift type"
+                )
+            }
+            guard remaining > 0 else { return }
+            for character in "aZ09-_.:\n" {
+                walk(candidate + String(character), remaining - 1)
+            }
+        }
+        walk("", 4)
+        XCTAssertEqual(
+            accepted,
+            386,
+            "the sweep must keep exercising the grammar's accepting path; this count is "
+                + "every accepted string over aZ09-_. to depth 4, so it moves if either changes"
+        )
+    }
+
+    func testAnExportWhoseSeparatorDoesNotJoinTwoSegmentsIsAnError() {
+        for export in ["device__link", "device.", ".link", "device-.link"] {
+            assertInvalidCatalog(
+                catalogSpec(bindings: bindingsCatalog(binding(export: export))),
+                contains: "declares export '\(export)', which is not a -, _ or . joined run of "
+                    + "alphanumeric segments starting with a letter"
+            )
+        }
+    }
+
+    func testAnExportCarryingALineTerminatorIsAnError() {
+        for export in ["deviceLink\\n", "\\ndeviceLink", "deviceLink\\r\\n"] {
+            assertInvalidCatalog(
+                catalogSpec(bindings: bindingsCatalog(binding(export: export))),
+                contains: "which is not a -, _ or . joined run of alphanumeric segments starting with a letter"
+            )
+        }
+    }
+
+    func testANewlineInARejectedExportCannotSplitTheGrammarDiagnostic() {
+        let spec = catalogSpec(
+            bindings: bindingsCatalog(
+                binding(id: "ev\\nAWSBLOCKS-NATIVE-999: forged", export: "deviceLink\\n")
+            )
+        )
+        XCTAssertThrowsError(try parser.parse(data: spec)) { error in
+            guard case CodegenError.invalidNativeCatalog(let detail) = error else {
+                return XCTFail("Expected CodegenError.invalidNativeCatalog, got \(error)")
+            }
+            XCTAssertTrue(detail.contains(#"ev\nAWSBLOCKS-NATIVE-999: forged"#), "got: \(detail)")
+            XCTAssertTrue(detail.contains(#"deviceLink\n"#), "got: \(detail)")
+            XCTAssertFalse(detail.contains("\n"), "the diagnostic must stay on one line, got: \(detail)")
         }
     }
 
@@ -360,7 +449,10 @@ final class DeclaredBindingParserTests: XCTestCase {
 
     func testMalformedMetadataIsRejectedEvenWhenTheBindingWouldBeDropped() {
         let bindings = bindingsCatalog(binding(id: "shadow", tag: "file-bucket/download", export: "9bad", arity: 0))
-        assertInvalidCatalog(catalogSpec(bindings: bindings), contains: "does not name a Swift type")
+        assertInvalidCatalog(
+            catalogSpec(bindings: bindings),
+            contains: "not a -, _ or . joined run of alphanumeric segments starting with a letter"
+        )
     }
 
     func testMalformedModuleIsRejectedEvenWhenThePackageIsOptedOut() {
