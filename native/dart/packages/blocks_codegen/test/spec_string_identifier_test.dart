@@ -139,7 +139,7 @@ void main() {
     });
 
     test('is sent as a parameter in its slot', () {
-      // Params are positional, so the spec name isn't sent (FX48).
+      // Params are positional, so the spec name isn't sent.
       expect(
         output,
         contains(

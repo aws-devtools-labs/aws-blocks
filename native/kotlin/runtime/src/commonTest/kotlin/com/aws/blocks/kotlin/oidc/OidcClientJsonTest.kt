@@ -32,7 +32,7 @@ private data class LoginMenu(
 
 /**
  * [OidcClient.json] decodes an `oidc/client` transferable wherever it sits in a model. A model
- * holding one used to throw `Unknown transferable: oidc/client` (R52).
+ * holding one used to throw `Unknown transferable: oidc/client`.
  */
 class OidcClientJsonTest {
 

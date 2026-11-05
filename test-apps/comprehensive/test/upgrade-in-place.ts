@@ -82,7 +82,7 @@
  *
  * Why a dedicated app rather than the comprehensive app: switching the
  * comprehensive app's `AuthCognito` instances to `Auth` would break its other
- * suites (task E1 owns that), and deploying all of its blocks twice would cost
+ * suites, and deploying all of its blocks twice would cost
  * far more than the two auth deploys this proof needs. The app lives in
  * `upgrade-in-place/app/` and is copied into each checkout at run time, because
  * the pre-refactor revision does not contain it. The BEFORE backend

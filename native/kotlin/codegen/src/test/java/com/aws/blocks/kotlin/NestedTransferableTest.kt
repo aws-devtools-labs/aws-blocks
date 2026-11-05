@@ -73,7 +73,7 @@ private fun Generated.shouldDeclareEveryReferencedSerializer() {
  * Kotlin hydrates a transferable through a kotlinx serializer. Only a transferable that was a
  * model's own property got one, so a transferable inside a list, a map or a nullable element
  * generated a model that didn't compile, a list of transferables returned directly threw at
- * runtime, and an `oidc/client` in a model threw `Unknown transferable: oidc/client` (R52).
+ * runtime, and an `oidc/client` in a model threw `Unknown transferable: oidc/client`.
  */
 class NestedTransferableTest : FunSpec({
 

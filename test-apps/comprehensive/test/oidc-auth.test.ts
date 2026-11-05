@@ -16,7 +16,7 @@ import { signInPoller } from './poll-for-signin.js';
 //   - the session cookie is `auth_<fullId>` (was `oidc_<…>_session`);
 //   - the user's provider is `signInProvider`, email/name are `attributes`;
 //   - federated sign-in actions are named `signIn:<provider id>`.
-// `userId` is unchanged (Q1): `${iss}:${sub}`.
+// `userId` is unchanged: `${iss}:${sub}`.
 const NotAuthenticated = AuthErrors.NotAuthenticated;
 
 /** `auth_<fullId>` session cookie of the instance whose id is `instanceId`. */
@@ -424,7 +424,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         const me = meCall.result;
         assert.strictEqual(me.userId, `${me.iss}:${me.sub}`, 'userId should be ${iss}:${sub}');
 
-        // Q1, checked independently of the session's own claims: the issuer the
+        // The unchanged `userId`, checked independently of the session's own claims: the issuer the
         // stub IdP advertises in discovery, plus the stub's subject for google.
         // AuthOIDC produced exactly this value, so `oidcProfiles` keys survive.
         const discovery = await (await fetch(`${baseUrl}/aws-blocks/auth/idp/google/.well-known/openid-configuration`)).json();
@@ -516,7 +516,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
 
       // Only POST signs out. `Auth` also serves GET on the sign-out path as the
-      // landing Cognito's hosted-UI `/logout` returns to (D6b): a 302 to
+      // landing Cognito's hosted-UI `/logout` returns to: a 302 to
       // `redirects.postSignOutPath` that changes no state, since a GET that
       // signed users out would be logout CSRF. (AuthOIDC served no GET: 404.)
       test('GET on the signout route only redirects — it does not sign out', async () => {
@@ -940,7 +940,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         // attaches every cookie it holds to every request. End that cookie
         // session first (the jar drops the cleared cookie), so only the bearer
         // token can authenticate the call below. A bearer token deliberately
-        // outlives signOut until it expires (L26).
+        // outlives signOut until it expires.
         const signoutResp = await fetch(`${baseUrl}/aws-blocks/auth/extras/signout`, { method: 'POST' });
         assert.strictEqual(signoutResp.status, 204);
 

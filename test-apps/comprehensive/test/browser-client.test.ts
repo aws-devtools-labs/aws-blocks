@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * The browser redirect client (`@aws-blocks/bb-auth/browser-client`, L69): a
+ * The browser redirect client (`@aws-blocks/bb-auth/browser-client`): a
  * web frontend on ANOTHER origin than the API signs in with a federated
  * provider, reads its session and signs out — against the running backend
  * (the dev server locally; the deployed stack in sandbox / production).

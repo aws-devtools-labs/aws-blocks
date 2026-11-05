@@ -39,7 +39,7 @@ final class InlineObjectPropertyTests: XCTestCase {
         XCTAssertFalse(models.contains("\npublic enum \(typeName):"), "\(typeName) must not be top-level", file: file, line: line)
     }
 
-    // MARK: - The L48 collision
+    // MARK: - Same-named inline properties of two schemas
 
     func testSameNamedInlinePropertiesOfTwoSchemasGetSeparateTypes() throws {
         let output = try models(schemas: """

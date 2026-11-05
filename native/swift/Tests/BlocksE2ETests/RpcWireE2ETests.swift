@@ -15,11 +15,11 @@ import XCTest
 /// leaves out an optional argument before a set one sends `null` in its slot, as the TypeScript client does, so
 /// `echoArgs(first: "a", middle: nil, last: "c")` reaches the server as `echoArgs("a", null, "c")`. The base
 /// generator appended only the optional arguments that were set and sent `["a","c"]`, which the server read as
-/// `middle = "c"` (FX46).
+/// `middle = "c"`.
 ///
 /// An optional parameter defaults to `nil` even when its schema is nullable (the spec generator writes every
 /// TypeScript `x?: T` as `oneOf [T, null]`), so a call can leave `middle` out: `echoArgs(first: "a", last: "c")`
-/// (FX50). Passing `nil` still compiles.
+/// Passing `nil` still compiles.
 final class RpcWireE2ETests: BlocksE2ETestCase {
 
     func testLeftOutMiddleOptionalKeepsTheLaterArgumentInItsSlot() async throws {

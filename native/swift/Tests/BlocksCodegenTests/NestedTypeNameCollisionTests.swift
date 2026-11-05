@@ -290,7 +290,7 @@ final class NestedTypeNameCollisionTests: XCTestCase {
     // MARK: - Warnings (fixture 09)
 
     func testUnionWithAFieldlessFallbackDoesntKeepTheDecodingError() throws {
-        // An empty object arm is the fieldless fallback. (Fixture 09's string arm was one until FX28: it now
+        // An empty object arm is the fieldless fallback. (Fixture 09's string arm used to be one: it now
         // carries its value, see `PrimitiveUnionArmTests`.)
         let query = #"{ "anyOf": [\#(object(["text": string])), { "type": "object", "properties": {} }] }"#
         let output = try generate(methods: [method("search", params: "[\(param("query", query))]", result: string)])

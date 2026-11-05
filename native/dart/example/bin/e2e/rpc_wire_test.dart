@@ -9,8 +9,8 @@ import 'harness.dart';
 /// `null` in its slot, as the TypeScript client does, so
 /// `echoArgs(first: 'a', last: 'c')` reaches the server as
 /// `echoArgs('a', null, 'c')`. The base generator sent the by-name map
-/// `{first: 'a', last: 'c'}`, which the server read as `middle = 'c'` (FX48;
-/// Kotlin's `RpcWireE2ETest`, FX45).
+/// `{first: 'a', last: 'c'}`, which the server read as `middle = 'c'` (see
+/// also Kotlin's `RpcWireE2ETest`).
 void main() async {
   final blocks = createBlocks();
 
@@ -44,7 +44,7 @@ void main() async {
   );
 
   // Why the client can't send by name: the server reads an object's values
-  // in order, so a left-out key moves the later values up (L64). If the
+  // in order, so a left-out key moves the later values up. If the
   // server starts rejecting or name-mapping object params, update this group.
   group('RPC wire: the server reads by-name params by position');
   final raw = BlocksClient(baseUrl: blocksUrl());

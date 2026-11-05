@@ -788,7 +788,7 @@ jobs:
       # Cognito's default sender (test-apps/native-bindings/aws-blocks/index.ts).
       E2E_FROM_EMAIL: ${{ secrets.E2E_FROM_EMAIL }}
       # JVM: the suite runs against the deployed stub IdP, like Dart and Swift
-      # (verified against a real sandbox, 2026-10-05; L50). iOS (Kotlin/Native)
+      # (verified against a real sandbox, 2026-10-05). iOS (Kotlin/Native)
       # hasn't been run against a deployed stub yet, so it keeps the real-IdP gate.
       RUN_OIDC: ${{ (matrix.suffix == 'jvm' || (vars.NATIVE_E2E_OIDC_ISSUER != '' && vars.NATIVE_E2E_OIDC_CLIENT_ID != '')) && '1' || '' }}
     steps:

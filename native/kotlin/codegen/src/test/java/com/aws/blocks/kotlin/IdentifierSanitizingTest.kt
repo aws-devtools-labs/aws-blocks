@@ -51,7 +51,7 @@ private fun generate(methods: List<String>, schemas: Map<String, String> = empty
  * `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:` or `\` (rejected on the JVM), a backtick or a control
  * character such as a line break (which end a backticked name). KotlinPoet threw "Can't escape
  * identifier" on the first kind, so a spec with a key `back\slash`, or a method `a.b.ping`
- * (namespace `a`, operation `b.ping`), got no Kotlin client at all (FX40); the others it wrote
+ * (namespace `a`, operation `b.ping`), got no Kotlin client at all; the others it wrote
  * into a backticked name they broke.
  *
  * Such a name is now sanitized to its words, camel-cased (`back\slash` -> `backSlash`, `b.ping`

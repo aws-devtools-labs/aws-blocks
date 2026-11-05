@@ -10,7 +10,7 @@ import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
 import { getTestSupport } from './test-support.js';
 
 // Ported from AuthBasic to the unified `Auth` block (instance id `auth`).
-// Error names follow the canonical `AuthErrors` vocabulary (the C1 mapping):
+// Error names follow the canonical `AuthErrors` vocabulary:
 //   InvalidCredentialsException → NotAuthorizedException
 //   UserAlreadyExistsException  → UsernameExistsException
 //   SessionExpiredException     → NotAuthenticatedException
@@ -63,13 +63,13 @@ const pollForCode = (api: typeof apiType, username: string, options?: PollForCod
 
 export function basicAuthTests(getApi: () => typeof apiType) {
 
-  // Every sign-up confirms with an emailed code (Q2). Locally the mock hands it
+  // Every sign-up confirms with an emailed code. Locally the mock hands it
   // to `codeDelivery`, which the backend records for `authGetLastCode`; on AWS
   // Cognito emails it and there is no backdoor to read it, so — like the
   // `authC` suite — this one runs against the local runtime only. Suites that
   // just need a signed-in user use `provisionConfirmedUser` (./test-support.ts),
   // which goes through the secret-gated `testSupport.provisionUser` there.
-  describe('Auth (email + password, formerly AuthBasic)', { skip: !isLocal && 'verification-code flow needs a mailbox (Q2: sign-up always confirms by email)' }, () => {
+  describe('Auth (email + password, formerly AuthBasic)', { skip: !isLocal && 'verification-code flow needs a mailbox (sign-up always confirms by email)' }, () => {
 
     // ── Sign Up (code-confirmed) ─────────────────────────────────────────
 
@@ -144,7 +144,7 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         } catch (e) {
           assert.ok(isAuthError(e, AuthErrors.InvalidPassword), `Expected ${AuthErrors.InvalidPassword}, got ${e}`);
           // The message describes this block's own policy (length only), the
-          // same locally and on AWS (L71).
+          // same locally and on AWS.
           assert.ok(e instanceof Error);
           assert.strictEqual(e.message, 'Password must be at least 6 characters.');
         }

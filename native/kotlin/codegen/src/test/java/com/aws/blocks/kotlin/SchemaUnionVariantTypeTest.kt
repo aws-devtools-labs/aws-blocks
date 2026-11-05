@@ -54,13 +54,13 @@ private fun String.count(needle: String): Int = windowed(needle.length).count { 
  * (`Holder.Payload`, beside `Holder.Event`) and keyed by the property's spec name, so two
  * variants whose `payload` properties are inline objects of different shapes registered one type:
  * every variant decoded its payload with the first variant's fields (`B.payload` with `x`, not
- * `y`), and the second shape was never declared. FX42 left it (R80 (d)): keying a variant's
+ * `y`), and the second shape was never declared. An earlier fix left it: keying a variant's
  * types per variant would rename the ones that are shared today and match (`NextStep` in the
  * auth fixtures).
  *
  * A same-named type is now shared only when it has the same shape (the same `TypeRef`, ignoring
  * descriptions): a variant whose type differs gets its own, allocated in the schema's scope as
- * FX29 and FX42 do (`Payload_2`, `_3`, …). Types that match keep the one name they have today,
+ * other nested types are (`Payload_2`, `_3`, …). Types that match keep the one name they have today,
  * and the same schema reached through several `$ref`s still declares its types once.
  */
 class SchemaUnionVariantTypeTest : FunSpec({

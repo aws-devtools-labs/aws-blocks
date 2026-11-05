@@ -77,7 +77,7 @@ final class PrimitiveUnionArmTests: XCTestCase {
         assertContains(output.api, "case query_Variant0(String)")
         assertContains(output.api, "case query_Variant1(Query_Variant1)")
         assertContains(output.api, "self = .query_Variant0(try decoder.singleValueContainer().decode(String.self))")
-        // Through a single-value container, so the encoder's strategies apply (FX35: a `Date` arm).
+        // Through a single-value container, so the encoder's strategies apply (for example to a `Date` arm).
         assertContains(output.api, """
                         case .query_Variant0(let payload):
                             var container = encoder.singleValueContainer()

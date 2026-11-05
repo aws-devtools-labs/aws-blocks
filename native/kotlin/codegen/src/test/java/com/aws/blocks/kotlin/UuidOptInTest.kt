@@ -39,7 +39,7 @@ private fun String.count(needle: String): Int = windowed(needle.length).count { 
 /**
  * `format: uuid` maps to `kotlin.uuid.Uuid`, which is `@ExperimentalUuidApi`, an opt-in marker at
  * level ERROR. The generated files used it without opting in, so a client generated from any spec
- * with a uuid didn't compile (fixture `06-format-types`, found by compiling every golden, R58).
+ * with a uuid didn't compile (fixture `06-format-types`, found by compiling every golden).
  */
 class UuidOptInTest : FunSpec({
 

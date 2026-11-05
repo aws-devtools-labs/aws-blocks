@@ -49,8 +49,8 @@ private fun String.count(needle: String): Int = windowed(needle.length).count { 
  * own type was never declared. Two kinds with one name (an enum `kind` beside an object `KIND`)
  * declared two `Kind`s ("Conflicting declarations"), and so did a nested type named like a
  * property of its class (a property `Meta` holding an inline object: Kotlin rejects a property and
- * a nested class of one name). FX29 fixed this for an operation's types
- * (`allocateNestedName`, R71); a schema's are now allocated per scope the same way: they are keyed
+ * a nested class of one name). An earlier fix did this for an operation's types
+ * (`allocateNestedName`); a schema's are now allocated per scope the same way: they are keyed
  * by the property's spec name, the first keeps its name, and a later sibling gets `_2`, `_3`, ….
  * The same schema reached through several `$ref`s still registers its nested types once, and the
  * wire name of each property is unchanged.

@@ -82,7 +82,7 @@ class GeneratedNameCollisionsRoundTripTest : FunSpec({
         received.map { it.getValue("method").jsonPrimitive.content } shouldBe listOf("api.send", "api.send")
     }
 
-    // FX45 (R81): params are positional on the server, so a left-out optional argument before a
+    // Params are positional on the server, so a left-out optional argument before a
     // set one is null in its slot, as the TypeScript client sends it. The base sent ["r","c","j"]:
     // the server read json's value as args.
     test("send() keeps json in its slot when args is left out, and leaves off trailing unset arguments") {

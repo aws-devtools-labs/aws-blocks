@@ -41,7 +41,7 @@ private fun String.count(needle: String): Int = windowed(needle.length).count { 
 /**
  * The parser accepted a `$ref` only to an object schema and threw
  * `$ref '#/components/schemas/Level' resolved to non-object type` for anything else, such as
- * an enum (R52). Dart and Swift accept such a `$ref`.
+ * an enum. Dart and Swift accept such a `$ref`.
  */
 class NonObjectSchemaRefTest : FunSpec({
 

@@ -40,7 +40,7 @@ private const val OBJECT_TEXT = """{ "type": "object", "properties": { "text": {
 /**
  * A union without a JSON-string discriminator over object arms used kotlinx's default sealed
  * serializer, which writes and reads `{"type": "<serial name>", …}`. Fixture 09's `anyOf [string,
- * {text}]` couldn't decode `"abc"` or `{"text":"t"}`, and encoded `{"type":"variant1"}` (R63, R73).
+ * {text}]` couldn't decode `"abc"` or `{"text":"t"}`, and encoded `{"type":"variant1"}`.
  * Each test here fails on the base generator unless it says it's a guard.
  */
 class UnionSerializerTest : FunSpec({
