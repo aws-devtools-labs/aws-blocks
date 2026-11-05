@@ -122,7 +122,9 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
     that deploy, its calls can get 503s for the minute or two the new tasks take
     to start, because the route switches before they're healthy.
   - The load balancer allows 100 namespaces by default (synth warns past that;
-    the quota can be raised), and an export name can be at most 112 characters.
+    the quota can be raised), and an export name can be at most 112 characters
+    (the load balancer's 128-character rule path limit, minus the 16-character
+    `/aws-blocks/api/` prefix).
 - **Everything else stays on the default compute:** namespaces without a
   `compute`, `RawRoute`s, and the auth routes.
 

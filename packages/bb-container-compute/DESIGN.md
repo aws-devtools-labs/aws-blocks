@@ -72,7 +72,9 @@ with readiness on port **8081** (503 while draining).
     fail synth (rename one export): shifting one to a free priority would make
     it depend on its neighbours, and break a later deploy that adds or removes one.
   - A rule's path pattern is at most 128 characters, so a longer namespace path
-    fails synth. Past the default quota of 100 rules per load balancer, synth warns.
+    fails synth: with the 16-character `/aws-blocks/api/` prefix, an export name
+    is at most 112. Past the default quota of 100 rules per load balancer, synth
+    warns.
 - **Only namespace paths reach a container; `RawRoute`s run on the default
   compute.** A namespace path is exact (`/aws-blocks/api/{name}`), so each one
   gets its own gateway resource and listener rule. `RawRoute` paths can be
@@ -96,9 +98,14 @@ with readiness on port **8081** (503 while draining).
   load balancer on 8080–8081 (one rule); the shared compute group (also used by
   in-VPC Lambdas and VPC endpoints) stays closed to inbound traffic. The load
   balancer admits only the gateway's VPC link, on the listener port range.
+- **Transport.** TLS terminates at API Gateway. The hop from the gateway's VPC
+  link to the load balancer, and on to the task, is plain HTTP inside the VPC:
+  the load balancer is internal and its security group admits only the VPC
+  link, and the tasks' security group admits only the load balancer, on the API
+  and readiness ports.
 - **Request URL.** A request reaches the task as the load balancer's hop — the
   integration URI's host, plain `http`, no stage — whereas the Lambda handler
-  gets the client's `Host` and the stage in its API Gateway event. So the
+  gets the gateway's `Host` and the stage in its API Gateway event. So the
   gateway stamps its public host and stage (`x-blocks-forwarded-host` /
   `x-blocks-forwarded-stage`, from its request context, overwriting any client
   value), and the container builds `ctx.request.url` from them: the same URL
