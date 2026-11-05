@@ -9,7 +9,7 @@ const scope = new Scope('my-app');
 const store = new KVStore(scope, 'app-store', {});
 const auth = new AuthBasic(scope, 'auth');
 
-// Agent: an AI agent with tools and conversation persistence. On deploy it runs
+// Agent: an AI agent with tools; each chat turn here is independent. On deploy it runs
 // against Amazon Bedrock; locally it uses the built-in `canned` provider — a
 // deterministic, keyword-driven fake that speaks the real model-stream protocol
 // with no AWS and no LLM, so `npm run dev` and the e2e below are reproducible.

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "blocksTemplate": "agent",
-  "blocksTemplateDescription": "Vite + vanilla-DOM frontend with an AI Agent (tools + conversation) end-to-end, deterministic canned model for dev",
+  "blocksTemplateDescription": "Vite + vanilla-DOM frontend with an AI Agent and a tool end-to-end, deterministic canned model for dev",
   "engines": {
     "node": ">=22.0.0"
   },

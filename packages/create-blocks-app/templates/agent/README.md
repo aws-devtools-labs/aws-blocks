@@ -1,7 +1,7 @@
 # Blocks Agent App
 
-A frontend on AWS Blocks with an **AI Agent** — model inference, tool calling,
-and conversation persistence — end to end. Locally the agent runs on the
+A frontend on AWS Blocks with an **AI Agent** — model inference and tool
+calling — end to end. Locally the agent runs on the
 built-in **`canned` provider**: a deterministic, keyword-driven fake model that
 speaks the real model-stream protocol with no AWS and no LLM, so `npm run dev`
 and the e2e tests are fully reproducible. On deploy it runs against Amazon
@@ -39,10 +39,12 @@ provider in `aws-blocks/index.ts`. The deployed model is `model.deployed`
 
 ## What's Included
 
-- **Agent** — model inference + tool calling + conversation persistence. The
-  `chat` method runs one turn server-side (`stream()` + `complete()`) and
-  returns the final text; the browser gets request/response (subscribe to the
-  Realtime channel for token streaming — see the Agent BB README).
+- **Agent** — model inference + tool calling. The `chat` method runs one
+  turn server-side (`stream()` + `complete()`) and returns the final text; the
+  browser gets request/response (subscribe to the Realtime channel for token
+  streaming — see the Agent BB README). Each turn is independent: to keep
+  history across turns, create a conversation with `createConversationId()`
+  and pass its id to `stream()` (see the Agent BB README).
 - **A tool with a side effect** — `saveNote` writes into the KVStore. The e2e
   asserts the note landed, proving the model requested the call and the handler
   ran end to end.
