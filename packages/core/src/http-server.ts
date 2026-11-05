@@ -56,8 +56,9 @@ export interface HttpServerHandle {
   readonly healthPort: number;
   /**
    * Stop accepting requests and report not-ready, wait up to `drainTimeoutMs` for
-   * in-flight requests (until their handlers settle), then close any remaining
-   * connections. Repeated calls return the same promise.
+   * in-flight requests (until their handlers settle and their responses have been
+   * written), then close any remaining connections. Repeated calls return the
+   * same promise.
    */
   close(): Promise<void>;
 }
@@ -140,7 +141,11 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     inFlight++;
     const socket = req.socket;
     busy.set(socket, (busy.get(socket) ?? 0) + 1);
-    // While draining, close each connection once its response is written.
+    // A request that arrives while draining closes its connection once its
+    // response is written. This flag only reaches requests that start after the
+    // drain began: a keep-alive connection whose request was already in flight
+    // is closed by the drain sweep (once idle) or by the final
+    // closeAllConnections() in drainAndClose.
     if (draining) res.shouldKeepAlive = false;
     const handled = handleRequest(req, res, env).catch((error: unknown) => {
       // The client went away mid-request (e.g. an aborted upload): nothing to answer.
@@ -200,7 +205,9 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     // the response short.
     net.Server.prototype.close.call(server);
     // Idle keep-alive connections would otherwise hold the drain open until they
-    // time out; one with a response in progress closes once it is written.
+    // time out, so close them now. A connection with a response in progress is
+    // left alone: it closes once written if its request arrived after the drain
+    // began, and otherwise at the final closeAllConnections() below.
     for (const socket of sockets) {
       if (!busy.has(socket)) socket.destroy();
     }
@@ -267,6 +274,9 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   const body = await readBody(req, bodyLimit);
   if (body === undefined) {
+    // Lingering holds the connection for a bounded time so the 413 arrives intact
+    // instead of being lost to a reset; it runs before the stamped-header check by
+    // design, since the body must be drained before any response is written.
     await discardRemainingBody(req);
     // Still uploading after the linger window: answer, then drop the connection.
     if (!req.complete) res.setHeader('Connection', 'close');
