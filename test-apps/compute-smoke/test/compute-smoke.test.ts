@@ -10,6 +10,7 @@
  * way `comprehensive`'s e2e.test.ts does:
  * - container-jobs.test.ts — container-backed AsyncJobs in the VPC
  * - api-namespace-compute.test.ts — an API namespace on its own serverless compute
+ * - container-api-namespace.test.ts — an API namespace on a container compute
  * - scope-compute.test.ts — blocks placed by their scope's compute (a namespace, a
  *   child scope's namespace, an AsyncJob, a CronJob), and a block's own compute
  *   winning over its scope's
@@ -32,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { apiNamespaceComputeTests } from './api-namespace-compute.test.js';
+import { containerApiNamespaceTests } from './container-api-namespace.test.js';
 import { containerCronTests } from './container-cron.test.js';
 import { containerJobTests } from './container-jobs.test.js';
 import { cronJobComputeTests } from './cron-job-compute.test.js';
@@ -121,6 +123,7 @@ describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute te
   });
 
   apiNamespaceComputeTests(ctx);
+  containerApiNamespaceTests(ctx);
   scopeComputeTests(ctx);
   cronJobComputeTests(ctx);
   containerJobTests(ctx);

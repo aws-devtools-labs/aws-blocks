@@ -31,8 +31,8 @@ new CronJob(scope, 'nightly', { compute: api, schedule: 'cron(0 2 * * ? *)', han
 | Workload | Option | Compute types |
 | --- | --- | --- |
 | `AsyncJob` | `compute` | `serverless`, `container` |
-| `ApiNamespace` | `compute` (4th argument) | `serverless` |
-| `CronJob` | `compute` | `serverless` |
+| `ApiNamespace` | `compute` (4th argument) | `serverless`, `container` |
+| `CronJob` | `compute` | `serverless`, `container` |
 | `Scope` (everything under it) | `compute` | `serverless`, `container` (see below) |
 
 ## Placing a whole scope
@@ -53,10 +53,10 @@ new CronJob(reports, 'nightly', { schedule: 'cron(0 2 * * ? *)', handler: async 
   both are child constructs of it.
 - **Nearest wins.** A block's own `compute` option, then the nearest scope that
   sets `compute`, then the app's default compute.
-- **A container scope** places its `AsyncJob`s and `CronJob`s on the container.
-  An `ApiNamespace` under it fails synth with an error naming the compute,
-  because it runs only on a `serverless` compute for now: give it its own
-  serverless `compute`, or create it outside that scope. Setting an
+- **A container scope** places its `AsyncJob`s, `CronJob`s and `ApiNamespace`s
+  on the container. Its namespaces are served through the container's load
+  balancer (see [API namespaces](#api-namespaces)), so the container needs at
+  least one running task: `scaling.minInstances: 0` fails synth. Setting an
   `AsyncJob`'s `maxConcurrencyPerCPU` still needs the container passed as the
   job's own `compute`, so the option is typed for it.
 - **`Realtime` and `RawRoute` stay on the default compute**, inside such a scope
@@ -101,6 +101,8 @@ type is a compile error.
   `AsyncJob` or `CronJob` on the compute and the default (or `queue-depth`)
   scaling strategy; anything else fails synth, because nothing would start a task
   or scale-in could stop one under a running job.
+  A compute that serves an `ApiNamespace` can't use `minInstances: 0` either:
+  nothing starts a task for an incoming request.
 - **Deploys restart running jobs.** A deploy that changes your code replaces
   the container's tasks. A stopping task stops taking new jobs and gives running
   ones up to about 2 minutes to finish (the AWS Fargate maximum). A job still
@@ -147,9 +149,31 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
   argument.
 - **Share a compute** across namespaces and `AsyncJob`s by passing the same
-  `Compute` to each; they then run in the same function.
-- **Only `serverless` computes serve API namespaces** today; passing a
-  `container` compute is a type error.
+  `Compute` to each; they then run in the same function (or the same
+  container tasks).
+- **A `container` compute serves its namespaces from its long-running tasks** —
+  no cold starts, CPU and memory sized for the workload:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ /* methods */ }), { compute: renderCompute });
+  ```
+
+  The gateway reaches the tasks through an internal Application Load Balancer
+  the compute provisions in the app's VPC (with a VPC link), so the same
+  ~29-second cap applies. One load balancer (and one listener) is shared by
+  every container in the backend that hosts a namespace.
+
+  - It needs at least one running task: `scaling.minInstances: 0` fails synth.
+  - Without a `scaling.strategy`, a container that also runs an `AsyncJob`
+    scales on CPU (the API load), and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during
+    that deploy, its calls can get 503s for the minute or two the new tasks take
+    to start, because the route switches before they're healthy.
+  - The load balancer allows 100 namespaces by default (synth warns past that;
+    the quota can be raised), and an export name can be at most 112 characters
+    (the load balancer's 128-character rule path limit, minus the 16-character
+    `/aws-blocks/api/` prefix).
 - **Everything else stays on the default compute:** namespaces with no
   `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
   routes (`/aws-blocks/auth/*`).

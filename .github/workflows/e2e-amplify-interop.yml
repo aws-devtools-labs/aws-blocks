@@ -72,6 +72,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -142,12 +143,19 @@ jobs:
           cd /tmp/amplify-interop-test
           node $GITHUB_WORKSPACE/scripts/smoke-test-amplify-interop.mjs
 
-      # Retries a delete that fails because CloudFormation gave up on a throttled
-      # REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their ampx holds the cdk.out lock), then runs the teardown,
+      # which retries a delete that fails because CloudFormation gave up on a
+      # throttled REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
+      # timeout-minutes stays as a backstop for the teardown's own budget. It
+      # runs only once AWS credentials were set up: before that nothing was
+      # deployed, and there is nothing to destroy it with.
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         timeout-minutes: 12
-        run: node scripts/ci/amplify-sandbox-teardown.mjs /tmp/amplify-interop-test int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
+        run: >
+          node scripts/ci/e2e-cleanup.mjs --
+          node scripts/ci/amplify-sandbox-teardown.mjs /tmp/amplify-interop-test int-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   e2e-amplify-interop:
     name: E2E Amplify Interop (Browser)
@@ -178,6 +186,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -202,10 +211,19 @@ jobs:
           cd test-apps/amplify-gen2
           npm run test:e2e
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, their ampx holds the cdk.out lock), then runs the teardown,
+      # which retries a delete that fails because CloudFormation gave up on a
+      # throttled REST API delete; see scripts/ci/amplify-sandbox-teardown.mjs.
+      # timeout-minutes stays as a backstop for the teardown's own budget. It
+      # runs only once AWS credentials were set up: before that nothing was
+      # deployed, and there is nothing to destroy it with.
       - name: Cleanup sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         timeout-minutes: 12
-        run: node scripts/ci/amplify-sandbox-teardown.mjs test-apps/amplify-gen2 amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
+        run: >
+          node scripts/ci/e2e-cleanup.mjs --
+          node scripts/ci/amplify-sandbox-teardown.mjs test-apps/amplify-gen2 amp-${GITHUB_RUN_ID:(-8)}-${GITHUB_RUN_ATTEMPT}
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. It always runs (even when the e2e jobs are skipped for

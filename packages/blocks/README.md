@@ -193,6 +193,7 @@ If resolution fails, fall back to `node_modules/@aws-blocks/blocks/docs`. That f
 | AWS account | not needed | required |
 | Data | persists to `.bb-data/` (delete to reset) | lives in AWS |
 | Use for | rapid iteration, tests | pre-production validation against real services |
+| On a file change | the server reloads | a code-only change is hotswapped into the deployed functions in seconds; a change that needs new or changed infrastructure (for example adding a `Database` or `Realtime`) runs a full deploy of the stack, which takes minutes |
 
 > **Deploying needs AWS credentials.** `npm run dev` is fully local (no creds). `npm run sandbox` and `npm run deploy` provision real AWS resources, so configure credentials first — e.g. `aws login` (AWS CLI 2.32.0 or later), `aws configure sso` + `aws sso login`, or `aws configure` (verify with `aws sts get-caller-identity`). If the credentials are missing or expired, both commands stop before synthesizing and print the sign-in or refresh command for the profile they use. Use **least-privilege** credentials scoped to the services your cdk-blocks deploy — not broad `Administrator` access.
 
