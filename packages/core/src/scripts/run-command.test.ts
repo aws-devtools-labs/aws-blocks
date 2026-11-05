@@ -24,4 +24,11 @@ describe('runCapture', () => {
   it('throws the spawn error for a missing command', () => {
     assert.throws(() => runCapture('definitely-not-a-real-command-xyz', []), /ENOENT/);
   });
+
+  it('throws when the command is killed by a signal', { skip: process.platform === 'win32' }, () => {
+    assert.throws(
+      () => runCapture(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")']),
+      /terminated by signal SIGTERM/,
+    );
+  });
 });
