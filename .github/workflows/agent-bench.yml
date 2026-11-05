@@ -66,7 +66,9 @@ jobs:
 
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
-    runs-on: ubuntu-latest
+    # Pinned: on the ubuntu-26.04 image the preinstalled JDK is writable by the agent user,
+    # which fails the isolation boundary check. Move back to ubuntu-latest once that is fixed.
+    runs-on: ubuntu-24.04
     # Not the sum of the step caps: the capped steps add up to 130 min (Playwright package 5,
     # browser install 25, agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3),
     # plus the uncapped ones. Even the main path (package 5 + browser 25 + agent 35 + build/test
@@ -696,7 +698,9 @@ jobs:
   # gate. Runs once per bench run, no AWS/OIDC.
   selfcheck:
     name: bench self-check (tsc + unit)
-    runs-on: ubuntu-latest
+    # Pinned: on the ubuntu-26.04 image the preinstalled JDK is writable by the agent user,
+    # which fails the isolation boundary check. Move back to ubuntu-latest once that is fixed.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
