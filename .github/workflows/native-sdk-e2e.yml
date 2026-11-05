@@ -5,6 +5,10 @@ name: Native SDK E2E
 # always-when-relevant, deploy a per-run sandbox to the shared repo account for
 # the sandbox suite (same-repo PRs + manual dispatch only), and expose a single
 # always-running required gate so unrelated/fork PRs don't block branch protection.
+#
+# Jobs check out the PR's merge commit (actions/checkout's default), the
+# commit GitHub reads this file from, so a step added on main finds its script
+# even when the PR branch predates it.
 
 on:
   pull_request:
@@ -36,7 +40,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - id: e2e-slot
         uses: ./.github/actions/e2e-slot
@@ -83,7 +86,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -120,7 +122,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -218,7 +219,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -270,7 +270,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -378,7 +377,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -403,6 +401,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -495,10 +494,14 @@ jobs:
           dart pub get
           dart run bin/e2e_test.dart
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run sandbox:destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   swift-e2e-sandbox:
     permissions:
@@ -523,7 +526,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -540,6 +542,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -599,10 +602,14 @@ jobs:
             -scheme BlocksE2ETests \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run sandbox:destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   kotlin-e2e-sandbox:
     permissions:
@@ -649,7 +656,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -666,6 +672,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -727,10 +734,14 @@ jobs:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run sandbox:destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. Always runs (even when the e2e jobs are skipped for unrelated

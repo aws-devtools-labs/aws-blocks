@@ -12,6 +12,7 @@ import { AuthUser } from '@aws-blocks/auth-common';
 import { BlocksAuth } from '@aws-blocks/auth-common';
 import { BlocksContext } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
 
@@ -75,6 +76,7 @@ export interface AuthBasicOptions {
     crossDomain?: boolean;
     lockout?: LockoutPolicy;
     logger?: ChildLogger;
+    metrics?: MetricsEmitter;
     passwordPolicy?: PasswordPolicy;
     sessionDuration?: number;
 }

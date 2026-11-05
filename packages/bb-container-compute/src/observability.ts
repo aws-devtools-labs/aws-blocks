@@ -10,6 +10,7 @@
 import { Duration } from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { GraphWidget, LogQueryWidget, Metric } from 'aws-cdk-lib/aws-cloudwatch';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 
 /**
  * Build Fargate health widgets: CPU utilization, memory utilization, and running
@@ -71,6 +72,52 @@ export function buildContainerHealthWidgets(serviceName: string, clusterName: st
 	});
 
 	return [[cpu, memory], [tasks]];
+}
+
+/**
+ * Build API widgets for a container that serves API namespaces behind its load
+ * balancer listener: requests and 5xx errors (from the tasks and from the load
+ * balancer itself), p99 latency, and healthy vs unhealthy tasks. Returns two rows.
+ *
+ * @param loadBalancer - The shared internal load balancer in front of the tasks.
+ * @param targetGroup - This compute's target group behind its listener.
+ * @param region - AWS region the widgets query in.
+ */
+export function buildContainerApiWidgets(
+	loadBalancer: elbv2.IApplicationLoadBalancer,
+	targetGroup: elbv2.IApplicationTargetGroup,
+	region: string,
+): IWidget[][] {
+	const period = Duration.seconds(60);
+	const requests = new GraphWidget({
+		title: 'API Requests and 5xx Errors',
+		width: 12,
+		height: 6,
+		region,
+		left: [targetGroup.metrics.requestCount({ period, label: 'Requests' })],
+		right: [
+			targetGroup.metrics.httpCodeTarget(elbv2.HttpCodeTarget.TARGET_5XX_COUNT, { period, label: 'Task 5xx' }),
+			loadBalancer.metrics.httpCodeElb(elbv2.HttpCodeElb.ELB_5XX_COUNT, { period, label: 'Load balancer 5xx (all container APIs)' }),
+		],
+	});
+	const latency = new GraphWidget({
+		title: 'API Latency (p99)',
+		width: 12,
+		height: 6,
+		region,
+		left: [targetGroup.metrics.targetResponseTime({ period, statistic: 'p99', label: 'p99' })],
+	});
+	const targets = new GraphWidget({
+		title: 'API Task Health',
+		width: 24,
+		height: 6,
+		region,
+		left: [
+			targetGroup.metrics.healthyHostCount({ period, label: 'Healthy' }),
+			targetGroup.metrics.unhealthyHostCount({ period, label: 'Unhealthy' }),
+		],
+	});
+	return [[requests, latency], [targets]];
 }
 
 /**

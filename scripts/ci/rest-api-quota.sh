@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Counts the REST APIs in the current account and region against the EDGE
+# quota (120 per region), for the REST API sweep in
+# .github/workflows/cleanup-stacks.yml. A full E2E run holds about 16 EDGE APIs
+# while it runs, and a saturated account fails every deploy that creates one.
+#
+# Usage: rest-api-quota.sh
+#
+# Writes "- REST APIs remaining: <total> total, <edge> EDGE (cap 120)" to stdout
+# and $GITHUB_STEP_SUMMARY, plus a warning annotation once the EDGE count
+# reaches REST_API_EDGE_WARN (default 80).
+#
+# A listing that fails or can't be parsed exits 1 with an error annotation
+# carrying the CLI's message. It is never read as zero APIs: that is how the
+# count went unseen while an account filled up.
+#
+# Tests: node --test scripts/ci/rest-api-quota.test.mjs
+
+set -euo pipefail
+# shellcheck source=scripts/ci/aws-error.sh
+. "$(dirname "${BASH_SOURCE[0]}")/aws-error.sh"
+
+cap=120
+warn=${REST_API_EDGE_WARN:-80}
+summary=${GITHUB_STEP_SUMMARY:-/dev/null}
+err=$(mktemp)
+trap 'rm -f "$err"' EXIT
+
+# get-rest-apis pages through every API itself. One call gives both counts,
+# with more attempts than the CLI default so one throttled call doesn't fail.
+if apis=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws apigateway get-rest-apis --output json 2>"$err") &&
+	counts=$(jq -er '(.items // []) | [length, (map(select(.endpointConfiguration.types // [] | index("EDGE"))) | length)] | @tsv' \
+		<<<"$apis" 2>>"$err"); then
+	read -r total edge <<<"$counts"
+	echo "- REST APIs remaining: $total total, $edge EDGE (cap $cap)" | tee -a "$summary"
+	if [ "$edge" -ge "$warn" ]; then
+		echo "::warning::$edge/$cap EDGE REST APIs in use, approaching the hard quota"
+	fi
+	exit 0
+fi
+
+# The reason has account ids masked: the log of a public repository is public.
+aws_annotate error "$err" "could not count REST APIs, so the EDGE quota ($cap) is unchecked"
+echo "- REST APIs remaining: unknown, the listing failed: $(aws_error_reason "$err")" | tee -a "$summary"
+exit 1
