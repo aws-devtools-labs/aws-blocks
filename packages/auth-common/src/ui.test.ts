@@ -1,10 +1,10 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { beforeEach, describe, test } from 'node:test';
 import { Window } from 'happy-dom';
-import type { AuthState, AuthAction, AuthUser } from './index.js';
+import type { AuthAction, AuthState, AuthUser } from './index.js';
 import type { AuthStateApi } from './ui.js';
 
 // ---------------------------------------------------------------------------
@@ -32,8 +32,12 @@ class BroadcastChannelShim {
 			}
 		}
 	}
-	addEventListener(_type: string, fn: any) { this.listeners.push(fn); }
-	removeEventListener(_type: string, fn: any) { this.listeners = this.listeners.filter((f) => f !== fn); }
+	addEventListener(_type: string, fn: any) {
+		this.listeners.push(fn);
+	}
+	removeEventListener(_type: string, fn: any) {
+		this.listeners = this.listeners.filter((f) => f !== fn);
+	}
 	close() {}
 }
 
@@ -51,7 +55,15 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, AccountMenuBar, StatusMessage, onAuthChange, broadcastAuthChange, submitAuthAction } = await import('./ui.js');
+const {
+	Authenticator,
+	AuthenticatedContent,
+	AccountMenuBar,
+	StatusMessage,
+	onAuthChange,
+	broadcastAuthChange,
+	submitAuthAction,
+} = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,14 +73,22 @@ function signedOutState(actions?: AuthAction[]): AuthState {
 	return {
 		state: 'signedOut',
 		actions: actions ?? [
-			{ name: 'signIn', label: 'Sign In', fields: [
-				{ name: 'username', label: 'Username', type: 'text', required: true },
-				{ name: 'password', label: 'Password', type: 'password', required: true },
-			]},
-			{ name: 'signUp', label: 'Create Account', fields: [
-				{ name: 'username', label: 'Username', type: 'text', required: true },
-				{ name: 'password', label: 'Password', type: 'password', required: true },
-			]},
+			{
+				name: 'signIn',
+				label: 'Sign In',
+				fields: [
+					{ name: 'username', label: 'Username', type: 'text', required: true },
+					{ name: 'password', label: 'Password', type: 'password', required: true },
+				],
+			},
+			{
+				name: 'signUp',
+				label: 'Create Account',
+				fields: [
+					{ name: 'username', label: 'Username', type: 'text', required: true },
+					{ name: 'password', label: 'Password', type: 'password', required: true },
+				],
+			},
 		],
 	};
 }
@@ -81,11 +101,15 @@ function signedInState(): AuthState {
 	};
 }
 
-function mockApi(initial: AuthState): AuthStateApi & { calls: { action: string; fields: Record<string, string> }[]; nextState: AuthState } {
+function mockApi(
+	initial: AuthState,
+): AuthStateApi & { calls: { action: string; fields: Record<string, string> }[]; nextState: AuthState } {
 	const api = {
 		calls: [] as { action: string; fields: Record<string, string> }[],
 		nextState: initial,
-		async getAuthState() { return api.nextState; },
+		async getAuthState() {
+			return api.nextState;
+		},
 		async setAuthState(input: any) {
 			const { action, ...fields } = input;
 			api.calls.push({ action, fields });
@@ -105,7 +129,6 @@ async function flush() {
 // ---------------------------------------------------------------------------
 
 describe('Authenticator', () => {
-
 	test('renders sign-in form when signed out', async () => {
 		const api = mockApi(signedOutState());
 		const el = Authenticator(api);
@@ -132,7 +155,7 @@ describe('Authenticator', () => {
 		// Find the Sign In button and its sibling inputs
 		const buttons = Array.from(el.querySelectorAll('button'));
 		const signInBtn = buttons.find((b) => b.textContent === 'Sign In');
-		assert.ok(signInBtn, `Should find Sign In button. Found: ${buttons.map(b => b.textContent)}`);
+		assert.ok(signInBtn, `Should find Sign In button. Found: ${buttons.map((b) => b.textContent)}`);
 
 		const actionDiv = signInBtn!.parentElement!;
 		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
@@ -220,7 +243,13 @@ describe('Authenticator', () => {
 				url: 'https://myco.okta.com/authorize',
 				method: 'GET',
 				fields: [
-					{ name: 'redirect_uri', label: 'Redirect', type: 'hidden', required: true, defaultValue: 'https://myapp.com/callback' },
+					{
+						name: 'redirect_uri',
+						label: 'Redirect',
+						type: 'hidden',
+						required: true,
+						defaultValue: 'https://myapp.com/callback',
+					},
 				],
 			},
 		]);
@@ -329,14 +358,22 @@ describe('Authenticator', () => {
 		// value flowing on submit even though the visible input is gone.
 		const api = mockApi({
 			state: 'confirmingSignUp',
-			actions: [{
-				name: 'confirmSignUp',
-				label: 'Confirm Account',
-				fields: [
-					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
-					{ name: 'code', label: 'Verification Code', type: 'text', required: true, defaultValue: '111111' },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmSignUp',
+					label: 'Confirm Account',
+					fields: [
+						{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+						{
+							name: 'code',
+							label: 'Verification Code',
+							type: 'text',
+							required: true,
+							defaultValue: '111111',
+						},
+					],
+				},
+			],
 		});
 		const el = Authenticator(api, {
 			actions: { confirmSignUp: { fields: { code: { hidden: true } } } },
@@ -450,7 +487,11 @@ describe('Authenticator', () => {
 						id: 'cred-stub',
 						type: 'public-key',
 						rawId: new ArrayBuffer(2),
-						response: { clientDataJSON: new ArrayBuffer(2), authenticatorData: new ArrayBuffer(2), signature: new ArrayBuffer(2) },
+						response: {
+							clientDataJSON: new ArrayBuffer(2),
+							authenticatorData: new ArrayBuffer(2),
+							signature: new ArrayBuffer(2),
+						},
 						getClientExtensionResults: () => ({}),
 						toJSON: () => ({ id: 'cred-stub', type: 'public-key' }),
 					} as any;
@@ -467,23 +508,31 @@ describe('Authenticator', () => {
 
 		const passkeyState: AuthState = {
 			state: 'confirmingSignIn',
-			actions: [{
-				name: 'confirmSignIn',
-				label: 'Use Passkey',
-				capability: 'webauthn-get',
-				fields: [
-					{ name: 'session', label: 'Session', type: 'hidden', required: true, defaultValue: 'sess-1' },
-					{ name: 'challenge', label: 'Challenge', type: 'hidden', required: true, defaultValue: 'webauthn' },
-					{
-						name: 'credentialRequestOptions',
-						label: 'opts',
-						type: 'hidden',
-						required: true,
-						defaultValue: '{"challenge":"abc","rpId":"localhost"}',
-					},
-					{ name: 'credential', label: 'Credential', type: 'hidden', required: true },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmSignIn',
+					label: 'Use Passkey',
+					capability: 'webauthn-get',
+					fields: [
+						{ name: 'session', label: 'Session', type: 'hidden', required: true, defaultValue: 'sess-1' },
+						{
+							name: 'challenge',
+							label: 'Challenge',
+							type: 'hidden',
+							required: true,
+							defaultValue: 'webauthn',
+						},
+						{
+							name: 'credentialRequestOptions',
+							label: 'opts',
+							type: 'hidden',
+							required: true,
+							defaultValue: '{"challenge":"abc","rpId":"localhost"}',
+						},
+						{ name: 'credential', label: 'Credential', type: 'hidden', required: true },
+					],
+				},
+			],
 		};
 		const api = mockApi(passkeyState);
 		const el = Authenticator(api);
@@ -620,30 +669,48 @@ describe('Authenticator forms (password managers)', () => {
 			const form = actionEl(el, 'signIn');
 			input(form, 'username').value = 'alice';
 			input(form, 'password').value = 'secret';
-			if (how === 'click') (form.querySelector('[data-testid="authenticator-submit"]') as HTMLButtonElement).click();
-			else input(form, 'username').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+			if (how === 'click')
+				(form.querySelector('[data-testid="authenticator-submit"]') as HTMLButtonElement).click();
+			else
+				input(form, 'username').dispatchEvent(
+					new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+				);
 			await flush();
 			assert.strictEqual(api.calls.length, 1, `${how}: one setAuthState call`);
 		}
 	});
 
 	test('autocomplete is set for password managers; a field override wins', async () => {
-		const code: AuthAction = { name: 'confirmSignUp', label: 'Confirm', fields: [
-			{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
-			{ name: 'code', label: 'Verification Code', type: 'text', required: true },
-		] };
-		const reset: AuthAction = { name: 'confirmResetPassword', label: 'Reset', fields: [
-			{ name: 'code', label: 'Reset Code', type: 'text', required: true },
-			{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
-		] };
-		const signUp: AuthAction = { name: 'signUp', label: 'Create Account', fields: [
-			{ name: 'username', label: 'Username', type: 'text', required: true },
-			{ name: 'password', label: 'Password', type: 'password', required: true },
-			{ name: 'email', label: 'Email', type: 'email', required: true },
-		] };
+		const code: AuthAction = {
+			name: 'confirmSignUp',
+			label: 'Confirm',
+			fields: [
+				{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+				{ name: 'code', label: 'Verification Code', type: 'text', required: true },
+			],
+		};
+		const reset: AuthAction = {
+			name: 'confirmResetPassword',
+			label: 'Reset',
+			fields: [
+				{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+				{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+			],
+		};
+		const signUp: AuthAction = {
+			name: 'signUp',
+			label: 'Create Account',
+			fields: [
+				{ name: 'username', label: 'Username', type: 'text', required: true },
+				{ name: 'password', label: 'Password', type: 'password', required: true },
+				{ name: 'email', label: 'Email', type: 'email', required: true },
+			],
+		};
 		const signIn = signedOutState().actions[0];
 		const api = mockApi(signedOutState([signIn, signUp, code, reset]));
-		const el = Authenticator(api, { actions: { resetPassword: {}, confirmSignUp: { fields: { code: { autocomplete: 'off' } } } } });
+		const el = Authenticator(api, {
+			actions: { resetPassword: {}, confirmSignUp: { fields: { code: { autocomplete: 'off' } } } },
+		});
 		await flush();
 		assert.strictEqual(input(actionEl(el, 'signIn'), 'username').autocomplete, 'username');
 		assert.strictEqual(input(actionEl(el, 'signIn'), 'password').autocomplete, 'current-password');
@@ -657,7 +724,6 @@ describe('Authenticator forms (password managers)', () => {
 });
 
 describe('AuthenticatedContent', () => {
-
 	test('renders content when signed in', async () => {
 		const api = mockApi(signedInState());
 		const el = AuthenticatedContent(api, (user) => {
@@ -686,11 +752,15 @@ describe('AuthenticatedContent', () => {
 		const api = mockApi(signedOutState());
 		const fallback = document.createElement('div');
 		fallback.textContent = 'Please sign in';
-		const el = AuthenticatedContent(api, (user) => {
-			const span = document.createElement('span');
-			span.textContent = `Hello ${user.username}`;
-			return span;
-		}, fallback);
+		const el = AuthenticatedContent(
+			api,
+			(user) => {
+				const span = document.createElement('span');
+				span.textContent = `Hello ${user.username}`;
+				return span;
+			},
+			fallback,
+		);
 		await flush();
 
 		assert.ok(el.textContent?.includes('Please sign in'));
@@ -700,11 +770,15 @@ describe('AuthenticatedContent', () => {
 		const api = mockApi(signedInState());
 		const fallback = document.createElement('div');
 		fallback.textContent = 'Please sign in';
-		const el = AuthenticatedContent(api, (user) => {
-			const span = document.createElement('span');
-			span.textContent = `Hello ${user.username}`;
-			return span;
-		}, fallback);
+		const el = AuthenticatedContent(
+			api,
+			(user) => {
+				const span = document.createElement('span');
+				span.textContent = `Hello ${user.username}`;
+				return span;
+			},
+			fallback,
+		);
 		await flush();
 
 		assert.ok(el.textContent?.includes('Hello alice'));
@@ -726,11 +800,12 @@ describe('AuthenticatedContent', () => {
 });
 
 describe('onAuthChange', () => {
-
 	test('calls callback immediately with current user', async () => {
 		const api = mockApi(signedInState());
-		let received: any ;
-		const unsub = onAuthChange(api, (user) => { received = user; });
+		let received: any;
+		const unsub = onAuthChange(api, (user) => {
+			received = user;
+		});
 		await flush();
 
 		assert.deepStrictEqual(received, { userId: 'alice', username: 'alice' });
@@ -740,7 +815,9 @@ describe('onAuthChange', () => {
 	test('calls callback with null when signed out', async () => {
 		const api = mockApi(signedOutState());
 		let received: any = 'not-called';
-		const unsub = onAuthChange(api, (user) => { received = user; });
+		const unsub = onAuthChange(api, (user) => {
+			received = user;
+		});
 		await flush();
 
 		assert.strictEqual(received, null);
@@ -754,7 +831,10 @@ describe('onAuthChange', () => {
 		const api = mockApi(signedOutState());
 		let called = false;
 		let received: any = 'sentinel';
-		const unsub = onAuthChange(api, (user) => { called = true; received = user; });
+		const unsub = onAuthChange(api, (user) => {
+			called = true;
+			received = user;
+		});
 		// No `await flush()` here — synchronous emission is the whole point.
 		assert.strictEqual(called, true, 'callback must fire synchronously on subscribe');
 		assert.strictEqual(received, null, 'cold signed-out load emits null synchronously');
@@ -770,7 +850,9 @@ describe('onAuthChange', () => {
 		// A subsequent subscribe must emit the known user synchronously, and must
 		// NOT flash null → user — the dedupe suppresses the redundant refresh.
 		const seen: any[] = [];
-		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+		const unsub = onAuthChange(api, (user) => {
+			seen.push(user);
+		});
 		assert.strictEqual(seen.length, 1, 'warm-cache subscribe emits exactly once, synchronously');
 		assert.deepStrictEqual(seen[0], { userId: 'alice', username: 'alice' });
 
@@ -783,11 +865,15 @@ describe('onAuthChange', () => {
 
 	test('does not throw or strand the UI when getAuthState rejects', async () => {
 		const api = mockApi(signedOutState());
-		api.getAuthState = async () => { throw new Error('network down'); };
+		api.getAuthState = async () => {
+			throw new Error('network down');
+		};
 
 		const seen: any[] = [];
 		// Subscribing must not throw even though hydration will reject.
-		const unsub = onAuthChange(api, (user) => { seen.push(user); });
+		const unsub = onAuthChange(api, (user) => {
+			seen.push(user);
+		});
 
 		// Synchronous first frame still painted from the (cold) cache.
 		assert.strictEqual(seen.length, 1, 'sync first frame emitted before the rejection');
@@ -812,7 +898,9 @@ describe('onAuthChange', () => {
 
 		// First subscribe: sync null frame, then the hydration rejects.
 		const seen1: any[] = [];
-		const unsub1 = onAuthChange(api, (user) => { seen1.push(user); });
+		const unsub1 = onAuthChange(api, (user) => {
+			seen1.push(user);
+		});
 		await flush();
 		assert.strictEqual(calls, 1, 'first hydration attempted');
 
@@ -820,7 +908,9 @@ describe('onAuthChange', () => {
 		// cache.hydrating instead of stranding a rejected promise — and resolve
 		// to the now-available signed-in user.
 		const seen2: any[] = [];
-		const unsub2 = onAuthChange(api, (user) => { seen2.push(user); });
+		const unsub2 = onAuthChange(api, (user) => {
+			seen2.push(user);
+		});
 		await flush();
 		assert.strictEqual(calls, 2, 'rejected hydration is retried, not replayed');
 		assert.ok(
@@ -835,7 +925,9 @@ describe('onAuthChange', () => {
 	test('reacts to broadcastAuthChange', async () => {
 		const api = mockApi(signedOutState());
 		const events: any[] = [];
-		const unsub = onAuthChange(api, (user) => { events.push(user); });
+		const unsub = onAuthChange(api, (user) => {
+			events.push(user);
+		});
 		await flush();
 
 		broadcastAuthChange({ userId: 'bob', username: 'bob' });
@@ -849,7 +941,9 @@ describe('onAuthChange', () => {
 	test('unsubscribe stops callbacks', async () => {
 		const api = mockApi(signedOutState());
 		let callCount = 0;
-		const unsub = onAuthChange(api, () => { callCount++; });
+		const unsub = onAuthChange(api, () => {
+			callCount++;
+		});
 		await flush();
 
 		const countAfterInit = callCount;
@@ -868,11 +962,12 @@ describe('onAuthChange', () => {
 // ---------------------------------------------------------------------------
 
 describe('submitAuthAction (issue #185)', () => {
-
 	test('sign-in fires onAuthChange exactly once with the new user', async () => {
 		const api = mockApi(signedOutState());
 		const users: (AuthUser | null)[] = [];
-		onAuthChange(api, (u) => { users.push(u); });
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
 		await flush();
 
 		const before = users.length;
@@ -888,7 +983,9 @@ describe('submitAuthAction (issue #185)', () => {
 	test('sign-out notifies onAuthChange with null', async () => {
 		const api = mockApi(signedInState());
 		const users: (AuthUser | null)[] = [];
-		onAuthChange(api, (u) => { users.push(u); });
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
 		await flush();
 
 		const before = users.length;
@@ -904,12 +1001,19 @@ describe('submitAuthAction (issue #185)', () => {
 	test('retriable failure does not broadcast and returns the state for inline errors', async () => {
 		const api = mockApi(signedOutState());
 		const users: (AuthUser | null)[] = [];
-		onAuthChange(api, (u) => { users.push(u); });
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
 		await flush();
 
 		const before = users.length;
 		api.nextState = { state: 'confirmingSignIn', retriable: true, error: 'Wrong code', actions: [] };
-		const result = await submitAuthAction(api, { action: 'confirmSignIn', challenge: 'code', session: 's', code: '000000' });
+		const result = await submitAuthAction(api, {
+			action: 'confirmSignIn',
+			challenge: 'code',
+			session: 's',
+			code: '000000',
+		});
 		await flush();
 
 		assert.strictEqual(result.retriable, true, 'should return the retriable state');
@@ -920,11 +1024,16 @@ describe('submitAuthAction (issue #185)', () => {
 	test('mid-flow challenge state does not broadcast', async () => {
 		const api = mockApi(signedOutState());
 		const users: (AuthUser | null)[] = [];
-		onAuthChange(api, (u) => { users.push(u); });
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
 		await flush();
 
 		const before = users.length;
-		api.nextState = { state: 'confirmingSignIn', actions: [{ name: 'confirmSignIn', label: 'Confirm', fields: [] }] };
+		api.nextState = {
+			state: 'confirmingSignIn',
+			actions: [{ name: 'confirmSignIn', label: 'Confirm', fields: [] }],
+		};
 		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
 		await flush();
 
@@ -936,20 +1045,24 @@ describe('submitAuthAction (issue #185)', () => {
 		const api = mockApi(signedOutState());
 		const el = Authenticator(api);
 		const users: (AuthUser | null)[] = [];
-		onAuthChange(api, (u) => { users.push(u); });
+		onAuthChange(api, (u) => {
+			users.push(u);
+		});
 		await flush();
 
 		const before = users.length;
 		api.nextState = {
 			state: 'confirmingSignIn',
-			actions: [{
-				name: 'confirmSignIn',
-				label: 'Confirm Code',
-				fields: [
-					{ name: 'code', label: 'Code', type: 'text', required: true },
-					{ name: 'session', label: '', type: 'hidden', required: true, defaultValue: 'sess-123' },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmSignIn',
+					label: 'Confirm Code',
+					fields: [
+						{ name: 'code', label: 'Code', type: 'text', required: true },
+						{ name: 'session', label: '', type: 'hidden', required: true, defaultValue: 'sess-123' },
+					],
+				},
+			],
 		};
 
 		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
@@ -972,7 +1085,9 @@ describe('submitAuthAction (issue #185)', () => {
 		const api = mockApi(signedOutState());
 		const el = Authenticator(api);
 		let broadcasts = 0;
-		onAuthChange(api, () => { broadcasts++; });
+		onAuthChange(api, () => {
+			broadcasts++;
+		});
 		await flush();
 
 		const before = broadcasts;
@@ -1000,7 +1115,6 @@ describe('submitAuthAction (issue #185)', () => {
 // ---------------------------------------------------------------------------
 
 describe('test hooks', () => {
-
 	function testId(root: ParentNode, id: string) {
 		return root.querySelector(`[data-testid="${id}"]`);
 	}
@@ -1036,15 +1150,17 @@ describe('test hooks', () => {
 	test('field hooks follow the field names the BB emits, hidden fields included', async () => {
 		const api = mockApi({
 			state: 'confirmingPasswordReset',
-			actions: [{
-				name: 'confirmResetPassword',
-				label: 'Reset Password',
-				fields: [
-					{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
-					{ name: 'code', label: 'Reset Code', type: 'text', required: true },
-					{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
-				],
-			}],
+			actions: [
+				{
+					name: 'confirmResetPassword',
+					label: 'Reset Password',
+					fields: [
+						{ name: 'username', label: 'Username', type: 'hidden', required: true, defaultValue: 'alice' },
+						{ name: 'code', label: 'Reset Code', type: 'text', required: true },
+						{ name: 'newPassword', label: 'New Password', type: 'password', required: true },
+					],
+				},
+			],
 		});
 		const el = Authenticator(api);
 		await flush();
@@ -1082,15 +1198,25 @@ describe('test hooks', () => {
 	});
 
 	test('external actions expose the same wrapper, field and submit hooks', async () => {
-		const api = mockApi(signedOutState([{
-			name: 'signIn:google',
-			label: 'Sign in with Google',
-			url: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
-			method: 'GET',
-			fields: [
-				{ name: 'redirect_uri', label: 'Redirect', type: 'hidden', required: true, defaultValue: 'https://myapp.com/callback' },
-			],
-		}]));
+		const api = mockApi(
+			signedOutState([
+				{
+					name: 'signIn:google',
+					label: 'Sign in with Google',
+					url: 'https://accounts.google.com/o/oauth2/auth?client_id=test',
+					method: 'GET',
+					fields: [
+						{
+							name: 'redirect_uri',
+							label: 'Redirect',
+							type: 'hidden',
+							required: true,
+							defaultValue: 'https://myapp.com/callback',
+						},
+					],
+				},
+			]),
+		);
 		const el = Authenticator(api);
 		await flush();
 
@@ -1102,11 +1228,27 @@ describe('test hooks', () => {
 	});
 
 	test('an unavailable external action renders a disabled button with its reason, and never navigates', async () => {
-		const hint = "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
-		const api = mockApi(signedOutState([
-			{ name: 'signIn:google', label: 'Sign in with Google', url: '/aws-blocks/auth/signin/google', method: 'GET', fields: [], unavailable: hint },
-			{ name: 'signIn:okta', label: 'Sign in with Okta', url: '/aws-blocks/auth/signin/okta', method: 'GET', fields: [] },
-		]));
+		const hint =
+			"Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally.";
+		const api = mockApi(
+			signedOutState([
+				{
+					name: 'signIn:google',
+					label: 'Sign in with Google',
+					url: '/aws-blocks/auth/signin/google',
+					method: 'GET',
+					fields: [],
+					unavailable: hint,
+				},
+				{
+					name: 'signIn:okta',
+					label: 'Sign in with Okta',
+					url: '/aws-blocks/auth/signin/okta',
+					method: 'GET',
+					fields: [],
+				},
+			]),
+		);
 		const el = Authenticator(api);
 		await flush();
 
@@ -1136,13 +1278,29 @@ describe('test hooks', () => {
 	// the quoted-attribute lookup and the exact-match behavior both here and in
 	// CUSTOMIZING-AUTH-UI.md.
 	test('provider-suffixed action names keep the suffix in the hook', async () => {
-		const api = mockApi(signedOutState([
-			{ name: 'signIn', label: 'Sign In', fields: [
-				{ name: 'username', label: 'Username', type: 'text', required: true },
-			]},
-			{ name: 'signIn:google', label: 'Sign in with Google', url: 'https://accounts.google.com/o/oauth2/auth', method: 'GET', fields: [] },
-			{ name: 'signIn:okta', label: 'Sign in with Okta', url: 'https://example.okta.com/oauth2/v1/authorize', method: 'POST', fields: [] },
-		]));
+		const api = mockApi(
+			signedOutState([
+				{
+					name: 'signIn',
+					label: 'Sign In',
+					fields: [{ name: 'username', label: 'Username', type: 'text', required: true }],
+				},
+				{
+					name: 'signIn:google',
+					label: 'Sign in with Google',
+					url: 'https://accounts.google.com/o/oauth2/auth',
+					method: 'GET',
+					fields: [],
+				},
+				{
+					name: 'signIn:okta',
+					label: 'Sign in with Okta',
+					url: 'https://example.okta.com/oauth2/v1/authorize',
+					method: 'POST',
+					fields: [],
+				},
+			]),
+		);
 		const el = Authenticator(api);
 		await flush();
 

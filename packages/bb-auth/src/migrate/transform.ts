@@ -200,16 +200,21 @@ function unwrap(ts: TypeScript, node: TS.Expression): TS.Expression {
 	return n;
 }
 
-/** `name` is imported from `@aws-blocks/bb-auth` or the umbrella. */
-function importsNewName(ts: TypeScript, sf: TS.SourceFile, name: string): boolean {
+/**
+ * Local name → imported name of each value binding of an import of `@aws-blocks/bb-auth` or the umbrella
+ * that is not in `skip` (the declarations the codemod rewrites).
+ */
+function newNameBindings(ts: TypeScript, sf: TS.SourceFile, skip: ReadonlySet<TS.Node>): Map<string, string> {
+	const out = new Map<string, string>();
 	for (const stmt of sf.statements) {
-		if (!ts.isImportDeclaration(stmt)) continue;
+		if (!ts.isImportDeclaration(stmt) || skip.has(stmt) || stmt.importClause?.isTypeOnly) continue;
 		const spec = moduleText(ts, stmt.moduleSpecifier);
 		if (spec !== NEW_MODULE && !(spec && UMBRELLA_MODULES.has(spec))) continue;
 		const b = stmt.importClause?.namedBindings;
-		if (b && ts.isNamedImports(b) && b.elements.some((el) => el.name.text === name)) return true;
+		if (!b || !ts.isNamedImports(b)) continue;
+		for (const el of b.elements) if (!el.isTypeOnly) out.set(el.name.text, (el.propertyName ?? el.name).text);
 	}
-	return false;
+	return out;
 }
 
 /** Every name bound at the top level by something other than an old-auth import. */
@@ -244,8 +249,8 @@ function topLevelNames(ts: TypeScript, sf: TS.SourceFile): Set<string> {
  * An unaliased import of an old name is renamed (`AuthCognito` → `Auth`), and so
  * is every use of it, unless the new name is already bound by something else.
  */
-function renamesImport(ts: TypeScript, sf: TS.SourceFile, taken: ReadonlySet<string>, to: string): boolean {
-	return !(taken.has(to) && !importsNewName(ts, sf, to));
+function renamesImport(taken: ReadonlySet<string>, to: string): boolean {
+	return !taken.has(to);
 }
 
 /** Analyse one file for the project-wide pass. */
@@ -341,7 +346,7 @@ function classExports(
 		const b = stmt.importClause?.namedBindings;
 		if (!b || !ts.isNamedImports(b)) continue;
 		for (const el of b.elements) {
-			if (!el.propertyName && classes.has(el.name.text) && renamesImport(ts, sf, taken, 'Auth'))
+			if (!el.propertyName && classes.has(el.name.text) && renamesImport(taken, 'Auth'))
 				renamedImports.add(el.name.text);
 		}
 	}
@@ -611,7 +616,7 @@ class FileMigrator {
 				const to = rule.to;
 				if (typeof to === 'string' && to !== imported && !s.aliased) {
 					// Keep the old local name (aliased) when the new one is already taken.
-					if (renamesImport(ts, this.sf, takenNames, to)) this.renames.set(s.local, to);
+					if (renamesImport(takenNames, to)) this.renames.set(s.local, to);
 					else s.local = imported;
 				}
 			}
@@ -640,7 +645,7 @@ class FileMigrator {
 		const to = rule?.to;
 		if (this.ts.isImportSpecifier(el) && typeof to === 'string' && to !== imported && !s.aliased) {
 			// Keep the old local name (aliased) when the new one is already taken.
-			if (renamesImport(this.ts, this.sf, takenNames, to)) this.renames.set(s.local, to);
+			if (renamesImport(takenNames, to)) this.renames.set(s.local, to);
 		}
 		return s;
 	}
@@ -734,6 +739,8 @@ class FileMigrator {
 	private queueImportJobs(): void {
 		const seenByModule = new Map<string, Set<string>>();
 		const planned: PlannedImport[] = [];
+		// `import { Auth } from '@aws-blocks/bb-auth'` already there: a renamed `AuthCognito` must not bind it twice.
+		const bound = newNameBindings(this.ts, this.sf, new Set(this.importJobs.map((j) => j.decl)));
 		for (const job of this.importJobs) {
 			const { decl } = job;
 			const current = moduleText(this.ts, decl.moduleSpecifier) ?? '';
@@ -748,7 +755,8 @@ class FileMigrator {
 				const text = this.renderSpec(s, goneTodos);
 				if (text === null) continue;
 				const key = text.replace(/^type /, '');
-				if (seen.has(key)) continue;
+				const [name, local = name] = key.split(' as ');
+				if (seen.has(key) || (this.ts.isImportDeclaration(decl) && bound.get(local) === name)) continue;
 				seen.add(key);
 				out.push(text);
 			}

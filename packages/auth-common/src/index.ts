@@ -3,16 +3,16 @@
 
 import type { BlocksContext } from '@aws-blocks/core';
 
+// Canonical auth error vocabulary + guards. See `errors.ts`.
+export type { AuthErrorName } from './errors.js';
+export { AuthErrors, isAuthError, isAuthErrorName } from './errors.js';
+
 // Re-export the state-machine API shape so server-side BBs can annotate
 // their `createApi()` return type without importing from the `/ui` subpath
 // (which pulls in DOM-dependent UI helpers). The discriminated payload
 // map is re-exported alongside so customers calling `setAuthState`
 // directly get the typed overload.
-export type { AuthActionPayloadMap, AuthActionInput, AuthMfaSetting, AuthStateApi, AuthUserOf } from './ui.js';
-
-// Canonical auth error vocabulary + guards. See `errors.ts`.
-export { AuthErrors, isAuthError, isAuthErrorName } from './errors.js';
-export type { AuthErrorName } from './errors.js';
+export type { AuthActionInput, AuthActionPayloadMap, AuthMfaSetting, AuthStateApi, AuthUserOf } from './ui.js';
 
 /**
  * Common user shape returned by all auth Building Blocks.

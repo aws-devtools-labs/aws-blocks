@@ -459,8 +459,29 @@ describe('the store selects which provider options apply', () => {
 		assert.deepStrictEqual(conflicts({ providers: { okta: { ...okta, clientSecret: null } } }), [
 			['providers.okta.clientSecret', message],
 		]);
+		// A falsy secret is no secret either (the CDK layer used to be the only one to refuse it).
+		for (const falsy of ['', 0, false]) {
+			assert.deepStrictEqual(conflicts({ providers: { okta: { ...okta, clientSecret: falsy } } }), [
+				['providers.okta.clientSecret', message],
+			]);
+		}
 		assert.deepStrictEqual(conflicts({ providers: { okta: { ...okta, clientSecret: secret } } }), []);
 		assert.deepStrictEqual(conflicts({ store: 'builtin', providers: { okta } }), []);
+	});
+
+	test("a 'cognito' block's oidc attributesRequestMethod must be 'GET' or 'POST'", () => {
+		const cognito = (attributesRequestMethod: unknown) => ({
+			providers: { okta: { ...okta, clientSecret: secret, attributesRequestMethod } },
+		});
+		const message = (got: string) => `must be \`'GET'\` or \`'POST'\`, got ${got}`;
+		assert.deepStrictEqual(invalid(cognito('PUT')), [
+			['providers.okta.attributesRequestMethod', message('the string "PUT"')],
+		]);
+		assert.deepStrictEqual(invalid(cognito('get')), [
+			['providers.okta.attributesRequestMethod', message('the string "get"')],
+		]);
+		assert.deepStrictEqual(invalid(cognito(null)), [['providers.okta.attributesRequestMethod', message('`null`')]]);
+		for (const ok of ['GET', 'POST', undefined]) assert.deepStrictEqual(invalid(cognito(ok)), []);
 	});
 
 	test("a 'builtin' provider's clientSecret must be a reference, never the secret itself (read only at the first token exchange)", () => {
@@ -1095,6 +1116,46 @@ describe('every entry rejects unknown options at construction', () => {
 			message(() => assertKnownAuthOptions('auth', null)),
 			/options must be an object, got null\.$/,
 		);
+	});
+
+	describe("a 'cognito' block's oidc entry with a falsy clientSecret or a bad attributesRequestMethod is rejected by every entry (only synth refused them)", () => {
+		const okta = { type: 'oidc', issuer: 'https://o.example.com', clientId: 'c' };
+		const cases: [unknown, RegExp][] = [
+			...['', 0, false].map((clientSecret): [unknown, RegExp] => [
+				{ providers: { okta: { ...okta, clientSecret } } },
+				/^Auth 'auth': option conflicts with `store: 'cognito'`:\n {2}- `providers\.okta\.clientSecret` is required with `store: 'cognito'`/,
+			]),
+			[
+				{ providers: { okta: { ...okta, clientSecret: secret, attributesRequestMethod: 'PUT' } } },
+				/^Auth 'auth': invalid option value:\n {2}- `providers\.okta\.attributesRequestMethod` must be `'GET'` or `'POST'`, got the string "PUT"\n/,
+			],
+		];
+		test('mock (default entry)', () => {
+			for (const [options, expected] of cases) {
+				assert.match(
+					message(() => new Auth(root(), 'auth', untyped(options))),
+					expected,
+				);
+			}
+		});
+		test('AWS runtime entry', () => {
+			for (const [options, expected] of cases) {
+				assert.match(
+					message(() => new AwsAuth(root(), 'auth', untyped(options))),
+					expected,
+				);
+			}
+		});
+		test('CDK entry (fails synth)', () => {
+			for (const [options, expected] of cases) {
+				const stack = Object.assign(new cdk.Stack(new cdk.App(), 'OptValOidcStack'), { id: 'OptValOidcStack' });
+				// Test plumbing: a bare stack is an acceptable CDK parent.
+				assert.match(
+					message(() => new CdkAuth(stack as unknown as ScopeParent, 'auth', untyped(options))),
+					expected,
+				);
+			}
+		});
 	});
 
 	describe('the resolver rejects a type the store does not accept, and a block with no way to sign in, in every entry', () => {

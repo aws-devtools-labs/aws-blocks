@@ -29,8 +29,9 @@ import {
 	federationConfigKeys,
 } from './cdk/contract.js';
 import { deriveDomainPrefix } from './cdk/federation.js';
-import { DOMAIN_PREFIX_PATTERN, RESERVED_DOMAIN_WORDS } from './cdk/federation-providers.js';
+import { DOMAIN_PREFIX_PATTERN, idpRegistrations, RESERVED_DOMAIN_WORDS } from './cdk/federation-providers.js';
 import { Auth } from './index.cdk.js';
+import type { ResolvedAuthOptions } from './resolve-options.js';
 import {
 	type CdkSynthResult,
 	type CfnResourceJson,
@@ -1168,6 +1169,21 @@ describe('Auth federation — contract helpers', () => {
 				{ id: 'corp', kind: 'saml', providerName: 'corp' },
 				{ id: 'viaCognito', kind: 'oidc', providerName: 'viaCognito' },
 			],
+		);
+	});
+
+	test('idpRegistrations backstops a falsy clientSecret and a bad attributesRequestMethod (the constructor refuses both first)', () => {
+		const okta = { issuer: 'https://dev-1.okta.com', clientId: '0oa1', federateVia: 'cognito' };
+		// Test plumbing: resolved options as no constructor would let them through (option-validation.test.ts).
+		const resolved = (entry: Record<string, unknown>) =>
+			({ oidcProviders: { okta: { ...okta, ...entry } } }) as unknown as ResolvedAuthOptions;
+		assert.throws(
+			() => idpRegistrations(resolved({ clientSecret: '' })),
+			/^Error: Auth: providers\.okta is a `type: 'oidc'` provider of a Cognito user pool but has no `clientSecret`\./,
+		);
+		assert.throws(
+			() => idpRegistrations(resolved({ clientSecret: secret, attributesRequestMethod: 'PUT' })),
+			/^Error: Auth: providers\.okta\.attributesRequestMethod must be 'GET' or 'POST'\.$/,
 		);
 	});
 

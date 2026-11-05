@@ -429,7 +429,7 @@ describe('resolveOptions — backstops for untyped callers', () => {
 		assert.throws(() => resolveOptions(untyped as AuthOptions), { message: /^Auth: `store` must be/ });
 	});
 
-	it('drops a leftover federateVia from a provider entry', () => {
+	it("a leftover federateVia on an entry is replaced by the store's (cognito)", () => {
 		const options: unknown = {
 			providers: { okta: { type: 'oidc', issuer, clientId: 'c', clientSecret: secret, federateVia: 'direct' } },
 		};

@@ -201,6 +201,8 @@ describe("stub IdP — store: 'builtin', end to end on the mock", () => {
 
 		const bob = new TestBrowser();
 		const refused = await signInThroughPicker(bob, 'u-2');
+		assert.strictEqual(refused.status, 403);
+		assert.strictEqual((await refused.json()).name, AuthErrors.NotAuthorized);
 		assert.notStrictEqual(refused.headers.get('location'), '/', 'not landed');
 		assert.ok(!bob.jar.has(`auth_${auth.fullId}`), 'no session cookie');
 		await assert.rejects(auth.requireAuth(bob.context(server.origin)), { status: 401 });

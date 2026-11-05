@@ -47,7 +47,7 @@ function multiBlockSnippets(): Snippet[] {
 		: [];
 	return [...DOCS, ...changesets].flatMap((file) => {
 		const md = readFileSync(file, 'utf8');
-		return [...md.matchAll(/```(?:ts|typescript)\n([\s\S]*?)```/g)]
+		return [...md.matchAll(/```(?:ts|typescript|tsx)[^\n]*\r?\n([\s\S]*?)```/g)]
 			.filter((m) => (m[1] ?? '').split('new Auth(').length > 2)
 			.map((m) => ({
 				label: `${file.slice(REPO_ROOT.length + 1)}:${md.slice(0, m.index).split('\n').length}`,
@@ -87,7 +87,7 @@ describe('two-block snippets load in the mock runtime', () => {
 
 	test('the docs show two-block apps', () => {
 		const inPackages = snippets.filter((s) => s.label.startsWith('packages/'));
-		assert.ok(inPackages.length >= 4, `found ${snippets.map((s) => s.label).join(', ')}`);
+		assert.strictEqual(inPackages.length, 4, `found ${snippets.map((s) => s.label).join(', ')}`);
 	});
 
 	for (const s of snippets) {

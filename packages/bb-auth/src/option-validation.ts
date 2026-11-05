@@ -822,8 +822,9 @@ export function findUnknownAuthOptions(options: unknown): UnknownOption[] {
  * `boolean` option set to anything but `true` / `false`, or a group with a
  * boolean shorthand set to anything but a boolean or an object (FX53); a
  * `providers` value that is not a plain object, a `__proto__` provider id, or
- * a provider entry that is not an object. Values under an unknown key are not
- * checked (the key is reported instead).
+ * a provider entry that is not an object; a `'cognito'` block's `type: 'oidc'`
+ * entry with an `attributesRequestMethod` other than `'GET'` / `'POST'`. Values
+ * under an unknown key are not checked (the key is reported instead).
  *
  * @internal
  */
@@ -836,7 +837,8 @@ export function findInvalidAuthOptions(options: unknown): InvalidOption[] {
  * a provider key only the same `type` on the other store accepts
  * (`groupsClaim` on a `'cognito'` block's `type: 'oidc'` entry,
  * `attributesRequestMethod` on a `'builtin'` one), a `'cognito'` block's
- * `type: 'oidc'` entry without `clientSecret`, and `allowBearerAuth` as an
+ * `type: 'oidc'` entry without `clientSecret` (or with a falsy one: `''`,
+ * `0`, `false`), and `allowBearerAuth` as an
  * object on a `'builtin'` block. Empty for a `store` value the resolver rejects.
  *
  * @internal
@@ -860,12 +862,21 @@ function findAll(options: unknown): Findings {
 	const providers = field(options, 'providers');
 	if (store === 'cognito' && isPlainObject(providers)) {
 		for (const [id, entry] of Object.entries(providers)) {
-			if (field(entry, 'type') === 'oidc' && field(entry, 'clientSecret') == null) {
+			if (field(entry, 'type') !== 'oidc') continue;
+			// Any falsy secret (`''`, `0`, `false`) is no secret: the CDK layer refuses it at synth, so every layer must.
+			if (!field(entry, 'clientSecret')) {
 				out.conflicts.push({
 					path: join(join('providers', id), 'clientSecret'),
 					message:
 						"is required with `store: 'cognito'` (the default): Cognito federates OIDC as a confidential client. " +
 						"Add one, or move the provider to a `store: 'builtin'` block for a public (PKCE-only) client.",
+				});
+			}
+			const method = field(entry, 'attributesRequestMethod');
+			if (method !== undefined && method !== 'GET' && method !== 'POST') {
+				out.invalid.push({
+					path: join(join('providers', id), 'attributesRequestMethod'),
+					message: `must be \`'GET'\` or \`'POST'\`, got ${describeValue(method)}`,
 				});
 			}
 		}
