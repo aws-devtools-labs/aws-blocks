@@ -38,7 +38,7 @@ export const ApiNamespace: ApiNamespaceConstructor;
 export interface ApiNamespaceOptions {
     compute?: {
         resolve(): {
-            readonly type: 'serverless';
+            readonly type: 'serverless' | 'container';
         };
     };
     httpErrorStatus?: boolean;
@@ -340,7 +340,12 @@ export function _resetSdkRegistry(): void;
 export function resolvePerInstanceConcurrency(maxConcurrencyPerCPU: number, vcpu: number): number;
 
 // @public
-export function runContainer(): Promise<void>;
+export function runContainer(options?: RunContainerOptions): Promise<void>;
+
+// @public
+export interface RunContainerOptions {
+    backend?: unknown;
+}
 
 // @public
 export function runJobWorker(resolveJob: (fullId: string) => {
