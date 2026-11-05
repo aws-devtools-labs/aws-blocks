@@ -42,8 +42,8 @@ after(() => {
 	rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function synth(preset: 'sandbox' | 'production'): ProbeResult {
-	const probe = join(tmpDir, `probe.${preset}.mjs`);
+function synth(preset: 'sandbox' | 'production', withCustomerSecret = false): ProbeResult {
+	const probe = join(tmpDir, `probe.${preset}.${withCustomerSecret}.mjs`);
 	writeFileSync(
 		probe,
 		`
@@ -52,6 +52,7 @@ import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { Realtime } from '@aws-blocks/bb-realtime';
+import { AppSetting } from '@aws-blocks/bb-app-setting';
 
 const schema = { '~standard': { version: 1, vendor: 'blocks-test', validate: (value) => ({ value }) } };
 const app = new cdk.App({ context: { sandboxMode: ${preset === 'sandbox' ? "'true'" : "'false'"} } });
@@ -62,6 +63,7 @@ const stack = await BlocksStack.create(app, 'RtStack', {
 	defaultComputeFactory: (root) => new LambdaCompute(root, 'DefaultCompute'),
 });
 new Realtime(stack, 'rt', { namespaces: { chat: Realtime.namespace(schema) } });
+${withCustomerSecret ? "new AppSetting(stack, 'customer-key', { secret: true });" : ''}
 const resources = Template.fromStack(stack).toJSON().Resources;
 const warnings = Annotations.fromStack(stack).findWarning('*', Match.anyValue()).map((m) => String(m.entry.data));
 console.log('__PROBE__' + JSON.stringify({ resources, warnings }));
@@ -124,5 +126,57 @@ test('sandbox preset: token-secret is the SSM SecureString written by the secret
 	assert.deepStrictEqual(
 		warnings.filter((w) => w.includes('SsmSecretsStoreOutsideSandbox')),
 		[],
+	);
+});
+
+/** The functions that load the Blocks config (the computes), with their environment. */
+function computeEnvironments(resources: Record<string, CfnResource>): Record<string, unknown>[] {
+	return ofType(resources, 'AWS::Lambda::Function')
+		.map((f) => (f.Properties?.Environment as { Variables?: Record<string, unknown> } | undefined)?.Variables ?? {})
+		.filter((vars) => 'BLOCKS_CONFIG_BUCKET' in vars);
+}
+
+const TOKEN_ARN_ENV = 'BLOCKS_SECRET_ARN_RTSTACK_RT_TOKEN_SECRET';
+
+test('production preset: the token secret ARN arrives with the compute update (Lambda environment)', () => {
+	const { resources } = synth('production');
+	const [secretId] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::SecretsManager::Secret') ?? [];
+	const envs = computeEnvironments(resources);
+	assert.ok(envs.length >= 1, 'at least one compute loads the config');
+	for (const vars of envs) assert.deepStrictEqual(vars[TOKEN_ARN_ENV], { Ref: secretId });
+});
+
+test('sandbox preset: no secret ARN environment variable on the compute', () => {
+	const { resources } = synth('sandbox');
+	for (const vars of computeEnvironments(resources)) {
+		assert.deepStrictEqual(
+			Object.keys(vars).filter((k) => k.startsWith('BLOCKS_SECRET_ARN_')),
+			[],
+		);
+	}
+});
+
+// Upgrade from an SSM stack: the token key leaves the secret-init custom
+// resource. With other SSM secrets left, its Update handler deletes the names
+// that dropped out of the list; with none left, the whole custom resource leaves
+// the template and its Delete handler removes the old parameter.
+test('upgrade, production preset with a customer secret AppSetting: the token key leaves the bulk list', () => {
+	const { resources } = synth('production', true);
+	const bulk = ofType(resources, 'AWS::CloudFormation::CustomResource').filter(
+		(r) => 'Parameters' in (r.Properties ?? {}),
+	);
+	assert.strictEqual(bulk.length, 1);
+	assert.deepStrictEqual(bulk[0].Properties?.Parameters, [{ name: '/RtStack-customer-key' }]);
+});
+
+test('upgrade, production preset with Realtime only: no secret-init custom resource at all', () => {
+	const { resources } = synth('production');
+	assert.deepStrictEqual(
+		ofType(resources, 'AWS::CloudFormation::CustomResource').filter((r) => 'Parameters' in (r.Properties ?? {})),
+		[],
+	);
+	assert.strictEqual(
+		Object.keys(resources).some((id) => id.startsWith('BlocksSecretInitFn') || id.startsWith('BlocksSecretsBulk')),
+		false,
 	);
 });
