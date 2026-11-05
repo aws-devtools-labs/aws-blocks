@@ -3898,4 +3898,19 @@ describe('Hosting — skipping the frontend build', () => {
     });
     assert.ok(!built(), 'buildCommand should not run');
   });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 names the variable when the adapter output is missing (Next.js: .next without .open-next)', () => {
+    fs.mkdirSync(path.join(tmpDir, '.next'), { recursive: true });
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    const stack = new Stack(new App(), 'SkipBuildNextStack');
+    assert.throws(
+      () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, framework: 'nextjs', buildCommand: BUILD }),
+      (err: Error) => {
+        assert.match(err.message, /OpenNext output not found/);
+        assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD=1 skips the frontend build/);
+        return true;
+      },
+    );
+    assert.ok(!built(), 'buildCommand should not run');
+  });
 });

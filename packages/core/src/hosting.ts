@@ -921,6 +921,36 @@ const DEFAULT_BUILD_DIRS: Record<string, string> = {
   static: 'dist',
 };
 
+/**
+ * A framework adapter error for a build output that isn't there: the
+ * SPA/static output dir, OpenNext's `.open-next/`, Nitro's `.output/`, the
+ * SvelteKit and Astro build dirs.
+ */
+const MISSING_BUILD_OUTPUT_ERROR = /^[A-Za-z]*(?:OutputNotFound|OutputMissing)Error$/;
+
+/**
+ * Run the adapter. Under `BLOCKS_SKIP_FRONTEND_BUILD=1` the adapter doesn't
+ * build either, and the output it deploys can differ from the dir checked
+ * above (Next.js deploys `.open-next/`, not `.next/`). So a missing-output
+ * error from the adapter also says the variable skipped the build.
+ */
+const runAdapterNamingSkippedBuild = (
+  run: () => DeployManifest,
+  reuseBuild: ReturnType<typeof frontendBuildReuse>,
+): DeployManifest => {
+  try {
+    return run();
+  } catch (error) {
+    if (reuseBuild !== 'required' || !(error instanceof Error) || !MISSING_BUILD_OUTPUT_ERROR.test(error.name)) {
+      throw error;
+    }
+    throw new Error(
+      `${error.message}\n${SKIP_FRONTEND_BUILD_ENV}=1 skips the frontend build, so build the frontend first or unset it.`,
+      { cause: error },
+    );
+  }
+};
+
 // ─── Construct ───────────────────────────────────────────────────
 
 /**
@@ -1174,7 +1204,7 @@ export class Hosting extends Construct {
           ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),
           ...(reuseBuild ? { reuseBuild } : {}),
         },
-        () => adapter(root),
+        () => runAdapterNamingSkippedBuild(() => adapter(root), reuseBuild),
       ),
     );
 
