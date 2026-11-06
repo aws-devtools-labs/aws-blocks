@@ -53,14 +53,6 @@ private fun digest(value: String): String {
  *
  * A blank id is treated as no id: it identifies nothing, so an unset build property arriving as an
  * empty string should not quietly create a directory that cannot be traced back to an application.
- *
- * [storageRoot] replaces the home directory, for tests.
  */
-internal fun applicationStorageDirectoryOrNull(applicationId: String?, storageRoot: String?): File? =
-    applicationId
-        ?.takeIf { it.isNotBlank() }
-        ?.let { id ->
-            storageRoot
-                ?.let { applicationStorageDirectory(id, File(it)) }
-                ?: applicationStorageDirectory(id)
-        }
+internal fun applicationStorageDirectoryOrNull(applicationId: String?): File? =
+    applicationId?.takeIf { it.isNotBlank() }?.let { applicationStorageDirectory(it) }

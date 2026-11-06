@@ -9,5 +9,5 @@ private val sharedJar: PersistentCookiesStorage by lazy {
     PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, applicationId = null))
 }
 
-internal actual fun cookieJar(applicationId: String?, storageRoot: String?): PersistentCookiesStorage =
+internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage =
     sharedJar

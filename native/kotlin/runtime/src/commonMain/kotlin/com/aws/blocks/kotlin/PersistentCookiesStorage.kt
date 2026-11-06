@@ -25,7 +25,7 @@ internal const val COOKIE_STORE_NAME = "cookies"
  * writes second replaces what the other had added rather than adding to it. Sharing is what keeps
  * two instances — an environment switcher, say — from silently dropping each other's sessions.
  */
-internal expect fun cookieJar(applicationId: String?, storageRoot: String? = null): PersistentCookiesStorage
+internal expect fun cookieJar(applicationId: String?): PersistentCookiesStorage
 
 /**
  * A [CookiesStorage] that keeps cookies in memory and mirrors the whole jar to [store] under a

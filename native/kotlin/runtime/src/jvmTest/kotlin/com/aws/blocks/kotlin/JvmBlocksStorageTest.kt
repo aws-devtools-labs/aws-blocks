@@ -67,7 +67,7 @@ class JvmBlocksStorageTest {
     ): Blocks = Blocks(
         BlocksConfig(server = server, applicationId = applicationId),
         backend.engine(),
-        storageRoot = root.path,
+        cookieJarIn(applicationStorageDirectory(applicationId, root)),
     )
 
     @Test
@@ -129,10 +129,10 @@ class JvmBlocksStorageTest {
 
     @Test
     fun `an instance with no id persists nothing`() = runTest {
-        Blocks(BlocksConfig(server = server), Backend().engine(), storageRoot = root.path).use { call(it) }
+        Blocks(BlocksConfig(server = server), Backend().engine()).use { call(it) }
 
         val next = Backend()
-        Blocks(BlocksConfig(server = server), next.engine(), storageRoot = root.path).use { call(it) }
+        Blocks(BlocksConfig(server = server), next.engine()).use { call(it) }
 
         next.received.single().headers.getAll(HttpHeaders.Cookie).orEmpty().shouldBeEmpty()
     }

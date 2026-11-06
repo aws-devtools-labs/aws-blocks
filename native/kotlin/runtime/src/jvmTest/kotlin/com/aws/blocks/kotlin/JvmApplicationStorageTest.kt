@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin
 
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.ktor.http.Cookie
 import io.ktor.http.Url
@@ -26,9 +27,8 @@ class JvmApplicationStorageTest {
     }
 
     /** A jar as a freshly launched application would build one, so each call stands in for a launch. */
-    private fun jarFor(applicationId: String) = PersistentCookiesStorage(
-        platformKeyValueStore("cookies", applicationId, storageRoot = root.path),
-    )
+    private fun jarFor(applicationId: String) =
+        cookieJarIn(applicationStorageDirectory(applicationId, root))
 
     @Test
     fun `an application reads back the session it stored`() = runTest {
@@ -58,15 +58,12 @@ class JvmApplicationStorageTest {
     fun `a blank id counts as no id rather than naming a directory of its own`() = runTest {
         // An empty identifier identifies nothing -- an unset build property reaching us as "" should
         // not quietly create a directory nobody can trace back to an application.
-        val jar = PersistentCookiesStorage(
-            platformKeyValueStore("cookies", "   ", storageRoot = root.path),
-        )
-        jar.addCookie(url, Cookie(name = "session", value = "a-session"))
+        applicationStorageDirectoryOrNull("   ").shouldBeNull()
 
-        File(root, ".blocks").exists() shouldBe false
-        PersistentCookiesStorage(platformKeyValueStore("cookies", "   ", storageRoot = root.path))
-            .get(url)
-            .shouldBeEmpty()
+        // So the store it resolves to is the in-memory one, which forgets on the next launch.
+        val jar = PersistentCookiesStorage(platformKeyValueStore("cookies", "   "))
+        jar.addCookie(url, Cookie(name = "session", value = "a-session"))
+        PersistentCookiesStorage(platformKeyValueStore("cookies", "   ")).get(url).shouldBeEmpty()
     }
 
     @Test

@@ -36,8 +36,8 @@ import io.ktor.client.engine.HttpClientEngine
 class Blocks internal constructor(
     config: BlocksConfig,
     engine: HttpClientEngine?,
-    /** Replaces the home directory desktop storage is derived from, for tests. */
-    storageRoot: String? = null,
+    /** The jar this instance persists through. Replaced by tests that need a disposable one. */
+    private val cookies: PersistentCookiesStorage = cookieJar(config.applicationId),
 ) : AutoCloseable {
 
     /** Configures the instance. */
@@ -50,7 +50,6 @@ class Blocks internal constructor(
     // may name a namespace anything, a member always wins over an extension of the same name, and
     // that leaves the generated accessor unreachable behind nothing louder than a compiler
     // warning. Functions are safe: a member function and an extension property can share a name.
-    private val cookies = cookieJar(config.applicationId, storageRoot)
 
     private val client: BlocksClient = BlocksClient(config.server, defaultHttpClient(engine, cookies))
 

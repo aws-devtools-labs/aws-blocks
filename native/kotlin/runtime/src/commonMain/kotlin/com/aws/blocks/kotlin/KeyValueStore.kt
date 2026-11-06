@@ -40,15 +40,8 @@ internal interface KeyValueStore {
  * derives a directory from [applicationId], and falls back to [InMemoryKeyValueStore] when there
  * is none — writing to a directory every application shares is what let two of them read each
  * other's entries.
- *
- * [storageRoot] replaces the home directory the JVM derives from, so a test can write somewhere
- * disposable instead of the developer's own storage. Nothing in production passes it.
  */
-internal expect fun platformKeyValueStore(
-    name: String,
-    applicationId: String?,
-    storageRoot: String? = null,
-): KeyValueStore
+internal expect fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore
 
 /**
  * Holds entries for the life of the process and writes nothing. What a target falls back to when

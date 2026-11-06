@@ -23,12 +23,8 @@ import javax.crypto.spec.SecretKeySpec
  * itself would put every Blocks application the user runs in one directory — the defect this
  * fallback exists instead of.
  */
-internal actual fun platformKeyValueStore(
-    name: String,
-    applicationId: String?,
-    storageRoot: String?,
-): KeyValueStore =
-    applicationStorageDirectoryOrNull(applicationId, storageRoot)
+internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore =
+    applicationStorageDirectoryOrNull(applicationId)
         ?.let { EncryptedFileKeyValueStore(name, it) }
         ?: InMemoryKeyValueStore()
 
