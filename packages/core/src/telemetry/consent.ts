@@ -1,6 +1,6 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { readBlocksConfigFile } from '../blocks-config-file.js';
 
 const ENV_VAR = 'AWS_BLOCKS_DISABLE_TELEMETRY';
 
@@ -11,23 +11,6 @@ export function isDisableValue(value: string | undefined): boolean {
   if (value === undefined) return false;
   const normalized = value.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
-}
-
-interface BlocksConfig {
-  telemetry?: { enabled?: boolean };
-  [key: string]: unknown;
-}
-
-/**
- * Read and parse a Blocks config file, returning null if it doesn't exist or is invalid.
- */
-export function readConfigFile(configPath: string): BlocksConfig | null {
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    return JSON.parse(content) as BlocksConfig;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -44,6 +27,17 @@ export function getGlobalConfigPath(): string {
  */
 export function getProjectConfigPath(projectRoot?: string): string {
   return join(projectRoot ?? process.cwd(), '.blocks', 'config.json');
+}
+
+/**
+ * `telemetry.enabled` from a Blocks config file, or `undefined` when the file is
+ * missing, unparseable, or doesn't set it (a UTF-8 BOM is tolerated).
+ */
+function readTelemetryEnabled(configPath: string): unknown {
+  const read = readBlocksConfigFile(configPath);
+  if (read.status !== 'ok') return undefined;
+  const telemetry = read.config.telemetry;
+  return telemetry && typeof telemetry === 'object' && 'enabled' in telemetry ? telemetry.enabled : undefined;
 }
 
 /**
@@ -78,11 +72,8 @@ export interface TelemetryStatus {
  */
 export function getTelemetryStatus(projectRoot?: string): TelemetryStatus {
   const envValue = process.env[ENV_VAR];
-  const globalConfig = readConfigFile(getGlobalConfigPath());
-  const projectConfig = readConfigFile(getProjectConfigPath(projectRoot));
-
-  const globalEnabled = globalConfig?.telemetry?.enabled;
-  const projectEnabled = projectConfig?.telemetry?.enabled;
+  const globalEnabled = readTelemetryEnabled(getGlobalConfigPath());
+  const projectEnabled = readTelemetryEnabled(getProjectConfigPath(projectRoot));
 
   const status: TelemetryStatus = {
     enabled: true,

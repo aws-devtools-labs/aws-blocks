@@ -5,14 +5,32 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-
-interface BlocksConfig {
-  stackId?: string;
-  [key: string]: unknown;
-}
+import { readBlocksConfigFile } from '../blocks-config-file.js';
 
 function randomSuffix(length: number): string {
   return randomBytes(length).toString('hex').slice(0, length);
+}
+
+/**
+ * Read the `stackId` from `.blocks/config.json` in the project root, or `undefined`
+ * when the file is missing or has no non-empty string `stackId`. A UTF-8 BOM is
+ * tolerated.
+ *
+ * @throws When the file exists but can't be parsed or isn't a JSON object — a
+ *   caller must not treat that as "no stackId" and fall back to another name.
+ */
+export function readStackId(projectRoot?: string): string | undefined {
+  const configPath = join(projectRoot || process.cwd(), '.blocks', 'config.json');
+  const read = readBlocksConfigFile(configPath);
+  if (read.status === 'invalid') {
+    throw new Error(
+      `.blocks/config.json could not be read: ${read.reason}. Fix ${configPath} so it is a JSON object with a "stackId", ` +
+      `e.g. { "stackId": "<your-app-name>" }.`
+    );
+  }
+  if (read.status === 'missing') return undefined;
+  const { stackId } = read.config;
+  return typeof stackId === 'string' && stackId ? stackId : undefined;
 }
 
 /**
@@ -20,27 +38,15 @@ function randomSuffix(length: number): string {
  * This is the stable project identifier used as the base for CloudFormation stack names.
  */
 export function getStackId(projectRoot?: string): string {
-  const root = projectRoot || process.cwd();
-  const configPath = join(root, '.blocks', 'config.json');
-  const missing = () =>
-    new Error(
-      `.blocks/config.json not found or missing stackId — it is created by create-blocks-app and should be committed. ` +
-      `To fix manually, create ${configPath} with: { "stackId": "<id>" }. ` +
-      `For an app that is already deployed, <id>-prod must be the name of its existing production stack ` +
-      `(the stack that aws-blocks/index.cdk.ts names); any other id makes the next deploy create a second production stack.`
-    );
-  let config: BlocksConfig | null;
-  try {
-    config = JSON.parse(readFileSync(configPath, 'utf-8'));
-  } catch (error) {
-    // A file that exists but does not parse is not a missing file: say what is wrong with it.
-    if (error instanceof SyntaxError) {
-      throw new Error(`.blocks/config.json is not valid JSON (${error.message}): fix ${configPath}.`);
-    }
-    throw missing();
-  }
-  if (!config?.stackId) throw missing();
-  return config.stackId;
+  const stackId = readStackId(projectRoot);
+  if (stackId) return stackId;
+  const configPath = join(projectRoot || process.cwd(), '.blocks', 'config.json');
+  throw new Error(
+    `.blocks/config.json not found or missing stackId — it is created by create-blocks-app and should be committed. ` +
+    `To fix manually, create ${configPath} with: { "stackId": "<id>" }. ` +
+    `For an app that is already deployed, <id>-prod must be the name of its existing production stack ` +
+    `(the stack that aws-blocks/index.cdk.ts names); any other id makes the next deploy create a second production stack.`
+  );
 }
 
 /**

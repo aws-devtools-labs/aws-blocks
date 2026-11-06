@@ -209,6 +209,15 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
 // ─── Shared workspace helper ─────────────────────────────────────────────────
 
 /**
+ * Files AWS Blocks creates next to the committed `.blocks/config.json` while it
+ * updates it: the lock (`config.json.lock`), its record and reap files
+ * (`config.json.lock.*`) and the write temp file (`config.json.*.tmp`). A process
+ * killed mid-update can leave them behind, so they're ignored; `config.json` itself
+ * stays tracked. The template `gitignore` files list the same patterns.
+ */
+const BLOCKS_CONFIG_LOCK_GITIGNORE_ENTRIES = ['.blocks/*.lock*', '.blocks/*.tmp'];
+
+/**
  * Adds the aws-blocks workspace to an existing project's package.json.
  * Shared between `integrateWithExistingProject()` and `integrateWithAmplify()`.
  *
@@ -619,7 +628,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
     blocksConfig: { dev: { port: 3001, frontend: false } },
-    gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
+    gitignoreEntries: ['.blocks-sandbox', '.bb-data/', ...BLOCKS_CONFIG_LOCK_GITIGNORE_ENTRIES],
     skipInstall,
     workspaceRoot,
   });
@@ -807,7 +816,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'dev:stop': 'cdk-blocks dev stop',
     },
     blocksConfig: backendDevConfig(templatePkg.blocks),
-    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
+    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/', ...BLOCKS_CONFIG_LOCK_GITIGNORE_ENTRIES],
     skipInstall,
     workspaceRoot,
   });

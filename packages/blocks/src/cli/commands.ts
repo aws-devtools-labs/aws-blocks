@@ -331,7 +331,7 @@ async function productionStack(ctx: Context, root: string): Promise<string> {
 			cause: error,
 			where: [`project: ${root}`],
 			// Lists the production stacks, so that the id can be the one whose `<id>-prod` exists.
-			hint: /not valid JSON/.test(message)
+			hint: /could not be read/.test(message)
 				? undefined
 				: [
 						`aws cloudformation describe-stacks --query "Stacks[?ends_with(StackName, '-prod')].StackName"`,
@@ -816,7 +816,7 @@ export async function whoami(ctx: Context): Promise<number> {
 			// Reported as null, with the reason in the text.
 			const message = error instanceof Error ? error.message : String(error);
 			if (!existsSync(join(root, '.blocks', 'config.json'))) noProduction = '(no .blocks/config.json)';
-			else if (/not valid JSON/.test(message)) {
+			else if (/could not be read/.test(message)) {
 				noProduction = '(invalid .blocks/config.json)';
 				ctx.out.warn(message);
 			} else noProduction = '(no stackId in .blocks/config.json)';
