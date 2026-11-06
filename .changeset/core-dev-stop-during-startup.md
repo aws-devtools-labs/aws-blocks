@@ -11,3 +11,4 @@ The dev server wrote its pidfile only once it had loaded, about a second after `
 - A second `cdk-blocks dev` on the port is refused at once, before it starts anything.
 - When a SIGTERM ends `tsx watch`'s runner before the runner handles signals, `tsx watch` never exits on its own SIGTERM. The CLI now SIGKILLs it once its runner is gone.
 - New export `@aws-blocks/core/scripts/dev-pidfile`: the pidfile protocol (`claimDevSession`, `claimDevPidfile`, `releaseDevPidfile`, `DEV_SESSION_ENV`, …), which loads without the rest of core. `claimDevPidfile` takes the pid of the CLI whose record it may take over as an optional last argument, and `StopResult.via` can be `cli`.
+- A `cdk-blocks dev stop` reports such a stop as done only once the CLI has exited. A CLI still running after its SIGTERM and the wait keeps its record, and the stop exits 1 with `Signalled the cdk-blocks dev on :<port> (pid <pid>), but it has not ended yet`, even when the port is free.
