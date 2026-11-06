@@ -914,6 +914,26 @@ function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly strin
 
 // ─── Default build output directories per framework ──────────────
 
+/**
+ * The path whose existence means a reusable build exists, for a destroy's
+ * `if-present` reuse. It must be the marker the framework adapter itself checks
+ * (see `shouldSkipBuild` in `@aws-blocks/hosting`), or `Hosting` could skip
+ * `buildCommand` while the adapter still runs its full build. The built-in
+ * Next.js adapter deploys the OpenNext output, not `.next`; every other
+ * framework (and a custom adapter) is keyed on the build output dir.
+ *
+ * @internal
+ */
+export function frontendReuseMarker(
+  framework: string,
+  root: string,
+  expectedOutputDir: string,
+  hasCustomAdapter: boolean,
+): string {
+  if (framework === 'nextjs' && !hasCustomAdapter) return join(root, '.open-next', 'open-next.output.json');
+  return expectedOutputDir;
+}
+
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
@@ -944,7 +964,7 @@ const runAdapterNamingSkippedBuild = (
     if (reuseBuild !== 'required' || !(error instanceof Error) || !MISSING_BUILD_OUTPUT_ERROR.test(error.name)) {
       throw error;
     }
-    const message = `${error.message}\n${SKIP_FRONTEND_BUILD_ENV}=1 skips the frontend build, so build the frontend first or unset it.`;
+    const message = `${error.message}\n${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`;
     // Keep the adapter's structured error (code, name, resolution) for callers that key on it.
     if (error instanceof HostingError) {
       throw new HostingError(error.code, { message, resolution: error.resolution }, error);
@@ -1126,13 +1146,16 @@ export class Hosting extends Construct {
     const expectedOutputDir = props.buildOutputDir
       ? resolve(root, props.buildOutputDir)
       : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
+    // A destroy reuses a build only when the adapter will too, so it checks the
+    // adapter's own marker (OpenNext's output for Next.js), not just the dir.
+    const reuseMarker = frontendReuseMarker(framework, root, expectedOutputDir, Boolean(props.customAdapter));
     const skipBuildCommand =
-      reuseBuild === 'required' || (reuseBuild === 'if-present' && existsSync(expectedOutputDir));
+      reuseBuild === 'required' || (reuseBuild === 'if-present' && existsSync(reuseMarker));
     if (props.buildCommand && skipBuildCommand) {
       console.log(
         reuseBuild === 'required'
-          ? `⏭️  Skipping frontend build (${SKIP_FRONTEND_BUILD_ENV}=1): using ${relative(root, expectedOutputDir) || '.'}`
-          : `⏭️  Skipping frontend build: this synth doesn't deploy the frontend, reusing ${relative(root, expectedOutputDir) || '.'}`,
+          ? `⏭️  Skipping frontend build (${SKIP_FRONTEND_BUILD_ENV} is set): using ${relative(root, expectedOutputDir) || '.'}`
+          : `⏭️  Skipping frontend build: this synth doesn't deploy the frontend, reusing ${relative(root, reuseMarker) || '.'}`,
       );
     }
     if (props.buildCommand && !skipBuildCommand) {
@@ -1169,7 +1192,7 @@ export class Hosting extends Construct {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
           (reuseBuild === 'required'
-            ? `${SKIP_FRONTEND_BUILD_ENV}=1 skips the frontend build, so build the frontend first or unset it.`
+            ? `${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`
             : `Provide a buildCommand or ensure the directory exists before synthesis.`),
       );
     }
