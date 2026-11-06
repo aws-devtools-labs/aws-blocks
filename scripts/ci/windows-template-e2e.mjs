@@ -10,7 +10,8 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
-import { isWin, killTree, runOrThrow, runSpawn, httpUp, startRegistry } from './_proc.mjs';
+import { isWin, killTree, runOrThrow, runTeardown, httpUp, startRegistry } from './_proc.mjs';
+import { WINDOWS_E2E_PURPOSE, addPurposeTag } from './_scaffold-tag.mjs';
 
 import { makeProductionDeployDisposable } from './_scaffold-teardown.mjs';
 
@@ -33,35 +34,17 @@ const run = (cmd, args, opts = {}) => runOrThrow(cmd, args, opts, ROOT);
 
 /** Teardown commands that failed; a failed teardown leaves a stack deployed. */
 const teardownFailures = [];
+const TEARDOWN_FAILED = 'teardown failed, stack(s) may be left deployed:';
 
-/**
- * Run a teardown command without throwing, so a failed destroy can't mask the
- * phase's own result or skip the next teardown. Failures are recorded and fail
- * the job at the end: a silently ignored destroy leaked one stack per run.
- */
-function runTeardown(cmd, args, opts = {}) {
-  console.log(`\n$ ${cmd} ${args.join(' ')}  (teardown, cwd: ${opts.cwd ?? ROOT})`);
-  let failure;
-  try {
-    // runSpawn returns the spawnSync result and does not throw on a failed command.
-    const r = runSpawn(cmd, args, opts, ROOT, { log: false });
-    if (r.error) failure = r.error.message;
-    else if (r.status !== 0) failure = r.status === null ? `signal ${r.signal}` : `exit code ${r.status}`;
-  } catch (e) {
-    failure = e?.message ?? String(e);
-  }
-  if (failure !== undefined) {
-    failure = `${cmd} ${args.join(' ')}: ${failure}`;
-    teardownFailures.push(failure);
-    console.error(`  TEARDOWN FAILED (stack may be left deployed): ${failure}`);
-  }
-}
+/** Run a teardown command; a failure is recorded and fails the job at the end. */
+const teardown = (cmd, args, opts = {}) => runTeardown(cmd, args, opts, ROOT, teardownFailures);
 
 /**
  * Spawn a long-running command and poll `ready()` until it returns true.
  * Readiness is based on product artifacts (config/outputs files, ports), NOT
  * console log strings, so it doesn't break when log wording changes. Rejects if
- * the child exits early or the timeout elapses. Returns the child to kill.
+ * the child exits early or the timeout elapses; on timeout it kills the child's
+ * tree first, so the caller's teardown doesn't race it. Returns the child to kill.
  */
 async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
   console.log(`\n$ ${cmd} ${args.join(' ')}`);
@@ -73,6 +56,10 @@ async function startUntilReady(cmd, args, opts, ready, timeoutMs) {
     if (await ready()) return child;
     await sleep(2000);
   }
+  // Stop it before the caller's teardown runs, so the local sandbox process
+  // can't race (or redeploy in watch mode after) the destroy. A CloudFormation
+  // operation it already started may still be in progress.
+  killTree(child.pid);
   throw new Error(`${cmd} ${args.join(' ')} did not become ready within ${timeoutMs / 1000}s`);
 }
 
@@ -114,6 +101,10 @@ async function main() {
   const app = join(work, 'bb-test-win');
   // `backend` template is backend-only (no DynamoDB/GSI/Aurora) → fast deploy.
   run(createBin, [app, '--template', 'backend'], { cwd: work, env });
+  // The prefix alone isn't enough: cleanup-stacks.yml only deletes a `bb-test-*`
+  // stack whose `blocks:purpose` tag is an e2e marker. Tag the scaffold so a
+  // stack a failed teardown leaves behind is reclaimed instead of skipped.
+  addPurposeTag(join(app, 'aws-blocks', 'index.cdk.ts'), WINDOWS_E2E_PURPOSE);
 
   const inApp = { cwd: app, env };
   // The production preset retains the config access-log bucket on destroy (by
@@ -140,7 +131,7 @@ async function main() {
     killTree(sb.pid);
     console.log('OK: npm run sandbox deployed');
   } finally {
-    runTeardown('npm', ['run', 'sandbox:destroy'], inApp);
+    teardown('npm', ['run', 'sandbox:destroy'], inApp);
   }
 
   // Phase 3: production deploy → destroy.
@@ -149,15 +140,23 @@ async function main() {
     console.log('OK: npm run deploy succeeded');
   } finally {
     // `cdk-blocks destroy` asks for confirmation; this run has no terminal, so it needs --yes.
-    runTeardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
+    teardown('npm', ['run', 'destroy', '--', '--yes'], inApp);
   }
 
   if (teardownFailures.length > 0) {
-    throw new Error(`teardown failed, stack(s) may be left deployed:\n  ${teardownFailures.join('\n  ')}`);
+    throw new Error(`${TEARDOWN_FAILED}\n  ${teardownFailures.join('\n  ')}`);
   }
   console.log(`\nOK: scaffolded backend template dev + sandbox + deploy all work on ${process.platform}.`);
 }
 
 main()
   .then(() => { shutdown(); process.exit(0); })
-  .catch((err) => { console.error(`\nFAIL: ${err?.message ?? err}`); shutdown(); process.exit(1); });
+  .catch((err) => {
+    console.error(`\nFAIL: ${err?.message ?? err}`);
+    // A phase error replaces the end-of-run teardown check; still name the leak.
+    if (teardownFailures.length > 0 && !String(err?.message).startsWith(TEARDOWN_FAILED)) {
+      console.error(`Also, ${TEARDOWN_FAILED}\n  ${teardownFailures.join('\n  ')}`);
+    }
+    shutdown();
+    process.exit(1);
+  });

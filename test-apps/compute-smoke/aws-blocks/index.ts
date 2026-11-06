@@ -162,11 +162,12 @@ const scaleFromZeroJob = new AsyncJob(scope, 'scale-from-zero-job', {
 /**
  * Which compute served the call, and the request URL its handler saw — what the
  * API-namespace scenarios assert on. On Lambda the function env vars are set; on
- * a container task Blocks stamps `BLOCKS_SERVICE_MODE=worker` and Fargate sets
- * the task metadata endpoint.
+ * a container task Blocks stamps `BLOCKS_SERVICE_MODE=worker` and the compute's
+ * id (`BLOCKS_COMPUTE_ID`), and Fargate sets the task metadata endpoint.
  */
 function whereAmI(context?: BlocksContext) {
   return {
+    computeId: process.env.BLOCKS_COMPUTE_ID ?? null,
     functionName: process.env.AWS_LAMBDA_FUNCTION_NAME ?? null,
     memoryMb: process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE ?? null,
     serviceMode: process.env.BLOCKS_SERVICE_MODE ?? null,
@@ -195,13 +196,30 @@ export const reports = new ApiNamespace(
 
 // The `worker` compute already keeps a task running (`scaling.minInstances: 1`),
 // which a container that serves API namespaces needs, so the namespace shares it
-// with the container AsyncJob and CronJob instead of adding a service.
+// with the container AsyncJob and CronJob instead of adding a service. The front
+// door reaches it through the gateway's VPC link on the `apigateway` leg, and
+// through a CloudFront VPC origin on the `cloudfront` leg — both to the
+// container's internal load balancer.
 export const containerApi = new ApiNamespace(
   scope,
   'containerApi',
   (context) => ({
     async whereAmI() {
       return whereAmI(context);
+    },
+    async setCookies() {
+      context.response.headers.append('Set-Cookie', 'container-a=1; Path=/; Secure; HttpOnly; SameSite=Lax');
+      context.response.headers.append('Set-Cookie', 'container-b=2; Path=/; Secure; HttpOnly; SameSite=Lax');
+      return { ok: true };
+    },
+    async echoCookie() {
+      return { cookie: context.request.headers.get('cookie') };
+    },
+    /** Hold the request open — past the gateway's 29 s cap, within CloudFront's 60 s. */
+    async sleep(ms: number) {
+      const bounded = Math.min(Math.max(ms, 0), 50_000);
+      await new Promise((resolve) => setTimeout(resolve, bounded));
+      return { sleptMs: bounded };
     },
   }),
   { compute: worker },

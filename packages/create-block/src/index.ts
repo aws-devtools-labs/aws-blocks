@@ -915,11 +915,20 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	printNextSteps(mode, names);
+	printNextSteps(mode, names, relative(cwd, targetDir) || '.');
 	return 0;
 }
 
-function printNextSteps(mode: Mode, names: DerivedNames): void {
+/**
+ * Quote a path for a copy-pasteable POSIX shell command. Paths made only of safe characters print
+ * as-is; anything else (spaces, `;`, `$`, quotes, ...) is single-quoted so the shell treats it literally.
+ */
+function shellQuotePath(path: string): string {
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(path)) return path;
+	return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): void {
 	console.log('\nNext steps:');
 	if (mode === 'contributor') {
 		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
@@ -932,7 +941,7 @@ function printNextSteps(mode: Mode, names: DerivedNames): void {
 		console.log(`  2. Import it in your backend: import { ${names.className} } from '${names.pkgName}';`);
 		console.log(`     (it's linked into your workspace — no publish needed).`);
 	} else {
-		console.log(`  1. cd ${names.folder} && npm run build && npm test`);
+		console.log(`  1. cd ${shellQuotePath(targetRel)} && npm run build && npm test`);
 		console.log(`  2. Implement ${names.className}'s API in src/, then publish (keywords: ["aws-blocks"]).`);
 	}
 }
