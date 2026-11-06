@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { DSQL_MIGRATION_VALIDATION_ERROR_NAME, DSQL_PERMISSION_ERROR_NAME } from './errors.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
+import { _resetDatabaseRegistry } from './runtime/construction.js';
 import { internalAccess } from './runtime/internal.js';
 import { migrations, tempDir } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks, scopeId } from './test-support/lifecycle.js';
@@ -522,6 +523,20 @@ describe('block identity', () => {
 });
 
 describe('construction-time rules', () => {
+	test('the binding marker stops a block from moving clusters', () => {
+		const scope = freshScope('app', (id) => new Scope(id));
+		new Database(scope, 'orders');
+		assert.ok(existsSync(join(DATA_DIR, `${scope.id}-orders`, 'binding.json')));
+		_resetDatabaseRegistry();
+		const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
+		assert.throws(
+			() => new Database(scope, 'orders', { cluster: shared }),
+			new RegExp(
+				`Deploy stopped: Database '${scope.id}-orders' is bound to its default cluster \\(dsql\\) and cannot move to '${scope.id}-shared' \\(dsql\\)`,
+			),
+		);
+	});
+
 	// The app roots carry this process's id: a block's data dir is named after its fullId.
 	test('Database short ids are unique per app', () => {
 		const root = { id: scopeId('bbdb', 'app') };
