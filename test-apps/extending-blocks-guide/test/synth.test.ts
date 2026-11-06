@@ -6,10 +6,10 @@
  * template to assert each pattern produced (or *didn't* produce) the
  * expected resources.
  *
- * Pattern 1: external SQS queue + handler env var EXTERNAL_QUEUE_URL.
+ * Pattern 1: external SQS queue + runtime config EXTERNAL_QUEUE_URL.
  * Pattern 2: legacy DynamoDB table is created by us; KVStore.fromExisting
  *            does NOT add a second table (this asserts the bb-kv-store fix).
- * Pattern 3: bb-queue creates its own SQS queue, env var WORK_URL on handler.
+ * Pattern 3: bb-queue creates its own SQS queue, runtime config WORK_URL.
  */
 import { test, describe, before } from 'node:test';
 import assert from 'node:assert';
@@ -70,7 +70,7 @@ describe('extending-blocks-guide synth', () => {
     assert.strictEqual(queues.length, 2, `expected 2 SQS queues; got ${queues.length}`);
   });
 
-  test('handler has EXTERNAL_QUEUE_URL and BLOCKS_LEGACY_SESSIONS_TABLE env vars', () => {
+  test('registers external resource identifiers in the runtime config', () => {
     const handler: any = Object.values(template.Resources).find(
       (r: any) =>
         r.Type === 'AWS::Lambda::Function' &&
@@ -78,10 +78,17 @@ describe('extending-blocks-guide synth', () => {
     );
     assert.ok(handler, 'could not find Blocks handler Lambda');
     const envVars = handler.Properties.Environment.Variables;
-    assert.ok('EXTERNAL_QUEUE_URL' in envVars, 'missing EXTERNAL_QUEUE_URL on handler');
-    assert.ok('BLOCKS_LEGACY_SESSIONS_TABLE' in envVars, 'missing BLOCKS_LEGACY_SESSIONS_TABLE on handler');
-    // Pattern 3: bb-queue injects EXTENDING_GUIDE_WORK_URL.
-    const workKey = Object.keys(envVars).find(k => k.endsWith('_WORK_URL'));
-    assert.ok(workKey, 'missing *_WORK_URL on handler (Pattern 3 custom BB)');
+    assert.ok('BLOCKS_CONFIG_BUCKET' in envVars, 'missing BLOCKS_CONFIG_BUCKET on handler');
+    assert.ok('BLOCKS_CONFIG_KEY' in envVars, 'missing BLOCKS_CONFIG_KEY on handler');
+    assert.ok(!('EXTERNAL_QUEUE_URL' in envVars), 'EXTERNAL_QUEUE_URL must use runtime config');
+
+    const configDeployment: any = Object.values(template.Resources).find(
+      (r: any) => r.Type === 'Custom::CDKBucketDeployment'
+    );
+    assert.ok(configDeployment, 'missing runtime config deployment');
+    const config = JSON.stringify(configDeployment.Properties.SourceMarkers);
+    assert.ok(config.includes('EXTERNAL_QUEUE_URL'), 'missing EXTERNAL_QUEUE_URL in runtime config');
+    assert.ok(config.includes('BLOCKS_LEGACY_SESSIONS_TABLE'), 'missing legacy sessions table in runtime config');
+    assert.ok(config.includes('WORK_URL'), 'missing custom BB queue URL in runtime config');
   });
 });

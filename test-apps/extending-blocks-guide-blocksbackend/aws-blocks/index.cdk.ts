@@ -56,7 +56,7 @@ class MyExistingStack extends cdk.Stack {
       defaults: BlocksPresets.sandbox,
     });
 
-    // Wire IAM + env on the BlocksBackend's handler — same surface as BlocksStack.
+    // Wire IAM and runtime configuration on the BlocksBackend — same surface as BlocksStack.
     stack.externalQueue.grantSendMessages(stack.blocks.executionRole);
     registerConfig(stack.blocks, 'EXTERNAL_QUEUE_URL', stack.externalQueue.queueUrl);
 
