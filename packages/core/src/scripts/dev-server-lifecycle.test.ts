@@ -228,7 +228,7 @@ describe('dev server lifecycle', { skip: !posix && 'POSIX process groups', timeo
       join(dir, '.blocks-sandbox', 'config.production.json'),
       JSON.stringify({ apiUrl: 'https://prod.example/aws-blocks/api', environment: 'production' }),
     );
-    // And the config.json a deploy from before core 0.8 wrote: the dev server replaces it with its own.
+    // And the config.json a deploy from core 0.8.0 or earlier wrote: the dev server replaces it with its own.
     writeFileSync(
       join(dir, '.blocks-sandbox', 'config.json'),
       JSON.stringify({ apiUrl: 'https://stub.example/aws-blocks/api', environment: 'production' }),
