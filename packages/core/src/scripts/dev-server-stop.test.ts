@@ -571,4 +571,21 @@ describe('stopDevServer — a cdk-blocks dev CLI whose dev server is still start
     assert.deepEqual(sigs, []);
     assert.deepEqual(removed, [devPidfilePath(3000)]);
   });
+
+  it('reports a CLI that has not exited after its SIGTERM as not stopped, and keeps its record, even with the port free', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => starting,
+      isAlive: () => true,
+      commandOf: (pid) => (pid === 700 ? CLI : 'bash'),
+      probe: async () => false,
+      waitExit: async () => false,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 700, signal: 'SIGTERM', via: 'signal' }]);
+    assert.equal(r.via, 'cli');
+    assert.equal(r.portFree, false);
+    assert.equal(isStopWarning(r), true);
+    assert.deepEqual(removed, []);
+    assert.match(stopMessage(r), /Signalled the cdk-blocks dev on :3000 \(pid 700\), but it has not ended yet/);
+  });
 });

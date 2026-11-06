@@ -1793,13 +1793,14 @@ export async function stopDevServer(
     } catch {
       /* raced away */
     }
-    await d.waitExit(record.pid, CLI_STOP_TIMEOUT_MS);
+    const exited = await d.waitExit(record.pid, CLI_STOP_TIMEOUT_MS);
     await d.waitFree(port, 3000);
     const portFree = !(await d.probe(port));
     // The dev server may have taken the record over, and ended before it could remove it.
+    // A CLI that has not exited still holds the session, and keeps its record.
     const left = d.readPidfile(pidfilePath);
-    if (portFree && left != null) reapIfEnded(left);
-    return result('cli', [record.pid], portFree);
+    if (portFree && exited && left != null) reapIfEnded(left);
+    return result('cli', [record.pid], portFree && exited);
   }
 
   /**
@@ -1973,6 +1974,12 @@ export function stopMessage(result: StopResult): string {
     return (
       `⚠️  Signalled the cdk-blocks sandbox session on :${result.port}${who}, but it has not ended yet: ` +
       'its dev server or its cdk watch may still be shutting down.'
+    );
+  }
+  if (result.via === 'cli') {
+    return (
+      `⚠️  Signalled the cdk-blocks dev on :${result.port}${who}, but it has not ended yet: ` +
+      'it may still be stopping what it started, or another process now holds the port.'
     );
   }
   return (
