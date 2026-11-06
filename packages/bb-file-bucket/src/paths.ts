@@ -13,6 +13,7 @@
  * .bb-data/{fullId}/versions/{key}/{versionId}       version body
  * .bb-data/{fullId}/versions/{key}/{versionId}.json  version metadata
  * .bb-data/{fullId}/versions/{key}/__deleted__       delete marker (sentinel)
+ * .bb-data/{fullId}/version-counters/{sha256(key)}   highest version number issued
  * ```
  *
  * Because user content lives only under `content/`, `scan()` can yield every
@@ -24,6 +25,7 @@
  * import these helpers so the two stay in lockstep.
  */
 
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 
 /** Subdirectory holding file content, byte-identical to what was written. */
@@ -34,6 +36,12 @@ export const META_DIR = 'meta';
 export const VERSIONS_DIR = 'versions';
 /** Sentinel filename marking a versioned key as deleted. */
 export const DELETE_MARKER = '__deleted__';
+/**
+ * Flat directory of per-key version counters, each named by a hash of the key.
+ * Kept out of `versions/{key}/` so no nested key (`a/x` beside `a`) can turn a
+ * counter file into a directory or the other way round.
+ */
+const VERSION_COUNTERS_DIR = 'version-counters';
 /** Suffix for version metadata sidecars (internal namespace only). */
 const VERSION_META_SUFFIX = '.json';
 
@@ -70,6 +78,11 @@ export function versionMetaPath(root: string, key: string, versionId: string): s
 /** Absolute path to a key's delete-marker sentinel. */
 export function deleteMarkerPath(root: string, key: string): string {
 	return join(root, VERSIONS_DIR, key, DELETE_MARKER);
+}
+
+/** Absolute path to the file recording the highest version number issued for a key. */
+export function lastVersionPath(root: string, key: string): string {
+	return join(root, VERSION_COUNTERS_DIR, createHash('sha256').update(key).digest('hex'));
 }
 
 /** True if a versions-directory entry is a real version body (not metadata or a sentinel). */

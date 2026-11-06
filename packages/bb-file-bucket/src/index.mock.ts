@@ -12,16 +12,22 @@ import { assertContainedPath } from './mock-utils.js';
 import {
 	contentRoot, contentPath, metaPath,
 	versionsDirFor, versionContentPath, versionMetaPath,
-	deleteMarkerPath, isVersionEntry,
+	deleteMarkerPath, isVersionEntry, lastVersionPath,
 } from './paths.js';
 import { mintFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { deriveBucketName, validateBucketName } from './bucket-name.js';
 import { validateFileBucketOptions, assertValidKey, presignedUploadUnsupportedMessage } from './validation.js';
+import {
+	OBJECT_CREATED_JOB_ID, matchesObjectCreatedFilter, objectCreatedJobHandler, toS3NotificationMessage,
+	validateObjectCreatedOptions,
+} from './object-created.js';
+import type { S3NotificationMessage } from './object-created.js';
+import { AsyncJob } from '@aws-blocks/bb-async-job';
 import type {
 	FileBucketOptions, PutOptions, PutUrlOptions, ScanOptions,
 	FileContent, FileInfo, ExternalBucketRef, ExternalKmsKeyRef,
 	FileDownloadClient, FileUploadClient, FileVersionInfo,
-	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
+	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor, ObjectCreatedOptions,
 } from './types.js';
 
 // Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
@@ -34,6 +40,7 @@ export type {
 	FileDownloadDescriptor, FileUploadDescriptor,
 	VersionedGetOptions, VersionedDeleteOptions, VersionedGetUrlOptions,
 	GetOptionsFor, DeleteOptionsFor, GetUrlOptionsFor,
+	ObjectCreatedOptions, ObjectCreatedEvent, ObjectCreatedContext,
 } from './types.js';
 
 import { Logger } from '@aws-blocks/bb-logger';
@@ -86,6 +93,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	private versioned: boolean;
 	/** Mirrors the AWS runtime: presigned uploads are rejected on an `objectLock` bucket. */
 	private readonly objectLocked: boolean;
+	/** `onObjectCreated` delivery: the user's filter, and the internal job that runs the handler with retries. */
+	private readonly objectCreated?: { options: ObjectCreatedOptions; job: AsyncJob<S3NotificationMessage> };
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -106,7 +115,20 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		// CDK's external-bucket branch returns before these checks, so a wrapped
 		// bucket bypasses them here too.
 		if (!options?.bucket) validateFileBucketOptions(this.fullId, options);
+		validateObjectCreatedOptions(this.fullId, options);
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		// Same child the CDK layer provisions. Submitting an S3-shaped message runs
+		// the handler through the same parser, retries, and dead-letter accounting
+		// as a deployed bucket's notifications.
+		if (options?.onObjectCreated) {
+			this.objectCreated = {
+				options: options.onObjectCreated,
+				job: new AsyncJob<S3NotificationMessage>(this, OBJECT_CREATED_JOB_ID, {
+					handler: objectCreatedJobHandler(options.onObjectCreated),
+					logger: options.logger,
+				}),
+			};
+		}
 		this.dataDir = getMockDataDir(this);
 		this.versioned = options?.versioned ?? true;
 		this.registerClientMiddleware('@aws-blocks/bb-file-bucket/middleware');
@@ -122,7 +144,8 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	/**
 	 * Upload a file.
 	 *
-	 * Overwrites any existing file at the given path.
+	 * Overwrites any existing file at the given path. Triggers `onObjectCreated`
+	 * when the path matches its filter.
 	 *
 	 * The object's metadata is replaced too: it becomes exactly `options.metadata`
 	 * (none when omitted). Metadata can't be edited in place, so to change it,
@@ -151,10 +174,9 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			cacheControl: options?.cacheControl,
 		};
 
+		let versionId: string | undefined;
 		if (this.versioned) {
-			const versionId = this.nextVersionId(path);
-			const versionsDir = versionsDirFor(this.dataDir, path);
-			mkdirSync(versionsDir, { recursive: true });
+			versionId = this.issueVersionId(path);
 			writeFileSync(versionContentPath(this.dataDir, path, versionId), buf);
 			writeFileSync(versionMetaPath(this.dataDir, path, versionId), JSON.stringify(meta));
 			// Remove any delete marker
@@ -163,6 +185,16 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 
 		this.writeMeta(path, meta);
 		writeFileSync(filePath, buf);
+
+		// Like an S3 notification, the handler runs after the write, not inside it:
+		// submit() only enqueues. Dev file-server uploads (putUrl / createUploadHandle)
+		// and restoreVersion() also come through here.
+		const objectCreated = this.objectCreated;
+		if (objectCreated && matchesObjectCreatedFilter(path, objectCreated.options)) {
+			await objectCreated.job.submit(toS3NotificationMessage({
+				path, size: buf.length, ...(versionId !== undefined ? { versionId } : {}),
+			}));
+		}
 	}
 
 	/**
@@ -597,13 +629,25 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		return results;
 	}
 
-	private nextVersionId(path: string): string {
+	/**
+	 * Issue the next version id for a key and record it, like S3, which never
+	 * reuses a version id. Counting only the versions still on disk would hand a
+	 * permanently deleted version's id to the next upload, so a queued
+	 * `onObjectCreated` event (or anything keyed by path and version) would read
+	 * the replacement instead. Data written before the counter existed resumes
+	 * from its highest stored version.
+	 */
+	private issueVersionId(path: string): string {
 		const dir = versionsDirFor(this.dataDir, path);
-		if (!existsSync(dir)) return 'v1';
-		const existing = readdirSync(dir)
+		mkdirSync(dir, { recursive: true });
+		const counter = lastVersionPath(this.dataDir, path);
+		mkdirSync(dirname(counter), { recursive: true });
+		const issued = readdirSync(dir)
 			.filter(f => f.startsWith('v') && !f.includes('.'))
-			.map(f => parseInt(f.slice(1), 10))
-			.filter(n => !isNaN(n));
-		return `v${(existing.length > 0 ? Math.max(...existing) : 0) + 1}`;
+			.map(f => parseInt(f.slice(1), 10));
+		if (existsSync(counter)) issued.push(parseInt(readFileSync(counter, 'utf8'), 10));
+		const next = Math.max(0, ...issued.filter(n => !Number.isNaN(n))) + 1;
+		writeFileSync(counter, String(next));
+		return `v${next}`;
 	}
 }

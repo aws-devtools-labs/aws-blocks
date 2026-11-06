@@ -23,6 +23,7 @@ import type {
 } from './types.js';
 import { AsyncJobErrors, blocksError } from './errors.js';
 import { STATUS_TABLE_ID, statusTableOptions } from './status.js';
+import { deriveQueueNames } from './queue-name.js';
 
 export { AsyncJobErrors, BatchSubmitFailedError } from './errors.js';
 export type {
@@ -141,11 +142,13 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 			validateEventSourceOptions(this.fullId, batchSize, maxBatchingWindowSeconds);
 		}
 
+		// Names that SQS accepts (see deriveQueueNames): the DLQ reserves room for its
+		// `-dlq` suffix before the 80-char cap so a long fullId can't truncate the
+		// dlq and main-queue names to the same 80 chars — identical names fail
+		// CloudFormation with "queue already exists".
+		const { queueName, dlqName } = deriveQueueNames(this.fullId);
 		this.dlq = new Queue(this, 'dlq', {
-			// Reserve room for the `-dlq` suffix (4 chars) before the 80-char cap so a
-			// long fullId can't truncate the dlq and main-queue names to the same 80
-			// chars — identical names fail CloudFormation with "queue already exists".
-			queueName: `${this.fullId.substring(0, 76)}-dlq`,
+			queueName: dlqName,
 			retentionPeriod: Duration.days(14),
 			encryption: QueueEncryption.SQS_MANAGED,
 			enforceSSL: true,
@@ -159,7 +162,6 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// recommendation of 6x the function timeout plus the window (see D-AJ-1a).
 		const visibilityTimeout = SHARED_HANDLER_TIMEOUT_SECONDS + maxBatchingWindowSeconds;
 
-		const queueName = `${this.fullId}`.substring(0, 80);
 		this.queue = new Queue(this, 'queue', {
 			queueName,
 			visibilityTimeout: Duration.seconds(visibilityTimeout),
@@ -196,8 +198,8 @@ export class AsyncJob<T = unknown> extends BuildingBlockScope {
 		// `{ batchItemFailures }`, so this is never configurable.
 		if (onLambda) {
 			// Claim the key the Lambda runtime registers this queue under (its name,
-			// `{fullId}` capped at 80 characters), so two jobs that map to one queue
-			// fail synth instead of every request failing on cold start.
+			// from deriveQueueNames), so two jobs that map to one queue fail synth
+			// instead of every request failing on cold start.
 			this.registerLambdaEventHandler(EventSourceMapping.SQS, queueName);
 			compute.fn.addEventSource(
 				new SqsEventSource(this.queue, {

@@ -42,6 +42,7 @@ const bucket = new FileBucket(scope, id, options?)
 | `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can be added to a deployed bucket, but can't be turned off once on. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
+| `onObjectCreated` | `ObjectCreatedOptions` | Run a handler in the background whenever an object is created, optionally only for keys matching a `prefix` and/or `suffix`. Fires for `put()`, `restoreVersion()`, presigned and handle uploads, and writes by any other client. Delivery is at least once and unordered. Not supported with `bucket`. See [Running Code When a File Arrives](#running-code-when-a-file-arrives). |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
 
 All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
@@ -94,6 +95,18 @@ Returned by `listVersions()` — one entry per object version, newest first.
 | `lastModified` | `Date` | When this version was created. |
 | `size` | `number` | Size in bytes. |
 | `isCurrent` | `boolean` | Whether this is the current (latest) version. |
+
+### ObjectCreatedOptions
+
+Supplied via the `onObjectCreated` option.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `prefix` | `string` | Optional. Only keys starting with this prefix run the handler. |
+| `suffix` | `string` | Optional. Only keys ending with this suffix run the handler. With both set, a key must match both. |
+| `handler` | `(event: ObjectCreatedEvent, context: ObjectCreatedContext) => Promise<void>` | Called once per created object. A thrown error retries the event. |
+
+`ObjectCreatedEvent` has `path` (the key, as passed to `get()`), `size` (bytes) and `versionId` (the version the write created; set on versioned buckets, absent with `versioned: false`). `ObjectCreatedContext` has `receiveCount`: `1` on the first delivery, higher on retries.
 
 ### Error Handling
 
@@ -329,6 +342,48 @@ await BlocksStack.create(app, stackName, {
   defaults: { ...BlocksPresets.production, storageAccessLogging: true },
 });
 ```
+
+### Running Code When a File Arrives
+
+`onObjectCreated` runs a handler after a file lands in the bucket, including uploads that go straight from a client to S3 through `putUrl()` or `createUploadHandle()`, which the backend otherwise never sees:
+
+```typescript
+const importedRows = new KVStore(scope, 'imported-rows');
+
+const inbox = new FileBucket(scope, 'inbox', {
+  onObjectCreated: {
+    prefix: 'incoming/',
+    suffix: '.csv',
+    handler: async (event) => {
+      // Read the version that was notified, not whatever is latest now.
+      const file = await inbox.get(event.path, { versionId: event.versionId });
+      if (!file) return; // that version was permanently deleted since
+      const upload = `${event.path}@${event.versionId}`;
+      for (const [i, line] of file.body.toString().split('\n').entries()) {
+        // Per-upload keys: a duplicate event rewrites the same entries, and a
+        // late, older upload can't overwrite a newer one's rows.
+        await importedRows.put(`${upload}:${i}`, line);
+      }
+    },
+  },
+});
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getUploadUrl(name: string) {
+    return inbox.putUrl(`incoming/${encodeURIComponent(name)}`); // the handler still runs
+  },
+}));
+```
+
+- **At least once, unordered.** The handler can run twice for one upload, and two uploads to the same key can be handled in either order. Make it idempotent, and key its outputs by path and `versionId` as above rather than by path alone.
+- **Retries.** A handler that throws is retried, up to 3 attempts in total. On AWS the event then moves to a dead-letter queue kept for 14 days.
+- **On AWS**, S3 sends an `ObjectCreated` notification to a dedicated SQS queue, which your backend's compute consumes like an `AsyncJob`, plus a dead-letter queue. Expect a few seconds between the upload and the handler. Only this bucket, in this account, can send to the queue.
+- **Filters** can contain any characters, including spaces: FileBucket URL-encodes `prefix` and `suffix` the way S3 encodes keys, which is the form S3 matches them against.
+- **Queue names** are the bucket's scope id plus `-on-object-created` (and `-dlq`), capped at 80 characters; if that name would contain characters SQS doesn't allow, such as `.`, they are replaced and a short hash is appended. If two buckets' names (scope id plus `-on-object-created`) agree on their first 80 characters, they get the same queue name and `cdk synth` fails, naming the queue; shorten one of the ids.
+- **Locally**, every matching write through the mock (`put()`, `restoreVersion()`, and uploads to the dev server's presigned URLs) runs the handler asynchronously, with the same retry count.
+- `onObjectCreated` can't be combined with `bucket` (a wrapped existing bucket). S3 keeps one notification configuration per bucket, which its owner may already manage; configure the notification there instead.
+- `event.path` is always a key FileBucket accepts. An object another client wrote under a key FileBucket rejects (for example one containing a newline) fails with `ValidationFailed` before your handler runs and ends up in the dead-letter queue.
+- Deletes don't run the handler.
 
 ### Encryption with KMS
 

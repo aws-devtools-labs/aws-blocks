@@ -525,3 +525,22 @@ test('mock: encryption and a valid objectLock are accepted and the bucket still 
 test('mock: fromKmsKey returns a branded ref', () => {
 	assert.deepStrictEqual(FileBucket.fromKmsKey('arn:k'), { __brand: 'ExternalKmsKeyRef', keyArn: 'arn:k' });
 });
+
+// ── Version-id counters vs nested keys ──────────────────────────────────────
+
+// The counter that keeps a key's version ids from repeating outlives the key's
+// last version. It must not sit where a later nested key's directories go:
+// once every version of `a.txt` is gone, `a.txt/...` is a valid key to write.
+test("a key's version counter doesn't block a nested key written after the key is gone", async () => {
+	const bucket = new FileBucket(scope, 'nested-counter');
+	await bucket.put('a.txt', 'one');
+	const [v1] = await bucket.listVersions('a.txt');
+	await bucket.delete('a.txt', { versionId: v1.versionId });
+
+	for (const nested of ['a.txt/__last-version__/child.txt', 'a.txt/child.txt']) {
+		await bucket.put(nested, 'two');
+		assert.strictEqual((await bucket.get(nested))?.body.toString(), 'two');
+	}
+	// The removed key's counter still holds: its id isn't reissued.
+	assert.strictEqual(await bucket.get('a.txt', { versionId: v1.versionId }), null);
+});
