@@ -66,12 +66,12 @@ Every log entry is a JSON object written to stdout (or stderr for errors):
   "message": "User logged in",
   "timestamp": "2024-01-15T10:30:00.000Z",
   "logger": "app",
-  "requestId": "c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
+  "awsRequestId": "c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
   "userId": "user-123"
 }
 ```
 
-On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), `requestId` is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically, so you can find everything one request logged, for example with CloudWatch Logs Insights: `filter requestId = "<id>"`. A `requestId` you pass in context takes precedence. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), `awsRequestId` is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically, so you can find everything one request logged, for example with CloudWatch Logs Insights: `filter awsRequestId = "<id>"`. It is reserved: a context value under that key is ignored. Your own correlation fields, such as a `requestId` passed to `child()`, are separate keys and are kept as is. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
 
 ### Child Loggers
 
@@ -150,7 +150,7 @@ In local dev (`npm run dev`), the Logger BB:
 - Does NOT create any files in `.bb-data/`
 - Retention has no local effect (it is a cloud-only, compute-level setting)
 - Log level comes from the `Logger`'s `level` option (default `'info'`)
-- Lines have no `requestId` field: the dev server doesn't set a request id
+- Lines have no `awsRequestId` field: the dev server doesn't set a request id
 
 ## Errors
 
