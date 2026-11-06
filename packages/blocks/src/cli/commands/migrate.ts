@@ -32,6 +32,7 @@ import {
 	lstatSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
 	rmdirSync,
 	rmSync,
 	type Stats,
@@ -847,7 +848,10 @@ export function planMigration(
 	return { result, pkg, pkgText };
 }
 
-/** Write `pkg` over `original`, the unchanged `package.json` text it was parsed from, in that text's style. */
+/**
+ * Write `pkg` over `original`, the unchanged `package.json` text it was parsed from, in that text's style.
+ * A rename, so that a reader (another migrate run, a dev server) never sees half a file.
+ */
 function writePackageJson(root: string, pkg: PackageJson, original: string, devConfig: MigratedDevConfig | null): void {
 	const path = join(root, 'package.json');
 	const indent = /^([ \t]+)"/m.exec(original)?.[1] ?? '  ';
@@ -856,7 +860,9 @@ function writePackageJson(root: string, pkg: PackageJson, original: string, devC
 	// Keep the file's line endings, so that the diff shows only the lines migrate changed.
 	const eol = original.includes('\r\n') ? '\r\n' : '\n';
 	const out = text.replace(/\n/g, eol);
-	writeFileSync(path, original.endsWith('\n') ? `${out}${eol}` : out);
+	const temporary = `${path}.${process.pid}.tmp`;
+	writeFileSync(temporary, original.endsWith('\n') ? `${out}${eol}` : out);
+	renameSync(temporary, path);
 }
 
 function describe(result: MigrateResult, dryRun: boolean): string {
