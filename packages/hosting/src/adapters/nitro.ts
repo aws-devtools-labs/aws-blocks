@@ -39,7 +39,7 @@ import {
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
 import { normalizeBasePath } from './shared/basepath.js';
-import { buildProfile } from './shared/build_profile.js';
+import { buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 import { targetCompute } from './shared/compute_target.js';
 
 export type NitroAdapterOptions = {
@@ -261,7 +261,9 @@ type NitroRouteRule = {
  * @returns framework-agnostic DeployManifest ready for the L3 construct
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
-  const { projectDir, skipBuild, preset, buildCommand } = options;
+  const { projectDir, preset, buildCommand } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () => fs.existsSync(path.join(projectDir, '.output')));
   // Web Functions run a plain Node.js HTTP server → `node-server`. An API
   // Gateway HTTP API invokes the server buffered, which a streaming
   // `aws-lambda` handler (`awsLambda.streaming: true`) can't answer → a

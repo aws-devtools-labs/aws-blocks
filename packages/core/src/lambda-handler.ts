@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // This will be bundled with the customer's backend code
+import { emitRpcErrorMetric } from './rpc-error-metric.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { lockRouteRegistry } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
@@ -354,6 +355,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
+        if (isRpcPath(requestPath)) emitRpcErrorMetric({ status: 504 });
         return {
           statusCode: 504,
           headers: {
@@ -410,7 +412,9 @@ function getRequestPath(event: any): string {
 }
 
 function createHandler(backend: any) {
-  const dispatch = createDispatcher(backend, { rpcErrorLabel: 'Lambda Error:' });
+  // Each failed RPC call writes the `RpcErrors` metric: the response is an HTTP
+  // 200 JSON-RPC error envelope, so Lambda's own `Errors` metric never counts it.
+  const dispatch = createDispatcher(backend, { rpcErrorLabel: 'Lambda Error:', onRpcError: emitRpcErrorMetric });
   return async (event: any, signal?: AbortSignal) => {
     const eventClass = classifyEvent(event);
 

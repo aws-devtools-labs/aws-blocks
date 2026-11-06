@@ -64,6 +64,7 @@ import {
 import { getRegisteredRoutes } from './raw-route.js';
 import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 import { writeFrameworkSink } from './telemetry/framework-sink.js';
+import { REUSE_FRONTEND_BUILD_CONTEXT, SKIP_FRONTEND_BUILD_ENV, frontendBuildReuse } from './common/frontend-build.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -233,6 +234,11 @@ export interface HostingProps {
    * When provided, it is executed during CDK synth with `BLOCKS_API_URL`
    * injected into the environment.
    * Omit if the app is already pre-built.
+   *
+   * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
+   * build output already exists, or on a deploy with
+   * `BLOCKS_SKIP_FRONTEND_BUILD=1`, which deploys the existing build output
+   * as is (a destroy ignores the variable). The framework adapter's own build is skipped the same way.
    */
   buildCommand?: string;
 
@@ -918,11 +924,63 @@ function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly strin
 
 // ─── Default build output directories per framework ──────────────
 
+/**
+ * The path whose existence means a reusable build exists, for a destroy's
+ * `if-present` reuse. It must be the marker the framework adapter itself checks
+ * (see `shouldSkipBuild` in `@aws-blocks/hosting`), or `Hosting` could skip
+ * `buildCommand` while the adapter still runs its full build. The built-in
+ * Next.js adapter deploys the OpenNext output, not `.next`; every other
+ * framework (and a custom adapter) is keyed on the build output dir.
+ *
+ * @internal
+ */
+export function frontendReuseMarker(
+  framework: string,
+  root: string,
+  expectedOutputDir: string,
+  hasCustomAdapter: boolean,
+): string {
+  if (framework === 'nextjs' && !hasCustomAdapter) return join(root, '.open-next', 'open-next.output.json');
+  return expectedOutputDir;
+}
+
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
   spa: 'dist',
   static: 'dist',
+};
+
+/**
+ * A framework adapter error for a build output that isn't there: the
+ * SPA/static output dir, OpenNext's `.open-next/`, Nitro's `.output/`, the
+ * SvelteKit and Astro build dirs.
+ */
+const MISSING_BUILD_OUTPUT_ERROR = /^[A-Za-z]*(?:OutputNotFound|OutputMissing)Error$/;
+
+/**
+ * Run the adapter. Under `BLOCKS_SKIP_FRONTEND_BUILD=1` the adapter doesn't
+ * build either, and the output it deploys can differ from the dir checked
+ * above (Next.js deploys `.open-next/`, not `.next/`). So a missing-output
+ * error from the adapter also says the variable skipped the build.
+ */
+const runAdapterNamingSkippedBuild = (
+  run: () => DeployManifest,
+  reuseBuild: ReturnType<typeof frontendBuildReuse>,
+): DeployManifest => {
+  try {
+    return run();
+  } catch (error) {
+    if (reuseBuild !== 'required' || !(error instanceof Error) || !MISSING_BUILD_OUTPUT_ERROR.test(error.name)) {
+      throw error;
+    }
+    const message = `${error.message}\n${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`;
+    // Keep the adapter's structured error (code, name, resolution) for callers that key on it.
+    if (error instanceof HostingError) {
+      throw new HostingError(error.code, { message, resolution: error.resolution }, error);
+    }
+    throw new Error(message, { cause: error });
+  }
 };
 
 // ─── Construct ───────────────────────────────────────────────────
@@ -1091,7 +1149,26 @@ export class Hosting extends Construct {
     writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
-    if (props.buildCommand) {
+    // A destroy reuses an existing build, and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+    // makes a deploy reuse it (see common/frontend-build.ts). The adapter gets
+    // the same decision through the build profile below.
+    const reuseBuild = frontendBuildReuse(this.node.tryGetContext(REUSE_FRONTEND_BUILD_CONTEXT));
+    const expectedOutputDir = props.buildOutputDir
+      ? resolve(root, props.buildOutputDir)
+      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
+    // A destroy reuses a build only when the adapter will too, so it checks the
+    // adapter's own marker (OpenNext's output for Next.js), not just the dir.
+    const reuseMarker = frontendReuseMarker(framework, root, expectedOutputDir, Boolean(props.customAdapter));
+    const skipBuildCommand =
+      reuseBuild === 'required' || (reuseBuild === 'if-present' && existsSync(reuseMarker));
+    if (props.buildCommand && skipBuildCommand) {
+      console.log(
+        reuseBuild === 'required'
+          ? `⏭️  Skipping frontend build (${SKIP_FRONTEND_BUILD_ENV} is set): using ${relative(root, expectedOutputDir) || '.'}`
+          : `⏭️  Skipping frontend build: this synth doesn't deploy the frontend, reusing ${relative(root, reuseMarker) || '.'}`,
+      );
+    }
+    if (props.buildCommand && !skipBuildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
       // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
@@ -1118,17 +1195,15 @@ export class Hosting extends Construct {
       }
     }
 
-    // ── 3. Resolve build output dir (for validation only) ────────
+    // ── 3. Validate the build output dir ─────────────────────────
     const buildOutputDir = props.buildOutputDir;
-
-    const expectedOutputDir = buildOutputDir
-      ? resolve(root, buildOutputDir)
-      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
 
     if (!existsSync(expectedOutputDir)) {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
-          `Provide a buildCommand or ensure the directory exists before synthesis.`,
+          (reuseBuild === 'required'
+            ? `${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`
+            : `Provide a buildCommand or ensure the directory exists before synthesis.`),
       );
     }
 
@@ -1162,8 +1237,9 @@ export class Hosting extends Construct {
           ...(props.incrementalRegeneration === false ? { skipIsr: true } : {}),
           ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
           ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),
+          ...(reuseBuild ? { reuseBuild } : {}),
         },
-        () => adapter(root),
+        () => runAdapterNamingSkippedBuild(() => adapter(root), reuseBuild),
       ),
     );
 

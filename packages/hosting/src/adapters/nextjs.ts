@@ -19,7 +19,7 @@ import fg from 'fast-glob';
 import semver from 'semver';
 import { getProjectPackageInfo } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
-import { type BuildProfile, buildProfile } from './shared/build_profile.js';
+import { type BuildProfile, buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 import { targetCompute } from './shared/compute_target.js';
 import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
 import {
@@ -117,7 +117,11 @@ type OpenNextBehavior = {
 export const nextjsAdapter = (
   options: NextjsAdapterOptions,
 ): DeployManifest => {
-  const { projectDir, configPath, skipBuild } = options;
+  const { projectDir, configPath } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () =>
+    fs.existsSync(path.join(projectDir, '.open-next', 'open-next.output.json')),
+  );
   // How the deploy around this build is shaped: the door's server invoke, and
   // the preview trims (see `build_profile.ts`).
   const profile = buildProfile();
