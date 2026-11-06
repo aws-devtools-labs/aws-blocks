@@ -662,7 +662,7 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
 	// The name as a literal, not core's `deployedConfigFile`: this CLI may run against an
 	// app whose installed core predates that export, and the file name is fixed.
 	rmSync(join(dir, `config.${stage}.json`), { force: true });
-	// Before core 0.8, a deploy wrote its URL to the dev server's config.json.
+	// Core 0.8.0 and earlier: a deploy wrote its URL to the dev server's config.json.
 	if (readJson('config.json')?.environment === stage) rmSync(join(dir, 'config.json'));
 }
 

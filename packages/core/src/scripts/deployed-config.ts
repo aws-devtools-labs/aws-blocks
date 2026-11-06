@@ -32,7 +32,7 @@ export function writeDeployedConfig(outDir: string, stage: DeployedStage, apiUrl
 }
 
 /**
- * Move a `config.json` that a deploy from before core 0.8 wrote in `outDir`
+ * Move a `config.json` that a deploy from core 0.8.0 or earlier wrote in `outDir`
  * (see `legacyDeployedStage`) to the `config.<stage>.json` of its stage, unless
  * a newer deploy already recorded that stage, and remove it, so the local loop
  * no longer finds an AWS URL there. A dev server's own `config.json` stays.
