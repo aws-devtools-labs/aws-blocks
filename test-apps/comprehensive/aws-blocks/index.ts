@@ -2819,6 +2819,36 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { traceId: tracer.getTraceId() };
   },
 
+  async tracerParallelRoots() {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    const run = (name: string) => tracer.startSegment(name, async () => {
+      const before = tracer.getTraceId();
+      await ready;
+      return { before, after: tracer.getTraceId() };
+    });
+    const first = run('parallel-first');
+    const second = run('parallel-second');
+    release();
+    return Promise.all([first, second]);
+  },
+
+  async tracerDeferredRoot() {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { release = resolve; });
+    let deferred!: Promise<string | null>;
+    const requestId = await tracer.startSegment('request', async () => {
+      deferred = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          ready.then(() => tracer.startSegment('deferred', async () => tracer.getTraceId())).then(resolve, reject);
+        }, 0);
+      });
+      return tracer.getTraceId();
+    });
+    release();
+    return { requestId, deferredId: await deferred };
+  },
+
   async tracerAddAnnotation(key: string, value: string) {
     tracer.addAnnotation(key, value);
     return { success: true };
