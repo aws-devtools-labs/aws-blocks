@@ -871,7 +871,9 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		return 0;
 	}
 
-	console.log(`\nCreated ${planned.size} files in ${relative(cwd, targetDir) || '.'}`);
+	// Relative to where the CLI ran, which may be below the repo/workspace root.
+	const targetRel = relative(cwd, targetDir) || '.';
+	console.log(`\nCreated ${planned.size} files in ${targetRel}`);
 	if (wire) {
 		console.log(mode === 'contributor' ? 'Wired:' : 'Linked:');
 		for (const e of wire.edits) console.log(`  ~ ${e}`);
@@ -915,29 +917,33 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	printNextSteps(mode, names, relative(cwd, targetDir) || '.');
+	printNextSteps(mode, names, targetRel);
 	return 0;
 }
 
 /**
  * Quote a path for a copy-pasteable POSIX shell command. Paths made only of safe characters print
  * as-is; anything else (spaces, `;`, `$`, quotes, ...) is single-quoted so the shell treats it literally.
+ * A path whose first character could change how the shell or `cd` reads the word gets a `./` prefix
+ * first, since quoting alone doesn't help: `-x` parses as an option, `-` means `$OLDPWD`, and zsh
+ * expands a leading `=`.
  */
 function shellQuotePath(path: string): string {
-	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(path)) return path;
-	return `'${path.replace(/'/g, `'\\''`)}'`;
+	const anchored = /^[A-Za-z0-9_./]/.test(path) ? path : `./${path}`;
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(anchored)) return anchored;
+	return `'${anchored.replace(/'/g, `'\\''`)}'`;
 }
 
 function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): void {
 	console.log('\nNext steps:');
 	if (mode === 'contributor') {
-		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
+		console.log(`  1. Implement ${names.className}'s API in ${targetRel}/src/.`);
 		console.log(`  2. Add a real ${names.className} instance + assertions to test-apps/comprehensive`);
 		console.log(`     (aws-blocks/index.ts and test/${names.suffix}.test.ts — zero type casts).`);
 		console.log(`  3. Fill in the TODO summaries in packages/blocks/src/index.ts and the changeset.`);
 		console.log('  4. npm run build && npm run lint:deps && npm test && npm run test:e2e:local');
 	} else if (mode === 'customer') {
-		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
+		console.log(`  1. Implement ${names.className}'s API in ${targetRel}/src/.`);
 		console.log(`  2. Import it in your backend: import { ${names.className} } from '${names.pkgName}';`);
 		console.log(`     (it's linked into your workspace — no publish needed).`);
 	} else {
