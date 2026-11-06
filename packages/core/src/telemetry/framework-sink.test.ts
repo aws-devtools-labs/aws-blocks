@@ -89,15 +89,31 @@ describe('telemetry framework-sink (synth child -> parent bridge)', () => {
   });
 
   it('creates nothing at all when the user opted out', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    const before = readdirSync(tmpdir()).filter((e) => e.startsWith('blocks-framework-')).length;
+    // Observe a private tmpdir: the shared one also holds blocks-framework-* dirs that
+    // other tests (here and in files the runner runs concurrently) create and remove,
+    // so counting entries there races. os.tmpdir() reads these variables at call time.
+    const privateTmp = mkdtempSync(join(tmpdir(), 'fw-sink-tmpdir-'));
+    const tmpVars = ['TMPDIR', 'TMP', 'TEMP'] as const;
+    const prevTmp = tmpVars.map((name) => process.env[name]);
+    try {
+      for (const name of tmpVars) process.env[name] = privateTmp;
+      assert.strictEqual(tmpdir(), privateTmp, 'test setup: tmpdir() must resolve to the private directory');
+      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
 
-    assert.strictEqual(createFrameworkSink(), undefined);
-    assert.strictEqual(
-      readdirSync(tmpdir()).filter((e) => e.startsWith('blocks-framework-')).length,
-      before,
-      'an opted-out run must not create even an empty directory',
-    );
+      assert.strictEqual(createFrameworkSink(), undefined);
+      assert.deepStrictEqual(
+        readdirSync(privateTmp),
+        [],
+        'an opted-out run must not create even an empty directory',
+      );
+    } finally {
+      tmpVars.forEach((name, i) => {
+        const value = prevTmp[i];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      });
+      rmSync(privateTmp, { recursive: true, force: true });
+    }
   });
 
   it('removes the directory when the command exits without running its own cleanup', () => {

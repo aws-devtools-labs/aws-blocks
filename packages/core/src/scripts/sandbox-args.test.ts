@@ -107,6 +107,14 @@ describe('sandboxFailureRecoveryHint — no silent dead-end after a failed expre
   it('explains why (rollback is off under express mode)', () => {
     assert.match(hint, /rollback is off|automatic rollback/i);
   });
+
+  it('names the commands the user runs, when the caller passes them, aligned', () => {
+    const named = sandboxFailureRecoveryHint('cdk-blocks sandbox deploy', 'cdk-blocks sandbox destroy');
+    assert.match(named, /If the next `cdk-blocks sandbox deploy` reports/);
+    assert.match(named, /^ {5}cdk-blocks sandbox destroy {3}# tears/m);
+    assert.match(named, /^ {5}cdk-blocks sandbox deploy {4}# redeploy/m);
+    assert.doesNotMatch(named, /npm run/);
+  });
 });
 
 describe('sandbox Express Mode fallback (Lambda Web Function endpoints)', () => {
@@ -273,6 +281,24 @@ describe('buildSandboxDeployArgs — preview re-deploy hotswap', () => {
   });
 });
 
+describe('buildSandboxWatchArgs — infrastructure changes are deployed, not skipped', () => {
+  const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: '/proj/aws-blocks/index.cdk.ts' };
+
+  // `cdk watch` defaults to --hotswap, which ignores changes it can't hotswap
+  // (a new Database or Realtime). The fallback deploys them in full instead.
+  it('watches with --hotswap-fallback', () => {
+    const args = buildSandboxWatchArgs(base);
+    assert.deepStrictEqual(args.slice(0, 2), ['cdk', 'watch']);
+    assert.ok(args.includes('--hotswap-fallback'), `missing --hotswap-fallback: ${args.join(' ')}`);
+  });
+
+  it('never passes plain --hotswap or --no-hotswap, which would skip or slow every change', () => {
+    const args = buildSandboxWatchArgs(base);
+    assert.ok(!args.includes('--hotswap'));
+    assert.ok(!args.includes('--no-hotswap'));
+  });
+});
+
 describe('preview sandbox — the previewMode context', () => {
   const base = { outDir: '.blocks-sandbox', projectRoot: '/proj', backendPath: 'aws-blocks/index.cdk.ts' };
   const contexts = (args: string[]) => args.flatMap((a, i) => (args[i - 1] === '--context' ? [a] : []));
@@ -339,6 +365,12 @@ describe('previewRemovalWarning — a plain sandbox deploy over a hosted preview
     assert.match(warning ?? '', /hosted preview at https:\/\/abc\.execute-api\.us-west-2\.amazonaws\.com/);
     assert.match(warning ?? '', /removes it/);
     assert.match(warning ?? '', /npm run sandbox:preview/);
+  });
+
+  it('names the command that deploys a preview, when the launcher passes it', () => {
+    const warning = previewRemovalWarning(outputsWith(withPreview), false, 'npx --no -- cdk-blocks sandbox preview');
+    assert.match(warning ?? '', /Run npx --no -- cdk-blocks sandbox preview to keep it/);
+    assert.doesNotMatch(warning ?? '', /npm run/);
   });
 
   it('is silent for a preview deploy, a backend-only stack, and no or an unreadable outputs file', () => {

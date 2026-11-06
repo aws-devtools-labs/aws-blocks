@@ -35,6 +35,8 @@ export interface DeployOptions {
    * rewrites that file with only its own stack, and can do so during the wait.
    */
   onDeployed?: (deployed: DeployedStack) => void;
+  /** How the user runs the deploy, in the guidance (for example `cdk-blocks deploy`). Default: `npm run deploy`. */
+  invocation?: string;
 }
 
 /** The stack a production deploy deployed, from the outputs it read. */
@@ -246,7 +248,12 @@ export async function deploy(options: DeployOptions) {
     // Fail fast if AWS credentials are missing/expired, or the account and Region were
     // never CDK-bootstrapped, before generating the client and spending time in synth
     // only to hit an opaque CDK error.
-    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot, checkBootstrap: true });
+    await assertAwsCredentials({
+      command: 'deploy',
+      invocation: options.invocation,
+      projectRoot: options.projectRoot,
+      checkBootstrap: true,
+    });
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name
@@ -272,8 +279,8 @@ export async function deploy(options: DeployOptions) {
 
     log.progress('🚀 Deploying to AWS...');
     log.detail('   (This may take a few minutes on first deploy)');
-    log.detail('   - Backend API (Lambda + API Gateway)');
-    log.detail('   - Frontend hosting (S3 + CloudFront)');
+    // Not "Frontend hosting": the app may have none, and that is known only from its outputs.
+    log.detail('   - Backend API (Lambda + API Gateway), and frontend hosting when the app defines it');
     log.detail('   Streaming CloudFormation events below; the deploy keeps running if this');
     log.detail('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
 

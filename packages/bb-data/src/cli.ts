@@ -109,10 +109,23 @@ function takeFlagOrBool(args: string[], flag: string): { present: boolean; value
   return { present: false };
 }
 
+/**
+ * The command that runs this CLI, for the verb usage: `bb-data`, or the
+ * `BB_DATA_COMMAND` that a wrapper sets (`cdk-blocks db` for the `cdk-blocks` CLI).
+ */
+const COMMAND = process.env.BB_DATA_COMMAND || 'bb-data';
+
+/**
+ * What `pull` does without a terminal. `cdk-blocks db pull` refuses before it runs bb-data, as
+ * a usage error (exit 2), also under --no-input or CI; bb-data itself exits 1.
+ */
+const PULL_NO_TERMINAL =
+  COMMAND === 'cdk-blocks db' ? 'exits 2 without one (or with --no-input or CI)' : 'exits 1 without one';
+
 /** The verbs, with the usage that `bb-data <verb> --help` prints. */
 const VERB_HELP: Record<string, string> = {
   migrate: `
-Usage: bb-data migrate [dir] [--url <conn>] [--stage <name>] [--regenerate-types[=<dir>]]
+Usage: ${COMMAND} migrate [dir] [--url <conn>] [--stage <name>] [--regenerate-types[=<dir>]]
 
 Apply pending SQL migrations from [dir] (default: ./migrations), in file-name order.
 Without --url it applies them to the local PGlite database in .bb-data/; on an app whose
@@ -128,7 +141,7 @@ Options:
   -h, --help               Print this help and exit.
 `,
   status: `
-Usage: bb-data status [dir] [--url <conn>]
+Usage: ${COMMAND} status [dir] [--url <conn>]
 
 Show applied and pending migrations from [dir] (default: ./migrations). Reads only.
 Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
@@ -139,7 +152,7 @@ Options:
   -h, --help               Print this help and exit.
 `,
   'generate-types': `
-Usage: bb-data generate-types [output] [--url <conn>]
+Usage: ${COMMAND} generate-types [output] [--url <conn>]
 
 Introspect the schema and write TypeScript types to [output] (default: ./types/database.ts).
 Without --url it reads the local PGlite database in .bb-data/; on an app whose database is
@@ -150,11 +163,11 @@ Options:
   -h, --help               Print this help and exit.
 `,
   pull: `
-Usage: bb-data pull [output-dir]
+Usage: ${COMMAND} pull [output-dir]
 
 Interactive: asks whether the database is for development or production, then for its
 connection string, introspects it and writes the generated files to [output-dir]
-(default: ./aws-blocks). It needs a terminal and exits 1 without one.
+(default: ./aws-blocks). It needs a terminal, and ${PULL_NO_TERMINAL}.
 
 Options:
   -h, --help               Print this help and exit.

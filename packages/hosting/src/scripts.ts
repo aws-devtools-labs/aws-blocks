@@ -17,6 +17,7 @@ export {
 	removeValue,
 	runValueCli,
 	setValue,
+	ValueCliInterruptedError,
 	type ValueCliOptions,
 	ValueCliUsageError,
 } from './secret-cli.js';

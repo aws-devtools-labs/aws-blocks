@@ -1116,7 +1116,8 @@ class CodegenModelBuilder {
 
   void _resolveBindings(RpcModel rpc) {
     final referenced = <String>{};
-    final claimed = <String, ({String package, String export})>{};
+    final claimed =
+        <String, ({String package, String export, int genericArity})>{};
     for (final binding in rpc.nativeBindings) {
       if (!rpc.nativePackages.containsKey(binding.package)) {
         throw FormatException(
@@ -1140,7 +1141,11 @@ class CodegenModelBuilder {
       if (package == null) continue;
       final typeName = _exportTypeName(binding.export);
       _checkTypeNameUnclaimed(binding, typeName, claimed);
-      claimed[typeName] = (package: binding.package, export: binding.export);
+      claimed[typeName] = (
+        package: binding.package,
+        export: binding.export,
+        genericArity: binding.genericArity,
+      );
       _bindings[binding.tag] = TransferableBinding(
         typeName: typeName,
         packageName: package.name,
@@ -1158,11 +1163,12 @@ class CodegenModelBuilder {
     }
   }
 
-  /// Two tags may share one export, but two exports cannot share a type name.
+  /// Two tags may share one export at one arity, but two exports cannot share
+  /// a type name.
   void _checkTypeNameUnclaimed(
     NativeBinding binding,
     String typeName,
-    Map<String, ({String package, String export})> claimed,
+    Map<String, ({String package, String export, int genericArity})> claimed,
   ) {
     final String? occupant;
     if (dartCoreTypeNames.contains(typeName)) {
@@ -1170,10 +1176,16 @@ class CodegenModelBuilder {
     } else if (blocksRuntimeTypeNames.contains(typeName)) {
       occupant = 'package:blocks_runtime/blocks_runtime.dart';
     } else if (claimed[typeName] case final prior?
-        when prior != (package: binding.package, export: binding.export)) {
+        when prior !=
+            (
+              package: binding.package,
+              export: binding.export,
+              genericArity: binding.genericArity,
+            )) {
       occupant =
           "export '${escapeForDiagnostic(prior.export)}' in package "
-          "'${escapeForDiagnostic(prior.package)}'";
+          "'${escapeForDiagnostic(prior.package)}' at generic arity "
+          '${prior.genericArity}';
     } else {
       occupant = null;
     }
@@ -1190,8 +1202,9 @@ class CodegenModelBuilder {
   String _exportTypeName(String export) {
     if (!_exportGrammar.hasMatch(export)) {
       throw FormatException(
-        "Binding export '${escapeForDiagnostic(export)}' does not name a "
-        'public Dart type',
+        "Binding export '${escapeForDiagnostic(export)}' is not a -, _ or . "
+        'joined run of alphanumeric segments starting with a letter, so it '
+        'cannot name a public Dart type',
       );
     }
     return export.split(RegExp(r'[-_.]+')).map(_capitalize).join();

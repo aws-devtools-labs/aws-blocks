@@ -17,6 +17,7 @@ import jwt from 'jsonwebtoken';
 import type { BlocksContext } from '@aws-blocks/core';
 import { Scope, hasAuthError } from '@aws-blocks/core';
 import type { AuthStateApi } from '@aws-blocks/auth-common';
+import type { EmitOptions, MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { AuthBasic, AuthBasicErrors, type AuthBasicOptions } from './index.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -1125,5 +1126,112 @@ describe('AuthBasic telemetry registration', () => {
 			[{ name: BB_NAME, version: BB_VERSION }],
 		);
 		assert.strictEqual(customBlocksCount, 0, 'must not be filtered out as an unnamed custom block');
+	});
+});
+
+/** A `MetricsEmitter` that records every `emit`, or throws when `failing` is set. */
+function recordingMetrics(failing = false): MetricsEmitter & { emitted: { name: string; value: number; options?: EmitOptions }[] } {
+	const emitted: { name: string; value: number; options?: EmitOptions }[] = [];
+	const emitter = {
+		emitted,
+		emit(name: string, value: number, options?: EmitOptions): void {
+			if (failing) throw new Error('metrics backend unavailable');
+			emitted.push({ name, value, options });
+		},
+		emitBatch(): void {},
+		flush(): void {},
+		child(): MetricsEmitter {
+			return emitter;
+		},
+	};
+	return emitter;
+}
+
+describe('AuthBasic sign-in metrics', () => {
+	test('a successful sign-in emits SignInSuccess with the AuthBlock dimension', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics });
+		await auth.signUp('alice', 'password123');
+		await auth.signIn('alice', 'password123', ctx());
+		assert.deepStrictEqual(metrics.emitted, [
+			{ name: 'SignInSuccess', value: 1, options: { unit: 'Count', dimensions: { AuthBlock: auth.fullId } } },
+		]);
+	});
+
+	test('an unknown user and an unconfirmed user each emit SignInFailure', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics, codeDelivery: async () => {} });
+		// carol stays unconfirmed: with codeDelivery set, signUp leaves the account pending.
+		await auth.signUp('carol', 'password123');
+		await assert.rejects(() => auth.signIn('nobody', 'password123', ctx()));
+		await assert.rejects(() => auth.signIn('carol', 'password123', ctx()));
+		assert.deepStrictEqual(
+			metrics.emitted.map((m) => m.name),
+			['SignInFailure', 'SignInFailure'],
+		);
+	});
+
+	test('wrong password emits SignInFailure', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics });
+		await auth.signUp('alice', 'password123');
+		await assert.rejects(
+			() => auth.signIn('alice', 'wrong-password', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+		);
+		assert.deepStrictEqual(metrics.emitted.map((m) => m.name), ['SignInFailure']);
+		assert.deepStrictEqual(metrics.emitted[0].options?.dimensions, { AuthBlock: auth.fullId });
+	});
+
+	test('a sign-in refused by the lockout emits SignInLocked', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics, lockout: { maxAttempts: 2 } });
+		await auth.signUp('alice', 'password123');
+		await assert.rejects(() => auth.signIn('alice', 'wrong-1', ctx()));
+		await assert.rejects(() => auth.signIn('alice', 'wrong-2', ctx()));
+		await assert.rejects(
+			() => auth.signIn('alice', 'password123', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.AccountLocked,
+		);
+		assert.deepStrictEqual(
+			metrics.emitted.map((m) => m.name),
+			['SignInFailure', 'SignInFailure', 'SignInLocked'],
+		);
+	});
+
+	test('a failure is counted even when the lockout counter read fails', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics, lockout: {} });
+		await auth.signUp('alice', 'password123');
+		const codes = codesStore(auth);
+		const realGet = codes.get.bind(codes);
+		// Each sign-in reads the counter twice: the lockout pre-check, then
+		// recordFailedSignIn. Let every pre-check pass and fail every second read.
+		let reads = 0;
+		codes.get = async (k: string) => {
+			if (k.startsWith('lockout:') && ++reads % 2 === 0) throw new Error('ProvisionedThroughputExceededException');
+			return realGet(k);
+		};
+		try {
+			await assert.rejects(() => auth.signIn('alice', 'wrong-password', ctx()));
+			await assert.rejects(() => auth.signIn('nobody', 'password123', ctx()));
+		} finally {
+			codes.get = realGet;
+		}
+		assert.deepStrictEqual(
+			metrics.emitted.map((m) => m.name),
+			['SignInFailure', 'SignInFailure'],
+		);
+	});
+
+	test('an emitter that throws does not change the sign-in result', async () => {
+		const auth = makeAuth({ metrics: recordingMetrics(true) });
+		await auth.signUp('alice', 'password123');
+		const user = await auth.signIn('alice', 'password123', ctx());
+		assert.strictEqual(user.username, 'alice');
+		await assert.rejects(
+			() => auth.signIn('alice', 'wrong-password', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+		);
 	});
 });

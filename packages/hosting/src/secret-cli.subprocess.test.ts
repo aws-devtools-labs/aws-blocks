@@ -27,6 +27,7 @@ interface StoreCall {
 let server: Server;
 let endpoint: string;
 let calls: StoreCall[] = [];
+let described: string[] = [];
 
 before(async () => {
 	server = createServer((req, res) => {
@@ -36,7 +37,10 @@ before(async () => {
 		});
 		req.on('end', () => {
 			const body = (raw ? JSON.parse(raw) : {}) as Record<string, unknown>;
-			calls.push({ target: String(req.headers['x-amz-target'] ?? ''), body });
+			const target = String(req.headers['x-amz-target'] ?? '');
+			// A forced delete first checks that the secret exists; record only the calls that change the store.
+			if (target.endsWith('.DescribeSecret')) described.push(String(body.SecretId));
+			else calls.push({ target, body });
 			res.writeHead(200, { 'content-type': 'application/x-amz-json-1.1' });
 			res.end(
 				JSON.stringify({ ARN: 'arn:aws:secretsmanager:us-east-1:000000000000:secret:x', Name: body.SecretId }),
@@ -52,6 +56,7 @@ after(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
 beforeEach(() => {
 	calls = [];
+	described = [];
 });
 
 function runBin(args: string[], bin = BIN): Promise<{ code: number | null; stdout: string; stderr: string }> {
@@ -108,6 +113,7 @@ void describe('hosting-secret remove --force (subprocess, loopback Secrets Manag
 		assert.match(calls[0].target, /DeleteSecret$/);
 		assert.strictEqual(calls[0].body.ForceDeleteWithoutRecovery, true);
 		assert.match(String(calls[0].body.SecretId), /\/prod\/DB_PASSWORD$/);
+		assert.deepStrictEqual(described, [calls[0].body.SecretId], 'the secret is looked up before it is deleted');
 	});
 
 	void it('-y on the shared namespace: warns that every stage shares it, then force-deletes', async () => {

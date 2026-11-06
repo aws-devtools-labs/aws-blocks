@@ -164,6 +164,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 - register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
 - add to the root `workspaces`
 - add an instance + test to `test-apps/comprehensive` (zero casts)
+- needs a step before `cdk deploy` (a guard, host-side migrations)? Declare it in the block's `package.json` as `"aws-blocks": { "predeploy": { "module": "./dist/predeploy.js", "stages": ["production"] } }` and export `predeploy(context)` from that module; core's `deploy` and `sandbox` scripts discover and run it (`context.synth()` gives the templates). Never add block-specific code to `packages/core/src/scripts`.
 - `npx changeset add`.
 
 ---

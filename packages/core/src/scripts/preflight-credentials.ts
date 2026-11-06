@@ -130,6 +130,8 @@ const stsProbe: CredentialProbe = async (region, profile, environmentKeys) => {
 export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	/** The npm script name, used in the messages (e.g. `sandbox`, `deploy`). */
 	command: string;
+	/** How the user runs the command, in the messages (for example `cdk-blocks deploy`). Default: `npm run <command>`. */
+	invocation?: string;
 	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
 	probe?: CredentialProbe;
 	/** Reads `aws --version` when the guidance recommends `aws login`. Override in tests. */
@@ -268,6 +270,7 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
  */
 export async function assertAwsCredentials({
 	command,
+	invocation = `npm run ${command}`,
 	probe = stsProbe,
 	readAwsCliVersion,
 	metadataClients,
@@ -286,7 +289,7 @@ export async function assertAwsCredentials({
 	if (!region) {
 		log.warn(
 			[
-				`⚠️  Skipping the AWS credential pre-check for \`npm run ${command}\`: no Region is set. ` +
+				`⚠️  Skipping the AWS credential pre-check for \`${invocation}\`: no Region is set. ` +
 					'Set AWS_REGION, or set region in your AWS profile. The deploy will surface any credential error itself.',
 				...(target.profile
 					? [
@@ -316,18 +319,19 @@ export async function assertAwsCredentials({
 		// Not a credential problem: don't block a deploy that might still work.
 		if (failure === 'network') {
 			log.warn(
-				`⚠️  Could not reach AWS to verify credentials for \`npm run ${command}\` (${label}); ` +
+				`⚠️  Could not reach AWS to verify credentials for \`${invocation}\` (${label}); ` +
 					'continuing — if the deploy also fails to connect, check your network or proxy settings.',
 			);
 		} else if (failure === 'inconclusive') {
 			log.warn(
-				`⚠️  Could not verify AWS credentials for \`npm run ${command}\` (${label}); ` +
+				`⚠️  Could not verify AWS credentials for \`${invocation}\` (${label}); ` +
 					'continuing — the deploy will report any real error.',
 			);
 		} else {
 			throw new Error(
 				await credentialFailureMessage({
 					command,
+					invocation,
 					errorName: label,
 					failure,
 					// The guidance follows the deploy: with environment keys, no profile is used.
@@ -343,7 +347,7 @@ export async function assertAwsCredentials({
 	const bootstrapFailure =
 		checkBootstrap && verified?.account
 			? cdkBootstrapFailure({
-					command,
+					invocation,
 					account: verified.account,
 					region,
 					profile,
@@ -397,7 +401,7 @@ export interface AwsIdentity {
 
 /** Options for {@link readAwsIdentity}. */
 export interface ReadAwsIdentityOptions extends DeploymentTargetOptions {
-	/** How the user runs the command, used in the failure guidance (for example `blocks whoami`). */
+	/** How the user runs the command, used in the failure guidance (for example `cdk-blocks whoami`). */
 	invocation: string;
 	/** Credential probe; defaults to STS GetCallerIdentity. Override in tests. */
 	probe?: CredentialProbe;
@@ -432,7 +436,25 @@ export async function readAwsIdentity({
 		...(target.profile ? { profile: target.profile } : {}),
 		region: region || null,
 	};
-	if (!region) return identity;
+	if (!region) {
+		// No request to send, but a selected profile that does not exist is the first thing to fix:
+		// with it, no Region can be read from the profile either.
+		const source = environmentKeys ? undefined : await describeCredentialSource(env, profile).catch(() => undefined);
+		if (source?.type === 'missing-profile') {
+			throw new Error(
+				await credentialFailureMessage({
+					command: invocation,
+					invocation,
+					errorName: 'ProfileNotFound',
+					failure: 'unavailable',
+					env,
+					profile,
+					readAwsCliVersion,
+				}),
+			);
+		}
+		return identity;
+	}
 
 	let verified: VerifiedCredentials | undefined;
 	try {

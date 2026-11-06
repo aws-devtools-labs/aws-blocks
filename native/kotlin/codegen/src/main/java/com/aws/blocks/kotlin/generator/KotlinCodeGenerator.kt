@@ -126,19 +126,34 @@ private const val TRANSFERABLE_KIND = "transferable"
 
 private data class BoundTransferable(val type: ClassName, val genericArity: Int)
 
+private data class TypeNameClaim(val packageIdentity: String, val export: String, val genericArity: Int)
+
 private fun resolveBoundTransferables(
     catalogs: NativeCatalogs,
     excludedPackages: Set<String>,
-): Map<String, BoundTransferable> = catalogs.bindings
-    .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
-    .mapNotNull { binding ->
-        binding.kotlinPackage?.let { kotlinPackage ->
-            binding.tag to BoundTransferable(
-                ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export)),
-                binding.genericArity,
-            )
-        }
-    }.toMap()
+): Map<String, BoundTransferable> {
+    val claimants = mutableMapOf<String, TypeNameClaim>()
+    return catalogs.bindings
+        .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
+        .mapNotNull { binding ->
+            binding.kotlinPackage?.let { kotlinPackage ->
+                val type = ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export))
+                val claim = TypeNameClaim(binding.packageIdentity, binding.export, binding.genericArity)
+                val prior = claimants[type.canonicalName]
+                if (prior != null && prior != claim) {
+                    throw CodegenException(
+                        "x-blocks-native-bindings binds tag \"${binding.tag.forDiagnostic()}\" to " +
+                            "${type.canonicalName}, already resolved by export " +
+                            "\"${prior.export.forDiagnostic()}\" in package " +
+                            "\"${prior.packageIdentity.forDiagnostic()}\" " +
+                            "at generic arity ${prior.genericArity}",
+                    )
+                }
+                claimants[type.canonicalName] = claim
+                binding.tag to BoundTransferable(type, binding.genericArity)
+            }
+        }.toMap()
+}
 
 /**
  * Generates Kotlin source files from a [CodegenModel] using KotlinPoet.

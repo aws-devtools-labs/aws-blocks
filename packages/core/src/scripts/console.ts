@@ -8,6 +8,8 @@ import { trackCommand } from '../telemetry/trackCommand.js';
 export interface ConsoleOptions {
   stackId?: string;
   outputsFile?: string;
+  /** The Region the stack is in, for example the one it was deployed to. Default: the configured Region. */
+  region?: string;
 }
 
 function resolveRegion(): string {
@@ -50,7 +52,7 @@ export async function openConsole(options: ConsoleOptions) {
       throw new Error('Must provide either stackId or outputsFile');
     }
 
-    const region = resolveRegion();
+    const region = options.region || resolveRegion();
     const stackUrl = `https://${region}.console.aws.amazon.com/cloudformation/home?region=${region}#/stacks?filteringText=${encodeURIComponent(stackName)}`;
 
     console.log('Opening AWS Console...');

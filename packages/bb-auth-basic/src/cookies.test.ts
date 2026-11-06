@@ -114,6 +114,31 @@ describe('AuthBasic session cookie', () => {
 		}
 	});
 
+	test('on deployed compute, a request claiming a localhost Origin cannot drop Secure', async () => {
+		const keys = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const;
+		const previous = keys.map((k) => process.env[k]);
+		const auth = makeAuth();
+		await auth.signUp(USER, PASS);
+		process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+		process.env.BLOCKS_CONFIG_KEY = 'config.json';
+		try {
+			const c = ctx('http://localhost:3000');
+			await auth.signIn(USER, PASS, c);
+			const header = c.response.headers.get('set-cookie') ?? '';
+			assert.ok(header.includes('SameSite=Lax; Secure'), header);
+			const out = ctx('http://localhost:3000');
+			await auth.signOut(out);
+			const cleared = out.response.headers.get('set-cookie') ?? '';
+			assert.ok(cleared.includes('Max-Age=0'), cleared);
+			assert.ok(cleared.includes('Secure'), cleared);
+		} finally {
+			keys.forEach((k, i) => {
+				if (previous[i] === undefined) delete process.env[k];
+				else process.env[k] = previous[i];
+			});
+		}
+	});
+
 	test('signOut clears the cookie with matching attributes', async () => {
 		const auth = makeAuth();
 		const c = ctx('https://app.example.com');

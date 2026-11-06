@@ -36,6 +36,8 @@ Template descriptions are sourced from each template's `package.json` (`blocksTe
 npx @aws-blocks/create-blocks-app .
 ```
 
+In an npm workspaces monorepo, the app's `aws-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["aws-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/aws-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
+
 ### Add Blocks to an Amplify Gen 2 Project
 
 Already have an Amplify Gen 2 app? Run from your project root:
@@ -55,16 +57,11 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 │   ├── index.cdk.ts      # CDK stack definition
 │   ├── index.handler.ts  # Lambda handler
 │   ├── client.js         # Auto-generated frontend client
-│   ├── package.json      # Backend workspace dependencies
-│   └── scripts/
-│       ├── server.ts     # Local dev server
-│       ├── sandbox.ts    # Sandbox deployment
-│       ├── deploy.ts     # Production deployment
-│       └── destroy.ts    # Stack teardown
+│   └── package.json      # Backend workspace dependencies
 ├── cdk.json              # CDK configuration
 ├── src/
 │   └── ...               # Your existing code
-└── package.json          # Updated with Blocks scripts
+└── package.json          # Updated with Blocks scripts and "blocks" CLI settings
 ```
 
 ### Backend Structure
@@ -120,19 +117,37 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 ### Package.json Scripts
 
+Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`: `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings live in `package.json#blocks.dev`.
+
 ```json
 {
   "scripts": {
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:deploy": "tsx aws-blocks/scripts/sandbox.ts --deploy-only",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:preview": "cdk-blocks sandbox preview",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "deploy": "cdk-blocks deploy",
+    "destroy": "cdk-blocks destroy",
+    "secret": "cdk-blocks secret",
+    "typegen": "cdk-blocks generate types",
+    "spec": "cdk-blocks generate spec",
+    "vendorize": "cdk-blocks vendorize",
+    "prebuild": "cdk-blocks generate client",
     "build": "tsc && vite build"
+  },
+  "blocks": {
+    "dev": { "frontendPort": 3100 }
   }
 }
 ```
+
+No template sets `frontendCommand`: `cdk-blocks dev` starts the frontend dev server it detects from the app's dependencies (`npx vite --port <frontendPort> --strictPort` for `vite`, `npx next dev --webpack --hostname 127.0.0.1 --port <frontendPort>` for `next`), so `npm run dev -- --frontend-port 4100` moves it. Set `frontendCommand` only for another dev server, and give it the same port as `frontendPort`; `cdk-blocks dev` warns when the command does not contain that port. Backend-only templates (`api-only`, `backend`, `sql`) set `"blocks": { "dev": { "port": 3001, "frontend": false } }`: `"frontend": false` keeps `cdk-blocks dev` backend-only even when the project has `vite` or `next` installed. "Add to existing project" mode adds `sandbox`, `sandbox:destroy`, `sandbox:console`, `deploy`, `destroy`, `dev:server` and `dev:stop` the same way. Unless your `package.json` already has `blocks.dev`, it copies only the template's `port` and `"frontend": false`: `--template backend`, `api-only` or `sql` in a Vite or Next.js project runs the backend only, and any other template runs the project's own Vite or Next.js dev server. The Amplify overlay adds `blocks:dev` (`cdk-blocks dev`, backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, because the Amplify app runs its own frontend) and `blocks:stop`, and keeps its own `aws-blocks/scripts/generate-client.ts` for `blocks:generate-client`, because its client needs the Amplify auth middleware and the API URL from `amplify_outputs.json`.
+
+`npm run destroy` asks for confirmation in a terminal; in CI, run `npm run destroy -- --yes`. `npm run sandbox:destroy` also asks in a terminal; `npm run sandbox:destroy -- --yes` skips the question.
 
 ### `@aws-blocks/*` Dependency Versions
 
@@ -147,13 +162,13 @@ Every `@aws-blocks/*` package the CLI writes into your `package.json` (and into 
 }
 ```
 
-A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.8.x` to `0.9.0`) is a new, breaking release line, and your app moves to it only when you edit the range. The CLI is released with every `@aws-blocks/blocks` release and has the same version number, so the latest CLI starts a new app on the latest `@aws-blocks/blocks` release. If you add AWS Blocks to an existing project that already lists one of these packages in `dependencies`, your range is kept. For an Amplify Gen 2 project, `aws-blocks/package.json` follows the root's range too (from `dependencies` or `devDependencies`) when it is a semver range; a `*`, path or protocol spec gets the stamp instead.
+A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.9.x` to `0.10.0`) is a new, breaking release line, and your app moves to it only when you edit the range. The CLI is released with every `@aws-blocks/blocks` release and has the same version number, so the latest CLI starts a new app on the latest `@aws-blocks/blocks` release. If you add AWS Blocks to an existing project that already lists one of these packages in `dependencies`, your range is kept. For an Amplify Gen 2 project, `aws-blocks/package.json` follows the root's range too (from `dependencies` or `devDependencies`) when it is a semver range; a `*`, path or protocol spec gets the stamp instead.
 
 Apps scaffolded by an older CLI declare `"*"` instead, so their next clean install can pull a breaking release. Replace each `"*"` for an `@aws-blocks/*` package with a caret range for the version you have installed (`npm ls @aws-blocks/blocks` shows it), then run `npm install`.
 
 ## Templates
 
-Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `amplify`, `demo`.
+Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `cron`, `amplify`, `demo`.
 
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 
@@ -165,7 +180,7 @@ A template declares each `@aws-blocks/*` dependency as `"*"`, a placeholder. Ins
 
 ## Related Packages
 
-- [blocks](../blocks/README.md) - Core runtime and Building Blocks
+- [blocks](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#readme) - Core runtime and Building Blocks
 
 ## License
 

@@ -61,7 +61,8 @@ export function isAllowedUpgradeOrigin(
 	if (isLoopbackHost(hostname)) return true;
 	const optIn = devHost?.trim();
 	if (!optIn) return false;
-	if (!isWildcardHost(optIn)) return hostname.toLowerCase() === optIn.toLowerCase();
+	// URL hostnames keep IPv6 brackets (`[fd00::1]`); a BLOCKS_DEV_HOST may omit them.
+	if (!isWildcardHost(optIn)) return unbracket(hostname) === unbracket(optIn);
 	if (!requestHost || !isIpLiteral(hostname)) return false;
 	let connectedHost: string;
 	try {
@@ -70,6 +71,11 @@ export function isAllowedUpgradeOrigin(
 		return false;
 	}
 	return connectedHost === hostname;
+}
+
+/** Lowercase and strip IPv6 brackets (`[FD00::1]` → `fd00::1`). */
+function unbracket(host: string): string {
+	return host.replace(/^\[|\]$/g, '').toLowerCase();
 }
 
 let wss: WebSocketServer | null = null;

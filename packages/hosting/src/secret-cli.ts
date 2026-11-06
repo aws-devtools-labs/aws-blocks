@@ -39,7 +39,7 @@ export interface ValueCliOptions {
 	stage?: string;
 	/** AWS region to write/read in. Defaults to the SDK's resolved region (`AWS_REGION`, profile, …). */
 	region?: string;
-	/** Command label shown in usage text (e.g. `'blocks secret'`, `'hosting-config'`). */
+	/** Command label shown in usage text (e.g. `'cdk-blocks secret'`, `'hosting-config'`). */
 	label?: string;
 	/**
 	 * Whether the CLI may prompt. `false` (for example `--no-input` or `CI` in the
@@ -54,7 +54,7 @@ export interface ValueCliOptions {
 /**
  * A usage error of the secret/config CLI: a missing argument, an unknown
  * subcommand, a missing flag value, or input or a confirmation the run cannot
- * give. Callers map it to their usage exit code (the `blocks` CLI exits 2).
+ * give. Callers map it to their usage exit code (the `cdk-blocks` CLI exits 2).
  */
 export class ValueCliUsageError extends Error {
 	constructor(message: string) {
@@ -63,9 +63,17 @@ export class ValueCliUsageError extends Error {
 	}
 }
 
+/** The hidden value prompt ended without an answer: Ctrl-C, or the end of the input (Ctrl-D). */
+export class ValueCliInterruptedError extends Error {
+	constructor() {
+		super('The prompt was interrupted; nothing was set.');
+		this.name = 'ValueCliInterruptedError';
+	}
+}
+
 function assertValidKey(key: string): void {
 	if (!key || !KEY_PATTERN.test(key)) {
-		throw new Error(
+		throw new ValueCliUsageError(
 			`Invalid key ${JSON.stringify(key)}. Keys must match ${KEY_PATTERN} ` +
 				`(start with a letter or underscore, then letters, digits, or underscores).`,
 		);
@@ -88,15 +96,21 @@ export async function setValue(
 	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
-		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand } = await import(
+		const { SecretsManagerClient, CreateSecretCommand, PutSecretValueCommand, RestoreSecretCommand } = await import(
 			'@aws-sdk/client-secrets-manager'
 		);
 		const client = new SecretsManagerClient(clientConfig);
 		try {
 			await client.send(new CreateSecretCommand({ Name: name, SecretString: value }));
 		} catch (error: unknown) {
-			if ((error as { name?: string })?.name === 'ResourceExistsException') {
+			const { name: errorName, message } = (error ?? {}) as { name?: string; message?: string };
+			if (errorName === 'ResourceExistsException') {
 				await client.send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
+			} else if (errorName === 'InvalidRequestException' && /scheduled for deletion/i.test(message ?? '')) {
+				// `remove` (a recoverable delete) left it in its recovery window: setting it again restores it.
+				await client.send(new RestoreSecretCommand({ SecretId: name }));
+				await client.send(new PutSecretValueCommand({ SecretId: name, SecretString: value }));
+				console.log(`♻️  ${kind} '${key}' was scheduled for deletion; restored it.`);
 			} else {
 				throw error;
 			}
@@ -170,6 +184,23 @@ export function forceDeleteWarning(kind: ValueKind, key: string, stage: string |
 }
 
 /**
+ * The AWS CLI command that restores the secret `name`, with the profile and Region this run used,
+ * so that it acts on the same account from a shell that does not export them.
+ * @internal
+ */
+export function restoreSecretCommand(name: string, region: string | undefined, env = process.env): string {
+	const quote = (word: string) => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
+	const profile = env.AWS_PROFILE;
+	const regionArg = region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION;
+	return [
+		'aws secretsmanager restore-secret --secret-id',
+		quote(name),
+		...(profile ? ['--profile', quote(profile)] : []),
+		...(regionArg ? ['--region', quote(regionArg)] : []),
+	].join(' ');
+}
+
+/**
  * Remove a value of `kind`. Returns true if it existed, false if already absent.
  *
  * For **secrets** (Secrets Manager) the default is a *recoverable* delete — the
@@ -191,10 +222,18 @@ export async function removeValue(
 	const clientConfig = opts.region ? { region: opts.region } : {};
 
 	if (store === 'secrets-manager') {
-		if (opts.force) console.warn(forceDeleteWarning(kind, key, opts.stage));
-		const { SecretsManagerClient, DeleteSecretCommand } = await import('@aws-sdk/client-secrets-manager');
+		const { SecretsManagerClient, DeleteSecretCommand, DescribeSecretCommand } = await import(
+			'@aws-sdk/client-secrets-manager'
+		);
 		const client = new SecretsManagerClient(clientConfig);
 		try {
+			// Secrets Manager accepts a forced delete of a name that does not exist: look it up first,
+			// so a typo'd key reports "was not set" (ResourceNotFoundException) instead of "removed".
+			// The warning follows the lookup: it must not claim a deletion of a key that is not set.
+			if (opts.force) {
+				await client.send(new DescribeSecretCommand({ SecretId: name }));
+				console.warn(forceDeleteWarning(kind, key, opts.stage));
+			}
 			// Default: recoverable delete (recovery window). --force: immediate, no recovery.
 			await client.send(
 				new DeleteSecretCommand(
@@ -204,7 +243,7 @@ export async function removeValue(
 			console.log(
 				opts.force
 					? `🗑️  ${kind} '${key}' permanently removed (no recovery).`
-					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`aws secretsmanager restore-secret\`, or use --force --yes to delete immediately).`,
+					: `🗑️  ${kind} '${key}' scheduled for deletion (recovery window active; restore with \`${restoreSecretCommand(name, opts.region)}\`, or use --force --yes to delete immediately).`,
 			);
 			return true;
 		} catch (error: unknown) {
@@ -396,14 +435,21 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 			} else {
 				value = await promptHidden(`Enter value for ${kind} '${key}' (hidden): `, opts.interactive);
 			}
-			if (value.length === 0) throw new Error(`No value provided for '${key}'.`);
+			if (value.length === 0) throw new ValueCliUsageError(`No value provided for '${key}'.`);
 			await setValue(kind, key, value, { prefix: effPrefix, stage: effStage, region: effRegion });
 			break;
 		}
 		case 'list': {
+			if (args.length > 0) {
+				throw new ValueCliUsageError(
+					`Unexpected argument ${JSON.stringify(args[0])}: ${label} list takes no arguments.`,
+				);
+			}
 			const keys = await listValues(kind, { prefix: effPrefix, stage: effStage, region: effRegion });
 			const scope = effStage ? ` (stage '${effStage}')` : '';
-			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${label} set <KEY> <value>`);
+			// A secret value is never a positional (it would land in shell history): it is prompted for or piped.
+			const add = kind === 'secret' ? `${label} set <KEY>` : `${label} set <KEY> <value>`;
+			if (keys.length === 0) console.log(`No ${kind} values set${scope}. Add one: ${add}`);
 			else {
 				console.log(`${kind} values${scope}:`);
 				for (const key of keys) console.log(`  ${key}`);
@@ -412,11 +458,16 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		}
 		case 'remove':
 		case 'rm': {
-			const [key] = args;
+			const [key, ...extra] = args;
 			if (!key)
 				throw new ValueCliUsageError(
 					`Usage: ${label} remove <KEY> [--force --yes] [--stage <name>] [--region <name>]`,
 				);
+			if (extra.length > 0) {
+				throw new ValueCliUsageError(
+					`Unexpected argument ${JSON.stringify(extra[0])}: ${label} remove takes one KEY.`,
+				);
+			}
 			// Every forced secret delete needs --yes: a stage name can't tell production
 			// apart reliably (`prod-us-east-1`, `prd`, `live`, …), and there is no undo.
 			if (force && kind === 'secret' && !yes) {
@@ -432,11 +483,23 @@ export async function runValueCli(argv: string[], opts: ValueCliOptions = {}): P
 		}
 		default:
 			throw new ValueCliUsageError(
-				`Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
+				subcommand === undefined
+					? `${label} needs a subcommand: set, list or remove.`
+					: `Unknown subcommand ${JSON.stringify(subcommand)}. Expected one of: set, list, remove.`,
 			);
 	}
 }
 
+/** The options {@link runValueCli} reads; anything else that starts with `-` is refused. */
+const VALUE_CLI_OPTIONS = '--stage, --value-stdin, --prefix, --region, --force, --yes';
+
+/**
+ * Split argv into the options and the positionals. After `--`, every token is
+ * a positional, so a config value can start with `-` (`set KEY -- -1`).
+ *
+ * @throws {ValueCliUsageError} On an unknown option: it would otherwise become
+ * part of a value, or be ignored by `list` and `remove`.
+ */
 function extractFlags(argv: string[]): {
 	stage?: string;
 	valueStdin: boolean;
@@ -455,6 +518,10 @@ function extractFlags(argv: string[]): {
 	let yes = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
+		if (arg === '--') {
+			positional.push(...argv.slice(i + 1));
+			break;
+		}
 		if (arg === '--force') {
 			force = true;
 		} else if (arg === '--yes' || arg === '-y') {
@@ -480,6 +547,10 @@ function extractFlags(argv: string[]): {
 			}
 		} else if (arg.startsWith('--region=')) {
 			region = arg.slice('--region='.length);
+		} else if (arg.startsWith('-') && arg !== '-') {
+			throw new ValueCliUsageError(
+				`Unknown option ${JSON.stringify(arg)}. The options are ${VALUE_CLI_OPTIONS}; to pass a value that starts with "-", put it after "--" or use --value-stdin.`,
+			);
 		} else {
 			positional.push(arg);
 		}
@@ -507,7 +578,8 @@ async function promptHidden(prompt: string, interactive: boolean | undefined): P
 		);
 	}
 	const { createInterface } = await import('node:readline');
-	const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+	// The prompt goes to stderr, so stdout carries only the result (`… set KEY | cat` shows the prompt).
+	const rl = createInterface({ input: process.stdin, output: process.stderr, terminal: true });
 	// Mask typed input by overriding readline's `_writeToOutput`. This is an
 	// undocumented Node internal, but it is the long-standing idiom for hidden
 	// prompts (no public readline masking API exists). It is best-effort: if a
@@ -516,15 +588,26 @@ async function promptHidden(prompt: string, interactive: boolean | undefined): P
 	const output = rl as unknown as { _writeToOutput?: (s: string) => void };
 	let muted = false;
 	output._writeToOutput = (str: string) => {
-		if (!muted) process.stdout.write(str);
+		if (!muted) process.stderr.write(str);
 	};
-	process.stdout.write(prompt);
+	process.stderr.write(prompt);
 	muted = true;
 	try {
-		const value = await new Promise<string>((resolve) => rl.question('', resolve));
-		process.stdout.write('\n');
-		return value;
+		return await new Promise<string>((resolve, reject) => {
+			let answered = false;
+			// In a terminal, readline reads Ctrl-C as a key: without this listener it only pauses stdin,
+			// and the prompt never settles. Ctrl-D (the end of the input) closes the interface.
+			rl.on('SIGINT', () => rl.close());
+			rl.on('close', () => {
+				if (!answered) reject(new ValueCliInterruptedError());
+			});
+			rl.question('', (answer) => {
+				answered = true;
+				resolve(answer);
+			});
+		});
 	} finally {
+		process.stderr.write('\n');
 		rl.close();
 	}
 }
