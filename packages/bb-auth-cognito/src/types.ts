@@ -383,7 +383,7 @@ export interface AdminUserFilter {
 	attribute: string;
 	/** Comparison operator. Cognito supports prefix (`^=`) and exact (`=`). */
 	match: 'startsWith' | 'equals';
-	/** Value to compare against. */
+	/** Value to compare against. Quotes and backslashes are escaped for you. */
 	value: string;
 }
 

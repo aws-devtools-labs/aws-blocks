@@ -630,6 +630,20 @@ export function toCognitoApiError(e: unknown): ApiError {
 	return new ApiError('Unknown error', 500);
 }
 
+/**
+ * Map an AdminUserFilter to a Cognito ListUsers `Filter` expression. Cognito
+ * uses `^=` for prefix and `=` for exact match, with the value in double
+ * quotes. `\` and `"` in the value are escaped so it can't close the quotes.
+ *
+ * @internal
+ */
+export function toCognitoFilter(filter?: AdminUserFilter): string | undefined {
+	if (!filter) return undefined;
+	const op = filter.match === 'startsWith' ? '^=' : '=';
+	const escaped = filter.value.replace(/[\\"]/g, '\\$&');
+	return `${filter.attribute} ${op} "${escaped}"`;
+}
+
 function asApiError(e: unknown): never {
 	throw toCognitoApiError(e);
 }
@@ -811,15 +825,6 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				attributes,
 			};
 		};
-		// Map an AdminUserFilter to a Cognito ListUsers Filter expression.
-		// Cognito uses `^=` for prefix and `=` for exact match, value quoted.
-		const toCognitoFilter = (filter?: AdminUserFilter): string | undefined => {
-			if (!filter) return undefined;
-			const op = filter.match === 'startsWith' ? '^=' : '=';
-			const escaped = filter.value.replace(/"/g, '\\"');
-			return `${filter.attribute} ${op} "${escaped}"`;
-		};
-
 		return {
 			// ── GroupAdmin ───────────────────────────────────────────────────
 			addUserToGroup: async (username, group) => {

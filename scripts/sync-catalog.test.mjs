@@ -5,7 +5,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { extractBetweenMarkers, extractBlurb, injectCatalog } from './sync-catalog.mjs';
+import { escapeCell, extractBetweenMarkers, extractBlurb, injectCatalog } from './sync-catalog.mjs';
 
 const BEGIN_MARKER = '<!-- BEGIN:block-catalog -->';
 const END_MARKER = '<!-- END:block-catalog -->';
@@ -80,4 +80,14 @@ describe('catalog markers', () => {
       assert.throws(() => injectCatalog(invalidReadme, 'New table'), /catalog markers .* not found/);
     });
   }
+});
+
+describe('escapeCell', () => {
+  it('escapes pipes', () => {
+    assert.equal(escapeCell('a | b'), 'a \\| b');
+  });
+
+  it('escapes backslashes so an existing `\\|` stays literal', () => {
+    assert.equal(escapeCell('a \\| b'), 'a \\\\\\| b');
+  });
 });
