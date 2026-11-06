@@ -10,3 +10,4 @@
  */
 
 export { closeOnProcessExit, pgliteUnrefTimersExtension } from './pglite-process.js';
+export { PgliteTransaction } from './pglite-transaction.js';
