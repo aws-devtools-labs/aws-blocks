@@ -287,6 +287,11 @@ jobs:
       - name: Test that cleanup-stacks.yml covers the E2E stacks
         run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
 
+      # Fails once the vpc-smoke lane runs its tests again, so the rotation
+      # coverage the comprehensive app carries meanwhile gets handed back.
+      - name: Test that the rotation coverage sits in one test app
+        run: node --test scripts/ci/rotation-coverage-home.test.mjs
+
       # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
       # unblock Amplify sandboxes stuck in DELETE_FAILED.
       - name: Test the stuck Amplify sandbox delete

@@ -3,7 +3,7 @@
 
 import { Annotations } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import type { Construct } from 'constructs';
+import { type Construct, type IConstruct, Node } from 'constructs';
 import { getBlocksRoot } from './root-registry.js';
 import { getVpcRequirements as getRegisteredVpcRequirements } from './vpc-requirements-registry.js';
 import type { BlocksVpcOptions, SubnetRole, SubnetScope, VpcContext, VpcRequirements } from './vpc-types.js';
@@ -213,6 +213,8 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 
 	const gatewayEndpoints: ec2.GatewayVpcEndpointAwsService[] = [];
 	const interfaceEndpoints: ec2.InterfaceVpcEndpointAwsService[] = [];
+	const endpointClientSecurityGroups: Array<{ fullId: string; sg: ec2.ISecurityGroup }> = [];
+	const endpointClientDependents: IConstruct[] = [];
 
 	// Pull requirements from the central registry — every BuildingBlockScope
 	// self-registers in its constructor, so this is a faithful census without a
@@ -224,6 +226,10 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 		if (reqs.interfaceEndpoints) {
 			interfaceEndpoints.push(...reqs.interfaceEndpoints);
 		}
+		if (reqs.endpointClientSecurityGroups) {
+			endpointClientSecurityGroups.push(...reqs.endpointClientSecurityGroups.map((sg) => ({ fullId, sg })));
+		}
+		if (reqs.endpointClientDependents) endpointClientDependents.push(...reqs.endpointClientDependents);
 		// Validate the BB's runtime egress need against where the runtime is
 		// actually placed. We never move the runtime (that's the customer's
 		// explicit choice) — an unsatisfiable requirement is a synth error, not a
@@ -253,6 +259,45 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	}
 
 	if (options.provisionEndpoints === false) {
+		// The customer owns the endpoints, so Blocks can't admit BB-provisioned
+		// compute on them. Say which SGs need admitting rather than let the
+		// compute (e.g. a Database's rotation Lambda) fail at runtime with a
+		// Secrets Manager timeout. The SG is named by construct path, since
+		// `securityGroupId` is a deploy-time token that would render as
+		// `${Token[...]}` in the synth output. A BB that registers the same SG
+		// twice warns once: `Annotations` drops a message equal to one the scope
+		// already holds.
+		for (const { fullId, sg } of endpointClientSecurityGroups) {
+			// The endpoint is the customer's, so its security group cannot be named
+			// here, and a client closed outbound would have no route at all. Scope the
+			// rule to the VPC's own CIDR, which is where an interface endpoint's ENIs
+			// live; fall back to any address for a VPC imported without a CIDR, where
+			// `vpcCidrBlock` throws and nothing narrower is expressible. That fallback
+			// also covers a NAT route to the public endpoint. On a client left open
+			// outbound either form is a no-op.
+			let destination: ec2.IPeer;
+			try {
+				destination = ec2.Peer.ipv4(vpc.vpcCidrBlock);
+			} catch {
+				destination = ec2.Peer.anyIpv4();
+			}
+			sg.connections.allowTo(
+				destination,
+				ec2.Port.tcp(443),
+				'HTTPS to the customer-owned interface endpoints',
+			);
+			Annotations.of(scope).addWarningV2(
+				'blocks:vpc:endpoint-client-unadmitted',
+				`${fullId} runs compute in security group '${sg.node.path}' that must reach the ` +
+					`interface VPC endpoints, but 'provisionEndpoints: false' leaves the endpoints to you. ` +
+					`Allow inbound 443 from that security group on your endpoints' security group. ` +
+					`Blocks has added a 443 egress rule to the VPC CIDR on that group so it can ` +
+					`reach them (any address if the VPC has no known CIDR). ` +
+					`Until the inbound rule exists that compute cannot reach the endpoints, so its ` +
+					`first run after this deploy fails; that is expected, not a misconfiguration. ` +
+					`See packages/blocks/VPC.md.`,
+			);
+		}
 		return;
 	}
 
@@ -284,7 +329,11 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	// Dedicated security group for the interface endpoints. Without an explicit
 	// SG, CDK creates a default that allows 443 from the entire VPC CIDR — on a
 	// bring-your-own VPC that exposes every endpoint to unrelated workloads. Scope
-	// ingress to just the Blocks Lambda SG so only our functions can reach them.
+	// ingress to the Blocks Lambda SG plus the BB-registered client SGs admitted
+	// below, so only our compute can reach them. The description predates the
+	// client SGs and is kept verbatim, because changing it replaces the group, so
+	// it names fewer sources than the group actually admits: read the ingress
+	// rules, not the description, when auditing what can reach the endpoints.
 	const ctx = getVpcContext(scope);
 	const endpointSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksVpcEndpointSg', {
 		vpc,
@@ -299,6 +348,30 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 		);
 	}
 
+	// Admit each BB-registered client SG explicitly rather than re-widen to the
+	// VPC CIDR. The same SG registered twice is harmless: the rule is dropped if
+	// it equals one the group already holds. `connections` pairs the admit rule
+	// with the client's matching egress rule, since a BB registers here because
+	// its compute must reach the endpoints and that compute may be closed
+	// outbound; a literal peer would instead be inlined into both groups, which
+	// makes them reference each other and CloudFormation reject the template. On
+	// a client left open outbound the egress half is a no-op.
+	for (const { sg } of endpointClientSecurityGroups) {
+		endpointSecurityGroup.connections.allowFrom(
+			sg,
+			ec2.Port.tcp(443),
+			'HTTPS from Building Block compute',
+		);
+	}
+
+	// A registered dependent must not be created before the client security
+	// groups can reach the endpoints, so order it after the endpoint security
+	// group (the rules above are its children) and after the endpoints
+	// themselves, which are created below.
+	for (const dependent of endpointClientDependents) {
+		Node.of(dependent).addDependency(endpointSecurityGroup);
+	}
+
 	// Provision interface endpoints (deduplicated)
 	const provisionedInterface = new Set<string>();
 
@@ -308,17 +381,21 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 		provisionedInterface.add(key);
 
 		const constructId = `VpcIf${key.replace(/[^a-zA-Z0-9]/g, '')}`;
-		new ec2.InterfaceVpcEndpoint(scope, constructId, {
+		const endpoint = new ec2.InterfaceVpcEndpoint(scope, constructId, {
 			vpc,
 			service,
 			privateDnsEnabled: true,
 			securityGroups: [endpointSecurityGroup],
 			// `open: false` suppresses CDK's default "allow 443 from the whole VPC
-			// CIDR" ingress rule. Our dedicated SG already allows 443 from just the
-			// Blocks Lambda SG; without this, CDK would re-widen access to the entire
-			// VPC — the exact broadening this dedicated SG exists to prevent.
+			// CIDR" ingress rule. Our dedicated SG already allows 443 from the Blocks
+			// Lambda SG and the registered client SGs; without this, CDK would
+			// re-widen access to the entire VPC — the exact broadening this dedicated
+			// SG exists to prevent.
 			open: false,
 		});
+		for (const dependent of endpointClientDependents) {
+			Node.of(dependent).addDependency(endpoint);
+		}
 	}
 }
 
