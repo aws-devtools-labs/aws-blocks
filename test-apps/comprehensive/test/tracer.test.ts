@@ -41,6 +41,15 @@ export function tracerTests(getApi: () => typeof apiType) {
       assert.deepStrictEqual(result, { success: true });
     });
 
+    test('local mock starts a new trace for work after a root closes', {
+      skip: (process.env.BLOCKS_TEST_ENV || 'local') !== 'local',
+    }, async () => {
+      const { requestId, deferredId } = await getApi().tracerDeferredRoot();
+      assert.ok(requestId);
+      assert.ok(deferredId);
+      assert.notStrictEqual(requestId, deferredId);
+    });
+
     test('addMetadata succeeds', async () => {
       const api = getApi();
       const result = await api.tracerAddMetadata('context', { requestId: '123' });

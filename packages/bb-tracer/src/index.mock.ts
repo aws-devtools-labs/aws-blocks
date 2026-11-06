@@ -39,16 +39,19 @@ interface TraceState {
 	traceId: string | null;
 	rootAnnotations: Record<string, AnnotationValue>;
 	rootMetadata: Record<string, unknown>;
+	closed: boolean;
 }
 
 interface TraceContext {
 	trace: TraceState;
 	sampled: boolean;
 	record?: TraceRecord;
+	parent?: TraceContext;
+	closed: boolean;
 }
 
 function createTraceState(): TraceState {
-	return { traceId: null, rootAnnotations: {}, rootMetadata: {} };
+	return { traceId: null, rootAnnotations: {}, rootMetadata: {}, closed: false };
 }
 
 // ── Mock Segment ────────────────────────────────────────────────────────────
@@ -138,14 +141,22 @@ export class Tracer extends Scope {
 			return fn(NO_OP_SEGMENT);
 		}
 
-		const parent = this.context.getStore();
+		const parent = this.getActiveContext();
 		const trace = parent?.trace ?? this.pendingTrace;
 		if (!parent) this.pendingTrace = createTraceState();
 		// Sample once per root, including unsampled roots, and inherit only
 		// through that root's async context rather than other in-flight work.
 		const sampled = parent ? parent.sampled : this.shouldSample();
+		const context: TraceContext = { trace, sampled, parent, closed: false };
 		if (!sampled) {
-			return this.context.run({ trace, sampled }, () => fn(NO_OP_SEGMENT));
+			return this.context.run(context, async () => {
+				try {
+					return await fn(NO_OP_SEGMENT);
+				} finally {
+					context.closed = true;
+					if (!parent) trace.closed = true;
+				}
+			});
 		}
 		trace.traceId ??= randomUUID();
 
@@ -164,14 +175,17 @@ export class Tracer extends Scope {
 		};
 
 		parent?.record?.children.push(record);
+		context.record = record;
 
-		return this.context.run({ trace, sampled, record }, async () => {
+		return this.context.run(context, async () => {
 			try {
 				return await fn(segment);
 			} catch (error) {
 				segment.addError(error as Error);
 				throw error;
 			} finally {
+				context.closed = true;
+				if (!parent) trace.closed = true;
 				this.finalizeRecord(record, Date.now(), segment);
 				if (!parent) {
 					record.rootAnnotations = { ...trace.rootAnnotations };
@@ -193,7 +207,7 @@ export class Tracer extends Scope {
 	 */
 	addAnnotation(key: string, value: AnnotationValue): void {
 		if (!this.enabled) return;
-		const trace = this.context.getStore()?.trace ?? this.pendingTrace;
+		const trace = this.getActiveContext()?.trace ?? this.pendingTrace;
 		trace.rootAnnotations[key] = value;
 	}
 
@@ -205,7 +219,7 @@ export class Tracer extends Scope {
 	 */
 	addMetadata(key: string, value: unknown): void {
 		if (!this.enabled) return;
-		const trace = this.context.getStore()?.trace ?? this.pendingTrace;
+		const trace = this.getActiveContext()?.trace ?? this.pendingTrace;
 		trace.rootMetadata[key] = value;
 	}
 
@@ -218,12 +232,21 @@ export class Tracer extends Scope {
 	 */
 	getTraceId(): string | null {
 		if (!this.enabled) return null;
-		const trace = this.context.getStore()?.trace ?? this.pendingTrace;
+		const trace = this.getActiveContext()?.trace ?? this.pendingTrace;
 		trace.traceId ??= randomUUID();
 		return trace.traceId;
 	}
 
 	// ── Private helpers ─────────────────────────────────────────────────────
+
+	private getActiveContext(): TraceContext | undefined {
+		let context = this.context.getStore();
+		// Timers retain their async store after the originating segment closes.
+		// A closed root invalidates even descendants that are still running.
+		if (context?.trace.closed) return undefined;
+		while (context?.closed) context = context.parent;
+		return context;
+	}
 
 	private shouldSample(): boolean {
 		return Math.random() < this.samplingRate;

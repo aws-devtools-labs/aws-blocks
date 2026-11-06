@@ -57,6 +57,7 @@ When `enabled: false` is passed, `registerTracer` is not called — that Tracer 
 
 - `startSegment` captures timing (start/end timestamps via `Date.now()`) and uses an instance-local `AsyncLocalStorage` context to track the current segment and its root trace state.
 - Nested calls inherit their caller's segment as their parent. Parallel children remain siblings, and independent concurrent roots have separate IDs, root annotations, metadata, and sampling decisions.
+- Contexts are marked closed on completion or error, including unsampled contexts. Deferred work falls back to the nearest still-open ancestor; after the root closes it starts a new trace with a fresh sampling decision. This prevents timers and local jobs from appending to an already-persisted trace.
 - Annotations and metadata are stored on each `MockSegment` instance and copied to the `TraceRecord` on segment close.
 - On top-level segment close, the complete segment tree is persisted to `.bb-data/{fullId}/traces.json`.
 - Traces are also logged to console as structured JSON (`_type: 'trace'`).
