@@ -68,17 +68,16 @@ describe('sandbox destroy deletes the sandbox SSM secrets', () => {
 		assert.deepStrictEqual(deleted, []);
 	});
 
-	it('fails with the parameter name and the delete command when SSM refuses', async () => {
-		await assert.rejects(
-			deleteSandboxSecrets(root, async () => {
-				throw awsError('AccessDeniedException');
-			}),
-			(error: Error) => {
-				assert.match(error.message, /still stored in the SSM parameter \/zz-app-dev-abc123-db-url \(AccessDeniedException\)/);
-				assert.match(error.message, /aws ssm delete-parameter --name \/zz-app-dev-abc123-db-url/);
-				return true;
-			},
-		);
+	it('warns with the parameter name and the delete command when SSM refuses, and does not fail', async () => {
+		const warn = mock.method(console, 'warn', () => {});
+		const deleted = await deleteSandboxSecrets(root, async () => {
+			throw awsError('AccessDeniedException');
+		});
+		assert.deepStrictEqual(deleted, []);
+		assert.strictEqual(warn.mock.callCount(), 1);
+		const message = String(warn.mock.calls[0].arguments[0]);
+		assert.match(message, /SSM parameter \/zz-app-dev-abc123-db-url,.* could not be deleted \(AccessDeniedException\)/);
+		assert.match(message, /aws ssm delete-parameter --name \/zz-app-dev-abc123-db-url/);
 	});
 
 	function steps(calls: string[], destroy: () => Promise<void>): SandboxDestroySteps {
