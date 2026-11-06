@@ -33,7 +33,9 @@ const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json
 // carries which runtime we hit.
 let isLocalMock = false;
 
-const creds = { username: 'agent-user@example.com', password: 'TestPass123!' };
+// A new user each run: the local auth store persists, so a fixed username
+// would already exist when you rerun `npm run test:e2e` against the same server.
+const creds = { username: `agent-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 
 test.before(async () => {
   if (!await isServerRunning(serverPort)) {
@@ -123,12 +125,8 @@ test('Agent - a chat turn returns the model text', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  // signUp is idempotent across reruns only if the account is fresh; fall back
-  // to signIn so a second local run against the same .bb-data still authenticates.
-  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds }).catch(() => null);
-  if (signedUp?.state !== 'signedIn') {
-    await authApi.setAuthState({ action: 'signIn', ...creds });
-  }
+  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  assert.strictEqual(signedUp.state, 'signedIn');
 
   const { text } = await api.chat('hello there');
   // The canned provider always tags its output; the exact phrasing is an
