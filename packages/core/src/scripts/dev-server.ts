@@ -1961,8 +1961,21 @@ export async function stopDevServer(
       /* raced away */
     }
     let exited = await d.waitExit(record.ppid, childAlive ? WATCHER_EXIT_TIMEOUT_MS : NO_RUNNER_WATCHER_GRACE_MS);
+    // The record read at the start may name the runner that exited for a reload, while
+    // tsx watch has started its successor since, which takes the record over in place.
+    // Read it again: a live successor gets the runner's grace, and is never orphaned by
+    // a SIGKILL of its watcher.
+    const successorAlive = (): boolean => {
+      const now = d.readPidfile(pidfilePath);
+      const next = now == null ? null : parsePidRecord(now);
+      return (
+        next !== null && next.pid !== record.pid && next.ppid === record.ppid &&
+        recordLiveness(next, d.isAlive, d.commandOf).pidAlive
+      );
+    };
+    if (!exited && !childAlive && successorAlive()) exited = await d.waitExit(record.ppid, WATCHER_EXIT_TIMEOUT_MS);
     let killed = false;
-    if (!exited && !runnerAlive()) {
+    if (!exited && !runnerAlive() && !successorAlive()) {
       try {
         d.signal(record.ppid, 'SIGKILL');
         killed = true;
