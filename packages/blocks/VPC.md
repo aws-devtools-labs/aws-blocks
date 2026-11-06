@@ -61,7 +61,7 @@ await BlocksStack.create(app, stackName, {
 AWS Blocks handles:
 - **Lambda placement** in private subnets (configurable via `subnets`)
 - **VPC endpoint provisioning** based on which BBs are in scope (DynamoDB, S3, SSM, Secrets Manager, SQS, Bedrock, etc.)
-- **Security group wiring** (e.g., Lambda → Aurora on port 5432)
+- **Security group wiring** (e.g., Blocks Lambda → endpoints on 443, `Database` rotation Lambda → Aurora on 5432)
 
 ### Bring Your Own VPC
 
@@ -99,6 +99,17 @@ await BlocksStack.create(app, stackName, {
   defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc, provisionEndpoints: false } },
 });
 ```
+
+Your endpoints' security groups must then admit everything Blocks places in the
+VPC: the Blocks Lambda security group, and any compute a Building Block provisions
+itself. Today that is the `Database` rotation Lambda, which reaches the Secrets
+Manager endpoint from its own security group. Synth emits a
+`blocks:vpc:endpoint-client-unadmitted` warning naming that security group by
+construct path; allow inbound 443 from it on your Secrets Manager endpoint's
+security group, or the first rotation fails. Blocks cannot tell whether your
+endpoint already admits the group, so it does not fail the synth; a rotation that
+cannot reach Secrets Manager shows up in the rotation Lambda's log and as a
+`RotationFailed` CloudTrail event.
 
 ## Configuration Options
 

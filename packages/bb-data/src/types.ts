@@ -96,12 +96,18 @@ export interface DatabaseOptions {
    *
    * **Requirements for the key you pass.** The key is *imported* — Blocks binds
    * to it by ARN and does not (cannot) modify its key policy — so the key's
-   * policy must already permit the principals that use it:
+   * policy must allow the account's IAM principals to use it (the default key
+   * policy does, through the account root; a policy that enumerates principals
+   * must name each role listed here, the rotation Lambda's included — its ARN
+   * is only known after the first deploy):
    * - The **deploying principal** needs `kms:CreateGrant` and `kms:DescribeKey`
    *   on the key: RDS uses a grant to encrypt the cluster's storage volume with it.
    * - The runtime path reads the credentials secret over the RDS Data API, so
-   *   the principal reading it needs `kms:Decrypt` on the key. `secret.grantRead`
-   *   adds the identity-side permission; the key policy must still allow it.
+   *   the principal reading it needs `kms:Decrypt` on the key. Blocks grants this
+   *   to the app runtime and the migration Lambda, scoped to use via Secrets
+   *   Manager.
+   * - The **rotation Lambda** (see `secretRotation`) is granted `kms:Decrypt`,
+   *   `kms:DescribeKey` and `kms:GenerateDataKey` on the key by its own template.
    * - The key must be in the **same account and region** as the cluster.
    *
    * **Why this is a flat ARN** (rather than the `encryption:
@@ -135,6 +141,24 @@ export interface DatabaseOptions {
    * always wins. The CDK layer resolves this into the cluster's backup retention.
    */
   pointInTimeRecovery?: boolean | { retentionDays: number };
+  /**
+   * Automatic rotation of the database credentials secret. **On by default**:
+   * every 30 days AWS's PostgreSQL single-user rotation function (a Serverless
+   * Application Repository app: an AWS-maintained Lambda placed in the cluster's
+   * VPC) generates a new `postgres` password, sets it on the cluster and makes
+   * it the secret's current version. The secret keeps its ARN, and the app never
+   * reads the password itself (the RDS Data API reads the secret for it), so a
+   * rotation needs no redeploy.
+   *
+   * - `{ intervalDays: n }` — rotate every `n` days. `n` must be an integer
+   *   **1–1000**; an out-of-range value fails at synth.
+   * - `false` — turn automatic rotation off.
+   *
+   * With a `storageEncryptionKeyArn`, see the key requirements on that option.
+   *
+   * @default { intervalDays: 30 }
+   */
+  secretRotation?: false | { intervalDays: number };
 }
 
 /**

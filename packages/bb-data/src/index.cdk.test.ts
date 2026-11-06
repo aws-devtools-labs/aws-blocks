@@ -12,7 +12,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
 import { Scope, BlocksPresets, DEFAULT_NODE_RUNTIME, type BlocksDefaults } from '@aws-blocks/core/cdk';
-import { getOrCreateVpc, initializeVpc } from '@aws-blocks/core/cdk/internal';
+import { finalizeVpc, getOrCreateVpc, initializeVpc } from '@aws-blocks/core/cdk/internal';
 import { materialize } from './infra.js';
 import { Database } from './index.cdk.js';
 
@@ -199,11 +199,43 @@ test('Database: fromExisting() with provisioning-only options warns they are ign
     },
     storageEncryptionKeyArn: 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234-ef56',
     pointInTimeRecovery: { retentionDays: 7 },
+    secretRotation: { intervalDays: 7 },
   });
   Annotations.fromStack(stack).hasWarning(
     '*',
-    Match.stringLikeRegexp('fromExisting\\(\\)'),
+    Match.stringLikeRegexp('Ignoring pointInTimeRecovery, storageEncryptionKeyArn, secretRotation because'),
   );
+});
+
+test('Database: rotates the credentials secret every 30 days by default', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', {});
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 1);
+  template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(30 days)' },
+  });
+  // Standalone VPC: the Database provisions its own Secrets Manager endpoint.
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 1);
+  template.hasResourceProperties('AWS::EC2::VPCEndpoint', {
+    ServiceName: { 'Fn::Join': ['', ['com.amazonaws.', { Ref: 'AWS::Region' }, '.secretsmanager']] },
+  });
+});
+
+test('Database: secretRotation: false emits no rotation schedule', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', { secretRotation: false });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 0);
+});
+
+test('Database: secretRotation { intervalDays: 14 } sets the rotation schedule to 14 days', () => {
+  const { stack, parent } = setupDatabaseStack();
+  new Database(parent, 'main', { secretRotation: { intervalDays: 14 } });
+  const template = Template.fromStack(stack);
+  template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(14 days)' },
+  });
 });
 
 test('Database: pointInTimeRecovery { retentionDays: 30 } sets BackupRetentionPeriod to 30', () => {
@@ -314,13 +346,39 @@ test('Database: joins a customer-PROVIDED shared VPC (does not build its own)', 
   const { stack, parent } = setupDatabaseStack();
   const customerVpc = new ec2.Vpc(stack, 'CustomerVpc', { maxAzs: 2 });
   // Customer path: default source is 'provided'.
-  initializeVpc(stack, { network: customerVpc });
+  const vpcOptions = { network: customerVpc };
+  initializeVpc(stack, vpcOptions);
   new Database(parent, 'main', {});
+  // What BlocksStack does after every block is constructed.
+  finalizeVpc(stack, vpcOptions);
   const template = Template.fromStack(stack);
   // Only the customer VPC exists — the Database did NOT stand up its own.
   template.resourceCountIs('AWS::EC2::VPC', 1);
   // The cluster's subnet group is built from the customer VPC's subnets.
   template.resourceCountIs('AWS::RDS::DBSubnetGroup', 1);
+  // The rotation Lambda shares the core-managed Secrets Manager endpoint: the
+  // Database added no endpoint of its own, and core's endpoint SG admits the
+  // rotation SG on 443 (registered via endpointClientSecurityGroups).
+  template.resourcePropertiesCountIs(
+    'AWS::EC2::VPCEndpoint',
+    { ServiceName: { 'Fn::Join': ['', ['com.amazonaws.', { Ref: 'AWS::Region' }, '.secretsmanager']] } },
+    1,
+  );
+  template.resourcePropertiesCountIs(
+    'AWS::EC2::SecurityGroup',
+    { GroupDescription: Match.stringLikeRegexp('^Secrets Manager endpoint for ') },
+    0,
+  );
+  template.hasResourceProperties('AWS::EC2::SecurityGroup', {
+    GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only',
+    SecurityGroupIngress: Match.arrayWith([
+      Match.objectLike({
+        FromPort: 443,
+        Description: 'HTTPS from Building Block compute',
+        SourceSecurityGroupId: { 'Fn::GetAtt': [Match.stringLikeRegexp('RotationSg'), 'GroupId'] },
+      }),
+    ]),
+  });
 });
 
 test('Database: IGNORES a Blocks-DERIVED shared VPC and builds its own (data-loss guard)', () => {

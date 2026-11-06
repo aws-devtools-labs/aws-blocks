@@ -28,5 +28,23 @@ export const DEFAULT_MAX_CAPACITY = 2;
  */
 export const DEFAULT_BACKUP_RETENTION_DAYS = 15;
 
+/**
+ * Default rotation interval (days) for the cluster's credentials secret.
+ * Matches CDK's `addRotationSingleUser` default.
+ */
+export const DEFAULT_SECRET_ROTATION_DAYS = 30;
+
+/**
+ * Minimum rotation interval (days). Blocks' own bound: Secrets Manager and CDK
+ * accept down to 4 hours, but the option is expressed in whole days.
+ */
+export const MIN_SECRET_ROTATION_DAYS = 1;
+
+/**
+ * Maximum rotation interval (days). Secrets Manager's bound; CDK enforces it at
+ * synth too.
+ */
+export const MAX_SECRET_ROTATION_DAYS = 1000;
+
 /** Number of availability zones for the Aurora VPC. */
 export const VPC_MAX_AZS = 2;

@@ -1,6 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
@@ -13,6 +16,17 @@ function synthTemplate(options: Parameters<typeof materialize>[2]): Template {
   const stack = new cdk.Stack(app, 'TestStack');
   materialize(stack, 'testdb', options);
   return Template.fromStack(stack);
+}
+
+/** Run `fn` with a temporary migrations directory holding one .sql file; removes it afterwards. */
+function withMigrationsDir<T>(fn: (dir: string) => T): T {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-data-infra-'));
+  fs.writeFileSync(path.join(dir, '001_init.sql'), 'CREATE TABLE t (id int);');
+  try {
+    return fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 // --- Aurora cluster ---
@@ -182,10 +196,12 @@ test('CDK: VPC has isolated subnets and no NAT gateways', () => {
 
 // --- Security group ---
 
-test('CDK: cluster security group has no ingress rule (reached via Data API, not a socket)', () => {
+test('CDK: cluster security group has no inline ingress (rotation rule is a separate resource)', () => {
   const template = synthTemplate({ databaseName: 'mydb' });
-  // The cluster is reached over the RDS Data API (HTTPS), never a raw Postgres
-  // socket, so there must be no 5432 (or any) ingress rule on its SG.
+  // The app reaches the cluster over the RDS Data API (HTTPS), never a raw
+  // Postgres socket, so the SG itself declares no ingress. The one socket path
+  // is the credentials-rotation Lambda, which CDK adds as a separate
+  // AWS::EC2::SecurityGroupIngress resource (asserted in the rotation tests).
   const sgs = template.findResources('AWS::EC2::SecurityGroup', {
     Properties: { GroupDescription: Match.stringLikeRegexp('Aurora cluster') },
   });
@@ -193,8 +209,11 @@ test('CDK: cluster security group has no ingress rule (reached via Data API, not
   const sg = Object.values(sgs)[0] as { Properties: { SecurityGroupIngress?: unknown[] } };
   assert.ok(
     sg.Properties.SecurityGroupIngress === undefined || sg.Properties.SecurityGroupIngress.length === 0,
-    'Aurora SG should have no ingress rules',
+    'Aurora SG should declare no inline ingress rules',
   );
+  // With rotation off there is no ingress at all, inline or separate.
+  const off = synthTemplate({ databaseName: 'mydb', secretRotation: false });
+  off.resourceCountIs('AWS::EC2::SecurityGroupIngress', 0);
 });
 
 test('CDK: security group disallows all outbound traffic', () => {
@@ -318,6 +337,57 @@ test('CDK: grantDataApi adds rds-data permissions to a Lambda', () => {
   });
 });
 
+test('CDK: grantDataApi with a CMK grants kms:Decrypt via Secrets Manager', () => {
+  // `secret.grantRead` puts kms:Decrypt on the KEY policy; an imported key's policy
+  // can't be edited from the stack, so without an identity-side grant the Data API
+  // cannot decrypt the secret and every query fails.
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack', { env: { account: '111122223333', region: 'us-east-1' } });
+  const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234';
+  const template = withMigrationsDir((dir) => {
+    const infra = materialize(stack, 'testdb', {
+      databaseName: 'mydb',
+      migrationsPath: dir,
+      storageEncryptionKey: cdk.aws_kms.Key.fromKeyArn(stack, 'Key', keyArn),
+    });
+    infra.grantDataApi(new cdk.aws_iam.Role(stack, 'AppRole', { assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com') }));
+    return Template.fromStack(stack);
+  });
+  // Both Data API callers carry it: the app principal and the migration Lambda.
+  template.resourcePropertiesCountIs(
+    'AWS::IAM::Policy',
+    {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          {
+            Action: 'kms:Decrypt',
+            Effect: 'Allow',
+            Resource: keyArn,
+            Condition: { StringEquals: { 'kms:ViaService': 'secretsmanager.us-east-1.amazonaws.com' } },
+          },
+        ]),
+      }),
+    },
+    2,
+  );
+});
+
+test('CDK: grantDataApi without a CMK grants no KMS actions', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const infra = materialize(stack, 'testdb', { databaseName: 'mydb' });
+  infra.grantDataApi(new cdk.aws_iam.Role(stack, 'AppRole', { assumedBy: new cdk.aws_iam.ServicePrincipal('lambda.amazonaws.com') }));
+  const template = Template.fromStack(stack);
+  // Positive anchor first, so a grantDataApi that became a no-op cannot pass.
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([Match.objectLike({ Action: Match.arrayWith(['rds-data:ExecuteStatement']) })]),
+    }),
+  });
+  const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+  assert.ok(!policies.includes('kms:'), 'no kms actions without a key');
+});
+
 // --- Secrets Manager ---
 
 test('CDK: stack has Secrets Manager secret for cluster credentials', () => {
@@ -325,6 +395,178 @@ test('CDK: stack has Secrets Manager secret for cluster credentials', () => {
   // Aurora auto-creates a secret; verify it's referenced in outputs
   template.hasOutput('testdbClusterArn', {});
   template.hasOutput('testdbSecretArn', {});
+});
+
+// --- Secret rotation ---
+
+test('CDK: rotates the credentials secret every 30 days by default', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  // One RotationSchedule on the attached secret, 30-day default.
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 1);
+  template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+    RotationRules: { ScheduleExpression: 'rate(30 days)' },
+    SecretId: { Ref: Match.stringLikeRegexp('^testdbClusterSecretAttachment') },
+  });
+  // The rotation Lambda is AWS's PostgreSQL single-user app from the Serverless
+  // Application Repository (SAR), placed in the dedicated rotation SG.
+  template.resourceCountIs('AWS::Serverless::Application', 1);
+  template.hasResourceProperties('AWS::Serverless::Application', {
+    Parameters: Match.objectLike({
+      vpcSecurityGroupIds: { 'Fn::GetAtt': [Match.stringLikeRegexp('^testdbRotationSg'), 'GroupId'] },
+      // Private DNS on the endpoint resolves the standard regional hostname, so
+      // CDK is NOT given `endpoint` (it would derive a hostname that doesn't
+      // match a private-DNS endpoint's DNS entry) and renders the default URL.
+      endpoint: { 'Fn::Join': ['', ['https://secretsmanager.', { Ref: 'AWS::Region' }, '.', { Ref: 'AWS::URLSuffix' }]] },
+    }),
+  });
+});
+
+test('CDK: only the rotation Lambda may reach the cluster on its port', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  const [clusterSgId] = Object.keys(
+    template.findResources('AWS::EC2::SecurityGroup', {
+      Properties: { GroupDescription: 'Security group for testdb Aurora cluster' },
+    }),
+  );
+  const [rotationSgId] = Object.keys(
+    template.findResources('AWS::EC2::SecurityGroup', {
+      Properties: { GroupDescription: 'Security group for testdb credentials-rotation Lambda' },
+    }),
+  );
+  assert.ok(clusterSgId && rotationSgId, 'both SGs synthesized');
+  template.resourceCountIs('AWS::EC2::SecurityGroupIngress', 1);
+  template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+    GroupId: { 'Fn::GetAtt': [clusterSgId, 'GroupId'] },
+    SourceSecurityGroupId: { 'Fn::GetAtt': [rotationSgId, 'GroupId'] },
+    FromPort: { 'Fn::GetAtt': [Match.stringLikeRegexp('^testdbCluster'), 'Endpoint.Port'] },
+  });
+});
+
+test('CDK: own VPC gets a Secrets Manager endpoint reachable only from the rotation SG', () => {
+  const template = synthTemplate({ databaseName: 'mydb' });
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 1);
+  template.hasResourceProperties('AWS::EC2::VPCEndpoint', {
+    VpcEndpointType: 'Interface',
+    PrivateDnsEnabled: true,
+    ServiceName: { 'Fn::Join': ['', ['com.amazonaws.', { Ref: 'AWS::Region' }, '.secretsmanager']] },
+    SecurityGroupIds: [{ 'Fn::GetAtt': [Match.stringLikeRegexp('^testdbSecretsEndpointSg'), 'GroupId'] }],
+  });
+  // Endpoint SG: one 443 rule sourced from the rotation SG, never a CIDR.
+  template.hasResourceProperties('AWS::EC2::SecurityGroup', {
+    GroupDescription: 'Secrets Manager endpoint for testdb - 443 from the rotation Lambda only',
+    SecurityGroupIngress: [
+      Match.objectLike({
+        FromPort: 443,
+        ToPort: 443,
+        SourceSecurityGroupId: { 'Fn::GetAtt': [Match.stringLikeRegexp('^testdbRotationSg'), 'GroupId'] },
+      }),
+    ],
+  });
+});
+
+test('CDK: shared VPC adds no Secrets Manager endpoint (core owns it) and exposes the rotation SG', () => {
+  const app = new cdk.App();
+  const stack = new cdk.Stack(app, 'TestStack');
+  const infra = materialize(stack, 'testdb', {
+    databaseName: 'mydb',
+    // biome-ignore lint/suspicious/noExplicitAny: minimal VpcContext test double
+    vpcContext: sharedVpcContext(stack, { isolated: true }) as any,
+  });
+  const template = Template.fromStack(stack);
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 0);
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 1);
+  // index.cdk.ts registers this SG so core's endpoint SG admits the rotation Lambda
+  // (see the shared-VPC test in index.cdk.test.ts).
+  assert.ok(infra.rotationSecurityGroup, 'rotationSecurityGroup is exposed for core registration');
+});
+
+test('CDK: secretRotation:false emits no rotation resources', () => {
+  const template = synthTemplate({ databaseName: 'mydb', secretRotation: false });
+  template.resourceCountIs('AWS::SecretsManager::RotationSchedule', 0);
+  template.resourceCountIs('AWS::Serverless::Application', 0);
+  template.resourceCountIs('AWS::EC2::VPCEndpoint', 0);
+  template.resourceCountIs('AWS::EC2::SecurityGroupIngress', 0);
+  template.resourceCountIs('AWS::SecretsManager::ResourcePolicy', 0);
+});
+
+test('CDK: secretRotation intervalDays sets the schedule (1 and 1000 accepted)', () => {
+  for (const [intervalDays, expression] of [
+    [7, 'rate(7 days)'],
+    [1, 'rate(1 day)'],
+    [1000, 'rate(1000 days)'],
+  ] as const) {
+    const template = synthTemplate({ databaseName: 'mydb', secretRotation: { intervalDays } });
+    template.hasResourceProperties('AWS::SecretsManager::RotationSchedule', {
+      RotationRules: { ScheduleExpression: expression },
+    });
+  }
+});
+
+test('CDK: invalid secretRotation intervalDays throws at synth time', () => {
+  for (const intervalDays of [0, 1001, 1.5, Number.NaN]) {
+    assert.throws(
+      () => synthTemplate({ databaseName: 'mydb', secretRotation: { intervalDays } }),
+      /Invalid secretRotation\.intervalDays/,
+      `intervalDays=${intervalDays} should be rejected`,
+    );
+  }
+});
+
+test('CDK: the first rotation waits for the writer instance and the migrations', () => {
+  const template = withMigrationsDir((dir) => synthTemplate({ databaseName: 'mydb', migrationsPath: dir }));
+  // Both the schedule and the rotation Lambda (the SAR app, which is what
+  // connects to the database) must wait.
+  for (const type of ['AWS::SecretsManager::RotationSchedule', 'AWS::Serverless::Application']) {
+    const [resource] = Object.values(template.findResources(type)) as Array<{ DependsOn?: string[] }>;
+    const deps = resource.DependsOn ?? [];
+    assert.ok(deps.some((d) => /^testdbClustertestdbWriter/.test(d)), `${type} depends on the writer: ${deps}`);
+    assert.ok(deps.includes('testdbMigrationCR'), `${type} depends on the migration CR: ${deps}`);
+  }
+});
+
+test('CDK: enabling rotation adds resources only (cluster, writer and secret unchanged)', () => {
+  // Rotation must add resources only. A change to a Replacement-class property
+  // of a pre-existing resource would replace the cluster on upgrade (see
+  // DESIGN.md, "Security posture").
+  const keyArn = 'arn:aws:kms:us-east-1:111122223333:key/abcd-1234';
+  const variants: Array<[string, (rotation: false | undefined) => Template]> = [
+    ['own VPC, no CMK', (secretRotation) => synthTemplate({ databaseName: 'mydb', secretRotation })],
+    [
+      'own VPC, CMK',
+      (secretRotation) => {
+        const app = new cdk.App();
+        const stack = new cdk.Stack(app, 'TestStack');
+        materialize(stack, 'testdb', {
+          databaseName: 'mydb',
+          secretRotation,
+          storageEncryptionKey: cdk.aws_kms.Key.fromKeyArn(stack, 'Key', keyArn),
+        });
+        return Template.fromStack(stack);
+      },
+    ],
+    [
+      'shared VPC',
+      (secretRotation) => {
+        const app = new cdk.App();
+        const stack = new cdk.Stack(app, 'TestStack');
+        materialize(stack, 'testdb', {
+          databaseName: 'mydb',
+          secretRotation,
+          // biome-ignore lint/suspicious/noExplicitAny: minimal VpcContext test double
+          vpcContext: sharedVpcContext(stack, { isolated: true }) as any,
+        });
+        return Template.fromStack(stack);
+      },
+    ],
+  ];
+  for (const [label, synth] of variants) {
+    const off = synth(false).toJSON().Resources as Record<string, unknown>;
+    const on = synth(undefined).toJSON().Resources as Record<string, unknown>;
+    for (const [id, res] of Object.entries(off)) {
+      if ((res as { Type: string }).Type === 'AWS::CDK::Metadata') continue;
+      assert.deepStrictEqual(on[id], res, `[${label}] resource ${id} must be unchanged when rotation is on`);
+    }
+  }
 });
 
 // --- Migrations ---

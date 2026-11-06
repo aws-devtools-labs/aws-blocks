@@ -14,14 +14,18 @@ import type * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
 import {
   DEFAULT_BACKUP_RETENTION_DAYS,
   DEFAULT_MAX_CAPACITY,
   DEFAULT_MIN_CAPACITY,
+  DEFAULT_SECRET_ROTATION_DAYS,
   ENV_NAME_SANITIZE_PATTERN,
   ENV_VAR_PREFIX,
+  MAX_SECRET_ROTATION_DAYS,
+  MIN_SECRET_ROTATION_DAYS,
   VPC_MAX_AZS,
 } from './constants.js';
 
@@ -99,6 +103,14 @@ export interface AuroraInfraConfig {
    *   custom resource).
    */
   logRetention?: cdk.aws_logs.RetentionDays;
+  /**
+   * Automatic rotation of the cluster's credentials secret. On by default: AWS's
+   * PostgreSQL single-user rotation function (a Serverless Application
+   * Repository app) runs in the cluster VPC and rotates the `postgres` password
+   * in place every `intervalDays` days. Pass `false` to turn rotation off.
+   * @default `{ intervalDays: 30 }`
+   */
+  secretRotation?: false | { intervalDays: number };
 }
 
 /**
@@ -126,13 +138,21 @@ export interface AuroraInfraOutputs {
    * infra.grantDataApi(lambdaFunction);
    */
   grantDataApi: (grantee: iam.IGrantable) => void;
+  /**
+   * Security group of the secret-rotation Lambda, when rotation is enabled. In a
+   * shared VPC the CDK layer registers it with core, whose single endpoint SG
+   * (shared by every Blocks-managed interface endpoint) otherwise admits only the
+   * Blocks Lambda SG. Undefined when `secretRotation` is `false`.
+   */
+  rotationSecurityGroup?: ec2.ISecurityGroup;
 }
 
 /**
  * Provision Aurora Serverless v2 PostgreSQL with Data API enabled.
  *
  * Creates: VPC (2 AZs, isolated subnets, no NAT), Aurora cluster,
- * Secrets Manager credentials, security group, IAM grants, and CfnOutputs.
+ * Secrets Manager credentials, the rotation Lambda and (standalone VPC) a
+ * Secrets Manager endpoint, security groups, IAM grants, and CfnOutputs.
  *
  * @param scope - CDK construct scope
  * @param name - Logical name used for resource naming and env var prefix
@@ -165,10 +185,11 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
   // every docs example (`new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 })`)
   // has only public + private-with-egress subnets, so hard-requiring PRIVATE_ISOLATED
   // makes the documented setup fail synth with "no isolated subnet groups in this VPC".
-  // Aurora is reached over the RDS Data API (HTTPS via the interface endpoint), never a
-  // raw socket, so the placement tier doesn't affect reachability — it only has to be a
-  // tier the VPC actually has. Prefer isolated when present (keeps the DB off any NAT
-  // path), otherwise fall back to private-with-egress.
+  // The app reaches Aurora over the RDS Data API (HTTPS via the interface endpoint),
+  // never a raw socket, and the rotation Lambda lands in the cluster's own subnets, so
+  // the placement tier doesn't affect reachability — it only has to be a tier the VPC
+  // actually has. Prefer isolated when present (keeps the DB off any NAT path),
+  // otherwise fall back to private-with-egress.
   let clusterSubnets: ec2.SubnetSelection;
   if (options.clusterSubnets) {
     // Customer explicitly chose placement via Database({ subnets }); honor it.
@@ -185,11 +206,12 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     clusterSubnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
   }
 
-  // Security group for the cluster. No ingress rule: the cluster runs with
-  // `enableDataApi: true` and is reached exclusively over the RDS Data API
-  // (HTTPS via the Secrets Manager + RDS Data interface endpoints), never a raw
-  // Postgres socket. A 5432 ingress rule would imply a direct DB connection path
-  // that nothing in Blocks uses. Egress stays closed for the same reason.
+  // Security group for the cluster. No ingress rule here: the cluster runs with
+  // `enableDataApi: true` and the app reaches it exclusively over the RDS Data
+  // API (HTTPS via the Secrets Manager + RDS Data interface endpoints), never a
+  // raw Postgres socket. The only socket path is the credentials-rotation Lambda:
+  // `addRotationSingleUser` below admits its dedicated SG on the Postgres port.
+  // Egress stays closed.
   const securityGroup = new ec2.SecurityGroup(scope, `${name}Sg`, {
     vpc,
     description: `Security group for ${name} Aurora cluster`,
@@ -292,9 +314,8 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     // iamAuthentication is intentionally NOT enabled: the cluster is reached
     // exclusively over the RDS Data API (HTTPS + Secrets Manager credentials),
     // never a direct DB socket, so database-level IAM authentication does not
-    // apply here. Automatic secret rotation is likewise a deliberate follow-up:
-    // it requires a rotation Lambda wired into the cluster VPC, a larger change
-    // than this one.
+    // apply here. The credentials secret is rotated on a schedule by the
+    // rotation Lambda wired up below, unless `secretRotation` is `false`.
     // Read independently from defaults (falling back to the removalPolicy-derived
     // value for direct materialize() callers that don't pass it).
     deletionProtection: options.deletionProtection ?? removalPolicy !== cdk.RemovalPolicy.DESTROY,
@@ -317,7 +338,8 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
   };
 
   /**
-   * Grant rds-data:* and secretsmanager:GetSecretValue to a principal.
+   * Grant rds-data:* and secretsmanager:GetSecretValue (plus kms:Decrypt on the
+   * customer-managed key, when one encrypts the secret) to a principal.
    * Call this with the Lambda handler to allow Data API access.
    */
   const grantDataApi = (grantee: iam.IGrantable) => {
@@ -332,12 +354,47 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
       resources: [cluster.clusterArn],
     }));
     secret.grantRead(grantee);
+    // With a customer-managed key, `secret.grantRead` puts `kms:Decrypt` on the
+    // KEY policy (via `ViaServicePrincipal`), and an imported key's policy can't
+    // be edited from here, so that grant is silently dropped and the principal
+    // can't decrypt the secret: every Data API call fails. Grant it identity-side
+    // instead, scoped to use through Secrets Manager. The key policy must still
+    // allow the account's IAM principals to use the key (the default key policy
+    // does, via the account root).
+    if (options.storageEncryptionKey) {
+      grantee.grantPrincipal.addToPrincipalPolicy(new iam.PolicyStatement({
+        actions: ['kms:Decrypt'],
+        resources: [options.storageEncryptionKey.keyArn],
+        conditions: {
+          StringEquals: { 'kms:ViaService': `secretsmanager.${cdk.Stack.of(scope).region}.amazonaws.com` },
+        },
+      }));
+    }
   };
 
   new cdk.CfnOutput(scope, `${name}ClusterArn`, { value: cluster.clusterArn });
   new cdk.CfnOutput(scope, `${name}SecretArn`, { value: secret.secretArn });
 
+  // The writer instance's CfnResource. Anything that connects to the database
+  // during the deploy (the migration Lambda, the first rotation) must wait for
+  // it: CloudFormation considers the cluster "created" before any instance
+  // exists, and a connection attempt then fails with "Cannot find DBInstance in
+  // DBCluster". Located by CFN resource type (the writer is created inside the
+  // cluster construct; this cluster has exactly one instance) and wired with a
+  // CFN-level DependsOn. Throw if it isn't there: a CDK change that moved it
+  // would otherwise silently drop the ordering.
+  const cfnWriter = cluster.node.findAll().find((c) => (c as any).cfnResourceType === 'AWS::RDS::DBInstance') as
+    | cdk.CfnResource
+    | undefined;
+  if (!cfnWriter) {
+    throw new Error(
+      `Aurora cluster '${name}' has no AWS::RDS::DBInstance child; aws-cdk-lib may have changed how the writer ` +
+        `is created. Blocks needs it to order migrations and the first rotation after the instance.`,
+    );
+  }
+
   // Run migrations on deploy if migrationsPath is provided
+  let migrationCR: cdk.CustomResource | undefined;
   if (options.migrationsPath) {
     const migrationsHash = hashMigrationsDir(options.migrationsPath);
     const migrationFn = new lambda.NodejsFunction(scope, `${name}MigrationFn`, {
@@ -376,22 +433,117 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
       onEventHandler: migrationFn,
     });
 
-    const migrationCR = new cdk.CustomResource(scope, `${name}MigrationCR`, {
+    migrationCR = new cdk.CustomResource(scope, `${name}MigrationCR`, {
       serviceToken: provider.serviceToken,
       properties: { migrationsHash },
     });
 
-    // Ensure the migration custom resource waits for the Aurora writer instance.
-    // Without this, CloudFormation may invoke the migration Lambda before the
-    // writer is available, causing "Cannot find DBInstance in DBCluster".
-    // Use node.defaultChild to get the underlying CfnResource, then
-    // CfnResource.addDependency for a proper CFN-level DependsOn.
-    const cfnMigrationCR = migrationCR.node.defaultChild as cdk.CfnResource;
-    const cfnWriter = cluster.node.findAll().find((c) => (c as any).cfnResourceType === 'AWS::RDS::DBInstance') as
-      | cdk.CfnResource
-      | undefined;
-    if (cfnMigrationCR && cfnWriter) {
-      cfnMigrationCR.addDependency(cfnWriter);
+    // Ensure the migration custom resource waits for the Aurora writer instance
+    // (see `cfnWriter` above).
+    (migrationCR.node.defaultChild as cdk.CfnResource).addResourceDependency(cfnWriter);
+  }
+
+  // Automatic rotation of the credentials secret: AWS's PostgreSQL single-user
+  // rotation function (a Serverless Application Repository app; not CDK's
+  // `HostedRotation`, which uses a different transform) runs in the cluster VPC,
+  // generates a new password, sets it on the cluster as `postgres`, and makes it
+  // the secret's AWSCURRENT version. The secret is rotated in place (same ARN);
+  // the Data API callers never read the password themselves, so nothing else
+  // changes. The RDS-managed master password (`manageMasterUserPassword`) was not
+  // used: it would replace every existing no-CMK cluster and change the secret
+  // ARN (see DESIGN.md).
+  //
+  // The rotation Lambda needs a path to the cluster's Postgres port (granted on
+  // the cluster SG from the dedicated rotation SG only) and to the Secrets
+  // Manager API: in the standalone VPC (isolated, no NAT) that is the interface
+  // endpoint created below; in a shared VPC core already provisions it, and the
+  // CDK layer registers `rotationSecurityGroup` so core's endpoint SG admits the
+  // rotation Lambda. CDK also attaches a resource policy denying
+  // `secretsmanager:DeleteSecret` to the account while rotation is on: `cdk
+  // destroy` still deletes the secret, but an out-of-band `delete-secret` is
+  // refused.
+  let rotationSecurityGroup: ec2.ISecurityGroup | undefined;
+  if (options.secretRotation !== false) {
+    // `undefined` (option omitted) is the only way to get the default: the object
+    // form requires `intervalDays`, so an empty object is a type error, not a
+    // silent default.
+    const intervalDays = options.secretRotation?.intervalDays ?? DEFAULT_SECRET_ROTATION_DAYS;
+    if (
+      !Number.isInteger(intervalDays) ||
+      intervalDays < MIN_SECRET_ROTATION_DAYS ||
+      intervalDays > MAX_SECRET_ROTATION_DAYS
+    ) {
+      throw new Error(
+        `Invalid secretRotation.intervalDays ${String(intervalDays)}; expected an integer between ` +
+          `${MIN_SECRET_ROTATION_DAYS} and ${MAX_SECRET_ROTATION_DAYS}.`,
+      );
+    }
+
+    // Egress open, unlike the cluster and endpoint SGs: the rotation Lambda
+    // must reach the cluster (port from the cluster's endpoint) and Secrets
+    // Manager (443 via the endpoint), and in the isolated, no-NAT standalone
+    // VPC there is nowhere else for traffic to go. In a shared VPC the same
+    // posture as core's Blocks Lambda SG applies.
+    const rotationSg = new ec2.SecurityGroup(scope, `${name}RotationSg`, {
+      vpc,
+      description: `Security group for ${name} credentials-rotation Lambda`,
+      allowAllOutbound: true,
+    });
+    rotationSecurityGroup = rotationSg;
+
+    if (!options.vpcContext) {
+      // Standalone VPC: no other workloads live here, but mirror core's endpoint
+      // ingress posture anyway — a dedicated SG admitting 443 from the rotation
+      // Lambda only, and `open: false` so CDK doesn't add its default
+      // allow-from-VPC-CIDR rule. Egress is closed, tighter than core's: an
+      // endpoint ENI never initiates a connection.
+      const endpointSg = new ec2.SecurityGroup(scope, `${name}SecretsEndpointSg`, {
+        vpc,
+        description: `Secrets Manager endpoint for ${name} - 443 from the rotation Lambda only`,
+        allowAllOutbound: false,
+      });
+      endpointSg.addIngressRule(
+        ec2.Peer.securityGroupId(rotationSg.securityGroupId),
+        ec2.Port.tcp(443),
+        'HTTPS from the credentials-rotation Lambda',
+      );
+      new ec2.InterfaceVpcEndpoint(scope, `${name}SecretsManagerEndpoint`, {
+        vpc,
+        service: ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER,
+        subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+        privateDnsEnabled: true,
+        securityGroups: [endpointSg],
+        open: false,
+      });
+    }
+
+    // `endpoint` is deliberately not passed: the endpoint has private DNS, so the
+    // standard regional hostname already resolves to it, and the hostname CDK
+    // derives from an explicit endpoint does not match a private-DNS endpoint's
+    // DNS entry. `vpcSubnets` is not passed either: CDK defaults it to the
+    // cluster's own subnet selection, so the function lands in the same tier.
+    const rotation = cluster.addRotationSingleUser({
+      automaticallyAfter: cdk.Duration.days(intervalDays),
+      securityGroup: rotationSg,
+    });
+
+    // The schedule rotates immediately once created. Make it wait for the
+    // writer (so the first rotation can connect) and for the migrations (so a
+    // mid-rotation password swap can't fail a migration statement). CDK puts
+    // the RotationSchedule under the *secret*, not under `rotation`, and
+    // `SecretRotation` exposes no handle to it, so find it by type rather than
+    // by its (internal, renameable) child id. Throw if it isn't there: a CDK
+    // upgrade that moved it would otherwise silently drop this ordering.
+    const schedule = secret.node.children.find((c) => c instanceof secretsmanager.RotationSchedule);
+    if (!schedule) {
+      throw new Error(
+        `Aurora cluster '${name}' has no RotationSchedule under its secret after addRotationSingleUser; ` +
+          `aws-cdk-lib may have changed where it lives. Blocks needs it to order the first rotation.`,
+      );
+    }
+    for (const dependent of [rotation, schedule]) {
+      dependent.node.addDependency(cfnWriter);
+      if (migrationCR) dependent.node.addDependency(migrationCR);
     }
   }
 
@@ -402,6 +554,7 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
     databaseName,
     envVars,
     grantDataApi,
+    rotationSecurityGroup,
   };
 }
 
