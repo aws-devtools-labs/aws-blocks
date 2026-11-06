@@ -570,10 +570,8 @@ export class OidcClientEngine implements AuthEngine {
 	}
 
 	async signOut(ctx: BlocksContext): Promise<void> {
-		const { refreshToken, provider } = await this.sessionManager.signOutSession(ctx);
-		if (refreshToken && provider) {
-			await this.bestEffortRevoke(provider, refreshToken, ctx);
-		}
+		await this.sessionManager.signOutSession(ctx, (refreshToken, provider) =>
+			this.bestEffortRevoke(provider, refreshToken, ctx));
 	}
 
 	async resolveCookieSecret(): Promise<string> {

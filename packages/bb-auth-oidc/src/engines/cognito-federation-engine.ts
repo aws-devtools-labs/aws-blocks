@@ -404,10 +404,7 @@ export class CognitoFederationEngine implements AuthEngine {
 	}
 
 	async signOut(ctx: BlocksContext): Promise<void> {
-		const { refreshToken } = await this.sessionManager.signOutSession(ctx);
-		if (refreshToken) {
-			await this.bestEffortRevoke(refreshToken);
-		}
+		await this.sessionManager.signOutSession(ctx, (refreshToken) => this.bestEffortRevoke(refreshToken));
 	}
 
 	async resolveCookieSecret(): Promise<string> {

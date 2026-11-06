@@ -586,6 +586,30 @@ describe('AuthOIDCClient.signOut — @aws-blocks/auth-common bridge', () => {
 		assert.strictEqual(detail.user, null);
 		assert.strictEqual(reloaded, true, 'signOut should reload the page after broadcasting');
 	});
+
+	test('rejects with the server error and does not report success when the sign-out returns 503', async () => {
+		globalThis.fetch = (async () => ({
+			ok: false,
+			status: 503,
+			json: async () => ({
+				error: 'Sign-out could not be completed: the server-side session was not invalidated',
+				name: 'SignOutIncompleteException',
+			}),
+		})) as unknown as typeof globalThis.fetch;
+		let dispatched = false;
+		(globalThis as any).window.addEventListener('blocks-auth-change', () => { dispatched = true; });
+
+		const client = makeClient();
+		await assert.rejects(() => client.signOut(), (e: unknown) => {
+			assert.ok(e instanceof ApiError, `expected ApiError, got ${String(e)}`);
+			assert.strictEqual(e.name, 'SignOutIncompleteException');
+			assert.strictEqual(e.status, 503);
+			return true;
+		});
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab signed-out post for a failed sign-out');
+		assert.strictEqual(dispatched, false, 'no same-window auth-change event for a failed sign-out');
+		assert.strictEqual(reloaded, false, 'no reload, so the caller can surface the error');
+	});
 });
 
 describe('AuthOIDCClient.signOut — server-side (no window / BroadcastChannel)', () => {

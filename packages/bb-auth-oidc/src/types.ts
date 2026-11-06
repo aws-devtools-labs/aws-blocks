@@ -429,6 +429,15 @@ export interface OIDCClient<Provider extends string = string> {
 	 */
 	signIn(provider: Provider, opts?: { state?: string; redirectPath?: string }): Promise<void>;
 	handleRedirectCallback(): Promise<{ userId: string; username: string } | null>;
+	/**
+	 * Sign out: POST the sign-out route, then notify listeners and reload.
+	 *
+	 * @returns A promise that **rejects** with an `ApiError` carrying the server's
+	 *   `status` and `name` when sign-out fails — notably
+	 *   `SignOutIncompleteException` (503): the cookie was cleared but the session
+	 *   was not invalidated server-side. On rejection, listeners are not notified
+	 *   and the page is not reloaded.
+	 */
 	signOut(): Promise<void>;
 	onAuthStateChange(handler: (user: OIDCUser | null, meta: { state?: string } | null) => void): () => void;
 	/** @internal Transferable serialization. */
