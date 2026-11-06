@@ -107,8 +107,8 @@ function renderCatalogTable(entries) {
   return ['| Block | What it does | Keywords |', '|-------|--------------|----------|', ...rows].join('\n');
 }
 
-function escapeCell(value) {
-  return (value || '').replace(/\|/g, '\\|');
+export function escapeCell(value) {
+  return (value || '').replace(/[\\|]/g, '\\$&');
 }
 
 // ─── Marker helpers ──────────────────────────────────────────────────────────

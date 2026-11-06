@@ -7,12 +7,14 @@
  *
  * Runs only when BLOCKS_TEST_ENV=sandbox|production (the unified e2e harness
  * deploys + tears down the stack). Verifies the admin IAM grant is wired and
- * the surface behaves end-to-end against real Cognito.
+ * the surface behaves end-to-end against real Cognito. The scan filter-value
+ * suite at the end also runs locally, against the mock.
  */
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
+import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 import type { api as apiType } from 'aws-blocks';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
@@ -204,6 +206,49 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 
 			await api.authCAdminDeleteUser(a);
 			await api.authCAdminDeleteUser(b);
+		});
+	});
+
+	// `admin.scan` refuses a filter value containing `"` or `\`: Cognito ListUsers
+	// unescapes its filter more than once, so such a value never matches literally.
+	// The refusal happens before any Cognito call, the same locally and on AWS; a
+	// plain value with a space still filters on the pool side.
+	describe('AuthCognito admin.scan filter values with quotes and backslashes', () => {
+		test('rejects values holding " or \\ with InvalidParameter and still matches plain values', async () => {
+			const api = getApi();
+			const base = `scanesc-${uniqueUser()}`;
+			const u = uniqueUser();
+			try {
+				await api.authCAdminCreateUserWithName(u, PW, `${base} plain`);
+				// ListUsers can trail AdminCreateUser; wait until the prefix sees the user.
+				let found: string[] = [];
+				for (let i = 0; i < 10 && found.length === 0; i++) {
+					if (i > 0) await new Promise((r) => setTimeout(r, 1000));
+					found = await api.authCAdminScan({ attribute: 'name', match: 'startsWith', value: `${base} ` });
+				}
+				assert.deepStrictEqual(found, [u]);
+				assert.deepStrictEqual(
+					await api.authCAdminScan({ attribute: 'name', match: 'equals', value: `${base} plain` }),
+					[u],
+				);
+				for (const value of [`${base} q"x`, `${base} b\\x`, `${base} b\\`, `${base} a\\b "c" \\"d\\"`]) {
+					for (const match of ['equals', 'startsWith'] as const) {
+						await assert.rejects(
+							() => api.authCAdminScan({ attribute: 'name', match, value }),
+							// The block's own message, so a 400 from Cognito itself cannot pass for the refusal.
+							(e: unknown) =>
+								isBlocksError(e, AuthCognitoErrors.InvalidParameter) &&
+								e instanceof ApiError &&
+								e.status === 400 &&
+								e.message.includes('cannot contain a double quote or a backslash'),
+							`expected InvalidParameter for ${match} ${JSON.stringify(value)}`,
+						);
+					}
+				}
+			} finally {
+				// Don't let a cleanup failure hide the assertion that failed.
+				await api.authCAdminDeleteUser(u).catch((e: unknown) => console.warn(`cleanup of ${u} failed:`, e));
+			}
 		});
 	});
 }
