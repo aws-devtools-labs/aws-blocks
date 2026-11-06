@@ -25,12 +25,12 @@ export interface ChildLogger {
 export interface LogEntry {
     // (undocumented)
     [key: string]: unknown;
+    awsRequestId?: string;
     // (undocumented)
     level: LogLevel;
     logger: string;
     // (undocumented)
     message: string;
-    requestId?: string;
     timestamp: string;
     traceId?: string;
 }
