@@ -1049,7 +1049,7 @@ describe('unicode / multilingual retrieval', () => {
 //
 // The local corpus loads synchronously on first retrieve(), so there is no
 // asynchronous ingestion window — isSynced() is always true and
-// waitUntilSynced() resolves immediately (options are ignored).
+// waitUntilSynced() resolves immediately (except for an already-aborted signal).
 
 describe('sync', () => {
 	test('isSynced() resolves true immediately', async () => {
@@ -1067,9 +1067,21 @@ describe('sync', () => {
 		assert.strictEqual(await kb.isSynced(), true);
 	});
 
-	test('waitUntilSynced() ignores options and resolves immediately', async () => {
+	test('waitUntilSynced() ignores timing options and resolves immediately', async () => {
 		const kb = new KnowledgeBase({ id: 'test' }, 'waitopts', { source: 'test-knowledge-tmp' });
 		await kb.waitUntilSynced({ timeoutMs: 1, pollIntervalMs: 1 });
+	});
+
+	test('waitUntilSynced() rejects with an already-aborted signal reason', async () => {
+		const kb = new KnowledgeBase({ id: 'test' }, 'waitabort', { source: 'test-knowledge-tmp' });
+		const controller = new AbortController();
+		const reason = new Error('request cancelled');
+		controller.abort(reason);
+
+		await assert.rejects(
+			() => kb.waitUntilSynced({ signal: controller.signal }),
+			(err: unknown) => err === reason,
+		);
 	});
 });
 
