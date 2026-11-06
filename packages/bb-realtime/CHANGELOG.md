@@ -1,5 +1,52 @@
 # @aws-blocks/bb-realtime
 
+## 0.5.1
+
+### Patch Changes
+
+- b2eb306: A specific IPv6 `BLOCKS_DEV_HOST` (for example `fd00::1`) now admits the local realtime WebSocket from its bracketed origin (`http://[fd00::1]:3000`).
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- 10eb382: A server-side subscriber (`getChannel(...).subscribe(handler)` or `realtime.subscribe(...)` in the backend) now runs its handler once per published message on AWS, as it already did locally. When the publish came from the subscriber's own process, the handler used to run twice: once through the in-process emitter and once through the subscriber's own WebSocket.
+- 6bac1c9: The WebSocket handler (deployed and local dev) now checks the channel in `subscribe` and `unsubscribe` messages before using it. It must be a channel path of the form `getChannel()` returns (`<instance>/<namespace>/<channel>`, at most 1024 bytes); otherwise a subscribe gets `{ type: 'error', message: 'Invalid channel' }` and an unsubscribe is ignored. A subscribe also requires a channel token: the connect token only authorizes opening the connection, as documented. A subscribe without a token (or with a token that isn't a string) now gets `{ type: 'error', channel, message: 'Unauthorized: missing token' }` from the deployed handler too, as it already did in local dev. Channel handles returned by `getChannel()` are unaffected.
+- Updated dependencies [e83d152]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [be8864c]
+- Updated dependencies [60360c1]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-distributed-table@0.4.0
+  - @aws-blocks/bb-lambda-compute@0.7.1
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.5.0
 
 ### Minor Changes

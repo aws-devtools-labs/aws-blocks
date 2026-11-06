@@ -1,5 +1,50 @@
 # @aws-blocks/bb-distributed-table
 
+## 0.4.0
+
+### Minor Changes
+
+- be8864c: feat(bb-distributed-table): add a `consistentRead` option to `get()`
+
+  `get(key, { consistentRead: true })` reads the item with a strongly consistent DynamoDB `GetItem` (`ConsistentRead: true`), so it sees every write that succeeded before the read. Use it when the next step depends on an item that was just written, such as an existence or ownership check. Without the option `get()` stays eventually consistent, as before. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent and accepts the option.
+
+  The new `GetOptions` type is exported from `@aws-blocks/bb-distributed-table`, and from the umbrella `@aws-blocks/blocks` as `DTGetOptions`.
+
+### Patch Changes
+
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.3.0
 
 ### Minor Changes

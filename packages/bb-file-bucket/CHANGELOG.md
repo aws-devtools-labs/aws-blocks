@@ -1,5 +1,54 @@
 # @aws-blocks/bb-file-bucket
 
+## 0.4.1
+
+### Patch Changes
+
+- e8e3262: Brand the `ValidationFailed` error thrown for an invalid object key so its name and message reach RPC clients instead of a generic internal error.
+- eacc87e: Local file server now returns 404 `NoSuchKey` for presigned GETs of a versioned key whose current version is a delete marker, matching S3 and `get()`.
+- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
+
+  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
+
+- 8fb67ec: Fix local FileBucket version deletion so removing the newest stored data version updates the current body and metadata from the next stored data version, or removes the current copies when none remain. Active delete-marker flags and older-version deletion behavior are preserved. Document that historical delete markers discarded by a subsequent upload are not reconstructed, so deletion across re-uploads still differs from S3.
+
+  Ignore nested-key directories when reading version history. Retain the target version body until current-copy reconciliation and version-sidecar removal succeed, allowing filesystem failures to be retried with the same version ID.
+
+- 77c2c75: Docs: FileBucket object metadata is set when the object is written and can't be edited in place. Each `put()` replaces it, and a `put()` without `metadata` leaves none. A new "Changing Metadata" README section shows how to change it (re-`put()` the same body with the complete new set) and what that implies: a full GET and PUT, `cacheControl` passed again, another stored version on versioned buckets (the default), a rewrite that isn't atomic, and no custom metadata on presigned uploads. It also notes that S3 stores metadata keys in lowercase while the local mock keeps their case; DESIGN.md lists this among the mock vs AWS differences. The `PutOptions.metadata` and `put()` JSDoc say the same.
+- f643a76: Return HTTP 404 for local presigned downloads of unknown or permanently deleted file versions instead of serving the current file's content.
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.4.0
 
 ### Minor Changes

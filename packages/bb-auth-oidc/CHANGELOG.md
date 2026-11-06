@@ -1,5 +1,48 @@
 # @aws-blocks/bb-auth-oidc
 
+## 0.3.1
+
+### Patch Changes
+
+- b2eb306: Docs: the README, DESIGN and `cognitoFederated()` JSDoc now name the `cdk-blocks secret` CLI, the command `@aws-blocks/blocks` installs, when they say it doesn't manage the SSM SecureString behind a `secret: true` `AppSetting`.
+- Updated dependencies [e83d152]
+- Updated dependencies [1c7e0dd]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/auth-common@0.4.0
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-logger@0.4.0
+  - @aws-blocks/bb-kv-store@0.4.1
+
 ## 0.3.0
 
 ### Minor Changes

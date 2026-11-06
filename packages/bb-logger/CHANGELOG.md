@@ -1,5 +1,45 @@
 # @aws-blocks/bb-logger
 
+## 0.4.0
+
+### Minor Changes
+
+- 4e92168: On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), every `Logger` line now carries `awsRequestId`, the invocation's request id, so you can correlate everything one request logged (for example `filter awsRequestId = "<id>"` in CloudWatch Logs Insights). Core's `createLambdaHandler` runs each invocation with its `awsRequestId` in scope, and overlapping invocations on one container each see their own id. `awsRequestId` is reserved, so context can't replace it, and your own context fields such as `requestId` are kept as is. Building Block authors can read the same id with `currentRequestId()` from `@aws-blocks/core/bb-utils`. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+
+### Patch Changes
+
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+
 ## 0.3.0
 
 ### Minor Changes
