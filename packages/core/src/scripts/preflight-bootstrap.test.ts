@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { AwsCredentialIdentity } from '@smithy/types';
 import { type BootstrapTarget, type BootstrapVersionReader, cdkBootstrapFailure } from './preflight-bootstrap.js';
-import { type AssertAwsCredentialsOptions, assertAwsCredentials } from './preflight-credentials.js';
+import { type AssertAwsCredentialsOptions, type AwsPreflightResult, assertAwsCredentials } from './preflight-credentials.js';
 
 const CREDENTIALS: AwsCredentialIdentity = { accessKeyId: 'AKIAEXAMPLEFIXTURE', secretAccessKey: 'fixture-secret' };
 const ACCOUNT = '123456789012';
@@ -60,7 +60,10 @@ describe('CDK bootstrap check', () => {
 		await rm(directory, { recursive: true, force: true });
 	});
 
-	function check(read: BootstrapVersionReader, options: Partial<AssertAwsCredentialsOptions> = {}): Promise<void> {
+	function check(
+		read: BootstrapVersionReader,
+		options: Partial<AssertAwsCredentialsOptions> = {},
+	): Promise<AwsPreflightResult> {
 		return assertAwsCredentials({
 			command: 'deploy',
 			env,
@@ -126,10 +129,11 @@ describe('CDK bootstrap check', () => {
 		assert.doesNotMatch(message, /custom bootstrap qualifier/);
 	});
 
-	it('continues when the version parameter exists', async () => {
+	it('continues when the version parameter exists, and returns the verified account', async () => {
 		const { read, calls } = reader(FOUND);
-		await check(read);
+		const { account } = await check(read);
 		assert.equal(calls.length, 1);
+		assert.equal(account, ACCOUNT);
 	});
 
 	for (const [name, result] of [

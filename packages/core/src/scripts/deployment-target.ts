@@ -155,3 +155,23 @@ export async function resolveDeploymentTarget({
 		...bootstrapQualifier,
 	};
 }
+
+/**
+ * The directory, relative to the project root unless absolute, that CDK writes
+ * the cloud assembly to: `output` in `cdk.json`, then in `~/.cdk.json`, else
+ * CDK's default `cdk.out`. The production deploy synthesizes there and deploys
+ * that assembly, so its output stays where a plain `cdk synth` puts it.
+ *
+ * @throws {Error} When `cdk.json` or `~/.cdk.json` cannot be read.
+ */
+export async function resolveCdkOutputDir({
+	env = process.env,
+	projectRoot = process.cwd(),
+}: DeploymentTargetOptions = {}): Promise<string> {
+	const [userSettings, projectSettings] = await Promise.all([
+		readCdkSettings(join(homeDirectory(env), '.cdk.json')),
+		readCdkSettings(join(projectRoot, 'cdk.json')),
+	]);
+	const { output } = { ...userSettings, ...projectSettings };
+	return typeof output === 'string' && output ? output : 'cdk.out';
+}

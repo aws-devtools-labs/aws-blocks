@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { AwsCredentialIdentity } from '@smithy/types';
-import { type AccountMetadata, type AccountMetadataClientFactory, readAccountMetadata } from './account-metadata.js';
+import {
+	type AccountMetadata,
+	type AccountMetadataClientFactory,
+	type AccountPlanType,
+	readAccountMetadata,
+} from './account-metadata.js';
 import {
 	type AwsCliVersionReader,
 	classifyCredentialError,
@@ -160,10 +165,18 @@ export interface AssertAwsCredentialsOptions extends DeploymentTargetOptions {
 	readBootstrapVersion?: BootstrapVersionReader;
 }
 
+/** What {@link assertAwsCredentials} read that later deploy steps use. */
+export interface AwsPreflightResult {
+	/** The account plan type; `null` when the plan was not read or is unavailable. */
+	accountPlan: AccountPlanType | null;
+	/** The account STS verified, which {@link accountPlan} belongs to; `null` when not verified. */
+	account: string | null;
+}
+
 const BILLING_URL = 'https://settings.aws.com/billing';
 const PROJECTS_URL = 'https://settings.aws.com/projects';
 
-const NO_METADATA: AccountMetadata = { accountName: null, plan: null, managedRole: false };
+const NO_METADATA: AccountMetadata = { accountName: null, plan: null, planType: null, managedRole: false };
 
 /** How the summary names the deploy credentials, and the profile that the `aws login` advice is for. */
 interface CredentialsLabel {
@@ -269,6 +282,8 @@ function targetSummary(credentials: CredentialsLabel, region: string | null, met
  * deployment target, it stops the deploy only when that parameter does not exist,
  * with the `cdk bootstrap` command for the account and Region.
  *
+ * @returns The account plan type when the optional plan read returned one, and the
+ * account STS verified; each `null` when unavailable.
  * @throws {Error} With actionable guidance when the probe reports a credential error,
  * when `checkBootstrap` finds that CDK is not bootstrapped, or when the CDK
  * configuration cannot be read.
@@ -284,7 +299,7 @@ export async function assertAwsCredentials({
 	checkBootstrap = false,
 	readBootstrapVersion,
 	...options
-}: AssertAwsCredentialsOptions): Promise<void> {
+}: AssertAwsCredentialsOptions): Promise<AwsPreflightResult> {
 	const env = options.env ?? process.env;
 	const { region, profile, bootstrapQualifier } = await resolveDeploymentTarget(options);
 	// CDK deploys with access keys from the environment unless cdk.json selects a profile;
@@ -307,7 +322,7 @@ export async function assertAwsCredentials({
 			].join('\n'),
 		);
 		console.log(targetSummary(target, null, accountDetails ? NO_METADATA : null));
-		return;
+		return { accountPlan: null, account: null };
 	}
 
 	let verified: VerifiedCredentials | undefined;
@@ -383,6 +398,7 @@ export async function assertAwsCredentials({
 	console.log(targetSummary(target, region, metadata));
 	const failure = await bootstrapFailure;
 	if (failure) throw new Error(failure);
+	return { accountPlan: metadata?.planType ?? null, account: verified?.account ?? null };
 }
 
 /**
