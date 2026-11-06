@@ -180,10 +180,10 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
     (the load balancer's 128-character rule path limit, minus the 16-character
     `/aws-blocks/api/` prefix).
 
-  Through CloudFront, `ctx.request.url` in a container namespace is the
-  CloudFront (or custom-domain) URL, while a namespace on a Lambda compute
-  reports the gateway's `execute-api` URL, since CloudFront reaches it through
-  the gateway.
+  Through a Blocks CloudFront front door, `ctx.request.url` is the CloudFront
+  (or custom-domain) URL in a container namespace and in a namespace on a
+  Lambda compute alike, with no API Gateway stage. Called at the gateway's
+  `execute-api` URL directly, both report that URL, stage included.
 - **Everything else stays on the default compute:** namespaces with no
   `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
   routes (`/aws-blocks/auth/*`).

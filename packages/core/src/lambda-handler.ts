@@ -11,7 +11,8 @@ import { errorResponse } from './rpc.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher } from './dispatch.js';
 import type { DispatchRequest, DispatchResponse } from './dispatch.js';
-import { isLoopbackForwardedHost } from './request-context.js';
+import { PUBLIC_HOST_HEADER } from './constants.js';
+import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 
@@ -69,9 +70,15 @@ function decodeEventBody(event: any): { bodyText: string; bodyStream: ReadableSt
  *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
  *   front door), the URL is rebuilt as the browser-visible origin: that host,
- *   plain `http`, and **no** API Gateway stage prefix. Otherwise host comes from
- *   `Host`/`host`, protocol from `x-forwarded-proto` (default `https`), and the
- *   stage prefix is prepended. See {@link isLoopbackForwardedHost} for the gate.
+ *   plain `http`, and **no** API Gateway stage prefix.
+ * - Otherwise, behind a Blocks CloudFront front door — which drops the viewer's
+ *   `Host` and stamps it as `x-blocks-public-host` instead — the URL is the one the
+ *   viewer called: `https://<that host><path>`, no stage (CloudFront serves the
+ *   API from the gateway's stage as its origin path). Taken only when the host is
+ *   one of the backend's own front-door hosts; see {@link trustedPublicHost}.
+ * - Otherwise host comes from `Host`/`host`, protocol from `x-forwarded-proto`
+ *   (default `https`), and the stage prefix is prepended. See
+ *   {@link isLoopbackForwardedHost} for the loopback gate.
  *
  * @internal Exported for testing only.
  */
@@ -79,6 +86,7 @@ export function buildEventUrl(event: any): URL {
   const path: string = event.path || event.requestContext?.http?.path || '/';
   const forwardedHost: string | undefined =
     event.headers?.['x-forwarded-host'] || event.headers?.['X-Forwarded-Host'];
+  const publicHost = trustedPublicHost(singleEventHeader(event, PUBLIC_HOST_HEADER));
 
   let origin: string;
   let fullPath: string;
@@ -100,6 +108,12 @@ export function buildEventUrl(event: any): URL {
     // header inference.
     origin = `http://${forwardedHost}`;
     fullPath = path;
+  } else if (publicHost) {
+    // A Blocks CloudFront front door: the viewer called `https://<publicHost>`, and
+    // CloudFront added the stage as the gateway origin's path, so it isn't part
+    // of the public path (the container behind the same door reports the same).
+    origin = `https://${publicHost}`;
+    fullPath = path;
   } else {
     const host = event.headers?.Host || event.headers?.host || 'localhost';
     const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || 'https';
@@ -112,7 +126,13 @@ export function buildEventUrl(event: any): URL {
     fullPath = stage ? `/${stage}${path}` : path;
   }
 
-  const url = new URL(fullPath, origin);
+  // Start from the origin alone, then assign the path: resolved against the
+  // origin, a path starting `//` or `/\` is a network-path reference that swaps
+  // the host (`//evil.example/x` → `https://evil.example/x`), and a forwarded
+  // host's own query, fragment or userinfo (`localhost:3000?a=b`) must not ride
+  // along. The container builds its URL the same way.
+  const url = new URL(new URL(origin).origin);
+  url.pathname = fullPath;
 
   if (event.rawQueryString) {
     url.search = `?${event.rawQueryString}`;
@@ -131,6 +151,29 @@ export function buildEventUrl(event: any): URL {
   }
 
   return url;
+}
+
+/**
+ * The value of the event header `name` (lower-case), matched case-insensitively,
+ * when the request carried exactly one header of that name; `undefined` when it
+ * carried none or several — a client copy under another letter case, or a repeat
+ * that a REST event keeps only the last of in `headers` (every copy is in
+ * `multiValueHeaders`). The container refuses the same requests' value.
+ */
+function singleEventHeader(
+  event: { headers?: Record<string, unknown> | null; multiValueHeaders?: Record<string, unknown> | null },
+  name: string,
+): string | undefined {
+  for (const [key, values] of Object.entries(event.multiValueHeaders ?? {})) {
+    if (key.toLowerCase() === name && Array.isArray(values) && values.length > 1) return undefined;
+  }
+  let found: string | undefined;
+  for (const [key, value] of Object.entries(event.headers ?? {})) {
+    if (key.toLowerCase() !== name) continue;
+    if (found !== undefined || typeof value !== 'string') return undefined;
+    found = value;
+  }
+  return found;
 }
 
 /**

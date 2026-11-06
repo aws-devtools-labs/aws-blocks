@@ -120,9 +120,11 @@ export class AuthOIDC<
 	/**
 	 * Derive the absolute callback URL the IdP redirects back to.
 	 *
-	 * On a full CloudFront deploy the Lambda never sees the public host — the
-	 * distribution strips the viewer `Host` header (`ALL_VIEWER_EXCEPT_HOST_HEADER`),
-	 * so a request-derived URL would resolve to the raw execute-api host and the
+	 * On a full CloudFront deploy the distribution strips the viewer `Host` header
+	 * (`ALL_VIEWER_EXCEPT_HOST_HEADER`). A Blocks CloudFront door stamps it back for
+	 * the request URL, but other doors don't, and the callback must be one stable
+	 * origin (the one authorize registered), not whichever host this request came
+	 * in on; a request-derived URL could resolve to the raw execute-api host and the
 	 * CloudFront-scoped session cookie wouldn't be sent back. So we prefer the
 	 * deploy-time-trusted `BLOCKS_PUBLIC_ORIGIN` (the CloudFront / custom-domain
 	 * origin, injected by the Hosting construct). It's the public origin only —

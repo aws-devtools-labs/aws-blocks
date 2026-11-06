@@ -141,9 +141,17 @@ with readiness on port **8081** (503 while draining).
     `x-blocks-forwarded-stage`, overwriting client values. It also drops a
     client-sent `x-forwarded-host`, which the container would take ahead of the
     stamped host when it is a loopback value (the local-dev path): `ctx.request.url`
-    is the public URL, custom domain included. (A namespace on a Lambda compute,
-    which CloudFront reaches through the gateway, reports the gateway's
-    `execute-api` URL instead.)
+    is the public URL, custom domain included.
+  - The door's behaviors to the gateway stamp the viewer host too, as
+    `x-blocks-public-host` (the gateway overwrites `x-blocks-forwarded-host` with
+    its own, so it needs a header of its own). A Lambda handler, and a container
+    the gateway proxies to, take it when it is one of the backend's front-door
+    hosts (`BLOCKS_PUBLIC_HOSTS`, which each CloudFront door registers): a
+    container namespace and a Lambda one behind the same door report the same
+    URL. The gateway is reachable directly, so the header alone proves nothing; a
+    forged value can only name another of the app's own domains. These behaviors
+    keep the client's `x-forwarded-host`: the sandbox dev server proxies through
+    the distribution and names its loopback origin there.
   - The load balancer admits CloudFront's origin-facing prefix list on the
     listener range in one rule — the prefix list is looked up at deploy time (a
     custom resource, created with the gateway) because its id differs per region.
