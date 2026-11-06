@@ -325,6 +325,11 @@ jobs:
       - name: Check packed Lambda assets
         run: npm run check:packed-assets
 
+      # The Windows E2E driver's rewrite that keeps its production deploy from
+      # leaking retained resources (it runs on a schedule, not on PRs).
+      - name: Test the Windows E2E scaffold teardown helper
+        run: node --test scripts/ci/_scaffold-teardown.test.mjs
+
       - name: Check API backward compatibility
         run: npm run check:api
 
@@ -751,10 +756,11 @@ jobs:
   e2e-compute-smoke:
     # The compute suite: one app (test-apps/compute-smoke) with a scenario module
     # per compute kind and workload — container AsyncJobs, an API namespace on
-    # its own serverless compute — deployed once per leg. The legs vary the API
-    # front door (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or
-    # its compute type. The `apigateway` front door is covered without a VPC by
-    # E2E Sandbox/Production (comprehensive) and behind Hosting by E2E Hosting.
+    # its own serverless compute, an API namespace on a container compute —
+    # deployed once per leg. The legs vary the API front door
+    # (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or its compute
+    # type: a container namespace is reached through the gateway's VPC link on
+    # `apigateway`, and straight from CloudFront (a VPC origin) on `cloudfront`.
     name: E2E Compute Smoke (${{ matrix.front-door }})
     permissions:
       contents: read
@@ -785,7 +791,7 @@ jobs:
       # this account) cancels the pending one.
       max-parallel: 1
       matrix:
-        front-door: [cloudfront]
+        front-door: [apigateway, cloudfront]
     env:
       # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
       # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
