@@ -114,7 +114,15 @@ describe('Database (owned DSQL cluster)', () => {
 	test("a schema library's issue message stays on the server", async () => {
 		const db = owned({ '001.sql': 'CREATE TABLE orders (id TEXT PRIMARY KEY, status TEXT NOT NULL);' });
 		await db.execute(sql`INSERT INTO orders VALUES (${'o1'}, ${'refunded'})`);
-		const Order = z.object({ id: z.string(), status: z.enum(['paid', 'pending']) });
+		// zod 4's enum message no longer quotes the rejected value, so use a refinement
+		// whose own message echoes it: the raw issue still carries sensitive row data,
+		// which is exactly what bb-database must keep off the client.
+		const Order = z.object({
+			id: z.string(),
+			status: z.string().refine((s) => s === 'paid' || s === 'pending', {
+				error: (iss) => `status ${String(iss.input)} is not an allowed order status`,
+			}),
+		});
 		await assert.rejects(db.query(sql`SELECT id, status FROM orders`, { schema: Order }), (e: unknown) => {
 			assert.ok(isBlocksError(e, DatabaseErrors.ResultValidationFailed));
 			assert.strictEqual(
@@ -123,7 +131,7 @@ describe('Database (owned DSQL cluster)', () => {
 				'the client message carries the row index and path',
 			);
 			assert.ok(e.cause instanceof Error, 'the issues are the cause');
-			assert.match(e.cause.message, /refunded/, "zod's enum message quotes the value");
+			assert.match(e.cause.message, /refunded/, 'the raw issue message quotes the row value');
 			assert.ok('issues' in e.cause && Array.isArray(e.cause.issues) && e.cause.issues.length === 1);
 			assert.strictEqual(Object.getOwnPropertyDescriptor(e, 'cause')?.enumerable, false);
 			assert.ok(!JSON.stringify({ ...e, message: e.message }).includes('refunded'));
