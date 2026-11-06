@@ -127,6 +127,30 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     assert.deepEqual(removed, [], 'a live session keeps its record');
   });
 
+  it('never SIGKILLs a watcher whose reload started a new runner since the stop read the record', async () => {
+    // The record names the runner that exited for a reload; tsx watch has started its successor,
+    // which takes the record over in place. A SIGKILL of the watcher would orphan that runner.
+    const SERVER = 'node aws-blocks/scripts/server.ts';
+    let pidfile = JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, command: SERVER });
+    const waits: Array<[number, number]> = [];
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => pidfile,
+      isAlive: (pid) => pid === 4000 || pid === 4343,
+      commandOf: (pid) => (pid === 4000 ? TSX : pid === 4343 ? SERVER : ''),
+      waitExit: async (pid, ms) => {
+        waits.push([pid, ms]);
+        pidfile = JSON.stringify({ pid: 4343, ppid: 4000, port: 3000, command: SERVER });
+        return false;
+      },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 4000, signal: 'SIGTERM', via: 'signal' }]);
+    assert.deepEqual(waits, [[4000, 2000], [4000, 8000]], 'the successor gets the runner budget');
+    assert.equal(r.killed, undefined);
+    assert.equal(r.portFree, false);
+    assert.deepEqual(removed, []);
+  });
+
   it("waits for the cdk-blocks sandbox session a dev server records, and says it stopped the sandbox (U2)", async () => {
     let ended = false;
     const waited: number[] = [];
