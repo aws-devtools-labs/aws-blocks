@@ -185,14 +185,18 @@ export function snapshotForHosting(hosting: Construct): HostingSnapshot {
  * `edge-lambda-stack-*` under the same construct id and doesn't expose that role,
  * so it's found there by id. The helper stacks' cross-region providers are
  * reached at finalize. No-op without an owning root.
+ *
+ * @returns the separate stacks Hosting added for the app (the us-east-1 support
+ *   stack, the Lambda@Edge stack), so `defaults.app` can tag them as the app's;
+ *   empty without an owning root.
  */
 export function coverHosting(
 	hosting: Construct,
 	owner: Construct | undefined,
 	before: HostingSnapshot,
 	edgeFunctions: readonly IConstruct[],
-): void {
-	if (!owner) return;
+): cdk.Stack[] {
+	if (!owner) return [];
 	const coverage = coverageOf(owner);
 	const stack = cdk.Stack.of(hosting);
 	coverScope(coverage, hosting);
@@ -204,15 +208,31 @@ export function coverHosting(
 	);
 	for (const helper of helperStacks) coverScope(coverage, helper);
 
-	const edgeStacks = stack.dependencies.filter((s) => s.node.id.startsWith('edge-lambda-stack-'));
+	// The edge stack is CDK's `edge-lambda-stack-<hash>`, or `<app id>-edge` under
+	// `defaults.app`. `EdgeFunction` keeps the real function in its private
+	// `_edgeFunction`, so that function's own stack is the edge stack exactly;
+	// if a CDK version drops the field, fall back to a dependency holding a child
+	// with the edge function's id.
+	const edgeStacks: cdk.Stack[] = [];
+	const addEdge = (edgeStack: cdk.Stack, scope: IConstruct) => {
+		coverScope(coverage, scope);
+		if (!edgeStacks.includes(edgeStack)) edgeStacks.push(edgeStack);
+	};
 	for (const fn of edgeFunctions) {
-		for (const edgeStack of edgeStacks) {
-			const peer = edgeStack.node.tryFindChild(fn.node.id);
-			if (peer) coverScope(coverage, peer);
+		const real = (fn as { _edgeFunction?: unknown })._edgeFunction;
+		if (real && Construct.isConstruct(real)) {
+			const edgeStack = cdk.Stack.of(real);
+			if (edgeStack !== stack) addEdge(edgeStack, real);
+			continue;
+		}
+		for (const dependency of stack.dependencies) {
+			const peer = dependency.node.tryFindChild(fn.node.id);
+			if (peer) addEdge(dependency, peer);
 		}
 	}
 
 	for (const s of [stack, ...helperStacks, ...edgeStacks]) coverage.lateStacks.add(s);
+	return [...helperStacks, ...edgeStacks.filter((s) => !helperStacks.includes(s))];
 }
 
 /**
