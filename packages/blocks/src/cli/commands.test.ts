@@ -3,6 +3,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
+import { once } from 'node:events';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -10,7 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { type AwsIdentity, describeDeploymentCredentials, runSecretCli } from '@aws-blocks/core/scripts';
+import { type DevServerPidRecord, parsePidRecord, pidCommand } from '@aws-blocks/core/scripts/dev-pidfile';
+import { type AwsIdentity, describeDeploymentCredentials, runSecretCli, type StopResult } from '@aws-blocks/core/scripts';
 import { redactArgs } from './commands.js';
 import { type ChildResult, type SpawnSpec, stageEnv } from './context.js';
 import type { LastDeploy } from './runners/last-deploy.js';
@@ -642,6 +644,8 @@ describe('lifecycle commands', () => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
 		// A failed destroy forgets nothing.
@@ -653,6 +657,8 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['production']);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-prod': { ApiUrl: 'https://p' } });
 		assert.ok(!existsSync(join(dir, 'config.json')));
+		assert.ok(!existsSync(join(dir, 'config.sandbox.json')), 'the sandbox deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		assert.ok(existsSync(join(dir, 'sandbox-id.txt')));
 		// No record names the deleted sandbox any more, and CloudFormation no longer has it.
 		const console = await runCli(['sandbox', 'console'], {
@@ -679,6 +685,8 @@ describe('lifecycle commands', () => {
 			write('last-deploy.json', { sandbox: entry('demo-jdoe-abc123'), production: entry('demo-prod') });
 			write('outputs.json', { 'demo-jdoe-abc123': { ApiUrl: 'https://s' }, 'demo-prod': { ApiUrl: 'https://p' } });
 			write('config.json', config);
+			write('config.sandbox.json', { apiUrl: 'https://s', environment: 'sandbox' });
+			write('config.production.json', { apiUrl: 'https://p', environment: 'production' });
 		};
 		seed({ apiUrl: 'https://p', environment: 'production' });
 		// A failed or declined destroy forgets nothing.
@@ -689,11 +697,14 @@ describe('lifecycle commands', () => {
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox', 'production']);
 		assert.deepStrictEqual(Object.keys(read('outputs.json') as object), ['demo-jdoe-abc123', 'demo-prod']);
 		assert.ok(existsSync(join(dir, 'config.json')));
+		assert.ok(existsSync(join(dir, 'config.production.json')));
 		const run = await runCli(['destroy', '--yes'], { cwd: root, env: AWS_ENV });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(Object.keys(read('last-deploy.json') as object), ['sandbox']);
 		assert.deepStrictEqual(read('outputs.json'), { 'demo-jdoe-abc123': { ApiUrl: 'https://s' } });
 		assert.ok(!existsSync(join(dir, 'config.json')), 'the production config.json points at the deleted API');
+		assert.ok(!existsSync(join(dir, 'config.production.json')), 'the production deploy record points at the deleted API');
+		assert.ok(existsSync(join(dir, 'config.sandbox.json')));
 		// A sandbox config.json stays; an outputs.json with only the production stack goes.
 		seed({ apiUrl: 'https://s', environment: 'sandbox' });
 		write('outputs.json', { 'demo-prod': { ApiUrl: 'https://p' } });
@@ -1875,6 +1886,7 @@ describe('JSON output', () => {
 					record: null,
 					pids: [],
 					via: 'watcher' as const,
+					holders: [],
 				};
 			},
 		};
@@ -1883,7 +1895,7 @@ describe('JSON output', () => {
 			[['deploy', '--query', 'apiUrl.x'], 'apiUrl is a value, with no fields.'],
 			[
 				['dev', 'stop', '--query', 'stopped.0.nope'],
-				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via.',
+				'Fields of stopped.0: port, stopped, alreadyStopped, portFree, via, holders.',
 			],
 			[
 				['dev', 'stop', '--query', 'stopped.length'],
@@ -2066,6 +2078,7 @@ describe('cdk-blocks dev stop', () => {
 						record: null,
 						pids: [],
 						via: 'none' as const,
+						holders: [],
 					};
 				},
 			},
@@ -2170,6 +2183,65 @@ describe('cdk-blocks dev stop', () => {
 			/Warning: No dev server is recorded on :3000, but this app recorded ones on :4000, :4001\. Stop one with npx --no -- cdk-blocks dev stop --port <port>, or all of them with npx --no -- cdk-blocks dev stop --all\./,
 		);
 	});
+
+	it('cdk-blocks dev claims the session before it starts anything, and releases it after', async () => {
+		const cwd = fixtureApp({ blocks: { dev: { port: 41966 } } });
+		const pidfile = join(cwd, '.blocks-sandbox', 'dev-server.41966.pid');
+		let during: DevServerPidRecord | null = null;
+		const run = await runCli(['dev'], {
+			cwd,
+			onSpawn: () => {
+				during = parsePidRecord(readFileSync(pidfile, 'utf-8'));
+				return { code: 143 };
+			},
+		});
+		assert.strictEqual(run.code, 0, run.stderr);
+		// `dev stop` during startup finds this record, and SIGTERMs this process; the dev server takes it over.
+		const { token, ...record } = during ?? { token: undefined };
+		assert.match(token ?? '', /^[0-9a-f-]{36}$/, 'a token names the record for the reap protocol');
+		assert.deepStrictEqual(record, {
+			pid: process.pid,
+			ppid: process.ppid,
+			port: 41966,
+			command: pidCommand(process.pid),
+			parentCommand: pidCommand(process.ppid),
+			starting: true,
+		});
+		assert.strictEqual(run.spawned[0]?.env.BLOCKS_DEV_SESSION, String(process.pid));
+		assert.strictEqual(existsSync(pidfile), false);
+
+		// While another CLI's session is starting, a second cdk-blocks dev is refused before it starts anything.
+		const other = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60_000)'], { stdio: 'ignore' });
+		try {
+			const pid = other.pid ?? 0;
+			await once(other, 'spawn');
+			const record = { pid, ppid: process.pid, port: 41966, command: pidCommand(pid), parentCommand: '', starting: true };
+			writeFileSync(pidfile, JSON.stringify(record));
+			const second = await runCli(['dev'], { cwd });
+			assert.strictEqual(second.code, 1, second.stderr);
+			assert.strictEqual(second.spawned.length, 0);
+			assert.match(
+				second.stderr,
+				new RegExp(
+					`^Error: a dev server is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- cdk-blocks dev stop --port 41966\\n`,
+				),
+			);
+			assert.deepStrictEqual(JSON.parse(readFileSync(pidfile, 'utf-8')), record, 'the first session keeps its record');
+			// One dev server per app: a cdk-blocks dev on another port is refused too, and told the running port.
+			const elsewhere = await runCli(['dev', '--port', '41967'], { cwd });
+			assert.strictEqual(elsewhere.code, 1, elsewhere.stderr);
+			assert.strictEqual(elsewhere.spawned.length, 0);
+			assert.match(
+				elsewhere.stderr,
+				new RegExp(
+					`^Error: a dev server of this app is already starting on :41966 \\(pid ${pid}\\)\\. Not starting a second one\\.\\n(.*\\n)*Try: npx --no -- cdk-blocks dev stop --port 41966\\n`,
+				),
+			);
+			assert.ok(!existsSync(join(cwd, '.blocks-sandbox', 'dev-server.41967.pid')), 'the refused start leaves no record');
+		} finally {
+			other.kill('SIGKILL');
+		}
+	});
 });
 
 describe('cdk-blocks secret and config', () => {
@@ -2218,5 +2290,46 @@ describe('cdk-blocks secret and config', () => {
 		assert.strictEqual(bad.code, 2, bad.stderr);
 		assert.match(bad.stderr, /^Error: Invalid key "bad-key"\./);
 		assert.doesNotMatch(bad.stderr, /--verbose/);
+	});
+});
+
+describe('dev stop output', () => {
+	const stopResult = (overrides: Partial<StopResult>): StopResult => ({
+		port: 3000,
+		stopped: false,
+		alreadyStopped: true,
+		record: null,
+		via: 'none',
+		pids: [],
+		portFree: true,
+		holders: [],
+		...overrides,
+	});
+
+	it('prints a port still bound after the stop on stderr, not stdout, and exits 1', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dev', 'stop'], {
+			cwd: root,
+			core: {
+				stopDevServer: async () =>
+					stopResult({ stopped: true, alreadyStopped: false, via: 'watcher', pids: [4242], portFree: false }),
+			},
+		});
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(run.stdout, '');
+		assert.match(run.stderr, /Signalled the dev server on :3000 \(pid 4242\), but the port is still bound/);
+	});
+
+	it('names the process holding the port, and reports it in JSON', async () => {
+		const root = fixtureApp();
+		const holders = [{ pid: 777, command: 'python3 -m http.server 3000' }];
+		const core = { stopDevServer: async () => stopResult({ portFree: false, holders }) };
+		const text = await runCli(['dev', 'stop'], { cwd: root, core });
+		assert.strictEqual(text.code, 0, text.stderr);
+		assert.match(text.stdout, /held by another process, which was not stopped: pid 777 \(python3 -m http\.server 3000\)/);
+		const json = await runCli(['--output', 'json', 'dev', 'stop'], { cwd: root, core });
+		assert.deepStrictEqual(JSON.parse(json.stdout).stopped[0].holders, holders);
+		const pid = await runCli(['dev', 'stop', '--query', 'stopped.0.holders.0.pid'], { cwd: root, core });
+		assert.strictEqual(pid.stdout, '777\n', pid.stderr);
 	});
 });

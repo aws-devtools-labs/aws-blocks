@@ -224,7 +224,11 @@ export const COMMANDS: readonly CommandSpec[] = [
 			},
 			{ name: 'all', type: 'boolean', description: 'Stop every dev server this app recorded, on any port' },
 		],
-		json: { stopped: [{ port: null, stopped: null, alreadyStopped: null, portFree: null, via: null }] },
+		json: {
+			stopped: [
+				{ port: null, stopped: null, alreadyStopped: null, portFree: null, via: null, holders: [{ pid: null, command: null }] },
+			],
+		},
 		examples: [
 			{ command: 'cdk-blocks dev stop', description: 'Stop the dev server on the configured port' },
 			{ command: 'cdk-blocks dev stop --all', description: 'Stop every dev server this app started' },
@@ -568,7 +572,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 			removed: [null],
 			kept: [{ file: null, reason: null }],
 			scriptsRewritten: { '*': { from: null, to: null } },
-			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null },
+			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null, generateClient: null },
 		},
 		examples: [
 			{ command: 'cdk-blocks migrate --dry-run', description: 'Show what would change' },

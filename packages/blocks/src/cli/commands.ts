@@ -33,6 +33,7 @@ import {
 	STAGE_ENV_FILES,
 	stageEnv,
 } from './context.js';
+import { loadDevPidfile } from './core-load.js';
 import {
 	BLOCKS_COMMAND,
 	blocksCommand,
@@ -184,6 +185,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 		const code = devExitCode(run, run.failureFile, result);
 		if (code !== undefined) return code;
 	}
+
 	// A child that is not long-running and exited 0 finished its work before the
 	// Ctrl-C reached it (`cdk-blocks db migrate` applied every migration): report that.
 	// A long-running child (`cdk-blocks dev`) exits 0 when Ctrl-C stops it, which is an interruption.
@@ -430,20 +432,48 @@ export async function dev(ctx: Context, input: CommandInput): Promise<number> {
 		);
 	}
 	const { source: _source, ...devConfig } = config;
-	// The dev server records a fatal startup failure here (see ChildRun.failureFile).
-	const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
-	const failureFile = join(failureDir, 'failure');
-	try {
-		return await runRunner(ctx, {
-			runner: 'dev-server',
-			operation: 'cdk-blocks dev',
-			watch: true,
-			env: { ...devServerEnv(ctx.env, { backendPath, ...devConfig }), [DEV_FAILURE_FILE_ENV]: failureFile },
-			longRunning: true,
-			failureFile,
+	const port = config.port ?? 3000;
+	const { claimDevSession, DEV_SESSION_ENV } = await loadDevPidfile();
+	// Claim the session before anything starts, so that a `dev stop` from now on finds it: until the dev
+	// server has loaded and taken the record over, the stop SIGTERMs this process, which stops what it started.
+	// A listener keeps that SIGTERM from ending the CLI before it spawns `tsx watch`; from then on the spawn's
+	// own listener stops the child. Nothing in between awaits, so the signal is handled once both are in place.
+	const keepAlive = (): void => {};
+	process.on('SIGTERM', keepAlive);
+	const session = claimDevSession(root, port);
+	if (!session.acquired) {
+		process.off('SIGTERM', keepAlive);
+		// One dev server per app, whatever its port: stop the one that runs, on its port.
+		const running = session.port;
+		const stop = running === 3000 ? blocksCommand('dev', 'stop') : blocksCommand('dev', 'stop', '--port', String(running));
+		throw new CliError(`${session.reason}. Not starting a second one.`, {
+			where: [`project: ${root}`],
+			hint: stop,
 		});
+	}
+	try {
+		// The dev server records a fatal startup failure here (see ChildRun.failureFile).
+		const failureDir = mkdtempSync(join(tmpdir(), 'blocks-dev-'));
+		const failureFile = join(failureDir, 'failure');
+		try {
+			return await runRunner(ctx, {
+				runner: 'dev-server',
+				operation: 'cdk-blocks dev',
+				watch: true,
+				env: {
+					...devServerEnv(ctx.env, { backendPath, ...devConfig }),
+					[DEV_FAILURE_FILE_ENV]: failureFile,
+					[DEV_SESSION_ENV]: String(process.pid),
+				},
+				longRunning: true,
+				failureFile,
+			});
+		} finally {
+			rmSync(failureDir, { recursive: true, force: true });
+		}
 	} finally {
-		rmSync(failureDir, { recursive: true, force: true });
+		process.off('SIGTERM', keepAlive);
+		session.release();
 	}
 }
 
@@ -485,23 +515,24 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	}
 	const results = [];
 	for (const port of ports) results.push(await core.stopDevServer(port));
+	// A port still bound after the stop is a problem, not an outcome: it goes to stderr, as in core's runStopCli.
+	const warnings = results.filter((r) => core.isStopWarning(r));
+	for (const r of warnings) ctx.out.error(`${core.stopMessage(r)}\n`);
+	const outcomes = results.filter((r) => !core.isStopWarning(r));
 	const text =
-		results.length > 0
-			? results.map((r) => core.stopMessage(r)).join('\n')
-			: 'No dev server was recorded for this app.';
-	ctx.out.result(
-		{
-			stopped: results.map(({ port, stopped, alreadyStopped, portFree, via }) => ({
-				port,
-				stopped,
-				alreadyStopped,
-				portFree,
-				via,
-			})),
-		},
-		text,
-	);
-	return results.some((r) => !r.alreadyStopped && !r.portFree) ? ExitCode.Failure : ExitCode.Ok;
+		results.length > 0 ? outcomes.map((r) => core.stopMessage(r)).join('\n') : 'No dev server was recorded for this app.';
+	const value = {
+		stopped: results.map(({ port, stopped, alreadyStopped, portFree, via, holders }) => ({
+			port,
+			stopped,
+			alreadyStopped,
+			portFree,
+			via,
+			holders,
+		})),
+	};
+	if (ctx.out.format === 'json' || text !== '') ctx.out.result(value, text);
+	return warnings.length > 0 ? ExitCode.Failure : ExitCode.Ok;
 }
 
 /** How `cdk-blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
@@ -602,10 +633,11 @@ export async function sandboxDestroy(ctx: Context): Promise<number> {
 
 /**
  * Remove what this machine recorded about the deleted stack of `stage`, so that
- * `sandbox console`, `--output json` and the frontend no longer point at it: its
- * entry in `last-deploy.json`, its stack in `outputs.json`, and `config.json`
- * when a deploy of that stage wrote it. The other stage's records stay, and so
- * does the sandbox id: the next deploy reuses it.
+ * `sandbox console`, `--output json` and tests that target that stage no longer
+ * point at it: its entry in `last-deploy.json`, its stack in `outputs.json`, its
+ * `config.<stage>.json` (see core's `deployedConfigFile`), and a `config.json`
+ * that an older deploy of that stage wrote. The other stage's records stay, and
+ * so does the sandbox id: the next deploy reuses it.
  */
 function forgetDeployRecords(root: string, stage: DeployStage, stack: string): void {
 	forgetLastDeploy(root, stage);
@@ -627,6 +659,10 @@ function forgetDeployRecords(root: string, stage: DeployStage, stack: string): v
 		if (Object.keys(outputs).length === 0) rmSync(join(dir, 'outputs.json'));
 		else writeFileSync(join(dir, 'outputs.json'), `${JSON.stringify(outputs, null, 2)}\n`);
 	}
+	// The name as a literal, not core's `deployedConfigFile`: this CLI may run against an
+	// app whose installed core predates that export, and the file name is fixed.
+	rmSync(join(dir, `config.${stage}.json`), { force: true });
+	// Core 0.8.0 and earlier: a deploy wrote its URL to the dev server's config.json.
 	if (readJson('config.json')?.environment === stage) rmSync(join(dir, 'config.json'));
 }
 

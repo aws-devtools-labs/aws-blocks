@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { resolveDevCorsOrigin, LOCALHOST_PATTERN, buildDevCorsHeaders } from './dev-server.js';
+import { resolveDevCorsOrigin, LOCALHOST_PATTERN, buildDevCorsHeaders, devUrlHost } from './dev-server.js';
 import { CORS_MAX_AGE } from '../cors.js';
 import { CLIENT_USER_AGENT_HEADER } from '../constants.js';
 
@@ -57,5 +57,85 @@ describe('buildDevCorsHeaders — dev server header set', () => {
       buildDevCorsHeaders('http://localhost:3000')['Access-Control-Allow-Headers'],
       `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
     );
+  });
+});
+
+describe('resolveDevCorsOrigin — the bound host and port', () => {
+  const lan = { host: '10.253.66.118', port: 41083 };
+
+  it("falls back to the server's own origin, not a hard-coded :3000", () => {
+    assert.strictEqual(resolveDevCorsOrigin('https://evil.com', { host: '127.0.0.1', port: 4000 }), 'http://localhost:4000');
+    assert.strictEqual(resolveDevCorsOrigin('https://evil.com', lan), 'http://10.253.66.118:41083');
+  });
+
+  it('reflects an origin on the specific host the server binds, on any port', () => {
+    assert.strictEqual(resolveDevCorsOrigin('http://10.253.66.118:41083', lan), 'http://10.253.66.118:41083');
+    assert.strictEqual(resolveDevCorsOrigin('http://10.253.66.118:5173', lan), 'http://10.253.66.118:5173');
+  });
+
+  it('does not reflect look-alikes of the bound host', () => {
+    for (const origin of ['http://10.253.66.118.evil.com', 'http://10.253.66.1180:80', 'http://user@10.253.66.118', 'null']) {
+      assert.strictEqual(resolveDevCorsOrigin(origin, lan), 'http://10.253.66.118:41083', origin);
+    }
+  });
+
+  it('reflects no extra origins for an all-interfaces bind', () => {
+    assert.strictEqual(resolveDevCorsOrigin('http://192.168.1.9:3000', { host: '0.0.0.0', port: 3000 }), 'http://localhost:3000');
+  });
+
+  it('keeps reflecting localhost origins whatever the bind', () => {
+    assert.strictEqual(resolveDevCorsOrigin('http://localhost:5173', lan), 'http://localhost:5173');
+    assert.strictEqual(buildDevCorsHeaders('http://10.253.66.118:5173', lan)['Access-Control-Allow-Origin'], 'http://10.253.66.118:5173');
+  });
+});
+
+describe('resolveDevCorsOrigin — a same-origin request', () => {
+  const wildcard = { host: '0.0.0.0', port: 41041 };
+
+  it('reflects the Origin that equals http://<Host header>, for a page loaded at the machine address', () => {
+    assert.strictEqual(
+      resolveDevCorsOrigin('http://10.253.66.118:41041', wildcard, '10.253.66.118:41041'),
+      'http://10.253.66.118:41041',
+    );
+    assert.strictEqual(
+      resolveDevCorsOrigin('http://[fd00::5]:41041', { host: '::', port: 41041 }, '[fd00::5]:41041'),
+      'http://[fd00::5]:41041',
+    );
+    assert.strictEqual(
+      buildDevCorsHeaders('http://devbox.lan:41041', wildcard, 'DevBox.lan:41041')['Access-Control-Allow-Origin'],
+      'http://devbox.lan:41041',
+    );
+    // The default port is left out of the Origin, but a Host header may carry it.
+    assert.strictEqual(resolveDevCorsOrigin('http://devbox.lan', wildcard, 'devbox.lan:80'), 'http://devbox.lan');
+  });
+
+  it('does not reflect an Origin on another host, port or scheme than the Host header', () => {
+    for (const origin of [
+      'http://evil.example:41041',
+      'http://10.253.66.118:5173',
+      'https://10.253.66.118:41041',
+      'http://10.253.66.118:41041/',
+      'null',
+    ]) {
+      assert.strictEqual(resolveDevCorsOrigin(origin, wildcard, '10.253.66.118:41041'), 'http://localhost:41041', origin);
+    }
+  });
+
+  it('falls back when the Host header is missing or is not a host', () => {
+    assert.strictEqual(resolveDevCorsOrigin('http://10.253.66.118:41041', wildcard), 'http://localhost:41041');
+    assert.strictEqual(resolveDevCorsOrigin('http://10.253.66.118:41041', wildcard, ''), 'http://localhost:41041');
+    assert.strictEqual(resolveDevCorsOrigin('http://a:1', wildcard, 'a b:1'), 'http://localhost:41041');
+  });
+});
+
+describe('devUrlHost', () => {
+  it('names loopback and wildcard binds localhost, and keeps any other host', () => {
+    assert.strictEqual(devUrlHost('127.0.0.1'), 'localhost');
+    assert.strictEqual(devUrlHost('::1'), 'localhost');
+    assert.strictEqual(devUrlHost('0.0.0.0'), 'localhost');
+    assert.strictEqual(devUrlHost('10.0.0.5'), '10.0.0.5');
+    assert.strictEqual(devUrlHost('fd00::5'), '[fd00::5]');
+    assert.strictEqual(devUrlHost('[fd00::5]'), '[fd00::5]');
+    assert.strictEqual(devUrlHost('devbox.local'), 'devbox.local');
   });
 });

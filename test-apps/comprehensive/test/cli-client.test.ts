@@ -4,7 +4,8 @@
 import { after, before, describe, test } from 'node:test';
 import assert from 'node:assert';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { testApiUrl } from './api-url.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -74,7 +75,7 @@ export function cliClientTests() {
     });
 
     test('generateClient with correct URL succeeds', { timeout: 15_000 }, async () => {
-      const config = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'config.json'), 'utf-8'));
+      const config = { apiUrl: testApiUrl() };
 
       // CWD has no config.json, but generateClient bypasses discovery entirely.
       const result = await runCli(`

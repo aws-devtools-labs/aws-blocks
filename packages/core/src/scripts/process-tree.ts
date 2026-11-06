@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 
 // Shared process-tree teardown primitives used by every dev-tooling entrypoint
 // (the dev server and the sandbox). Both spawn a long-running command with
@@ -131,8 +131,11 @@ interface CommandOutput {
  * - **POSIX**: `lsof -ti tcp:<port> -sTCP:LISTEN` — `-t` prints bare PIDs and the
  *   `-sTCP:LISTEN` state filter restricts the match to the *listener*, so a
  *   transient client socket on the same port is never targeted.
- * - **Windows**: `netstat -ano -p tcp`, keeping the trailing PID column of
- *   `LISTENING` rows whose local address ends in `:<port>`.
+ * - **Windows**: `netstat -ano`, which lists TCP and TCPv6 (`-p tcp` lists
+ *   IPv4 only, and a `localhost` frontend such as Vite binds `[::1]`), keeping
+ *   the trailing PID column of listener rows whose local address ends in
+ *   `:<port>`. A listener is a TCP row with no remote end (`0.0.0.0:0`,
+ *   `[::]:0`), which also holds on a Windows that does not say `LISTENING`.
  *
  * Best-effort and never throws: a missing tool, a non-zero exit ("nothing is
  * listening"), or unparseable output all yield `[]`. The `spawnSync` runs with a
@@ -151,14 +154,13 @@ export function findListenerPids(
   try {
     const pids = new Set<number>();
     if (platform === 'win32') {
-      const { stdout } = runner('netstat', ['-ano', '-p', 'tcp']);
+      const { stdout } = runner('netstat', ['-ano']);
       if (!stdout) return [];
       for (const line of stdout.split(/\r?\n/)) {
-        if (!/LISTENING/i.test(line)) continue;
         // Columns: Proto  Local-Address  Foreign-Address  State  PID
         const cols = line.trim().split(/\s+/);
-        const local = cols[1] ?? '';
-        if (!local.endsWith(`:${port}`)) continue;
+        if (cols.length < 5 || cols[0].toUpperCase() !== 'TCP' || !/^(0\.0\.0\.0|\[::\]):0$/.test(cols[2])) continue;
+        if (!cols[1].endsWith(`:${port}`)) continue;
         const pid = Number(cols[cols.length - 1]);
         if (Number.isInteger(pid) && pid > 1) pids.add(pid);
       }
@@ -174,6 +176,93 @@ export function findListenerPids(
   } catch {
     return [];
   }
+}
+
+/**
+ * A Windows process, as CIM's `Win32_Process` reports it. `created` is its
+ * creation time (a FILETIME, as a decimal string). With the pid it names one
+ * process: a pid that Windows hands out again belongs to a process created later.
+ */
+export interface WindowsProcess {
+  pid: number;
+  ppid: number;
+  created: string;
+  command: string;
+}
+
+/** How long a `powershell.exe` CIM query may take: its cold start alone can take seconds on a busy machine. */
+const CIM_TIMEOUT_MS = 15_000;
+
+/** The `powershell.exe` arguments that print `pid<TAB>ppid<TAB>created<TAB>command line` for each process of `pids`, or for all. */
+function windowsProcessQuery(pids?: readonly number[]): string[] {
+  const filter = pids === undefined ? '' : ` -Filter "${pids.map((pid) => `ProcessId=${Math.trunc(pid)}`).join(' OR ')}"`;
+  const script =
+    '[Console]::OutputEncoding = [Text.Encoding]::UTF8; ' +
+    `Get-CimInstance Win32_Process${filter} | ForEach-Object { ` +
+    '"$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CreationDate.ToFileTimeUtc())`t$($_.CommandLine)" }';
+  return ['-NoProfile', '-NonInteractive', '-Command', script];
+}
+
+/** Parse {@link windowsProcessQuery}'s output; a line without a pid, a parent and a creation time is skipped. */
+export function parseWindowsProcesses(stdout: string): Map<number, WindowsProcess> {
+  const processes = new Map<number, WindowsProcess>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const [pid, ppid, created = '', ...command] = line.split('\t');
+    const p = Number(pid);
+    const parent = Number(ppid);
+    if (!Number.isInteger(p) || p <= 0 || !Number.isInteger(parent) || !/^\d+$/.test(created)) continue;
+    processes.set(p, { pid: p, ppid: parent, created, command: command.join('\t') });
+  }
+  return processes;
+}
+
+/**
+ * The Windows processes `pids` (all of them without `pids`), by pid, from one
+ * CIM query: about a second, so callers ask once for every pid they need. A pid
+ * that is not running is missing. Empty when the query fails; never throws.
+ */
+export function windowsProcesses(
+  pids?: readonly number[],
+  runner: (command: string, args: readonly string[]) => CommandOutput = (command, args) =>
+    spawnSync(command, args as string[], { encoding: 'utf-8', windowsHide: true, timeout: CIM_TIMEOUT_MS }),
+): Map<number, WindowsProcess> {
+  if (pids?.length === 0) return new Map();
+  try {
+    const { stdout } = runner('powershell.exe', windowsProcessQuery(pids));
+    return parseWindowsProcesses(stdout ?? '');
+  } catch {
+    return new Map();
+  }
+}
+
+/** {@link windowsProcesses} without blocking the event loop: for a server that keeps serving while it asks. */
+export function windowsProcessesAsync(pids?: readonly number[]): Promise<Map<number, WindowsProcess>> {
+  if (pids?.length === 0) return Promise.resolve(new Map());
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      windowsProcessQuery(pids),
+      { encoding: 'utf-8', windowsHide: true, timeout: CIM_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
+      (_error, stdout) => resolve(parseWindowsProcesses(stdout ?? '')),
+    );
+  });
+}
+
+/**
+ * True when, in `processes`, `pid` descends from `ancestor`: each parent on the
+ * way is running and was created no later than its child. Windows keeps a
+ * child's parent pid after the parent exits, and may give that pid to a new
+ * process, which is created after the child: that one is not its parent.
+ */
+export function descendsFrom(processes: ReadonlyMap<number, WindowsProcess>, pid: number, ancestor: number): boolean {
+  let child = processes.get(pid);
+  for (let depth = 0; child !== undefined && depth < 64; depth++) {
+    const parent = processes.get(child.ppid);
+    if (parent === undefined || parent.pid === child.pid || BigInt(parent.created) > BigInt(child.created)) return false;
+    if (parent.pid === ancestor) return true;
+    child = parent;
+  }
+  return false;
 }
 
 /**

@@ -14,17 +14,18 @@ npm run dev
 npm run sandbox
 
 # Regenerate the spec — run this after dev or sandbox, whichever you want the apps to target
-npx blocks-generate-spec
+npx blocks-generate-spec                            # the dev server (.blocks-sandbox/config.json)
+BLOCKS_SPEC_STAGE=sandbox npx blocks-generate-spec  # the deployed sandbox (.blocks-sandbox/config.sandbox.json)
 ```
 
-`npm run dev` and `npm run sandbox` each write `.blocks-sandbox/config.json`, and `blocks-generate-spec` copies that single `apiUrl` into the spec's `servers` array. So the spec describes **one** server, named after whichever command ran last:
+The dev server writes `.blocks-sandbox/config.json` with its own URL, and a sandbox deploy records the deployed API in `.blocks-sandbox/config.sandbox.json`. `blocks-generate-spec` copies one `apiUrl` into the spec's `servers` array: the dev server's, or with `BLOCKS_SPEC_STAGE=sandbox` (or `production`) the deployed one. So the spec describes **one** server:
 
-| Last command run | Generated `Servers` entry | URL |
+| Generated with | Generated `Servers` entry | URL |
 |---|---|---|
-| `npm run dev` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
-| `npm run sandbox` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
+| `npx blocks-generate-spec` | `Servers.local` | `http://localhost:3001/aws-blocks/api` |
+| `BLOCKS_SPEC_STAGE=sandbox npx blocks-generate-spec` | `Servers.sandbox` | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/api` |
 
-To switch the apps between local and sandbox, re-run the other command and regenerate the spec.
+To switch the apps between local and sandbox, regenerate the spec the other way.
 
 ## Configuring OIDC
 
@@ -64,7 +65,7 @@ The client builds `redirect_uri` from the `BlocksServer` the app is pointed at, 
 | Local (`npm run dev`) | `http://localhost:3001/aws-blocks/auth/callback` |
 | Sandbox (`npm run sandbox`) | `https://<api-id>.execute-api.<region>.amazonaws.com/prod/aws-blocks/auth/callback` |
 
-Read the sandbox host out of `.blocks-sandbox/config.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
+Read the sandbox host out of `.blocks-sandbox/config.sandbox.json` (`apiUrl`) after deploying, and add it to the Google client — each new sandbox deployment to a fresh stack gets a new API ID and therefore a new URI.
 
 > **Android emulator:** Google only accepts `http://` redirect URIs on `localhost` and `127.0.0.1`, so the usual `servers { local("http://10.0.2.2:3001") }` override does not work for sign-in — Google rejects `http://10.0.2.2:3001/...` at registration. Keep `localhost` and forward the port into the emulator instead: `adb reverse tcp:3001 tcp:3001`.
 

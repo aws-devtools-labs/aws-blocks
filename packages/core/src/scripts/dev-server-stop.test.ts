@@ -5,12 +5,16 @@ import assert from 'node:assert';
 import {
   stopDevServer,
   stopMessage,
+  isStopWarning,
   runStopCli,
   devPidfilePath,
   parsePortArg,
+  portInUseHint,
   type StopDevServerDeps,
   type StopResult,
+  windowsSessionRoot,
 } from './dev-server.js';
+import type { WindowsProcess } from './process-tree.js';
 
 // Fully injected: no real processes, ports, or filesystem. We assert ownership
 // (only the pids the pidfile recorded are ever signalled) and that the tsx-watch
@@ -41,7 +45,11 @@ function makeDeps(overrides: Partial<StopDevServerDeps> = {}): {
     probe: async () => false,
     listPids: () => [],
     killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); },
+    groupOf: () => undefined,
+    processes: () => new Map(),
     waitFree: async () => {},
+    waitExit: async () => true,
+    platform: 'linux',
     ...overrides,
   };
   return { deps, sigs, removed };
@@ -58,9 +66,12 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
   });
 
   it('SIGTERMs the recorded tsx-watch ppid (the clean watcher path)', async () => {
+    // The session ends while the stop waits for the port: only then does its record go.
+    let ended = false;
     const { deps, sigs, removed } = makeDeps({
       readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000 }),
-      isAlive: (pid) => pid === 4000 || pid === 4242,
+      isAlive: (pid) => !ended && (pid === 4000 || pid === 4242),
+      waitFree: async () => { ended = true; },
       commandOf: (pid) => (pid === 4000 ? TSX : ''),
       // The watcher path probes once, after the SIGTERM: free ⇒ clean stop.
       probe: seqProbe([false]),
@@ -73,6 +84,100 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
     // not killTree, and never the listener child.
     assert.deepEqual(sigs, [{ pid: 4000, signal: 'SIGTERM', via: 'signal' }]);
     assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  it("SIGKILLs a tsx watch that outlives its dead runner, and says so (H4)", async () => {
+    // A runner killed by a signal: tsx waits for an exit that already happened, and ignores SIGTERM.
+    let watcher = true;
+    const waits: Array<[number, number]> = [];
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000 }),
+      isAlive: (pid) => pid === 4000 && watcher,
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      signal: (pid, signal) => {
+        sigs.push({ pid, signal, via: 'signal' });
+        if (signal === 'SIGKILL') watcher = false;
+      },
+      waitExit: async (pid, ms) => { waits.push([pid, ms]); return !watcher; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'watcher');
+    assert.equal(r.killed, true);
+    assert.equal(r.portFree, true);
+    assert.deepEqual(sigs, [
+      { pid: 4000, signal: 'SIGTERM', via: 'signal' },
+      { pid: 4000, signal: 'SIGKILL', via: 'signal' },
+    ]);
+    assert.equal(waits[0][1], 2000, 'a watcher without a runner gets a short grace, not the runner budget');
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /its tsx watch had lost its runner and ignored SIGTERM, so it was killed/);
+  });
+
+  it('never SIGKILLs a watcher whose runner is still shutting down, and warns that the session goes on', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000 }),
+      isAlive: (pid) => pid === 4000 || pid === 4242,
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      waitExit: async () => false,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 4000, signal: 'SIGTERM', via: 'signal' }]);
+    assert.equal(r.portFree, false, 'reported as a warning: the session has not ended');
+    assert.equal(isStopWarning(r), true);
+    assert.deepEqual(removed, [], 'a live session keeps its record');
+  });
+
+  it('never SIGKILLs a watcher whose reload started a new runner since the stop read the record', async () => {
+    // The record names the runner that exited for a reload; tsx watch has started its successor,
+    // which takes the record over in place. A SIGKILL of the watcher would orphan that runner.
+    const SERVER = 'node aws-blocks/scripts/server.ts';
+    let pidfile = JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, command: SERVER });
+    const waits: Array<[number, number]> = [];
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => pidfile,
+      isAlive: (pid) => pid === 4000 || pid === 4343,
+      commandOf: (pid) => (pid === 4000 ? TSX : pid === 4343 ? SERVER : ''),
+      waitExit: async (pid, ms) => {
+        waits.push([pid, ms]);
+        pidfile = JSON.stringify({ pid: 4343, ppid: 4000, port: 3000, command: SERVER });
+        return false;
+      },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 4000, signal: 'SIGTERM', via: 'signal' }]);
+    assert.deepEqual(waits, [[4000, 2000], [4000, 8000]], 'the successor gets the runner budget');
+    assert.equal(r.killed, undefined);
+    assert.equal(r.portFree, false);
+    assert.deepEqual(removed, []);
+  });
+
+  it("waits for the cdk-blocks sandbox session a dev server records, and says it stopped the sandbox (U2)", async () => {
+    let ended = false;
+    const waited: number[] = [];
+    const { deps, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, sandbox: { pid: 6000 } }),
+      isAlive: (pid) => !ended && [4000, 4242, 6000].includes(pid),
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      signal: () => { ended = true; },
+      waitExit: async (pid) => { waited.push(pid); return true; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(r.sandbox, { pid: 6000 });
+    assert.equal(r.portFree, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /^🛑 Stopped the cdk-blocks sandbox session on :3000 \(pid 4000\): its dev server and its cdk watch\. .*cdk-blocks sandbox destroy/);
+  });
+
+  it('warns when the sandbox session outlives its dev server', async () => {
+    const { deps } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 4242, ppid: 4000, port: 3000, sandbox: { pid: 6000 } }),
+      isAlive: (pid) => pid === 4000 || pid === 6000,
+      commandOf: (pid) => (pid === 4000 ? TSX : ''),
+      waitExit: async (pid) => pid !== 6000,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(isStopWarning(r), true);
+    assert.match(stopMessage(r), /Signalled the cdk-blocks sandbox session on :3000 .* has not ended yet/);
   });
 
   it('does NOT signal the ppid when it is a bare shell, not a tsx watcher (self-kill guard)', async () => {
@@ -155,6 +260,227 @@ describe('stopDevServer — proves ownership, targets the tsx watch supervisor',
   });
 });
 
+describe('stopDevServer on Windows — ends the session from its top', () => {
+  // A signal is TerminateProcess there: a SIGTERM to `tsx watch` runs no cleanup, and the `cdk-blocks dev` CLI
+  // above it started the dev server again on the next save (W1). The record names the CLI (`session`).
+  const WIN_TSX = '"C:\\node.exe" "C:\\app\\node_modules\\tsx\\dist\\cli.mjs" watch "C:\\blocks\\dist\\cli\\runners\\dev-server.js"';
+  const proc = (pid: number, ppid: number, created: string, command = ''): WindowsProcess => ({ pid, ppid, created, command });
+  const session = (overrides: Array<[number, WindowsProcess]> = []) =>
+    new Map<number, WindowsProcess>([
+      [10, proc(10, 1, '100', '"C:\\node.exe" "C:\\blocks\\dist\\cli\\bin.js" dev')],
+      [20, proc(20, 10, '200', WIN_TSX)],
+      [30, proc(30, 20, '300', '"C:\\node.exe" dev-server.js')],
+      ...overrides,
+    ]);
+  const record = { pid: 30, ppid: 20, port: 3000, command: '', session: { pid: 10 }, frontend: { port: 3100, listeners: [{ pid: 40, created: '400' }] } };
+
+  it('ends the cdk-blocks dev CLI with its whole tree, waits for both ports, and removes the record', async () => {
+    let alive = true;
+    const freed: number[] = [];
+    const { deps, sigs, removed } = makeDeps({
+      platform: 'win32',
+      readPidfile: () => JSON.stringify(record),
+      isAlive: (pid) => alive && [10, 20, 30].includes(pid),
+      processes: (pids) => {
+        assert.deepEqual([...pids].sort(), [10, 20, 30]);
+        return session();
+      },
+      killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); alive = false; },
+      waitFree: async (p) => { freed.push(p); },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 10, signal: 'SIGKILL', via: 'killTree' }], 'the CLI, never a lone signal to tsx watch');
+    assert.deepEqual(freed, [3000, 3100]);
+    assert.equal(r.via, 'cli');
+    assert.equal(r.portFree, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.equal(stopMessage(r), '🛑 Stopped the dev server on :3000 (pid 10).');
+  });
+
+  it('ends tsx watch when no CLI is recorded, or the recorded one is not its parent any more', async () => {
+    for (const [label, rec, table] of [
+      ['no session', { ...record, session: undefined }, session()],
+      // The CLI's pid now names a process created after tsx watch: not its parent.
+      ['reused pid', record, session([[10, proc(10, 1, '250')]])],
+    ] as const) {
+      const { deps, sigs } = makeDeps({
+        platform: 'win32',
+        readPidfile: () => JSON.stringify(rec),
+        isAlive: (pid) => [10, 20, 30].includes(pid) && sigs.length === 0,
+        processes: () => table,
+      });
+      const r = await stopDevServer(3000, deps);
+      assert.deepEqual(sigs, [{ pid: 20, signal: 'SIGKILL', via: 'killTree' }], label);
+      assert.equal(r.via, 'watcher', label);
+    }
+  });
+
+  it('never ends the tree of a parent that is not a tsx watch (a plain node start under a shell)', async () => {
+    const shell = new Map<number, WindowsProcess>([
+      [20, proc(20, 1, '200', 'C:\\Windows\\System32\\cmd.exe')],
+      [30, proc(30, 20, '300', 'node dev-server.js')],
+    ]);
+    const { deps, sigs } = makeDeps({
+      platform: 'win32',
+      readPidfile: () => JSON.stringify({ pid: 30, ppid: 20, port: 3000, command: '' }),
+      isAlive: (pid) => pid === 20 || pid === 30,
+      processes: () => shell,
+      probe: seqProbe([true, false]),
+      listPids: () => [30],
+    });
+    const r = await stopDevServer(3000, deps);
+    // The listener fallback: only the recorded runner's tree.
+    assert.equal(r.via, 'listener');
+    assert.deepEqual(sigs, [{ pid: 30, signal: 'SIGTERM', via: 'killTree' }]);
+  });
+
+  it('picks the top of the session from what CIM proves', () => {
+    assert.equal(windowsSessionRoot(record, session()), 10);
+    assert.equal(windowsSessionRoot(record, new Map()), undefined, 'nothing running');
+    // Between two reloads: no runner, but tsx watch still descends from the CLI.
+    const reloading = session();
+    reloading.delete(30);
+    assert.equal(windowsSessionRoot(record, reloading), 10);
+    assert.equal(windowsSessionRoot({ ...record, session: undefined }, reloading), undefined);
+  });
+});
+
+describe('stopDevServer — what it reports when nothing of this app runs', () => {
+  it('names the foreign process that holds the port, without signalling it', async () => {
+    const { deps, sigs } = makeDeps({
+      readPidfile: () => null,
+      probe: async () => true,
+      listPids: () => [4321],
+      commandOf: (pid) => (pid === 4321 ? 'python3 -m http.server 3000' : ''),
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.alreadyStopped, true);
+    assert.deepEqual(r.holders, [{ pid: 4321, command: 'python3 -m http.server 3000' }]);
+    assert.deepEqual(sigs, []);
+    const message = stopMessage(r);
+    assert.doesNotMatch(message, /nothing to stop/);
+    assert.match(message, /held by another process, which was not stopped: pid 4321 \(python3 -m http\.server 3000\)/);
+  });
+
+  it('removes an unreadable pidfile, so --all stops listing its port', async () => {
+    const { deps, removed } = makeDeps({ readPidfile: () => 'garbage' });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.alreadyStopped, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  it('treats a recorded child whose pid now runs another command as gone', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => JSON.stringify({ pid: 777, ppid: 500, port: 3000, command: 'node run-dev.ts' }),
+      isAlive: (pid) => pid === 777,
+      commandOf: () => 'postgres: writer',
+      probe: async () => true,
+      listPids: () => [777],
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'none');
+    assert.deepEqual(sigs, []);
+    assert.deepEqual(removed, [devPidfilePath(3000)], 'the stale record is cleared');
+  });
+});
+
+describe('stopDevServer — the frontend a SIGKILLed dev server left behind', () => {
+  // A SIGKILL of the dev group leaves its detached Vite holding the frontend port. dev stop used to clear
+  // the record as stale, which the next start needed to reclaim that port, and that start then failed (JA-3).
+  const record = JSON.stringify({ pid: 777, ppid: 500, port: 3000, command: 'node run-dev.ts', frontend: { pgid: 900, port: 3100 } });
+
+  it("stops the recorded frontend group when it still holds the frontend port, then clears the record", async () => {
+    let held = true;
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => record,
+      probe: async (p) => p === 3100 && held,
+      listPids: (p) => (p === 3100 && held ? [901] : []),
+      groupOf: (pid) => (pid === 901 ? 900 : undefined),
+      killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); held = false; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'frontend');
+    assert.equal(r.stopped, true);
+    assert.equal(r.portFree, true);
+    assert.deepEqual(r.frontend, { pgid: 900, port: 3100 });
+    assert.deepEqual(sigs, [{ pid: 900, signal: 'SIGTERM', via: 'killTree' }], 'the recorded group, by its pgid');
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /stopped the frontend that this app's dev server left running on :3100 \(pid 901\)/);
+  });
+
+  it('leaves a frontend port that another process holds alone, and clears the record', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => record,
+      probe: async (p) => p === 3100,
+      listPids: (p) => (p === 3100 ? [4242] : []),
+      groupOf: () => 4242,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'none');
+    assert.deepEqual(sigs, []);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  // Windows has no process groups: the record names the frontend's listeners, with their creation times.
+  const windowsRecord = JSON.stringify({
+    pid: 777,
+    ppid: 500,
+    port: 3000,
+    command: '',
+    frontend: { port: 3100, listeners: [{ pid: 901, created: '134000000000000000' }] },
+  });
+  const running = (pid: number, created: string) => new Map([[pid, { pid, ppid: 1, created, command: 'node vite.js' }]]);
+
+  it('on Windows, stops the recorded listener that an orphaned frontend still holds the port with', async () => {
+    let held = true;
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => windowsRecord,
+      probe: async (p) => p === 3100 && held,
+      listPids: (p) => (p === 3100 && held ? [901] : []),
+      processes: (pids) => (pids.includes(901) ? running(901, '134000000000000000') : new Map()),
+      killTree: (pid, signal) => { sigs.push({ pid, signal, via: 'killTree' }); held = false; },
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'frontend');
+    assert.equal(r.portFree, true);
+    assert.deepEqual(sigs, [{ pid: 901, signal: 'SIGTERM', via: 'killTree' }], "the listener's tree (taskkill /T)");
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  it('on Windows, leaves a listener whose pid now names a process created later alone', async () => {
+    const { deps, sigs } = makeDeps({
+      readPidfile: () => windowsRecord,
+      probe: async (p) => p === 3100,
+      listPids: (p) => (p === 3100 ? [901] : []),
+      processes: () => running(901, '134000000000999999'),
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.via, 'none');
+    assert.deepEqual(sigs, []);
+  });
+});
+
+describe('portInUseHint — an exact next command', () => {
+  it('names the pids to stop, how to start again, and the flag for another port', () => {
+    assert.equal(
+      portInUseHint(3100, { foreign: [{ pid: 3181756, command: 'node vite --port 3100 --strictPort' }], pids: [] }, '--frontend-port', 'linux'),
+      'Stop it with `kill 3181756`, then run `npx --no -- cdk-blocks dev` again, or choose another port with --frontend-port.',
+    );
+    assert.match(portInUseHint(3000, { foreign: [], pids: [] }, '--port', 'linux'), /`lsof -i :3000`/);
+  });
+
+  it('names Windows commands on Windows', () => {
+    assert.equal(
+      portInUseHint(4610, { foreign: [], pids: [4242, 4243] }, '--frontend-port', 'win32'),
+      'Stop it with `taskkill /PID 4242 /T /F && taskkill /PID 4243 /T /F`, then run `npx --no -- cdk-blocks dev` again, or choose another port with --frontend-port.',
+    );
+    assert.equal(
+      portInUseHint(4610, { foreign: [], pids: [] }, '--frontend-port', 'win32'),
+      'Find the process that holds it with `netstat -ano | findstr :4610` and stop it, then run `npx --no -- cdk-blocks dev` again, or choose another port with --frontend-port.',
+    );
+  });
+});
+
 /** Per-call probe sequencer shared across both ports (front door only here). */
 function seqProbe(states: boolean[]): (port: number) => Promise<boolean> {
   const s = seq(states);
@@ -162,7 +488,7 @@ function seqProbe(states: boolean[]): (port: number) => Promise<boolean> {
 }
 
 describe('stopMessage', () => {
-  const base: StopResult = { port: 3000, stopped: false, alreadyStopped: true, record: null, via: 'none', pids: [], portFree: true };
+  const base: StopResult = { port: 3000, stopped: false, alreadyStopped: true, record: null, via: 'none', pids: [], portFree: true, holders: [] };
   it('says nothing-to-stop when already stopped', () => {
     assert.match(stopMessage(base), /nothing to stop/);
   });
@@ -198,11 +524,92 @@ describe('runStopCli', () => {
     process.exitCode = prev;
   });
 
+  it('sends the still-bound warning to stderr and only that case is a warning', () => {
+    const base: StopResult = { port: 3000, stopped: true, alreadyStopped: false, record: null, via: 'watcher', pids: [1], portFree: false, holders: [] };
+    assert.equal(isStopWarning(base), true);
+    assert.equal(isStopWarning({ ...base, portFree: true }), false);
+    assert.equal(isStopWarning({ ...base, alreadyStopped: true, stopped: false, via: 'none', pids: [] }), false);
+  });
+
   it('parsePortArg feeds the CLI', () => {
     assert.equal(parsePortArg(['--port', '3005']), 3005);
     assert.equal(parsePortArg(['--port=3006']), 3006);
     assert.equal(parsePortArg(['--foo']), null);
     assert.equal(parsePortArg(['--port', 'abc']), null);
     assert.equal(parsePortArg(['--port', '0']), null);
+  });
+});
+
+describe('stopDevServer — a cdk-blocks dev CLI whose dev server is still starting', () => {
+  const CLI = 'node /app/node_modules/@aws-blocks/blocks/dist/cli/bin.js dev';
+  const starting = JSON.stringify({ pid: 700, ppid: 600, port: 3000, command: CLI, parentCommand: 'bash', starting: true });
+
+  it('SIGTERMs the CLI alone, never its caller, waits for it, and removes the pidfile it left', async () => {
+    let pidfile: string | null = starting;
+    const waited: number[] = [];
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => pidfile,
+      removePidfile: (p) => { removed.push(p); pidfile = null; },
+      isAlive: (pid) => pid === 700 || pid === 600,
+      commandOf: (pid) => (pid === 700 ? CLI : 'bash'),
+      waitExit: async (pid) => { waited.push(pid); return true; },
+    });
+    // The CLI's exit leaves the record of the dev server that took it over, and ended.
+    deps.signal = (pid, signal) => {
+      sigs.push({ pid, signal, via: 'signal' });
+      pidfile = JSON.stringify({ pid: 702, ppid: 701, port: 3000, command: 'node dev-server.js', parentCommand: 'tsx watch' });
+      deps.isAlive = () => false;
+    };
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 700, signal: 'SIGTERM', via: 'signal' }]);
+    assert.deepEqual(waited, [700]);
+    assert.equal(r.via, 'cli');
+    assert.equal(r.stopped, true);
+    assert.equal(r.portFree, true);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+    assert.match(stopMessage(r), /Stopped the dev server on :3000 \(pid 700\)/);
+  });
+
+  it('keeps the record of a live session that took the pidfile over meanwhile', async () => {
+    const live = JSON.stringify({ pid: 900, ppid: 901, port: 3000, command: 'node dev-server.js', parentCommand: 'tsx watch x' });
+    let pidfile = starting;
+    const { deps, removed } = makeDeps({
+      readPidfile: () => pidfile,
+      isAlive: () => true,
+      commandOf: (pid) => ({ 700: CLI, 900: 'node dev-server.js', 901: 'tsx watch x' })[pid] ?? 'bash',
+      signal: () => { pidfile = live; },
+    });
+    assert.equal((await stopDevServer(3000, deps)).via, 'cli');
+    assert.deepEqual(removed, []);
+  });
+
+  it('treats the record of a CLI that has exited as stale', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => starting,
+      // Its caller, the shell, is still alive, and is never signalled.
+      isAlive: (pid) => pid === 600,
+      commandOf: () => 'bash',
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.equal(r.alreadyStopped, true);
+    assert.deepEqual(sigs, []);
+    assert.deepEqual(removed, [devPidfilePath(3000)]);
+  });
+
+  it('reports a CLI that has not exited after its SIGTERM as not stopped, and keeps its record, even with the port free', async () => {
+    const { deps, sigs, removed } = makeDeps({
+      readPidfile: () => starting,
+      isAlive: () => true,
+      commandOf: (pid) => (pid === 700 ? CLI : 'bash'),
+      probe: async () => false,
+      waitExit: async () => false,
+    });
+    const r = await stopDevServer(3000, deps);
+    assert.deepEqual(sigs, [{ pid: 700, signal: 'SIGTERM', via: 'signal' }]);
+    assert.equal(r.via, 'cli');
+    assert.equal(r.portFree, false);
+    assert.equal(isStopWarning(r), true);
+    assert.deepEqual(removed, []);
+    assert.match(stopMessage(r), /Signalled the cdk-blocks dev on :3000 \(pid 700\), but it has not ended yet/);
   });
 });

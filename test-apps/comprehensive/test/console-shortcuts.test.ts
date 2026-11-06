@@ -4,12 +4,9 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { testBaseUrl } from './api-url.js';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 function getStackName(): string {
   const outputs = JSON.parse(readFileSync('.blocks-sandbox/outputs.json', 'utf-8'));

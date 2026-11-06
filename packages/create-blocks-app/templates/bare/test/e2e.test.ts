@@ -15,10 +15,14 @@ let server: ChildProcess | null = null;
 let api: typeof apiType;
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
+// The app under test: the dev server on that port, or a deployed app when you set TEST_URL to the URL its
+// API is under (TEST_URL=https://<id>.cloudfront.net, or the deployed API URL without /aws-blocks/api). The
+// client resolves BLOCKS_API_URL first, so a deploy, which records its URL in config.<stage>.json, never redirects these tests.
+const testUrl = process.env.TEST_URL?.replace(/\/$/, '') || undefined;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
+  if (!testUrl && !await isServerRunning(serverPort)) {
     server = spawn('npm', ['run', 'dev:server'], {
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -30,11 +34,13 @@ test.before(async () => {
     await setTimeout(2000);
   }
 
+  // Pin the client to the app under test. Only now: a dev server started above must not inherit it.
+  process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;
   const mod = await import('aws-blocks');
   api = mod.api;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 30 && !testUrl; i++) {
     try {
       const response = await fetch(readinessUrl);
       if (response.ok) return;
@@ -43,7 +49,7 @@ test.before(async () => {
     }
     await setTimeout(1000);
   }
-  throw new Error(`Server not ready at ${readinessUrl}`);
+  if (!testUrl) throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
@@ -78,7 +84,7 @@ test.after(async () => {
 
 // App-level readiness — independent of the sample API, so it keeps passing
 // after you replace `greet` with your own methods.
-test('app: server serves its Blocks config', async () => {
+test('app: server serves its Blocks config', { skip: testUrl && 'TEST_URL targets a deployed app' }, async () => {
   const response = await fetch(readinessUrl);
   assert.ok(response.ok, `expected ${readinessUrl} to respond ok`);
 });

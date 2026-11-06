@@ -297,6 +297,48 @@ describe('create-blocks-app template metadata', () => {
     assert.deepStrictEqual(problems, []);
   });
 
+  it('every template e2e test calls the dev server it reuses, or TEST_URL, never a URL a deploy recorded', () => {
+    // The Node client resolves BLOCKS_API_URL before it reads .blocks-sandbox/config.json. A test that
+    // left the choice to that file sent its sign-ups and writes to the stack a deploy had just recorded.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const pin = 'process.env.BLOCKS_API_URL = `${testUrl ?? `http://localhost:${serverPort}`}/aws-blocks/api`;';
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
+      if (!entry.isDirectory() || !existsSync(testPath)) continue;
+      const source = readFileSync(testPath, 'utf-8');
+      const load = source.indexOf("import('aws-blocks')");
+      if (load === -1) continue; // builds its own client from the server's URL (nextjs)
+      const pinned = source.indexOf(pin);
+      if (pinned === -1 || pinned > load) problems.push(`${entry.name}: does not set BLOCKS_API_URL before it loads the client`);
+      // A dev server that inherits BLOCKS_API_URL runs in sandbox mode, proxying to that URL (here: itself).
+      if (pinned !== -1 && pinned < source.indexOf("server = spawn('npm'")) {
+        problems.push(`${entry.name}: sets BLOCKS_API_URL before it starts the dev server, which then inherits it`);
+      }
+      if (!source.includes("const testUrl = process.env.TEST_URL?.replace(/\\/$/, '') || undefined;")) {
+        problems.push(`${entry.name}: does not read TEST_URL`);
+      }
+      if (!source.includes('if (!testUrl && !await isServerRunning(serverPort))')) {
+        problems.push(`${entry.name}: starts a dev server although TEST_URL names a deployed app`);
+      }
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
+  it("every template's cdk watch ignores the generated aws-blocks/client.js", () => {
+    // cdk-blocks deploy regenerates it; a running cdk-blocks sandbox then started a watch synth, and the deploy failed
+    // on CDK's cdk.out lock (JW-02). The deployed backend does not use the browser client.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const problems: string[] = [];
+    for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+      const cdkJson = join(templatesDir, entry.name, 'cdk.json');
+      if (!entry.isDirectory() || !existsSync(cdkJson)) continue;
+      const exclude: string[] = JSON.parse(readFileSync(cdkJson, 'utf-8')).watch?.exclude ?? [];
+      if (!exclude.includes('aws-blocks/client.js')) problems.push(`${entry.name}: watch.exclude lacks aws-blocks/client.js`);
+    }
+    assert.deepStrictEqual(problems, []);
+  });
+
   it('every template e2e suite can run again and again against one running dev server', () => {
     // AGENTS.md's iteration loop reruns `npm run test:e2e` against a running server. The
     // realtime client keeps its socket to that server open, so the run must exit when the
@@ -482,7 +524,9 @@ describe('create-blocks-app auto-detection', () => {
       assert.strictEqual(packageJson.scripts['blocks:stop'], 'cdk-blocks dev stop');
       // The Blocks dev server stays backend-only on :3001, as the removed server.ts set it,
       // even with vite and next installed: the Amplify app runs its own frontend.
-      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false } });
+      // generateClient: false keeps the overlay's own aws-blocks/client.js (Cognito token,
+      // amplify_outputs.json API URL) instead of the dev server's generic one.
+      assert.deepStrictEqual(packageJson.blocks, { dev: { port: 3001, frontend: false, generateClient: false } });
       const dev = await resolvedDevConfig(tmpDir);
       assert.strictEqual(dev.frontendCommand, undefined);
       assert.strictEqual(dev.port, 3001);
