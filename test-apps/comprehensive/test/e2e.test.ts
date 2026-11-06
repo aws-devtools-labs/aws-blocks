@@ -25,6 +25,7 @@ import { authCognitoAdminTests } from './auth-cognito-admin-sandbox.test.js';
 import { oidcAuthTests } from './oidc-auth.test.js';
 import { databaseTests } from './database.test.js';
 import { dsqlTests } from './dsql.test.js';
+import { databaseBlockTests } from './database-block.test.js';
 import { cronJobTests } from './cron-job.test.js';
 import { fileBucketTests } from './file-bucket.test.js';
 import { appSettingTests } from './app-setting.test.js';
@@ -156,10 +157,19 @@ test.after(async (t) => {
   if ((ENV === 'sandbox' || ENV === 'production') && !process.env.BLOCKS_SANDBOX_KEEP) {
     const destroyScript = ENV === 'sandbox' ? 'test/sandbox-destroy.ts' : 'test/production-destroy.ts';
     console.log(`\n🗑️  Destroying ${ENV} stack...`);
-    execFileSync('npx', ['tsx', destroyScript, backendPath], {
-      cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
-    });
-    console.log(`✅ ${ENV} stack destroyed`);
+    try {
+      execFileSync('npx', ['tsx', destroyScript, backendPath], {
+        cwd: process.cwd(), stdio: 'inherit', env: { ...process.env, NODE_OPTIONS: '' }
+      });
+      console.log(`✅ ${ENV} stack destroyed`);
+    } catch (e) {
+      // Fail the run. This file runs directly (not under `node --test`), where
+      // a throwing after() hook is reported but the process still exits 0, so a
+      // broken destroy would pass CI. No rethrow: the cleanup below must still
+      // run so the process can exit.
+      console.error(`\n❌ Destroying the ${ENV} stack failed: ${e instanceof Error ? e.message : String(e)}`);
+      process.exitCode = 1;
+    }
   }
 
   // Close the realtime client middleware's pooled WebSocket(s) so the event
@@ -278,6 +288,8 @@ databaseTests(() => api);
 
 // DSQL Database tests (separate file)
 dsqlTests(() => api);
+
+databaseBlockTests(() => api);
 
 // AppSetting tests (separate file)
 appSettingTests(() => api);

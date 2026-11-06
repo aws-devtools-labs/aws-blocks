@@ -15,6 +15,7 @@ import {
 } from '../common/index.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import {
+	assertBlocksDefaults,
 	assertCdkConditionActive,
 	BlocksBackend,
 	buildSharedGateway,
@@ -35,6 +36,7 @@ import {
 	publicApiUrl,
 	resolveApiFrontDoor,
 } from './api-front-door.js';
+import type { ApiDirectRoute } from './api-direct-routes.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
@@ -125,6 +127,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_apiWaf?: ResolvedApiWaf;
 	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
 	_apiFrontDoorMarked?: boolean;
+	/** The API paths a CloudFront front door routes straight to a container's load balancer; set with the gateway. @internal */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -240,6 +244,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksStack');
 
 		// Detect ambient pipeline stage scope set by Pipeline appFile imports
 		const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];
@@ -363,8 +368,8 @@ export class Scope extends Construct {
 	/**
 	 * Compute assigned at this node. Applies to this block and is inherited by
 	 * descendants (a nearer assignment wins). Covers both a handler assigned to a
-	 * specific compute and a scope-level default for its subtree. Internal until
-	 * the customer-facing surface exists.
+	 * specific compute (a block's own `compute` option) and a scope-level default
+	 * for its subtree ({@link ScopeOptions.compute}).
 	 * @internal
 	 */
 	_compute?: ComputeBase;
@@ -380,6 +385,10 @@ export class Scope extends Construct {
 			this.bbVersion = options.bbVersion;
 			recordBuildingBlock(this, options.bbName);
 		}
+		// A scope-level compute (`new Scope(id, { parent, compute })`). Its
+		// `resolve()` yields the concrete compute, a `ComputeBase`: the option is
+		// typed structurally only so the default entry carries no CDK types.
+		if (options?.compute) this._compute = options.compute.resolve() as ComputeBase;
 	}
 
 	/**
@@ -409,10 +418,10 @@ export class Scope extends Construct {
 	 * The compute this block runs on: the nearest `_compute` assigned on this
 	 * block or an ancestor scope, else the owning stack/backend's default compute.
 	 *
-	 * For any app that doesn't assign a compute, this always resolves to the
-	 * default — so reads are a no-op refactor. `_compute` is internal
-	 * (test/framework) until the customer-facing surface exists; there is no
-	 * public option to set it yet.
+	 * A block's own `compute` option assigns it on the block; `new Scope(id, {
+	 * compute })` assigns it on a scope, for everything under it
+	 * ({@link ScopeOptions.compute}). For an app that assigns none, this always
+	 * resolves to the default.
 	 */
 	get compute(): ComputeBase {
 		for (let current: ScopeParent | undefined = this; current; current = (current as Scope).parent) {

@@ -341,7 +341,7 @@ Delegate the OIDC flow to a Cognito User Pool. Cognito handles PKCE, token verif
 
 `cognitoFederated()` takes `AppSetting` instances (not closures) for the IdP credentials. The IdP is registered on the User Pool by a **deploy-time custom resource**: a Lambda reads and decrypts those SecureString parameters via the SDK at deploy time and calls Cognito's `CreateIdentityProvider`. (A native `AWS::Cognito::UserPoolIdentityProvider` resource can't be used — CloudFormation rejects the `{{resolve:ssm-secure}}` dynamic references it would need in `ProviderDetails`.) The credential values therefore never appear in the CloudFormation template.
 
-**Setting the credential values.** A `secret: true` `AppSetting` is an SSM SecureString at `/<appSetting.fullId>` — **not** an AWS Secrets Manager entry, so the `blocks secret` CLI (which manages Secrets Manager) does not apply here. Set the value by writing the SecureString directly, or via the `AppSetting`'s runtime `put()`:
+**Setting the credential values.** A `secret: true` `AppSetting` is an SSM SecureString at `/<appSetting.fullId>` — **not** an AWS Secrets Manager entry, so the `cdk-blocks secret` CLI (which manages Secrets Manager) does not apply here. Set the value by writing the SecureString directly, or via the `AppSetting`'s runtime `put()`:
 
 ```bash
 aws ssm put-parameter --name /<fullId> --type SecureString --value '<google-client-secret>' --overwrite

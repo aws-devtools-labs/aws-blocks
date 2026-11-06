@@ -41,11 +41,14 @@ export type {
 	ServerlessComputeOptions,
 } from '../common/compute-capabilities.js';
 export { LAMBDA_MAX_TIMEOUT_SECONDS, resolvePerInstanceConcurrency } from '../common/compute-capabilities.js';
-export type { ComputeDashboardSection, ComputeProvider } from './compute/compute.js';
+export type { ComputeApiIngress, ComputeDashboardSection, ComputeProvider } from './compute/compute.js';
+export { API_LISTENER_PORTS } from './api-vpc-link.js';
+export { CONTAINER_HTTP_PORT, CONTAINER_READINESS_PORT, CONTAINER_SERVES_API_ENV } from '../constants.js';
 export { ComputeBase } from './compute/compute.js';
 // Enumerate the computes registered on a stack — the Dashboard BB's default
 // compute selection resolves through this at finalize.
 export { getComputes } from './compute/compute-registry.js';
+export { foreignComputeProblem } from './compute/compute-ownership.js';
 export type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 // VPC integration helpers a concrete container compute needs to hook into the
 // central lazy VPC: derive-or-reuse the shared VPC, initialize context, resolve

@@ -22,6 +22,9 @@
     },
     {
       "path": "../bb-logger"
+    },
+    {
+      "path": "../bb-metrics"
     }
   ]
 }

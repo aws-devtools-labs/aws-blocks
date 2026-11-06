@@ -362,7 +362,7 @@ export interface CognitoFederatedOpts<N extends string = string> {
  *
  * **Setting the credential values.** A `secret: true` `AppSetting` is an SSM
  * SecureString at `/<appSetting.fullId>`; its value is *not* managed by the
- * `blocks secret` CLI (that CLI manages AWS Secrets Manager, a different store).
+ * `cdk-blocks secret` CLI (that CLI manages AWS Secrets Manager, a different store).
  * Set it by writing the SecureString directly — e.g.
  * `aws ssm put-parameter --name /<fullId> --type SecureString --value <secret> --overwrite`
  * — or through the `AppSetting`'s runtime `put()`. On the first deploy the

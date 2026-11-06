@@ -29,24 +29,8 @@
 
 import { loadConfigToProcessEnv } from '@aws-blocks/core';
 import { BedrockAgentCoreApp } from 'bedrock-agentcore/runtime';
-import { z } from 'zod';
 import { getAgentInstance } from './agent.js';
-
-/** Request contract — mirrors the Lambda jobPayloadSchema, minus transport-only fields. */
-const requestSchema = z.object({
-	/** User prompt. Empty on resume (interruptResponses drive the turn instead). */
-	prompt: z.string().default(''),
-	/** Realtime channel the client subscribes to for this turn's chunks. */
-	channelId: z.string(),
-	/** Conversation to persist to / restore the session from. Falls back to the AgentCore session id. */
-	conversationId: z.string().optional(),
-	/** Owner of the conversation. Required when persistence is enabled (not inferenceOnly). */
-	userId: z.string().optional(),
-	/** HITL resume: approval responses to apply instead of a new prompt. */
-	interruptResponses: z.array(z.object({ interruptId: z.string(), response: z.string() })).optional(),
-	/** Per-call tool context, threaded through to tool handlers. Must be JSON-serializable. */
-	context: z.unknown().optional(),
-});
+import { handleInvocation, requestSchema } from './agentcore-invocation.js';
 
 /**
  * Serve a registered Agent on the AgentCore harness.
@@ -72,31 +56,7 @@ export function serve(agentId = process.env.BB_AGENT_ID): void {
 	const app = new BedrockAgentCoreApp({
 		invocationHandler: {
 			requestSchema,
-			process: (request, context) => {
-				// AgentCore routes every invocation for a session to the same warm microVM.
-				// runtimeSessionId maps to the Agent BB's conversationId (session state key).
-				const conversationId = request.conversationId ?? context.sessionId;
-
-				// Run the turn as a background async task so this invocation returns immediately.
-				// The harness reports `/ping` = HealthyBusy while the task is in flight, keeping
-				// the microVM alive (up to the 8h session lifetime) until the loop completes.
-				// Chunks are delivered out-of-band via Realtime — this HTTP response is just an ack.
-				const taskId = app.addAsyncTask('agent-turn');
-				void agent
-					.invokeTurn({
-						message: request.prompt,
-						conversationId,
-						channelId: request.channelId,
-						userId: request.userId ?? 'anonymous',
-						interruptResponses: request.interruptResponses,
-						context: request.context,
-					})
-					.finally(() => app.completeAsyncTask(taskId));
-
-				// The client already has channelId (from the RPC that invoked us) and subscribes
-				// to Realtime; it does not consume this response body.
-				return { channelId: request.channelId, status: 'accepted' };
-			},
+			process: (request, context): ReturnType<typeof handleInvocation> => handleInvocation(agent, app, request, context),
 		},
 	});
 
