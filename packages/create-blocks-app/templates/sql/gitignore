@@ -4,7 +4,6 @@ build-temp
 .blocks-sandbox
 cdk.out/
 aws-blocks/client.js
-aws-blocks/.types/
 aws-blocks/blocks.spec.json
 .bb-data/
 

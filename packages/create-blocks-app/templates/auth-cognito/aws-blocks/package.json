@@ -5,7 +5,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./.types/index.d.ts",
+      "types": "./index.ts",
       "browser": "./client.js",
       "react-server": "./client.js",
       "import": "./client.js",

@@ -11,7 +11,6 @@ import { createInterface } from 'node:readline';
 import { randomBytes } from 'node:crypto';
 import { minimatch } from 'minimatch';
 import { trackCommand } from './telemetry.js';
-import { checkFrontendTsconfigs } from './frontend-tsconfig-check.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -208,42 +207,6 @@ function tailorAgentsGuide(guide: string, dev: { port?: unknown; frontend?: unkn
 }
 
 // ─── Shared workspace helper ─────────────────────────────────────────────────
-
-/**
- * The frontend reads the backend's generated types (`aws-blocks/.types/`)
- * through the `aws-blocks` package. A frontend tsconfig whose `include` also
- * covers `aws-blocks/` (Next.js's `**\/*.ts`, or no `include` at all) makes the
- * backend a program root, and a rooted file is checked under the config that
- * rooted it — so the backend gets frontend settings again.
- *
- * Reported, not fixed: editing a tsconfig we don't own is more risk than one
- * line is worth, and skipping the fix fails loudly on the next typecheck — it
- * names the backend files directly — so a printed instruction is enough.
- *
- * This print is the only channel for the integration paths: `AGENTS.md` carries
- * the same fix, but `copySharedResources()` only runs for a fresh project, so
- * an existing project never receives it. There the note covers a different
- * case — a scaffolded app whose tsconfig is widened later.
- */
-function reportFrontendTsconfigs(targetDir: string): void {
-  const findings = checkFrontendTsconfigs(targetDir);
-  if (findings.length === 0) return;
-
-  console.log('');
-  for (const finding of findings) {
-    const name = relative(targetDir, finding.file) || finding.file;
-    if (finding.kind === 'covers-backend') {
-      console.log(`  ⚠ ${name} includes aws-blocks/, so your frontend would typecheck the backend source.`);
-    } else if (finding.kind === 'unknown-extends') {
-      console.log(`  ⚠ ${name} extends another config, so we cannot tell whether it includes aws-blocks/.`);
-    } else {
-      console.log(`  ⚠ ${name} is not valid JSONC, so we cannot tell whether it includes aws-blocks/.`);
-    }
-  }
-  console.log('    Add "aws-blocks" to "exclude" in the file(s) above, e.g.:');
-  console.log('      "exclude": ["node_modules", "aws-blocks"]');
-  console.log('    Without it the backend is typechecked with frontend settings and Node APIs fail.');
-}
 
 /**
  * Adds the aws-blocks workspace to an existing project's package.json.
@@ -530,13 +493,8 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
   await mkdir(blocksConfigDir, { recursive: true });
   await writeFile(join(blocksConfigDir, 'config.json'), JSON.stringify({ stackId }, null, 2));
   
-  if (!skipInstall) {
-    // Writes aws-blocks/.types/ on the way out, via the template's `prepare`
-    // hook (`cdk-blocks generate declarations`) — so does the `npm install` the user runs
-    // themselves with --skip-install, and so does a later clone of this app.
-    installDependencies(targetDir, workspaceRoot);
-  }
-
+  if (!skipInstall) installDependencies(targetDir, workspaceRoot);
+  
   // The local server port the template's `cdk-blocks dev` listens on: 3001 for the backend-only templates.
   const devPort = templatePkg.blocks?.dev?.port ?? 3000;
   console.log('\n✓ Blocks app created!');
@@ -640,8 +598,6 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
     }
   }
 
-  reportFrontendTsconfigs(targetDir);
-
   // 4. Add Blocks workspace (package.json, .gitignore, deps, install)
   await addBlocksWorkspace(targetDir, {
     deps: { '@aws-blocks/blocks': '*' },
@@ -650,9 +606,6 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       'esbuild': '^0.27.1',
       '@types/node': '^20.0.0',
       'cross-env': '^7.0.3',
-      // Required by `prepare`/`prebuild`: the generated declarations are built
-      // by the app's own `tsc` (see `generateBackendTypes`).
-      'typescript': '^5.9.3',
     },
     scripts: {
       'sandbox': 'cross-env NODE_OPTIONS="--conditions=cdk" AMPLIFY_SANDBOX=true npx ampx sandbox',
@@ -662,19 +615,11 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
       // The CLI's `cdk-blocks generate client` has no Amplify preamble (auth middleware and
       // the API URL from amplify_outputs.json), so the overlay keeps its own generator.
       'blocks:generate-client': 'cross-env NODE_OPTIONS="--conditions=aws-runtime" tsx aws-blocks/scripts/generate-client.ts',
-      // See `cdk-blocks generate declarations`: `prepare` makes aws-blocks/.types/ exist
-      // after install, the pre-hooks keep it from going stale before a
-      // typecheck or build. Existing scripts of the same name are never
-      // replaced, so an app that already has one keeps it and only gets
-      // `prepare`'s coverage.
-      'prepare': 'cdk-blocks generate declarations',
-      'prebuild': 'npm run blocks:generate-client',
-      'pretypecheck': 'npm run blocks:generate-client',
     },
     // The Blocks dev server runs backend-only on :3001; the Amplify app runs its own frontend,
     // so `"frontend": false` stops `cdk-blocks dev` from detecting the app's vite or next.
     blocksConfig: { dev: { port: 3001, frontend: false } },
-    gitignoreEntries: ['.blocks-sandbox', '.bb-data/', 'aws-blocks/.types/'],
+    gitignoreEntries: ['.blocks-sandbox', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });
@@ -838,8 +783,6 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
     console.log('  ⚠ cdk.json already exists, skipping');
   }
 
-  reportFrontendTsconfigs(targetDir);
-
   // 3. Add Blocks workspace (package.json, .gitignore, deps, install).
   // Source devDeps versions from the template's package.json — single source of truth.
   const templatePkg = JSON.parse(await readFile(join(templateDir, 'package.json'), 'utf-8'));
@@ -853,9 +796,6 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'tsx': tplDevDeps['tsx'] || '^4.7.0',
       'esbuild': tplDevDeps['esbuild'] || '^0.27.1',
       '@types/node': tplDevDeps['@types/node'] || '^20.0.0',
-      // Required by `prepare`/`prebuild`: the generated declarations are built
-      // by the app's own `tsc` (see `generateBackendTypes`).
-      'typescript': tplDevDeps['typescript'] || '^5.9.3',
     },
     scripts: {
       'sandbox': 'cdk-blocks sandbox',
@@ -865,17 +805,9 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
       'destroy': 'cdk-blocks destroy',
       'dev:server': 'cdk-blocks dev',
       'dev:stop': 'cdk-blocks dev stop',
-      // See `cdk-blocks generate declarations`: `prepare` makes aws-blocks/.types/ exist
-      // after install, the pre-hooks keep it from going stale before a
-      // typecheck or build. Existing scripts of the same name are never
-      // replaced, so an app that already has one keeps it and only gets
-      // `prepare`'s coverage.
-      'prepare': 'cdk-blocks generate declarations',
-      'prebuild': 'cdk-blocks generate client',
-      'pretypecheck': 'cdk-blocks generate client',
     },
     blocksConfig: backendDevConfig(templatePkg.blocks),
-    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/.types/', 'aws-blocks/blocks.spec.json', '.bb-data/'],
+    gitignoreEntries: ['.blocks-sandbox', 'cdk.out/', 'aws-blocks/client.js', 'aws-blocks/blocks.spec.json', '.bb-data/'],
     skipInstall,
     workspaceRoot,
   });

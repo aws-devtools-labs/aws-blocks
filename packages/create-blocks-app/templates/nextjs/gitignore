@@ -46,6 +46,5 @@ Thumbs.db
 npm-debug.log*
 
 aws-blocks/client.js
-aws-blocks/.types/
 aws-blocks/blocks.spec.json
 .hosting/

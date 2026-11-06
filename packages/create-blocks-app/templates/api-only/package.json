@@ -11,10 +11,8 @@
     "aws-blocks"
   ],
   "scripts": {
-    "prepare": "cdk-blocks generate declarations",
     "build": "npm run typecheck",
     "typecheck": "tsc --noEmit",
-    "pretypecheck": "cdk-blocks generate client",
     "spec": "cdk-blocks generate spec",
     "prebuild": "cdk-blocks generate client",
     "dev": "cdk-blocks dev",
