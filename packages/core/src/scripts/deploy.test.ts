@@ -22,6 +22,7 @@ import {
   makeInvalidationProbe,
   type InvalidationStatusClient,
 } from './deploy.js';
+import { OUTPUTS_FILE } from './deploy-outputs.js';
 
 describe('formatDeploySignal — the machine-readable deploy completion line', () => {
   it('is re-exported by deploy.ts (the public surface external callers import)', () => {
@@ -223,7 +224,8 @@ describe('makeInvalidationProbe — maps the SDK result to a pure outcome', () =
 
 describe('deploy — onDeployed', () => {
   // deploy() itself, in a fresh process. Only the steps that reach AWS or spawn
-  // CDK are replaced; the fake CDK writes outputs.json, as `cdk deploy` does.
+  // CDK are replaced; the fake CDK writes the production outputs document, as
+  // `cdk deploy --outputs-file` does.
   const scripts = new URL('./', import.meta.url).href;
   const fixture = `
 import assert from 'node:assert/strict';
@@ -232,7 +234,7 @@ import { mock } from 'node:test';
 
 const scripts = ${JSON.stringify(scripts)};
 const moduleUrl = (name) => new URL(name + '.js', scripts).href;
-const outputsFile = '.blocks-sandbox/outputs.json';
+const outputsFile = ${JSON.stringify(OUTPUTS_FILE.production)};
 const prod = {
   ApiUrl: 'https://prod.execute-api.us-east-1.amazonaws.com/',
   HostingHostingUrl1A2B3C4D: 'https://d111.cloudfront.net',
