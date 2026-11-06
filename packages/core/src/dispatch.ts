@@ -19,6 +19,7 @@ import {
   methodNotFoundResponse,
   parseRpcRequest,
   rawRouteErrorFromCatch,
+  sanitizeCaughtError,
   successResponse,
 } from './rpc.js';
 import { resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
@@ -72,6 +73,14 @@ export interface DispatchRequestBody {
 export interface DispatcherOptions {
   /** Prefix of the log line for an RPC method that throws. Default `'RPC Error:'`. */
   rpcErrorLabel?: string;
+  /**
+   * Called once for each RPC call that fails: a method that throws, or a call
+   * to an API namespace or method that doesn't exist. `status` is the HTTP
+   * status of a thrown error (as in its JSON-RPC envelope), or 404 for an
+   * unknown namespace or method. The Lambda handler uses it to
+   * write the `RpcErrors` metric (see rpc-error-metric.ts). Must not throw.
+   */
+  onRpcError?: (info: { status: number; namespace?: string; method?: string }) => void;
 }
 
 /**
@@ -132,6 +141,13 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
  */
 export function createDispatcher(backend: unknown, options: DispatcherOptions = {}): Dispatcher {
   const rpcErrorLabel = options.rpcErrorLabel ?? 'RPC Error:';
+  const reportRpcError = (info: { status: number; namespace?: string; method?: string }): void => {
+    try {
+      options.onRpcError?.(info);
+    } catch {
+      // Reporting is best-effort; it never changes the response.
+    }
+  };
   return async (request) => {
     const { origin, method: httpMethod } = request;
     const corsHeaders = buildCorsHeaders(origin);
@@ -244,6 +260,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // Block instances and `_`-private exports, so only an API surface is callable.
         const apiHandler = resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
+          reportRpcError({ status: 404, namespace: apiNamespace, method });
           return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId));
         }
 
@@ -255,6 +272,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // Own/declared callable methods only — never an inherited Object.prototype member.
         const apiMethod = resolveApiMethod(apiMethods, method);
         if (!apiMethod) {
+          reportRpcError({ status: 404, namespace: apiNamespace, method });
           return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
         }
 
@@ -269,6 +287,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         };
       } catch (error: any) {
         logRequestError(request, rpcErrorLabel, error);
+        reportRpcError({ status: sanitizeCaughtError(error).status, namespace: apiNamespace, method });
         // Only Set-Cookie values that DELETE a cookie survive into the error
         // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
         // session cookie, but a method that signs a user in and then throws can
