@@ -22,7 +22,7 @@ import {
   sanitizeCaughtError,
   successResponse,
 } from './rpc.js';
-import { resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import { isDispatchableExport, resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
 import type { RpcErrorInfo } from './rpc-error-metric.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
@@ -85,7 +85,68 @@ export interface DispatcherOptions {
    * reports it itself.
    */
   onRpcError?: (info: RpcErrorInfo) => void;
+  /**
+   * Which cross-origin requests are refused and which CORS headers every
+   * response carries. Default: the deployed allowlist from
+   * `CORS_ALLOWED_ORIGINS` / `CORS_HOSTING_ORIGINS` (see {@link getCorsPatterns}).
+   */
+  cors?: DispatchCorsPolicy;
+  /**
+   * Logs a RawRoute handler or RPC method that throws, in place of the default
+   * error line. Set by transports that format their own error output.
+   */
+  logHandlerError?: (failure: DispatchHandlerFailure) => void;
+  /** Observes each JSON-RPC request, for transports that log request traffic. */
+  rpcTrace?: DispatchRpcTrace;
+  /**
+   * Name the backend's callable APIs in the error for an unknown API namespace.
+   * Local development only: it tells any caller what the backend exports.
+   * Default `false`.
+   */
+  listApisWhenNotFound?: boolean;
 }
+
+/**
+ * A CORS policy for {@link createDispatcher}.
+ *
+ * @internal
+ */
+export interface DispatchCorsPolicy {
+  /** Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin. */
+  rejects(origin: string): boolean;
+  /** The CORS headers for a response to a request from `origin` (`''` when absent). */
+  headers(origin: string): Record<string, string>;
+}
+
+/**
+ * A handler that threw, as reported to {@link DispatcherOptions.logHandlerError}.
+ *
+ * @internal
+ */
+export type DispatchHandlerFailure =
+  | { source: 'rpc'; apiNamespace: string; method: string; error: unknown }
+  | { source: 'raw-route'; error: unknown };
+
+/**
+ * Callbacks for each stage of a JSON-RPC request. Each runs synchronously
+ * within the request's dispatch.
+ *
+ * @internal
+ */
+export interface DispatchRpcTrace {
+  /** The body was not a valid JSON-RPC request; `response` is the envelope sent back. */
+  parseError?(response: string): void;
+  /** The request names `apiNamespace.method`, about to be resolved and called with `args`. */
+  call?(apiNamespace: string, method: string, args: unknown[]): void;
+  /** The method returned; `value` is what the response carries as its result. */
+  result?(apiNamespace: string, method: string, value: unknown): void;
+}
+
+/** The deployed CORS policy: the configured allowlist, when there is one. */
+const ALLOWLIST_CORS_POLICY: DispatchCorsPolicy = {
+  rejects: (origin) => getCorsPatterns() !== null && !isOriginAllowed(origin),
+  headers: buildCorsHeaders,
+};
 
 /**
  * Which dispatch path produced a response. Adapters use it to keep any
@@ -152,13 +213,18 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       // Reporting is best-effort; it never changes the response.
     }
   };
+  const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
+  const trace = options.rpcTrace;
+  const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
+    if (options.logHandlerError) options.logHandlerError(failure);
+    else logRequestError(request, label, failure.error);
+  };
   return async (request) => {
     const { origin, method: httpMethod } = request;
-    const corsHeaders = buildCorsHeaders(origin);
+    const corsHeaders = cors.headers(origin);
 
     // Reject cross-origin requests from disallowed origins
-    const patterns = getCorsPatterns();
-    if (origin && patterns && !isOriginAllowed(origin)) {
+    if (origin && cors.rejects(origin)) {
       const rejection = corsRejection();
       return { kind: 'cors-rejected', status: rejection.statusCode, headers: rejection.headers, cookies: [], body: rejection.body };
     }
@@ -192,7 +258,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       if (!isRpcPath(requestPath)) {
         const matched = matchRoute(httpMethod, requestPath);
         if (matched) {
-          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders);
+          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders, logHandlerError);
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
@@ -226,10 +292,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
 
       if (!parsed.ok) {
+        trace?.parseError?.(parsed.response);
         return rpcEnvelope(parsed.response);
       }
 
       const { apiNamespace, method, args, id: rpcId } = parsed.request;
+      trace?.call?.(apiNamespace, method, args);
 
       // Declared outside the try so the error path can still deliver cookies the
       // method set before throwing (e.g. clearing a dead session on a 401).
@@ -265,7 +333,8 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         const apiHandler = resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
           reportRpcError({ status: 404, namespace: apiNamespace, method });
-          return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId));
+          const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
+          return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found${available}`, rpcId));
         }
 
         // Call the handler to get methods
@@ -281,16 +350,18 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         }
 
         const result = await apiMethod(...args);
+        const value = responseBody ?? result;
+        trace?.result?.(apiNamespace, method, value);
 
         return {
           kind: 'rpc-result',
           status: responseStatus,
           headers: withoutSetCookie(responseHeaders),
           cookies: setCookiesOf(responseHeaders),
-          body: successResponse(responseBody ?? result, rpcId),
+          body: successResponse(value, rpcId),
         };
       } catch (error: any) {
-        logRequestError(request, rpcErrorLabel, error);
+        logHandlerError({ source: 'rpc', apiNamespace, method, error }, request, rpcErrorLabel);
         // A method that fails after the request was aborted (the Lambda handler's
         // deadline won and already answered, and counted, the call with a 504)
         // must not count the same call a second time.
@@ -327,6 +398,7 @@ async function dispatchRawRoute(
   route: RegisteredRoute,
   params: Record<string, string>,
   corsHeaders: Record<string, string>,
+  logHandlerError: (failure: DispatchHandlerFailure, request: DispatchRequest, label: string) => void,
 ): Promise<DispatchResponse> {
   const headers = request.headers();
   const { text: bodyText, stream: bodyStream } = request.body();
@@ -368,7 +440,7 @@ async function dispatchRawRoute(
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
   } catch (error: unknown) {
-    logRequestError(request, 'RawRoute Error:', error);
+    logHandlerError({ source: 'raw-route', error }, request, 'RawRoute Error:');
     const { status, body } = rawRouteErrorFromCatch(error);
     return {
       kind: 'raw-route',
@@ -378,6 +450,14 @@ async function dispatchRawRoute(
       body,
     };
   }
+}
+
+/** The names of the backend's exports that RPC can dispatch to, in export order. */
+function dispatchableExportNames(backend: unknown): string[] {
+  if (typeof backend !== 'object' || backend === null) return [];
+  return Object.entries(backend)
+    .filter(([name, value]) => isDispatchableExport(name, value))
+    .map(([name]) => name);
 }
 
 /**
