@@ -84,14 +84,14 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
  * current release line.
  *
  * @param cliPkg - create-blocks-app's parsed package.json.
- * @returns Package name to range, e.g. `{ '@aws-blocks/blocks': '^0.8.0' }`.
+ * @returns Package name to range, e.g. `{ '@aws-blocks/blocks': '^0.9.0' }`.
  * @throws When no `@aws-blocks/*` devDependency is listed, or one is `*` or
  *   empty. Either is a packaging bug, so the CLI fails before it writes
  *   anything.
  *
  * @example
- * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.8.0' } });
- * // -> { '@aws-blocks/blocks': '^0.8.0' }
+ * resolveStampedVersions({ devDependencies: { '@aws-blocks/blocks': '^0.9.0' } });
+ * // -> { '@aws-blocks/blocks': '^0.9.0' }
  */
 export function resolveStampedVersions(cliPkg: { devDependencies?: Record<string, string> }): Record<string, string> {
   const versions: Record<string, string> = {};

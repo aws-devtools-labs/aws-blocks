@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import assert from 'node:assert';
+import { minimatch } from 'minimatch';
 import { resolveStampedVersions, stampBlocksVersions } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -20,6 +21,19 @@ type Manifest = {
 };
 
 const readManifest = (path: string): Manifest => JSON.parse(readFileSync(path, 'utf-8'));
+
+/** Why `range` is not a caret range on the current release line of package `name`, or null when it is. */
+function releaseLineProblem(name: string, range: string | undefined): string | null {
+  const current = readManifest(join(PACKAGES_DIR, name.replace('@aws-blocks/', ''), 'package.json'));
+  if (current.name !== name) return `${name}: no package at packages/${name.replace('@aws-blocks/', '')}`;
+  // An optional prerelease suffix keeps changesets pre mode (`^0.9.0-next.1`) working.
+  const match = /^\^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(range ?? '');
+  if (!match) return `${name}: expected a caret range, got "${range}"`;
+  const [major, minor] = (current.version ?? '').split('.').map(Number);
+  const line = major === 0 ? `0.${minor}` : `${major}`;
+  const rangeLine = match[1] === '0' ? `0.${match[2]}` : match[1];
+  return rangeLine === line ? null : `${name}: "${range}" is not on the ${current.version} release line`;
+}
 
 /** Every package.json under `dir`, at any depth (templates nest an aws-blocks/ workspace). */
 function findManifests(dir: string): string[] {
@@ -125,15 +139,27 @@ describe('create-blocks-app stamped package inventory', () => {
     const stamped = Object.entries(cliDevDeps).filter(([name]) => name.startsWith('@aws-blocks/'));
     assert.ok(stamped.length > 0, 'create-blocks-app must list the packages it stamps');
     for (const [name, range] of stamped) {
-      const current = readManifest(join(PACKAGES_DIR, name.replace('@aws-blocks/', ''), 'package.json'));
-      assert.strictEqual(current.name, name);
-      // An optional prerelease suffix keeps changesets pre mode (`^0.9.0-next.1`) working.
-      const match = /^\^(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(range);
-      assert.ok(match, `${name}: expected a caret range, got "${range}"`);
-      const [major, minor] = (current.version ?? '').split('.').map(Number);
-      const line = major === 0 ? `0.${minor}` : `${major}`;
-      const rangeLine = match[1] === '0' ? `0.${match[2]}` : match[1];
-      assert.strictEqual(rangeLine, line, `${name}: "${range}" is not on the ${current.version} release line`);
+      const problem = releaseLineProblem(name, range);
+      assert.strictEqual(problem, null, problem ?? '');
+    }
+  });
+
+  it('releases the CLI whenever a stamped package starts a new release line', () => {
+    // The fixed group releases the CLI with every blocks release, and changesets
+    // releases blocks when another stamped package leaves the caret range blocks
+    // declares for it. A stamped package outside blocks' dependencies would not.
+    const config = JSON.parse(readFileSync(join(PACKAGES_DIR, '..', '.changeset', 'config.json'), 'utf-8'));
+    const group = ['@aws-blocks/blocks', '@aws-blocks/create-blocks-app'];
+    const fixed: string[][] = config.fixed ?? [];
+    assert.ok(fixed.some((g) => group.every((name) => g.includes(name))), `${group.join(' and ')} must be a changesets fixed group`);
+    for (const name of group) {
+      assert.ok(!(config.ignore ?? []).some((pattern: string) => minimatch(name, pattern)), `${name} must not be ignored by changesets`);
+    }
+    const blocksDeps = readManifest(join(PACKAGES_DIR, 'blocks', 'package.json')).dependencies ?? {};
+    for (const name of Object.keys(cliDevDeps)) {
+      if (!name.startsWith('@aws-blocks/') || name === '@aws-blocks/blocks') continue;
+      const problem = releaseLineProblem(name, blocksDeps[name]);
+      assert.strictEqual(problem, null, `${name} is stamped, so @aws-blocks/blocks must depend on it with a caret range on its current line (${problem})`);
     }
   });
 });

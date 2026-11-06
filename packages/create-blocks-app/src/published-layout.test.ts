@@ -54,8 +54,8 @@ let cli: string;
 /**
  * Copy what `npm publish` ships (the package.json `files` list plus the
  * manifest) into `<tmp>/node_modules/@aws-blocks/create-blocks-app`, next to
- * the CLI's one runtime dependency. Nothing in that tree has a sibling
- * `core/package.json`, so the CLI takes its published-registry path.
+ * a link to each of the CLI's runtime dependencies. Nothing in that tree has a
+ * sibling `core/package.json`, so the CLI takes its published-registry path.
  */
 before(() => {
   root = mkdtempSync(join(tmpdir(), 'cba-published-'));
@@ -63,7 +63,11 @@ before(() => {
   for (const entry of ['package.json', ...(cliManifest.files ?? [])]) {
     if (existsSync(join(PKG_DIR, entry))) cpSync(join(PKG_DIR, entry), join(dest, entry), { recursive: true });
   }
-  symlinkSync(dirname(require.resolve('ci-info/package.json')), join(root, 'node_modules', 'ci-info'), 'junction');
+  for (const name of Object.keys(cliManifest.dependencies ?? {})) {
+    const link = join(root, 'node_modules', name);
+    mkdirSync(dirname(link), { recursive: true });
+    symlinkSync(dirname(require.resolve(`${name}/package.json`)), link, 'junction');
+  }
   cli = join(dest, 'dist', 'index.js');
 });
 
