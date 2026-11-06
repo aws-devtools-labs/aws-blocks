@@ -21,6 +21,7 @@ import {
 	type RunnerName,
 	runnerPath,
 	TSX_IMPORT_ENV,
+	TSX_TSCONFIG_ENV,
 } from './runners/launch.js';
 import { fixtureApp, runCli } from './test-helpers.js';
 
@@ -808,6 +809,25 @@ describe('lifecycle commands', () => {
 		const deployOptions = runnerOptions(deploy.spawned[0], 'sandbox');
 		assert.ok(deployOptions && typeof deployOptions === 'object' && 'preview' in deployOptions);
 		assert.strictEqual(deployOptions.preview, false);
+	});
+
+	it("points the runners' tsx at aws-blocks/tsconfig.json when the backend has one", async () => {
+		// A Vite template's root tsconfig.json only lists project references, so tsx would
+		// compile backend files with no options (no jsx, no paths) without this.
+		const root = fixtureApp();
+		const backend = join(root, 'aws-blocks', 'tsconfig.json');
+		const without = await runCli(['dev'], { cwd: root });
+		assert.strictEqual(without.code, 0, without.stderr);
+		assert.strictEqual(without.spawned[0].env[TSX_TSCONFIG_ENV], undefined);
+		writeFileSync(backend, '{}\n');
+		for (const argv of [['dev'], ['deploy'], ['sandbox'], ['generate', 'spec']]) {
+			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
+			assert.ok(run.spawned.length > 0, `${argv.join(' ')}: ${run.stderr}`);
+			assert.strictEqual(run.spawned[0].env[TSX_TSCONFIG_ENV], backend, argv.join(' '));
+		}
+		// One the user set wins.
+		const own = await runCli(['dev'], { cwd: root, env: { [TSX_TSCONFIG_ENV]: 'tsconfig.dev.json' } });
+		assert.strictEqual(own.spawned[0].env[TSX_TSCONFIG_ENV], 'tsconfig.dev.json');
 	});
 
 	it('exports a configured dev host as BLOCKS_DEV_HOST, which opts /realtime into it', async () => {

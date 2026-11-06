@@ -131,6 +131,13 @@ export function pollDashboard(render: (data: Dashboard) => void, intervalMs = 5_
 
 Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` when it unmounts.
 
+### Typechecking: `npm run typecheck`
+
+- An app with a `tsconfig.app.json` (the Vite templates) checks the browser code and the backend as separate TypeScript projects: `src/` without Node types, `aws-blocks/` (through `aws-blocks/tsconfig.json`) with them. `process` or `Buffer` in `src/` fails with `TS2591`, and a `node:` import with `TS2307`: that code runs in the browser. Keep it in `aws-blocks/`, or read build-time values with `import.meta.env`.
+- Run `npm run typecheck` (`tsc -b --force`), never `npx tsc --noEmit` at the root: that root `tsconfig.json` only lists references, so it checks nothing. `TS6305 ... has not been built` means `tsc` ran without `-b`.
+- `TS6307 ... is not listed within the file list of project` means the backend imports a file its project does not include. `TROUBLESHOOTING.md` in the docs folder has the fix for this and the other errors of the layout.
+- A Next.js or backend-only app has one `tsconfig.json` with Node types, and `npm run typecheck` is `tsc --noEmit`.
+
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)

@@ -65,6 +65,7 @@ import {
 	runnerPath,
 	shellQuote,
 	TSX_IMPORT_ENV,
+	tsxTsconfigEnv,
 } from './runners/launch.js';
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -260,7 +261,8 @@ function devServerEnv(env: NodeJS.ProcessEnv, options: { backendPath: string; ho
 /**
  * Run a lifecycle runner with the app's `tsx`, from the project root (see
  * {@link runnerArgs}). The runner's client generation (core's deploy and
- * sandbox) loads the same `tsx`.
+ * sandbox) loads the same `tsx`, and both compile the backend with
+ * `aws-blocks/tsconfig.json` when the app has one (see {@link tsxTsconfigEnv}).
  */
 function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 	const root = run.cwd ?? ctx.requireRoot();
@@ -274,7 +276,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 			args: [...options, ...(run.args ?? []), ...telemetryArgs(ctx)],
 		}),
 		cwd: root,
-		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...run.env },
+		env: { [TSX_IMPORT_ENV]: resolveTsxLoader(root), ...tsxTsconfigEnv(root, ctx.env), ...run.env },
 		where: run.where,
 		tool: run.tool,
 		longRunning: run.longRunning,
