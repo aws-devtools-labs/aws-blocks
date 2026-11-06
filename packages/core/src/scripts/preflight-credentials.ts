@@ -388,8 +388,13 @@ export async function assertAwsCredentials({
 /**
  * The environment that the failure guidance reads. With environment keys, no
  * profile is used, and the keys are passed under the AWS_ names that the guidance reads.
+ * Also used by the sandbox for credential failures that the CDK CLI reports (not
+ * exported from the package).
  */
-function guidanceEnv(env: NodeJS.ProcessEnv, environmentKeys: AwsCredentialIdentity | undefined): NodeJS.ProcessEnv {
+export function guidanceEnv(
+	env: NodeJS.ProcessEnv,
+	environmentKeys: AwsCredentialIdentity | undefined,
+): NodeJS.ProcessEnv {
 	if (!environmentKeys) return env;
 	return {
 		...env,
