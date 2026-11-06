@@ -99,12 +99,14 @@ with readiness on port **8081** (503 while draining).
 - **Security groups.** The tasks get a group of their own that admits only the
   load balancer on 8080–8081 (one rule); the shared compute group (also used by
   in-VPC Lambdas and VPC endpoints) stays closed to inbound traffic. The load
-  balancer admits only the gateway's VPC link, on the listener port range.
-- **Transport.** TLS terminates at API Gateway. The hop from the gateway's VPC
-  link to the load balancer, and on to the task, is plain HTTP inside the VPC:
-  the load balancer is internal and its security group admits only the VPC
-  link, and the tasks' security group admits only the load balancer, on the API
-  and readiness ports.
+  balancer admits the gateway's VPC link and, on the `cloudfront` tier,
+  CloudFront's origin-facing prefix list — each on the listener port range.
+- **Transport.** TLS terminates at API Gateway, or at CloudFront for a direct
+  route on the `cloudfront` tier. The hop from the gateway's VPC link or
+  CloudFront's VPC origin to the load balancer, and on to the task, is plain
+  HTTP inside the VPC: the load balancer is internal and its security group
+  admits only those two sources, and the tasks' security group admits only the
+  load balancer, on the API and readiness ports.
 - **Request URL.** A request reaches the task as the load balancer's hop — the
   integration URI's host, plain `http`, no stage — whereas the Lambda handler
   gets the gateway's `Host` and the stage in its API Gateway event. So the
@@ -114,13 +116,65 @@ with readiness on port **8081** (503 while draining).
   the Lambda handler reports. A request whose stamped headers aren't one
   well-formed value each — a client copy under another letter case, say — is
   refused with a 400.
+- **CloudFront front doors.** On the `apiFrontDoor: 'cloudfront'` tier, the
+  distribution that fronts the API — the managed one, or `Hosting`'s default
+  CloudFront door when it claims the API — routes each container namespace's
+  exact path (`/aws-blocks/api/{name}`) straight to the load balancer's shared
+  listener through one CloudFront VPC origin per distribution, ahead of the
+  `/aws-blocks/api/*` gateway behavior; the listener's path rule picks the
+  compute. On the `apigateway` tier, and behind `Hosting`'s other doors, container
+  namespaces go through the gateway like every other path. The gateway keeps its
+  VPC-link route for every container namespace on both tiers, so a namespace
+  CloudFront doesn't route directly still works.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway: its
+    edge sends `/aws-blocks/*` to its ALB router (which proxies to the gateway)
+    through behaviors it creates with the distribution, and CloudFront matches
+    behaviors in the order they were added, so an exact-path behavior added
+    afterwards would never match. Calls keep the gateway's ~29-second limit. The
+    prefix-list lookup (its custom resource and provider function) and the load
+    balancer's CloudFront rule below still exist, unused: they are created with
+    the gateway, before `Hosting` picks its door, so that the provider's role
+    gets the backend's permissions boundary.
+  - CloudFront forwards the viewer's `Host` to a VPC origin with the origin port
+    appended (`<domain>:10000`), so a viewer-request CloudFront Function stamps
+    the bare viewer host as `x-blocks-forwarded-host` and drops
+    `x-blocks-forwarded-stage`, overwriting client values. It also drops a
+    client-sent `x-forwarded-host`, which the container would take ahead of the
+    stamped host when it is a loopback value (the local-dev path): `ctx.request.url`
+    is the public URL, custom domain included. (A namespace on a Lambda compute,
+    which CloudFront reaches through the gateway, reports the gateway's
+    `execute-api` URL instead.)
+  - The load balancer admits CloudFront's origin-facing prefix list on the
+    listener range in one rule — the prefix list is looked up at deploy time (a
+    custom resource, created with the gateway) because its id differs per region.
+    The prefix list weighs ~55 of the group's 60 rules, which is why the whole
+    range is a single rule.
+  - The origin's read timeout is 60 s, matching the load balancer's idle timeout:
+    raising one alone doesn't lengthen a call.
+  - A direct call skips the gateway, so its stage throttling and access logs
+    don't apply; the distribution's web ACL does (`apiWaf` on the managed
+    distribution, `Hosting`'s WAF when Hosting fronts the API). Synth warns when
+    the distribution has none.
+  - A VPC origin needs the VPC to have an internet gateway, and isn't available
+    in a few Availability Zones (see the CloudFront VPC origins docs). A
+    namespace whose load balancer's VPC has no public subnets (an isolated VPC,
+    owned or looked up) stays on the gateway's VPC link — no VPC origin, no
+    CloudFront rule — and synth warns (`blocks:api:direct-routes-without-public-subnets`)
+    naming it. The check reads the VPC's public subnets, so an imported VPC
+    (`Vpc.fromVpcAttributes`) lists its `publicSubnetIds`.
+  - Each direct path is a cache behavior of the distribution, added after it is
+    built, so synth counts the distribution's behaviors (the default included)
+    once they are all in and fails above the quota — CloudFront's default of
+    75, or `Hosting`'s `quotas.cacheBehaviors` — naming the container namespaces
+    and a remedy for the distribution that has them.
 - **Moving a live namespace onto a container.** CloudFormation switches the
   namespace's route to the load balancer without waiting for the new tasks to
   become healthy (making the gateway wait on the ECS service would be a
   dependency cycle once the config the service waits for carries a CloudFront
   URL). So during that deploy, calls to the namespace can get 503s for the minute
   or two the tasks take to start and pass their health check.
-- **Limits.** API calls keep the gateway's ~29-second integration timeout.
+- **Limits.** Through the gateway, API calls keep its ~29-second integration
+  timeout; through a CloudFront VPC origin, up to 60 seconds.
 
 ## Autoscaling
 

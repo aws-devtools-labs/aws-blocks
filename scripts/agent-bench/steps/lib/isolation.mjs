@@ -319,12 +319,19 @@ function adoptableLinkTarget(real, trustedRoots) {
 	}
 }
 
+// Lockdown round ceiling. A tree reports only its first writable path per round, so a tree holding
+// several links to writable targets (the hosted tool cache links each JDK into /usr/lib/jvm) is
+// adopted one link per round: each linked JDK costs a round.
+const MAX_LOCKDOWN_ROUNDS = 12;
+
 /**
  * Remove group/other write from every trusted executable path the agent user can write (under CI;
- * locally only verify), then verify again as the agent user. Round 1 scans everything; up to two
- * more rounds rescan only the trees that had hits (plus adopted link targets), and a final pass
- * verifies everything. A writable hit that is a symlink (e.g. a tool-cache entry linking into
- * /usr/lib/jvm) is fixed through the link, and its target tree is adopted when that is safe (see
+ * locally only verify), then verify again as the agent user. Round 1 scans everything; later rounds
+ * rescan only the trees that had hits (plus adopted link targets), until a round finds nothing, a
+ * round finds exactly what the one before it found (the fix made no progress), or
+ * MAX_LOCKDOWN_ROUNDS is reached. A final pass then verifies everything. A writable hit that is a
+ * symlink (e.g. a tool-cache entry linking into /usr/lib/jvm) is fixed through the link, and its
+ * target tree is adopted when that is safe (see
  * adoptableLinkTarget). Sticky shared dirs are never chmodded. Anything still writable (owned by the
  * agent user, granted by an ACL, a non-adoptable link target) is a problem: the caller must fail
  * closed. Progress goes to stderr under CI.
@@ -339,12 +346,18 @@ export function lockDownExecPaths(targets, options = {}) {
 	const prune = targets.exclude.flatMap((p) => ['-path', p, '-prune', '-o']);
 	const fixedTrees = new Set();
 	let scan = targets;
-	for (let round = 1; round <= 3; round++) {
+	let previousHits = null;
+	for (let round = 1; round <= MAX_LOCKDOWN_ROUNDS; round++) {
 		const started = Date.now();
 		const found = findAgentWritable(scan);
 		log(`round ${round}: ${scan.flat.length} dir(s) + ${scan.deep.length} tree(s), ${found.writable.length} hit(s) in ${Date.now() - started}ms`);
 		if (found.problems.length === 0) break;
 		if (!fix) return found.problems;
+		// The same hits again: the last round's fix changed nothing (e.g. an agent-owned file), so
+		// further rounds can't help. The final pass reports it.
+		const hits = [...found.writable].sort().join('\n');
+		if (hits === previousHits) break;
+		previousHits = hits;
 		for (const root of found.deepRoots) {
 			if (fixedTrees.has(root)) continue;
 			fixedTrees.add(root);

@@ -24,6 +24,7 @@ import {
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
+import { type ApiDirectRoute, admitCloudFront, cloudFrontReachableRoutes } from './api-direct-routes.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
@@ -361,6 +362,13 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 	// Recorded for `Hosting`, which warns when its CloudFront error pages would
 	// replace these namespaces' 4xx responses (see HTTP_ERROR_STATUS_EXPORTS).
 	Reflect.set(owner, HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports(backendModule));
+	// Container namespaces skip the gateway only where CloudFront is the API's front
+	// door. On the `apigateway` tier a CloudFront Hosting forwards them to the gateway
+	// like every other path, so its stage — WAF, throttling, access logs — sees them.
+	// A namespace whose VPC CloudFront can't reach (no public subnets) stays on the
+	// gateway's VPC link, which serves every container namespace on both tiers.
+	owner._apiDirectRoutes = cloudfront ? cloudFrontReachableRoutes(owner, sharedGateway.directRoutes) : [];
+	for (const { ingress } of owner._apiDirectRoutes) admitCloudFront(ingress.loadBalancer);
 	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
 }
@@ -473,6 +481,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiWaf?: ResolvedApiWaf;
 	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
 	_apiFrontDoorMarked?: boolean;
+	/** The API paths a CloudFront front door routes straight to a container's load balancer; set with the gateway. @internal */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this

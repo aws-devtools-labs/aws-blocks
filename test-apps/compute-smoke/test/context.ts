@@ -11,6 +11,12 @@ export interface ComputeTestContext {
   readonly frontDoor: FrontDoor;
   /** The client endpoint, the stack's `ApiUrl` output. Set once the harness has deployed. */
   apiUrl(): string;
+  /**
+   * The Hosting distribution's public URL (its `HostingUrl` output), deployed on
+   * the `cloudfront` leg only (see aws-blocks/index.cdk.ts). Set once the harness
+   * has deployed.
+   */
+  hostingUrl(): string;
 }
 
 export type RpcReply = { result?: unknown; error?: { code?: number; message?: string; data?: { name?: string } } };
