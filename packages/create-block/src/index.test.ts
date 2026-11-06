@@ -339,24 +339,32 @@ describe('run() integration — customer mode', () => {
 	);
 });
 
+/** Run the CLI hermetically from `cwd` (no registry call) and return what it printed via console.log. */
+async function runCapturingLog(argv: string[], cwd: string): Promise<string[]> {
+	const prev = process.env.CREATE_BLOCK_SKIP_REGISTRY;
+	process.env.CREATE_BLOCK_SKIP_REGISTRY = '1';
+	const log = mock.method(console, 'log', () => {});
+	try {
+		const code = await run(argv, cwd);
+		assert.strictEqual(code, 0);
+		return log.mock.calls.map((c) => String(c.arguments[0]));
+	} finally {
+		log.mock.restore();
+		if (prev === undefined) delete process.env.CREATE_BLOCK_SKIP_REGISTRY;
+		else process.env.CREATE_BLOCK_SKIP_REGISTRY = prev;
+	}
+}
+
 describe('run() integration — external mode next steps', () => {
 	async function nextStepsCd(args: string[]): Promise<string | undefined> {
 		const dir = mkdtempSync(join(tmpdir(), 'cb-ext-run-'));
-		const prev = process.env.CREATE_BLOCK_SKIP_REGISTRY;
-		process.env.CREATE_BLOCK_SKIP_REGISTRY = '1';
-		const log = mock.method(console, 'log', () => {});
 		try {
-			const code = await run(
+			const lines = await runCapturingLog(
 				['Widget', '--scope', 'acme', '--yes', '--skip-install', '--skip-verify', ...args],
 				dir,
 			);
-			assert.strictEqual(code, 0);
-			const lines = log.mock.calls.map((c) => String(c.arguments[0]));
 			return lines.find((l) => l.trim().startsWith('1. cd '));
 		} finally {
-			log.mock.restore();
-			if (prev === undefined) delete process.env.CREATE_BLOCK_SKIP_REGISTRY;
-			else process.env.CREATE_BLOCK_SKIP_REGISTRY = prev;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	}
@@ -385,4 +393,80 @@ describe('run() integration — external mode next steps', () => {
 			`  1. cd 'x;$(id)'\\''y' && npm run build && npm test`,
 		);
 	});
+
+	test('cd line keeps a ./ prefix so a leading - is not parsed as an option', async () => {
+		assert.strictEqual(await nextStepsCd(['--dir', './-x']), '  1. cd ./-x && npm run build && npm test');
+		// `cd -` would jump to $OLDPWD instead of the new package.
+		assert.strictEqual(await nextStepsCd(['--dir', './-']), '  1. cd ./- && npm run build && npm test');
+	});
+
+	test('cd line keeps a ./ prefix so a leading = is not expanded by zsh', async () => {
+		assert.strictEqual(await nextStepsCd(['--dir', './=build']), '  1. cd ./=build && npm run build && npm test');
+	});
+
+	test('cd line combines the ./ prefix with quoting', async () => {
+		assert.strictEqual(await nextStepsCd(['--dir', './-x y']), "  1. cd './-x y' && npm run build && npm test");
+	});
+});
+
+// Contributor and customer modes place the block under the repo/workspace root, which is
+// found by walking up from cwd, so the printed path must resolve from where the CLI ran.
+describe('run() integration — next steps from a subdirectory', () => {
+	async function implementLine(cwd: string): Promise<string | undefined> {
+		mkdirSync(cwd, { recursive: true });
+		const lines = await runCapturingLog(['Widget', '--yes', '--skip-install', '--skip-verify'], cwd);
+		return lines.find((l) => l.trim().startsWith('1. Implement '));
+	}
+
+	function withRoot(fn: (dir: string) => Promise<void>) {
+		return async () => {
+			const dir = mkdtempSync(join(tmpdir(), 'cb-sub-'));
+			try {
+				await fn(dir);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		};
+	}
+
+	/** Minimal AWS Blocks monorepo: enough for contributor-mode detection and wiring. */
+	function writeMonorepo(dir: string): void {
+		writeFileSync(join(dir, 'package.json'), JSON.stringify({ workspaces: ['packages/blocks'] }));
+		mkdirSync(join(dir, 'packages', 'blocks', 'src'), { recursive: true });
+		writeFileSync(join(dir, 'packages', 'blocks', 'package.json'), JSON.stringify({ name: '@aws-blocks/blocks' }));
+		writeFileSync(join(dir, 'packages', 'blocks', 'tsconfig.json'), JSON.stringify({ references: [] }));
+		writeFileSync(join(dir, 'packages', 'blocks', 'src', 'index.ts'), '');
+		writeFileSync(join(dir, 'packages', 'blocks', 'src', 'index.cdk.ts'), '');
+		mkdirSync(join(dir, '.changeset'));
+	}
+
+	test(
+		'contributor mode from the monorepo root',
+		withRoot(async (dir) => {
+			writeMonorepo(dir);
+			assert.strictEqual(await implementLine(dir), "  1. Implement Widget's API in packages/bb-widget/src/.");
+		}),
+	);
+
+	test(
+		'contributor mode from a package directory',
+		withRoot(async (dir) => {
+			writeMonorepo(dir);
+			assert.strictEqual(
+				await implementLine(join(dir, 'packages', 'bb-kv-store')),
+				"  1. Implement Widget's API in ../bb-widget/src/.",
+			);
+		}),
+	);
+
+	test(
+		'customer mode from a nested app directory',
+		withRoot(async (dir) => {
+			writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@acme/app', workspaces: ['packages/*'] }));
+			assert.strictEqual(
+				await implementLine(join(dir, 'apps', 'web')),
+				"  1. Implement Widget's API in ../../packages/bb-widget/src/.",
+			);
+		}),
+	);
 });
