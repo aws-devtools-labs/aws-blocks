@@ -101,8 +101,10 @@ export type DeleteParameterSender = (name: string) => Promise<void>;
  * an app whose `.blocks/config.json` gives no stack name: the deploy derives the
  * name the same way, so it wrote no parameter for such an app.
  *
- * @throws {Error} When SSM refuses the delete, naming the parameter and the
- * command that deletes it.
+ * Any other SSM error (access denied, throttling, no Region) is a warning that
+ * names the parameter and the command that deletes it, not a failure: the
+ * stack is already gone, and the call is made for every app, also one that
+ * never had an external database.
  */
 export async function deleteSandboxSecrets(
   projectRoot?: string,
@@ -115,16 +117,19 @@ export async function deleteSandboxSecrets(
     return [];
   }
   const parameterName = dbConnectionParameterName(stackName);
-  const deleteParameter = send ?? (await ssmDeleteParameter(projectRoot));
   try {
+    const deleteParameter = send ?? (await ssmDeleteParameter(projectRoot));
     await deleteParameter(parameterName);
   } catch (e: unknown) {
     const name = e instanceof Error ? e.name : 'Error';
     if (name === 'ParameterNotFound') return [];
-    throw new Error(
-      'The sandbox stack was deleted, but its database connection string is still stored in the SSM ' +
-        `parameter ${parameterName} (${name}). Delete it with: aws ssm delete-parameter --name ${parameterName}`,
+    // console.warn, not log.warn: BLOCKS_LOG_LEVEL=quiet must not hide a password left in SSM.
+    console.warn(
+      `⚠️  The sandbox stack was deleted, but the SSM parameter ${parameterName}, which holds its database ` +
+        `connection string if the app has one, could not be deleted (${name}). ` +
+        `Delete it with: aws ssm delete-parameter --name ${parameterName}`,
     );
+    return [];
   }
   return [parameterName];
 }
