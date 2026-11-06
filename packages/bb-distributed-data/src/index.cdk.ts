@@ -20,6 +20,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
+import { copyMigrationsCommand } from './migrations-copy.js';
 import { validateMigrations } from './validation.js';
 import { BB_NAME } from './version.js';
 
@@ -108,9 +109,9 @@ export class DistributedDatabase extends BuildingBlockScope {
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
-          // Quoted: the hook runs in a shell, and a project path may contain a space.
+          // Single-quoted for `sh`: a project path may contain a space, `"` or `$`.
           afterBundling: (_inputDir: string, outputDir: string) => resolvedMigrationsPath
-            ? [`cp -r "${resolvedMigrationsPath}" "${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}"`]
+            ? [copyMigrationsCommand(resolvedMigrationsPath, `${outputDir}${LAMBDA_MIGRATIONS_DIR.replace('/var/task', '')}`)]
             : [],
         },
       }),

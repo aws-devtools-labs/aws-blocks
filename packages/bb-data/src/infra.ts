@@ -32,6 +32,7 @@ import {
   SAR_ROTATION_PARTITIONS,
   VPC_MAX_AZS,
 } from './constants.js';
+import { copyMigrationsCommand } from './migrations-copy.js';
 
 /**
  * Configuration for Aurora Serverless v2 infrastructure.
@@ -408,8 +409,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
 
   // Run migrations on deploy if migrationsPath is provided
   let migrationCR: cdk.CustomResource | undefined;
-  if (options.migrationsPath) {
-    const migrationsHash = hashMigrationsDir(options.migrationsPath);
+  const { migrationsPath } = options;
+  if (migrationsPath) {
+    const migrationsHash = hashMigrationsDir(migrationsPath);
     const migrationFn = new lambda.NodejsFunction(scope, `${name}MigrationFn`, {
       // Points at the compiled migration-lambda.js in dist/ (same directory as this file at runtime).
       // Must NOT use ../src/migration-lambda.ts — an installed package runs from dist/. A vendorized
@@ -433,9 +435,9 @@ export function materialize(scope: Construct, name: string, options: AuroraInfra
         commandHooks: {
           beforeBundling: () => [],
           beforeInstall: () => [],
-          // Quoted: the hook runs in a shell, and a project path may contain a space.
+          // Single-quoted for `sh`: a project path may contain a space, `"` or `$`.
           afterBundling: (_inputDir: string, outputDir: string) => [
-            `cp -r "${options.migrationsPath}" "${outputDir}/migrations"`,
+            copyMigrationsCommand(migrationsPath, `${outputDir}/migrations`),
           ],
         },
         externalModules: ['@aws-sdk/*'],
