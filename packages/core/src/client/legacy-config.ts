@@ -3,7 +3,7 @@
 
 /**
  * The deployed stage a `.blocks-sandbox/config.json` points at, when a deploy
- * from before core 0.8 wrote it, else `null`.
+ * from core 0.8.0 or earlier wrote it, else `null`.
  *
  * Only a dev server writes `config.json` now, always with an `http:` URL of its
  * own: `environment` is `local`, or `sandbox` for the dev server `blocks
