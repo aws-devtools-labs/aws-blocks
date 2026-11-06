@@ -426,7 +426,7 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       };
       const alb = warn({ kind: 'alb' }, { backendApi: { url: API_URL } });
       assert.equal(alb.length, 1);
-      assert.match(JSON.stringify(alb[0].entry.data), /AuthCognito and AuthOIDC keep it/);
+      assert.match(JSON.stringify(alb[0].entry.data), /`Auth` drops `Secure` from its session cookie/);
       assert.equal(warn({ kind: 'alb' }).length, 0, 'no API: nothing sensitive');
       assert.equal(warn({ kind: 'apiGateway' }, { backendApi: { url: API_URL } }).length, 0, 'HTTPS');
       // The S3 website's URL is a token at synth; its handle says it is plain HTTP.

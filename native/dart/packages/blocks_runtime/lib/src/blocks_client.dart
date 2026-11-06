@@ -33,10 +33,28 @@ class BlocksClient {
 
   /// Calls a JSON-RPC method with the given params and returns the result.
   ///
+  /// [params] is a `List` or a `Map`, sent as the request's `params` as is.
+  /// An AWS Blocks server reads params by position: a list is the method's
+  /// argument list, and a map is read by its values, in order, so a key left
+  /// out moves every later value up a slot. Generated clients send a list, as
+  /// the TypeScript client does: the arguments in the method's parameter
+  /// order, `null` in the slot of a left-out optional that comes before a set
+  /// one, and trailing left-out optionals omitted.
+  ///
   /// The request is POSTed to `{baseUrl}/{namespace}` (e.g.
   /// `…/aws-blocks/api/reports` for `reports.build`), so a namespace that runs
   /// on its own compute is served by it.
-  Future<dynamic> call(String method, Map<String, dynamic> params) async {
+  ///
+  /// Throws an [ArgumentError], before any request is sent, when [params] is
+  /// neither a `List` nor a `Map`.
+  Future<dynamic> call(String method, Object params) async {
+    if (params is! List && params is! Map) {
+      throw ArgumentError.value(
+        params,
+        'params',
+        'must be a List (positional) or a Map',
+      );
+    }
     final response = await _doCall(method, params);
 
     if (response.response.statusCode == 401 && authProvider != null) {
@@ -48,10 +66,7 @@ class BlocksClient {
     return _parseResponse(response);
   }
 
-  Future<ResponseWithUrl> _doCall(
-    String method,
-    Map<String, dynamic> params,
-  ) async {
+  Future<ResponseWithUrl> _doCall(String method, Object params) async {
     final id = _nextId++;
     final body = jsonEncode({
       'jsonrpc': '2.0',

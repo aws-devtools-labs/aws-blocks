@@ -2051,8 +2051,7 @@ export class HostingConstruct extends Construct {
             'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
             (isNone
               ? ''
-              : 'AuthBasic drops `Secure` from its session cookie behind such a door; AuthCognito and AuthOIDC keep it, ' +
-                "so the browser discards their session cookie and sign-in doesn't persist. ") +
+              : '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ') +
             (isNone
               ? 'Use the CloudFront door for HTTPS.'
               : "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door."),

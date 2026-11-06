@@ -9,7 +9,7 @@
  */
 export { getMockDataDir } from './common/mock-data.js';
 export { assertNotMockInDeployedEnv } from './common/runtime-guard.js';
-export { API_NAMESPACE_MARKER } from './api.js';
+export { API_NAMESPACE_DISCOVER, API_NAMESPACE_MARKER } from './api.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export { currentRequestId } from './request-context.js';
 export { constantTimeEquals } from './common/crypto.js';
@@ -17,3 +17,6 @@ export { isLoopbackHost, isWildcardHost, isIpLiteral } from './common/loopback.j
 // Defined in the config module (it owns the config-key contract), re-exported
 // here so BB authors get it alongside the other BB utilities.
 export { sanitizeConfigKey } from './common/config.js';
+// Internal: the per-call fetch store the generated client reads and
+// `@aws-blocks/blocks/utils`'s createTestClient sets (see client/fetch-store.ts).
+export { CLIENT_FETCH_STORE } from './client/fetch-store.js';

@@ -1,0 +1,136 @@
+{
+	"$comment": [
+		"GOLDEN resource identity of AuthCognito — enforced by src/resource-identity.cdk.test.ts.",
+		"Each entry is a CloudFormation resource that exists in customer deployments. Changing a logicalId,",
+		"Type or physicalName here means CloudFormation deletes or replaces that resource (user pools are",
+		"DESTROY by default: every user is lost). Edit only on purpose, with maintainer review."
+	],
+	"variants": {
+		"default": {
+			"construct": "new AuthCognito(stack, 'auth')",
+			"fullId": "TestStack-auth",
+			"userPoolName": "TestStack-auth",
+			"sessionCookieName": "auth_TestStack-auth",
+			"configKeys": {
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_CLIENT_ID": {
+					"Ref": "authclientB98ED767"
+				},
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_REGION": {
+					"Ref": "AWS::Region"
+				},
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_USER_POOL_ID": {
+					"Ref": "authpoolBA1CDCB6"
+				}
+			},
+			"resources": {
+				"authclientB98ED767": {
+					"Type": "AWS::Cognito::UserPoolClient",
+					"path": "TestStack/auth/client/Resource",
+					"physicalName": null
+				},
+				"authpoolBA1CDCB6": {
+					"Type": "AWS::Cognito::UserPool",
+					"path": "TestStack/auth/pool/Resource",
+					"physicalName": "TestStack-auth"
+				},
+				"authsessionstable46C26735": {
+					"Type": "AWS::DynamoDB::Table",
+					"path": "TestStack/auth/sessions/table/Resource",
+					"physicalName": "TestStack-auth-sessions"
+				},
+				"BlocksSecretsBulk": {
+					"Type": "AWS::CloudFormation::CustomResource",
+					"path": "TestStack/BlocksSecretsBulk/Default",
+					"physicalName": [
+						"/TestStack-auth-session-secret"
+					]
+				}
+			}
+		},
+		"configured": {
+			"construct": "new AuthCognito(stack, 'auth', { groups: ['admins', { name: 'readers', description: 'Read-only', precedence: 2 }], selfSignUp: false, signInWith: 'email', mfa: 'optional', mfaTypes: ['TOTP'], removalPolicy: 'retain' })",
+			"fullId": "TestStack-auth",
+			"userPoolName": "TestStack-auth",
+			"sessionCookieName": "auth_TestStack-auth",
+			"configKeys": {
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_CLIENT_ID": {
+					"Ref": "authclientB98ED767"
+				},
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_REGION": {
+					"Ref": "AWS::Region"
+				},
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_USER_POOL_ID": {
+					"Ref": "authpoolBA1CDCB6"
+				}
+			},
+			"resources": {
+				"authclientB98ED767": {
+					"Type": "AWS::Cognito::UserPoolClient",
+					"path": "TestStack/auth/client/Resource",
+					"physicalName": null
+				},
+				"authgroupadmins4C19D9E8": {
+					"Type": "AWS::Cognito::UserPoolGroup",
+					"path": "TestStack/auth/group-admins",
+					"physicalName": "admins"
+				},
+				"authgroupreaders00D00A11": {
+					"Type": "AWS::Cognito::UserPoolGroup",
+					"path": "TestStack/auth/group-readers",
+					"physicalName": "readers"
+				},
+				"authpoolBA1CDCB6": {
+					"Type": "AWS::Cognito::UserPool",
+					"path": "TestStack/auth/pool/Resource",
+					"physicalName": "TestStack-auth"
+				},
+				"authsessionstable46C26735": {
+					"Type": "AWS::DynamoDB::Table",
+					"path": "TestStack/auth/sessions/table/Resource",
+					"physicalName": "TestStack-auth-sessions"
+				},
+				"BlocksSecretsBulk": {
+					"Type": "AWS::CloudFormation::CustomResource",
+					"path": "TestStack/BlocksSecretsBulk/Default",
+					"physicalName": [
+						"/TestStack-auth-session-secret"
+					]
+				}
+			}
+		},
+		"existingPool": {
+			"construct": "new AuthCognito(stack, 'auth', { userPool: AuthCognito.fromExisting('us-east-1_existing') })",
+			"fullId": "TestStack-auth",
+			"userPoolName": null,
+			"sessionCookieName": "auth_TestStack-auth",
+			"configKeys": {
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_CLIENT_ID": {
+					"Ref": "authclientB98ED767"
+				},
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_REGION": {
+					"Ref": "AWS::Region"
+				},
+				"BLOCKS_AUTH_COGNITO_TESTSTACK_AUTH_USER_POOL_ID": "us-east-1_existing"
+			},
+			"resources": {
+				"authclientB98ED767": {
+					"Type": "AWS::Cognito::UserPoolClient",
+					"path": "TestStack/auth/client/Resource",
+					"physicalName": null
+				},
+				"authsessionstable46C26735": {
+					"Type": "AWS::DynamoDB::Table",
+					"path": "TestStack/auth/sessions/table/Resource",
+					"physicalName": "TestStack-auth-sessions"
+				},
+				"BlocksSecretsBulk": {
+					"Type": "AWS::CloudFormation::CustomResource",
+					"path": "TestStack/BlocksSecretsBulk/Default",
+					"physicalName": [
+						"/TestStack-auth-session-secret"
+					]
+				}
+			}
+		}
+	}
+}

@@ -1,0 +1,14 @@
+import type { BlocksContext } from '@aws-blocks/core';
+import { Scope } from '@aws-blocks/core';
+import { AuthCognito } from './barrel.js';
+import { AuthCognito as Cognito, CognitoErrors } from './local.js';
+
+const scope = new Scope('app');
+export const auth = new AuthCognito(scope, 'auth', { sessionTtlSeconds: 3600 });
+export const staff = new Cognito(scope, 'staff');
+
+export async function tokens(context: BlocksContext) {
+	return auth.fetchAuthSession(context);
+}
+
+export const denied = CognitoErrors.NotAuthorized;

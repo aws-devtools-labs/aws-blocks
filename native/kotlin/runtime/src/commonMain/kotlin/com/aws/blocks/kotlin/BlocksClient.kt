@@ -15,9 +15,9 @@ import io.ktor.http.isSuccess
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 
 /** Reported by anything that runs on an engine a [Blocks] instance has already closed. */
 internal const val CLOSED_MESSAGE: String =
@@ -76,18 +76,24 @@ class BlocksClient internal constructor(
             null
         }
 
-        if (!response.status.isSuccess()) {
-            val message = responseJson?.get("error")?.jsonPrimitive?.content ?: "HTTP ${response.status.value}"
-            throw NetworkException(message, response.status.value)
+        val errorElement = responseJson?.get("error")
+
+        // A JSON-RPC error is decoded the same way whatever the HTTP status: a namespace
+        // created with `httpErrorStatus: true` answers a 4xx `ApiError` with that status
+        // (e.g. 401) and the same `{ error: { code, message, data } }` body as the 200 it
+        // sends otherwise.
+        if (errorElement is JsonObject) {
+            val message = (errorElement["message"] as? JsonPrimitive)?.contentOrNull ?: "Unknown error"
+            val code = (errorElement["code"] as? JsonPrimitive)?.intOrNull ?: -1
+            val data = errorElement["data"] as? JsonObject
+            throw ApiException(message, code, data)
         }
 
-        val errorObj = responseJson?.get("error")
-        if (errorObj != null) {
-            val error = errorObj.jsonObject
-            val message = error["message"]?.jsonPrimitive?.content ?: "Unknown error"
-            val code = error["code"]?.jsonPrimitive?.int ?: -1
-            val data = error["data"] as? JsonObject
-            throw ApiException(message, code, data)
+        if (!response.status.isSuccess()) {
+            // Not a JSON-RPC error (a gateway or route error such as `{ "error": "Not Found" }`,
+            // or no JSON at all): a transport failure.
+            val message = (errorElement as? JsonPrimitive)?.contentOrNull ?: "HTTP ${response.status.value}"
+            throw NetworkException(message, response.status.value)
         }
 
         val resultElement = responseJson?.get("result")

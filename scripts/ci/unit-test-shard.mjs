@@ -21,22 +21,20 @@ import { pathToFileURL } from 'node:url';
 // Only used to balance the shards: a workspace missing here weighs 1 and
 // still runs. Refresh when the shards drift apart by more than a minute.
 const WEIGHTS = {
+	'packages/bb-auth': 1469,
 	'packages/bb-data': 96,
 	'packages/core': 79,
 	'packages/blocks': 68,
 	'packages/hosting': 49,
 	'packages/bb-compute': 43,
 	'test-apps/pipeline': 33,
-	'packages/bb-auth-cognito': 21,
 	'packages/bb-distributed-data': 21,
-	'packages/bb-auth-basic': 16,
 	'packages/bb-lambda-compute': 12,
 	'packages/bb-agent': 11,
 	'packages/bb-async-job': 10,
 	'packages/create-blocks-app': 9,
 	'packages/bb-distributed-table': 7,
 	'packages/bb-container-compute': 7,
-	'packages/bb-auth-oidc': 6,
 	'test-apps/auth-cognito-passkeys': 6,
 	'test-apps/db-pull-typecheck': 6,
 	'packages/pipeline': 5,

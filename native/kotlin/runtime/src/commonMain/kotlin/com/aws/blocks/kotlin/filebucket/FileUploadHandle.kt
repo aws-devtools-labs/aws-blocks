@@ -13,8 +13,11 @@ import io.ktor.utils.io.writeFully
 import kotlinx.io.Buffer
 import kotlinx.io.RawSource
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 class FileUploadHandle(
     val url: String,
@@ -29,6 +32,17 @@ class FileUploadHandle(
             val contentType = obj["contentType"]?.jsonPrimitive?.content
             return FileUploadHandle(url, contentType)
         }
+    }
+
+    /**
+     * This handle's descriptor, as the server's `toJSON()` sends it and [fromJson] reads it:
+     * `{ "__blocks": "file-bucket/upload", "url", "contentType"? }`. A generated client sends a
+     * handle parameter this way.
+     */
+    fun toJson(): JsonObject = buildJsonObject {
+        put("__blocks", "file-bucket/upload")
+        put("url", url)
+        fileContentType?.let { put("contentType", it) }
     }
 
     suspend fun upload(body: ByteArray) {

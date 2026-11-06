@@ -31,6 +31,7 @@ import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
+import { HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports } from '../rpc-dispatch.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
@@ -358,6 +359,9 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
+	// Recorded for `Hosting`, which warns when its CloudFront error pages would
+	// replace these namespaces' 4xx responses (see HTTP_ERROR_STATUS_EXPORTS).
+	Reflect.set(owner, HTTP_ERROR_STATUS_EXPORTS, httpErrorStatusExports(backendModule));
 	// Container namespaces skip the gateway only where CloudFront is the API's front
 	// door. On the `apigateway` tier a CloudFront Hosting forwards them to the gateway
 	// like every other path, so its stage — WAF, throttling, access logs — sees them.

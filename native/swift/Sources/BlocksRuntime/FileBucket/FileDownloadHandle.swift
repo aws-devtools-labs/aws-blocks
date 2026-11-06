@@ -33,15 +33,31 @@ public final class FileDownloadHandle: Sendable {
     ///
     /// Expected shape: `{ "url": "https://s3.../presigned-url" }`
     public static func fromJSON(_ json: [String: Any]) throws -> FileDownloadHandle {
-        try FileDownloadHandle(url: url(in: json))
-    }
-
-    /// The presigned URL a descriptor carries.
-    static func url(in json: [String: Any]) throws -> String {
         guard let url = json["url"] as? String else {
             throw FileBucketError.invalidURL("missing 'url' in descriptor")
         }
-        return url
+        return FileDownloadHandle(url: url)
+    }
+
+    private enum DescriptorKeys: String, CodingKey {
+        case blocksType = "__blocks"
+        case url
+    }
+
+    /// Decodes a handle from its `{ "__blocks": "file-bucket/download", "url": … }` descriptor, so a generated
+    /// model can hold one in a field, an array, a dictionary or an optional.
+    public required convenience init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: DescriptorKeys.self)
+        try TransferableDescriptor.check(container, key: .blocksType, expected: "file-bucket/download")
+        self.init(url: try container.decode(String.self, forKey: .url))
+    }
+
+    /// Encodes the handle's descriptor, as the server's `toJSON()` sends it:
+    /// `{ "__blocks": "file-bucket/download", "url" }`.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: DescriptorKeys.self)
+        try container.encode("file-bucket/download", forKey: .blocksType)
+        try container.encode(url, forKey: .url)
     }
 
     /// Returns the presigned download URL.
@@ -112,16 +128,4 @@ public final class FileDownloadHandle: Sendable {
     }
 }
 
-// MARK: - Codable
-
-extension FileDownloadHandle: Codable {
-    /// Hydrates a handle from its descriptor in a generated result, at any depth, as `fromJSON` does.
-    public convenience init(from decoder: Decoder) throws {
-        try self.init(url: Self.url(in: TransferableCoding.descriptor(from: decoder)))
-    }
-
-    /// Always throws: transferables are read-only.
-    public func encode(to encoder: Encoder) throws {
-        throw TransferableCoding.readOnlyError(self, encoder)
-    }
-}
+extension FileDownloadHandle: Codable {}
