@@ -820,7 +820,7 @@ describe('lifecycle commands', () => {
 		assert.strictEqual(without.code, 0, without.stderr);
 		assert.strictEqual(without.spawned[0].env[TSX_TSCONFIG_ENV], undefined);
 		writeFileSync(backend, '{}\n');
-		for (const argv of [['dev'], ['deploy'], ['sandbox'], ['generate', 'spec']]) {
+		for (const argv of [['dev'], ['deploy'], ['sandbox'], ['generate', 'spec'], ['generate', 'client']]) {
 			const run = await runCli(argv, { cwd: root, env: AWS_ENV });
 			assert.ok(run.spawned.length > 0, `${argv.join(' ')}: ${run.stderr}`);
 			assert.strictEqual(run.spawned[0].env[TSX_TSCONFIG_ENV], backend, argv.join(' '));

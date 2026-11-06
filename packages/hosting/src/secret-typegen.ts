@@ -306,6 +306,8 @@ function configFor(
 		const parsed = parse(path);
 		if (parsed && lists(parsed)) return { path, parsed };
 	}
+	// Intended fallback: no project lists the file, so use the nearest config's options.
+	// resolveSchemaTypes still applies `strict: true` under them.
 	return { path: nearest, parsed: root };
 }
 

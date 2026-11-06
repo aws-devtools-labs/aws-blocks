@@ -953,6 +953,8 @@ export function generateClient(ctx: Context, input: CommandInput): Promise<numbe
 		command: process.execPath,
 		args: [join(BLOCKS_DIST, 'generate-client-cli.js'), ...input.positionals.map((p) => resolve(ctx.startDir, p))],
 		cwd: root,
+		// The worker imports the backend through tsx, so it needs the backend's jsx and paths too.
+		env: tsxTsconfigEnv(root, ctx.env),
 	});
 }
 
