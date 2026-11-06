@@ -510,7 +510,7 @@ The Transferable class is functional on both sides, but the implementations diff
 
 | Side | Class | Methods | Source |
 |------|-------|---------|--------|
-| Server (Lambda) | `RealtimeChannel` | Real AWS SDK calls (AppSync, IoT, etc.) | `aws-runtime` export |
+| Server (Lambda) | `RealtimeChannel` | API Gateway Management API + DynamoDB connection registry | `aws-runtime` export |
 | Server (Mock) | `RealtimeChannel` | In-process event emitter | `default` export |
 | Client (Browser) | `RealtimeChannelClient` | WebSocket connection | Client plugin |
 

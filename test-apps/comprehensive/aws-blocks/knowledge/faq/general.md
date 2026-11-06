@@ -18,4 +18,4 @@ Blocks provides AuthBasic for username and password authentication with JWT sess
 
 ## Can I use Blocks for real-time features?
 
-Yes, the Realtime Building Block provides typed pub/sub messaging backed by AppSync Events. It supports chat, notifications, live dashboards, and collaborative editing with typed namespaces and schema validation.
+Yes, the Realtime Building Block provides typed pub/sub messaging backed by API Gateway WebSocket and DynamoDB. It supports chat, notifications, live dashboards, and collaborative editing with typed namespaces and schema validation.

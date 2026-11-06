@@ -288,7 +288,7 @@ export {};
 realtime/
 ├── client-hook.ts  # WebSocket client setup
 ├── index.ts        # Server-side pub/sub
-├── infra.ts        # AppSync Event API
+├── infra.ts        # API Gateway WebSocket API + DynamoDB connection registry
 └── mock.ts         # In-memory pub/sub
 ```
 
@@ -317,28 +317,30 @@ export class RealtimeClientHook {
 
 **index.ts:**
 ```typescript
-import { IoTDataPlaneClient, PublishCommand } from '@aws-sdk/client-iot-data-plane';
+import {
+  ApiGatewayManagementApiClient,
+  PostToConnectionCommand,
+} from '@aws-sdk/client-apigatewaymanagementapi';
 
 export class Realtime {
-  private client?: IoTDataPlaneClient;
-  private endpoint?: string;
+  constructor(
+    private connections: {
+      forChannel(channel: string): Promise<string[]>;
+    },
+  ) {}
 
-  constructor(public name: string, public options: any) {}
+  async publish(channel: string, message: unknown) {
+    const client = new ApiGatewayManagementApiClient({
+      endpoint: process.env.BLOCKS_RT_CALLBACK_URL,
+    });
+    const connectionIds = await this.connections.forChannel(channel);
 
-  private getClient() {
-    if (!this.client) {
-      this.endpoint = process.env[`BLOCKS_${this.name}_ENDPOINT`];
-      this.client = new IoTDataPlaneClient({ endpoint: this.endpoint });
-    }
-    return this.client;
-  }
-
-  async publish(channel: string, message: any) {
-    const client = this.getClient();
-    await client.send(new PublishCommand({
-      topic: channel,
-      payload: Buffer.from(JSON.stringify(message))
-    }));
+    await Promise.all(connectionIds.map((connectionId) =>
+      client.send(new PostToConnectionCommand({
+        ConnectionId: connectionId,
+        Data: JSON.stringify(message),
+      })),
+    ));
   }
 }
 ```
@@ -347,7 +349,7 @@ export class Realtime {
 ```typescript
 import { Construct } from 'constructs';
 import { CfnOutput } from 'aws-cdk-lib';
-// AppSync or IoT Core setup...
+// API Gateway WebSocket API, route integrations, and a DynamoDB connection registry.
 
 export function materialize(scope: Construct, name: string, options: any) {
   // Create WebSocket API infrastructure
