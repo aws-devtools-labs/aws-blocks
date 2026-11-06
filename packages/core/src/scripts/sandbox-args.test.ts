@@ -27,8 +27,10 @@ import {
   stacksWithExpressUnsafeResources,
   sandboxDevServerExitCode,
   assertNoRunningSandbox,
+  assertNoRunningDevServer,
+  startSandbox,
 } from './sandbox.js';
-import { pidCommand } from './dev-pidfile.js';
+import { claimDevSession, pidCommand } from './dev-pidfile.js';
 import { FRAMEWORK_SINK_ENV } from '../telemetry/framework-sink.js';
 import { buildCdkDeployArgs } from './deploy-stream.js';
 import { OUTPUTS_FILE } from './deploy-outputs.js';
@@ -446,6 +448,36 @@ describe('assertNoRunningSandbox — one sandbox session per app (JW-02)', () =>
       writeFileSync(join(root, '.blocks-sandbox', 'dev-server.41950.pid'), JSON.stringify({ ...record, sandbox: { pid: 4194301 } }));
       assertNoRunningSandbox(root, 'x');
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('assertNoRunningDevServer — a sandbox with a dev server beside cdk-blocks dev', () => {
+  it('refuses before the deploy while a cdk-blocks dev of the app is starting or running, on any port', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'blocks-running-dev-'));
+    const savedCwd = process.cwd();
+    // A `cdk-blocks dev` CLI that has claimed the app on :41960 and is still starting (this process plays it).
+    const session = claimDevSession(root, 41960);
+    try {
+      assert.ok(session.acquired);
+      const refusal = new RegExp(
+        `^Error: A dev server of this app is already starting on :41960 \\(pid ${process.pid}\\).*` +
+          'npx --no -- cdk-blocks dev stop --port 41960.*re-run `npx --no -- cdk-blocks sandbox`',
+      );
+      assert.throws(() => assertNoRunningDevServer(root, 'npx --no -- cdk-blocks sandbox'), refusal);
+      // startSandbox refuses first, before the credential check, the synth or any cdk call.
+      process.chdir(root);
+      await assert.rejects(
+        startSandbox({ backendPath: 'aws-blocks/index.cdk.ts', invocation: 'npx --no -- cdk-blocks sandbox' }),
+        refusal,
+      );
+      // The record of a session that has ended is no reason to refuse.
+      session.release();
+      assertNoRunningDevServer(root, 'x');
+    } finally {
+      process.chdir(savedCwd);
+      if (session.acquired) session.release();
       rmSync(root, { recursive: true, force: true });
     }
   });

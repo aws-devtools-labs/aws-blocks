@@ -547,6 +547,28 @@ export function liveSandboxSession(root: string, deps: Partial<ClaimPidfileDeps>
   return null;
 }
 
+/** A live dev session of an app: the process that holds it, its port, and whether it is still starting. */
+export interface DevSession {
+  pid: number;
+  port: number;
+  starting: boolean;
+}
+
+/**
+ * The live dev session of the app at `root` on any port, if any: a
+ * `cdk-blocks dev`, also one still starting, or a `cdk-blocks sandbox`'s dev
+ * server (see {@link recordLiveness}). The app runs one dev server at a time,
+ * so a command that would start one checks this before it does anything else.
+ */
+export function liveDevSession(root: string, deps: Partial<ClaimPidfileDeps> = {}): DevSession | null {
+  const d = { ...defaultClaimDeps(), ...deps };
+  // Port 0 never has a pidfile: its peers are every dev-server pidfile of the app.
+  const record = livePeer(d, join(root, devPidfilePath(0)));
+  if (!record) return null;
+  const pid = recordLiveness(record, d.isAlive, d.commandOf).pidAlive ? record.pid : record.ppid;
+  return { pid, port: record.port, starting: record.starting === true };
+}
+
 /**
  * Remove the pidfile at `path` if it still holds `owner`'s record, under that
  * record's reap file (see the protocol above), so a successor that is taking
