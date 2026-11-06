@@ -2295,3 +2295,80 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
   });
 });
+
+// ── request id in scope ─────────────────────────────────────────────────────
+// Each invocation runs with its Lambda awsRequestId in scope, so Building Blocks
+// (bb-logger) can tag their output with it. Overlapping invocations on one
+// container must each see their own id.
+
+describe('createLambdaHandler — request id in scope', () => {
+  const ctx = (awsRequestId: string): LambdaContext => ({ awsRequestId, getRemainingTimeInMillis: () => 30_000 });
+  const readStore = () =>
+    (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__?.getStore();
+
+  it('makes the invocation awsRequestId visible to the backend method', async () => {
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => backend);
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-111'));
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-111' });
+  });
+
+  it('keeps overlapping invocations apart', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const backend = {
+      api: (_c: BlocksContext) => ({
+        async slow() { await gate; return { id: readStore() ?? null }; },
+        async fast() { return { id: readStore() ?? null }; },
+      }),
+    };
+    const handler = createLambdaHandler(async () => backend);
+    const call = (method: string, id: string) =>
+      handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: [], id: 1 }) }), ctx(id)) as Promise<any>;
+    const slow = call('slow', 'req-slow');
+    const fast = await call('fast', 'req-fast');
+    release();
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(fast.body)), { id: 'req-fast' });
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse((await slow).body)), { id: 'req-slow' });
+  });
+
+  it('has no request id outside an invocation', () => {
+    assert.strictEqual(readStore(), undefined);
+  });
+
+  it('imports the backend outside the first invocation request id', async () => {
+    let idAtImport: unknown = 'not-imported';
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => {
+      idAtImport = readStore();
+      return backend;
+    });
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-first'));
+    assert.strictEqual(idAtImport, undefined);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-first' });
+  });
+});
+
+describe('request-context — request id store registration', () => {
+  const KEY = '__BLOCKS_REQUEST_ID_STORE__';
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  it('replaces a non-store value at the globalThis key instead of throwing on use', async () => {
+    const original = globals[KEY];
+    globals[KEY] = { not: 'a store' };
+    try {
+      const fresh = await import(`./request-context.js?non-store-${Date.now()}`);
+      assert.strictEqual(fresh.currentRequestId(), undefined);
+      assert.strictEqual(fresh.requestIdStore.run('req-x', () => fresh.currentRequestId()), 'req-x');
+      assert.strictEqual(globals[KEY], fresh.requestIdStore);
+    } finally {
+      globals[KEY] = original;
+    }
+  });
+
+  it('a second copy of core reuses the registered store', async () => {
+    const original = globals[KEY];
+    const fresh = await import(`./request-context.js?second-copy-${Date.now()}`);
+    assert.strictEqual(fresh.requestIdStore, original);
+  });
+});

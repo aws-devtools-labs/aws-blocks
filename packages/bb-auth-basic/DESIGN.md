@@ -206,6 +206,18 @@ This allows the Authenticator UI component to display errors without losing trac
 - **The epoch read is eventually consistent, like the `jti` check.** For the propagation window just after a bump (sub-second on a single-region table), a read on a replica that has not seen it can return the old epoch. A replayed pre-reset token can then authenticate for that window. And a sign-in right after the reset can mint a token below the new epoch, so the user who just reset gets `SessionRevoked` on their next request and signs in again. Both windows close once the write propagates. A bring-your-own global table for `codes` would widen them to its cross-region replication lag.
 - **Backward compatible with pre-feature tokens.** A token issued before this feature has no `ep` claim; `parseSessionToken` reads a missing claim as `0`, so the first password-reset bump (to ≥ 1) invalidates it like any other stale-epoch token. A corrupt/non-numeric stored epoch reads as `0` (fail-open to "valid") rather than `NaN` (which would make every `ep < NaN` comparison false and silently disable the check); the next bump re-establishes it.
 
+### D-AB-13: Opt-in sign-in outcome metrics through a caller-supplied `MetricsEmitter`
+
+**Decision:** AuthBasic takes an optional `metrics` option, a `MetricsEmitter` from `@aws-blocks/bb-metrics`. When it is set, every `signIn` emits one `Count` data point of `1`, named `SignInSuccess`, `SignInFailure` or `SignInLocked`, with the single dimension `AuthBlock: <fullId>`. When it is not set, nothing is emitted.
+
+**Rationale:**
+- **Something to alarm on.** The lockout counter (D-AB-11) protects one account, but it is not observable. A credential-stuffing run shows up as a jump in `SignInFailure` across many usernames, which only a metric can show and alarm on.
+- **Opt-in, like `logger`.** Every distinct metric name and dimension set is billed by CloudWatch, so AuthBasic does not create metrics on its own. The app passes the `Metrics` instance it already owns, choosing the namespace and any default dimensions.
+- **One failure name.** An unknown user, an unconfirmed user and a wrong password all emit `SignInFailure`, matching the identical `InvalidCredentials` response, so the metric is not a user-existence oracle.
+- **`SignInLocked` is emitted only on a real lock.** It is emitted next to the `AccountLocked` throw, not around the lockout check, so a store error while reading the counter is not counted as a lock.
+- **Low cardinality.** The only dimension is the AuthBasic instance's `fullId`, which separates two instances sharing one `Metrics`. Usernames are never dimensions.
+- **Best-effort.** `emit` is synchronous; an error from it is logged and never changes the sign-in result.
+
 ## Infrastructure (CDK)
 
 None directly — AuthBasic is a composite Building Block with no CDK construct. All infrastructure is created by composed Building Blocks:
@@ -308,6 +320,7 @@ Bumped on password reset (`confirmResetPassword`) — the only operation that bu
 | Token replay after sign-out | Revocation list keyed by `jti` — `signOut` records the token id (self-expiring at the token's `exp`), and every auth check rejects a revoked `jti`, so a copied/replayed cookie stops working at sign-out rather than at `exp` |
 | Stolen token surviving a password reset | Per-user session epoch (D-AB-12) — `confirmResetPassword` bumps `epoch:<username>`, and every auth check rejects a token whose `ep` claim predates it, so a credential reset invalidates **all** sessions issued before it (not just the one that signs out) |
 | Sibling-cookie shadowing | The session cookie is read by its exact name: the match is anchored to the header start or a `;` boundary, and the `fullId` in the name is regex-escaped, so a cookie such as `xauth_<fullId>` or one whose name differs only where `fullId` has a `.` can neither supply nor shadow the session value |
+| Undetected credential stuffing | Opt-in `metrics` option (D-AB-13) — `SignInFailure`, `SignInLocked` and `SignInSuccess` counts the app can alarm on in CloudWatch |
 | Timing attacks on code verification | `constantTimeEquals` for HMAC comparison |
 | User enumeration (resetPassword) | Silent success for non-existent users |
 | Code brute-force | `MAX_CODE_ATTEMPTS` (5) failed-guess cap, enforced atomically (each attempt reserved by a compare-and-swap, so parallel bursts can't bypass it), plus the 10-minute TTL (D-AB-4). The cap bounds guesses against a *single* code; issuance is unthrottled, so the overall bound is `cap × issuances ÷ keyspace` — rate-limit issuance volume at the infrastructure layer (WAF / API Gateway) |

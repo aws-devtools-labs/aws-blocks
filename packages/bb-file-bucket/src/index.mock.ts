@@ -124,6 +124,10 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	 *
 	 * Overwrites any existing file at the given path.
 	 *
+	 * The object's metadata is replaced too: it becomes exactly `options.metadata`
+	 * (none when omitted). Metadata can't be edited in place, so to change it,
+	 * `put()` the same body again with the complete new set.
+	 *
 	 * @param path - The object key (e.g., `uploads/photo.jpg`).
 	 * @param body - The file content.
 	 * @param options - Optional metadata and content settings.

@@ -117,6 +117,7 @@ const auth = new AuthBasic(scope, id, options?)
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 | `crossDomain` | `boolean` | `false` | Set to `true` when the frontend and API are on different registrable domains (e.g. frontend on Vercel, API on AWS). Switches the session cookie to `SameSite=None; Secure; Partitioned`. |
 | `lockout` | `LockoutPolicy` | — (disabled) | Sign-in throttling / account lockout. Omit to disable (default). Pass `{}` to enable with defaults, or override `maxAttempts` (5), `windowSeconds` (900), `lockoutSeconds` (900). See [Sign-in throttling](#sign-in-throttling). |
+| `metrics` | `MetricsEmitter` | — (no metrics) | Emits `SignInSuccess` / `SignInFailure` / `SignInLocked` counts for alarming. Pass a `Metrics` instance from `@aws-blocks/bb-metrics`. See [Alarming on failed sign-ins](#alarming-on-failed-sign-ins). |
 
 ### Password Policy
 
@@ -273,3 +274,48 @@ Throttling is **opt-in** — with no `lockout` option, sign-in is unlimited and 
 The counter is a best-effort read-modify-write, not an atomic increment, so highly concurrent failures for the same username (across many Lambda instances) can lose an increment and make the lock trip slightly later than `maxAttempts` suggests. The lockout window is measured from the moment the count first reaches `maxAttempts`, so a lock always holds for the full `lockoutSeconds` once tripped.
 
 > **Local development:** the mock KVStore is in-memory, so lockout counters (like all AuthBasic state) reset when the dev server restarts.
+
+## Alarming on failed sign-ins
+
+Pass a `Metrics` instance as the `metrics` option and AuthBasic emits one CloudWatch count per sign-in, so you can alarm on a spike in failures:
+
+```typescript
+import { AuthBasic, Metrics } from '@aws-blocks/blocks';
+
+// aws-blocks/index.ts, with `const scope = new Scope('my-app')`
+const authMetrics = new Metrics(scope, 'authMetrics', { namespace: 'MyApp/Auth' });
+const auth = new AuthBasic(scope, 'auth', { lockout: {}, metrics: authMetrics });
+```
+
+| Metric | Emitted when |
+|---|---|
+| `SignInFailure` | Unknown user, unconfirmed user, or wrong password. One name for all three, so the metric does not reveal which usernames exist. |
+| `SignInLocked` | A sign-in is refused because the account is locked out (needs `lockout`). |
+| `SignInSuccess` | A session is issued. |
+
+Each data point is a `Count` of `1` with the dimension `AuthBlock` set to the AuthBasic instance's `fullId`. On deployed compute that `fullId` starts with the stack name you pass to `BlocksStack.create`: with stack `production`, `new AuthBasic(new Scope('my-app'), 'auth')` emits `AuthBlock=production-my-app-auth`. (Locally, with no stack, it is `my-app-auth`.) A CloudWatch alarm must name the same dimensions, plus any `defaultDimensions` you gave the `Metrics` instance. In `aws-blocks/index.cdk.ts`:
+
+```typescript
+import { Duration } from 'aws-cdk-lib';
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+
+const stackName = 'production';
+export const blocksStack = await BlocksStack.create(app, stackName, { /* ... */ });
+
+new Alarm(blocksStack, 'SignInFailureAlarm', {
+  metric: new Metric({
+    namespace: 'MyApp/Auth', // the Metrics instance's namespace
+    metricName: 'SignInFailure',
+    dimensionsMap: { AuthBlock: `${stackName}-my-app-auth` }, // the deployed AuthBasic fullId
+    statistic: 'Sum',
+    period: Duration.minutes(5),
+  }),
+  threshold: 100,
+  evaluationPeriods: 1,
+  comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+  // SignInFailure only has data points when a sign-in fails, so treat a quiet period as OK.
+  treatMissingData: TreatMissingData.NOT_BREACHING,
+});
+```
+
+With no `metrics` option nothing is emitted. Emitting is best-effort: an error from the emitter is logged and never changes the sign-in result.

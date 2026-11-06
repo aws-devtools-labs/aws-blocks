@@ -128,12 +128,10 @@ export interface FileBucketOptions {
 	 *   emptied, so a teardown would fail. Pass `removalPolicy: 'retain'` to use
 	 *   Object Lock in a sandbox.
 	 *
-	 * Decide at creation time: CloudFormation can only turn Object Lock on when it
-	 * creates the bucket, so adding `objectLock` to an already-deployed
-	 * FileBucket fails the deploy (use a new FileBucket id instead), and S3 can't
-	 * turn Object Lock off once it's on. Once a bucket has Object Lock, changing
-	 * `mode` or `retentionDays` is an in-place update that applies to new
-	 * versions only.
+	 * Adding `objectLock` to an already-deployed FileBucket is an in-place
+	 * update: CloudFormation enables Object Lock on the existing bucket. S3 can't
+	 * turn Object Lock off once it's on. Changing `mode` or `retentionDays` is
+	 * also an in-place update that applies to new versions only.
 	 *
 	 * @example
 	 * ```ts
@@ -202,7 +200,15 @@ export interface FileBucketOptions {
 export interface PutOptions {
 	/** MIME type of the file (e.g., `image/png`). */
 	contentType?: string;
-	/** Custom metadata key-value pairs. */
+	/**
+	 * Custom metadata key-value pairs.
+	 *
+	 * Set when the object is written and can't be edited in place: each `put()`
+	 * replaces the object's metadata, so a `put()` without `metadata` leaves
+	 * none. To change it, `put()` the same body again with the complete new set
+	 * (see "Changing Metadata" in the README). S3 stores the keys in lowercase,
+	 * so use lowercase keys.
+	 */
 	metadata?: Record<string, string>;
 	/** Cache-Control header value. */
 	cacheControl?: string;

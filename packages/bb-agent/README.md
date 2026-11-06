@@ -772,7 +772,7 @@ while (true) {
 
 ## Inference-Only (No Persistence)
 
-Set `inferenceOnly: true` for stateless tasks that don't need conversation history — classification, extraction, summarization. No DynamoDB tables or session storage are created.
+Set `inferenceOnly: true` for stateless tasks that don't need conversation history — classification, extraction, summarization. The conversation and message tables are not created. The agent's S3 session bucket is still created; it holds session snapshots for turns that pass a `conversationId`.
 
 ```typescript
 const classifier = new Agent(scope, 'classifier', {
