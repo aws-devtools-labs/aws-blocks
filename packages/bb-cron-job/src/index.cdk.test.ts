@@ -191,8 +191,9 @@ describe('CronJob one handler per event key, at synth', () => {
 	// Two jobs end up with one `fullId` (`<stack>-x-y-z`) because `fullId` joins
 	// ids with '-': `x-y`/`z` and `x`/`y-z`. CDK accepts both construct paths, and
 	// the Lambda runtime would register both under `blocks.cronjob:<fullId>` —
-	// the second throws on cold start, failing every request. Synth must refuse it.
-	test('two CronJobs that share a fullId fail synth, naming the key', async () => {
+	// the second throws on cold start, failing every request. Synth must refuse it:
+	// the second job's Scope cannot claim a fullId another path already holds.
+	test('two CronJobs that share a fullId fail synth, naming the fullId and both paths', async () => {
 		const stack = await makeStack('CronCollide');
 		new CronJob(new Scope('x-y', { parent: stack }), 'z', { schedule: 'rate(1 day)', handler: async () => {} });
 		const other = new Scope('x', { parent: stack });
@@ -200,8 +201,9 @@ describe('CronJob one handler per event key, at synth', () => {
 			() => new CronJob(other, 'y-z', { schedule: 'rate(1 day)', handler: async () => {} }),
 			(e: unknown) => {
 				assert.ok(e instanceof Error);
-				assert.match(e.message, /"blocks\.cronjob:CronCollide-x-y-z"/);
-				assert.match(e.message, /already registered by Building Block 'CronCollide-x-y-z'/);
+				assert.match(e.message, /fullId 'CronCollide-x-y-z'/);
+				assert.match(e.message, /'CronCollide' > 'x' > 'y-z'/);
+				assert.match(e.message, /'CronCollide' > 'x-y' > 'z'/);
 				return true;
 			},
 		);

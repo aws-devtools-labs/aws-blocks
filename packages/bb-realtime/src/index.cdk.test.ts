@@ -157,9 +157,10 @@ test('CDK: sandbox leaves the WebSocket stage without access logging', async () 
 // The Lambda runtime registers each Realtime's WebSocket handler under
 // `blocks.websocket:<fullId>`. `fullId` joins ids with '-', so `a-b`/`c` and
 // `a`/`b-c` share one; CDK accepts both construct paths, and the second runtime
-// registration would throw on every cold start. Synth must refuse it.
+// registration would throw on every cold start. Synth must refuse it: the second
+// block's Scope cannot claim a fullId another path already holds.
 
-test('CDK: two Realtime blocks that share a fullId fail synth, naming the key and both blocks', async () => {
+test('CDK: two Realtime blocks that share a fullId fail synth, naming the fullId and both paths', async () => {
 	const stack = await setup(BlocksPresets.production, 'RtCollide');
 	const namespaces = { chat: Realtime.namespace(passthroughSchema) };
 	new Realtime(new Scope('a-b', { parent: stack }), 'c', { namespaces });
@@ -168,9 +169,9 @@ test('CDK: two Realtime blocks that share a fullId fail synth, naming the key an
 		() => new Realtime(other, 'b-c', { namespaces }),
 		(e: unknown) => {
 			assert.ok(e instanceof Error);
-			assert.match(e.message, /"blocks\.websocket:RtCollide-a-b-c"/);
-			assert.match(e.message, /Scope 'RtCollide-a-b-c'/);
-			assert.match(e.message, /already registered by Building Block 'RtCollide-a-b-c'/);
+			assert.match(e.message, /fullId 'RtCollide-a-b-c'/);
+			assert.match(e.message, /'RtCollide' > 'a' > 'b-c'/);
+			assert.match(e.message, /'RtCollide' > 'a-b' > 'c'/);
 			return true;
 		},
 	);
