@@ -53,7 +53,7 @@ The S3 bucket name is derived from the scope chain: the FileBucket id joined to 
 | Option | Type | Description |
 |--------|------|-------------|
 | `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. |
-| `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
+| `metadata` | `Record<string, string>` | Custom metadata key-value pairs, set when the object is written. It can't be edited in place: each `put()` replaces it, so a `put()` without `metadata` leaves none. See [Changing Metadata](#changing-metadata). S3 stores the keys in lowercase, so use lowercase keys. |
 | `cacheControl` | `string` | Cache-Control header value. |
 
 ### Presigned URL options
@@ -147,6 +147,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 }));
 ```
+
+### Changing Metadata
+
+Object metadata is fixed when the object is written: S3 can only change metadata by rewriting the object, and FileBucket doesn't expose S3's server-side copy (`CopyObject`), so there is no call that edits it. Every `put()` replaces the object's metadata with what it passes, and a `put()` without `metadata` leaves the object with none. To change metadata, `put()` the same body again with the complete new set:
+
+```typescript
+const bucket = new FileBucket(scope, 'documents');
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async markReviewed(path: string) {
+    const file = await bucket.get(path);
+    if (!file) return null;
+    await bucket.put(path, file.body, {
+      contentType: file.contentType,
+      metadata: { ...file.metadata, status: 'reviewed' },
+    });
+    return { status: 'reviewed' };
+  },
+}));
+```
+
+- The rewrite downloads and re-uploads the whole object, so it costs a GET and a PUT and takes longer for a large file.
+- `get()` doesn't return `cacheControl`. If you set one, pass it again.
+- Versioning is on by default (see [Versioned Bucket](#versioned-bucket)), so each rewrite stores another full copy of the object as a noncurrent version. It's kept, and billed, for `noncurrentVersionExpirationDays` (default 90). Until then the previous metadata stays on the previous version, and `restoreVersion()` brings it back with that version.
+- The rewrite isn't atomic. Anything written to the object between the `get()` and the `put()` (a new body or other metadata) is overwritten with what was read, and FileBucket has no conditional write to guard against it. Avoid rewriting objects that other code may be updating at the same time.
+- Uploads through presigned URLs (`putUrl()`, `createUploadHandle()`) carry no custom metadata. Set it afterwards with a rewrite like the one above.
+- S3 stores metadata keys in lowercase, so `get()` on AWS returns `{ owner: … }` for a key written as `Owner`. The local mock keeps the case you wrote (see [Mock vs AWS Behavior Differences](./DESIGN.md#mock-vs-aws-behavior-differences)). Use lowercase keys so both return the same thing.
 
 ### Presigned Upload URL
 
