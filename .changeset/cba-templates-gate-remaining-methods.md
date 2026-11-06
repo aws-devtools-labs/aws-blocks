@@ -15,8 +15,13 @@ fix(create-blocks-app): gate the remaining public template methods and git-ignor
   non-positive amount, which previously slipped past the overdraft guard.
 - The `demo` template's `searchDocs` now calls `auth.requireAuth(context)`: on
   deploy each query is a billed Bedrock retrieval.
+- The `demo` and `auth-cognito` templates' `updateTodo` copies only `completed`,
+  `priority` and `title` from `updates`. It spread the whole argument, so a
+  caller could set the owner key and write a todo into another user's list.
 - Adding Blocks to an existing project (or an Amplify Gen 2 app) now appends
   `.env`, `.env.*` (except `.env.example`), `*.pem`, `*.key`, `*.p12`,
   `credentials` files (not `credentials/` directories), and `.aws/` to its
   `.gitignore`, the same patterns the templates ship. Entries are compared as
   whole lines, so an existing `.env.local` no longer stops `.env` being added.
+  The `.env.example` / `credentials/` exceptions are left out when the project's
+  own `.gitignore` could already ignore those names, so they never un-ignore them.

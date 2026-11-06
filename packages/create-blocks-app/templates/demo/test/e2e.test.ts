@@ -337,3 +337,22 @@ test("DistributedDatabase - a user cannot read or debit another user's accounts"
   );
   assert.strictEqual((await api.balanceOf('checking')).balance, 0, 'nothing was credited');
 });
+
+// Todos are keyed by the owner's username. `updates` is typed, but RPC arguments
+// aren't checked at runtime, so a caller can send fields the type doesn't allow.
+test("DistributedTable - an update cannot move a todo into another user's list", async () => {
+  const suffix = uniqueSuffix();
+  const victim = `todo-victim-${suffix}`;
+  await signUp(victim);
+  await signUp(`todo-attacker-${suffix}`);
+
+  const todo = await api.createTodo('mine');
+  const forged: Parameters<typeof api.updateTodo>[1] = Object.assign({ title: 'planted' }, { userId: victim });
+  await api.updateTodo(todo.todoId, forged);
+  assert.deepStrictEqual((await api.listTodos()).map((t) => t.title), ['planted'], 'the update applies to the caller');
+
+  const signIn = await authApi.setAuthState({ action: 'signIn', username: victim, password: 'Password1!' });
+  assert.strictEqual(signIn.state, 'signedIn', `signIn: ${signIn.error ?? ''}`);
+  assert.deepStrictEqual(await api.listTodos(), [], "nothing was written into the other user's list");
+  await authApi.setAuthState({ action: 'signOut' });
+});

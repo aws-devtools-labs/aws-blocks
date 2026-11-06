@@ -285,7 +285,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const existing = await todos.get({ userId: user.username, todoId });
     if (!existing) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     
-    await todos.put({ ...existing, ...updates });
+    // Copy only the fields a caller may change: RPC arguments aren't checked at
+    // runtime, so spreading `updates` would let a caller set `userId` and write
+    // into another user's todos.
+    const { completed, priority, title } = updates;
+    await todos.put({
+      ...existing,
+      completed: completed ?? existing.completed,
+      priority: priority ?? existing.priority,
+      title: title ?? existing.title,
+    });
     return { success: true };
   },
 

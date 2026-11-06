@@ -119,6 +119,17 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
     }
   };
 
+  /** Paths in `dir` that its `.gitignore` does not ignore. */
+  const notIgnored = (dir: string, paths: string[]) => {
+    const result = spawnSync(
+      'git',
+      ['-c', `core.excludesFile=${join(dir, '.no-global-excludes')}`, 'check-ignore', ...paths],
+      { cwd: dir, encoding: 'utf-8' },
+    );
+    const ignored = result.stdout.split('\n').filter(Boolean);
+    return paths.filter((p) => !ignored.includes(p));
+  };
+
   const projects: Record<string, Record<string, string>> = {
     'a project with no .gitignore': { 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }) },
     // `.env.local` contains `.env`: a substring check would wrongly skip it.
@@ -129,6 +140,11 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
     'an Amplify Gen 2 project': {
       'package.json': JSON.stringify({ name: 'amplify-app', version: '1.0.0' }),
       'amplify/backend.ts': 'export const backend = defineBackend({});',
+    },
+    // Git applies the last matching line, so the `.env` line alone doesn't make it present.
+    'a project whose .gitignore un-ignores .env after ignoring it': {
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': '.env\n!.env\n',
     },
   };
 
@@ -156,6 +172,25 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }
   });
+
+  // The `!.env.example` / `!credentials/` exceptions come last, so appending one
+  // after a line the project already had would un-ignore what that line ignores.
+  const alreadyIgnored: Record<string, string> = {
+    'credentials/': 'credentials/service-account.json',
+    'config/credentials/': 'config/credentials/service-account.json',
+    '.env*': '.env.example',
+    '*.example': '.env.example',
+  };
+  for (const [line, path] of Object.entries(alreadyIgnored)) {
+    it(`keeps ${path} ignored when the existing .gitignore has ${line}`, () => {
+      const dir = addBlocks({ 'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }), '.gitignore': `${line}\n` });
+      try {
+        assert.deepStrictEqual(notIgnored(dir, [path, ...SECRET_PATHS]), []);
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    });
+  }
 });
 
 /** `source` with `/* … *\/` and `// …` comments removed, so a doc comment can't satisfy a check on the code. */
@@ -229,6 +264,8 @@ const UNGATED: Record<string, Record<string, string>> = {
   },
   backend: { 'api.greet': PUBLIC_GREETING },
   bare: { 'api.greet': PUBLIC_GREETING },
+  // The template has no auth block. Its store only holds what the two cron handlers write.
+  cron: { 'api.lastRun': 'public: when a scheduled job last fired and how often, no user data' },
   demo: {
     'hello.greet': PUBLIC_GREETING,
     'api.getFlag': 'public: reads one app-wide, non-secret flag',
@@ -246,6 +283,8 @@ const UNGATED: Record<string, Record<string, string>> = {
 interface TemplateMethod {
   /** `<namespace>.<method>` */
   name: string;
+  /** Names of the method's identifier parameters (the caller's arguments). */
+  parameters: string[];
   body: ts.Block;
 }
 
@@ -266,7 +305,11 @@ function apiMethods(file: string): TemplateMethod[] {
           ts.isMethodDeclaration(property) && property.body,
           `${file}: ${nsArg.text} members must be method declarations (async name(…) { … })`,
         );
-        methods.push({ name: `${nsArg.text}.${property.name.getText(sourceFile)}`, body: property.body });
+        methods.push({
+          name: `${nsArg.text}.${property.name.getText(sourceFile)}`,
+          parameters: property.parameters.flatMap((p) => (ts.isIdentifier(p.name) ? [p.name.text] : [])),
+          body: property.body,
+        });
       }
     }
     ts.forEachChild(node, visit);
@@ -341,6 +384,26 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
           `${name} ${method.name} is listed as gated by the auth block but calls none of ${SESSION_GATED_AUTH_METHODS.join(', ')}`,
         );
       }
+    });
+
+    // RPC arguments are not checked at runtime, so `{ ...existing, ...updates }`
+    // lets a caller set any field, including the owner key that scopes the row.
+    it(`template "${name}" never spreads a caller's argument into an object`, () => {
+      const spreads: string[] = [];
+      for (const method of apiMethods(backend)) {
+        const visit = (node: ts.Node) => {
+          if (
+            ts.isSpreadAssignment(node) &&
+            ts.isIdentifier(node.expression) &&
+            method.parameters.includes(node.expression.text)
+          ) {
+            spreads.push(`${method.name} (...${node.expression.text})`);
+          }
+          ts.forEachChild(node, visit);
+        };
+        visit(method.body);
+      }
+      assert.deepStrictEqual(spreads, [], `${name}: copy the fields a caller may set instead of spreading the argument`);
     });
   }
 });
