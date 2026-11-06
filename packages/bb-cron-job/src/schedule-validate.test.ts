@@ -19,6 +19,11 @@ describe('validateSchedule (synth-time guard)', () => {
 		'cron(0 9 ? * MON#1 *)', // named nth weekday
 		'cron(0 0 1 1 ? 2025)', // explicit year
 		'cron(0 0 1 1 ? 2025-2027)', // year range
+		'cron(* * * * ? 2099)',
+		'cron(* * * * ? 2099-2100)',
+		'cron(* * * * ? 2099,2101)',
+		'cron(* * * * ? 2099/2)',
+		'cron(* * * * ? */2)',
 	];
 	for (const ok of valid) {
 		test(`accepts valid "${ok}"`, () => {
@@ -56,7 +61,18 @@ describe('validateTimezone (synth-time guard)', () => {
 describe('parseScheduleForMock (local firing) — distinguishes unsupported from invalid', () => {
 	// Advanced EventBridge cron the gate accepts but the mock parser can't simulate:
 	// surfaces as ScheduleNotSupported, NOT InvalidSchedule.
-	for (const adv of ['cron(0 10 L * ? *)', 'cron(0 10 LW * ? *)']) {
+	for (const adv of [
+		'cron(0 10 L * ? *)',
+		'cron(0 10 LW * ? *)',
+		'cron(* * * * ? 1970)',
+		'cron(* * * * ? 2099)',
+		'cron(* * * * ? 2099-2100)',
+		'cron(* * * * ? 2099,2101)',
+		'cron(* * * * ? 2099/2)',
+		'cron(* * * * ? */2)',
+		'cron(0 10 L * ? 2099)',
+		'cron(  *  *  *  *  ?  2099  )',
+	]) {
 		test(`"${adv}" → ScheduleNotSupported (not InvalidSchedule)`, () => {
 			assert.throws(
 				() => parseScheduleForMock(adv),
@@ -73,6 +89,17 @@ describe('parseScheduleForMock (local firing) — distinguishes unsupported from
 		'nonsense',
 		'cron(100 9 * * ? 2025)', // minute 100 invalid + year present
 		'cron(0 9 30-10 * ? 2025)', // inverted day-of-month range + year present
+		'cron(0 24 * * ? 2099)',
+		'cron(0 9 * 13 ? 2099)',
+		'cron(0 9 ? * 8 2099)',
+		'cron(* * * * ? 1969)',
+		'cron(* * * * ? 2200)',
+		'cron(* * * * ? 2100-2099)',
+		'cron(* * * * ? 2099/0)',
+		'cron(* * * * ? invalid)',
+		'cron(* * * * ? 2099oops)',
+		'cron(* * * * ? 2099,)',
+		'cron(0 10 L * ? invalid)',
 	]) {
 		test(`"${bad}" → InvalidSchedule`, () => {
 			assert.throws(
