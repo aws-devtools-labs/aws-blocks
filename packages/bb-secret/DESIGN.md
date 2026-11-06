@@ -159,6 +159,10 @@ is absent) never throws.
   labels automatically on each put, so the prior value becomes `'previous'`. On
   success it clears the instance read cache (a write invalidates `current`,
   `previous`, and any specific-version entries), so a later `get()` re-fetches.
+  It also increments a per-instance cache generation that `get()` snapshots
+  before fetching: a `get()` whose fetch was in flight across the write returns
+  its result but skips caching it, so it can't put the pre-write value back
+  into the cache or overwrite the entry a post-write `get()` stored.
 - `listVersions()` → `ListSecretVersionIdsCommand` (paginated, `IncludeDeprecated:
   false`), mapped to `SecretVersionInfo[]` (versionId + staging labels + created
   date — never values) and sorted newest-first.
