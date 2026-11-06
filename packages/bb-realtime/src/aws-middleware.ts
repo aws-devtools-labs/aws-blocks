@@ -809,9 +809,9 @@ export function hydrate(data: unknown): unknown {
 	}
 	if (Array.isArray(data)) return data.map(hydrate);
 	if (typeof data === 'object' && data !== null) {
-		const result: Record<string, unknown> = {};
-		for (const [k, v] of Object.entries(data)) result[k] = hydrate(v);
-		return result;
+		// Object.fromEntries defines own data properties, so a JSON key named
+		// `__proto__` stays a key instead of becoming the copy's prototype.
+		return Object.fromEntries(Object.entries(data).map(([k, v]) => [k, hydrate(v)]));
 	}
 	return data;
 }
