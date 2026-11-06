@@ -1,5 +1,13 @@
 # @aws-blocks/data-common
 
+## 0.1.8
+
+### Patch Changes
+
+- ee557d4: Closing local engines when the process exits now runs every registered close even if one throws synchronously, and the throw no longer escapes the `beforeExit` handler.
+- Updated dependencies [4e92168]
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.1.7
 
 ### Patch Changes

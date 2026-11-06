@@ -1,5 +1,67 @@
 # @aws-blocks/create-blocks-app
 
+## 0.5.0
+
+### Minor Changes
+
+- ba80bbd: feat(create-blocks-app): scaffold apps that call the cdk-blocks CLI
+
+  New apps no longer get `aws-blocks/scripts/*.ts` wrappers. Every lifecycle script in `package.json` keeps its name and becomes an alias of the `cdk-blocks` CLI from `@aws-blocks/blocks`: `"dev": "cdk-blocks dev"`, `"dev:stop": "cdk-blocks dev stop"`, `"sandbox": "cdk-blocks sandbox"`, `"sandbox:deploy": "cdk-blocks sandbox deploy"`, `"sandbox:destroy": "cdk-blocks sandbox destroy"`, `"deploy": "cdk-blocks deploy"`, `"destroy": "cdk-blocks destroy"`, `"secret": "cdk-blocks secret"`, `"typegen": "cdk-blocks generate types"`, `"spec": "cdk-blocks generate spec"`, `"vendorize": "cdk-blocks vendorize"` and `"cleanup": "cdk-blocks dev stop --all"`. `npm run dev` and the other commands work as before; run `npx --no -- cdk-blocks --help` for every command and its options. The next steps and docs show the npm scripts first and `npx --no -- cdk-blocks <command>` for a direct run: `--no` uses the installed CLI and never downloads a package, while a bare `npx blocks` would install the unrelated `blocks` package from npm.
+
+  The dev server settings that `server.ts` used to hard-code are now in `package.json` under `"blocks": { "dev": { … } }`: port 3001 and `"frontend": false` for the backend-only templates (`api-only`, `backend`, `sql`), so they stay backend-only when added to a project that has `vite` or `next`, and `frontendPort: 3100` for the others. No template sets `frontendCommand`: `cdk-blocks dev` starts Vite, or `next dev` for `nextjs`, from the app's dependencies on the effective frontend port, so `npm run dev -- --port 4000 --frontend-port 4100` moves both servers. Adding AWS Blocks to an existing project writes the same scripts and, unless the project already has `blocks.dev`, copies only the template's `port` and `"frontend": false`, so `cdk-blocks dev` runs the project's own Vite or Next.js dev server whichever template you add. The Amplify overlay's `blocks:dev` and `blocks:stop` scripts call the CLI too (backend-only on port 3001 through `"blocks": { "dev": { "port": 3001, "frontend": false } }`, so `cdk-blocks dev` does not start the Amplify app's own Vite or Next.js frontend a second time); the overlay keeps `aws-blocks/scripts/generate-client.ts`, because its client needs the Amplify auth middleware.
+
+  Three behaviours change with the CLI. `npm run destroy` now asks before it deletes the production stack, and without a terminal it needs `npm run destroy -- --yes`. `npm run sandbox:destroy` now asks before it deletes the sandbox stack when it runs in a terminal; `npm run sandbox:destroy -- --yes` skips the question, and without a terminal it runs without asking, as before. `npm run cleanup` now stops only the dev servers this app recorded, instead of killing every process on ports 3000-3003.
+
+  The scaffolded `AGENTS.md` describes the Blocks CLI (`--output json`, `--query`, `--yes` and the exit codes) and no longer says that `sandbox:deploy` generates the client after the deploy. The `@aws-blocks/core` README now shows how to set the dev server host with `cdk-blocks dev --host` or `package.json#blocks.dev.host`, and says that only `BLOCKS_DEV_HOST` opts the local `/realtime` WebSocket into another host; the CLI sets it from that host.
+
+  Also in the scaffolded apps:
+
+  - `AGENTS.md` backgrounds the dev server with `npm run dev > dev.log 2>&1 &`: without the redirect, a background dev server stops at its next log line once the shell that started it closes. Every template's `.gitignore` now ignores `*.log`, so `dev.log` and `deploy.log` are not committed.
+  - `npm run test:e2e` finds the dev server on `package.json#blocks.dev.port` (default 3000, or 3001 for the backend-only templates) instead of a hard-coded port, so it reuses a server on the configured port rather than starting a second one. `AGENTS.md` says to stop a server started with `npm run dev -- --port <n>` with the same flag, or with `npm run cleanup`.
+  - The template READMEs say to run `npm run typegen` once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check`; a fresh app has no generated types, so the check exits 1 until then.
+  - `"prebuild"` is `cdk-blocks generate client` instead of the `blocks-generate-client` bin, so every script is an alias of the `cdk-blocks` CLI as the docs say. Both write the same `aws-blocks/client.js` with the same defaults and exit codes.
+  - The next steps quote a `cd` path that has a space, and give the backend-only templates' API URL on port 3001 instead of `http://localhost:3000`. `--template=<name>` works as well as `--template <name>`. The Amplify overlay's Blocks-native migration step says to point the `sandbox` script at `cdk-blocks sandbox` (the overlay's `npm run sandbox` runs `ampx sandbox`). The `backend` README names the JSON-RPC namespace correctly: the exported variable name, not the `ApiNamespace` argument, and gives the dev server's API URL as `http://localhost:3001/aws-blocks/api`.
+  - `AGENTS.md` names `cdk-blocks db migrate aws-blocks/migrations` and `cdk-blocks db status aws-blocks/migrations`, which apply and list the SQL migrations against the local PGlite database, and `npm run vendorize -- <package>`, which copies a Building Block into the app.
+
+### Patch Changes
+
+- 4f1445f: fix(create-blocks-app): show todo and last-code errors in the auth-cognito template
+
+  In the auth-cognito template, a failed toggle, priority change, title edit or delete previously did nothing visible, and a failed title edit left the unsaved text in the input. These now reload the list, so the row shows the saved value again, and report the failure in the existing todo status line. A failed "Show last code" lookup now shows an error instead of an unhandled rejection.
+
+- ba80bbd: fix(create-blocks-app): fail on a failed install, and fix scaffolds that did not work
+
+  - `create-blocks-app` exits 1 when a step such as `npm install` fails, instead of printing the error and exiting 0, so `npx @aws-blocks/create-blocks-app app && cd app` stops at the failed scaffold.
+  - The `nextjs` template's `.gitignore` ignores `.open-next/` (the deploy's build output) and `*.tsbuildinfo` (written by `next build`).
+  - Adding AWS Blocks to an existing project adds `zod` to its dependencies, at the template's version, when the copied `aws-blocks/` backend imports it. Before, `zod` resolved only when another package happened to hoist it.
+  - Scaffolding into a workspace of an npm workspaces monorepo stops before it writes anything, unless the monorepo root also lists the app's `aws-blocks/` folder, and prints the `"workspaces"` entry to add; once the root lists it, `npm install` runs at the root, where npm links the app's `aws-blocks` package. npm installs a workspace's dependencies at the root and ignores the app's nested `"workspaces": ["aws-blocks"]`, so before this the scaffold reported success with an app that could not import `aws-blocks`.
+  - To find that root, `create-blocks-app` reads each `"workspaces"` glob as npm does, with `minimatch`: a brace glob such as `"{apps,packages}/*"` includes `apps/web`, and an entry such as `"!packages/legacy"` leaves that folder out of the workspaces, unless a later entry lists it again, so an app there installs in its own folder.
+  - `npm run test:e2e` can run again and again against one running dev server, as `AGENTS.md` suggests: it exits when the tests finish (`--test-force-exit`) instead of hanging on the realtime client's open socket, and the `default` and `react` tests sign up a new user each run instead of a fixed `testuser@example.com`, which the persisted local auth store already had on the second run.
+  - The scaffolded `AGENTS.md` matches the app's dev server: its local API URLs use the `package.json` `"blocks.dev.port"` (3001 in the backend-only `api-only`, `backend` and `sql` templates, instead of 3000), and a backend-only app's workflow no longer tells the agent to edit a frontend in `src/`.
+  - Every template that has `npm run secret` also has `npm run config` (`cdk-blocks config`), which the release notes promised, and its README lists it.
+
+- 05a88e1: When AWS denies the credential check before `npm run deploy` and `npm run sandbox`, for example when a profile's role cannot be assumed, the warning now says so instead of reporting an unverified check, and says whether an AWS Organizations policy (a service control policy or a resource control policy) explicitly denied the request. It still does not stop the command, and it never includes the error's account IDs, ARNs or policy IDs.
+
+  A credential failure message now names the profile and the deployment Region. When the fix is `aws login` and the profile has no Region or a different one, the message first prints `aws configure set region <region> --profile <name>`, so that the sign-in uses the Region you deploy to, and says to sign in again after a later Region change. If the profile's Region is set in the AWS credentials file, which overrides the config file that `aws configure set` writes, the message asks you to change it there instead. When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region than the deployment, which the AWS CLI would use instead, the `aws login` command includes `--region <region>`.
+
+- 9009efa: feat: add a `cron` template with scheduled CronJobs
+
+  `npx @aws-blocks/create-blocks-app my-app --template cron` scaffolds a
+  backend-only app with a `CronJob` that runs every minute and records each run
+  in a `KVStore`, plus a disabled job that shows `enabled: false`. The shipped
+  e2e test waits for the first scheduled run and checks that the disabled job
+  never fires.
+
+- a63c3a5: fix(create-blocks-app): keep todo errors visible in the demo template
+
+  In the demo template, a failed toggle, priority change or title edit showed its error and then reloaded the list, and the reload cleared the error straight away. The list now reloads first and the error is shown afterwards, so it stays on screen.
+
+- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
+
+  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
+  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
+  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
+
 ## 0.4.0
 
 ### Minor Changes

@@ -1,5 +1,82 @@
 # @aws-blocks/bb-cron-job
 
+## 0.5.0
+
+### Minor Changes
+
+- 3ae8592: feat(bb-cron-job): run a CronJob on a container compute for long-running jobs
+
+  `CronJob` takes the same `compute` and `timeoutSeconds` options as `AsyncJob`.
+  Assign a container `Compute` to run a scheduled job longer than a serverless
+  compute's 15-minute limit:
+
+  ```ts
+  import { Compute, CronJob } from "@aws-blocks/blocks";
+
+  const worker = new Compute(scope, "worker", {
+    type: "container",
+    size: { vcpu: 1, memory: 2048 },
+  });
+
+  new CronJob(scope, "nightly-rebuild", {
+    schedule: "cron(0 3 * * ? *)",
+    compute: worker,
+    timeoutSeconds: 2 * 60 * 60,
+    handler: async () => {
+      // ...
+    },
+  });
+  ```
+
+  On a container compute each tick is delivered like a container `AsyncJob`: the
+  handler runs in its own worker thread, `timeoutSeconds` is enforced, and a
+  failed tick is retried up to 3 attempts in total before moving to a dead-letter
+  queue. A CronJob under a container scope (`new Scope(id, { parent, compute })`)
+  now runs on that container instead of failing synth. Jobs on a serverless
+  compute deploy as before.
+
+### Patch Changes
+
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- Updated dependencies [6236bf9]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [e8673cd]
+- Updated dependencies [60360c1]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-container-compute@0.3.0
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-async-job@0.3.1
+  - @aws-blocks/bb-lambda-compute@0.7.1
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.4.0
 
 ### Minor Changes

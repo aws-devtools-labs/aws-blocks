@@ -1,5 +1,45 @@
 # @aws-blocks/hosting
 
+## 0.6.0
+
+### Minor Changes
+
+- c1fabce: feat(hosting): `secret` and `config` CLIs print help for `--help` and `-h`
+
+  `hosting-secret`, `hosting-config` and the `runSecretCli` / `runConfigCli` commands of `@aws-blocks/core/scripts` built on them now print usage for `set`, `list` and `remove` when `--help` or `-h` appears anywhere in the arguments, and exit 0. The help lists each command's flags and shows where `--stage <name>` stores a value (`<prefix>/<name>/<KEY>` instead of the shared `<prefix>/<KEY>`; any name is accepted), with the prefix in effect. Before, `--help` was read as a key or ignored, so `remove KEY --help` deleted the value; a help request now returns before any prompt or AWS call. Without `--help`, every command behaves as before.
+
+  For tools that wrap this CLI, `runValueCli` takes two new options. `interactive: false` refuses the hidden value prompt, with an error that names `--value-stdin`, even on a terminal. `yes: true` confirms `remove --force`, as `--yes` in the arguments does. A usage problem (a missing key, an unknown subcommand, a flag without its value, or a prompt or confirmation the run cannot give) throws the newly exported `ValueCliUsageError`, so a wrapper can tell it apart from an AWS failure.
+
+### Patch Changes
+
+- 1f565bd: Docs: the README and the `getSecret()` JSDoc now say local values for `getSecret()` and `getConfig()` go in `.env.local`, the file the Blocks dev server and sandbox load. They don't load `.env`, so a value only there made the getter throw `no config reference found`.
+- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
+
+  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
+  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
+  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
+
+- b2eb306: An empty `secret list` suggests `set <KEY>` (prompted, or piped with `--value-stdin`), instead of `set <KEY> <value>`, which the secret CLI refuses.
+- b2eb306: `secret set` of a key that `secret remove` scheduled for deletion restores the secret and sets the new value, instead of failing with Secrets Manager's raw "already scheduled for deletion" error.
+
+  `secret remove KEY --force --yes` of a key that does not exist reports that it was not set, instead of claiming it was permanently removed.
+
+  `secret remove KEY --force` prints its "deleted immediately" warning only after it found the secret, so a key that is not set reports only that it was not set. The `restore-secret` command that a recoverable `secret remove` suggests names the secret, and the profile and Region the run used.
+
+- 60360c1: `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:
+
+  - **Destroy:** `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output already on disk instead of running `buildCommand` and the framework build (OpenNext, Nitro, Astro, SvelteKit). On a Next.js app this removes a multi-minute build from every destroy. When there is no build output, the destroy builds as before; a Next.js destroy reuses the `.open-next/` output of an earlier deploy. `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
+  - **Opt-in deploy reuse:** `BLOCKS_SKIP_FRONTEND_BUILD=1` makes a deploy use the existing build output without building. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with the adapter's error (same code and resolution) plus a line naming the variable. The build bakes in `BLOCKS_API_URL`, so a deploy never reuses a build on its own.
+
+  The framework adapters read the decision from the build profile (`reuseBuild: 'if-present' | 'required'`); an explicit `skipBuild` option still wins.
+
+- b2eb306: The hidden value prompt of the secret and config CLI (`hosting-secret set KEY`, `runValueCli`) rejects with the new `ValueCliInterruptedError` on Ctrl-C or Ctrl-D, before any store call, instead of never settling: Node then exited 13 with an "unsettled top-level await" warning.
+
+  The hidden prompt is written to stderr, so `hosting-secret set KEY | cat` shows it and stdout carries only the result.
+
+- b2eb306: The secret and config CLI (`hosting-secret`, `hosting-config`, `runValueCli`) refuses an unknown option, and an extra argument to `list` or `remove`, with a usage error before any store call, instead of storing the option as part of a config value or ignoring it. After `--`, every argument is a positional, so a config value can start with `-`: `config set KEY -- -1`.
+- b2eb306: The secret and config CLI reports an invalid key, an empty value and a missing subcommand as `ValueCliUsageError`s, so callers map them to their usage exit code, and a missing subcommand says `<label> needs a subcommand: set, list or remove.` instead of `Unknown subcommand undefined`.
+
 ## 0.5.0
 
 ### Minor Changes

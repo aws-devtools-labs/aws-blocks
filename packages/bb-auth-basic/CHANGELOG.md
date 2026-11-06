@@ -1,5 +1,78 @@
 # @aws-blocks/bb-auth-basic
 
+## 0.3.0
+
+### Minor Changes
+
+- 320e529: AuthBasic now invalidates every outstanding session when a user resets their
+  password. Previously `confirmResetPassword` only changed the credential, so a
+  token stolen before the reset kept authenticating until it expired — the reset
+  did not actually lock the attacker out. Each session JWT now carries the user's
+  current session epoch (an `ep` claim); `confirmResetPassword` bumps a per-user
+  epoch counter, and every auth check rejects a token whose epoch predates it
+  (reported as `SessionRevokedException`), so a password reset signs the user out
+  on all devices.
+
+  Tokens issued before this change have no epoch claim and are treated as the
+  lowest epoch, so the first reset invalidates them too. If the sessions cannot be
+  invalidated, `confirmResetPassword` throws `SignOutIncompleteException` (503)
+  and leaves the password unchanged; request a new reset code and try again. The
+  umbrella `@aws-blocks/blocks` is bumped because the bundled `bb-auth-basic`
+  README/DESIGN docs it mirrors have changed.
+
+- 0b6375c: `AuthBasic` can now emit sign-in metrics you can alarm on. Pass a `Metrics` instance as the new `metrics` option and every `signIn` emits a CloudWatch count: `SignInSuccess`, `SignInFailure` (unknown user, unconfirmed user or wrong password, under one name so usernames are not revealed) or `SignInLocked` (refused by the `lockout` policy), each with an `AuthBlock` dimension naming the AuthBasic instance.
+
+  The option is off by default, so existing apps emit nothing and pay nothing new. A failing emitter is logged and never changes a sign-in result.
+
+### Patch Changes
+
+- e99250d: `AuthBasic` now reads its session cookie by exact name. Previously a cookie whose name merely ended with the session cookie's name (for example `xauth_<id>`, set by another app on a shared parent domain) could supply or shadow the session value, and a `.` in the scope id matched any character.
+
+  The match is now anchored to a cookie boundary and the scope id is matched literally, the same way `AuthCognito` reads its cookie. Apps need no changes.
+
+- 1c7e0dd: `AuthBasic` and `AuthCognito` no longer let a request header decide whether the session cookie is `Secure`. Previously, on a deployed stack, a request that sent `Origin: http://localhost` received a cookie without `Secure` (and, with `crossDomain: true`, without `Partitioned`). The local-dev relaxation now applies only when the process itself is local, as reported by `getDeploymentType()` from deploy configuration. The local dev server (`npm run dev`) behaves as before. A sandbox (`npm run sandbox`) proxies the API to deployed compute, so its cookie now keeps `Secure` (and `Partitioned` with `crossDomain: true`) even though the page is on `http://localhost`, matching `AuthOIDC`.
+
+  `@aws-blocks/auth-common/cookies` adds `isLocalDevRequest(ctx)`, the per-request input both BBs now use.
+
+- Updated dependencies [e83d152]
+- Updated dependencies [1c7e0dd]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/auth-common@0.4.0
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-logger@0.4.0
+  - @aws-blocks/bb-kv-store@0.4.1
+  - @aws-blocks/bb-metrics@0.2.1
+
 ## 0.2.0
 
 ### Minor Changes

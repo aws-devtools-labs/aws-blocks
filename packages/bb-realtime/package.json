@@ -1,6 +1,6 @@
 {
   "name": "@aws-blocks/bb-realtime",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "keywords": [
     "aws-blocks",
     "realtime",
@@ -58,11 +58,11 @@
     "test": "node --test dist/**/*.test.js"
   },
   "dependencies": {
-    "@aws-blocks/core": "^0.8.0",
-    "@aws-blocks/bb-app-setting": "^0.4.0",
-    "@aws-blocks/bb-lambda-compute": "^0.7.0",
-    "@aws-blocks/bb-distributed-table": "^0.3.0",
-    "@aws-blocks/bb-logger": "^0.3.0",
+    "@aws-blocks/core": "^0.9.0",
+    "@aws-blocks/bb-app-setting": "^0.4.1",
+    "@aws-blocks/bb-lambda-compute": "^0.7.1",
+    "@aws-blocks/bb-distributed-table": "^0.4.0",
+    "@aws-blocks/bb-logger": "^0.4.0",
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1156.0",
     "@standard-schema/spec": "^1.1.0",
     "ws": "^8.22.0"

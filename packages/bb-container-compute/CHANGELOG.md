@@ -1,5 +1,118 @@
 # @aws-blocks/bb-container-compute
 
+## 0.3.0
+
+### Minor Changes
+
+- 9ebf67a: An API namespace can run on a `container` compute:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+  ```
+
+  The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/aws-blocks/api/render`.
+
+  - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
+  - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.
+  - The load balancer drops request headers that aren't valid HTTP before they reach a task.
+  - API calls to a container keep the gateway's ~29-second cap. A stopping task finishes its in-flight requests (up to 35 s) before it shuts down.
+  - A `Scope` with a container `compute` now places its `ApiNamespace`s on that container too, instead of failing synth.
+  - A container that serves API namespaces needs a running task: `scaling.minInstances: 0` fails synth. Without a `scaling.strategy`, one that also runs an `AsyncJob` scales on CPU, and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during that deploy, its calls can get 503s for the minute or two the new tasks take to start.
+  - `runContainer()` takes the backend module (`runContainer({ backend })`) and serves its API on port 8080, with readiness on port 8081; called without it, the container answers a health check on port 8080 as before. A container compute passes it only when the compute serves API traffic.
+  - The container compute's dashboard section gains API request, 5xx, latency and task-health widgets.
+
+- 3ae8592: feat(bb-container-compute): scale a container compute to zero between jobs
+
+  A container `Compute` with `scaling: { minInstances: 0 }` now starts a task when
+  a job is waiting. Before, a service at zero tasks never woke for a backlog
+  smaller than `backlogPerInstance` (default 100), so its jobs were never run.
+
+  ```ts
+  const worker = new Compute(scope, "worker", {
+    type: "container",
+    scaling: { minInstances: 0, maxInstances: 2 },
+  });
+  ```
+
+  Use `minInstances: 0` only for long-running jobs that can tolerate high latency
+  before they start; most workloads should use `minInstances` of 1 or more. Waking
+  usually takes a few minutes (queue metrics, the scaling alarm, and the task's
+  start), and up to about 20 minutes when the job's queue has been idle for more
+  than six hours. Computes with `minInstances` of 1 or more deploy the same
+  autoscaling as before.
+
+  `minInstances: 0` also requires at least one `AsyncJob` or `CronJob` on the
+  compute and the default (or `queue-depth`) scaling strategy. Anything else fails
+  synth: with no job nothing would ever start a task, and a `cpu` or `memory`
+  strategy could scale in to zero while a job is still running.
+
+  Instance bounds are now checked at synth: `minInstances` must be an integer of
+  0 or more, `maxInstances` an integer of 1 or more, and `minInstances` must not
+  exceed `maxInstances`.
+
+### Patch Changes
+
+- 6236bf9: Add a README describing the internal container compute, its options, local-dev and AWS behavior, and synth-time errors.
+- f133ff8: On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace on a `container` compute straight to the container's load balancer, instead of through the shared API gateway — from the backend's managed distribution, or from `Hosting`'s default CloudFront door when it fronts the API. A call can run up to 60 seconds (CloudFront's origin read timeout) instead of the gateway's ~29, and skips a hop.
+
+  - Each container namespace path (`/aws-blocks/api/<export name>`) gets its own CloudFront behavior, ahead of the `/aws-blocks/api/*` gateway behavior, all on one VPC origin per distribution for the backend's load balancer listener (whose path rules pick the compute) — so a distribution uses one of the account's VPC origins (25 by default) however many containers serve API traffic. Namespaces on Lambda computes, auth routes and `RawRoute`s still go through the gateway.
+  - A viewer-request CloudFront Function stamps the viewer's host on those requests, so `ctx.request.url` in the container is the public URL, including a custom domain.
+  - The load balancer admits CloudFront's origin-facing prefix list on its listener ports; the prefix list is looked up at deploy time, so stacks stay environment-agnostic.
+  - A direct call skips the gateway's throttling and access logs; the distribution's web ACL (`apiWaf`, or Hosting's WAF) covers it, and synth warns when there is none.
+  - On the `apigateway` tier nothing changes: container namespaces go through the gateway, behind `Hosting` too.
+  - A container namespace whose load balancer's VPC has no public subnets (an isolated VPC; a CloudFront VPC origin needs an internet gateway) stays on the gateway, and synth warns naming it.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway, through its ALB router.
+  - Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (CloudFront's default of 75, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
+  - The CloudFront Function also drops a client-sent `X-Forwarded-Host`, so it cannot change `ctx.request.url`.
+
+- 3ae8592: fix(bb-container-compute): deploys no longer reset an autoscaled container's task count
+
+  A container `Compute` with autoscaling no longer declares a task count in its
+  CloudFormation template. Before, every deploy that changed the app's code reset
+  the running task count to `minInstances`, stopping tasks that were running jobs.
+
+  Running jobs also get longer to finish when a task is stopped by a deploy or by
+  scale-in: the container now waits up to 120 seconds (the AWS Fargate maximum),
+  up from 25 seconds. A job still running after that is stopped and retried.
+
+  The `bb-compute`, `bb-async-job` and `bb-cron-job` READMEs now say that a deploy
+  restarts a job still running after that window, and that the restart counts as
+  one of the job's attempts.
+
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/core@0.9.0
+
 ## 0.2.0
 
 ### Minor Changes

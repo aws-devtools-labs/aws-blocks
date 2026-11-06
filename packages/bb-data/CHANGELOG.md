@@ -1,5 +1,97 @@
 # @aws-blocks/bb-data
 
+## 0.6.0
+
+### Minor Changes
+
+- 49b68af: feat(bb-data): load Postgres extensions (PostGIS, pgvector) in local dev
+
+  Adds an `extensions` option to `DatabaseOptions` so a Database Block can declare
+  the Postgres extensions it uses (e.g. `['postgis']`, `['pgvector']`) and have them
+  load in the **local PGlite engine**, restoring local/production parity for spatial
+  and vector workloads. Previously `CREATE EXTENSION postgis` worked once deployed to
+  Aurora but failed in local dev, forcing a sandbox deploy for every spatial/vector
+  iteration.
+
+  - **Local-only, mirroring `postgresVersion`.** The option is read only by the local
+    PGlite implementation and is a no-op on AWS, where Aurora PostgreSQL supports
+    these extensions natively. Application code is unchanged across environments, and
+    PGlite never leaks into app code.
+  - **Opt-in install.** Each supported extension ships as its own package, declared as
+    an **optional peer dependency** and loaded by dynamic import, so only projects
+    that declare an extension install it: `postgis` → `@electric-sql/pglite-postgis`,
+    `pgvector` → `@electric-sql/pglite-pgvector`. A declared extension whose package is
+    missing (or an unknown name) fails on the first database interaction with an
+    actionable error — the exact `npm install` command, or the list of supported names.
+  - You still run `CREATE EXTENSION <name>` in a migration — the option only makes the
+    extension available for `CREATE EXTENSION` to succeed locally.
+
+  Both extension packages are experimental upstream; the opt-in install keeps that
+  risk with the consuming app rather than every `bb-data` consumer. No change to the
+  AWS/CDK path. Non-breaking and additive: a `Database` with no `extensions` behaves
+  exactly as before.
+
+  The two extension packages are pinned to exact versions (`@electric-sql/pglite-postgis`
+  `0.2.11`, `@electric-sql/pglite-pgvector` `0.0.12`) to match the exact-pinned
+  `@electric-sql/pglite` `0.5.11` they peer-depend on. A caret range let a newer extension
+  release (whose `pglite` peer had moved on) float in and produce an unresolvable peer tree.
+
+- 116b32b: **Breaking (behavior):** `db pull` no longer generates CRUD for tables with row-level security (RLS) disabled.
+
+  Generated CRUD relies on row-level security to decide which rows each user can access, and PostgreSQL applies no row filtering to a table without RLS. `db pull` and the `npm run dev` type refresh now skip these tables. The `db pull` eligibility table shows `No — RLS disabled` for them, and both commands print a warning that names each skipped table with the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` statement to run, and a `USING (true)` policy as the way to share a table with every signed-in user on purpose. Tables with RLS enabled but no policies are still generated, but `db pull` now marks them `Action required`: Postgres denies every row until a table has a policy.
+
+  If you re-pull a project that already has CRUD for a table without RLS, that table disappears from `database.types.ts` and `database.meta.ts`, and code that uses it stops compiling. To keep it, enable RLS and add policies for the table in a migration, then re-run `db pull`.
+
+### Patch Changes
+
+- b2eb306: fix(bb-data): the verb usage names the command that runs the CLI
+
+  `bb-data <verb> --help` prints `Usage: <command> <verb> …`, where `<command>` is `BB_DATA_COMMAND` when a wrapper sets it, else `bb-data`. `cdk-blocks db <verb> --help` sets it, so its usage reads `Usage: cdk-blocks db migrate …` instead of `Usage: bb-data migrate …`.
+
+- c1fabce: fix(bb-data): `bb-data <command> --help` prints that command's usage
+
+  `bb-data migrate --help`, `status --help`, `generate-types --help` and `pull --help` (or `-h`) now print the usage and options of that command and exit 0. Before, `migrate --help` read `--help` as the migrations directory and exited 1, and `pull --help` failed without a terminal. `--help` is checked first, wherever it appears in the arguments, so a help request never opens, migrates or introspects a database and never prompts. `bb-data --help` prints the overview of every command. Without `--help`, every command behaves as before.
+
+  The `pull` verb help states the exit code it really has without a terminal: 1 for `bb-data pull`, and 2 for `cdk-blocks db pull`, which refuses before bb-data runs (also under `--no-input` or `CI`).
+
+- f0c1455: `bb-data pull` no longer shows the connection string as you type or paste it, and a paste that ends in Enter is submitted at once. Ctrl-C at any of its prompts now exits with code 130, and closing stdin (Ctrl-D) before answering exits with code 1 and `stdin closed before an answer was given.` Previously both exited 0 without a message.
+- Updated dependencies [e83d152]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [ee557d4]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [60360c1]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/data-common@0.1.8
+  - @aws-blocks/bb-logger@0.4.0
+
 ## 0.5.0
 
 ### Minor Changes

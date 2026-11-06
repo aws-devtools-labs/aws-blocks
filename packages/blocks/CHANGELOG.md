@@ -1,5 +1,425 @@
 # @aws-blocks/blocks
 
+## 0.10.0
+
+### Minor Changes
+
+- be8864c: fix(bb-agent): check conversation ownership in `stream()`, `resume()`, `getConversation()` and `getPendingInterrupts()`, and scope `getChannel()` to the caller
+
+  `stream()` and `resume()` accepted any `conversationId` alongside a `userId` and never checked that the conversation belonged to that user. A caller who knew another user's conversation ID could add turns to it, or approve (and `trust`) that user's pending tool call, which then ran with the agent's IAM role. The same ID also let a caller read the conversation's history, and listen to or push chunks onto its live Realtime channel (the default `channelId` is the conversation ID).
+
+  - **`stream()` and `resume()`** now throw `AgentErrors.ConversationNotFound` unless `options.conversationId` was created by `createConversationId(userId)` for the same `options.userId`. The check runs before anything is persisted or dispatched, and reads the conversation record with a strongly consistent read, so a `stream()` right after `createConversationId()` is not rejected on AWS.
+  - **A turn without a `conversationId`** no longer runs in a conversation's session on AWS. Its AgentCore session id was the caller-chosen `channelId`, and the AgentCore entry used that as the conversation, so `stream({ channelId: <another user's conversation id> })` skipped the ownership check. It now gets its own session and, as in the local mock, no persisted conversation. **Breaking (AWS only):** a deployed agent that relied on reusing a `channelId` without a `conversationId` to keep memory across turns loses it; pass a `conversationId` instead (`createConversationId()` for persistence agents, a server-chosen key for `inferenceOnly` agents).
+  - **`getPendingInterrupts(conversationId, { userId })`** now requires an options object with the caller's `userId` and returns `[]` for a conversation that user doesn't own. **Breaking:** `getPendingInterrupts(id)` becomes `getPendingInterrupts(id, { userId })`.
+  - **`getConversation(id, { userId, limit? })`** now requires the caller's `userId` in its existing options object and returns `[]` for a conversation that user doesn't own. **Breaking:** `getConversation(id)` / `getConversation(id, { limit })` become `getConversation(id, { userId })` / `getConversation(id, { userId, limit })`.
+  - **`getChannel(channelId, { userId })`** now requires an options object with the caller's `userId`. With persistence enabled, a turn's chunks are published on a channel scoped to the user who started it, so a caller can't listen to, or push chunks onto, another user's channel, whatever `channelId` they pass. **Breaking:** `getChannel(channelId)` becomes `getChannel(channelId, { userId })`, with the same `userId` you pass to `stream()`/`resume()`. `inferenceOnly` agents ignore the value but still take `{ userId }`: pass the session's `userId` as for persistence agents, not a placeholder, so the call stays correct if persistence is turned on later; their channels are not user-scoped.
+  - There is no backward-compatible form: the old calls carry no `userId`, so they could only keep returning another user's data or change behaviour. With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` naming the new signature when the options object or its `userId` is missing, instead of returning data. Build the options from the session's `userId`; don't spread a caller-supplied object into them.
+
+  Agents with `inferenceOnly: true` keep no conversation records, so these checks don't apply to them: a `conversationId` passed to one is a shared session key, so don't let callers choose it.
+
+  The channel key changes with persistence enabled, so reload chat sessions that were open across the upgrade (including turns that were running while the deploy rolled out); a subscription made before it no longer receives chunks.
+
+  If you pass a `conversationId` that was never created with `createConversationId()`, `stream()` now rejects it; create the conversation first. Pass a `userId` taken from the authenticated session, never from a request parameter. The README's Authorization section and End-to-End example (which now includes the `getPendingInterrupts` and `resume` handlers) show this.
+
+- 49b68af: feat(bb-data): load Postgres extensions (PostGIS, pgvector) in local dev
+
+  Adds an `extensions` option to `DatabaseOptions` so a Database Block can declare
+  the Postgres extensions it uses (e.g. `['postgis']`, `['pgvector']`) and have them
+  load in the **local PGlite engine**, restoring local/production parity for spatial
+  and vector workloads. Previously `CREATE EXTENSION postgis` worked once deployed to
+  Aurora but failed in local dev, forcing a sandbox deploy for every spatial/vector
+  iteration.
+
+  - **Local-only, mirroring `postgresVersion`.** The option is read only by the local
+    PGlite implementation and is a no-op on AWS, where Aurora PostgreSQL supports
+    these extensions natively. Application code is unchanged across environments, and
+    PGlite never leaks into app code.
+  - **Opt-in install.** Each supported extension ships as its own package, declared as
+    an **optional peer dependency** and loaded by dynamic import, so only projects
+    that declare an extension install it: `postgis` → `@electric-sql/pglite-postgis`,
+    `pgvector` → `@electric-sql/pglite-pgvector`. A declared extension whose package is
+    missing (or an unknown name) fails on the first database interaction with an
+    actionable error — the exact `npm install` command, or the list of supported names.
+  - You still run `CREATE EXTENSION <name>` in a migration — the option only makes the
+    extension available for `CREATE EXTENSION` to succeed locally.
+
+  Both extension packages are experimental upstream; the opt-in install keeps that
+  risk with the consuming app rather than every `bb-data` consumer. No change to the
+  AWS/CDK path. Non-breaking and additive: a `Database` with no `extensions` behaves
+  exactly as before.
+
+  The two extension packages are pinned to exact versions (`@electric-sql/pglite-postgis`
+  `0.2.11`, `@electric-sql/pglite-pgvector` `0.0.12`) to match the exact-pinned
+  `@electric-sql/pglite` `0.5.11` they peer-depend on. A caret range let a newer extension
+  release (whose `pglite` peer had moved on) float in and produce an unresolvable peer tree.
+
+- b2eb306: feat(blocks): add the `cdk-blocks` CLI
+
+  `@aws-blocks/blocks` now installs a `cdk-blocks` command (there is no `blocks` command) for the whole app lifecycle: `cdk-blocks dev`, `cdk-blocks sandbox`, `cdk-blocks deploy`, `cdk-blocks destroy`, `cdk-blocks whoami`, `cdk-blocks secret`, `cdk-blocks config`, `cdk-blocks telemetry`, `cdk-blocks generate client|spec|types`, `cdk-blocks db` and `cdk-blocks vendorize`. Each lifecycle command runs the same code as the matching npm script of a generated app, so `npx --no -- cdk-blocks dev` behaves like `npm run dev`, and the npm-script spellings (`dev:stop`, `sandbox:destroy`, `typegen`, …) work as aliases. Run it as `npx --no -- cdk-blocks <command>`: `--no` uses the installed CLI and never downloads a package, while a bare `npx blocks` would install the unrelated `blocks` package from npm.
+
+  The CLI prints results on stdout and progress on stderr, supports `--output json` and `--query <field>` (for example `API_URL=$(npx --no -- cdk-blocks deploy --query apiUrl)`), and exits 0 on success, 1 on failure, 2 on a usage error and 130 when interrupted. `cdk-blocks destroy` shows the stack it deletes and asks first; in a non-interactive run it requires `--yes`. Local server settings can be set in `package.json` under `"blocks": { "dev": { … } }`; without a `frontendCommand` the frontend is detected from `vite` or `next` and started on `frontendPort` (default 3100). `@aws-blocks/blocks` now depends on `tsx`; the CLI uses the app's own `tsx` first, else that one, for its lifecycle runners and for client generation. `blocks-generate-client` falls back to it the same way, so it no longer needs the app to install `tsx`. CDK synth still runs the app's own `tsx` (the `app` command in `cdk.json`, or `npm exec tsx` for the sandbox commands), so apps keep `tsx` as a devDependency, as the templates do.
+
+  Inside an app, run it as `npx --no -- cdk-blocks <command>` or through the npm scripts. Without installing, run `npx -p @aws-blocks/blocks cdk-blocks <command>`: a plain `npx @aws-blocks/blocks` cannot choose a command, as none has the package's unscoped name.
+
+  `@aws-blocks/blocks/scripts` re-exports `@aws-blocks/core/scripts`, so the lifecycle scripts it exports now honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM`, and it exports `readAwsIdentity()`, `describeDeploymentCredentials()`, `resolveDeploymentTarget()` and `log`.
+
+- 9ebf67a: An API namespace can run on a `container` compute:
+
+  ```ts
+  const renderCompute = new Compute(scope, 'render', { type: 'container', size: { vcpu: 2, memory: 4096 } });
+  export const render = new ApiNamespace(scope, 'render', (context) => ({ … }), { compute: renderCompute });
+  ```
+
+  The container's tasks serve the namespace with the same dispatch as the Lambda handler (CORS, cookies, error envelopes), so clients call it exactly as before at `/aws-blocks/api/render`.
+
+  - The shared API gateway reaches the tasks through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC: one load balancer and one listener per backend, with a path rule per namespace forwarding to its container's target group, health-checked on the task's readiness port. A container that only runs jobs gets no target group.
+  - The tasks admit the load balancer on a security group of their own; the shared compute security group stays closed to inbound traffic.
+  - The load balancer drops request headers that aren't valid HTTP before they reach a task.
+  - API calls to a container keep the gateway's ~29-second cap. A stopping task finishes its in-flight requests (up to 35 s) before it shuts down.
+  - A `Scope` with a container `compute` now places its `ApiNamespace`s on that container too, instead of failing synth.
+  - A container that serves API namespaces needs a running task: `scaling.minInstances: 0` fails synth. Without a `scaling.strategy`, one that also runs an `AsyncJob` scales on CPU, and its queue backlog adds tasks too.
+  - Moving a namespace that already serves traffic onto a container: during that deploy, its calls can get 503s for the minute or two the new tasks take to start.
+  - `runContainer()` takes the backend module (`runContainer({ backend })`) and serves its API on port 8080, with readiness on port 8081; called without it, the container answers a health check on port 8080 as before. A container compute passes it only when the compute serves API traffic.
+  - The container compute's dashboard section gains API request, 5xx, latency and task-health widgets.
+
+- 2c9005f: fix(core): reject malformed native declarations instead of dropping them
+
+  An `aws-blocks` key that is present but not an object dropped every declaration
+  inside it; it is now `"aws-blocks" must be an object (declared by <block>)`. A
+  `null` key is an error rather than an absence, and an absent key still skips. An
+  unrecognized field on a binding with a usable `id` is rejected rather than
+  silently stripped, both generic-arity errors now name the binding and the
+  declaring block, and a registration, platform entry or package entry carrying a
+  non-enumerable field is rejected too.
+
+  Behavior change (0.x minor = breaking channel): generation now exits 1 where it
+  wrote a spec before, for a `null` or non-object `aws-blocks` key and for an
+  unrecognized binding field. Remove the offending key or field.
+
+- be8864c: feat(bb-distributed-table): add a `consistentRead` option to `get()`
+
+  `get(key, { consistentRead: true })` reads the item with a strongly consistent DynamoDB `GetItem` (`ConsistentRead: true`), so it sees every write that succeeded before the read. Use it when the next step depends on an item that was just written, such as an existence or ownership check. Without the option `get()` stays eventually consistent, as before. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent and accepts the option.
+
+  The new `GetOptions` type is exported from `@aws-blocks/bb-distributed-table`, and from the umbrella `@aws-blocks/blocks` as `DTGetOptions`.
+
+### Patch Changes
+
+- e99250d: `AuthBasic` now reads its session cookie by exact name. Previously a cookie whose name merely ended with the session cookie's name (for example `xauth_<id>`, set by another app on a shared parent domain) could supply or shadow the session value, and a `.` in the scope id matched any character.
+
+  The match is now anchored to a cookie boundary and the scope id is matched literally, the same way `AuthCognito` reads its cookie. Apps need no changes.
+
+- 320e529: AuthBasic now invalidates every outstanding session when a user resets their
+  password. Previously `confirmResetPassword` only changed the credential, so a
+  token stolen before the reset kept authenticating until it expired — the reset
+  did not actually lock the attacker out. Each session JWT now carries the user's
+  current session epoch (an `ep` claim); `confirmResetPassword` bumps a per-user
+  epoch counter, and every auth check rejects a token whose epoch predates it
+  (reported as `SessionRevokedException`), so a password reset signs the user out
+  on all devices.
+
+  Tokens issued before this change have no epoch claim and are treated as the
+  lowest epoch, so the first reset invalidates them too. If the sessions cannot be
+  invalidated, `confirmResetPassword` throws `SignOutIncompleteException` (503)
+  and leaves the password unchanged; request a new reset code and try again. The
+  umbrella `@aws-blocks/blocks` is bumped because the bundled `bb-auth-basic`
+  README/DESIGN docs it mirrors have changed.
+
+- 0b6375c: `AuthBasic` can now emit sign-in metrics you can alarm on. Pass a `Metrics` instance as the new `metrics` option and every `signIn` emits a CloudWatch count: `SignInSuccess`, `SignInFailure` (unknown user, unconfirmed user or wrong password, under one name so usernames are not revealed) or `SignInLocked` (refused by the `lockout` policy), each with an `AuthBlock` dimension naming the AuthBasic instance.
+
+  The option is off by default, so existing apps emit nothing and pay nothing new. A failing emitter is logged and never changes a sign-in result.
+
+- 1c7e0dd: `AuthBasic` and `AuthCognito` no longer let a request header decide whether the session cookie is `Secure`. Previously, on a deployed stack, a request that sent `Origin: http://localhost` received a cookie without `Secure` (and, with `crossDomain: true`, without `Partitioned`). The local-dev relaxation now applies only when the process itself is local, as reported by `getDeploymentType()` from deploy configuration. The local dev server (`npm run dev`) behaves as before. A sandbox (`npm run sandbox`) proxies the API to deployed compute, so its cookie now keeps `Secure` (and `Partitioned` with `crossDomain: true`) even though the page is on `http://localhost`, matching `AuthOIDC`.
+
+  `@aws-blocks/auth-common/cookies` adds `isLocalDevRequest(ctx)`, the per-request input both BBs now use.
+
+- b2eb306: fix(blocks): `cdk-blocks` help never runs a command, and confirmations name the real credentials
+
+  - Help never runs a command. `-h` or `--help` anywhere after `cdk-blocks secret`, `cdk-blocks config`, `cdk-blocks db` or `cdk-blocks vendorize` shows help instead of running the tool with your arguments, so `cdk-blocks config remove KEY --help` never deletes `KEY`. `cdk-blocks help secret remove KEY` and `cdk-blocks db pull ./out --help` forward only `remove --help` or `pull --help` to the tool, which prints that command's usage; `cdk-blocks help vendorize <package>` and `cdk-blocks vendorize <package> --help` print the CLI's help. `blocks-vendorize --help` prints its usage and exits before it copies or installs anything.
+  - Confirmations name the real credentials. `cdk-blocks destroy`, `cdk-blocks deploy` and the sandbox commands describe the credentials as the deploy does, for example `access keys in AWS_ACCESS_KEY_ID (used instead of AWS_PROFILE)`. When environment access keys override an exported `AWS_PROFILE` or `--profile`, they print a warning, even with `--quiet`.
+  - `--verbose` masks the password of a URL (`postgres://user:***@host`) and the value of `--url` when it echoes a child command line.
+  - `--region` and `AWS_REGION` must be an AWS Region code such as `us-east-1`, `us-gov-west-1` or `cn-north-1`; anything else is a usage error (exit 2). On Windows, the sandbox dev command refuses a path that contains `"` or `%`, which the Windows shell cannot quote safely.
+
+- b2eb306: fix(blocks): `cdk-blocks` output streams, non-interactive runs and usage errors
+
+  - `--no-input` and `CI` reach `cdk-blocks secret`, `cdk-blocks config` and `cdk-blocks db pull`: a value prompt that the run cannot show is a usage error (exit 2) naming `--value-stdin`, even on a terminal. A missing key, an unknown subcommand, a missing flag value, an unknown `db` verb (with a suggestion) and an unconfirmed `secret remove --force` also exit 2. The global `--yes` confirms `secret remove --force`, as `--yes` after the command does.
+  - `--quiet` does not hide the dev server's RPC errors; it sets only `BLOCKS_LOG_LEVEL=quiet`. A `BLOCKS_DEV_QUIET` you set yourself still applies.
+  - Text output: the CLI runs core with `BLOCKS_LOG_STREAM=stderr`, so progress, CDK milestones, raw CDK output and streamed CloudFormation events go to stderr, and stdout keeps the deployment target, `BLOCKS_DEPLOYED` and the final URLs. `cdk-blocks generate spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line.
+  - `cdk-blocks deploy` and `cdk-blocks sandbox deploy` print no JSON or `--query` result after a failed or interrupted run. The result comes from `.blocks-sandbox/last-deploy.json`, which the deploy runner writes: the stack outputs core read when it deployed, so a concurrent deploy of the other stage that rewrites `.blocks-sandbox/outputs.json` cannot change or empty it, and the account and Region the deploy itself used. When the runner recorded no result, the command exits 1 with an error instead of printing null fields.
+  - A closed terminal no longer makes `cdk-blocks deploy` exit 1 while the deploy goes on: the runners other than the dev server run as `node --import` with the `tsx` loader, with no `tsx` process between the CLI and the runner, and the CLI reports the deploy's own exit code and result.
+  - Arguments after `--` are rejected with exit 2 (`unexpected arguments after --`) for commands that do not forward them, instead of being dropped.
+  - `--telemetry-file <path>` (or `--telemetry-file=<path>`) is a global option. The CLI passes it, as an absolute path, to the lifecycle runners, where core's telemetry client reads it, so `npm run dev -- --telemetry-file=/tmp/events.json` captures events as it did with the scripts.
+  - `cdk-blocks sandbox --deploy-only` runs `cdk-blocks sandbox deploy`, as a hidden alias of the old script flag.
+  - `package.json` `"blocks": { "dev": { "frontend": false } }` runs the backend only, as `--no-frontend` does, even when `vite` or `next` is installed. It cannot be combined with `frontendCommand` or `frontendPort`.
+  - A `--host` or `blocks.dev.host` is also exported to the dev server as `BLOCKS_DEV_HOST`, so the local realtime WebSocket (`/realtime`) accepts that host's origins, as it does for a `BLOCKS_DEV_HOST` you set yourself; a `BLOCKS_DEV_HOST` already in the environment is kept.
+  - A `package.json` that starts with a UTF-8 byte order mark is read as npm reads it, so `cdk-blocks dev`, `cdk-blocks dev stop` and the sandbox commands accept it instead of failing with `cannot read …/package.json`.
+  - Global options apply after `secret`, `config`, `db` and `vendorize` too, up to a `--`: `cdk-blocks secret remove KEY --profile prod` deletes in that profile's account, and `cdk-blocks config set KEY value --output json` exits 2, instead of the CLI forwarding the options to the tool, which wrote them into the value or a file name, or ignored them. Global options can also sit between the words of a command (`cdk-blocks generate --debug client`), and before the command they take the same forms as after it (`-qv`, `-C<dir>`). `--version` after any command prints the version and runs nothing.
+  - `--output json` and `--query` exit 2 with `… is not supported for "cdk-blocks <command>"` on a command without a JSON result, after the command name as before it, and without a command. A single-valued global option given twice with different values (`--cwd a -C b`), `-C` naming a file, `-y=false` and `-C=<dir>` are usage errors; `--port -1` takes `-1` as the value; `cdk-blocks --region <bad> help` shows the help.
+  - `--query` checks the whole path against the command's result before the command runs, so `cdk-blocks dev stop --query stopped.0.nope` or `cdk-blocks deploy --query apiUrl.x` exits 2 without stopping a server or deploying. A list element is named by its index (`stopped.0.port`); an element past the end of a list, as in an empty `stopped`, prints an empty line.
+  - The help of a `db`, `secret` or `config` verb (`cdk-blocks secret set --help`, `cdk-blocks help db pull`) works outside an app too, instead of failing with `not inside an AWS Blocks app`.
+  - `cdk-blocks vendorize` without a package, with two packages or with an option other than `--force` is a usage error (exit 2), with one `Error:` line, instead of the tool's usage and `cdk-blocks vendorize failed (exit code 1)`.
+  - Error hints say only what helps: `Run with --verbose for the full tool output` follows a failed lifecycle runner, whose output `--verbose` extends; a failed `db`, `vendorize` or `generate client` says that the tool's own output is above; `--debug` prints the stack trace of an error the CLI raised itself too. A runner prints a failure's message, and its stack trace only with `--debug`. The command line that `--verbose` echoes is quoted for a POSIX shell, so a path with a space or the runner's JSON options can be pasted back.
+  - A Ctrl-C that reaches a command after its tool finished (`cdk-blocks db migrate` applied every migration and exited 0) reports the tool's success, exit 0, instead of `interrupted` and 130. `cdk-blocks dev` and `cdk-blocks sandbox`, which exit 0 when Ctrl-C stops them, still exit 130.
+  - A relative path given to `cdk-blocks db` or to `cdk-blocks generate types --out`/`--include` is resolved from the directory you run the command in (or `-C`), as `cdk-blocks generate client` and `generate spec` already did, instead of from the project root. `cdk-blocks db` drops the `--` that ends the CLI's options instead of forwarding it to bb-data as a directory name.
+  - `cdk-blocks generate types` rejects `--check` with `--watch`, and an empty `--out`, `--include` or `--module`, as usage errors (exit 2), instead of passing them to typegen, which failed with exit 1 or wrote an invalid `declare module ""`.
+  - `cdk-blocks generate client <foundation> <output>` and `cdk-blocks generate spec <backend> [output]` run outside an app, as `blocks-generate-client` and `blocks-generate-spec` did; only their default paths need one.
+  - A typo of a hidden alias suggests the canonical command: `cdk-blocks consol` suggests `sandbox console`, `cdk-blocks typegn` suggests `generate types`.
+  - A relative `--telemetry-file` is resolved from the directory you run the command in for the commands that run core in the CLI process too (`cdk-blocks sandbox console`), instead of from the project root.
+  - `cdk-blocks telemetry enable|disable` outside an app is a usage error that suggests `--global`, instead of writing a `.blocks/config.json` into the current directory; `cdk-blocks -C <dir> telemetry` reads `<dir>`, not the shell's directory.
+  - `cdk-blocks destroy` prints the target with `.env.production` applied, as `cdk-blocks deploy` and `cdk-blocks whoami` do, and core's destroy now uses it too, so all three name the same credentials and Region.
+  - `cdk-blocks destroy` passes the stack it names to core, so destroying a production stack that does not exist (already deleted, or another Region) says there is nothing to delete instead of `✅ Production stack destroyed!`. `cdk-blocks sandbox destroy` on a machine with no `.blocks-sandbox/sandbox-id.txt` says there is no sandbox to delete and exits 0, without creating a sandbox id or running cdk.
+  - An explicit `--profile` wins over access keys in the environment: the CLI empties `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` (and their `AMAZON_` names) for the run, so neither the shell nor a stage env file can make CDK or `cdk-blocks whoami` use another account, and says so on stderr. `cdk-blocks whoami` prints the same warning as `deploy` and `destroy` when exported keys win over an exported `AWS_PROFILE`.
+  - `cdk-blocks deploy` checks the `--wait-live` budget before anything runs: `--wait-live=SECONDS` and `--wait-live-timeout=SECONDS` take a whole number from 1 to 3600, `--wait-live-timeout` needs `--wait-live`, and the budget is given once. Anything else exits 2, instead of deploying with a warning about the default budget, or silently ignoring the flag.
+  - `cdk-blocks sandbox console` opens this machine's sandbox stack, in the Region it was deployed to (from `last-deploy.json`, else the sandbox's configured Region with `.env.local`), instead of the first stack in `.blocks-sandbox/outputs.json`, which is the production stack after a `cdk-blocks deploy`. Without a sandbox id or a recorded deploy of the sandbox it exits 1 and suggests `cdk-blocks sandbox deploy`.
+  - After a successful `cdk-blocks sandbox destroy`, the CLI removes the deleted sandbox from `.blocks-sandbox/last-deploy.json` and `outputs.json`, and removes `config.json` when the sandbox wrote it, so `cdk-blocks sandbox console` and the frontend no longer point at the deleted stack. The sandbox id and the production records stay.
+  - Credential, bootstrap and sandbox recovery guidance names the `cdk-blocks` command that was run, with its `-C`, `--profile` and `--region`, for example `Then re-run \`cdk-blocks deploy --profile prod\`.`, instead of `npm run deploy`, `npm run sandbox`(for`sandbox deploy`too) or`npm run sandbox:destroy`, which an app without those scripts does not have.
+  - `cdk-blocks destroy` refuses, deleting nothing, when the CDK app does not define the `<stackId>-prod` stack it names and asked to delete (for example an older app whose `index.cdk.ts` names its own stack). `cdk-blocks deploy` warns when CDK deployed another stack than `<stackId>-prod`. Without a `stackId`, both say which id to choose and add a `Try:` line that lists the existing production stacks.
+  - `cdk-blocks whoami` tells a malformed `.blocks/config.json` (`(invalid .blocks/config.json)`, with the parse error as a warning) from a missing file or a missing `stackId`; `cdk-blocks deploy` and `destroy` print the parse error.
+  - `cdk-blocks whoami --profile <name>` for a profile that does not exist says the profile is not in your AWS config, instead of "no AWS Region is set".
+  - A SIGTERM or SIGHUP sent to the pid of `cdk-blocks dev` alone (`kill <pid>`, an IDE stop button, a harness) stops the dev server and its frontend at once, as one sent to its process group does, instead of after 10 s. `cdk-blocks sandbox` in watch mode stops at once too.
+  - `cdk-blocks dev` exits 1 with the reason when its dev server fails to start (another dev server owns the port, the bind fails), instead of waiting for a file change forever. Stopping `cdk-blocks dev` while its backend is not running (`cdk-blocks dev stop` after a crash, or a SIGTERM) exits 0 instead of reporting `failed (exit code 143)`.
+  - `--port`, `--frontend-port` and the `blocks.dev` ports accept only decimal port numbers from 1 to 65535: `1e3`, `0x10`, `0b…`, `" 41082 "` and `-1` are usage errors (exit 2) that name the value, instead of binding port 1000 or 16.
+  - `cdk-blocks dev stop --all --port N` and `cdk-blocks cleanup --port N` are usage errors (exit 2), instead of ignoring `--port` and stopping every recorded dev server.
+  - `cdk-blocks dev stop` reads only `blocks.dev.port`, so it stops the server while another `blocks.dev` setting is invalid. `cdk-blocks dev`, `dev stop` and `sandbox` warn about a `blocks.dev` key that nothing reads (a typo such as `prot`), with the nearest setting; `generateClient` is accepted.
+  - `cdk-blocks dev stop` without `--port` stops the only dev server the app recorded when none is recorded on the configured port (a server started with `cdk-blocks dev --port 4000`), and says which port. With several recorded, it lists them and points to `--port` and `--all`.
+  - `cdk-blocks dev` and `cdk-blocks sandbox` warn when a `frontendCommand` you set (`--frontend-command` or `package.json`) does not contain the frontend port the dev server proxies to, as with a hard-coded `npx vite --port 3100` and `--frontend-port 41079`, which answered 502. The README example config no longer sets `frontendCommand`.
+  - Ctrl-C or Ctrl-D at the hidden prompt of `cdk-blocks secret set` or `cdk-blocks config set` exits 130 with `Interrupted; nothing was set.`, instead of exit 13 and Node's "unsettled top-level await" warning.
+  - `cdk-blocks secret set KEY` and `config set KEY` with stdin that is not a terminal say `stdin is not a TTY`, instead of blaming `--no-input or CI` when neither was set.
+  - A bare `cdk-blocks secret` or `cdk-blocks config` exits 2 with `needs a verb: set, list or remove` and its help command, instead of `Unknown subcommand undefined`. An invalid key and an empty value exit 2, with no `--verbose` hint.
+  - `cdk-blocks generate client -q` (and `blocks-generate-client` at `BLOCKS_LOG_LEVEL=quiet`) hides the warnings that loading the backend prints, such as `[Realtime] BLOCKS_RT_WS_URL not set`, which say nothing about the generated client.
+  - `cdk-blocks db --help` shows `cdk-blocks db migrate aws-blocks/migrations` and `cdk-blocks db status aws-blocks/migrations`, the migrations directory of the templates, instead of examples that fail with `Migrations directory not found: ./migrations`. `cdk-blocks db <verb> --help` prints `Usage: cdk-blocks db <verb> …`, not `Usage: bb-data <verb> …`.
+  - A SIGTERM, SIGINT or SIGHUP sent to `cdk-blocks generate client` (or `blocks-generate-client`) alone reaches the client generator, and the command ends after it, instead of leaving the generator running to write `aws-blocks/client.js` after the command reported a failure.
+  - `cdk-blocks generate client` and `cdk-blocks generate spec` report a missing backend the same way, `cannot find the backend entry at <path>.` with exit 1, before anything runs (`generate client` exited 2). A backend that does not load (a syntax error) gives a one-line `❌ Client generation failed: …` with exit 1, as `❌ Spec generation failed: …` does, instead of a raw Node stack trace; both print the stack with `--debug`.
+  - A `db`, `vendorize` or `generate` tool stopped by a signal fails with `<tool> was stopped by SIGTERM.`, without `its output is above`, which it may not have printed. `cdk-blocks generate spec` fails as `cdk-blocks generate client` does: `blocks-generate-spec exited with code 1; its output is above.`
+  - A `cdk-blocks dev` startup refusal (another dev server on the port, a port in use) prints its reason once: the runner's `❌` message, then exit 1, without an `Error:` line repeating it.
+  - `cdk-blocks generate spec <backend>` outside an app runs from the backend's directory, so the backend's local mock storage (`.bb-data/`) is not created in the directory you run it from.
+  - `cdk-blocks generate types --out <dir>` naming a directory is a usage error (exit 2), instead of a raw `EISDIR` error.
+  - `cdk-blocks generate client` in an app whose `package.json` sets `"blocks": { "dev": { "generateClient": false } }` (the Amplify overlay) refuses to replace `aws-blocks/client.js`, with exit 2 and the hint `npm run blocks:generate-client`; `--force` writes it anyway.
+  - A single-valued command option given twice with different values (`cdk-blocks dev stop --port 1 --port 2`) is a usage error, as for global options. `cdk-blocks dev --port N stop -h` shows the help of `cdk-blocks dev stop`, the command the run names. A global value option without a command (`cdk-blocks --profile deploy`, where `deploy` became the profile) exits 2 instead of printing the help with exit 0.
+  - `cdk-blocks deploy --wait-live-timeout=0` without `--wait-live` suggests `--wait-live=SECONDS`, not a value `--wait-live` rejects. The `aws cloudformation describe-stacks` hint for a missing stackId passes the run's `--profile` and `--region`.
+  - A `cdk-blocks deploy --wait-live` whose liveness wait fails still records the deploy in `.blocks-sandbox/last-deploy.json` and, with `--output json` or `--query`, prints its result with `"live": false`; it exits 1 with `cdk-blocks deploy deployed the stack, but --wait-live could not confirm that the new build is live`, not `cdk-blocks deploy failed`. The `cdk-blocks deploy` JSON result has a `live` field: `true` when `--wait-live` confirmed the build, `null` without `--wait-live` or a frontend.
+  - `cdk-blocks sandbox` (watch mode) records the sandbox deploy in `last-deploy.json` after its first deploy, as `cdk-blocks sandbox deploy` does, so `cdk-blocks sandbox console` still opens the running sandbox after a production deploy rewrote `.blocks-sandbox/outputs.json`.
+  - `cdk-blocks dev` exits 1 when its dev server fails on its first start (a backend that throws while it loads, an import that does not resolve, an unreadable file, a malformed `.env.local`), instead of exiting 0: `tsx watch` ignores the runner in `node_modules` and ended by itself. A dev server that dies before anything stopped it (out of memory, `kill -9`) and leaves `tsx watch` with nothing to watch fails too. A failure after a reload still waits for the fix, as before.
+  - Ctrl-C ends a `cdk-blocks dev` whose dev server was killed (`kill -9`, the OOM killer), as a SIGTERM does: `tsx watch` waits forever for a runner that a signal ended, so once no runner is left the CLI SIGKILLs it after 1 s. It exits 130.
+  - A SIGTERM sent to `cdk-blocks` that ends the operation it runs (`cdk-blocks sandbox deploy`, `sandbox destroy`, `deploy`, `destroy`; for example core aborts a deploy on a second SIGTERM) exits 143 with `<command> stopped by SIGTERM.`, instead of exit 1 with `failed (signal SIGTERM)` and a `--verbose` hint. A runner that core aborted on the operator's SIGINT exits 130. A runner killed by a signal that `blocks` did not receive still fails with exit 1.
+  - A `package.json` that is valid JSON but not an object (`null`, `[]`, a string) fails `cdk-blocks dev`, `dev stop`, `sandbox` and `generate client` with `<path>/package.json must be a JSON object, not an array.` (exit 1), instead of `Cannot read properties of null`, a dev server on the default port, or a raw `ERR_INVALID_PACKAGE_CONFIG` stack.
+  - An installed `@aws-blocks/core` that does not match `@aws-blocks/blocks` (an upgrade that kept an older core in the lockfile) fails with `@aws-blocks/blocks <version> cannot load @aws-blocks/core <version>, which does not match it: …` and `Try: reinstall @aws-blocks/core to match @aws-blocks/blocks <version>: npm install '@aws-blocks/core@<range>'`, instead of a raw `ERR_PACKAGE_PATH_NOT_EXPORTED` or `does not provide an export named` stack, also when the CLI itself fails to load. `--version` and `--help` never load core.
+  - After a successful `cdk-blocks destroy`, the CLI removes the deleted production stack from `.blocks-sandbox/last-deploy.json` and `outputs.json`, and removes `config.json` when a production deploy wrote it, as `cdk-blocks sandbox destroy` does for the sandbox, so the local client and `--output json` no longer point at the deleted API. The sandbox records stay.
+  - `cdk-blocks sandbox console` opens a sandbox that no record on this machine names (one that the old npm-script wrappers deployed, after a production deploy rewrote `.blocks-sandbox/outputs.json`) when CloudFormation has its stack, looked up with the sandbox's credentials and Region. It refuses only a stack that does not exist, with `the sandbox stack <stack> does not exist in <Region>.`; when the lookup cannot tell (no credentials, no network), it opens the console.
+  - `Try:` lines and the deploy, sandbox and credential re-run guidance name `cdk-blocks` commands as `npx --no -- cdk-blocks …`, as the app's AGENTS.md does, so they can be copied into the app's shell, where a bare `blocks` is not on `PATH` (exit 127). The `--all --port` refusal suggests `npx --no -- cdk-blocks dev stop --all` instead of the hidden `cdk-blocks cleanup` alias.
+
+- b2eb306: feat(blocks): `cdk-blocks sandbox preview` deploys the preview sandbox
+
+  - `cdk-blocks sandbox preview` deploys the sandbox once with the app hosted in preview shape, prints the preview URL and exits, as `npm run sandbox:preview` does. With `--output json` or `--query url` it prints the deploy result. `cdk-blocks sandbox --preview` and `cdk-blocks sandbox:preview` run it, for the npm-script spellings.
+  - `startSandbox` takes `previewInvocation`, the command that the warning of a plain deploy over a hosted preview names. Default: `npm run sandbox:preview`. The recorded deploy result's `url` is the URL the sandbox prints.
+
+- b2eb306: fix(blocks): `cdk-blocks` on Windows
+
+  - Ctrl-C in `cdk-blocks dev` on Windows no longer prints `ps: unknown option -- A` when Git for Windows' `ps` is on `PATH`: the CLI runs no `ps` there, and on POSIX `ps`'s errors no longer reach the terminal.
+  - On Windows, an installed `@aws-blocks/core` that does not match `@aws-blocks/blocks` fails with the `cannot load @aws-blocks/core …, which does not match it` error and its reinstall hint, as on POSIX, instead of a raw `ERR_PACKAGE_PATH_NOT_EXPORTED`: Node names the package there by a path with backslashes.
+  - `cdk-blocks dev` and the sandbox's dev command tell the dev server that it runs under `tsx watch` (`BLOCKS_DEV_UNDER_WATCH=1`), so that a failed first start can end that `tsx watch` on Windows too, where the dev server cannot read its parent's command line.
+
+- b2eb306: fix(blocks): a SIGTERM to the process group of `cdk-blocks dev` or `cdk-blocks sandbox` stops it cleanly
+
+  A supervisor, `timeout` or CI sends SIGTERM to the whole process group, so the child of `cdk-blocks dev` and `cdk-blocks sandbox` gets it directly. On a SIGTERM or SIGHUP, the CLI now sends `cdk-blocks dev`'s dev server one SIGTERM, which its idempotent cleanup takes without harm, and stops `tsx watch` only once the dev server is gone. Before, its immediate forward was a second SIGTERM to `tsx watch`, which then SIGKILLed the dev server before it stopped the frontend, and `next dev` or Vite kept running. Other commands still forward SIGTERM at once.
+
+- e098c7a: The JSDoc on each Building Block re-export now points at the docs bundled in
+  this package (`docs/<package>/README.md`) instead of a `node_modules` package
+  directory, matching the lookup described in the README. Coding agents that
+  follow these comments now land on the shipped docs instead of a path that may
+  not exist.
+- f133ff8: On the `apiFrontDoor: 'cloudfront'` tier, CloudFront now routes an API namespace on a `container` compute straight to the container's load balancer, instead of through the shared API gateway — from the backend's managed distribution, or from `Hosting`'s default CloudFront door when it fronts the API. A call can run up to 60 seconds (CloudFront's origin read timeout) instead of the gateway's ~29, and skips a hop.
+
+  - Each container namespace path (`/aws-blocks/api/<export name>`) gets its own CloudFront behavior, ahead of the `/aws-blocks/api/*` gateway behavior, all on one VPC origin per distribution for the backend's load balancer listener (whose path rules pick the compute) — so a distribution uses one of the account's VPC origins (25 by default) however many containers serve API traffic. Namespaces on Lambda computes, auth routes and `RawRoute`s still go through the gateway.
+  - A viewer-request CloudFront Function stamps the viewer's host on those requests, so `ctx.request.url` in the container is the public URL, including a custom domain.
+  - The load balancer admits CloudFront's origin-facing prefix list on its listener ports; the prefix list is looked up at deploy time, so stacks stay environment-agnostic.
+  - A direct call skips the gateway's throttling and access logs; the distribution's web ACL (`apiWaf`, or Hosting's WAF) covers it, and synth warns when there is none.
+  - On the `apigateway` tier nothing changes: container namespaces go through the gateway, behind `Hosting` too.
+  - A container namespace whose load balancer's VPC has no public subnets (an isolated VPC; a CloudFront VPC origin needs an internet gateway) stays on the gateway, and synth warns naming it.
+  - `Hosting`'s `stacked` door keeps container namespaces on the gateway, through its ALB router.
+  - Synth fails with a clear message when the direct behaviors take a distribution past its cache-behavior quota (CloudFront's default of 75, or `Hosting`'s `quotas.cacheBehaviors`), naming the container namespaces.
+  - The CloudFront Function also drops a client-sent `X-Forwarded-Host`, so it cannot change `ctx.request.url`.
+
+- c1fabce: feat(core): honor `BLOCKS_LOG_LEVEL` and `BLOCKS_LOG_STREAM` in the lifecycle scripts
+
+  `deploy`, `destroy`, `startSandbox`, `destroySandbox` and `startDevServer` from `@aws-blocks/core/scripts` now read `BLOCKS_LOG_LEVEL`:
+
+  - unset (or any unrecognised value): output is unchanged.
+  - `quiet`: errors and final results only.
+  - `normal`: short progress steps; CDK output is condensed into milestones and a resource count, and failure and rollback lines still print.
+  - `verbose`: the raw CDK output, as today.
+  - `debug`: `verbose` plus stack traces for errors the scripts catch and report as warnings.
+
+  The `BLOCKS_DEPLOYED …` line, the deployment-target summary, the API and frontend URLs and error messages print at every level. At `quiet` and `normal` the last 500 lines of hidden CDK output are kept, and when a deploy, destroy or `cdk watch` deploy fails they are printed to stderr before the error, so the failure never needs a re-run to diagnose. A `cdk watch` deploy that fails during synth, which CDK reports without a `❌` line, counts as failed too.
+
+  The external-database migration step and the dev server's `secret()`/`config()` type generation follow the level as well: at `quiet` the migration's output and warnings (its stdout and stderr) are hidden, and printed to stderr only if the migration fails; type-generation notices are hidden at `quiet` and `normal`.
+
+  `BLOCKS_LOG_STREAM=stderr` moves progress to stderr: progress steps, CDK milestones, raw CDK output, streamed CloudFormation events, migration output and type-generation notices go to stderr, and stdout keeps only the results (the deployment target, `BLOCKS_DEPLOYED` and the final URLs). `blocks-generate-spec` follows it too: its progress lines go to stderr, and stdout keeps the `✅ OpenRPC spec written to …` line. Without the variable, the streams are unchanged. `@aws-blocks/core/scripts` exports `log`, the logger these scripts print progress with.
+
+- 6151940: Failed RPC calls on Lambda are now visible in CloudWatch. A failed call reaches the client as a JSON-RPC error inside an HTTP 200 response, so Lambda's `Errors` metric never counted it, and an alarm on it never fired. Each failed call (a method that throws, a call to an unknown API namespace or method, or the handler's 504 timeout) now writes one line in CloudWatch embedded metric format: the `AWSBlocks` / `RpcErrors` metric, with the dimensions `FunctionName` and `StatusClass` (`4xx` or `5xx`). The status, API namespace and method are in the same log line for CloudWatch Logs Insights. No SDK call or IAM permission is added, and the error message is never written to the metric line.
+- 1ec956f: Test temp directories are created with `mkdtempSync`, so two tests that start in the same millisecond no longer share a path.
+- 05a88e1: When AWS denies the credential check before `npm run deploy` and `npm run sandbox`, for example when a profile's role cannot be assumed, the warning now says so instead of reporting an unverified check, and says whether an AWS Organizations policy (a service control policy or a resource control policy) explicitly denied the request. It still does not stop the command, and it never includes the error's account IDs, ARNs or policy IDs.
+
+  A credential failure message now names the profile and the deployment Region. When the fix is `aws login` and the profile has no Region or a different one, the message first prints `aws configure set region <region> --profile <name>`, so that the sign-in uses the Region you deploy to, and says to sign in again after a later Region change. If the profile's Region is set in the AWS credentials file, which overrides the config file that `aws configure set` writes, the message asks you to change it there instead. When `AWS_REGION` or `AWS_DEFAULT_REGION` names another Region than the deployment, which the AWS CLI would use instead, the `aws login` command includes `--region <region>`.
+
+- 3ae8592: feat(bb-cron-job): run a CronJob on a container compute for long-running jobs
+
+  `CronJob` takes the same `compute` and `timeoutSeconds` options as `AsyncJob`.
+  Assign a container `Compute` to run a scheduled job longer than a serverless
+  compute's 15-minute limit:
+
+  ```ts
+  import { Compute, CronJob } from "@aws-blocks/blocks";
+
+  const worker = new Compute(scope, "worker", {
+    type: "container",
+    size: { vcpu: 1, memory: 2048 },
+  });
+
+  new CronJob(scope, "nightly-rebuild", {
+    schedule: "cron(0 3 * * ? *)",
+    compute: worker,
+    timeoutSeconds: 2 * 60 * 60,
+    handler: async () => {
+      // ...
+    },
+  });
+  ```
+
+  On a container compute each tick is delivered like a container `AsyncJob`: the
+  handler runs in its own worker thread, `timeoutSeconds` is enforced, and a
+  failed tick is retried up to 3 attempts in total before moving to a dead-letter
+  queue. A CronJob under a container scope (`new Scope(id, { parent, compute })`)
+  now runs on that container instead of failing synth. Jobs on a serverless
+  compute deploy as before.
+
+- 201e59e: The local dev server now handles API and raw-route requests through the same dispatcher as deployed handlers, so cookie and error responses match. Handlers in local dev can now read the request cookies and client user agent through the request context, API and raw-route responses carry the same no-store cache headers, `ctx.request.url` formats the query string the same way as in a deployment, handlers receive `ctx.request.signal`, `ctx.request.url` takes its host from a loopback `X-Forwarded-Host`, and a request without a `Host` header reads as `http://localhost/...`.
+- 9d69412: Correct documentation that no longer matched the code: session cookies default to `SameSite=Lax` (`SameSite=None; Partitioned` only with `crossDomain: true`), an `inferenceOnly` agent still creates its S3 session bucket, and local mocks are documented as matching the API rather than every AWS behavior.
+
+  `FileBucket` docs now say `objectLock` can be added to a bucket that is already deployed, as an in-place update; it still can't be turned off once on.
+
+- e8673cd: Clarify event block compute compatibility and UnsupportedCompute errors: AsyncJob and CronJob support Lambda and container delivery, while Realtime requires default Lambda compute. Distinguish direct Lambda scheduling from the internal AsyncJob queue used by container CronJobs. Align both design documents and the AsyncJob comments with compute inheritance, retry paths, and backend-scoped Scheduler permissions for function and queue targets. Document that omitting container concurrency allows five in-flight deliveries per job per instance, rather than one per vCPU.
+- 8fb67ec: Fix local FileBucket version deletion so removing the newest stored data version updates the current body and metadata from the next stored data version, or removes the current copies when none remain. Active delete-marker flags and older-version deletion behavior are preserved. Document that historical delete markers discarded by a subsequent upload are not reconstructed, so deletion across re-uploads still differs from S3.
+
+  Ignore nested-key directories when reading version history. Retain the target version body until current-copy reconciliation and version-sidecar removal succeed, allowing filesystem failures to be retried with the same version ID.
+
+- f643a76: Return HTTP 404 for local presigned downloads of unknown or permanently deleted file versions instead of serving the current file's content.
+- c6a59f4: chore(hosting,create-blocks-app): build Next.js with OpenNext 4.1
+
+  - The Next.js adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`, so 4.1.x no longer prints the out-of-range warning.
+  - An app that doesn't declare `@opennextjs/aws` builds with 4.1.14 instead of 4.0.3. Its `next` peer range is `>=15.5.28 <16 || >=16.4.1`, so the build warns for `next` versions below that.
+  - The `create-blocks-app` `nextjs` template declares `@opennextjs/aws` `~4.1.14`.
+
+- 60360c1: `Hosting` no longer rebuilds the frontend on a synth that doesn't need it:
+
+  - **Destroy:** `npm run destroy` and `npm run sandbox:destroy` reuse the frontend build output already on disk instead of running `buildCommand` and the framework build (OpenNext, Nitro, Astro, SvelteKit). On a Next.js app this removes a multi-minute build from every destroy. When there is no build output, the destroy builds as before; a Next.js destroy reuses the `.open-next/` output of an earlier deploy. `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
+  - **Opt-in deploy reuse:** `BLOCKS_SKIP_FRONTEND_BUILD=1` makes a deploy use the existing build output without building. A missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with the adapter's error (same code and resolution) plus a line naming the variable. The build bakes in `BLOCKS_API_URL`, so a deploy never reuses a build on its own.
+
+  The framework adapters read the decision from the build profile (`reuseBuild: 'if-present' | 'required'`); an explicit `skipBuild` option still wins.
+
+- d8a86ee: Update the `LambdaCompute` README and design doc to describe how the compute reaches an app (as the default compute and through `Compute` with `type: 'serverless'`), its options, and its VPC, CORS, tracing, and dashboard behavior. Add tests for the memory, timeout, and VPC placement settings.
+- 4e92168: On the Lambda functions AWS Blocks runs through `createLambdaHandler` (the backend API and its event handlers), every `Logger` line now carries `awsRequestId`, the invocation's request id, so you can correlate everything one request logged (for example `filter awsRequestId = "<id>"` in CloudWatch Logs Insights). Core's `createLambdaHandler` runs each invocation with its `awsRequestId` in scope, and overlapping invocations on one container each see their own id. `awsRequestId` is reserved, so context can't replace it, and your own context fields such as `requestId` are kept as is. Building Block authors can read the same id with `currentRequestId()` from `@aws-blocks/core/bb-utils`. Local dev, SSR hosting web functions and container compute set no request id, so the field is absent there.
+- 80ce128: `npm run sandbox` now deploys infrastructure changes made while it watches. Its `cdk watch` ran with CDK's default `--hotswap`, which applies code-only changes but silently ignores any change it can't hotswap. Adding a Building Block that needs new infrastructure, such as a `Database` or `Realtime`, therefore updated the Lambda code that uses it and never created it, with no message. The watch now passes `--hotswap-fallback`: a code-only change still hotswaps in seconds, and any other change runs a full deploy of the stack.
+- 58980c7: fix: `sandbox:destroy` works on Windows
+
+  On Windows, `npm run sandbox:destroy` always failed and left the sandbox stack deployed. The CDK `--app` path was
+  wrapped in single quotes, which `cmd.exe` keeps as part of the path (`Cannot find module '...index.cdk.ts'`). Listing
+  the stacks to empty their buckets also failed with `spawnSync npm ENOENT`, because `npm` is a `.cmd` shim there. The
+  path is now double-quoted on Windows (single-quoted elsewhere), and stack listing for `destroy`
+  uses the same cross-platform spawn as the rest of the CLI. `sandbox` deploy, synth, and watch now quote the path
+  the same way, so they also work when the project path contains a space.
+
+- Updated dependencies [be8864c]
+- Updated dependencies [e83d152]
+- Updated dependencies [e99250d]
+- Updated dependencies [320e529]
+- Updated dependencies [0b6375c]
+- Updated dependencies [1c7e0dd]
+- Updated dependencies [b2eb306]
+- Updated dependencies [6236bf9]
+- Updated dependencies [b2eb306]
+- Updated dependencies [c1fabce]
+- Updated dependencies [49b68af]
+- Updated dependencies [f0c1455]
+- Updated dependencies [e8e3262]
+- Updated dependencies [eacc87e]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [a5e754b]
+- Updated dependencies [f133ff8]
+- Updated dependencies [9ebf67a]
+- Updated dependencies [3ae8592]
+- Updated dependencies [3ae8592]
+- Updated dependencies [9059918]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [0cf1aa2]
+- Updated dependencies [c1fabce]
+- Updated dependencies [d7f62f3]
+- Updated dependencies [3be61fa]
+- Updated dependencies [36888a1]
+- Updated dependencies [fcf087d]
+- Updated dependencies [2c9005f]
+- Updated dependencies [6151940]
+- Updated dependencies [b7c262c]
+- Updated dependencies [c1fabce]
+- Updated dependencies [1ec956f]
+- Updated dependencies [c1fabce]
+- Updated dependencies [ba80bbd]
+- Updated dependencies [05a88e1]
+- Updated dependencies [3ae8592]
+- Updated dependencies [116b32b]
+- Updated dependencies [b2eb306]
+- Updated dependencies [201e59e]
+- Updated dependencies [be8864c]
+- Updated dependencies [9d69412]
+- Updated dependencies [4e41c28]
+- Updated dependencies [e8673cd]
+- Updated dependencies [8fb67ec]
+- Updated dependencies [77c2c75]
+- Updated dependencies [f643a76]
+- Updated dependencies [1f565bd]
+- Updated dependencies [c6a59f4]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [60360c1]
+- Updated dependencies [c1fabce]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [b2eb306]
+- Updated dependencies [d8a86ee]
+- Updated dependencies [4e92168]
+- Updated dependencies [bfdd06f]
+- Updated dependencies [10eb382]
+- Updated dependencies [6bac1c9]
+- Updated dependencies [80ce128]
+- Updated dependencies [58980c7]
+  - @aws-blocks/bb-agent@0.8.0
+  - @aws-blocks/bb-app-setting@0.4.1
+  - @aws-blocks/bb-auth-basic@0.3.0
+  - @aws-blocks/auth-common@0.4.0
+  - @aws-blocks/bb-auth-cognito@0.2.1
+  - @aws-blocks/bb-auth-oidc@0.3.1
+  - @aws-blocks/bb-container-compute@0.3.0
+  - @aws-blocks/bb-data@0.6.0
+  - @aws-blocks/bb-file-bucket@0.4.1
+  - @aws-blocks/bb-realtime@0.5.1
+  - @aws-blocks/core@0.9.0
+  - @aws-blocks/bb-compute@0.2.1
+  - @aws-blocks/bb-async-job@0.3.1
+  - @aws-blocks/bb-cron-job@0.5.0
+  - @aws-blocks/bb-distributed-table@0.4.0
+  - @aws-blocks/bb-distributed-data@0.3.1
+  - @aws-blocks/hosting@0.6.0
+  - @aws-blocks/bb-lambda-compute@0.7.1
+  - @aws-blocks/bb-logger@0.4.0
+  - @aws-blocks/bb-dashboard@0.3.1
+  - @aws-blocks/bb-email-client@0.2.1
+  - @aws-blocks/bb-knowledge-base@0.3.1
+  - @aws-blocks/bb-kv-store@0.4.1
+  - @aws-blocks/bb-metrics@0.2.1
+  - @aws-blocks/bb-secret@0.3.1
+  - @aws-blocks/bb-tracer@0.3.1
+
 ## 0.9.0
 
 ### Minor Changes
