@@ -10,7 +10,10 @@
  *
  * - a synth that won't deploy the frontend: `npm run destroy` and
  *   `npm run sandbox:destroy` set {@link REUSE_FRONTEND_BUILD_CONTEXT}, so an
- *   existing build output is reused and a build runs only when there is none;
+ *   existing build output is reused and a build runs only when there is none.
+ *   Each adapter checks its own deploy output: a Next.js destroy reuses
+ *   `.open-next/` from an earlier deploy, and with only `.next/` OpenNext still
+ *   builds, because the synth needs its output;
  * - a deploy the user asks to run on an existing build: {@link SKIP_FRONTEND_BUILD_ENV}
  *   set to `1`. Nothing is built, and a missing build output is an error. The
  *   build bakes the backend URL (`BLOCKS_API_URL`) into the frontend, so reuse
@@ -28,14 +31,16 @@ export const REUSE_FRONTEND_BUILD_CONTEXT = 'reuseFrontendBuild';
 /**
  * How this synth treats the frontend build: `'required'` (reuse it, error if
  * it's missing), `'if-present'` (reuse it when it exists), or `undefined`
- * (build as usual). The env var wins over the context.
+ * (build as usual). The destroy context wins over the env var: an exported
+ * `BLOCKS_SKIP_FRONTEND_BUILD=1` applies to deploys, so a destroy with no
+ * build output still builds instead of failing the teardown.
  */
 export function frontendBuildReuse(
 	contextValue: unknown,
 	env: NodeJS.ProcessEnv = process.env,
 ): 'required' | 'if-present' | undefined {
+	if (contextValue === true || contextValue === 'true') return 'if-present';
 	const flag = env[SKIP_FRONTEND_BUILD_ENV];
 	if (flag === '1' || flag === 'true') return 'required';
-	if (contextValue === true || contextValue === 'true') return 'if-present';
 	return undefined;
 }

@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
+import { HostingError } from '@aws-blocks/hosting/constructs';
 import {
   _setSynthExistsChecker,
   _setSynthSecretFetcher,
@@ -3908,9 +3909,23 @@ describe('Hosting — skipping the frontend build', () => {
       (err: Error) => {
         assert.match(err.message, /OpenNext output not found/);
         assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD=1 skips the frontend build/);
+        // The adapter's structured error survives: same code and name, its resolution, the original as cause.
+        assert.ok(err instanceof HostingError, 'expected a HostingError');
+        assert.strictEqual(err.code, 'OpenNextOutputNotFoundError');
+        assert.strictEqual(err.name, 'OpenNextOutputNotFoundError');
+        assert.ok(err.resolution.length > 0, 'expected the adapter resolution');
+        const { cause } = err;
+        assert.ok(cause instanceof HostingError, 'expected the adapter error as cause');
+        assert.strictEqual(err.resolution, cause.resolution);
         return true;
       },
     );
     assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('a destroy synth with BLOCKS_SKIP_FRONTEND_BUILD=1 exported and no build output still builds instead of failing', () => {
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(built(), 'buildCommand should run when dist/ is missing');
   });
 });

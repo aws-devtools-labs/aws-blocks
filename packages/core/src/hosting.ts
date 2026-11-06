@@ -226,9 +226,9 @@ export interface HostingProps {
    * Omit if the app is already pre-built.
    *
    * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
-   * build output already exists, or on any synth with
+   * build output already exists, or on a deploy with
    * `BLOCKS_SKIP_FRONTEND_BUILD=1`, which deploys the existing build output
-   * as is. The framework adapter's own build is skipped the same way.
+   * as is (a destroy ignores the variable). The framework adapter's own build is skipped the same way.
    */
   buildCommand?: string;
 
@@ -944,10 +944,12 @@ const runAdapterNamingSkippedBuild = (
     if (reuseBuild !== 'required' || !(error instanceof Error) || !MISSING_BUILD_OUTPUT_ERROR.test(error.name)) {
       throw error;
     }
-    throw new Error(
-      `${error.message}\n${SKIP_FRONTEND_BUILD_ENV}=1 skips the frontend build, so build the frontend first or unset it.`,
-      { cause: error },
-    );
+    const message = `${error.message}\n${SKIP_FRONTEND_BUILD_ENV}=1 skips the frontend build, so build the frontend first or unset it.`;
+    // Keep the adapter's structured error (code, name, resolution) for callers that key on it.
+    if (error instanceof HostingError) {
+      throw new HostingError(error.code, { message, resolution: error.resolution }, error);
+    }
+    throw new Error(message, { cause: error });
   }
 };
 

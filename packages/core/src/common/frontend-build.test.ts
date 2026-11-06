@@ -16,11 +16,15 @@ describe('frontendBuildReuse', () => {
 		assert.strictEqual(frontendBuildReuse('false', {}), undefined);
 	});
 
-	it('the env var requires reusing the build, and wins over the context', () => {
+	it('the env var requires reusing the build on a deploy', () => {
 		assert.strictEqual(frontendBuildReuse(undefined, { [SKIP_FRONTEND_BUILD_ENV]: '1' }), 'required');
 		assert.strictEqual(frontendBuildReuse(undefined, { [SKIP_FRONTEND_BUILD_ENV]: 'true' }), 'required');
-		assert.strictEqual(frontendBuildReuse('true', { [SKIP_FRONTEND_BUILD_ENV]: '1' }), 'required');
 		assert.strictEqual(frontendBuildReuse(undefined, { [SKIP_FRONTEND_BUILD_ENV]: '0' }), undefined);
+	});
+
+	it('a destroy synth ignores an exported env var, so a missing build never blocks the teardown', () => {
+		assert.strictEqual(frontendBuildReuse('true', { [SKIP_FRONTEND_BUILD_ENV]: '1' }), 'if-present');
+		assert.strictEqual(frontendBuildReuse(true, { [SKIP_FRONTEND_BUILD_ENV]: 'true' }), 'if-present');
 	});
 
 	it('names the context key and env var the scripts and docs use', () => {
