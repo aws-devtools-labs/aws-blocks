@@ -32,8 +32,9 @@ When a request names a call such as `orders.create(...)`, export `const orders =
 
 ### Errors that reach the client
 
-- Throw `new ApiError(message, status, { name, retriable })` (import `ApiError` and `isBlocksError` from `@aws-blocks/blocks`), e.g. `throw new ApiError('Order not found', 404, { name: 'OrderNotFound' })`. The client receives the status, message, `name` and `retriable`. `retriable` defaults to `false`; set `retriable: true` only when retrying the same call can succeed.
+- Throw `new ApiError(message, status, { name, retriable })` (in `aws-blocks/`, import `ApiError` and `isBlocksError` from `@aws-blocks/blocks`), e.g. `throw new ApiError('Order not found', 404, { name: 'OrderNotFound' })`. The client receives the status, message, `name` and `retriable`. `retriable` defaults to `false`; set `retriable: true` only when retrying the same call can succeed.
 - A plain `Error` (even with `name` or `status` set on it) or a thrown non-`Error` reaches the client as an unnamed `500` with the message `Internal error`. Clients match the name, not the message: `isBlocksError(e, 'OrderNotFound')`.
+- In client code (`src/` and `test/`), import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`: there `@aws-blocks/blocks` itself exports nothing, because the frontend build and `npm run test:e2e` load its browser entry. A failed call throws an `ApiError`; check `e instanceof ApiError` when you also need `e.status`.
 - `get()` on `DistributedTable`, `KVStore` and `FileBucket` returns `null` for a missing item; it does not throw. When the API promises a not-found error, turn that `null` into an `ApiError`.
 - `FileBucket.getUrl()` signs a URL without checking that the file exists, and `delete()` of a missing file succeeds. Call `get()` first when a download or delete must reject a missing file.
 
