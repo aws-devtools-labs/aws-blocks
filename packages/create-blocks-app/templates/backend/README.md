@@ -79,50 +79,117 @@ To change the stack name, edit `stackId` in `.blocks/config.json`. For dynamic n
 
 This template is backend-only. To add a frontend:
 
-1. **React/Vite frontend:**
+Run the commands below from this app's root, next to `package.json`. Use a root-level Vite app, as in the React template; creating another project inside `src/` would put its `index.html` and configuration below the directory where the dev server and build run.
+
+1. **Install React and Vite.** These commands use the same React 19 / Vite 6 major versions as the React template:
    ```bash
-   npm create vite@latest src -- --template react-ts
+   npm install react@19 react-dom@19
+   npm install --save-dev vite@6 @vitejs/plugin-react@4 @types/react@19 @types/react-dom@19
    ```
-   Then add a build script and the frontend dev server to `package.json`. Replace
-   `"blocks": { "dev": { "port": 3001, "frontend": false } }` with the frontend settings, so `npm run dev`
-   (`cdk-blocks dev`) starts Vite behind the dev server and serves both on http://localhost:3000:
+
+2. **Create `index.html` at the app root:**
+   ```html
+   <!doctype html>
+   <html lang="en">
+     <head>
+       <meta charset="UTF-8" />
+       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+       <title>Blocks App</title>
+     </head>
+     <body>
+       <div id="root"></div>
+       <script type="module" src="/src/main.tsx"></script>
+     </body>
+   </html>
+   ```
+
+   Create `src/main.tsx`. The `aws-blocks` workspace already provides a typed browser client for the backend:
+   ```tsx
+   import { StrictMode, useState } from 'react';
+   import { createRoot } from 'react-dom/client';
+   import { api } from 'aws-blocks';
+
+   function App() {
+     const [message, setMessage] = useState('');
+
+     async function greet() {
+       try {
+         const result = await api.greet('World');
+         setMessage(result.message);
+       } catch (error) {
+         setMessage(error instanceof Error ? error.message : String(error));
+       }
+     }
+
+     return (
+       <main>
+         <button onClick={greet}>Greet</button>
+         <p role="status">{message}</p>
+       </main>
+     );
+   }
+
+   createRoot(document.getElementById('root')!).render(
+     <StrictMode><App /></StrictMode>,
+   );
+   ```
+
+3. **Create `vite.config.ts` at the app root:**
+   ```ts
+   import { defineConfig } from 'vite';
+   import react from '@vitejs/plugin-react';
+
+   export default defineConfig({
+     plugins: [react()],
+     resolve: { conditions: ['browser'] },
+   });
+   ```
+
+   Add `"jsx": "react-jsx"` to the existing `compilerOptions` in `tsconfig.json`; keep its other options and `include` entries:
    ```json
    {
-     "scripts": {
-       "build": "tsc && vite build"
-     },
-     "blocks": {
-       "dev": { "frontendPort": 3100 }
-     },
-     "dependencies": {
-       "react": "^19.0.0",
-       "react-dom": "^19.0.0"
-     },
-     "devDependencies": {
-       "@vitejs/plugin-react": "^4.3.0",
-       "vite": "^5.0.0"
+     "compilerOptions": {
+       "jsx": "react-jsx"
      }
    }
    ```
 
-2. **Import APIs in your frontend:**
-   ```ts
-   import { api } from 'aws-blocks';
-   const result = await api.greet('World');
+4. **Update `package.json`.** Keep the existing dependencies, workspaces and other scripts, including `prebuild`. Change the `build` script and replace the whole `blocks.dev` value below, removing `"frontend": false`:
+   ```json
+   {
+     "scripts": {
+       "build": "tsc --noEmit && vite build"
+     },
+     "blocks": {
+       "dev": { "port": 3001, "frontendPort": 3100 }
+     }
+   }
    ```
 
-3. **Add Hosting to `aws-blocks/index.cdk.ts`:**
+5. **Check and run the app:**
+   ```bash
+   npm run typecheck
+   npm run build
+   npm run dev
+   ```
+
+   Open http://localhost:3001 and select **Greet**. The page displays `Hello, World!` from the backend. The Blocks server proxies Vite on port 3100, while keeping the existing API URL on port 3001. Stop it with `npm run dev:stop` when finished. The existing `npm run test:e2e` also continues to use `blocks.dev.port`.
+
+6. **Add Hosting for deployment.** Import `Hosting` and `HostingPresets` in `aws-blocks/index.cdk.ts`, then add this after `BlocksStack.create(...)`:
    ```ts
-   import { Hosting } from '@aws-blocks/blocks/cdk';
+   import { Hosting, HostingPresets } from '@aws-blocks/blocks/cdk';
 
    if (!sandboxMode) {
      new Hosting(blocksStack, 'Hosting', {
+       ...HostingPresets.production,
        root: join(__dirname, '..'),
        buildCommand: 'npm run build',
        buildOutputDir: 'dist',
-       api: blocksStack
+       api: blocksStack,
      });
    }
    ```
+
+   `vite build` writes to the root `dist/` directory, which matches `buildOutputDir`. A plain sandbox remains backend-only; `npm run deploy` includes the frontend.
 
 The `aws-blocks` workspace package re-exports a type-safe client that works in both Node.js and browser environments.
