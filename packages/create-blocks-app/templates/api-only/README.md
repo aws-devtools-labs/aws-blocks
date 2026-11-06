@@ -27,6 +27,10 @@ health check plus an auth-gated CRUD resource with per-user isolation.
   version field). `setQuantity` is the raw compare-and-swap: pass the version you
   read, and a stale write is rejected with `ConditionalCheckFailedException`
   (HTTP 409) so the caller can re-read and retry.
+- **Files** — `createUploadUrl` / `createDownloadUrl` mint presigned URLs on a
+  `FileBucket`; the client PUTs/GETs the bytes directly. Both call
+  `auth.requireAuth(context)` and scope the path to the caller, so a user can
+  only reach their own files.
 - **Auth** — `AuthBasic`: callers sign up, then their items are scoped to them.
 
 There is no `src/`, `index.html`, or web bundle — nothing is served to a browser.
