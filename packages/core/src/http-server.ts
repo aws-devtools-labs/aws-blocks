@@ -21,7 +21,7 @@ import {
 } from './constants.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
-import type { Dispatcher, DispatchResponse } from './dispatch.js';
+import type { Dispatcher, DispatchRequest, DispatchResponse } from './dispatch.js';
 import { lockRouteRegistry } from './raw-route.js';
 import { isLoopbackForwardedHost } from './request-context.js';
 import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from './rpc.js';
@@ -345,12 +345,7 @@ async function handleRequest(
   // JSON-RPC is capped at its own limit whatever `maxBodyBytes` allows RawRoutes.
   const bodyLimit = isRpcPath(pathname) ? Math.min(env.maxBodyBytes, MAX_RPC_BODY_BYTES) : env.maxBodyBytes;
 
-  // The request signal fires when the client goes away before the response is
-  // written, so handlers can stop in-flight fetch / SDK calls.
-  const abort = new AbortController();
-  res.on('close', () => {
-    if (!res.writableFinished) abort.abort();
-  });
+  const signal = clientGoneSignal(res);
 
   const body = await readBody(req, bodyLimit);
   if (body === undefined) {
@@ -378,19 +373,64 @@ async function handleRequest(
     return;
   }
 
-  const response = await env.dispatch({
+  const response = await env.dispatch(
+    toDispatchRequest(req, body, {
+      path: pathname,
+      publicOrigin: env.publicOrigin,
+      trustForwardedHeaders: env.trustForwardedHeaders,
+      signal,
+      requestId,
+    }),
+  );
+  writeResponse(res, response, requestId);
+}
+
+/**
+ * The request signal: fires when the client goes away before the response is
+ * written, so handlers can stop in-flight fetch / SDK calls.
+ *
+ * @internal
+ */
+export function clientGoneSignal(res: http.ServerResponse): AbortSignal {
+  const abort = new AbortController();
+  res.on('close', () => {
+    if (!res.writableFinished) abort.abort();
+  });
+  return abort.signal;
+}
+
+/** @internal */
+export interface NodeDispatchRequestInit {
+  /** Routing path (see {@link DispatchRequest.path}). */
+  path: string;
+  /** Public origin for request URLs (see {@link buildRequestUrl}). */
+  publicOrigin?: string;
+  /** Whether to trust front-door-stamped headers (see {@link buildRequestUrl}). */
+  trustForwardedHeaders?: boolean;
+  signal?: AbortSignal;
+  requestId?: string;
+}
+
+/**
+ * The {@link DispatchRequest} for a Node HTTP request whose body has been read
+ * into `body`. Shared by every Node HTTP transport (this server, the local dev
+ * server) so they hand the dispatcher identical requests.
+ *
+ * @internal
+ */
+export function toDispatchRequest(req: http.IncomingMessage, body: Buffer, init: NodeDispatchRequestInit): DispatchRequest {
+  return {
     method: req.method ?? 'GET',
-    path: pathname,
-    origin,
+    path: init.path,
+    origin: header(req, 'origin') ?? '',
     cookie: header(req, 'cookie') ?? '',
     clientUserAgent: header(req, CLIENT_USER_AGENT_HEADER),
     headers: () => toHeaders(req),
-    url: () => buildRequestUrl(req, env.publicOrigin, env.trustForwardedHeaders),
+    url: () => buildRequestUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
     body: () => ({ text: body.toString('utf-8'), stream: body.length > 0 ? bytesStream(body) : null }),
-    signal: abort.signal,
-    requestId,
-  });
-  writeResponse(res, response, requestId);
+    signal: init.signal,
+    requestId: init.requestId,
+  };
 }
 
 /**
@@ -421,8 +461,10 @@ function payloadTooLarge(pathname: string, origin: string, limitBytes: number): 
  * {@link OVERSIZED_BODY_LINGER_MS}. Answering first would let Node close a socket
  * that still holds unread data, which resets the connection and can discard the
  * 413 before the client reads it.
+ *
+ * @internal
  */
-function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
+export function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
   if (req.complete) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(done, OVERSIZED_BODY_LINGER_MS);
@@ -438,7 +480,20 @@ function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
   });
 }
 
-function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse, 'kind'>, requestId: string): void {
+/**
+ * Write a dispatcher response to a Node HTTP response. `requestId`, when set,
+ * prefixes the error line logged for an invalid status. `errorHeaders`, when
+ * set, is added to the plain 500 sent for an invalid status (see
+ * {@link writeInternalServerError}).
+ *
+ * @internal
+ */
+export function writeResponse(
+  res: http.ServerResponse,
+  response: Omit<DispatchResponse, 'kind'>,
+  requestId?: string,
+  errorHeaders?: Readonly<Record<string, string>>,
+): void {
   // A handler can set any number as `ctx.response.status`. Only a final status
   // is sent: Node refuses an out-of-range one only while ending the response,
   // after the handler's headers and Content-Length are recorded, and sends a 1xx
@@ -446,8 +501,9 @@ function writeResponse(res: http.ServerResponse, response: Omit<DispatchResponse
   // next response as the answer. Check it up front and answer an out-of-range or
   // interim status with a plain 500, without the handler's headers or cookies.
   if (!isValidStatus(response.status)) {
-    console.error('HTTP server error:', `[request ${requestId}]`, 'invalid response status', response.status);
-    writeInternalServerError(res);
+    if (requestId === undefined) console.error('HTTP server error:', 'invalid response status', response.status);
+    else console.error('HTTP server error:', `[request ${requestId}]`, 'invalid response status', response.status);
+    writeInternalServerError(res, errorHeaders);
     return;
   }
   res.statusCode = response.status;
@@ -469,19 +525,32 @@ function isValidStatus(status: number): boolean {
  * Answer a plain 500. Every header set so far is removed first, so the error
  * response carries no stale Content-Length (which would misframe the next
  * response on a keep-alive connection) and none of the handler's cookies.
+ * `extraHeaders`, when set, is added after that removal, for headers the
+ * caller sends on every response (such as the dev server's CORS headers).
+ *
+ * @internal
  */
-function writeInternalServerError(res: http.ServerResponse): void {
+export function writeInternalServerError(
+  res: http.ServerResponse,
+  extraHeaders?: Readonly<Record<string, string>>,
+): void {
   for (const name of res.getHeaderNames()) res.removeHeader(name);
   const body = JSON.stringify({ error: 'Internal Server Error' });
-  res.writeHead(500, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  res.writeHead(500, {
+    ...extraHeaders,
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(body),
+  });
   res.end(body);
 }
 
 /**
  * Read the whole request body, or `undefined` once it exceeds `limit` bytes.
  * The rest of an oversized body is discarded, not buffered.
+ *
+ * @internal
  */
-function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer | undefined> {
+export function readBody(req: http.IncomingMessage, limit: number): Promise<Buffer | undefined> {
   return new Promise((resolve, reject) => {
     const declared = Number(req.headers['content-length']);
     if (Number.isFinite(declared) && declared > limit) {
