@@ -515,3 +515,26 @@ describe('buildingBlockParent', () => {
 		assert.strictEqual(computeScopeFullId({ id: 'sessions', parent: self }), 'my-app-auth-sessions');
 	});
 });
+
+describe('computeScopeFullId', () => {
+	test('reads each ancestor fullId once, so cost is linear in nesting depth', () => {
+		let reads = 0;
+		const depth = 8;
+		let parent: ScopeParent = { id: 'root' };
+		for (let i = 0; i < depth; i++) {
+			const node = { id: `n${i}`, parent };
+			Object.defineProperty(node, 'fullId', {
+				get() {
+					reads++;
+					return computeScopeFullId(node);
+				},
+			});
+			parent = node as ScopeParent;
+		}
+
+		const fullId = computeScopeFullId({ id: 'leaf', parent });
+
+		assert.strictEqual(fullId, 'root-n0-n1-n2-n3-n4-n5-n6-n7-leaf');
+		assert.strictEqual(reads, depth);
+	});
+});
