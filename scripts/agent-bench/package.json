@@ -10,7 +10,7 @@
 		"test:ci": "tsc --noEmit && node --test --test-concurrency=1 steps/lib/*.test.mjs"
 	},
 	"devDependencies": {
-		"@strands-agents/sdk": "^1.22.0",
+		"@strands-agents/sdk": "^1.23.0",
 		"@types/node": "^20.19.43",
 		"tsx": "^4.23.15",
 		"typescript": "^5.9.3",

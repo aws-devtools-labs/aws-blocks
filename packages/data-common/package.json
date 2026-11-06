@@ -44,6 +44,6 @@
   },
   "dependencies": {
     "@aws-blocks/bb-logger": "^0.3.0",
-    "kysely": "^0.29.7"
+    "kysely": "^0.29.8"
   }
 }
