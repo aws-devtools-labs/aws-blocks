@@ -17,6 +17,22 @@ import {
   detectPackageManagerInstall,
   detectPackageManagerRun,
 } from './sveltekit.js';
+import { spawn } from './spawn.js';
+
+/**
+ * Run the synchronous `fn` with stdout muted. The adapter reports a detected
+ * base path (`🔗 Detected …`) on stdout, which in a `node --test` child carries
+ * this file's results to the runner.
+ */
+const withStdoutMuted = <T>(fn: () => T): T => {
+  const write = process.stdout.write;
+  process.stdout.write = (() => true) as typeof process.stdout.write;
+  try {
+    return fn();
+  } finally {
+    process.stdout.write = write;
+  }
+};
 
 /**
  * Fabricate a `build/` tree shaped like `@sveltejs/adapter-node` output:
@@ -198,7 +214,7 @@ void describe('sveltekitAdapter — manifest from build/ (skipBuild)', () => {
 
   void it('sets manifest.basePath from kit.paths.base', () => {
     scaffoldBuild(tmp, { base: '/app' });
-    const m = sveltekitAdapter({ projectDir: tmp, skipBuild: true });
+    const m = withStdoutMuted(() => sveltekitAdapter({ projectDir: tmp, skipBuild: true }));
     assert.equal(m.basePath, '/app');
   });
 
@@ -427,7 +443,7 @@ void describe('sveltekitAdapter — bridge guards (build path)', () => {
     );
   });
 
-  void it('does NOT throw when the only adapter reference is a commented-out incompatible adapter', () => {
+  void it('does NOT throw when the only adapter reference is a commented-out incompatible adapter', (t) => {
     // Inverse: a commented adapter with none active should not spuriously error.
     // Config has no active adapter → bridge path installs adapter-node; stub the
     // install by pre-providing a resolvable adapter-node so no network is hit.
@@ -446,8 +462,12 @@ void describe('sveltekitAdapter — bridge guards (build path)', () => {
       path.join(anDir, 'package.json'),
       JSON.stringify({ name: '@sveltejs/adapter-node', version: '5.2.0' }),
     );
-    // The build will still run (and fail, since there's no real toolchain), but
-    // it must NOT be the incompatible-adapter error.
+    // The build fails, as it does without a real toolchain, but it must NOT be
+    // the incompatible-adapter error. It is stubbed: a real build would run with
+    // inherited stdio, and this file's stdout carries its results to `node --test`.
+    t.mock.method(spawn, 'sync', () => {
+      throw new Error('Command failed (exit code 1): npm run build');
+    });
     try {
       sveltekitAdapter({ projectDir: tmp });
     } catch (err) {
