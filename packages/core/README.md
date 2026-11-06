@@ -312,6 +312,8 @@ A failed RPC call (a method that throws, or a call to an unknown API namespace o
 
 Alarm on `StatusClass = 5xx` to catch server failures; `4xx` counts include expected rejections such as an unauthenticated call. The error message is never written to the metric line.
 
+API namespaces on a `container` compute don't emit this metric yet: only Lambda functions write it.
+
 ### RawRoute
 
 Path-based HTTP routing Building Block for endpoints that need full request/response control: webhooks, health checks, redirects, file downloads, anything a browser or third party has to hit with a plain `GET`. Use `ApiNamespace` (RPC) for typed function calls; use `RawRoute` when you need raw HTTP semantics.

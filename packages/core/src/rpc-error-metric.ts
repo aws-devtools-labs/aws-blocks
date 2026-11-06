@@ -34,6 +34,23 @@ export interface RpcErrorInfo {
 	method?: string;
 }
 
+/**
+ * Longest API namespace or method name written to the metric line. On an
+ * unknown namespace or method both come straight from the request body, so a
+ * cap keeps one call from writing a line too big for a single CloudWatch Logs
+ * event (which would no longer parse as EMF). Real names are short identifiers.
+ */
+export const RPC_ERROR_METRIC_MAX_NAME_LENGTH = 128;
+
+/** Marker appended to a name cut at {@link RPC_ERROR_METRIC_MAX_NAME_LENGTH}. */
+const TRUNCATED_MARKER = '…[truncated]';
+
+function capName(name: string): string {
+	return name.length > RPC_ERROR_METRIC_MAX_NAME_LENGTH
+		? name.slice(0, RPC_ERROR_METRIC_MAX_NAME_LENGTH) + TRUNCATED_MARKER
+		: name;
+}
+
 /** `4xx` for a client error, `5xx` for everything else. */
 export function statusClass(status: number): '4xx' | '5xx' {
 	return status >= 400 && status < 500 ? '4xx' : '5xx';
@@ -55,8 +72,8 @@ export function rpcErrorMetricLine(info: RpcErrorInfo, functionName: string, tim
 		FunctionName: functionName,
 		StatusClass: statusClass(info.status),
 		Status: info.status,
-		...(info.namespace ? { ApiNamespace: info.namespace } : {}),
-		...(info.method ? { Method: info.method } : {}),
+		...(info.namespace ? { ApiNamespace: capName(info.namespace) } : {}),
+		...(info.method ? { Method: capName(info.method) } : {}),
 		[RPC_ERROR_METRIC_NAME]: 1,
 	});
 }
@@ -65,12 +82,17 @@ export function rpcErrorMetricLine(info: RpcErrorInfo, functionName: string, tim
  * Write the RPC error metric for one failed call, on Lambda only (the EMF line
  * is extracted from the function's log stream). Never throws: a metric must not
  * change the response.
+ *
+ * Writes to `process.stdout` directly, like `bb-metrics`, rather than through
+ * `console.log`: with Lambda's JSON log format the runtime wraps `console`
+ * output in its own JSON object, so `_aws` would no longer be top-level and
+ * nothing would be extracted.
  */
 export function emitRpcErrorMetric(info: RpcErrorInfo, env: NodeJS.ProcessEnv = process.env): void {
 	const functionName = env.AWS_LAMBDA_FUNCTION_NAME;
 	if (!functionName) return;
 	try {
-		console.log(rpcErrorMetricLine(info, functionName));
+		process.stdout.write(`${rpcErrorMetricLine(info, functionName)}\n`);
 	} catch {
 		// A metric is best-effort.
 	}

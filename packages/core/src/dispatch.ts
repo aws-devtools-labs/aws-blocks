@@ -23,6 +23,7 @@ import {
   successResponse,
 } from './rpc.js';
 import { resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import type { RpcErrorInfo } from './rpc-error-metric.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
 
@@ -79,8 +80,11 @@ export interface DispatcherOptions {
    * status of a thrown error (as in its JSON-RPC envelope), or 404 for an
    * unknown namespace or method. The Lambda handler uses it to
    * write the `RpcErrors` metric (see rpc-error-metric.ts). Must not throw.
+   * Not called for a method that fails after `request.signal` was aborted: the
+   * transport already answered that call (e.g. the Lambda handler's 504) and
+   * reports it itself.
    */
-  onRpcError?: (info: { status: number; namespace?: string; method?: string }) => void;
+  onRpcError?: (info: RpcErrorInfo) => void;
 }
 
 /**
@@ -141,7 +145,7 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
  */
 export function createDispatcher(backend: unknown, options: DispatcherOptions = {}): Dispatcher {
   const rpcErrorLabel = options.rpcErrorLabel ?? 'RPC Error:';
-  const reportRpcError = (info: { status: number; namespace?: string; method?: string }): void => {
+  const reportRpcError = (info: RpcErrorInfo): void => {
     try {
       options.onRpcError?.(info);
     } catch {
@@ -287,7 +291,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         };
       } catch (error: any) {
         logRequestError(request, rpcErrorLabel, error);
-        reportRpcError({ status: sanitizeCaughtError(error).status, namespace: apiNamespace, method });
+        // A method that fails after the request was aborted (the Lambda handler's
+        // deadline won and already answered, and counted, the call with a 504)
+        // must not count the same call a second time.
+        if (!request.signal?.aborted) {
+          reportRpcError({ status: sanitizeCaughtError(error).status, namespace: apiNamespace, method });
+        }
         // Only Set-Cookie values that DELETE a cookie survive into the error
         // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
         // session cookie, but a method that signs a user in and then throws can
