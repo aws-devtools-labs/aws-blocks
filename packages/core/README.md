@@ -299,6 +299,21 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
 
+#### Monitoring failed RPC calls
+
+A failed RPC call (a method that throws, or a call to an unknown API namespace or method) reaches the client as a JSON-RPC error inside an HTTP 200 response, and the Lambda invocation itself succeeds. So Lambda's `Errors` metric never counts it. Instead, on Lambda each failed call writes one log line in CloudWatch embedded metric format, which CloudWatch turns into a metric with no SDK call and no extra IAM permission:
+
+| | |
+|---|---|
+| Namespace | `AWSBlocks` |
+| Metric | `RpcErrors` (Count) |
+| Dimensions | `FunctionName`, `StatusClass` (`4xx` for a client error such as an `ApiError` with status 403, `5xx` for anything else, including an unexpected error and the handler's 504 timeout) |
+| Also in the log line | `Status`, `ApiNamespace` and `Method`, searchable with CloudWatch Logs Insights |
+
+Alarm on `StatusClass = 5xx` to catch server failures; `4xx` counts include expected rejections such as an unauthenticated call. The error message is never written to the metric line.
+
+API namespaces on a `container` compute don't emit this metric yet: only Lambda functions write it.
+
 ### RawRoute
 
 Path-based HTTP routing Building Block for endpoints that need full request/response control: webhooks, health checks, redirects, file downloads, anything a browser or third party has to hit with a plain `GET`. Use `ApiNamespace` (RPC) for typed function calls; use `RawRoute` when you need raw HTTP semantics.

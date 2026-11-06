@@ -19,9 +19,11 @@ import {
   methodNotFoundResponse,
   parseRpcRequest,
   rawRouteErrorFromCatch,
+  sanitizeCaughtError,
   successResponse,
 } from './rpc.js';
 import { isDispatchableExport, resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import type { RpcErrorInfo } from './rpc-error-metric.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
 
@@ -72,6 +74,17 @@ export interface DispatchRequestBody {
 export interface DispatcherOptions {
   /** Prefix of the log line for an RPC method that throws. Default `'RPC Error:'`. */
   rpcErrorLabel?: string;
+  /**
+   * Called once for each RPC call that fails: a method that throws, or a call
+   * to an API namespace or method that doesn't exist. `status` is the HTTP
+   * status of a thrown error (as in its JSON-RPC envelope), or 404 for an
+   * unknown namespace or method. The Lambda handler uses it to
+   * write the `RpcErrors` metric (see rpc-error-metric.ts). Must not throw.
+   * Not called for a method that fails after `request.signal` was aborted: the
+   * transport already answered that call (e.g. the Lambda handler's 504) and
+   * reports it itself.
+   */
+  onRpcError?: (info: RpcErrorInfo) => void;
   /**
    * Which cross-origin requests are refused and which CORS headers every
    * response carries. Default: the deployed allowlist from
@@ -193,6 +206,13 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
  */
 export function createDispatcher(backend: unknown, options: DispatcherOptions = {}): Dispatcher {
   const rpcErrorLabel = options.rpcErrorLabel ?? 'RPC Error:';
+  const reportRpcError = (info: RpcErrorInfo): void => {
+    try {
+      options.onRpcError?.(info);
+    } catch {
+      // Reporting is best-effort; it never changes the response.
+    }
+  };
   const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
   const trace = options.rpcTrace;
   const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
@@ -312,6 +332,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // Block instances and `_`-private exports, so only an API surface is callable.
         const apiHandler = resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
+          reportRpcError({ status: 404, namespace: apiNamespace, method });
           const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
           return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found${available}`, rpcId));
         }
@@ -324,6 +345,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // Own/declared callable methods only — never an inherited Object.prototype member.
         const apiMethod = resolveApiMethod(apiMethods, method);
         if (!apiMethod) {
+          reportRpcError({ status: 404, namespace: apiNamespace, method });
           return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
         }
 
@@ -340,6 +362,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         };
       } catch (error: any) {
         logHandlerError({ source: 'rpc', apiNamespace, method, error }, request, rpcErrorLabel);
+        // A method that fails after the request was aborted (the Lambda handler's
+        // deadline won and already answered, and counted, the call with a 504)
+        // must not count the same call a second time.
+        if (!request.signal?.aborted) {
+          reportRpcError({ status: sanitizeCaughtError(error).status, namespace: apiNamespace, method });
+        }
         // Only Set-Cookie values that DELETE a cookie survive into the error
         // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
         // session cookie, but a method that signs a user in and then throws can
