@@ -492,6 +492,10 @@ describe('create-blocks-app auto-detection', () => {
       assert.match(readFileSync(cognitoVerifierPath, 'utf-8'), /from '@aws-blocks\/blocks'/);
       assert.doesNotMatch(readFileSync(generateClientPath, 'utf-8'), /@aws-blocks\/core/);
       assert.doesNotMatch(readFileSync(cognitoVerifierPath, 'utf-8'), /@aws-blocks\/core/);
+      // With `next` installed, the app's tsconfig.json checks aws-blocks/ (next build ignores
+      // project references), so the backend gets no project of its own and the steps say so.
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
       // Blocks-native migration step: the overlay's own `sandbox` script runs `ampx sandbox`.
       assert.doesNotMatch(result.stdout, /Replace `npx ampx sandbox` with `npm run sandbox`/);
       assert.match(result.stdout, /`sandbox` script \(now `npx ampx sandbox`\)\n\s+to `cdk-blocks sandbox`/);
@@ -829,6 +833,62 @@ describe('create-blocks-app auto-detection', () => {
       }
     }
     assert.ok(checked.includes('default'), `checked: ${checked.join(', ')}`);
+  });
+
+  it('gives an existing project the backend\'s own tsconfig and prints the reference steps, leaving its tsconfig alone', () => {
+    const backendTsconfig = readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'tsconfig.json'), 'utf-8');
+    // `default` ships aws-blocks/tsconfig.json; `backend` does not, so the default template's is copied.
+    for (const template of ['default', 'backend']) {
+      const tmpDir = join(__dirname, `../.test-existing-tsconfig-${template}`);
+      mkdirSync(tmpDir, { recursive: true });
+      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+      const tsconfig = '{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }\n';
+      writeFileSync(join(tmpDir, 'tsconfig.json'), tsconfig);
+      try {
+        const result = run(['.', '--template', template, '-y', '--skip-install'], tmpDir);
+        assert.strictEqual(result.exitCode, 0, result.stderr);
+        assert.strictEqual(readFileSync(join(tmpDir, 'aws-blocks', 'tsconfig.json'), 'utf-8'), backendTsconfig, template);
+        assert.strictEqual(readFileSync(join(tmpDir, 'tsconfig.json'), 'utf-8'), tsconfig, `${template}: the project's own tsconfig.json changed`);
+        assert.match(result.stdout, /"references": \[\{ "path": "\.\/aws-blocks" \}\]/, template);
+        assert.match(result.stdout, /`tsc -b --force` instead of `tsc`/, template);
+      } finally {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
+    }
+  });
+
+  it('gives an existing Next.js project no backend tsconfig, since next build ignores project references', () => {
+    const tmpDir = join(__dirname, '../.test-existing-tsconfig-nextjs');
+    mkdirSync(tmpDir, { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'my-next-app', version: '1.0.0', dependencies: { next: '*' } }));
+    try {
+      // `default` ships aws-blocks/tsconfig.json; in a Next.js project nothing would build it, and
+      // esbuild and editors would read it instead of the app's tsconfig.json (and its "paths").
+      const result = run(['.', '-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.ok(existsSync(join(tmpDir, 'aws-blocks', 'index.ts')));
+      assert.ok(!existsSync(join(tmpDir, 'aws-blocks', 'tsconfig.json')));
+      assert.match(result.stdout, /leave your Next\.js tsconfig\.json as it is/);
+      assert.doesNotMatch(result.stdout, /"references"/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('gives an Amplify app without Next.js the default template\'s backend tsconfig', () => {
+    const tmpDir = join(__dirname, '../.test-amplify-tsconfig');
+    mkdirSync(join(tmpDir, 'amplify'), { recursive: true });
+    writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'amplify-vite-app', version: '1.0.0', devDependencies: { vite: '*' } }));
+    writeFileSync(join(tmpDir, 'amplify', 'backend.ts'), 'export const backend = defineBackend({});');
+    try {
+      const result = run(['-y', '--skip-install'], tmpDir);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      const expected = readFileSync(join(__dirname, '..', 'templates', 'default', 'aws-blocks', 'tsconfig.json'), 'utf-8');
+      assert.strictEqual(readFileSync(join(tmpDir, 'aws-blocks', 'tsconfig.json'), 'utf-8'), expected);
+      assert.match(result.stdout, /"references": \[\{ "path": "\.\/aws-blocks" \}\]/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
   });
 
   it('defaults to the default template when no --template is given for an existing project', () => {

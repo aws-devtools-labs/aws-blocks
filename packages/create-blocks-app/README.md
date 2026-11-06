@@ -36,6 +36,8 @@ Template descriptions are sourced from each template's `package.json` (`blocksTe
 npx @aws-blocks/create-blocks-app .
 ```
 
+This writes `aws-blocks/tsconfig.json`, a TypeScript project that checks the backend with Node types, and never edits your own `tsconfig`. To keep Node types out of your frontend, reference that project from the `tsconfig` that compiles the code importing `aws-blocks`, and typecheck with `tsc -b --force`: the CLI prints the steps, and [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) has them in full. In a Next.js project, it writes no `aws-blocks/tsconfig.json`: `next build` ignores project references, so the app's `tsconfig.json` keeps checking `aws-blocks/`.
+
 In an npm workspaces monorepo, the app's `aws-blocks/` folder has to be a workspace of the monorepo root too: npm installs the app's dependencies at the root and does not read the app's own `"workspaces": ["aws-blocks"]`. When the app is a workspace of an enclosing root that does not list `<app>/aws-blocks`, `create-blocks-app` stops before it writes anything and prints the `"workspaces"` entry to add; add it and run the command again.
 
 ### Add Blocks to an Amplify Gen 2 Project
@@ -57,7 +59,8 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 │   ├── index.cdk.ts      # CDK stack definition
 │   ├── index.handler.ts  # Lambda handler
 │   ├── client.js         # Auto-generated frontend client
-│   └── package.json      # Backend workspace dependencies
+│   ├── package.json      # Backend workspace dependencies
+│   └── tsconfig.json     # Backend TypeScript project (not in a Next.js app)
 ├── cdk.json              # CDK configuration
 ├── src/
 │   └── ...               # Your existing code
@@ -137,7 +140,8 @@ Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `
     "spec": "cdk-blocks generate spec",
     "vendorize": "cdk-blocks vendorize",
     "prebuild": "cdk-blocks generate client",
-    "build": "tsc && vite build"
+    "typecheck": "tsc -b --force",
+    "build": "tsc -b --force && vite build"
   },
   "blocks": {
     "dev": { "frontendPort": 3100 }
@@ -152,6 +156,8 @@ No template sets `frontendCommand`: `cdk-blocks dev` starts the frontend dev ser
 ## Templates
 
 Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `cron`, `amplify`, `demo`.
+
+The Vite templates (`default`, `bare`, `react`, `auth-cognito`, `demo`) typecheck the browser and the backend as separate [TypeScript projects](https://www.typescriptlang.org/docs/handbook/project-references.html), the way create-vite's `react-ts` template does: `tsconfig.app.json` checks `src/` with `"types": ["vite/client"]`, so a Node global there is an error, and `aws-blocks/tsconfig.json` checks the backend with Node types. `nextjs` and the backend-only templates keep one `tsconfig.json` with Node types. [Keep Node types out of the frontend](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend) explains the layout and how to move an older app to it.
 
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 

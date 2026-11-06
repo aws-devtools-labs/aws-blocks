@@ -2,7 +2,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { cp, mkdir, readFile, writeFile, rename, access, readdir } from 'node:fs/promises';
+import { cp, mkdir, readFile, writeFile, rename, access, readdir, rm } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -550,6 +550,8 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   const awsBlocksSrc = join(templateDir, 'aws-blocks');
   const awsBlocksDest = join(targetDir, 'aws-blocks');
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  const amplifyPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  await writeBackendTsconfig(awsBlocksDest, amplifyPkg);
   console.log('  ✓ Created aws-blocks/');
 
   // 2. Copy amplify/blocks.ts
@@ -633,6 +635,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  npm run blocks:dev            # Run Blocks local dev server\n');
   console.log('Your Blocks API is available at the /api endpoint alongside your Amplify backend.');
   console.log('');
+  printTypeScriptSteps(amplifyPkg);
   printMigrationInstructions();
 }
 
@@ -763,9 +766,10 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   }
 
   await cp(awsBlocksSrc, awsBlocksDest, { recursive: true });
+  const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
+  await writeBackendTsconfig(awsBlocksDest, existingPkg);
 
   // Generate blocks/config.json with a unique stackId
-  const existingPkg = JSON.parse(await readFile(join(targetDir, 'package.json'), 'utf-8'));
   const baseName = (existingPkg.name || basename(resolve(targetDir)));
   const stackId = generateStackId(baseName);
   const blocksConfigDir = join(targetDir, '.blocks');
@@ -820,6 +824,61 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('');
   console.log('Import your API in frontend code:');
   console.log('  import { api } from \'aws-blocks\'');
+  console.log('');
+  printTypeScriptSteps(existingPkg);
+}
+
+/** The guide section with the TypeScript steps below, also for apps scaffolded before templates split their tsconfig. */
+const TYPESCRIPT_STEPS_URL =
+  'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md#keep-node-types-out-of-the-frontend';
+
+/** The dependencies of a project's package.json. */
+interface PackageDeps {
+  dependencies?: Record<string, unknown>;
+  devDependencies?: Record<string, unknown>;
+}
+
+/** Whether the project builds with Next.js, whose `next build` ignores project references when it type-checks. */
+function usesNext(pkg: PackageDeps): boolean {
+  return Boolean(pkg.dependencies?.next || pkg.devDependencies?.next);
+}
+
+/**
+ * Gives the copied backend its own TypeScript project, `aws-blocks/tsconfig.json`,
+ * with Node types (see printTypeScriptSteps): the template's, or the default
+ * template's when the template ships none (the backend-only templates, the Amplify
+ * overlay). Not in a Next.js project, which typechecks aws-blocks/ as part of the
+ * app: nothing there would build the project, and editors and the deploy bundling
+ * (esbuild) would read it for backend files instead of the app's tsconfig.json,
+ * without the app's "paths".
+ */
+async function writeBackendTsconfig(awsBlocksDest: string, pkg: PackageDeps): Promise<void> {
+  const backendTsconfig = join(awsBlocksDest, 'tsconfig.json');
+  if (usesNext(pkg)) {
+    await rm(backendTsconfig, { force: true });
+  } else if (!(await exists(backendTsconfig))) {
+    await cp(join(__dirname, '../templates/default/aws-blocks/tsconfig.json'), backendTsconfig);
+  }
+}
+
+/**
+ * Prints how to make an existing project's TypeScript build read the backend through
+ * the project in `aws-blocks/tsconfig.json`, which typechecks it with Node types.
+ * Printed, never applied: the project's tsconfig and scripts are its own. A Next.js
+ * project gets no steps: `next build` ignores project references when it
+ * type-checks, so it keeps checking `aws-blocks/` as part of the app.
+ */
+function printTypeScriptSteps(pkg: PackageDeps): void {
+  if (usesNext(pkg)) {
+    console.log('TypeScript: leave your Next.js tsconfig.json as it is. `next build` typechecks aws-blocks/');
+    console.log('as part of your app, with the Node types your tsconfig.json has when it sets no "types".');
+  } else {
+    console.log('TypeScript: aws-blocks/tsconfig.json typechecks the backend with Node types. To keep them out');
+    console.log('of your frontend, add "references": [{ "path": "./aws-blocks" }] to the tsconfig that compiles');
+    console.log('the code importing \'aws-blocks\', and typecheck with `tsc -b --force` instead of `tsc`');
+    console.log('(if the script used --noEmit, set "noEmit": true in that tsconfig instead).');
+  }
+  console.log(`Details: ${TYPESCRIPT_STEPS_URL}`);
   console.log('');
 }
 
