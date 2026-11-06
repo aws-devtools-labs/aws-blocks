@@ -43,7 +43,7 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
+import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, normalizeUndefinedValues, applyReadValidation } from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -191,7 +191,9 @@ export class DistributedTable<
 		if (options?.ifFieldEquals) {
 			this.checkFieldEquals(keyStr, options.ifFieldEquals, retriable);
 		}
-		this.data.set(keyStr, item);
+		// Keep the in-memory copy identical to what the disk round-trip (and the AWS
+		// runtime) stores: nested `undefined` dropped from maps, `null` in lists.
+		this.data.set(keyStr, normalizeUndefinedValues(item));
 		this.flushToDisk();
 	}
 
@@ -268,6 +270,9 @@ export class DistributedTable<
 
 		for (const item of this.data.values()) {
 			if ((item as any)[pkField] !== pkValue) continue;
+			// DynamoDB indexes are sparse: an item without the index's sort-key
+			// attribute is not in that index, even when no sort-key condition is given.
+			if (skField && (item as any)[skField] === undefined) continue;
 
 			if (skField && skCondition) {
 				if (!matchesSortKeyCondition((item as any)[skField], skCondition)) continue;
@@ -336,7 +341,7 @@ export class DistributedTable<
 			}
 		}
 		for (const item of items) {
-			this.data.set(this.serializeKey(item as any), item);
+			this.data.set(this.serializeKey(item as any), normalizeUndefinedValues(item));
 		}
 		this.flushToDisk();
 	}
@@ -376,7 +381,7 @@ export class DistributedTable<
 			throw conditionalCheckFailed(retriable);
 		}
 		for (const [field, value] of entries) {
-			if (!deepEqual((existing as any)[field], value)) {
+			if (!deepEqual((existing as any)[field], normalizeUndefinedValues(value))) {
 				// Compare-and-swap conflict; retriability decided by the caller.
 				throw conditionalCheckFailed(retriable);
 			}
