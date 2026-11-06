@@ -21,18 +21,13 @@ import io.ktor.client.engine.HttpClientEngine
  * [BlocksConfig] to configure anything else:
  *
  * ```
- * val blocks = Blocks(
- *     BlocksConfig(
- *         server = Servers.prod,
- *         platformConfig = BlocksPlatformConfig(/* target-specific values */),
- *     ),
- * )
+ * val blocks = Blocks(BlocksConfig(server = Servers.prod, applicationId = "com.example.myapp"))
  * ```
  *
- * The instance also owns the cookie jar its session lives in, which is why two instances
- * configured with different storage hold different sessions. On the JVM, an instance configured
- * with no storage location keeps its session in memory and forgets it when the process ends — see
- * [BlocksPlatformConfig].
+ * The instance owns the cookie jar its session lives in. Instances that persist to the same place
+ * share that jar, so two of them cannot discard each other's cookies. On the JVM an instance with
+ * no [BlocksConfig.applicationId] keeps its session in memory and forgets it when the process
+ * ends.
  *
  * Each access to a generated property builds a new wrapper over [client], so keep one where a
  * stable reference matters — a Compose parameter, say. The instance is what owns the engine, and
@@ -41,9 +36,11 @@ import io.ktor.client.engine.HttpClientEngine
 class Blocks internal constructor(
     config: BlocksConfig,
     engine: HttpClientEngine?,
+    /** Replaces the home directory desktop storage is derived from, for tests. */
+    storageRoot: String? = null,
 ) : AutoCloseable {
 
-    /** Configures the instance. [BlocksConfig.platformConfig] carries the target-specific values. */
+    /** Configures the instance. */
     constructor(config: BlocksConfig) : this(config, engine = null)
 
     /** Reaches [server] with every other value left at its default. */
@@ -53,7 +50,7 @@ class Blocks internal constructor(
     // may name a namespace anything, a member always wins over an extension of the same name, and
     // that leaves the generated accessor unreachable behind nothing louder than a compiler
     // warning. Functions are safe: a member function and an extension property can share a name.
-    private val cookies = cookieJar(config.platformConfig)
+    private val cookies = cookieJar(config.applicationId, storageRoot)
 
     private val client: BlocksClient = BlocksClient(config.server, defaultHttpClient(engine, cookies))
 
@@ -75,8 +72,7 @@ class Blocks internal constructor(
      * the cookie here instead leaves a live session on the server that the caller believes is
      * gone. This exists so a test suite can start from a clean slate on the targets where storage
      * cannot be pointed somewhere disposable — Android and iOS, where the OS supplies the
-     * location. On the JVM, configure a [BlocksPlatformConfig.storageLocation] in a temporary
-     * directory instead.
+     * location.
      */
     @InternalBlocksApi
     suspend fun clearStoredState() {

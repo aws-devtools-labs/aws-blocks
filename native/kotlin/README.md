@@ -65,7 +65,7 @@ Building the instance — which server it reaches, the imports the generated acc
 closing the engine it owns — is covered in
 [runtime configuration](docs/runtime-configuration.md#building-an-instance).
 
-> **On JVM and desktop, give the client a [storage location](docs/runtime-configuration.md#storing-the-session-on-the-jvm)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
+> **On JVM and desktop, give the client an [`applicationId`](docs/runtime-configuration.md#identifying-your-application)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
 ## Documentation
 
@@ -88,7 +88,7 @@ iOS and desktop.
 |----------|--------|-------------------------------------------------------------------------------------------------------------------------|
 | Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
 | iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
-| JVM | OkHttp | AES-256-GCM encrypted files, in a [directory you supply](docs/runtime-configuration.md#storing-the-session-on-the-jvm)  |
+| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#identifying-your-application) — in memory if no id is set |
 
 ## Support by Target
 

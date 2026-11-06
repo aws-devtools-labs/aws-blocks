@@ -17,16 +17,15 @@ import kotlinx.serialization.Serializable
 internal const val COOKIE_STORE_NAME = "cookies"
 
 /**
- * The cookie jar for a client configured with [platformConfig], persisted through whatever storage
- * that target resolves to. On the JVM that is the location the application supplied, or memory
- * alone when it supplied none.
+ * The cookie jar for a client, persisted through whatever storage its target resolves to. On the
+ * JVM that is a directory derived from [applicationId], or memory alone when there is none.
  *
  * **Clients that persist to the same storage get the same jar.** A jar holds its cookies in memory
  * and mirrors the whole set on write, so two jars over one store do not interleave: whichever
  * writes second replaces what the other had added rather than adding to it. Sharing is what keeps
  * two instances — an environment switcher, say — from silently dropping each other's sessions.
  */
-internal expect fun cookieJar(platformConfig: BlocksPlatformConfig): PersistentCookiesStorage
+internal expect fun cookieJar(applicationId: String?, storageRoot: String? = null): PersistentCookiesStorage
 
 /**
  * A [CookiesStorage] that keeps cookies in memory and mirrors the whole jar to [store] under a

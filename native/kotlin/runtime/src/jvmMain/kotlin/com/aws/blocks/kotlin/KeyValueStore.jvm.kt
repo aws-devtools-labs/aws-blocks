@@ -19,12 +19,16 @@ import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Falls back to an in-memory store when the application supplied no location. Picking one would
- * mean picking a directory under `$HOME`, which every Blocks application the user runs would
- * share — the defect this fallback exists instead of.
+ * Falls back to an in-memory store when no application id was configured. Writing to `~/.blocks`
+ * itself would put every Blocks application the user runs in one directory — the defect this
+ * fallback exists instead of.
  */
-internal actual fun platformKeyValueStore(name: String, platformConfig: BlocksPlatformConfig): KeyValueStore =
-    platformConfig.storageLocation
+internal actual fun platformKeyValueStore(
+    name: String,
+    applicationId: String?,
+    storageRoot: String?,
+): KeyValueStore =
+    applicationStorageDirectoryOrNull(applicationId, storageRoot)
         ?.let { EncryptedFileKeyValueStore(name, it) }
         ?: InMemoryKeyValueStore()
 

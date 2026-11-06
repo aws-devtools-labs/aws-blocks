@@ -43,8 +43,12 @@ import platform.Security.kSecReturnData
 import platform.Security.kSecValueData
 import platform.darwin.OSStatus
 
-/** [platformConfig] is empty on iOS: the Keychain access group is the per-application location. */
-internal actual fun platformKeyValueStore(name: String, platformConfig: BlocksPlatformConfig): KeyValueStore =
+/** Both arguments are ignored on iOS: the Keychain access group is the per-application location. */
+internal actual fun platformKeyValueStore(
+    name: String,
+    applicationId: String?,
+    storageRoot: String?,
+): KeyValueStore =
     KeychainKeyValueStore(name)
 
 /**

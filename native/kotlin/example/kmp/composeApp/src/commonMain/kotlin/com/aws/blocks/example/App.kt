@@ -30,13 +30,13 @@ import blocks.testapp.authApi
 
 @Composable
 fun App() {
-    // Every RPC call below runs on the HTTP client this owns. `platformConfig()` is what gives
-    // the desktop target somewhere to keep the session: without it the JVM holds cookies in
-    // memory and a restart signs the user out. It is remembered because the DisposableEffect
-    // closes the engine it owns, and `api` because the screens take it as a parameter and a new
-    // instance on each recomposition would defeat skipping.
+    // Every RPC call below runs on the HTTP client this owns. The application id is what gives the
+    // desktop target somewhere to keep the session: without it the JVM holds cookies in memory and
+    // a restart signs the user out. It is remembered because the DisposableEffect closes the engine
+    // it owns, and `api` because the screens take it as a parameter and a new instance on each
+    // recomposition would defeat skipping.
     val blocks = remember {
-        Blocks(BlocksConfig(server = Blocks.defaultServer, platformConfig = platformConfig()))
+        Blocks(BlocksConfig(server = Blocks.defaultServer, applicationId = "com.aws.blocks.example.kmp"))
     }
     val api = remember { blocks.api }
     DisposableEffect(blocks) {

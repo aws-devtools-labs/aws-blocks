@@ -6,8 +6,8 @@ package com.aws.blocks.kotlin
  * writes.
  */
 private val sharedJar: PersistentCookiesStorage by lazy {
-    PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, BlocksPlatformConfig()))
+    PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, applicationId = null))
 }
 
-internal actual fun cookieJar(platformConfig: BlocksPlatformConfig): PersistentCookiesStorage =
+internal actual fun cookieJar(applicationId: String?, storageRoot: String?): PersistentCookiesStorage =
     sharedJar

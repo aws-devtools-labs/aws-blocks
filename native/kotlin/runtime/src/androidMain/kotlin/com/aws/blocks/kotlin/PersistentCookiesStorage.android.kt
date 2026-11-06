@@ -5,8 +5,8 @@ package com.aws.blocks.kotlin
  * location and every instance shares it — two jars over it would not interleave their writes.
  */
 private val sharedJar: PersistentCookiesStorage by lazy {
-    PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, BlocksPlatformConfig()))
+    PersistentCookiesStorage(platformKeyValueStore(COOKIE_STORE_NAME, applicationId = null))
 }
 
-internal actual fun cookieJar(platformConfig: BlocksPlatformConfig): PersistentCookiesStorage =
+internal actual fun cookieJar(applicationId: String?, storageRoot: String?): PersistentCookiesStorage =
     sharedJar

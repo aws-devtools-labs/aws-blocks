@@ -12,7 +12,7 @@ Three forms, shortest first:
 ```kotlin
 Blocks()                                                 // the spec's first server
 Blocks(Servers.sandbox)                                  // a server the spec declares
-Blocks(BlocksConfig(server = Blocks.defaultServer))      // anything beyond the server
+Blocks(BlocksConfig(Blocks.defaultServer, "com.example.myapp"))   // anything beyond the server
 ```
 
 ### `Blocks()` and `Blocks.defaultServer`
@@ -46,7 +46,7 @@ but those resolve from the receiver, so an IDE offers them.
 `BlocksConfig` is a `data class`, so varying one value across environments is a `copy`:
 
 ```kotlin
-val base = BlocksConfig(server = Blocks.defaultServer)
+val base = BlocksConfig(server = Blocks.defaultServer, applicationId = "com.example.myapp")
 val staging = Blocks(base.copy(server = Servers.staging))
 ```
 
@@ -61,85 +61,30 @@ the wrong idiom for it: the instance is meant to live as long as the application
 Hold one and close it at shutdown — and on Android, tie it to the application rather than to an
 `Activity`.
 
-## `BlocksPlatformConfig`
-
-Configuration that applies only to the target the app is built for. Each target declares its own
-shape, so a target with nothing to configure has no parameter to misuse rather than a field it
-silently ignores — which means `BlocksPlatformConfig` is only constructible with arguments from the
-source set where those arguments exist.
-
-Today the JVM is the only target with anything in it.
-
-## Storing the session on the JVM
-
-**A JVM or desktop app has to say where its stored data lives, or its session will not survive a
-restart.** Nothing else does: Android lands in the app's own sandbox and iOS in its Keychain access
-group, both supplied by the OS. The JVM has neither, and `$HOME` is shared by every process you run
-— so a directory the library picked would be shared by every Blocks application on the machine, and
-two apps against one backend would hold one session. Rather than guess, the library asks:
+## Identifying your application
 
 ```kotlin
-// jvmMain / desktopMain
-val blocks = Blocks(
-    BlocksConfig(
-        server = Servers.prod,
-        platformConfig = BlocksPlatformConfig(
-            storageLocation = applicationDataDirectory("MyApp"),
-        ),
-    ),
-)
+val blocks = Blocks(BlocksConfig(server = Blocks.defaultServer, applicationId = "com.example.myapp"))
 ```
 
-`storageLocation` is called on first use rather than at construction, and off the calling thread,
-so it may read the environment and create the directory it returns.
+`applicationId` is a stable identifier for your application, conventionally reverse-DNS. It keeps
+one application's stored data apart from another's, and it is consulted only where the platform
+does not already do that for you.
 
-**Configure nothing and the session is held in memory for the life of the process.** Calls work and
-sign-in works; the session is simply gone on the next launch. There is no error and no warning, so
-if sign-in is not surviving a restart, this is why.
+**On desktop, a session survives a restart only when you set it.** Android gives each application a
+private sandbox and iOS a Keychain access group, so both ignore the value. A desktop machine gives
+an application no private storage at all — `$HOME` is shared by every process you run — so without
+an id there is nowhere to put the data that another Blocks application could not also reach. The
+session is held in memory for the life of the process instead, and the user signs in again on the
+next launch. There is no error and no warning, so if sign-in is not surviving a restart, this is
+why.
 
-### Choosing a directory
+The same id in two applications means one shared session, which is the thing it exists to prevent.
+Pick a value unique to your application and keep it: changing it later points the application at a
+different directory, which reads to the user as being signed out.
 
-The conventional per-OS location, which has no portable form in the JDK:
-
-```kotlin
-fun applicationDataDirectory(appName: String): File {
-    val home = System.getProperty("user.home")
-    val os = System.getProperty("os.name").lowercase()
-    val base = when {
-        os.startsWith("windows") -> System.getenv("LOCALAPPDATA") ?: "$home\\AppData\\Local"
-        os.startsWith("mac") -> "$home/Library/Application Support"
-        else -> System.getenv("XDG_DATA_HOME") ?: "$home/.local/share"
-    }
-    return File(base, appName)
-}
-```
-
-Copy it rather than reaching for a library helper — there isn't one, deliberately. Roaming versus
-local on Windows is your policy, a `jpackage` or Conveyor bundle often carries its own convention,
-and a portable install wants its data beside the executable. A helper would have to pick one and
-could never change it without silently moving every app's session.
-
-Two applications must not share a directory. That is the whole point of supplying one: the library
-cannot tell two apps apart, and a shared directory means a shared session.
-
-### Shared multiplatform code
-
-An `expect`/`actual` keeps the asymmetry in one place — see [`example/kmp`](../example/kmp), whose
-desktop target does exactly this:
-
-```kotlin
-// commonMain
-expect fun platformConfig(): BlocksPlatformConfig
-val blocks = Blocks(BlocksConfig(server = Servers.prod, platformConfig = platformConfig()))
-
-// desktopMain — without this, a restart signs the user out
-actual fun platformConfig() = BlocksPlatformConfig(
-    storageLocation = applicationDataDirectory("MyApp"),
-)
-
-// androidMain and iosMain — the OS already isolates storage per application
-actual fun platformConfig() = BlocksPlatformConfig()
-```
+Because it is one value on `BlocksConfig` rather than a per-target one, shared multiplatform code
+configures it once with no platform-specific source sets — see [`example/kmp`](../example/kmp).
 
 ### Where each target stores it
 
@@ -147,7 +92,16 @@ actual fun platformConfig() = BlocksPlatformConfig()
 |---|---|
 | Android | `EncryptedSharedPreferences`, in the app's sandbox |
 | iOS | Keychain Services, scoped to the app's access group |
-| JVM | AES-256-GCM encrypted files under the directory you supply, or memory if you supply none |
+| JVM | AES-256-GCM encrypted files under `~/.blocks/<applicationId>`, or memory if no id is set |
+
+The JVM path is one location on every desktop OS, in the manner of `~/.aws` or `~/.gradle`. An id
+is reduced to characters a directory name can hold; when that reduction changes anything, a digest
+of the id as you wrote it is appended, so two ids that would otherwise reduce to the same name keep
+separate directories.
+
+There is deliberately no way to name the directory outright. The id is what the runtime needs in
+order to keep applications apart, and a path would be a second way to say the same thing — with
+the failure mode that two applications can be pointed at one directory by mistake.
 
 ## Signing out
 
@@ -159,9 +113,9 @@ There is no public method for clearing stored state locally, and that is deliber
 cookie without telling the backend leaves a live session on the server that the user believes is
 gone.
 
-## Upgrading from a release that wrote to `~/.blocks`
+## Upgrading from a release that wrote to `~/.blocks` directly
 
-Versions of this runtime that predate `storageLocation` wrote the cookie jar to `~/.blocks/cookies`,
-shared by every Blocks app for the OS user. Those entries are not read and not migrated, so a
-signed-in user signs in once more after upgrading. Nothing removes the old directory; delete
-`~/.blocks` by hand if you want it gone.
+Versions of this runtime that predate `applicationId` wrote the cookie jar to `~/.blocks/cookies`,
+with no per-application component, so every Blocks application run by one OS user shared it. Those
+entries are not read and not migrated, so a signed-in user signs in once more after upgrading. The
+old `~/.blocks/cookies` directory is not removed; delete it by hand if you want it gone.
