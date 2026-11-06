@@ -6,7 +6,8 @@
  *
  * Tests telemetry end-to-end by invoking REAL CLI scripts and verifying:
  * 1. Event payload correctness via --telemetry-file
- * 2. Actual delivery to the telemetry endpoint via NODE_DEBUG stderr output
+ * 2. That each command sends its event, via NODE_DEBUG stderr output
+ * 3. That the telemetry endpoint accepts an event (the "collector delivery" case)
  *
  * Requirements:
  * - Valid AWS credentials (for sandbox/deploy/destroy SUCCESS paths)
@@ -52,7 +53,23 @@ const BLOCKS_TELEMETRY_CLI = join(REPO_ROOT, 'packages', 'core', 'dist', 'script
 const PINNED_INSTALLATION_ID = '00000000-0000-0000-0000-000000000e2e';
 const PINNED_PROJECT_ID = '00000000-0000-0000-0000-0000000e2e57';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** The collector answered and accepted the event. */
 const SENT_REGEX = /BLOCKS-TELEMETRY: sent \(status=200\)/;
+/** The CLI handed an event to the send worker (core's client.ts `sendEvent`, before it spawns the worker). */
+const SEND_ATTEMPT_REGEX = /BLOCKS-TELEMETRY \d+: sending event to \S+ \(\d+ bytes\)/;
+/** The send worker finished: the collector answered, the request timed out, or it failed. */
+const SEND_OUTCOME_REGEX = /BLOCKS-TELEMETRY: (?:sent \(status=\d+\)|timed out|error: [^\n]*)/;
+/** The collector answered with something other than 200, i.e. it rejected the event. */
+const REJECTED_REGEX = /BLOCKS-TELEMETRY: sent \(status=(?!200\))\d+\)/;
+
+/**
+ * How many times the "collector delivery" case sends an event before it fails,
+ * and how long it waits between sends. The send worker gives up on an answer
+ * after 500 ms (TIMEOUT_MS in core's telemetry-send-worker.ts), and in CI about
+ * one send in 500 gets no answer in that time.
+ */
+const DELIVERY_ATTEMPTS = 3;
+const DELIVERY_RETRY_DELAY_MS = 5_000;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -282,14 +299,28 @@ function readTelemetryFile(filePath: string): TelemetryPayload {
   return Array.isArray(parsed) ? parsed[0] : parsed;
 }
 
-/** Assert that the event was delivered to the real endpoint. */
-function assertDelivered(stderr: string, description = ''): void {
-  assert.match(stderr, SENT_REGEX, `Telemetry should be delivered to endpoint. ${description}\nstderr: ${stderr.slice(-500)}`);
+/**
+ * Assert that the command sent its event: it logged the send, the send worker
+ * finished, and the collector, if it answered, accepted the event.
+ *
+ * A send that timed out or failed on the network passes. The worker stops
+ * waiting for an answer after 500 ms (TIMEOUT_MS in core's
+ * telemetry-send-worker.ts), even when the collector already has the whole
+ * event, so a timeout does not show that the event was lost. The "collector
+ * delivery" case checks that the collector accepts an event.
+ */
+function assertSendAttempted(stderr: string, description = ''): void {
+  const context = `${description}\nstderr: ${stderr.slice(-500)}`;
+  assert.match(stderr, SEND_ATTEMPT_REGEX, `Telemetry should be sent to the endpoint. ${context}`);
+  assert.match(stderr, SEND_OUTCOME_REGEX, `The telemetry send worker should finish and log its outcome. ${context}`);
+  assert.doesNotMatch(stderr, REJECTED_REGEX, `The telemetry endpoint should accept the event. ${context}`);
 }
 
-/** Assert that the event was NOT delivered (disabled). */
-function assertNotDelivered(stderr: string): void {
-  assert.doesNotMatch(stderr, SENT_REGEX, 'Telemetry should NOT be delivered when disabled');
+/** Assert that the command sent nothing: it logged no send, and no send worker ran. */
+function assertNotSent(stderr: string): void {
+  const context = `\nstderr: ${stderr.slice(-500)}`;
+  assert.doesNotMatch(stderr, SEND_ATTEMPT_REGEX, `Telemetry should NOT be sent when disabled.${context}`);
+  assert.doesNotMatch(stderr, SEND_OUTCOME_REGEX, `No telemetry send worker should run when disabled.${context}`);
 }
 
 // --- AWS lifecycle groups ---------------------------------------------------
@@ -542,9 +573,9 @@ function localCommandSuites(): void {
       assert.match(body.product.blocksVersion, /^\d+\.\d+\.\d+/);
       assert.deepStrictEqual(body.product.template, { name: 'telemetry-e2e', version: '1.2.3' });
 
-      // Delivery
+      // Sent
       await sleep(5000);
-      assertDelivered(result.output.stderr, 'dev SUCCESS');
+      assertSendAttempted(result.output.stderr, 'dev SUCCESS');
     });
 
     test('official BBs appear with version, custom BBs are excluded but counted', async () => {
@@ -682,7 +713,7 @@ function localCommandSuites(): void {
       assert.strictEqual(body.event.state, 'SUCCESS');
 
       await sleep(5000);
-      assertDelivered(result.output.stderr, 'dev SUCCESS');
+      assertSendAttempted(result.output.stderr, 'dev SUCCESS');
     });
 
     test('FAIL: dev server fails to bind and emits dev/FAIL', async () => {
@@ -707,7 +738,36 @@ function localCommandSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'dev');
       assert.strictEqual(body.event.state, 'FAIL');
-      assertDelivered(result.stderr, 'dev FAIL');
+      assertSendAttempted(result.stderr, 'dev FAIL');
+    });
+  });
+
+  // ── 3b. Delivery to the collector ──────────────────────────────────────────
+  //
+  // The other cases check that a command sends its event (assertSendAttempted).
+  // This one checks that the telemetry endpoint answers and accepts it.
+
+  describe('collector delivery', () => {
+    let tmpHome: string;
+    afterEach(() => { if (tmpHome) rmSync(tmpHome, { recursive: true, force: true }); });
+
+    test('the telemetry endpoint accepts an event (status=200)', async () => {
+      tmpHome = createTmpDir('collector-delivery');
+      const outcomes: string[] = [];
+
+      for (let attempt = 1; attempt <= DELIVERY_ATTEMPTS; attempt++) {
+        // dev/FAIL (see "FAIL: dev server fails to bind"): the command exits on its own.
+        const result = await runCommand('npx', ['tsx', 'aws-blocks/scripts/server.ts'], {
+          telemetryFile: uniqueTelemetryFile(tmpHome), env: { PORT: '80' }, timeoutMs: 30_000,
+        });
+        // Fails at once if the endpoint rejected the event: resending would not help.
+        assertSendAttempted(result.stderr, `collector delivery, attempt ${attempt}`);
+        if (SENT_REGEX.test(result.stderr)) return;
+
+        outcomes.push(`attempt ${attempt}: ${result.stderr.match(SEND_OUTCOME_REGEX)?.[0]}`);
+        if (attempt < DELIVERY_ATTEMPTS) await sleep(DELIVERY_RETRY_DELAY_MS);
+      }
+      assert.fail(`The telemetry endpoint accepted none of ${DELIVERY_ATTEMPTS} events:\n${outcomes.join('\n')}`);
     });
   });
 
@@ -734,7 +794,7 @@ function localCommandSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'create-blocks-app');
       assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'create-blocks-app SUCCESS');
+      assertSendAttempted(result.stderr, 'create-blocks-app SUCCESS');
     });
 
     test('FAIL: missing args emits create-blocks-app/FAIL', async () => {
@@ -802,7 +862,7 @@ function localCommandSuites(): void {
 
       assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
       assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-      assertNotDelivered(result.stderr);
+      assertNotSent(result.stderr);
     });
 
     test('AWS_BLOCKS_DISABLE_TELEMETRY=true prevents telemetry', async () => {
@@ -822,7 +882,7 @@ function localCommandSuites(): void {
 
       assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
       assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-      assertNotDelivered(result.stderr);
+      assertNotSent(result.stderr);
     });
 
     test('global config telemetry.enabled=false prevents telemetry', async () => {
@@ -849,7 +909,7 @@ function localCommandSuites(): void {
 
         assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
         assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
+        assertNotSent(result.stderr);
       } finally {
         // Restore original state
         if (originalContent !== null) writeFileSync(globalCfg, originalContent);
@@ -881,7 +941,7 @@ function localCommandSuites(): void {
 
         assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
         assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
+        assertNotSent(result.stderr);
       } finally {
         // Restore original config
         if (originalContent !== null) {
@@ -922,7 +982,7 @@ function localCommandSuites(): void {
         assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
         // Consent gates the file sink too (D-018): a disabled run writes nothing.
         assert.ok(!(await waitForFile(telemetryFile, 2_000)), '--telemetry-file must not write when telemetry is disabled');
-        assertNotDelivered(result.stderr);
+        assertNotSent(result.stderr);
       } finally {
         if (originalProject !== null) writeFileSync(projectConfig, originalProject);
         else rmSync(projectConfig, { force: true });
@@ -942,7 +1002,7 @@ function localCommandSuites(): void {
 
       assert.ok(await waitForFile(telemetryFile, 15_000), 'telemetry should still fire with =0');
       await sleep(5000);
-      assertDelivered(result.output.stderr, 'telemetry should be delivered when DISABLE=0');
+      assertSendAttempted(result.output.stderr, 'telemetry should be sent when DISABLE=0');
     });
 
   });
@@ -1181,7 +1241,7 @@ function localCommandSuites(): void {
 
       assert.match(result.stdout, /local server running on/, 'dev server must have started — an absent telemetry file proves nothing otherwise');
       assert.ok(!(await waitForFile(telemetryFile, 3_000)), '--telemetry-file must not write when telemetry is disabled');
-      assertNotDelivered(result.stderr);
+      assertNotSent(result.stderr);
     });
 
     test('projectId persists across runs from same project', async () => {
@@ -1371,7 +1431,7 @@ function sandboxLifecycleSuites(): void {
       assert.strictEqual(body.event.command, 'sandbox');
       assert.strictEqual(body.event.state, 'FAIL');
       assert.ok(body.event.error, 'FAIL should carry error info');
-      assertDelivered(result.stderr, 'sandbox FAIL');
+      assertSendAttempted(result.stderr, 'sandbox FAIL');
     });
 
     test('SUCCESS: sandbox deploys and emits sandbox/SUCCESS', async () => {
@@ -1404,7 +1464,7 @@ function sandboxLifecycleSuites(): void {
       assert.strictEqual(body.event.command, 'sandbox');
       assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 2000): ${result.stdout.slice(-2000)}\nstderr(last 2000): ${result.stderr.slice(-2000)}`);
       assert.strictEqual(body.event.error, undefined);
-      assertDelivered(result.stderr, 'sandbox SUCCESS');
+      assertSendAttempted(result.stderr, 'sandbox SUCCESS');
 
       // Cleanup: destroy the sandbox stack
       await spaceRestApiCall('delete');
@@ -1431,7 +1491,7 @@ function sandboxLifecycleSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox:destroy');
       assert.strictEqual(body.event.state, 'FAIL');
-      assertDelivered(result.stderr, 'sandbox:destroy FAIL');
+      assertSendAttempted(result.stderr, 'sandbox:destroy FAIL');
     });
 
     test('SUCCESS: sandbox:destroy after deploy emits sandbox:destroy/SUCCESS', async () => {
@@ -1455,7 +1515,7 @@ function sandboxLifecycleSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'sandbox:destroy');
       assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'sandbox:destroy SUCCESS');
+      assertSendAttempted(result.stderr, 'sandbox:destroy SUCCESS');
     });
   });
 
@@ -1484,7 +1544,7 @@ function sandboxLifecycleSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'console');
       assert.strictEqual(body.event.state, 'SUCCESS', `Expected SUCCESS but got ${body.event.state}. error=${JSON.stringify(body.event.error)}\nstdout(last 1000): ${result.stdout.slice(-1000)}\nstderr(last 1000): ${result.stderr.slice(-1000)}`);
-      assertDelivered(result.stderr, 'console SUCCESS');
+      assertSendAttempted(result.stderr, 'console SUCCESS');
 
       // Cleanup: destroy the sandbox
       await spaceRestApiCall('delete');
@@ -1520,7 +1580,7 @@ function productionLifecycleSuites(): void {
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'FAIL');
       assert.ok(body.event.error);
-      assertDelivered(result.stderr, 'deploy FAIL');
+      assertSendAttempted(result.stderr, 'deploy FAIL');
     });
 
     test('SUCCESS: deploy with creds emits deploy/SUCCESS', async () => {
@@ -1542,7 +1602,7 @@ function productionLifecycleSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'deploy');
       assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'deploy SUCCESS');
+      assertSendAttempted(result.stderr, 'deploy SUCCESS');
 
       // Cleanup: destroy the production stack
       await spaceRestApiCall('delete');
@@ -1569,7 +1629,7 @@ function productionLifecycleSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'destroy');
       assert.strictEqual(body.event.state, 'FAIL');
-      assertDelivered(result.stderr, 'destroy FAIL');
+      assertSendAttempted(result.stderr, 'destroy FAIL');
     });
 
     test('SUCCESS: destroy with creds emits destroy/SUCCESS', async () => {
@@ -1592,7 +1652,7 @@ function productionLifecycleSuites(): void {
       const body = readTelemetryFile(telemetryFile);
       assert.strictEqual(body.event.command, 'destroy');
       assert.strictEqual(body.event.state, 'SUCCESS');
-      assertDelivered(result.stderr, 'destroy SUCCESS');
+      assertSendAttempted(result.stderr, 'destroy SUCCESS');
     });
   });
 }
