@@ -677,9 +677,33 @@ describe('multiple wildcards validation', () => {
       () => compilePath('/a/*/b'),
       (err: Error) => {
         assert.ok(err.message.includes('must be the last segment'));
+        assert.ok(!err.message.includes('multiple wildcards'), `one wildcard reported as multiple: ${err.message}`);
         return true;
       },
     );
+  });
+
+  it('rejects an in-segment wildcard /fi*les without calling it multiple wildcards', () => {
+    assert.throws(
+      () => compilePath('/fi*les'),
+      (err: Error) => {
+        assert.ok(err.message.includes('must be the last segment'));
+        assert.ok(!err.message.includes('multiple wildcards'), `one wildcard reported as multiple: ${err.message}`);
+        return true;
+      },
+    );
+  });
+
+  it('reports multiple wildcards even when the first one is also misplaced', () => {
+    for (const path of ['/a/*/b/*', '/a*/*', '/**']) {
+      assert.throws(
+        () => compilePath(path),
+        (err: Error) => {
+          assert.ok(err.message.includes('multiple wildcards'), `${path}: ${err.message}`);
+          return true;
+        },
+      );
+    }
   });
 
   it('trailing wildcard /v1/* still works', () => {
@@ -708,6 +732,14 @@ describe('multiple wildcards validation', () => {
         return true;
       },
     );
+  });
+
+  it('a whole-segment wildcard /files/* stays inside its segment', () => {
+    registerRoute({ method: 'GET', path: '/files/*', handler: noop });
+    assert.deepStrictEqual(matchRoute('GET', '/files/docs/a.txt')?.params, nullProto({ '*': 'docs/a.txt' }));
+    assert.strictEqual(matchRoute('GET', '/filesbackup/secret'), null);
+    assert.strictEqual(matchRoute('GET', '/files-old/a.txt'), null);
+    assert.strictEqual(matchRoute('GET', '/files'), null);
   });
 });
 

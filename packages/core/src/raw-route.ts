@@ -394,7 +394,6 @@ export function compilePath(path: string): { pattern: RegExp; paramNames: string
   const paramNames: string[] = [];
   let regexStr = '';
   let i = 0;
-  let wildcardCount = 0;
 
   while (i < path.length) {
     if (path[i] === '{') {
@@ -417,15 +416,14 @@ export function compilePath(path: string): { pattern: RegExp; paramNames: string
     } else if (path[i] === '}') {
       throw new Error(`Unexpected '}' without matching '{' in path pattern: ${path}`);
     } else if (path[i] === '*') {
-      wildcardCount++;
-      if (wildcardCount > 1) {
+      if (path.indexOf('*', i + 1) !== -1) {
         throw new Error(
           `Path '${path}' contains multiple wildcards. Only one wildcard (*) is allowed per route, and it must be the last segment.`,
         );
       }
       if (i !== path.length - 1) {
         throw new Error(
-          `Path '${path}' contains multiple wildcards. Only one wildcard (*) is allowed per route, and it must be the last segment.`,
+          `Path '${path}' has a wildcard (*) before its end. The wildcard must be the last segment, as in '/files/*'.`,
         );
       }
       paramNames.push('*');
