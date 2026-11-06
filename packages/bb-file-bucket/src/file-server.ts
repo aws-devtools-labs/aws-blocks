@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { isBlocksError } from '@aws-blocks/core';
 import { validateFileToken, LOCAL_FILE_SECRET } from './tokens.js';
 import { assertContainedPath } from './mock-utils.js';
-import { contentRoot, contentPath, metaPath, versionContentPath, versionMetaPath } from './paths.js';
+import { contentRoot, contentPath, deleteMarkerPath, metaPath, versionContentPath, versionMetaPath } from './paths.js';
 
 const PREFIX = '/.bb-file-bucket/';
 
@@ -133,7 +133,9 @@ export function attach(httpServer: Server) {
 				metaFilePath = versionMetaPath(dataDir, path, versionId);
 			}
 
-			if (!existsSync(readPath)) {
+			// Without a versionId, a delete marker means the current version is
+			// deleted (S3 answers NoSuchKey) even though content/{key} remains.
+			if (!existsSync(readPath) || (!versionId && existsSync(deleteMarkerPath(dataDir, path)))) {
 				sendError(res, 404, 'NoSuchKey');
 				return;
 			}
