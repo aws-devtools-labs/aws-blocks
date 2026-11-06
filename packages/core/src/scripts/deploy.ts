@@ -9,12 +9,12 @@ import { applyExternalMigrations } from './external-migrations-step.js';
 import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
-import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
+import { runStreaming, buildCdkDeployArgs, formatDenialNotice, formatDeploySignal } from './deploy-stream.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
-import { log } from './log.js';
+import { log, progressToStderr } from './log.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -325,6 +325,16 @@ export async function deploy(options: DeployOptions) {
             // deliberately differs from the final `🌐 Frontend URL:` line so a
             // naive grep does not match both — the early line says "converging".
             console.log(`\n🌐 Frontend deploying to: ${url}`);
+          },
+          // Explained while CloudFormation is still rolling back (minutes before
+          // the CDK CLI exits), with the progress (stdout, or stderr for the blocks
+          // CLI) so a capture of that stream sees it. Not a log line: no
+          // BLOCKS_LOG_LEVEL hides it. The CDK output keeps the details; the
+          // deploy's outcome is unchanged.
+          onDenial: (kind) => {
+            (progressToStderr() ? console.error : console.log)(
+              `\n${formatDenialNotice(kind, options.invocation ?? 'npm run deploy')}`,
+            );
           },
         }
       );
