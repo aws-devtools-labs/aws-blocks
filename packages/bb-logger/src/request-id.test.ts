@@ -9,12 +9,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { buildEntry } from './serializer.js';
+import { buildEntry, safeStringify } from './serializer.js';
 
+// The serializer reads the id through `currentRequestId()` from core's bb-utils,
+// which registers core's own store here on load. Use that real store, not a stand-in.
 const globals = globalThis as { __BLOCKS_REQUEST_ID_STORE__?: AsyncLocalStorage<string | undefined> };
-// Core registers this store when its handler loads; stand in for it here.
-if (!globals.__BLOCKS_REQUEST_ID_STORE__) globals.__BLOCKS_REQUEST_ID_STORE__ = new AsyncLocalStorage();
-const store: AsyncLocalStorage<string | undefined> = globals.__BLOCKS_REQUEST_ID_STORE__;
+const registered = globals.__BLOCKS_REQUEST_ID_STORE__;
+assert.ok(registered instanceof AsyncLocalStorage, "core's request-id store is registered once the serializer loads");
+const store: AsyncLocalStorage<string | undefined> = registered;
 
 const parse = (line: string) => JSON.parse(line) as Record<string, unknown>;
 
@@ -46,4 +48,20 @@ test('overlapping invocations each log their own id', async () => {
 test('the structural fields keep their order, with requestId after logger', () => {
 	const entry = store.run('req-1', () => parse(buildEntry('warn', 'm', 'app', [{ k: 1 }])));
 	assert.deepStrictEqual(Object.keys(entry).slice(0, 5), ['level', 'message', 'timestamp', 'logger', 'requestId']);
+});
+
+test('the degraded line written on a serialization failure keeps requestId and traceId', () => {
+	const unserializable = { toJSON() { throw new Error('boom'); } };
+	const line = parse(
+		safeStringify({ level: 'error', message: 'm', timestamp: 't', logger: 'app', requestId: 'req-9', traceId: '1-abc', bad: unserializable }),
+	);
+	assert.strictEqual(line._serializationError, 'SerializationFailedException');
+	assert.strictEqual(line.requestId, 'req-9');
+	assert.strictEqual(line.traceId, '1-abc');
+});
+
+test('the degraded line drops a non-string requestId rather than failing again', () => {
+	const unserializable = { toJSON() { throw new Error('boom'); } };
+	const line = parse(safeStringify({ level: 'error', message: 'm', timestamp: 't', logger: 'app', requestId: 1n, bad: unserializable }));
+	assert.strictEqual('requestId' in line, false);
 });

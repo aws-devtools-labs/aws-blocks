@@ -227,7 +227,7 @@ export function computeHttpDeadlineMs(context?: LambdaContext): number {
  */
 export interface LambdaContext {
   getRemainingTimeInMillis(): number;
-  /** The invocation's request id; carried through the invocation by {@link currentRequestId}. */
+  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-blocks/core/bb-utils`. */
   awsRequestId?: string;
 }
 
@@ -296,7 +296,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
   }
 
   // Each invocation runs with its request id in scope, so Building Blocks can
-  // tag their output with it (see currentRequestId in request-context.ts).
+  // tag their output with it (`currentRequestId()` in request-context.ts).
   return (event: any, context?: LambdaContext) => requestIdStore.run(context?.awsRequestId, () => invoke(event, context));
 
   async function invoke(event: any, context?: LambdaContext) {
@@ -308,7 +308,10 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Resetting initPromise lets the next invocation re-run initialize() (config.ts re-fetches,
       // since it doesn't cache failures), so the handler self-heals once config is available.
       if (!initPromise) {
-        initPromise = initialize().catch((err) => {
+        // Run init outside this invocation's request-id scope: the backend import and the
+        // Building Block constructors create long-lived state (timers, pool listeners) that
+        // must not keep the first request's id for the life of the container.
+        initPromise = requestIdStore.exit(() => initialize()).catch((err) => {
           initPromise = null;
           throw err;
         });

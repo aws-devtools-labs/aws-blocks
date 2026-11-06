@@ -7,21 +7,9 @@
  * BigInt conversion, Error object extraction, and log level filtering.
  */
 
+import { currentRequestId } from '@aws-blocks/core/bb-utils';
 import type { LogLevel } from './types.js';
 import { LoggingErrors } from './errors.js';
-
-/**
- * The id of the request being handled, from the per-invocation store core's
- * Lambda handler populates (`request-context.ts` in `@aws-blocks/core`). Read
- * through its `globalThis` registration rather than an import, so the CDK entry
- * (which shares this serializer) doesn't load core's runtime handler at synth,
- * and a separately resolved copy of core still sees the same store.
- */
-function currentRequestId(): string | undefined {
-	const store = (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__;
-	const id = store?.getStore();
-	return typeof id === 'string' && id.length > 0 ? id : undefined;
-}
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	debug: 0,
@@ -72,6 +60,9 @@ export function safeStringify(obj: Record<string, unknown>): string {
 			message: obj.message,
 			timestamp: obj.timestamp,
 			logger: obj.logger,
+			// Keep the correlation ids: degraded lines are the ones most worth tracing.
+			requestId: typeof obj.requestId === 'string' ? obj.requestId : undefined,
+			traceId: typeof obj.traceId === 'string' ? obj.traceId : undefined,
 			_serializationError: LoggingErrors.SerializationFailed,
 		});
 	}

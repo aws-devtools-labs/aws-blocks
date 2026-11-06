@@ -38,18 +38,27 @@ export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>(
  * the store the handler populated.
  */
 const REQUEST_ID_STORE_KEY = '__BLOCKS_REQUEST_ID_STORE__';
-const globalStores = globalThis as unknown as Record<string, AsyncLocalStorage<string | undefined> | undefined>;
-export const requestIdStore: AsyncLocalStorage<string | undefined> =
-  globalStores[REQUEST_ID_STORE_KEY] ?? new AsyncLocalStorage<string | undefined>();
+const globalStores = globalThis as unknown as Record<string, unknown>;
+const isStore = (value: unknown): value is AsyncLocalStorage<string | undefined> =>
+  typeof (value as { getStore?: unknown } | undefined)?.getStore === 'function' &&
+  typeof (value as { run?: unknown } | undefined)?.run === 'function';
+const existingRequestIdStore = globalStores[REQUEST_ID_STORE_KEY];
+// Reuse the store another copy of core registered; anything else at the key is replaced.
+export const requestIdStore: AsyncLocalStorage<string | undefined> = isStore(existingRequestIdStore)
+  ? existingRequestIdStore
+  : new AsyncLocalStorage<string | undefined>();
 globalStores[REQUEST_ID_STORE_KEY] = requestIdStore;
 
 /**
  * The id of the request being handled, or `undefined` outside one. On AWS
  * Lambda this is the invocation's `awsRequestId` (the id in the function's
  * `START`/`END`/`REPORT` log lines). The local dev server sets none.
+ *
+ * Exported for Building Block authors from `@aws-blocks/core/bb-utils`.
  */
 export function currentRequestId(): string | undefined {
-  return requestIdStore.getStore();
+  const id = requestIdStore.getStore();
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
 /**

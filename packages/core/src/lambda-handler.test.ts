@@ -2335,4 +2335,40 @@ describe('createLambdaHandler — request id in scope', () => {
   it('has no request id outside an invocation', () => {
     assert.strictEqual(readStore(), undefined);
   });
+
+  it('imports the backend outside the first invocation request id', async () => {
+    let idAtImport: unknown = 'not-imported';
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => {
+      idAtImport = readStore();
+      return backend;
+    });
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-first'));
+    assert.strictEqual(idAtImport, undefined);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-first' });
+  });
+});
+
+describe('request-context — request id store registration', () => {
+  const KEY = '__BLOCKS_REQUEST_ID_STORE__';
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  it('replaces a non-store value at the globalThis key instead of throwing on use', async () => {
+    const original = globals[KEY];
+    globals[KEY] = { not: 'a store' };
+    try {
+      const fresh = await import(`./request-context.js?non-store-${Date.now()}`);
+      assert.strictEqual(fresh.currentRequestId(), undefined);
+      assert.strictEqual(fresh.requestIdStore.run('req-x', () => fresh.currentRequestId()), 'req-x');
+      assert.strictEqual(globals[KEY], fresh.requestIdStore);
+    } finally {
+      globals[KEY] = original;
+    }
+  });
+
+  it('a second copy of core reuses the registered store', async () => {
+    const original = globals[KEY];
+    const fresh = await import(`./request-context.js?second-copy-${Date.now()}`);
+    assert.strictEqual(fresh.requestIdStore, original);
+  });
 });
