@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // This will be bundled with the customer's backend code
+import { emitRpcErrorMetric } from './rpc-error-metric.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { lockRouteRegistry } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
@@ -17,6 +18,7 @@ export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 // The request-scoped stores and the forwarded-host gate live in request-context.ts
 // so the container HTTP server shares them; re-exported here for existing imports.
 export { requestCookies, requestClientUserAgent, isLoopbackForwardedHost } from './request-context.js';
+import { requestIdStore } from './request-context.js';
 
 /**
  * Event source mapping identifiers used by AWS when pushing records to Lambda.
@@ -226,6 +228,8 @@ export function computeHttpDeadlineMs(context?: LambdaContext): number {
  */
 export interface LambdaContext {
   getRemainingTimeInMillis(): number;
+  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-blocks/core/bb-utils`. */
+  awsRequestId?: string;
 }
 
 /**
@@ -292,7 +296,11 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
     lockRouteRegistry();
   }
 
-  return async (event: any, context?: LambdaContext) => {
+  // Each invocation runs with its request id in scope, so Building Blocks can
+  // tag their output with it (`currentRequestId()` in request-context.ts).
+  return (event: any, context?: LambdaContext) => requestIdStore.run(context?.awsRequestId, () => invoke(event, context));
+
+  async function invoke(event: any, context?: LambdaContext) {
     if (!handler) {
       // Retry init on failure instead of caching the rejection. If initialize() throws (most often
       // because loadConfigToProcessEnv() couldn't read blocks-config.json during the brief
@@ -301,7 +309,10 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Resetting initPromise lets the next invocation re-run initialize() (config.ts re-fetches,
       // since it doesn't cache failures), so the handler self-heals once config is available.
       if (!initPromise) {
-        initPromise = initialize().catch((err) => {
+        // Run init outside this invocation's request-id scope: the backend import and the
+        // Building Block constructors create long-lived state (timers, pool listeners) that
+        // must not keep the first request's id for the life of the container.
+        initPromise = requestIdStore.exit(() => initialize()).catch((err) => {
           initPromise = null;
           throw err;
         });
@@ -354,6 +365,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
+        if (isRpcPath(requestPath)) emitRpcErrorMetric({ status: 504 });
         return {
           statusCode: 504,
           headers: {
@@ -366,7 +378,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Non-timeout errors (handler threw before deadline) propagate normally.
       throw err;
     }
-  };
+  }
 }
 
 class HandlerTimeoutError extends Error {
@@ -410,7 +422,9 @@ function getRequestPath(event: any): string {
 }
 
 function createHandler(backend: any) {
-  const dispatch = createDispatcher(backend, { rpcErrorLabel: 'Lambda Error:' });
+  // Each failed RPC call writes the `RpcErrors` metric: the response is an HTTP
+  // 200 JSON-RPC error envelope, so Lambda's own `Errors` metric never counts it.
+  const dispatch = createDispatcher(backend, { rpcErrorLabel: 'Lambda Error:', onRpcError: emitRpcErrorMetric });
   return async (event: any, signal?: AbortSignal) => {
     const eventClass = classifyEvent(event);
 

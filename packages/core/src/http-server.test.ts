@@ -219,6 +219,7 @@ const BIG_RESPONSE_BYTES = 8 * 1024 * 1024;
 
 let slowRelease: (() => void) | undefined;
 let lastAbort: { aborted: boolean } | undefined;
+let lastSignal: AbortSignal | undefined;
 
 function registerRoutes() {
   registerRoute({
@@ -304,6 +305,14 @@ function registerRoutes() {
   });
   registerRoute({
     method: 'GET',
+    path: '/record-signal',
+    handler: async (ctx) => {
+      lastSignal = ctx.request.signal;
+      ctx.response.send('');
+    },
+  });
+  registerRoute({
+    method: 'GET',
     path: '/wait-for-abort',
     handler: async (ctx) => {
       const seen = { aborted: false };
@@ -332,6 +341,7 @@ beforeEach(() => {
   registerRoutes();
   slowRelease = undefined;
   lastAbort = undefined;
+  lastSignal = undefined;
 });
 afterEach(() => {
   if (savedCors === undefined) delete process.env.CORS_ALLOWED_ORIGINS;
@@ -714,6 +724,20 @@ describe('serveHttp — listener', { timeout: 30_000 }, () => {
     }
   }
 
+
+  it('leaves the request signal unaborted once the response is written', async () => {
+    const server = await start();
+    try {
+      const reply = await send(server.port, 'GET', '/record-signal');
+      assert.strictEqual(reply.status, 200);
+      // The server's response 'close' follows the client reading the reply.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      assert.ok(lastSignal, 'the handler saw a request signal');
+      assert.strictEqual(lastSignal.aborted, false);
+    } finally {
+      await server.close();
+    }
+  });
 
   it('aborts the request signal when the client disconnects', async () => {
     const server = await start();
