@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
+import * as cdk from 'aws-cdk-lib';
+import { CfnDBCluster } from 'aws-cdk-lib/aws-rds';
 import type { TemplateResource } from './cloud-assembly.js';
 import {
 	assertFreePlanAurora,
@@ -174,5 +176,77 @@ describe('assertFreePlanAurora', () => {
 		});
 		check(assemblyDir);
 		assert.deepEqual(warnings, []);
+	});
+});
+
+describe('assertFreePlanAurora with CDK nested stacks', () => {
+	let dir: string;
+	let warnings: string[];
+
+	/**
+	 * Synthesize a real assembly: a parent stack with a nested stack whose own nested
+	 * stack holds an Aurora cluster. `assetMetadata` mirrors the CDK CLI default
+	 * (`aws:asset:path` on the nested stack resources); without it, the template is
+	 * found through the asset manifest.
+	 */
+	function synth({
+		assetMetadata,
+		conditional = false,
+		account,
+	}: {
+		assetMetadata: boolean;
+		conditional?: boolean;
+		account?: string;
+	}): string {
+		// Path metadata is on as the CDK CLI sets it, so the messages name construct paths.
+		const app = new cdk.App({
+			outdir: dir,
+			context: { 'aws:cdk:enable-path-metadata': true, 'aws:cdk:enable-asset-metadata': assetMetadata },
+		});
+		const parent = new cdk.Stack(app, 'Parent', account ? { env: { account, region: 'eu-north-1' } } : {});
+		const child = new cdk.NestedStack(parent, 'Child');
+		const grandchild = new cdk.NestedStack(child, 'Grandchild');
+		new CfnDBCluster(grandchild, 'Db', { engine: 'aurora-postgresql' });
+		if (conditional) {
+			const resource = child.nestedStackResource;
+			assert.ok(resource);
+			resource.cfnOptions.condition = new cdk.CfnCondition(parent, 'CreateDb', {
+				expression: cdk.Fn.conditionEquals(new cdk.CfnParameter(parent, 'Db').valueAsString, 'yes'),
+			});
+		}
+		app.synth();
+		return dir;
+	}
+
+	const check = (assemblyDir: string, account: string | null = '111111111111') =>
+		assertFreePlanAurora({ accountPlan: 'FREE', account, assemblyDir, invocation: 'npm run deploy' });
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), 'blocks-free-plan-aurora-nested-'));
+		warnings = [];
+		mock.method(console, 'warn', (...args: unknown[]) => warnings.push(args.join(' ')));
+	});
+
+	afterEach(() => {
+		mock.restoreAll();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	for (const assetMetadata of [true, false]) {
+		it(`stops on an Aurora cluster two nested stacks down (asset metadata ${assetMetadata ? 'on' : 'off'})`, () => {
+			assert.throws(() => check(synth({ assetMetadata })), /^ {4}Parent: Parent\/Child\/Grandchild\/Db$/m);
+		});
+	}
+
+	it('warns instead of stopping when an enclosing nested stack is conditional', () => {
+		check(synth({ assetMetadata: true, conditional: true }));
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0] ?? '', /decided at deploy time[\s\S]*Parent: Parent\/Child\/Grandchild\/Db/);
+	});
+
+	it('gives nested stacks the target account of their parent', () => {
+		check(synth({ assetMetadata: true, account: '222222222222' }));
+		assert.equal(warnings.length, 1);
+		assert.match(warnings[0] ?? '', /Parent \(account 222222222222\): Parent\/Child\/Grandchild\/Db/);
 	});
 });

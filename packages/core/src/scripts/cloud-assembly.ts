@@ -29,13 +29,29 @@ export interface StackTemplate {
 	Resources?: Record<string, TemplateResource>;
 }
 
-/** A stack artifact in a cloud assembly's `manifest.json`. */
-type StackArtifact = {
+/** An artifact in a cloud assembly's `manifest.json`. */
+type AssemblyArtifact = {
 	type?: string;
 	environment?: string;
 	displayName?: string;
-	properties?: { templateFile?: string; stackName?: string };
+	properties?: { templateFile?: string; stackName?: string; file?: string };
 };
+
+/** The artifacts in `manifest.json` of the synthesized assembly at `assemblyDir`; [] if it can't be read. */
+function readArtifacts(assemblyDir: string): Array<[string, AssemblyArtifact]> {
+	let artifacts: Record<string, AssemblyArtifact>;
+	try {
+		artifacts =
+			(
+				JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as {
+					artifacts?: Record<string, AssemblyArtifact>;
+				}
+			).artifacts ?? {};
+	} catch {
+		return [];
+	}
+	return Object.entries(artifacts);
+}
 
 /**
  * The stack artifacts listed in `manifest.json` of the synthesized assembly at
@@ -43,23 +59,12 @@ type StackArtifact = {
  * inside a CDK `Stage` lives in a nested assembly and is not listed). [] if the
  * assembly can't be read.
  */
-function readStackArtifacts(assemblyDir: string): Array<[string, StackArtifact]> {
-	let artifacts: Record<string, StackArtifact>;
-	try {
-		artifacts =
-			(
-				JSON.parse(readFileSync(join(assemblyDir, 'manifest.json'), 'utf-8')) as {
-					artifacts?: Record<string, StackArtifact>;
-				}
-			).artifacts ?? {};
-	} catch {
-		return [];
-	}
-	return Object.entries(artifacts).filter(([, artifact]) => artifact.type === 'aws:cloudformation:stack');
+function readStackArtifacts(assemblyDir: string): Array<[string, AssemblyArtifact]> {
+	return readArtifacts(assemblyDir).filter(([, artifact]) => artifact.type === 'aws:cloudformation:stack');
 }
 
 /** The CloudFormation stack name and Region of a stack artifact. */
-function toAssemblyStack(id: string, artifact: StackArtifact): AssemblyStack {
+function toAssemblyStack(id: string, artifact: AssemblyArtifact): AssemblyStack {
 	const region = artifact.environment?.split('/')[3];
 	return {
 		stackName: artifact.properties?.stackName ?? id,
@@ -117,4 +122,77 @@ export function stackTemplates(assemblyDir: string): AssemblyStackTemplate[] {
 		});
 	}
 	return stacks;
+}
+
+/** The file name suffix CDK gives a `NestedStack`'s template in the assembly. */
+const NESTED_TEMPLATE_SUFFIX = '.nested.template.json';
+
+/** The part of a CDK asset manifest (`<stack>.assets.json`) that maps files to their S3 object keys. */
+type AssetManifest = {
+	files?: Record<string, { source?: { path?: unknown }; destinations?: Record<string, { objectKey?: unknown }> }>;
+};
+
+/**
+ * The nested-stack templates of the assembly by the S3 object key CDK uploads
+ * them as (`<hash>.json`), from the asset manifests (`cdk:asset-manifest`).
+ */
+function nestedTemplatesByObjectKey(assemblyDir: string): Map<string, string> {
+	const byKey = new Map<string, string>();
+	for (const [, artifact] of readArtifacts(assemblyDir)) {
+		if (artifact.type !== 'cdk:asset-manifest' || !artifact.properties?.file) continue;
+		let manifest: AssetManifest;
+		try {
+			manifest = JSON.parse(readFileSync(join(assemblyDir, artifact.properties.file), 'utf-8')) as AssetManifest;
+		} catch {
+			continue;
+		}
+		for (const { source, destinations } of Object.values(manifest?.files ?? {})) {
+			const path = source?.path;
+			if (typeof path !== 'string' || !path.endsWith(NESTED_TEMPLATE_SUFFIX)) continue;
+			for (const { objectKey } of Object.values(destinations ?? {})) {
+				if (typeof objectKey === 'string') byKey.set(objectKey, path);
+			}
+		}
+	}
+	return byKey;
+}
+
+/** A nested stack's template, read from the assembly, and the file it came from. */
+export interface NestedStackTemplate {
+	file: string;
+	template: StackTemplate;
+}
+
+/**
+ * A reader for the local templates of `AWS::CloudFormation::Stack` resources
+ * that CDK `NestedStack`s synthesize into the assembly at `assemblyDir`. CDK
+ * names the template file in the resource's `aws:asset:path` metadata when asset
+ * metadata is on (the CLI default); otherwise the reader matches the
+ * `TemplateURL` object key against the asset manifests. It returns `undefined`
+ * for any other resource, and for a nested stack whose template is not in the
+ * assembly (for example a `TemplateURL` that names a template elsewhere).
+ */
+export function nestedStackTemplateReader(
+	assemblyDir: string,
+): (resource: TemplateResource) => NestedStackTemplate | undefined {
+	let byKey: Map<string, string> | undefined;
+	return (resource) => {
+		if (resource.Type !== 'AWS::CloudFormation::Stack') return undefined;
+		const fromMetadata = resource.Metadata?.['aws:asset:path'];
+		let file =
+			typeof fromMetadata === 'string' && fromMetadata.endsWith(NESTED_TEMPLATE_SUFFIX)
+				? fromMetadata
+				: undefined;
+		if (!file) {
+			byKey ??= nestedTemplatesByObjectKey(assemblyDir);
+			const url = JSON.stringify(resource.Properties?.TemplateURL ?? '');
+			file = [...byKey].find(([key]) => url.includes(`/${key}`))?.[1];
+		}
+		if (!file) return undefined;
+		try {
+			return { file, template: JSON.parse(readFileSync(join(assemblyDir, file), 'utf-8')) };
+		} catch {
+			return undefined;
+		}
+	};
 }

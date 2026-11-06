@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { AccountPlanType } from './account-metadata.js';
-import { stackTemplates, type TemplateResource } from './cloud-assembly.js';
+import {
+	nestedStackTemplateReader,
+	type StackTemplate,
+	stackTemplates,
+	type TemplateResource,
+} from './cloud-assembly.js';
 import { log } from './log.js';
 
 /**
@@ -76,26 +81,50 @@ export function freePlanAuroraVerdict(resource: TemplateResource): FreePlanAuror
 
 /**
  * The DB clusters in the top-level stacks of the synthesized assembly at
- * `assemblyDir`. `account` is the account whose plan was read: an
- * environment-agnostic stack deploys there, and so does a stack that names it.
- * A stack that names any other account, or any account when `account` is
- * unknown, goes to `otherAccount`.
+ * `assemblyDir`, and in the CDK nested stacks under them. `account` is the
+ * account whose plan was read: an environment-agnostic stack deploys there, and
+ * so does a stack that names it. A stack that names any other account, or any
+ * account when `account` is unknown, goes to `otherAccount`. A nested stack
+ * deploys in its parent's account; a `Condition` on any enclosing nested stack
+ * resource may skip it, so its blocked clusters count as undecided.
  */
 export function findFreePlanAuroraClusters(assemblyDir: string, account: string | null): FreePlanAuroraFindings {
 	const findings: FreePlanAuroraFindings = { blocked: [], undecided: [], otherAccount: [] };
+	const readNested = nestedStackTemplateReader(assemblyDir);
 	for (const { stack, account: target, template } of stackTemplates(assemblyDir)) {
 		const planApplies = target === undefined || target === account;
-		for (const [logicalId, resource] of Object.entries(template.Resources ?? {})) {
-			const verdict = freePlanAuroraVerdict(resource);
-			if (verdict === 'allowed') continue;
-			const path = resource.Metadata?.['aws:cdk:path'];
-			findings[planApplies ? verdict : 'otherAccount'].push({
-				stackName: stack.stackName,
-				...(target ? { account: target } : {}),
-				logicalId,
-				...(typeof path === 'string' ? { path } : {}),
-			});
-		}
+		// `seen` holds the nested template files on the current path, so a malformed
+		// assembly that names a template inside itself cannot recurse forever.
+		const visit = (current: StackTemplate, conditional: boolean, seen: ReadonlySet<string>): void => {
+			for (const [logicalId, resource] of Object.entries(current.Resources ?? {})) {
+				const nested = readNested(resource);
+				if (nested) {
+					if (!seen.has(nested.file)) {
+						visit(
+							nested.template,
+							conditional || resource.Condition !== undefined,
+							new Set([...seen, nested.file]),
+						);
+					}
+					continue;
+				}
+				const verdict = freePlanAuroraVerdict(resource);
+				if (verdict === 'allowed') continue;
+				const path = resource.Metadata?.['aws:cdk:path'];
+				const list = !planApplies
+					? 'otherAccount'
+					: verdict === 'blocked' && conditional
+						? 'undecided'
+						: verdict;
+				findings[list].push({
+					stackName: stack.stackName,
+					...(target ? { account: target } : {}),
+					logicalId,
+					...(typeof path === 'string' ? { path } : {}),
+				});
+			}
+		};
+		visit(template, false, new Set());
 	}
 	return findings;
 }
