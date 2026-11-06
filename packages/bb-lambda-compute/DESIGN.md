@@ -105,7 +105,7 @@ layer (a no-op in the non-CDK layers — see below).
 | Option | Default | Notes |
 |--------|---------|-------|
 | `memory` | `2048` MB | One shared handler serves both the synchronous API path and async workers, so the default is sized for the heavier async path. A request/response-only compute can lower it to cut cost. |
-| `maxTimeoutSeconds` | `900` | The Lambda function timeout. It bounds async invocations (SQS / `AsyncJob`); it does **not** extend the synchronous API path, which API Gateway caps at 29s. |
+| `maxTimeoutSeconds` | `900` | The Lambda function timeout. It bounds async invocations (SQS / `AsyncJob`); it does **not** extend the synchronous API path, which is cut off at the shared gateway's 29s integration timeout. |
 | `logRetention` | `defaults.logRetention` | Retention of this compute's handler log group only; the shared gateway's access logs follow the stack-wide default. |
 | `architecture` | `ARM_64` | Graviton, ~20% cheaper per GB-second at equal performance. Only settable on a directly constructed `LambdaCompute`; the `Compute` block does not expose it. |
 
@@ -133,8 +133,9 @@ from options:
   only a `LambdaCompute` constructed after the derivation sees it. Creating and
   wiring the VPC (endpoints, subnet roles) is core's job; this package only
   consumes the context.
-- **CORS origins.** A non-empty `defaults.allowedOrigins` is set on the function
-  as `CORS_ALLOWED_ORIGINS`, comma-joined to match how the runtime's
+- **CORS origins.** A non-empty `defaults.allowedOrigins` (origin patterns —
+  regular expressions, not literal origins) is set on the function as
+  `CORS_ALLOWED_ORIGINS`, comma-joined to match how the runtime's
   `getCorsPatterns()` parses it. The `production` preset allows no origins, so
   the variable is absent there unless the app sets its own.
 

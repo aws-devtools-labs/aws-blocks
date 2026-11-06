@@ -39,7 +39,7 @@ entry and `BLOCKS_STACK_NAME` are derived from the owning `BlocksStack` /
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `memory` | `number` | `2048` | Function memory in MB. CPU scales with memory. |
-| `maxTimeoutSeconds` | `number` | `900` | Function timeout (1–900). Bounds async work (`AsyncJob`, queues); the synchronous API path is capped at 29s by API Gateway regardless. |
+| `maxTimeoutSeconds` | `number` | `900` | Function timeout (1–900). Bounds async work (`AsyncJob`, queues); the synchronous API path is cut off at the shared gateway's 29s integration timeout regardless. |
 | `logRetention` | `RetentionDays` | stack `defaults.logRetention` | How long the handler log group keeps logs. |
 | `architecture` | `Architecture` | `ARM_64` | Instruction set (Graviton by default). Not exposed through the `Compute` block. |
 
@@ -50,12 +50,13 @@ to these options.
 
 - **VPC.** When the stack sets `defaults.vpc`, the function is placed in that
   VPC's compute subnets (`defaults.vpc.subnets`, private-with-egress by default)
-  with the shared compute security group. Otherwise it runs in the AWS-managed
-  network. A VPC that Blocks derives on its own (for a container compute) does
-  not move the default compute, which is built before that VPC exists.
+  with the shared compute security group. With no VPC context it runs in the
+  AWS-managed network. A VPC that Blocks derives on its own (for a container
+  compute) does not move the default compute, which is built before that VPC
+  exists; a serverless `Compute` declared after the container compute does land in it.
 - **CORS.** When the stack's `defaults.allowedOrigins` is non-empty (e.g. the
-  sandbox preset allows localhost), the origins are set on the function as
-  `CORS_ALLOWED_ORIGINS`.
+  sandbox preset allows localhost), the origin patterns (regular expressions)
+  are set on the function as `CORS_ALLOWED_ORIGINS`.
 - **Tracing.** When a `Tracer` is registered, the function switches to X-Ray
   Active tracing.
 - **Dashboard.** Contributes health (invocations, errors, duration, concurrent
