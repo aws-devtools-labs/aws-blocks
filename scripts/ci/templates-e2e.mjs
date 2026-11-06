@@ -122,8 +122,10 @@ const releaseLine = (major, minor) => (major === 0 ? `0.${minor}` : `${major}`);
  * and no newer than it, so the app installs the line this run tests and never
  * a newer one. This catches a `*` or missing stamp on the published path. It
  * cannot see a stamped package's new release line shipping without a CLI
- * release: `changeset version` has already rewritten the range on disk, so
- * `changeset-guard.ts verify-scaffolder` catches that case on the release PR.
+ * release, because `changeset version` has already rewritten the range on disk.
+ * The changesets `fixed` group in `.changeset/config.json` rules that case out:
+ * it releases create-blocks-app with every `@aws-blocks/blocks` release, and a
+ * new line of a package blocks depends on releases blocks.
  */
 function stampProblems(app, versions) {
 	const pkg = JSON.parse(readFileSync(join(app, 'package.json'), 'utf-8'));

@@ -141,7 +141,11 @@ describe('create-blocks-app version stamping from the published package', () => 
     assertStamped(readManifest(join(project, 'package.json')), 'Amplify project root');
     const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
     assertStamped(workspace, 'Amplify aws-blocks/ workspace');
-    assert.ok(workspace.dependencies?.['@aws-blocks/bb-kv-store'], 'the Amplify workspace should depend on bb-kv-store');
+    assert.deepStrictEqual(
+      blocksDeps(workspace).map(([name]) => name),
+      ['@aws-blocks/blocks'],
+      'the Amplify workspace should take every block from @aws-blocks/blocks',
+    );
   });
 
   it('gives the Amplify aws-blocks/ workspace the range the project root already lists', () => {
@@ -158,22 +162,17 @@ describe('create-blocks-app version stamping from the published package', () => 
     assert.strictEqual(readManifest(join(project, 'package.json')).dependencies?.['@aws-blocks/blocks'], '~0.1.0');
     const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
     assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.0', 'workspace should follow the root range');
-    assert.strictEqual(
-      workspace.dependencies?.['@aws-blocks/bb-kv-store'],
-      cliManifest.devDependencies?.['@aws-blocks/bb-kv-store'],
-      'a package the root does not list is stamped as usual',
-    );
   });
 
-  it('in the Amplify workspace, prefers a root devDependency range and stamps over path specs', () => {
-    const project = join(root, 'amplify-mixed');
+  it('in the Amplify workspace, prefers a root devDependency range over a dependencies range', () => {
+    const project = join(root, 'amplify-dev-range');
     mkdirSync(join(project, 'amplify'), { recursive: true });
     writeFileSync(
       join(project, 'package.json'),
       JSON.stringify({
-        name: 'amplify-mixed',
+        name: 'amplify-dev-range',
         version: '1.0.0',
-        dependencies: { '@aws-blocks/blocks': '^0.1.0', '@aws-blocks/bb-kv-store': './vendor/kv' },
+        dependencies: { '@aws-blocks/blocks': '^0.1.0' },
         devDependencies: { '@aws-blocks/blocks': '~0.1.2' },
       }),
     );
@@ -183,9 +182,27 @@ describe('create-blocks-app version stamping from the published package', () => 
     assert.strictEqual(result.exitCode, 0, result.output);
     const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
     assert.strictEqual(workspace.dependencies?.['@aws-blocks/blocks'], '~0.1.2', 'the root devDependency range wins');
+  });
+
+  it('in the Amplify workspace, stamps over a path spec the root lists', () => {
+    const project = join(root, 'amplify-path');
+    mkdirSync(join(project, 'amplify'), { recursive: true });
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({
+        name: 'amplify-path',
+        version: '1.0.0',
+        dependencies: { '@aws-blocks/blocks': './vendor/blocks' },
+      }),
+    );
+    writeFileSync(join(project, 'amplify', 'backend.ts'), 'const backend = defineBackend({});\n');
+
+    const result = run(['.', '--yes', '--skip-install'], project);
+    assert.strictEqual(result.exitCode, 0, result.output);
+    const workspace = readManifest(join(project, 'aws-blocks', 'package.json'));
     assert.strictEqual(
-      workspace.dependencies?.['@aws-blocks/bb-kv-store'],
-      cliManifest.devDependencies?.['@aws-blocks/bb-kv-store'],
+      workspace.dependencies?.['@aws-blocks/blocks'],
+      cliManifest.devDependencies?.['@aws-blocks/blocks'],
       'a path spec is not copied into the workspace',
     );
   });

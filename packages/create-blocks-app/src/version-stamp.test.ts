@@ -64,22 +64,22 @@ describe('resolveStampedVersions', () => {
 });
 
 describe('stampBlocksVersions', () => {
-  const versions = { '@aws-blocks/blocks': '^0.8.0', '@aws-blocks/bb-kv-store': '^0.3.1' };
+  const versions = { '@aws-blocks/blocks': '^0.8.0', '@aws-blocks/hosting': '^0.4.1' };
 
   it('replaces each "*" placeholder for an @aws-blocks/* package with its range', () => {
-    const deps = { '@aws-blocks/blocks': '*', '@aws-blocks/bb-kv-store': '*', zod: '^4.0.0' };
+    const deps = { '@aws-blocks/blocks': '*', '@aws-blocks/hosting': '*', zod: '^4.0.0' };
     stampBlocksVersions(deps, versions);
     assert.deepStrictEqual(deps, {
       '@aws-blocks/blocks': '^0.8.0',
-      '@aws-blocks/bb-kv-store': '^0.3.1',
+      '@aws-blocks/hosting': '^0.4.1',
       zod: '^4.0.0',
     });
   });
 
   it('leaves concrete ranges, file: paths and non-@aws-blocks placeholders alone', () => {
-    const deps = { '@aws-blocks/blocks': '~0.1.0', '@aws-blocks/bb-kv-store': 'file:../kv', other: '*' };
+    const deps = { '@aws-blocks/blocks': '~0.1.0', '@aws-blocks/hosting': 'file:../hosting', other: '*' };
     stampBlocksVersions(deps, versions);
-    assert.deepStrictEqual(deps, { '@aws-blocks/blocks': '~0.1.0', '@aws-blocks/bb-kv-store': 'file:../kv', other: '*' });
+    assert.deepStrictEqual(deps, { '@aws-blocks/blocks': '~0.1.0', '@aws-blocks/hosting': 'file:../hosting', other: '*' });
   });
 
   it('accepts a missing dependency map', () => {

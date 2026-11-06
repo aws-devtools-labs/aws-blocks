@@ -70,7 +70,10 @@ async function collectNestedBlocksDeps(parentDir: string, seedPkgNames: string[]
 // which `changeset version` moves to each new release line. A scaffolded app
 // therefore starts on the line this CLI release was tested against, takes later
 // releases on that line on reinstall, and never moves to a new (pre-1.0:
-// breaking) line until its owner edits the range.
+// breaking) line until its owner edits the range. The CLI and
+// `@aws-blocks/blocks` form a changesets `fixed` group (.changeset/config.json),
+// so every blocks release, including one forced by a new line of a package
+// blocks depends on, also publishes the CLI with the moved ranges.
 
 /**
  * Reads the range to stamp for each `@aws-blocks/*` package from
