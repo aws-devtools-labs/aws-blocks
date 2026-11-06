@@ -97,6 +97,11 @@ interface VpcRequirements {
    *  validated at synth against the runtime's resolved placement, fails the
    *  build on a mismatch. */
   requiresEgress?: boolean;
+  /** Security groups of compute the BB provisions itself that must reach the
+   *  Blocks-managed interface endpoints; `finalizeVpc` admits each on the
+   *  endpoint security group (443). Registered in a second
+   *  `registerVpcRequirements` call once the SG exists. */
+  endpointClientSecurityGroups?: ec2.ISecurityGroup[];
 }
 ```
 
@@ -107,7 +112,7 @@ interface VpcRequirements {
 | bb-kv-store | `{ gatewayEndpoints: [DYNAMODB] }` |
 | bb-distributed-table | `{ gatewayEndpoints: [DYNAMODB] }` |
 | bb-file-bucket | `{ gatewayEndpoints: [S3] }` |
-| bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }` |
+| bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }` (plus `{ endpointClientSecurityGroups: [rotation SG] }` in a shared VPC) |
 | bb-async-job | `{ interfaceEndpoints: [SQS] }` |
 | bb-agent | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |
 | bb-knowledge-base | `{ interfaceEndpoints: [BEDROCK_RUNTIME] }` |

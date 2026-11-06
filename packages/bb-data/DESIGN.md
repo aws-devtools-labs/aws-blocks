@@ -107,13 +107,14 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 |----------|---------|
 | Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
-| Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
-| Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
+| Security groups | Cluster SG admits only the rotation Lambda's SG on the Postgres port (no ingress at all with `secretRotation: false`); the app reaches the cluster over the RDS Data API (HTTPS), not a socket. The Database's own VPC adds an endpoint SG admitting 443 from the rotation SG only |
+| Secrets Manager secret + rotation | Auto-generated credentials, rotated in place every 30 days (`secretRotation`) by the rotation Lambda (AWS's PostgreSQL single-user rotation function, a Serverless Application Repository app) in the cluster VPC; encrypted with `storageEncryptionKeyArn` when one is supplied |
+| Secrets Manager VPC endpoint | The rotation Lambda's route to the Secrets Manager API, in the Database's own VPC (isolated, no NAT); in a shared VPC the core-provisioned endpoint is reused |
 | Automated backups | On by default, retained 15 days; `pointInTimeRecovery` controls the window (`true` → 15 days, `{ retentionDays: n }` → 1–35 days, `false` → clamps to the 1-day minimum since Aurora cannot disable backups); also the PITR window |
 | CloudWatch log export | PostgreSQL engine log exported to CloudWatch Logs; retention follows `defaults.logRetention` when set, else the account default |
 | LogRetention custom resource | Setting the engine log group's retention adds a CDK `LogRetention` custom resource — a per-stack singleton Lambda + IAM role — because RDS owns the engine log group name via a token id, so CDK can't create the `LogGroup` directly. Intended/unavoidable for this knob |
 | Migration Lambda + CustomResource | Runs .sql files on deploy (retries with exponential backoff, 1s → 30s × 8, while the cluster is unreachable — a new cluster's writer coming up, or a scale-to-zero cluster resuming from auto-pause) |
-| IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue` |
+| IAM grants | `rds-data:*`, `secretsmanager:GetSecretValue`; with a `storageEncryptionKeyArn`, `kms:Decrypt` on that key via Secrets Manager |
 
 Removal policy: DESTROY in sandbox, RETAIN in production.
 
@@ -131,14 +132,44 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   customer-managed KMS key, when supplied, encrypts both the storage volume and
   the auto-generated credentials secret and forces encryption on regardless of the
   flag.
-- **`iamAuthentication` is intentionally NOT enabled.** The cluster is reached
-  exclusively over the RDS Data API (HTTPS + Secrets Manager credentials), never a
-  direct DB socket, so database-level IAM authentication does not apply to this
-  access path.
-- **Automatic secret rotation is a deliberate follow-up**, not implemented here.
-  Rotation requires a rotation Lambda wired into the cluster VPC — a larger change
-  than this hardening pass. Supplying a `storageEncryptionKeyArn` does encrypt the
-  generated secret today.
+- **`iamAuthentication` is intentionally NOT enabled.** The app reaches the
+  cluster exclusively over the RDS Data API (HTTPS + Secrets Manager
+  credentials), never a direct DB socket, so database-level IAM authentication
+  does not apply to this access path. The one socket client, the rotation
+  Lambda, signs in with the master password it is rotating.
+- **The credentials secret rotates automatically** (every 30 days by default,
+  `secretRotation` to change or disable). The cluster calls CDK's
+  `addRotationSingleUser()`, which deploys AWS's PostgreSQL single-user rotation
+  function (a Serverless Application Repository (SAR) app, not CDK's separate
+  `HostedRotation`) into the cluster VPC: it generates a new password, sets it on
+  the cluster as `postgres` and makes it the secret's current version. The
+  rotation is in place (same secret ARN) and the runtime never reads the password
+  (the Data API reads the secret for it), so a rotation needs no change or
+  redeploy of the app. The RDS-managed master password
+  (`manageMasterUserPassword`) was rejected: on a cluster without a CMK it renders
+  `MasterUsername` as a literal where today's template uses a Secrets Manager
+  dynamic reference, a text change CloudFormation applies as a cluster
+  **replacement** (new, empty cluster), and on every cluster it moves the
+  credentials to a new, RDS-owned secret with a different ARN. The rotation Lambda
+  gets its own security group, the only one the cluster SG admits on the Postgres
+  port. It reaches the Secrets Manager API through an interface endpoint: in the
+  Database's own VPC (isolated, no NAT) one is created for it (dedicated SG, 443
+  from the rotation SG only, ~$7.20/month per AZ in us-east-1, two AZs); in a
+  shared VPC core already provisions it, and the Database registers its rotation
+  SG via `endpointClientSecurityGroups` so core's endpoint SG admits it (with
+  `provisionEndpoints: false` core cannot, and warns with the SG the customer must
+  admit). The schedule rotates immediately once created (and again whenever it
+  changes, per CDK's default `rotateImmediatelyOnUpdate`), so it depends on the
+  writer instance and on the migration custom resource. Side effects: the stack
+  gains the `AWS::Serverless-2016-10-31` transform; CDK attaches a resource policy
+  to the secret denying `secretsmanager:DeleteSecret` to the account while
+  rotation is on (`cdk destroy` still deletes it; an out-of-band `delete-secret`
+  is refused); with a `storageEncryptionKeyArn` the rotation Lambda's SAR template
+  grants its role `kms:Decrypt`, `kms:DescribeKey` and `kms:GenerateDataKey` on
+  the key, so the key-policy requirement is the one the app's own reads already
+  have (the account's IAM principals may use the key; a policy that enumerates
+  principals must also name the rotation Lambda's role, known only after the first
+  deploy).
 - **Upgrade note (destructive replacement):** RDS cannot encrypt an
   already-provisioned, unencrypted cluster in place, so enabling storage
   encryption (or changing the key) makes CloudFormation create a **new, empty**

@@ -65,9 +65,9 @@ export interface BlocksVpcOptions {
 /**
  * VPC requirements declared by a Building Block.
  * Supplied to the `BuildingBlockScope` constructor and collected in the central
- * requirements registry; `finalizeVpc` pulls them to provision endpoints, and the
- * lazy VPC uses `requiresVpc` to decide whether to derive a VPC when none was
- * provided.
+ * requirements registry; `finalizeVpc` pulls them to provision endpoints and wire
+ * their security group, and the lazy VPC uses `requiresVpc` to decide whether to
+ * derive a VPC when none was provided.
  */
 export interface VpcRequirements {
 	/** Gateway VPC endpoints this BB needs (e.g., S3, DynamoDB). */
@@ -114,6 +114,21 @@ export interface VpcRequirements {
 	 * @default false
 	 */
 	requiresEgress?: boolean;
+	/**
+	 * Security groups of compute the BB provisions **itself** (not the shared
+	 * Blocks runtime) that must reach the Blocks-managed interface endpoints —
+	 * e.g. the rotation Lambda a `Database` places in the shared VPC. The endpoint
+	 * security group admits only the Blocks Lambda SG by default (see
+	 * `finalizeVpc`), so without this registration such compute cannot reach the
+	 * endpoints and fails at runtime. Each listed SG gets a 443 ingress rule on the
+	 * endpoint SG; with `provisionEndpoints: false` the framework instead warns,
+	 * naming the SG the customer must admit on their own endpoints.
+	 *
+	 * Register these in a second `registerVpcRequirements` call after the SG
+	 * exists: the base-constructor registration runs before a BB has built any
+	 * resources.
+	 */
+	endpointClientSecurityGroups?: ec2.ISecurityGroup[];
 }
 
 /**

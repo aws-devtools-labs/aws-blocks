@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { BuildingBlockScope, getVpcContext, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { registerVpcRequirements } from '@aws-blocks/core/cdk/internal';
 import type { VpcContext } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { resolve } from 'node:path';
@@ -19,11 +20,13 @@ import { BB_NAME } from './version.js';
  * to the parent scope's Lambda handler.
  *
  * Resources created:
- * - VPC with 2 AZs, isolated subnets, no NAT gateways
+ * - VPC with 2 AZs, isolated subnets, no NAT gateways (when no shared VPC is provided)
  * - Aurora Serverless v2 cluster (PostgreSQL-compatible, Data API enabled)
- * - Secrets Manager secret with auto-generated credentials
- * - Security group allowing inbound PostgreSQL (5432) from VPC
- * - IAM grants for rds-data:* and secretsmanager:GetSecretValue
+ * - Secrets Manager secret with auto-generated credentials, rotated on a schedule
+ * - Rotation Lambda for that secret (a Serverless Application Repository app)
+ * - Secrets Manager interface endpoint (when no shared VPC is provided)
+ * - Security groups for the cluster, rotation Lambda and endpoint (cluster: rotation Lambda only)
+ * - IAM grants for rds-data:* and secretsmanager:GetSecretValue (and kms:Decrypt with a CMK)
  * - Environment variables (BLOCKS_{id}_CLUSTER_ARN, BLOCKS_{id}_SECRET_ARN, BLOCKS_{id}_DATABASE)
  *
  * @example
@@ -105,17 +108,17 @@ export class Database extends BuildingBlockScope {
 
       // Provisioning-only options don't apply to an external database — we never
       // emit an Aurora cluster to attach them to. Surface that at synth so a
-      // `storageEncryptionKeyArn` or `pointInTimeRecovery` on what looks like a
-      // managed database isn't a silent no-op (mirrors DT's
+      // `storageEncryptionKeyArn`, `pointInTimeRecovery` or `secretRotation` on
+      // what looks like a managed database isn't a silent no-op (mirrors DT's
       // bb-distributed-table:IgnoredOptionsForExistingTable).
-      const ignoredForExisting = (['pointInTimeRecovery', 'storageEncryptionKeyArn'] as const).filter(
+      const ignoredForExisting = (['pointInTimeRecovery', 'storageEncryptionKeyArn', 'secretRotation'] as const).filter(
         (key) => options[key] !== undefined,
       );
       if (ignoredForExisting.length > 0) {
         cdk.Annotations.of(this).addWarningV2(
           '@aws-blocks/bb-data:IgnoredOptionsForExistingDatabase',
           `Ignoring ${ignoredForExisting.join(', ')} because this database is wrapped via fromExisting() — ` +
-            `the existing database owns its own durability/encryption configuration.`,
+            `the existing database owns its own durability/encryption/credentials configuration.`,
         );
       }
 
@@ -225,6 +228,7 @@ export class Database extends BuildingBlockScope {
       );
     }
 
+    const sharedVpc = providedVpcContext(this);
     const infra = materialize(this, this.fullId, {
       minCapacity: options?.minCapacity,
       maxCapacity: options?.maxCapacity,
@@ -254,11 +258,21 @@ export class Database extends BuildingBlockScope {
       // provided context, materialize() falls back to its own `${name}Vpc`,
       // exactly as before this shared-VPC work. Bringing a Database into a derived
       // shared VPC is a deliberate, out-of-band migration, never an implicit one.
-      vpcContext: providedVpcContext(this),
+      vpcContext: sharedVpc,
       clusterSubnets: resolveClusterSubnets(this, options?.subnets),
       // Migration Lambda log retention follows the stack-wide default.
       logRetention: this.defaults.logRetention,
+      secretRotation: options?.secretRotation,
     });
+
+    // In a shared VPC, register the rotation Lambda's SG so core's endpoint SG
+    // admits it (finalizeVpc adds the rule after every block is constructed).
+    // With no shared VPC, materialize() created its own endpoint + rule. This
+    // must stay after materialize(): the SG only exists then (see
+    // `VpcRequirements.endpointClientSecurityGroups`).
+    if (infra.rotationSecurityGroup && sharedVpc) {
+      registerVpcRequirements(this, { endpointClientSecurityGroups: [infra.rotationSecurityGroup] });
+    }
 
     // Inject config so DataApiEngine can read them at runtime
     Object.entries(infra.envVars).forEach(([key, value]) => {

@@ -4,7 +4,7 @@
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
-import { Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs';
 import {
@@ -171,6 +171,97 @@ describe('finalizeVpc — endpoint provisioning', () => {
 		assert.equal(https.length, 1, 'exactly one 443 ingress rule');
 		// Must NOT be open to a CIDR (that would be the broad default we're avoiding).
 		assert.equal(https[0].CidrIp, undefined, '443 ingress is SG-sourced, not CIDR-open');
+	});
+
+	it('admits registered client SGs on 443 beside the Lambda SG, once each', () => {
+		// A Database's rotation Lambda runs in the shared VPC with its own SG
+		// and must reach the Secrets Manager endpoint. The BB registers that SG via
+		// `endpointClientSecurityGroups` (a second registration, after the SG
+		// exists); finalizeVpc admits it on the endpoint SG without widening to the
+		// VPC CIDR. Registering the same SG twice must not produce a duplicate rule.
+		const template = synthWith((scope) => {
+			const db = new FakeBB(scope, 'Db', {
+				interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+			});
+			const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+			const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', { vpc });
+			registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+			registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+		});
+		const sgs = template.findResources('AWS::EC2::SecurityGroup', {
+			Properties: { GroupDescription: 'Blocks interface VPC endpoints - 443 from the Blocks Lambda only' },
+		});
+		const sg = Object.values(sgs)[0] as {
+			Properties: {
+				SecurityGroupIngress: Array<{
+					FromPort?: number;
+					ToPort?: number;
+					CidrIp?: string;
+					SourceSecurityGroupId?: unknown;
+					Description?: string;
+				}>;
+			};
+		};
+		const ingress = sg.Properties.SecurityGroupIngress ?? [];
+		const https = ingress.filter((r) => r.FromPort === 443 && r.ToPort === 443);
+		assert.equal(https.length, 2, 'Lambda SG rule + one (deduplicated) client SG rule');
+		const client = https.filter((r) => r.Description === 'HTTPS from Building Block compute');
+		assert.equal(client.length, 1);
+		assert.equal(client[0].CidrIp, undefined, 'client rule is SG-sourced, not CIDR-open');
+		const [rotationSgId] = Object.keys(
+			template.findResources('AWS::EC2::SecurityGroup', {
+				Properties: { GroupDescription: 'TestStack/RotationSg' },
+			}),
+		);
+		assert.ok(rotationSgId, 'rotation SG synthesized');
+		assert.deepEqual(client[0].SourceSecurityGroupId, { 'Fn::GetAtt': [rotationSgId, 'GroupId'] });
+	});
+
+	it('warns once per client SG when provisionEndpoints is false', () => {
+		// The customer owns the endpoints, so Blocks cannot admit the SG; it must
+		// tell them to, instead of letting rotation fail at runtime.
+		let stackRef: cdk.Stack | undefined;
+		const template = synthWith(
+			(scope) => {
+				stackRef = scope as cdk.Stack;
+				const db = new FakeBB(scope, 'Db', {
+					interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SECRETS_MANAGER],
+				});
+				const vpc = scope.node.findChild('Vpc') as ec2.IVpc;
+				const rotationSg = new ec2.SecurityGroup(scope, 'RotationSg', { vpc });
+				// Registered twice: warned once.
+				registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+				registerVpcRequirements(db, { endpointClientSecurityGroups: [rotationSg] });
+			},
+			{ provisionEndpoints: false },
+		);
+		template.resourceCountIs(IFACE, 0);
+		template.resourceCountIs('AWS::EC2::SecurityGroupIngress', 0);
+		const warnings = Annotations.fromStack(stackRef as cdk.Stack).findWarning(
+			'*',
+			Match.stringLikeRegexp('^Db runs compute in security group'),
+		);
+		assert.equal(warnings.length, 1, 'exactly one warning per security group');
+		// The SG is named by construct path, a plain string at synth (its id is a
+		// token).
+		Annotations.fromStack(stackRef as cdk.Stack).hasWarning(
+			'*',
+			Match.stringLikeRegexp(
+				"^Db runs compute in security group 'TestStack/RotationSg' .* 'provisionEndpoints: false' .* inbound 443",
+			),
+		);
+	});
+
+	it('does not warn when provisionEndpoints is false and no client SG is registered', () => {
+		let stackRef: cdk.Stack | undefined;
+		synthWith(
+			(scope) => {
+				stackRef = scope as cdk.Stack;
+				new FakeBB(scope, 'Kv', { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] });
+			},
+			{ provisionEndpoints: false },
+		);
+		Annotations.fromStack(stackRef as cdk.Stack).hasNoWarning('*', Match.stringLikeRegexp('endpoint'));
 	});
 });
 

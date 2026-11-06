@@ -213,6 +213,7 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 
 	const gatewayEndpoints: ec2.GatewayVpcEndpointAwsService[] = [];
 	const interfaceEndpoints: ec2.InterfaceVpcEndpointAwsService[] = [];
+	const endpointClientSecurityGroups: Array<{ fullId: string; sg: ec2.ISecurityGroup }> = [];
 
 	// Pull requirements from the central registry — every BuildingBlockScope
 	// self-registers in its constructor, so this is a faithful census without a
@@ -223,6 +224,9 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 		}
 		if (reqs.interfaceEndpoints) {
 			interfaceEndpoints.push(...reqs.interfaceEndpoints);
+		}
+		if (reqs.endpointClientSecurityGroups) {
+			endpointClientSecurityGroups.push(...reqs.endpointClientSecurityGroups.map((sg) => ({ fullId, sg })));
 		}
 		// Validate the BB's runtime egress need against where the runtime is
 		// actually placed. We never move the runtime (that's the customer's
@@ -253,6 +257,23 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	}
 
 	if (options.provisionEndpoints === false) {
+		// The customer owns the endpoints, so Blocks can't admit BB-provisioned
+		// compute on them. Say which SGs need admitting rather than let the
+		// compute (e.g. a Database's rotation Lambda) fail at runtime with a
+		// Secrets Manager timeout. The SG is named by construct path, since
+		// `securityGroupId` is a deploy-time token that would render as
+		// `${Token[...]}` in the synth output. A BB that registers the same SG
+		// twice warns once: `Annotations` drops a message equal to one the scope
+		// already holds.
+		for (const { fullId, sg } of endpointClientSecurityGroups) {
+			Annotations.of(scope).addWarningV2(
+				'blocks:vpc:endpoint-client-unadmitted',
+				`${fullId} runs compute in security group '${sg.node.path}' that must reach the ` +
+					`interface VPC endpoints, but 'provisionEndpoints: false' leaves the endpoints to you. ` +
+					`Allow inbound 443 from that security group on your endpoints' security group. ` +
+					`See packages/blocks/VPC.md.`,
+			);
+		}
 		return;
 	}
 
@@ -284,7 +305,9 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 	// Dedicated security group for the interface endpoints. Without an explicit
 	// SG, CDK creates a default that allows 443 from the entire VPC CIDR — on a
 	// bring-your-own VPC that exposes every endpoint to unrelated workloads. Scope
-	// ingress to just the Blocks Lambda SG so only our functions can reach them.
+	// ingress to the Blocks Lambda SG plus the BB-registered client SGs admitted
+	// below, so only our compute can reach them. The description predates the
+	// client SGs and is kept verbatim: changing it replaces the group.
 	const ctx = getVpcContext(scope);
 	const endpointSecurityGroup = new ec2.SecurityGroup(scope, 'BlocksVpcEndpointSg', {
 		vpc,
@@ -296,6 +319,19 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 			ec2.Peer.securityGroupId(ctx.computeSecurityGroup.securityGroupId),
 			ec2.Port.tcp(443),
 			'HTTPS from Blocks Lambda',
+		);
+	}
+
+	// BB-provisioned compute that also needs the endpoints (e.g. a Database's
+	// rotation Lambda) registers its SG via `endpointClientSecurityGroups`; admit
+	// each one explicitly rather than re-widening to the VPC CIDR. A BB that
+	// registers the same SG twice is harmless: `addIngressRule` drops a rule equal
+	// to one it already holds.
+	for (const { sg } of endpointClientSecurityGroups) {
+		endpointSecurityGroup.addIngressRule(
+			ec2.Peer.securityGroupId(sg.securityGroupId),
+			ec2.Port.tcp(443),
+			'HTTPS from Building Block compute',
 		);
 	}
 
@@ -314,9 +350,10 @@ export function finalizeVpc(scope: Construct, options: BlocksVpcOptions): void {
 			privateDnsEnabled: true,
 			securityGroups: [endpointSecurityGroup],
 			// `open: false` suppresses CDK's default "allow 443 from the whole VPC
-			// CIDR" ingress rule. Our dedicated SG already allows 443 from just the
-			// Blocks Lambda SG; without this, CDK would re-widen access to the entire
-			// VPC — the exact broadening this dedicated SG exists to prevent.
+			// CIDR" ingress rule. Our dedicated SG already allows 443 from the Blocks
+			// Lambda SG and the registered client SGs; without this, CDK would re-widen
+			// access to the entire VPC — the exact broadening this dedicated SG exists
+			// to prevent.
 			open: false,
 		});
 	}

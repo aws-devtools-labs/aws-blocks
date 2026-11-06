@@ -280,9 +280,13 @@ the transaction should continue.
   cluster is synthesized without the `StorageEncrypted` property (an existing,
   unencrypted cluster is left untouched) and a synth warning explains how to opt
   in. The key is **imported** (Blocks can't modify its policy), so its policy
-  must already grant the deploying principal `kms:CreateGrant` + `kms:DescribeKey`
-  (RDS uses a grant to encrypt the storage volume) and grant `kms:Decrypt` to the
-  principal that reads the credentials secret over the Data API. The key must be in
+  must allow the account's IAM principals to use it (the default key policy does,
+  through the account root; a policy that enumerates principals must name the
+  deploying principal, the app runtime, the migration Lambda and the rotation
+  Lambda's role): the deploying principal needs `kms:CreateGrant` +
+  `kms:DescribeKey` (RDS uses a grant to encrypt the storage volume), and Blocks
+  grants `kms:Decrypt` (via Secrets Manager) to the app runtime and the migration
+  Lambda, which read the credentials secret over the Data API. The key must be in
   the **same account and region** as the cluster.
 - **Automated backups** — on by default, retained **15 days**, which is also the
   point-in-time-recovery window. Controlled by the single `pointInTimeRecovery`
@@ -295,16 +299,34 @@ the transaction should continue.
   Logs. Log-group retention follows the stack-wide `defaults.logRetention` when
   set; otherwise it uses the account default.
 - **VPC** — Private subnets (isolated, no NAT)
-- **Secrets Manager** — Auto-generated credentials. Automatic rotation is not yet
-  wired up (a rotation Lambda in the cluster VPC is a planned follow-up); the
-  secret is encrypted with your `storageEncryptionKeyArn` when one is supplied.
+- **Secrets Manager** — Auto-generated credentials, **rotated automatically every
+  30 days** by AWS's PostgreSQL single-user rotation function (a Serverless
+  Application Repository app: an AWS-maintained Lambda placed in the cluster's
+  VPC). The password is rotated in place: the secret keeps its ARN, and the app
+  never reads the password itself (the Data API reads the secret for it), so a
+  rotation needs no redeploy. `secretRotation: { intervalDays: n }` changes the
+  interval; `secretRotation: false` turns it off. The secret is encrypted with
+  your `storageEncryptionKeyArn` when one is supplied; the rotation Lambda is then
+  granted `kms:Decrypt`, `kms:DescribeKey` and `kms:GenerateDataKey` on that key
+  (key-policy requirement as above).
+- **Secrets Manager VPC endpoint** — in the Database's own VPC (isolated, no NAT)
+  an interface endpoint gives the rotation Lambda its only path to the Secrets
+  Manager API (billed hourly per AZ, ~$7.20/month per AZ in us-east-1, two AZs).
+  In a shared VPC (`defaults.vpc`), Blocks already provisions this endpoint for
+  the Data API and the rotation Lambda shares it. If you manage the
+  endpoints yourself (`provisionEndpoints: false`), your Secrets Manager endpoint's
+  security group must allow inbound 443 from the rotation Lambda's security group;
+  synth warns (`blocks:vpc:endpoint-client-unadmitted`) with the group to admit.
 - **Migration Lambda** — Runs `.sql` files on deploy via CustomResource
 - **IAM** — `rds-data:*` and `secretsmanager:GetSecretValue` granted to the app Lambda
+  and the migration Lambda; with a `storageEncryptionKeyArn`, also `kms:Decrypt` on
+  that key, scoped to use through Secrets Manager
 
-> **Access model:** the database is reached exclusively over the RDS Data API
-> (HTTPS + Secrets Manager credentials), never a raw Postgres socket. Database-level
-> IAM authentication (`iamAuthentication`) is therefore intentionally left off — it
-> does not apply to the Data API access path.
+> **Access model:** the app reaches the database exclusively over the RDS Data API
+> (HTTPS + Secrets Manager credentials), never a raw Postgres socket; the only
+> socket client is the rotation Lambda, which signs in with the password it is
+> rotating. Database-level IAM authentication (`iamAuthentication`) is therefore
+> intentionally left off — it does not apply to the Data API access path.
 >
 > **Enabling encryption on an existing unencrypted cluster requires a
 > replacement — and a replacement is destructive.** RDS cannot encrypt an
@@ -430,9 +452,10 @@ interface DatabaseOptions {
    * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
    * context flag. When omitted, encryption follows that flag — on with the
    * account's AWS-managed `aws/rds` key when set, otherwise left unset. The key is
-   * imported, so its policy must already grant the deploying principal
-   * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
-   * reading the credentials secret; it must be in the same account + region.
+   * imported, so its policy must allow the account's IAM principals to use it
+   * (the default key policy does): the deploying principal needs `kms:CreateGrant`
+   * + `kms:DescribeKey`, and Blocks grants `kms:Decrypt` to the principals reading
+   * the credentials secret; it must be in the same account + region.
    */
   storageEncryptionKeyArn?: string;
   /**
@@ -442,6 +465,11 @@ interface DatabaseOptions {
    * automated backups). When omitted, follows `defaults.pointInTimeRecovery`.
    */
   pointInTimeRecovery?: boolean | { retentionDays: number };
+  /**
+   * Automatic rotation of the credentials secret. On by default, every 30 days.
+   * `{ intervalDays: n }` rotates every n days (1–1000); `false` turns it off.
+   */
+  secretRotation?: false | { intervalDays: number };
 }
 ```
 
