@@ -275,6 +275,30 @@ export interface CdkOutputOptions {
 export interface CdkRunOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  /** Also read the child's output while it is relayed; see {@link CdkOutputReader}. */
+  reader?: CdkOutputReader;
+}
+
+/**
+ * Reads a CDK child's output on the side while {@link CdkOutput.run} relays it,
+ * for example to explain an authorization failure as soon as the CDK CLI
+ * prints it (`createSandboxDeployObserver` in `sandbox.ts`).
+ *
+ * - Not curated: the child keeps this process's stdin and stdout, where the
+ *   CDK CLI decides its terminal behavior, as without a reader (stdout goes to
+ *   stderr with `BLOCKS_LOG_STREAM=stderr`, also as without one). Only its
+ *   stderr is piped: each chunk goes to {@link CdkOutputReader.write} as it
+ *   arrives (UTF-8, never split inside a character), and the reader relays it.
+ *   The run is then asynchronous.
+ * - Curated: the output is piped and curated as without a reader, and each
+ *   whole line of either stream goes to {@link CdkOutputReader.line} after the
+ *   curated relay has handled it.
+ */
+export interface CdkOutputReader {
+  /** Not curated: relay one chunk of the child's stderr. */
+  write(chunk: string): void;
+  /** Curated: read one whole line of the child's output (no trailing newline). */
+  line(line: string, from: 'stdout' | 'stderr'): void;
 }
 
 /** One operation's CDK output policy: how its children are run and relayed. */
@@ -294,6 +318,9 @@ export interface CdkOutput {
    * stays inherited, the progress summary prints on success, and failures
    * throw the same messages `runSync` does. Never prints the retained output:
    * a retried step (destroy) fails more than once before the operation does.
+   * With `options.reader`, see {@link CdkOutputReader}: not curated, the run
+   * then pipes stderr to the reader and is asynchronous, with the same failure
+   * messages.
    */
   run(command: string, args: string[], options?: CdkRunOptions): void | Promise<void>;
   /** Print the retained raw output to stderr (curated levels only; no-op when empty). */
@@ -348,11 +375,12 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
     level,
     curated,
     streams,
-    run(command: string, args: string[], runOptions: CdkRunOptions = {}): void | Promise<void> {
+    run(command: string, args: string[], { reader, ...runOptions }: CdkRunOptions = {}): void | Promise<void> {
       if (!streams) {
+        if (reader) return runPipingStderr(command, args, runOptions, toStderr ? 2 : 'inherit', reader);
         return runSync(command, args, { stdio: toStderr ? ['inherit', 2, 'inherit'] : 'inherit', ...runOptions });
       }
-      return runCurated(command, args, runOptions, streams);
+      return runCurated(command, args, runOptions, streams, reader);
     },
     printRetained(): void {
       if (!curated) return;
@@ -363,19 +391,23 @@ export function createCdkOutput(options: CdkOutputOptions): CdkOutput {
   };
 }
 
-/** Run a child with piped stdout/stderr relayed line by line into `streams`. */
+/** Run a child with piped stdout/stderr relayed line by line into `streams`, and each line to `reader`. */
 async function runCurated(
   command: string,
   args: string[],
   { cwd, env }: CdkRunOptions,
   streams: CuratedStreams,
+  reader?: CdkOutputReader,
 ): Promise<void> {
   let ok = false;
   let child: ChildProcess | undefined;
   try {
     const spawned = spawnCommand(command, args, { cwd, env, stdio: ['inherit', 'pipe', 'pipe'] });
     child = spawned;
-    const ended = [relayLines(spawned.stdout, streams.stdout), relayLines(spawned.stderr, streams.stderr)];
+    const ended = [
+      relayLines(spawned.stdout, streams.stdout, reader && ((line) => reader.line(line, 'stdout'))),
+      relayLines(spawned.stderr, streams.stderr, reader && ((line) => reader.line(line, 'stderr'))),
+    ];
     const { code, signal } = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve, reject) => {
         spawned.once('error', reject);
@@ -397,20 +429,82 @@ async function runCurated(
   }
 }
 
-/** Relay a stream line by line into `sink`; resolves when the stream ends. */
-function relayLines(stream: NodeJS.ReadableStream | null | undefined, sink: OutputSink): Promise<void> {
+/**
+ * Run a child with stdin inherited, stdout inherited or (`2`) sent to this
+ * process's stderr, and stderr piped to `reader`, which relays it; see
+ * {@link CdkOutputReader}. The same failure messages and bounded drain as
+ * {@link runCurated}. The child stays in this process's process group, as with
+ * `runSync`, so a Ctrl-C in the terminal reaches it the same way.
+ */
+async function runPipingStderr(
+  command: string,
+  args: string[],
+  { cwd, env }: CdkRunOptions,
+  stdout: 'inherit' | 2,
+  reader: CdkOutputReader,
+): Promise<void> {
+  let child: ChildProcess | undefined;
+  try {
+    const spawned = spawnCommand(command, args, { cwd, env, stdio: ['inherit', stdout, 'pipe'] });
+    child = spawned;
+    const ended = new Promise<void>((resolve) => {
+      const stream = spawned.stderr;
+      if (!stream) return resolve();
+      stream.setEncoding('utf-8');
+      stream.on('data', (chunk: string) => reader.write(chunk));
+      stream.once('end', () => resolve());
+      stream.once('close', () => resolve());
+    });
+    const { code, signal } = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        spawned.once('error', reject);
+        spawned.once('exit', (exitCode, exitSignal) => resolve({ code: exitCode, signal: exitSignal }));
+      },
+    );
+    await Promise.race([ended, new Promise((r) => setTimeout(r, STREAM_FLUSH_GRACE_MS).unref())]);
+    if (signal) throw new Error(`${command} was terminated by signal ${signal}`);
+    if (typeof code === 'number' && code !== 0) throw new Error(`${command} ${args.join(' ')} exited with code ${code}`);
+  } finally {
+    // A descendant still holding the pipe must not keep this process alive.
+    child?.stderr?.destroy();
+  }
+}
+
+/** Relay a stream line by line into `sink`, then to `onLine`; resolves when the stream ends. */
+function relayLines(
+  stream: NodeJS.ReadableStream | null | undefined,
+  sink: OutputSink,
+  onLine?: (line: string) => void,
+): Promise<void> {
   return new Promise((resolve) => {
     if (!stream) return resolve();
     const assembler = createLineAssembler();
+    const relay = (line: string): void => {
+      sink.write(`${line}\n`);
+      onLine?.(line);
+    };
     stream.setEncoding('utf-8');
     stream.on('data', (chunk: string) => {
-      for (const line of assembler.push(chunk)) sink.write(`${line}\n`);
+      for (const line of assembler.push(chunk)) relay(line);
     });
     stream.once('end', () => {
-      for (const line of assembler.flush()) sink.write(`${line}\n`);
+      for (const line of assembler.flush()) relay(line);
       resolve();
     });
     stream.once('close', () => resolve());
+  });
+}
+
+/** Call `onLine` with each whole line of `stream` (UTF-8), and with a last line without a newline when it ends. */
+function readLines(stream: NodeJS.ReadableStream | null | undefined, onLine: (line: string) => void): void {
+  if (!stream) return;
+  const assembler = createLineAssembler();
+  stream.setEncoding('utf-8');
+  stream.on('data', (chunk: string) => {
+    for (const line of assembler.push(chunk)) onLine(line);
+  });
+  stream.on('end', () => {
+    for (const line of assembler.flush()) onLine(line);
   });
 }
 
@@ -463,6 +557,13 @@ export interface CdkWatchOutputOptions {
   retainLines?: number;
   /** Default {@link WATCH_FAILURE_IDLE_MS}. */
   failureIdleMs?: number;
+  /**
+   * Also called with every whole line of the output (blank and Lambda platform
+   * lines included), at every level, after the relay has handled it: not
+   * curated, after the chunk that completed the line has printed. The sandbox
+   * reads it for authorization and credential failures.
+   */
+  onLine?: (line: string, from: 'stdout' | 'stderr') => void;
 }
 
 /**
@@ -482,9 +583,13 @@ export interface CdkWatchOutputOptions {
  * keeps watching. So a cycle that logged a failure line and no success marker
  * also counts as failed once the next cycle starts or output goes quiet for
  * `failureIdleMs`.
+ *
+ * With `onLine`, both streams are also read line by line (see
+ * {@link CdkWatchOutputOptions.onLine}); what is relayed does not change.
  */
 export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutputOptions = {}): void {
   const level = options.level ?? resolveLogLevel();
+  const { onLine } = options;
   if (!isCuratedLevel(level)) {
     child.stdout?.on('data', (data) => {
       const str = data.toString().trim();
@@ -495,6 +600,11 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
     child.stderr?.on('data', (data) => {
       console.error(`[CDK Watch] ${data.toString().trim()}`);
     });
+    // Registered after the relay, so a line is read once its chunk has printed.
+    if (onLine) {
+      readLines(child.stdout, (line) => onLine(line, 'stdout'));
+      readLines(child.stderr, (line) => onLine(line, 'stderr'));
+    }
     return;
   }
 
@@ -559,6 +669,11 @@ export function attachCdkWatchOutput(child: ChildProcess, options: CdkWatchOutpu
   };
   relay(child.stdout, 'stdout');
   relay(child.stderr, 'stderr');
+  // Registered after the relay, so a line is read once the relay has handled it.
+  if (onLine) {
+    readLines(child.stdout, (line) => onLine(line, 'stdout'));
+    readLines(child.stderr, (line) => onLine(line, 'stderr'));
+  }
   child.once('exit', (code) => {
     clearIdle();
     if (options.stopping?.() || code === 0) return;
