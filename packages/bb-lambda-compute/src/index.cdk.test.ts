@@ -4,10 +4,11 @@
 /**
  * Unit tests for LambdaCompute.
  *
- * LambdaCompute is not yet instantiated by the default app and is not reachable
- * by customers. These tests exercise it directly to pin its shape: the function
- * it owns (fronted by the stack's shared REST API gateway, not a per-compute
- * one), shared role, distinct construct paths, and owner-derived identity.
+ * LambdaCompute is the app's default compute and backs `Compute` with
+ * `type: 'serverless'`. These tests construct it directly to pin its shape: the
+ * function it owns (fronted by the stack's shared REST API gateway, not a
+ * per-compute one), shared role, distinct construct paths, owner-derived
+ * identity, sizing options, and stack-derived VPC / CORS configuration.
  */
 
 import assert from 'node:assert';
@@ -16,9 +17,10 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
-import { ComputeBase } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase, initializeVpc } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
@@ -236,6 +238,77 @@ describe('LambdaCompute architecture (Graviton default)', () => {
 
 		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
 			Architectures: ['x86_64'],
+		});
+	});
+});
+
+describe('LambdaCompute sizing (memory / maxTimeoutSeconds)', () => {
+	test('defaults to 2048 MB and the 900s platform maximum timeout', () => {
+		const { stack, parent } = setup('LambdaComputeSizingDefault');
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			MemorySize: 2048,
+			Timeout: 900,
+		});
+	});
+
+	test('respects memory and maxTimeoutSeconds overrides', () => {
+		const { stack, parent } = setup('LambdaComputeSizingOverride');
+
+		new LambdaCompute(parent, 'extra', { memory: 512, maxTimeoutSeconds: 120 });
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			MemorySize: 512,
+			Timeout: 120,
+		});
+	});
+});
+
+describe('LambdaCompute VPC placement (stack VPC context)', () => {
+	test('places the function in the shared VPC compute subnets and security group', () => {
+		const { stack, parent } = setup('LambdaComputeVpc');
+		// Two private tiers so the asserted placement (isolated) differs from
+		// CDK's own default for a Lambda in a VPC (private-with-egress): a
+		// regression that drops `vpcSubnets` would land in the egress tier.
+		const vpc = new ec2.Vpc(stack, 'TestVpc', {
+			maxAzs: 2,
+			natGateways: 1,
+			subnetConfiguration: [
+				{ name: 'Public', subnetType: ec2.SubnetType.PUBLIC },
+				{ name: 'Egress', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+				{ name: 'Isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+			],
+		});
+		initializeVpc(stack, { network: vpc, subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED } });
+
+		new LambdaCompute(parent, 'extra');
+
+		const template = Template.fromStack(stack);
+		const fn = Object.values(template.findResources('AWS::Lambda::Function'))[0] as any;
+		const subnetRefs: string[] = fn.Properties.VpcConfig.SubnetIds.map((s: any) => s.Ref);
+		assert.strictEqual(subnetRefs.length, 2, 'one compute subnet per AZ');
+		assert.ok(
+			subnetRefs.every((r) => r.startsWith('TestVpcIsolatedSubnet')),
+			`function placed only in the isolated tier, got ${subnetRefs.join(', ')}`,
+		);
+		// The shared compute security group (created by initializeVpc), not one
+		// CDK would otherwise mint per function.
+		const sharedSgId = Object.keys(template.findResources('AWS::EC2::SecurityGroup')).find((k) =>
+			k.startsWith('BlocksLambdaSg'),
+		);
+		assert.ok(sharedSgId, 'initializeVpc created the shared compute security group');
+		assert.deepStrictEqual(fn.Properties.VpcConfig.SecurityGroupIds, [{ 'Fn::GetAtt': [sharedSgId, 'GroupId'] }]);
+	});
+
+	test('leaves VPC config unset when the stack has no VPC', () => {
+		const { stack, parent } = setup('LambdaComputeNoVpc');
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			VpcConfig: Match.absent(),
 		});
 	});
 });

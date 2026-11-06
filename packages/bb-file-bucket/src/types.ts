@@ -200,7 +200,15 @@ export interface FileBucketOptions {
 export interface PutOptions {
 	/** MIME type of the file (e.g., `image/png`). */
 	contentType?: string;
-	/** Custom metadata key-value pairs. */
+	/**
+	 * Custom metadata key-value pairs.
+	 *
+	 * Set when the object is written and can't be edited in place: each `put()`
+	 * replaces the object's metadata, so a `put()` without `metadata` leaves
+	 * none. To change it, `put()` the same body again with the complete new set
+	 * (see "Changing Metadata" in the README). S3 stores the keys in lowercase,
+	 * so use lowercase keys.
+	 */
 	metadata?: Record<string, string>;
 	/** Cache-Control header value. */
 	cacheControl?: string;
