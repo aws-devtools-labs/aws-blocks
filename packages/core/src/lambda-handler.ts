@@ -17,6 +17,7 @@ export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 // The request-scoped stores and the forwarded-host gate live in request-context.ts
 // so the container HTTP server shares them; re-exported here for existing imports.
 export { requestCookies, requestClientUserAgent, isLoopbackForwardedHost } from './request-context.js';
+import { requestIdStore } from './request-context.js';
 
 /**
  * Event source mapping identifiers used by AWS when pushing records to Lambda.
@@ -226,6 +227,8 @@ export function computeHttpDeadlineMs(context?: LambdaContext): number {
  */
 export interface LambdaContext {
   getRemainingTimeInMillis(): number;
+  /** The invocation's request id; carried through the invocation by {@link currentRequestId}. */
+  awsRequestId?: string;
 }
 
 /**
@@ -292,7 +295,11 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
     lockRouteRegistry();
   }
 
-  return async (event: any, context?: LambdaContext) => {
+  // Each invocation runs with its request id in scope, so Building Blocks can
+  // tag their output with it (see currentRequestId in request-context.ts).
+  return (event: any, context?: LambdaContext) => requestIdStore.run(context?.awsRequestId, () => invoke(event, context));
+
+  async function invoke(event: any, context?: LambdaContext) {
     if (!handler) {
       // Retry init on failure instead of caching the rejection. If initialize() throws (most often
       // because loadConfigToProcessEnv() couldn't read blocks-config.json during the brief
@@ -366,7 +373,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Non-timeout errors (handler threw before deadline) propagate normally.
       throw err;
     }
-  };
+  }
 }
 
 class HandlerTimeoutError extends Error {

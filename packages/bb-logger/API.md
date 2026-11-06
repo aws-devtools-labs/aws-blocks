@@ -30,6 +30,7 @@ export interface LogEntry {
     logger: string;
     // (undocumented)
     message: string;
+    requestId?: string;
     timestamp: string;
     traceId?: string;
 }

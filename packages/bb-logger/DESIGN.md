@@ -51,6 +51,7 @@ Fields:
 - `timestamp` — ISO 8601 timestamp from `new Date().toISOString()`.
 - `logger` — The `id` passed to the constructor.
 - `traceId` — X-Ray trace ID (auto-injected from `_X_AMZN_TRACE_ID` env var when present).
+- `requestId` — the Lambda invocation's `awsRequestId`. Core's `createLambdaHandler` runs each invocation inside an `AsyncLocalStorage` scope holding it (`request-context.ts`, registered on `globalThis.__BLOCKS_REQUEST_ID_STORE__`), and the serializer reads that store when it builds a line. It is read through the global rather than imported, so the CDK entry, which shares the serializer, doesn't load core's runtime handler at synth, and a separately resolved copy of core still sees the same store. It is not a reserved field: a `requestId` in context overrides it. Overlapping invocations on one container each see their own id.
 - Spread fields from `defaultContext`, `child()` context, and per-call `context` (later wins).
 
 ### Serialization Safety
@@ -98,3 +99,4 @@ The mock entry point (`index.mock.ts`) re-exports the AWS runtime (`index.aws.ts
 | No log retention enforcement | Logs are ephemeral in local terminal | No mitigation needed — local logs don't persist |
 | No log group/stream structure | Cannot test subscription filters | Sandbox testing covers these |
 | No X-Ray trace ID injection | `traceId` field absent locally | Set `_X_AMZN_TRACE_ID` env var manually if needed |
+| No request id | `requestId` field absent locally (the dev server sets none) | Pass a `requestId` in `child()` context if you need correlation locally |

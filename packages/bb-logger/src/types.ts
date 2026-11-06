@@ -34,6 +34,12 @@ export interface LogEntry {
 	logger: string;
 	/** X-Ray trace ID. Auto-injected when running in Lambda with X-Ray enabled. */
 	traceId?: string;
+	/**
+	 * The id of the request that logged this line: the Lambda invocation's
+	 * `awsRequestId`. Auto-injected on AWS Lambda; absent in local dev. A
+	 * `requestId` you pass in context takes precedence.
+	 */
+	requestId?: string;
 	[key: string]: unknown;
 }
 

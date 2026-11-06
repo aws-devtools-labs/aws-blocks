@@ -66,9 +66,12 @@ Every log entry is a JSON object written to stdout (or stderr for errors):
   "message": "User logged in",
   "timestamp": "2024-01-15T10:30:00.000Z",
   "logger": "app",
+  "requestId": "c6af9ac6-7b61-11e6-9a41-93e8deadbeef",
   "userId": "user-123"
 }
 ```
+
+On AWS Lambda, `requestId` is the invocation's request id (the same id as in the function's `START`/`END`/`REPORT` lines), added to every line automatically, so you can find everything one request logged, for example with CloudWatch Logs Insights: `filter requestId = "<id>"`. A `requestId` you pass in context takes precedence. Local dev has no request id, so the field is absent there.
 
 ### Child Loggers
 
@@ -147,6 +150,7 @@ In local dev (`npm run dev`), the Logger BB:
 - Does NOT create any files in `.bb-data/`
 - Retention has no local effect (it is a cloud-only, compute-level setting)
 - Log level comes from the `Logger`'s `level` option (default `'info'`)
+- Lines have no `requestId` field: the dev server doesn't set a request id
 
 ## Errors
 

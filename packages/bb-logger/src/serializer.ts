@@ -10,6 +10,19 @@
 import type { LogLevel } from './types.js';
 import { LoggingErrors } from './errors.js';
 
+/**
+ * The id of the request being handled, from the per-invocation store core's
+ * Lambda handler populates (`request-context.ts` in `@aws-blocks/core`). Read
+ * through its `globalThis` registration rather than an import, so the CDK entry
+ * (which shares this serializer) doesn't load core's runtime handler at synth,
+ * and a separately resolved copy of core still sees the same store.
+ */
+function currentRequestId(): string | undefined {
+	const store = (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__;
+	const id = store?.getStore();
+	return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
 	debug: 0,
 	info: 1,
@@ -97,6 +110,12 @@ export function buildEntry(
 		timestamp: new Date(now).toISOString(),
 		logger: loggerName,
 	};
+
+	// The id of the request being handled (the Lambda invocation's awsRequestId),
+	// so every line one request logs can be correlated. Not a reserved field: a
+	// `requestId` the caller puts in context still wins below.
+	const requestId = currentRequestId();
+	if (requestId) entry.requestId = requestId;
 
 	// Merge user context — reserved keys are skipped (structural fields already written above).
 	for (const ctx of contexts) {
