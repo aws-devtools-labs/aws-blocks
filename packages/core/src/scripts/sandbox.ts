@@ -17,7 +17,7 @@ import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/fra
 import { DeployProcessError, formatDeploySignal } from './deploy-stream.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
-import { liveSandboxSession, SANDBOX_SESSION_ENV } from './dev-pidfile.js';
+import { liveDevSession, liveSandboxSession, SANDBOX_SESSION_ENV } from './dev-pidfile.js';
 import { terminateProcessTree, type AwaitableChild } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
@@ -302,6 +302,23 @@ export function assertNoRunningSandbox(projectRoot: string, invocation: string):
 }
 
 /**
+ * Refuse a sandbox that will start a dev server while any dev session of the
+ * app at `projectRoot` is live (see {@link liveDevSession}), also a
+ * `cdk-blocks dev` that is still starting: the app runs one dev server at a
+ * time, so the sandbox's would be refused only after the deploy, and the
+ * sandbox ends with it. `invocation` is the command to re-run.
+ */
+export function assertNoRunningDevServer(projectRoot: string, invocation: string): void {
+  const running = liveDevSession(projectRoot);
+  if (!running) return;
+  throw new Error(
+    `A dev server of this app is already ${running.starting ? 'starting' : 'running'} on :${running.port} (pid ${running.pid}), ` +
+      `and the sandbox would start another one. Stop it first, with Ctrl-C in its terminal or ` +
+      `\`npx --no -- cdk-blocks dev stop --port ${running.port}\`, then re-run \`${invocation}\`.`,
+  );
+}
+
+/**
  * Build the `npm exec cdk -- deploy …` argv used by the sandbox deploy.
  *
  * Kept pure (no I/O) so the argv contract — in particular the flags below — can
@@ -564,8 +581,10 @@ export async function startSandbox(options: SandboxOptions) {
   const sandboxStartTime = Date.now();
   // A closed output pipe or terminal must not crash the runner (see ignoreClosedOutput).
   ignoreClosedOutput();
-  // Before anything reaches AWS: a running `cdk-blocks sandbox` already deploys every change.
+  // Before anything reaches AWS: a running `cdk-blocks sandbox` already deploys every change,
+  // and a sandbox that starts a dev server can't run beside another dev server of the app.
   assertNoRunningSandbox(process.cwd(), invocation);
+  if (!deployOnly) assertNoRunningDevServer(process.cwd(), invocation);
   migrateLegacyDeployedConfig(outDir);
 
   // Load .env.local so CDK can read secret ARNs and other config.
