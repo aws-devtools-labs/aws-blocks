@@ -61,7 +61,7 @@ The API mixes **public** methods (no auth) and **protected** methods (gated by
 | `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
-| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run destroy` | Tear down the production stacks, every top-level stack in the app (asks first; `-- --yes` in CI) |
 | `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
 | `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
 | `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |

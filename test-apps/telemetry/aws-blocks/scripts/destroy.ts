@@ -10,6 +10,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 destroy({
   cdkAppPath: join(__dirname, '..', 'index.cdk.ts'),
   projectRoot: join(__dirname, '..', '..'),
+  // `npm run destroy -- --force` deletes without asking, even on a terminal.
+  force: process.argv.includes('--force'),
 }).catch((error) => {
   console.error(error);
   process.exitCode = 1;

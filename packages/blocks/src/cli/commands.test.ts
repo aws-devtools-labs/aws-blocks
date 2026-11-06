@@ -1124,6 +1124,8 @@ describe('destroy safety', () => {
 			projectRoot: root,
 			stackName: 'demo-prod',
 			invocation: 'npx --no -- cdk-blocks destroy',
+			// --yes also skips core's question before a multi-stack delete.
+			force: true,
 		});
 	});
 

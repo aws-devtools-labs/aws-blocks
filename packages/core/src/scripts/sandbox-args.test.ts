@@ -287,13 +287,13 @@ describe('buildSandboxWatchArgs — infrastructure changes are deployed, not ski
   // `cdk watch` defaults to --hotswap, which ignores changes it can't hotswap
   // (a new Database or Realtime). The fallback deploys them in full instead.
   it('watches with --hotswap-fallback', () => {
-    const args = buildSandboxWatchArgs(base);
+    const args = buildSandboxWatchArgs({ ...base, stacks: [] });
     assert.deepStrictEqual(args.slice(0, 2), ['cdk', 'watch']);
     assert.ok(args.includes('--hotswap-fallback'), `missing --hotswap-fallback: ${args.join(' ')}`);
   });
 
   it('never passes plain --hotswap or --no-hotswap, which would skip or slow every change', () => {
-    const args = buildSandboxWatchArgs(base);
+    const args = buildSandboxWatchArgs({ ...base, stacks: [] });
     assert.ok(!args.includes('--hotswap'));
     assert.ok(!args.includes('--no-hotswap'));
   });
@@ -317,7 +317,7 @@ describe('preview sandbox — the previewMode context', () => {
   });
 
   it('a plain sandbox passes no previewMode context', () => {
-    for (const args of [buildSandboxSynthArgs(base), buildSandboxDeployArgs(base), buildSandboxWatchArgs(base)]) {
+    for (const args of [buildSandboxSynthArgs(base), buildSandboxDeployArgs(base), buildSandboxWatchArgs({ ...base, stacks: [] })]) {
       assert.deepStrictEqual(contexts(args), ['projectRoot=/proj', 'sandboxMode=true']);
     }
   });
