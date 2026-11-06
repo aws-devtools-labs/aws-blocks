@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { config, secret } from '@aws-blocks/hosting';
+import { HostingError } from '@aws-blocks/hosting/constructs';
 import {
   _setSynthExistsChecker,
   _setSynthSecretFetcher,
@@ -20,6 +21,8 @@ import * as cdk from 'aws-cdk-lib';
 import { App, Duration, Stack, Token, aws_apigateway } from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Construct } from 'constructs';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import {
   type ApiFrontDoorOwner,
   apiFrontDoorMarker,
@@ -33,7 +36,7 @@ import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
-import { type BlocksStackApi, buildConfigJson, Hosting, type HostingProps } from './hosting.js';
+import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -532,6 +535,82 @@ describe('Hosting', () => {
           ]),
         }),
       });
+    });
+  });
+
+  // A namespace on a container compute: Hosting routes its exact path straight to
+  // the container's load balancer, ahead of the `/aws-blocks/api/*` gateway
+  // behavior that would otherwise match first.
+  describe('container API namespaces', () => {
+    function hostingWithDirectRoute(id: string, cacheBehaviors?: number) {
+      createSpaBuildOutput(tmpDir);
+      const app = new App();
+      const stack = new Stack(app, id);
+      const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+      const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+      const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+      const api: BlocksStackApi = {
+        apiUrl: MOCK_API.apiUrl,
+        _apiDirectRoutes: [
+          {
+            path: `${BLOCKS_RPC_PREFIX}/render`,
+            ingress: { kind: 'load-balancer', loadBalancer, port: 10_123, vpc, subnets, routePath: () => {} },
+          },
+        ],
+      };
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api,
+        ...(cacheBehaviors === undefined ? {} : { frontDoor: { features: { quotas: { cacheBehaviors } } } }),
+      });
+      return Template.fromStack(stack).toJSON().Resources as Record<string, { Type: string; Properties: any }>;
+    }
+
+    it("counts the container behaviors against the door's quotas.cacheBehaviors at synth", () => {
+      const resources = hostingWithDirectRoute('HostingDirectRouteCount');
+      const [dist] = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::Distribution');
+      // The default behavior plus every other one, the container path included.
+      const total = 1 + dist.Properties.DistributionConfig.CacheBehaviors.length;
+      assert.doesNotThrow(() => hostingWithDirectRoute('HostingDirectRouteAtLimit', total));
+      assert.throws(
+        () => hostingWithDirectRoute('HostingDirectRouteOverLimit', total - 1),
+        new RegExp(
+          `needs ${total} cache behaviors .*'render'.*exceeding the limit of ${total - 1} .*Hosting's ` +
+            '`frontDoor\\.features\\.quotas\\.cacheBehaviors`',
+          's',
+        ),
+      );
+    });
+
+    it('adds the container path before the gateway API behaviors, to a VPC origin', () => {
+      const resources = hostingWithDirectRoute('HostingDirectRoute');
+      const [dist] = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::Distribution');
+      const config = dist.Properties.DistributionConfig;
+      const patterns: string[] = config.CacheBehaviors.map((b: { PathPattern: string }) => b.PathPattern);
+      const direct = patterns.indexOf(`${BLOCKS_RPC_PREFIX}/render`);
+      assert.ok(direct !== -1, `behaviors: ${patterns.join(', ')}`);
+      assert.ok(direct < patterns.indexOf(`${BLOCKS_RPC_PREFIX}/*`), 'ahead of /aws-blocks/api/*');
+      assert.ok(direct < patterns.indexOf(BLOCKS_RPC_PREFIX), 'ahead of /aws-blocks/api');
+      const behavior = config.CacheBehaviors[direct];
+      const origin = config.Origins.find((o: { Id: string }) => o.Id === behavior.TargetOriginId);
+      assert.ok(origin.VpcOriginConfig, 'a VPC origin');
+      assert.strictEqual(behavior.FunctionAssociations?.[0]?.EventType, 'viewer-request');
+      const vpcOrigins = Object.values(resources).filter((r) => r.Type === 'AWS::CloudFront::VpcOrigin');
+      assert.strictEqual(vpcOrigins.length, 1);
+      assert.strictEqual(vpcOrigins[0].Properties.VpcOriginEndpointConfig.HTTPPort, 10_123);
+    });
+
+    it('adds no VPC origin or function without container namespaces', () => {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'HostingNoDirectRoute');
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+      const template = Template.fromStack(stack);
+      template.resourceCountIs('AWS::CloudFront::VpcOrigin', 0);
+      // Hosting has functions of its own; none of them is the forwarded-host stamp.
+      const stamps = Object.values(template.findResources('AWS::CloudFront::Function')).filter((f) =>
+        String(f.Properties.FunctionCode).includes('x-blocks-forwarded-host'),
+      );
+      assert.strictEqual(stamps.length, 0);
     });
   });
 
@@ -3839,3 +3918,138 @@ const _blocksFrontDoorTypes: Array<HostingProps['frontDoor']> = [
   { kind: 'apiGateway', features: { waf: { enabled: true } } },
 ];
 void _blocksFrontDoorTypes;
+
+// `Hosting` runs `buildCommand` on every synth. A destroy reuses an existing
+// build (context `reuseFrontendBuild=true`), and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+// makes a deploy reuse one; see common/frontend-build.ts.
+describe('Hosting — skipping the frontend build', () => {
+  let tmpDir: string;
+  const savedSkip = process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  // Records that it ran, then writes the SPA output a real build would.
+  const BUILD = `node -e "const f=require('fs');f.writeFileSync('built.txt','1');f.mkdirSync('dist',{recursive:true});f.writeFileSync('dist/index.html','<html></html>')"`;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-skipbuild-'));
+    fs.writeFileSync(path.join(tmpDir, 'package.json'), JSON.stringify({ name: 'skip', dependencies: { react: '^18' } }));
+    delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (savedSkip === undefined) delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+    else process.env.BLOCKS_SKIP_FRONTEND_BUILD = savedSkip;
+  });
+
+  const synth = (context?: Record<string, string>) => {
+    const stack = new Stack(new App(context ? { context } : undefined), 'SkipBuildStack');
+    new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: BUILD });
+  };
+  const built = () => fs.existsSync(path.join(tmpDir, 'built.txt'));
+
+  it('runs buildCommand on a normal synth', () => {
+    synth();
+    assert.ok(built(), 'buildCommand should run');
+  });
+
+  it('a destroy synth reuses an existing build instead of running buildCommand', () => {
+    createSpaBuildOutput(tmpDir);
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(!built(), 'buildCommand should not run when dist/ exists');
+  });
+
+  it('a destroy synth still builds when there is no build to reuse', () => {
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(built(), 'buildCommand should run when dist/ is missing');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 deploys the existing build without running buildCommand', () => {
+    createSpaBuildOutput(tmpDir);
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    synth();
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 with no build output fails and names the variable', () => {
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    assert.throws(() => synth(), (err: Error) => {
+      assert.match(err.message, /Build output directory not found/);
+      assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD is set, so the frontend build is skipped/);
+      return true;
+    });
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=1 names the variable when the adapter output is missing (Next.js: .next without .open-next)', () => {
+    fs.mkdirSync(path.join(tmpDir, '.next'), { recursive: true });
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    const stack = new Stack(new App(), 'SkipBuildNextStack');
+    assert.throws(
+      () => new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API, framework: 'nextjs', buildCommand: BUILD }),
+      (err: Error) => {
+        assert.match(err.message, /OpenNext output not found/);
+        assert.match(err.message, /BLOCKS_SKIP_FRONTEND_BUILD is set, so the frontend build is skipped/);
+        // The adapter's structured error survives: same code and name, its resolution, the original as cause.
+        assert.ok(err instanceof HostingError, 'expected a HostingError');
+        assert.strictEqual(err.code, 'OpenNextOutputNotFoundError');
+        assert.strictEqual(err.name, 'OpenNextOutputNotFoundError');
+        assert.ok(err.resolution.length > 0, 'expected the adapter resolution');
+        const { cause } = err;
+        assert.ok(cause instanceof HostingError, 'expected the adapter error as cause');
+        assert.strictEqual(err.resolution, cause.resolution);
+        return true;
+      },
+    );
+    assert.ok(!built(), 'buildCommand should not run');
+  });
+
+  it('a destroy synth with BLOCKS_SKIP_FRONTEND_BUILD=1 exported and no build output still builds instead of failing', () => {
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = '1';
+    synth({ reuseFrontendBuild: 'true' });
+    assert.ok(built(), 'buildCommand should run when dist/ is missing');
+  });
+});
+
+// A destroy reuses a build only when the adapter will too: `Hosting` must check
+// the same marker the framework adapter checks, or it skips `buildCommand` while
+// the adapter still runs its full build.
+describe('frontendReuseMarker', () => {
+  it('keys a Next.js app on the OpenNext output the adapter deploys, not .next', () => {
+    assert.strictEqual(
+      frontendReuseMarker('nextjs', '/app', '/app/.next', false),
+      path.join('/app', '.open-next', 'open-next.output.json'),
+    );
+  });
+
+  it('keys other frameworks, and a custom adapter, on the build output dir', () => {
+    assert.strictEqual(frontendReuseMarker('spa', '/app', '/app/dist', false), '/app/dist');
+    assert.strictEqual(frontendReuseMarker('sveltekit', '/app', '/app/build', false), '/app/build');
+    assert.strictEqual(frontendReuseMarker('nextjs', '/app', '/app/.next', true), '/app/.next');
+  });
+});
+
+describe('Hosting — the skip log names the variable, not a value', () => {
+  let tmpDir: string;
+  const saved = process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    if (saved === undefined) delete process.env.BLOCKS_SKIP_FRONTEND_BUILD;
+    else process.env.BLOCKS_SKIP_FRONTEND_BUILD = saved;
+  });
+
+  it('BLOCKS_SKIP_FRONTEND_BUILD=true logs the variable without claiming =1', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-hosting-skiplog-'));
+    createSpaBuildOutput(tmpDir);
+    process.env.BLOCKS_SKIP_FRONTEND_BUILD = 'true';
+    const logged: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => logged.push(args.map(String).join(' '));
+    try {
+      new Hosting(new Stack(new App(), 'SkipLogStack'), 'Hosting', { root: tmpDir, api: MOCK_API, buildCommand: 'exit 1' });
+    } finally {
+      console.log = original;
+    }
+    const line = logged.find((l) => l.includes('Skipping frontend build'));
+    assert.ok(line, `expected a skip line in: ${logged.join(' | ')}`);
+    assert.ok(line.includes('BLOCKS_SKIP_FRONTEND_BUILD is set'), line);
+    assert.ok(!line.includes('=1'), line);
+  });
+});
