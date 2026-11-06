@@ -1,0 +1,6 @@
+{
+  "name": "DatabaseErrorException",
+  "message": "ERROR: relation \"definitely_missing_table_xyz\" does not exist; Position: 15; SQLState: 42P01",
+  "expected": "QueryFailed",
+  "provenance": "captured from a live Aurora PostgreSQL 17.7 Serverless v2 cluster via the RDS Data API (us-west-2, 2026-08-28)"
+}
