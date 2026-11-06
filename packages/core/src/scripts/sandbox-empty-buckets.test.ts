@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
+import { topLevelStacks } from './cloud-assembly.js';
 import {
 	destroyRetryClients,
 	edgeStacksBlockedByReplicas,
@@ -17,7 +18,6 @@ import {
 	listStackBucketNames,
 	runDestroyWithRetries,
 	toDeleteObjects,
-	topLevelStacks,
 } from './sandbox.js';
 
 // The teardown bucket-emptying must delete BOTH live versions and delete

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   buildCdkDeployArgs,
+  buildCdkSynthArgs,
   createLineAssembler,
   decideSignalResponse,
   formatElapsed,
@@ -153,7 +154,7 @@ describe('formatElapsed', () => {
 // keeps them line-oriented when there is no TTY. Dropping either flag restores
 // the 0-byte stdout, so the argv is pinned here.
 describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
-  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json' });
+  const args = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: '.blocks-sandbox/outputs.json', assemblyDir: 'cdk.out' });
 
   it('sends CDK logs to stdout instead of stderr', () => {
     assert.ok(args.includes('--ci'), `expected --ci in: ${args.join(' ')}`);
@@ -182,6 +183,16 @@ describe('buildCdkDeployArgs — flags that make the deploy observable', () => {
     assert.strictEqual(args[args.indexOf('--require-approval') + 1], 'never');
     assert.strictEqual(args[args.indexOf('--outputs-file') + 1], '.blocks-sandbox/outputs.json');
     assert.strictEqual(args[args.indexOf('--context') + 1], 'projectRoot=/app');
+  });
+
+  it('deploys the assembly that the synth step wrote, so the app is synthesized once', () => {
+    const synth = buildCdkSynthArgs({ projectRoot: '/app', assemblyDir: 'build/assembly' });
+    assert.deepStrictEqual(synth.slice(0, 2), ['cdk', 'synth']);
+    assert.strictEqual(synth[synth.indexOf('--output') + 1], 'build/assembly');
+    assert.strictEqual(synth[synth.indexOf('--context') + 1], 'projectRoot=/app');
+    assert.ok(!synth.includes('--app'), 'synth runs the app from cdk.json');
+    const deploy = buildCdkDeployArgs({ projectRoot: '/app', outputsFile: 'o.json', assemblyDir: 'build/assembly' });
+    assert.strictEqual(deploy[deploy.indexOf('--app') + 1], 'build/assembly');
   });
 });
 
@@ -625,10 +636,11 @@ describe('the real CDK CLI: --ci moves logs to stdout and keeps failures on stde
     const deployArgs = buildCdkDeployArgs({
       projectRoot: assembly,
       outputsFile: join(assembly, 'outputs.json'),
+      assemblyDir: assembly,
     })
       .slice(1) // drop the leading `cdk`: the CLI entry point is invoked directly
       .filter((arg) => arg !== '--ci' && arg !== '--all');
-    return [...deployArgs, ciFlag, 'ProbeStack', '--app', assembly];
+    return [...deployArgs, ciFlag, 'ProbeStack'];
   }
 
   function probeDeploy(assembly: string, ciFlag: '--ci' | '--no-ci'): ProbeRun {

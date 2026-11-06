@@ -52,11 +52,16 @@ export interface AccountMetadataClients {
 /** Creates the metadata clients for a target. */
 export type AccountMetadataClientFactory = (target: AccountMetadataTarget) => Promise<AccountMetadataClients>;
 
+/** The account plan type from Free Tier GetAccountPlanState. */
+export type AccountPlanType = 'FREE' | 'PAID';
+
 /** Metadata values ready to print; `null` when unavailable. */
 export interface AccountMetadata {
 	accountName: string | null;
 	/** For example `Free (active)`, or only `Paid` when the status is missing or unknown. */
 	plan: string | null;
+	/** The plan type behind {@link plan}, for checks that depend on the plan. */
+	planType: AccountPlanType | null;
 	/** `true` only when the caller's role is the AWS-managed sign-in role; `false` when that is unknown. */
 	managedRole: boolean;
 }
@@ -64,7 +69,7 @@ export interface AccountMetadata {
 /** How long the metadata reads may take in total. */
 const METADATA_TIMEOUT_MS = 2500;
 
-const PLAN_TYPES: Record<string, string> = { FREE: 'Free', PAID: 'Paid' };
+const PLAN_TYPES: Record<AccountPlanType, string> = { FREE: 'Free', PAID: 'Paid' };
 const PLAN_STATUSES: Record<string, string> = { ACTIVE: 'active', EXPIRED: 'expired', NOT_STARTED: 'not started' };
 
 /** Control and format characters, which can move the cursor or reorder text in a terminal. */
@@ -126,9 +131,12 @@ function accountName(response: unknown): string | null {
 	return name.replace(UNPRINTABLE, '').trim().slice(0, MAX_ACCOUNT_NAME_LENGTH) || null;
 }
 
-function planLabel(response: unknown): string | null {
+function planType(response: unknown): AccountPlanType | null {
 	const type = field(response, 'accountPlanType');
-	if (typeof type !== 'string' || !Object.hasOwn(PLAN_TYPES, type)) return null;
+	return type === 'FREE' || type === 'PAID' ? type : null;
+}
+
+function planLabel(response: unknown, type: AccountPlanType): string {
 	const status = field(response, 'accountPlanStatus');
 	return typeof status === 'string' && Object.hasOwn(PLAN_STATUSES, status)
 		? `${PLAN_TYPES[type]} (${PLAN_STATUSES[status]})`
@@ -174,7 +182,7 @@ export async function readAccountMetadata(
 	target: AccountMetadataTarget,
 	{ clients: create = sdkAccountMetadataClients, timeoutMs = METADATA_TIMEOUT_MS }: ReadAccountMetadataOptions = {},
 ): Promise<AccountMetadata> {
-	const metadata: AccountMetadata = { accountName: null, plan: null, managedRole: false };
+	const metadata: AccountMetadata = { accountName: null, plan: null, planType: null, managedRole: false };
 	// IAM users, the root user and other ARNs have no role to read.
 	const roleName = target.callerArn ? ASSUMED_ROLE_ARN.exec(target.callerArn)?.[1] : undefined;
 	const controller = new AbortController();
@@ -195,7 +203,11 @@ export async function readAccountMetadata(
 				metadata.accountName = accountName(await created.getAccountInformation(controller.signal));
 			})(),
 			(async () => {
-				metadata.plan = planLabel(await created.getAccountPlanState(controller.signal));
+				const response = await created.getAccountPlanState(controller.signal);
+				const type = planType(response);
+				if (!type) return;
+				metadata.planType = type;
+				metadata.plan = planLabel(response, type);
 			})(),
 			(async () => {
 				if (roleName) metadata.managedRole = isManagedRole(await created.getRole(roleName, controller.signal));

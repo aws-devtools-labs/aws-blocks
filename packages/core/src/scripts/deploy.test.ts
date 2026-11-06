@@ -244,7 +244,9 @@ const replace = async (url, overrides) => {
   const real = await import(url);
   mock.module(url, { namedExports: { ...real, ...overrides } });
 };
-await replace(moduleUrl('preflight-credentials'), { assertAwsCredentials: async () => {} });
+await replace(moduleUrl('preflight-credentials'), {
+  assertAwsCredentials: async () => ({ accountPlan: null, account: null }),
+});
 await replace(moduleUrl('ensure-secrets'), {
   ensureSecrets: async () => ({ created: [], updated: [] }),
   loadProductionEnv: () => {},
@@ -293,5 +295,94 @@ assert.deepEqual(events, [
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('deploy — Free-plan Aurora stop', () => {
+  // deploy() in a fresh process, as above. The fake CDK synth writes an assembly
+  // with an Aurora cluster that has no express configuration.
+  const scripts = new URL('./', import.meta.url).href;
+  const fixture = (accountPlan: 'FREE' | 'PAID') => `
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { mock } from 'node:test';
+
+const scripts = ${JSON.stringify(scripts)};
+const moduleUrl = (name) => new URL(name + '.js', scripts).href;
+const replace = async (url, overrides) => {
+  const real = await import(url);
+  mock.module(url, { namedExports: { ...real, ...overrides } });
+};
+await replace(moduleUrl('preflight-credentials'), {
+  assertAwsCredentials: async () => ({ accountPlan: '${accountPlan}', account: '123456789012' }),
+});
+await replace(moduleUrl('ensure-secrets'), {
+  ensureSecrets: async () => ({ created: [], updated: [] }),
+  loadProductionEnv: () => {},
+});
+await replace(moduleUrl('external-migrations-step'), { applyExternalMigrations: async () => {} });
+await replace(moduleUrl('deploy-client-codegen'), { generateDeployClient: async () => {} });
+await replace(new URL('../telemetry/trackCommand.js', scripts).href, { trackCommand: async (_name, fn) => fn() });
+const steps = [];
+await replace(moduleUrl('deploy-stream'), {
+  runStreaming: async (_command, args) => {
+    steps.push(args[1]);
+    if (args[1] === 'synth') {
+      const out = args[args.indexOf('--output') + 1];
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, 'manifest.json'), JSON.stringify({ artifacts: { App: {
+        type: 'aws:cloudformation:stack',
+        properties: { templateFile: 'App.template.json', stackName: 'demo-prod' },
+      } } }));
+      writeFileSync(join(out, 'App.template.json'), JSON.stringify({ Resources: { DbCluster: {
+        Type: 'AWS::RDS::DBCluster',
+        Properties: { Engine: 'aurora-postgresql' },
+        Metadata: { 'aws:cdk:path': 'demo-prod/db/cluster/Resource' },
+      } } }));
+      return;
+    }
+    mkdirSync('.blocks-sandbox', { recursive: true });
+    writeFileSync('.blocks-sandbox/outputs.json', JSON.stringify({ 'demo-prod': { ApiUrl: 'https://prod.example/' } }));
+  },
+});
+const { deploy } = await import(moduleUrl('deploy'));
+const outcome = await deploy({ cdkAppPath: 'unused', projectRoot: process.cwd() }).then(
+  () => 'deployed',
+  (error) => error.message,
+);
+console.log('RESULT ' + JSON.stringify({ steps, outcome }));
+`;
+
+  function run(accountPlan: 'FREE' | 'PAID'): { steps: string[]; outcome: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'blocks-free-plan-aurora-'));
+    try {
+      const stdout = execFileSync(
+        process.execPath,
+        ['--experimental-test-module-mocks', '--input-type=module', '-e', fixture(accountPlan)],
+        {
+          cwd: dir,
+          env: { PATH: process.env.PATH, HOME: dir, AWS_BLOCKS_DISABLE_TELEMETRY: '1' },
+          encoding: 'utf8',
+          stdio: 'pipe',
+          timeout: 15_000,
+        },
+      );
+      const line = stdout.split('\n').find((l) => l.startsWith('RESULT '));
+      assert.ok(line, stdout);
+      return JSON.parse(line.slice('RESULT '.length));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('stops after synth, before cdk deploy, on a Free-plan account', () => {
+    const { steps, outcome } = run('FREE');
+    assert.deepStrictEqual(steps, ['synth']);
+    assert.match(outcome, /^`npm run deploy` stopped before deploying: this AWS account is on the Free plan/);
+    assert.match(outcome, /^ {4}demo-prod: demo-prod\/db\/cluster\/Resource$/m);
+  });
+
+  it('deploys the synthesized assembly on a Paid-plan account', () => {
+    assert.deepStrictEqual(run('PAID'), { steps: ['synth', 'deploy'], outcome: 'deployed' });
   });
 });

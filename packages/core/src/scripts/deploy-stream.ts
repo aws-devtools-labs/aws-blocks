@@ -340,10 +340,34 @@ export interface CdkDeployArgsOptions {
   projectRoot: string;
   /** Path (relative to the project root) CDK writes stack outputs to. */
   outputsFile: string;
+  /**
+   * The cloud assembly that {@link buildCdkSynthArgs} synthesized, deployed with
+   * `--app <dir>` so the app is not synthesized (and its frontend not built) twice.
+   */
+  assemblyDir: string;
+}
+
+/** Options for {@link buildCdkSynthArgs}. */
+export interface CdkSynthArgsOptions {
+  /** Project root passed to synth as `--context projectRoot=…`. */
+  projectRoot: string;
+  /** The directory to synthesize the cloud assembly into (see `resolveCdkOutputDir`). */
+  assemblyDir: string;
 }
 
 /**
- * Build the `cdk deploy` argv used by `npm run deploy`.
+ * Build the `cdk synth` argv that `npm run deploy` runs first. The app comes
+ * from `cdk.json`. The deploy inspects the synthesized templates before any
+ * stack changes (see `assertFreePlanAurora`), then deploys that assembly with
+ * {@link buildCdkDeployArgs}.
+ */
+export function buildCdkSynthArgs({ projectRoot, assemblyDir }: CdkSynthArgsOptions): string[] {
+  return ['cdk', 'synth', '--quiet', '--output', assemblyDir, '--context', `projectRoot=${projectRoot}`];
+}
+
+/**
+ * Build the `cdk deploy` argv used by `npm run deploy`, for the assembly that
+ * {@link buildCdkSynthArgs} synthesized.
  *
  * - `--all`: deploy every stack the app synthesizes. Blocks apps routinely
  *   synth more than one stack in documented configurations — `Hosting` with an
@@ -369,7 +393,7 @@ export interface CdkDeployArgsOptions {
  *   deploy does not have, and a half-rendered bar is not a usable progress
  *   signal in a log file.
  */
-export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOptions): string[] {
+export function buildCdkDeployArgs({ projectRoot, outputsFile, assemblyDir }: CdkDeployArgsOptions): string[] {
   return [
     'cdk',
     'deploy',
@@ -383,6 +407,8 @@ export function buildCdkDeployArgs({ projectRoot, outputsFile }: CdkDeployArgsOp
     outputsFile,
     '--context',
     `projectRoot=${projectRoot}`,
+    '--app',
+    assemblyDir,
   ];
 }
 

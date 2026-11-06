@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it, mock } from 'node:test';
 import type { AwsCredentialIdentity } from '@smithy/types';
-import type { AccountMetadataClientFactory, AccountMetadataTarget } from './account-metadata.js';
+import type { AccountMetadataClientFactory, AccountMetadataTarget, AccountPlanType } from './account-metadata.js';
 import {
 	type AssertAwsCredentialsOptions,
 	assertAwsCredentials,
@@ -117,15 +117,18 @@ describe('deployment target summary', () => {
 		await rm(directory, { recursive: true, force: true });
 	});
 
-	/** Run the check and return what it printed. */
-	async function run(
-		options: Partial<AssertAwsCredentialsOptions> = {},
-	): Promise<{ log: string; warn: string; elapsed: number }> {
+	/** Run the check and return what it printed and the plan type it returned. */
+	async function run(options: Partial<AssertAwsCredentialsOptions> = {}): Promise<{
+		log: string;
+		warn: string;
+		elapsed: number;
+		accountPlan: AccountPlanType | null;
+	}> {
 		const log = mock.method(console, 'log', () => {});
 		const warn = mock.method(console, 'warn', () => {});
 		const started = Date.now();
 		try {
-			await assertAwsCredentials({
+			const { accountPlan } = await assertAwsCredentials({
 				command: 'deploy',
 				env,
 				projectRoot: directory,
@@ -136,6 +139,7 @@ describe('deployment target summary', () => {
 				log: log.mock.calls.map((call) => call.arguments.join(' ')).join('\n'),
 				warn: warn.mock.calls.map((call) => call.arguments.join(' ')).join('\n'),
 				elapsed: Date.now() - started,
+				accountPlan,
 			};
 		} finally {
 			log.mock.restore();
@@ -172,13 +176,14 @@ describe('deployment target summary', () => {
 		assert.match(log, /AWS profile from-cdk, Region us-gov-west-1/);
 	});
 
-	for (const { name, account, plan, expectedName, expectedPlan } of [
+	for (const { name, account, plan, expectedName, expectedPlan, expectedType } of [
 		{
 			name: 'denied',
 			account: () => Promise.reject(namedError('AccessDeniedException')),
 			plan: () => Promise.reject(namedError('AccessDeniedException')),
 			expectedName: 'not available',
 			expectedPlan: 'not available',
+			expectedType: null,
 		},
 		{
 			name: 'unsupported',
@@ -186,6 +191,7 @@ describe('deployment target summary', () => {
 			plan: () => Promise.reject(Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' })),
 			expectedName: 'not available',
 			expectedPlan: 'not available',
+			expectedType: null,
 		},
 		{
 			name: 'empty',
@@ -193,6 +199,7 @@ describe('deployment target summary', () => {
 			plan: async () => ({ $metadata: {} }),
 			expectedName: 'not available',
 			expectedPlan: 'not available',
+			expectedType: null,
 		},
 		{
 			name: 'partial',
@@ -200,6 +207,7 @@ describe('deployment target summary', () => {
 			plan: async () => ({ accountPlanType: 'PAID' }),
 			expectedName: 'Starter project',
 			expectedPlan: 'Paid',
+			expectedType: 'PAID',
 		},
 		{
 			name: 'half failed',
@@ -207,6 +215,7 @@ describe('deployment target summary', () => {
 			plan: async () => ({ accountPlanType: 'FREE', accountPlanStatus: 'EXPIRED' }),
 			expectedName: 'not available',
 			expectedPlan: 'Free (expired)',
+			expectedType: 'FREE',
 		},
 		{
 			name: 'malformed',
@@ -214,6 +223,7 @@ describe('deployment target summary', () => {
 			plan: async () => ({ accountPlanType: 'GOLD', accountPlanStatus: 'ACTIVE' }),
 			expectedName: 'not available',
 			expectedPlan: 'not available',
+			expectedType: null,
 		},
 		{
 			name: 'not an object',
@@ -221,6 +231,7 @@ describe('deployment target summary', () => {
 			plan: async () => 'FREE',
 			expectedName: 'not available',
 			expectedPlan: 'not available',
+			expectedType: null,
 		},
 		{
 			name: 'blank name and unknown status',
@@ -228,13 +239,15 @@ describe('deployment target summary', () => {
 			plan: async () => ({ accountPlanType: 'FREE', accountPlanStatus: 'PAUSED' }),
 			expectedName: 'not available',
 			expectedPlan: 'Free',
+			expectedType: 'FREE',
 		},
 	]) {
 		it(`continues with ${name} metadata`, async () => {
 			const { factory, state } = fakeClients(account, plan);
-			const { log, warn } = await run({ metadataClients: factory });
+			const { log, warn, accountPlan } = await run({ metadataClients: factory });
 			assert.ok(log.includes(`Account name: ${expectedName}\n`), log);
 			assert.ok(log.includes(`Account plan: ${expectedPlan}\n`), log);
+			assert.strictEqual(accountPlan, expectedType);
 			assert.deepStrictEqual(billingLines(log), [BILLING_LINE]);
 			assert.strictEqual(warn, '');
 			assert.strictEqual(state.destroyed, 1);
@@ -255,9 +268,10 @@ describe('deployment target summary', () => {
 
 	it('keeps the account name when only the plan read times out', async () => {
 		const { factory, state } = fakeClients(NAMED, NEVER);
-		const { log } = await run({ metadataClients: factory, metadataTimeoutMs: 50 });
+		const { log, accountPlan } = await run({ metadataClients: factory, metadataTimeoutMs: 50 });
 		assert.match(log, /Account name: Starter project$/m);
 		assert.match(log, /Account plan: not available$/m);
+		assert.strictEqual(accountPlan, null);
 		assert.strictEqual(state.destroyed, 1);
 	});
 
