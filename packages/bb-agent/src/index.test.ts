@@ -11,7 +11,7 @@ import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
-import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
+import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
@@ -170,6 +170,31 @@ describe('agentErrorFromChunk', () => {
 	test('falls back to StreamFailed when errorName is absent or unrecognised', () => {
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom' }), AgentErrors.StreamFailed));
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom', errorName: 'SomethingElse' }), AgentErrors.StreamFailed));
+	});
+});
+
+describe('persistedTurnError', () => {
+	test('reads the error row a failed turn persists', () => {
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'denied', errorName: AgentErrors.ModelUnavailable } }),
+			{ error: 'denied', errorName: AgentErrors.ModelUnavailable },
+		);
+		assert.deepStrictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'boom' } }), { error: 'boom' });
+		// A turn stopped by a runaway cap keeps its partial text alongside metadata.error.
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: 'partial', metadata: { error: 'Agent stopped: cap.' } }),
+			{ error: 'Agent stopped: cap.' },
+		);
+	});
+
+	test('ignores rows that are not a failed turn', () => {
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: 'done', metadata: { latencyMs: 12 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'user', content: '', metadata: { error: 'x' } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: {} }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 42 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: '{"error":"x"}' }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '' }), undefined);
+		assert.strictEqual(persistedTurnError(undefined), undefined);
 	});
 });
 
@@ -2493,6 +2518,76 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+				] }),
+			},
+			subscribe,
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		t.mock.timers.tick(700_000);
+		assert.strictEqual(errors.length, 1, 'no later Timed-out error from the failsafe');
+		chat.destroy();
+	});
+
+	test('reconnect keeps the partial text of a turn a cap stopped while disconnected, and reports why', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A runaway cap stopped the turn: its partial text is saved with the reason, and the
+				// `error` chunk that ended it was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'Partial answer', metadata: { error: 'Agent stopped: too many model calls.' } },
+				] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'text-delta', text: 'Partial' });
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the stopped turn found on re-sync clears loading');
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial answer', 'the partial text is kept');
+		assert.deepStrictEqual(errors, ['Agent stopped: too many model calls.'], 'the stop reason is reported once');
+		t.mock.timers.tick(700_000);
+		assert.strictEqual(errors.length, 1, 'no later Timed-out error from the failsafe');
+		chat.destroy();
+	});
+
 	test('reconnect re-checks pending interrupts', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
@@ -4009,6 +4104,80 @@ describe('createChat', () => {
 		cap.chunk({ type: 'done', text: 'done at last' });
 		await flush();
 		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+					],
+				}),
+			},
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		t.mock.timers.tick(700_000);
+		assert.strictEqual(errors.length, 1, 'no later Timed-out error from the failsafe');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect keeps the partial text of a turn a cap stopped while disconnected, and reports why', async (t) => {
+		t.mock.timers.enable({ apis: ['setTimeout'] });
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A runaway cap stopped the turn: its partial text is saved with the reason, and the
+				// `error` chunk that ended it was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'Partial answer', metadata: { error: 'Agent stopped: too many model calls.' } },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Partial' });
+		await flush();
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the stopped turn found on re-sync clears loading');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial answer', 'the partial text is kept');
+		assert.deepStrictEqual(errors, ['Agent stopped: too many model calls.'], 'the stop reason is reported once');
+		t.mock.timers.tick(700_000);
+		assert.strictEqual(errors.length, 1, 'no later Timed-out error from the failsafe');
 		chat.destroy();
 		await flush();
 	});

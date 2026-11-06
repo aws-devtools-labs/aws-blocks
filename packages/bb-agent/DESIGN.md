@@ -195,6 +195,13 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
   `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **A turn that failed during the gap** is recovered from the row the backend saves for it: an
+  assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the
+  turn threw, and holds the partial text when a runaway cap (`maxLlmCalls` / `maxToolIterations`)
+  stopped it. The client adopts any partial text under the same `extendsStream` guard, then ends the
+  turn through `failTurn()`, the same path a live `error` chunk takes: `loading` clears, the failsafe
+  is disarmed, and `onError` fires once with the recorded message (typed by `errorName`, e.g.
+  `AgentErrors.ModelUnavailable`, as for a live chunk), instead of waiting out the failsafe below.
 - **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
   by every received chunk, so it fires only after *complete silence* — never during a long tool-call
   gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect
