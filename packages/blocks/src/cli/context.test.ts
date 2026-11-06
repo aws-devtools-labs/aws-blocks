@@ -235,6 +235,26 @@ describe('the children of a watcher', () => {
 			[],
 		);
 	});
+
+	it('asks ps for pid and ppid as two -o options, which procps-ng 3.3.10 reads as two columns', { skip: process.platform === 'win32' }, () => {
+		// A ps that, like procps-ng 3.3.10 (CentOS 7, AL2), takes each -o argument as one column:
+		// `-o pid=,ppid=` is a single pid column there, and no line names a parent.
+		const bin = mkdtempSync(join(tmpdir(), 'blocks-old-ps-'));
+		const savedPath = process.env.PATH;
+		try {
+			writeFileSync(
+				join(bin, 'ps'),
+				'#!/bin/sh\ncols=0\nfor a in "$@"; do case "$a" in -A|-o) ;; *) cols=$((cols+1)) ;; esac; done\n' +
+					'if [ "$cols" = 2 ]; then printf "  41  40\\n  42   1\\n"; else printf "  41\\n  42\\n"; fi\n',
+				{ mode: 0o755 },
+			);
+			process.env.PATH = `${bin}:${savedPath}`;
+			assert.deepStrictEqual(childPids(40, 'linux'), [41]);
+		} finally {
+			process.env.PATH = savedPath;
+			rmSync(bin, { recursive: true, force: true });
+		}
+	});
 });
 
 // On Windows, child.kill() ends the child without running its handlers.
@@ -624,7 +644,7 @@ setInterval(() => {}, 1000);
 
 	/** The pids whose parent is `pid`. */
 	function childrenOf(pid: number): number[] {
-		return execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf-8' })
+		return execFileSync('ps', ['-A', '-o', 'pid=', '-o', 'ppid='], { encoding: 'utf-8' })
 			.split('\n')
 			.map((line) => line.trim().split(/\s+/).map(Number))
 			.filter(([, parent]) => parent === pid)
