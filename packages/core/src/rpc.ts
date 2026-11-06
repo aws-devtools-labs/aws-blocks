@@ -65,12 +65,11 @@ const VERSION = '2.0' as const;
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
  *
- * Note: this value is the Lambda + API Gateway limit. It lives here (in the
- * compute-agnostic parser) because Lambda is the only compute path today. When
- * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
- * become compute-aware — sourced from / overridden by the compute layer (via
- * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
- * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ * Note: this value is the API Gateway limit, and every compute keeps it — one
+ * constant in the compute-agnostic parser, so a call accepted on one compute is
+ * accepted on every other. A Lambda compute is reached through the gateway,
+ * which rejects a larger body first; a container compute may be reached without
+ * it, so there this guard is the limit.
  *
  * The container HTTP server (`serveHttp`) keeps the same limit for JSON-RPC on
  * every path to it, and checks it while reading the body — before buffering past
