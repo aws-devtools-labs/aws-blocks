@@ -28,6 +28,40 @@ export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>(
 (globalThis as any).__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__ = requestClientUserAgent;
 
 /**
+ * Per-invocation store for the id of the request being handled: the Lambda
+ * `awsRequestId` while `createLambdaHandler` runs an invocation. Building Blocks
+ * read it through {@link currentRequestId} to tag their output (bb-logger adds it
+ * to every log line), so everything one request logs can be correlated.
+ *
+ * Registered on `globalThis.__BLOCKS_REQUEST_ID_STORE__` and read from there, so
+ * a Building Block that resolves its own copy of `@aws-blocks/core` still sees
+ * the store the handler populated.
+ */
+const REQUEST_ID_STORE_KEY = '__BLOCKS_REQUEST_ID_STORE__';
+const globalStores = globalThis as unknown as Record<string, unknown>;
+const isStore = (value: unknown): value is AsyncLocalStorage<string | undefined> =>
+  typeof (value as { getStore?: unknown } | undefined)?.getStore === 'function' &&
+  typeof (value as { run?: unknown } | undefined)?.run === 'function';
+const existingRequestIdStore = globalStores[REQUEST_ID_STORE_KEY];
+// Reuse the store another copy of core registered; anything else at the key is replaced.
+export const requestIdStore: AsyncLocalStorage<string | undefined> = isStore(existingRequestIdStore)
+  ? existingRequestIdStore
+  : new AsyncLocalStorage<string | undefined>();
+globalStores[REQUEST_ID_STORE_KEY] = requestIdStore;
+
+/**
+ * The id of the request being handled, or `undefined` outside one. On AWS
+ * Lambda this is the invocation's `awsRequestId` (the id in the function's
+ * `START`/`END`/`REPORT` log lines). The local dev server sets none.
+ *
+ * Exported for Building Block authors from `@aws-blocks/core/bb-utils`.
+ */
+export function currentRequestId(): string | undefined {
+  const id = requestIdStore.getStore();
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/**
  * Hostnames that count as loopback for the trusted-forwarded-host gate.
  *
  * `URL.hostname` keeps the brackets on IPv6 literals (`http://[::1]:3000` →
