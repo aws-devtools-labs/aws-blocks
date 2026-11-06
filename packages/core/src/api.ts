@@ -22,6 +22,14 @@ export type BlocksContext = {
      * came through stamped on it (`x-blocks-forwarded-host` /
      * `x-blocks-forwarded-stage`), so the URL is the one the Lambda handler
      * reports for the same request.
+     *
+     * Behind a Blocks CloudFront front door (the `apiFrontDoor: 'cloudfront'`
+     * distribution, or `Hosting`'s CloudFront door), Lambda and container handlers
+     * alike see the URL the client called: the distribution's domain or the custom
+     * domain it was called at, and no API Gateway stage (`https://app.example.com/aws-blocks/api/orders`).
+     * The door stamps the viewer's host, and a handler takes it only when it is one
+     * of the backend's own front-door hosts. A request sent to the `execute-api`
+     * URL directly still sees that URL, stage included.
      */
     url: URL;
     /**

@@ -18,12 +18,13 @@ import {
   FORWARDED_HOST_HEADER,
   FORWARDED_STAGE_HEADER,
   isRpcPath,
+  PUBLIC_HOST_HEADER,
 } from './constants.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
 import type { Dispatcher, DispatchRequest, DispatchResponse } from './dispatch.js';
 import { lockRouteRegistry } from './raw-route.js';
-import { isLoopbackForwardedHost } from './request-context.js';
+import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from './rpc.js';
 
 /** @internal */
@@ -589,10 +590,16 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  *    `http://<that host><path>`, no stage. Applies with or without
  *    `trustForwardedHeaders`, as in the Lambda handler; only a loopback host is
  *    taken, so it never yields anything but a loopback `http://` URL.
- * 2. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}
+ * 2. A front-door host in `x-blocks-public-host` that is one of the backend's own
+ *    CloudFront front-door hosts (see {@link trustedPublicHost}):
+ *    `https://<host><path>`, no stage — exactly what the Lambda handler reports
+ *    behind the same door, whether the door reached this container straight or
+ *    through the gateway. Several values (a client copy under another letter
+ *    case) are never one of those hosts, so they fall through.
+ * 3. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}
  *    (+ optional {@link FORWARDED_STAGE_HEADER}): `https://<host>/<stage><path>`.
- * 3. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
- * 4. The request's own `Host`, over plain HTTP (local `docker run`).
+ * 4. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
+ * 5. The request's own `Host`, over plain HTTP (local `docker run`).
  *
  * The request target only ever supplies the path and query: a `//host/...` or
  * absolute-form target can never move the URL to another host.
@@ -603,10 +610,13 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
   const { pathname, search } = splitTarget(req.url ?? '/');
   const forwardedHost = header(req, 'x-forwarded-host');
   const stampedHost = trustForwardedHeaders ? header(req, FORWARDED_HOST_HEADER) : undefined;
+  const publicHost = trustedPublicHost(header(req, PUBLIC_HOST_HEADER));
   let url: URL;
   let stage = '';
   if (isLoopbackForwardedHost(forwardedHost)) {
     url = new URL(`http://${forwardedHost}`);
+  } else if (publicHost) {
+    url = new URL(`https://${publicHost}`);
   } else if (stampedHost) {
     url = new URL(`https://${stampedHost}`);
     const stamped = header(req, FORWARDED_STAGE_HEADER);
@@ -616,7 +626,10 @@ export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string
   } else {
     url = new URL(`http://${requestHost(req)}`);
   }
-  // Assign the path rather than resolving the target against the origin.
+  // Keep only the origin — a forwarded host's own query, fragment or userinfo
+  // (`localhost:3000?a=b#c`) must not ride along, as in the Lambda handler — and
+  // assign the path rather than resolving the target against it.
+  url = new URL(url.origin);
   url.pathname = `${stage}${pathname}`;
   // Re-serialize the query the way the Lambda handler does (it rebuilds it from
   // API Gateway's parsed parameters), so `href` matches across transports.
