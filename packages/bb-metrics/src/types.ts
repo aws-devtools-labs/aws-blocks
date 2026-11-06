@@ -71,7 +71,7 @@ export interface EmitOptions {
 	 * Merged with `defaultDimensions` — per-emit dimensions take precedence.
 	 */
 	dimensions?: Record<string, string>;
-	/** Timestamp for the data point. Defaults to now. */
+	/** Valid timestamp for the data point. Defaults to now. */
 	timestamp?: Date;
 	/**
 	 * Storage resolution. 'standard' = 60-second aggregation (default).
@@ -86,13 +86,13 @@ export interface EmitOptions {
 export interface MetricDatum {
 	/** Metric name (non-empty, max 1024 characters). */
 	name: string;
-	/** Numeric value. */
+	/** Finite numeric value between -2^360 and 2^360. */
 	value: number;
 	/** Unit of the metric value. Defaults to 'None'. */
 	unit?: MetricUnit;
 	/** Dimensions to attach (max 30 total including defaults). */
 	dimensions?: Record<string, string>;
-	/** Timestamp for the data point. Defaults to now. */
+	/** Valid timestamp for the data point. Defaults to now. */
 	timestamp?: Date;
 	/** Storage resolution. Defaults to 'standard'. */
 	resolution?: MetricResolution;
