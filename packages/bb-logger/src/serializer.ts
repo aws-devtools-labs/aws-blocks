@@ -37,16 +37,26 @@ export function processValue(value: unknown): unknown {
 
 /**
  * Safely stringify an object, handling circular references and BigInt values.
+ * Only true cycles (an object that contains itself somewhere below it) are
+ * replaced with `'[Circular]'`; an object referenced more than once without a
+ * cycle (sibling keys, repeated array elements) is serialized in full each time.
  * Falls back to a degraded entry on unexpected serialization failure.
  */
 export function safeStringify(obj: Record<string, unknown>): string {
-	const seen = new WeakSet();
+	// Objects on the path from the root to the value being serialized.
+	// JSON.stringify calls the replacer with `this` bound to the holder of
+	// the current key, so popping until the top is `this` drops finished
+	// siblings' subtrees and leaves exactly the current value's ancestors.
+	const ancestors: object[] = [];
 	try {
-		return JSON.stringify(obj, (_key, value) => {
+		return JSON.stringify(obj, function (this: unknown, _key: string, value: unknown) {
 			if (typeof value === 'bigint') return value.toString();
 			if (typeof value === 'object' && value !== null) {
-				if (seen.has(value)) return '[Circular]';
-				seen.add(value);
+				while (ancestors.length > 0 && ancestors[ancestors.length - 1] !== this) {
+					ancestors.pop();
+				}
+				if (ancestors.includes(value)) return '[Circular]';
+				ancestors.push(value);
 			}
 			if (typeof value === 'function' || typeof value === 'symbol') {
 				return '[unserializable]';
