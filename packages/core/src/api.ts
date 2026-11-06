@@ -233,8 +233,9 @@ export interface ApiNamespaceOptions {
    *   build's own `404.html`, or the default not-found page of a static
    *   multi-page site (no server, no SPA fallback, no 404 page of its own) — a
    *   403 / 404 from this namespace reaches the browser as that HTML page, and
-   *   the typed client's `response.json()` throws instead of rejecting with the
-   *   `ApiError`. `Hosting` fails synth for that combination with a
+   *   the typed client rejects with a bare `ApiError` carrying only the HTTP
+   *   status (message `HTTP 404`) instead of the namespace's error name and
+   *   message. `Hosting` fails synth for that combination with a
    *   `HostingError` named `HttpErrorStatusErrorPagesError`: CloudFront
    *   cannot scope error responses away from `/aws-blocks/*`. Remove the 4xx
    *   error pages, or leave this option off for the namespace. A 401, a 409 or
