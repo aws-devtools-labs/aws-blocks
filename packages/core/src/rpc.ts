@@ -65,12 +65,16 @@ const VERSION = '2.0' as const;
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
  *
- * Note: this value is the Lambda + API Gateway limit. It lives here (in the
- * compute-agnostic parser) because Lambda is the only compute path today. When
- * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
- * become compute-aware — sourced from / overridden by the compute layer (via
- * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
- * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ * Note: this value is the API Gateway limit, and every compute keeps it — one
+ * constant in the compute-agnostic parser, so a call accepted on one compute is
+ * accepted on every other. A Lambda compute is reached through the gateway,
+ * which rejects a larger body first; a container compute may be reached without
+ * it, so there this guard is the limit.
+ *
+ * The container HTTP server (`serveHttp`) keeps the same limit for JSON-RPC on
+ * every path to it, and checks it while reading the body — before buffering past
+ * it — rather than only in `parseRpcRequest`: a front door that streams the body
+ * (a load balancer, a CloudFront VPC origin) enforces no limit of its own.
  */
 export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -124,6 +128,22 @@ export function decodeRpcResponse(body: unknown): unknown {
 // ── Server helpers (parse request, encode response) ─────────────────────────
 
 /**
+ * The JSON-RPC error envelope for a request body over `limitBytes` (default
+ * {@link MAX_RPC_BODY_BYTES}). Shared by {@link parseRpcRequest} and transports
+ * that reject an oversized RPC body before reading all of it.
+ *
+ * @internal
+ */
+export function payloadTooLargeResponse(limitBytes: number = MAX_RPC_BODY_BYTES): string {
+  return errorResponse(
+    413,
+    `Request body exceeds the ${limitBytes} byte (${+(limitBytes / (1024 * 1024)).toFixed(2)} MiB) limit`,
+    null,
+    { name: 'PayloadTooLarge' },
+  );
+}
+
+/**
  * Parse a raw body string into a validated `RpcParsedRequest`.
  *
  * Returns `{ ok: false, response }` with a ready-to-send JSON string when
@@ -146,15 +166,7 @@ export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {})
     // (reserved codes collapse to 500), mirroring the 504 handler-timeout path,
     // so a caller's `e.status === 413` works. `name` (which crosses the wire,
     // not the code) lets callers match with `isBlocksError(e, 'PayloadTooLarge')`.
-    return {
-      ok: false,
-      response: errorResponse(
-        413,
-        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte (${MAX_RPC_BODY_BYTES / (1024 * 1024)} MiB) limit`,
-        null,
-        { name: 'PayloadTooLarge' },
-      ),
-    };
+    return { ok: false, response: payloadTooLargeResponse() };
   }
 
   let parsed: any;

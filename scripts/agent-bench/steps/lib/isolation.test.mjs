@@ -474,6 +474,39 @@ describe('the agent-user boundary on a real host', () => {
 		}
 	});
 
+	// The hosted tool cache links every JDK into /usr/lib/jvm. A tree reports one writable path per
+	// round, so the links are found one per round; a fixed three-round budget left the last adopted
+	// JDK unscanned and failed the lockdown on images with three or more linked JDKs.
+	it('exec lockdown locks every JDK when the tool cache links several into one writable jvm dir', needsBoundary, () => {
+		const base = mkdtempSync(join(tmpdir(), 'bench-exec-'));
+		try {
+			chmodSync(base, 0o755);
+			const versions = ['8', '11', '17', '21'];
+			for (const v of versions) {
+				const jdk = join(base, 'jvm', `jdk-${v}`);
+				mkdirSync(join(jdk, 'bin'), { recursive: true });
+				mkdirSync(join(jdk, 'lib'));
+				writeFileSync(join(jdk, 'bin', 'java'), '#!/bin/sh\n', { mode: 0o755 });
+				const link = join(base, 'toolcache', 'Java', v);
+				mkdirSync(link, { recursive: true });
+				spawnSync('/bin/ln', ['-s', jdk, join(link, 'x64')]);
+			}
+			sudo('/usr/bin/chown', '-R', 'root:root', join(base, 'jvm'));
+			sudo('/usr/bin/chmod', '-R', '0777', join(base, 'jvm'));
+			const targets = { flat: [], deep: [join(base, 'toolcache')], exclude: [] };
+			assert.deepEqual(lockDownExecPaths(targets, { fix: true }), []);
+			for (const v of versions) {
+				const jdk = join(base, 'jvm', `jdk-${v}`);
+				const r = asAgent(`echo x > ${jdk}/lib/planted; echo x > ${jdk}/bin/java; echo done`);
+				assert.match(r.stdout, /done/);
+				assert.equal(existsSync(join(jdk, 'lib', 'planted')), false, `no planting in jdk-${v}/lib`);
+				assert.equal(readFileSync(join(jdk, 'bin', 'java'), 'utf-8'), '#!/bin/sh\n', `no replacing jdk-${v}/bin/java`);
+			}
+		} finally {
+			spawnSync('/usr/bin/sudo', ['-n', '/usr/bin/rm', '-rf', base]);
+		}
+	});
+
 	it('exec lockdown fails closed when the agent already owns a file in a trusted dir', needsBoundary, () => {
 		const base = mkdtempSync(join(tmpdir(), 'bench-exec-'));
 		try {
