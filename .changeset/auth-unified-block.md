@@ -3,7 +3,7 @@
 '@aws-blocks/blocks': minor
 ---
 
-Add `Auth` (`@aws-blocks/bb-auth`), the single authentication Building Block, exported from `@aws-blocks/blocks`. One options object configures email + password (backed by a Cognito user pool, with MFA, passkeys, groups and `requireRole`), social and SAML sign-in federated through Cognito, and OIDC / OAuth 2.0 providers federated directly by your backend — no user pool needed. Methods your configuration doesn't support don't compile. Everything runs locally with no AWS account, and `stubIdp()` gives you an offline identity provider for development.
+Add `Auth` (`@aws-blocks/bb-auth`), the single authentication Building Block, exported from `@aws-blocks/blocks`. One options object configures email + password (backed by a Cognito user pool, with MFA, passkeys, groups and `requireRole`), social and SAML sign-in federated through Cognito, and OIDC / OAuth 2.0 providers verified by your backend (`store: 'builtin'`) — no user pool needed. Methods your configuration doesn't support don't compile. Everything runs locally with no AWS account, and `stubIdp()` gives you an offline identity provider for development.
 
 ```ts
 import { Auth, Scope } from '@aws-blocks/blocks';

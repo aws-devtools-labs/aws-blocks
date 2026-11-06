@@ -341,7 +341,7 @@ Lambda reads the parameter at runtime.
 
 ### 4. If you use OAuth or OIDC sign-in, register the production callback URL
 
-Add your deployed app's sign-in callback URL to the allowed redirect URIs in your OIDC provider's dashboard (Google/Auth0/Clerk). Sign-in fails with a redirect-mismatch error until this is done. For an \`Auth\` OIDC provider federated directly (the default), the callback is \`https://<your domain>/aws-blocks/auth/callback\`; see the @aws-blocks/bb-auth README for providers federated through Cognito.
+Add your deployed app's sign-in callback URL to the allowed redirect URIs in your OIDC provider's dashboard (Google/Auth0/Clerk). Sign-in fails with a redirect-mismatch error until this is done. For a \`type: 'oidc'\` provider of an \`Auth\` block with \`store: 'builtin'\` (verified by your backend), the callback is \`https://<your domain>/aws-blocks/auth/callback\`; see the @aws-blocks/bb-auth README for providers federated through Cognito.
 
 ### 5. Deploy
 

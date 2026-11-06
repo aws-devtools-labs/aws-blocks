@@ -98,7 +98,7 @@ jobs:
           - { task: cognito-profile, template: auth } # Auth (email + password, emailed sign-up code; profile + session)
           - { task: observability-api, template: backend } # Logger + Metrics + Tracer + AppSetting
           - { task: sql-kb-catalog, template: nextjs } # Database + KnowledgeBase
-          - { task: oidc-dsql-notes, template: react } # Auth (direct OIDC, stub IdP) + DistributedDatabase
+          - { task: oidc-dsql-notes, template: react } # Auth (store: 'builtin', stub IdP) + DistributedDatabase
           - { task: email-digest, template: demo } # CronJob + EmailClient (+ KVStore)
           - { task: kb-chat-agent, template: demo } # Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use
     env:

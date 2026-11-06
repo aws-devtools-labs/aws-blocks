@@ -3,11 +3,10 @@
 "@aws-blocks/blocks": patch
 ---
 
-fix(bb-auth): the local user pool now keeps an email / phone unique, as Cognito does
+fix(bb-auth): the local user pool keeps an email / phone unique, as Cognito does
 
-Locally, two users could verify the same email, and signing in with it picked
-whichever user came last. The local pool now follows Cognito's rules, so code that
-works under `npm run dev` behaves the same when deployed:
+The local pool follows Cognito's rules, so code that works under `npm run dev`
+behaves the same when deployed:
 
 - With sign-in aliases (`users.signInWith` with `'username'`, the default), an email
   or phone can be verified on one account only. A second user can still sign up

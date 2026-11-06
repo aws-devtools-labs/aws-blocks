@@ -219,7 +219,7 @@ dimensions* below — there is no per-task dimension to author.
 | `cognito-profile` | `auth` | Auth (email + password sign-up confirmed with an emailed code; profile + session) |
 | `observability-api` | `backend` | Logger + Metrics + Tracer + AppSetting |
 | `sql-kb-catalog` | `nextjs` | Database + KnowledgeBase |
-| `oidc-dsql-notes` | `react` | Auth (direct OIDC, stub IdP) + DistributedDatabase |
+| `oidc-dsql-notes` | `react` | Auth (`store: 'builtin'`, stub IdP) + DistributedDatabase |
 | `email-digest` | `demo` | CronJob + EmailClient + KVStore |
 | `kb-chat-agent` | `demo` | Agent (Bedrock Sonnet 4.6) + KnowledgeBase + tool use |
 

@@ -42,31 +42,31 @@ States are intentionally minimal — only states where the client must act are r
 | `signedOut` | No session |
 | `signedIn` | Authenticated, `user` is present |
 | `confirmingSignUp` | Account created, awaiting verification code |
-| `confirmingMfa` | Credentials valid, awaiting MFA code |
+| `confirmingSignIn` | Credentials valid, awaiting a sign-in challenge answer (an MFA code, a new password, a passkey) |
+| `confirmingMfa` | Credentials valid, awaiting MFA code (part of the contract; `Auth` uses `confirmingSignIn`) |
 | `confirmingPasswordReset` | Reset requested, awaiting code + new password |
 
 ### Auth Flows
 
-These flows were drawn against the three predecessor blocks and still illustrate the state machine. With `Auth`, sign-up always goes through `confirmingSignUp` (the *AuthCognito* flow — *AuthBasic*'s instant sign-up no longer exists), the email + password flows are the *AuthCognito* ones, and a directly federated OIDC provider follows the *AuthOIDC* flow, with its callback at `/aws-blocks/auth/callback`.
+How `Auth` (`@aws-blocks/bb-auth`) drives the state machine. Fields marked hidden are pre-filled by the server and sent back unchanged.
 
-#### AuthBasic: Sign Up
+#### Sign Up with Email Confirmation
 
 ```mermaid
 sequenceDiagram
 	participant C as Client
 	participant S as Server
 
-	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [{name: signUp, fields: [username, password]}, ...]
+	C->>S: setAuthState({ action: 'signUp', username, password, email })
+	Note over S: Create the user (Cognito, or the local pool), send a verification code
+	S-->>C: state: confirmingSignUp<br/>actions: [{name: confirmSignUp, fields: [username (hidden), code]},<br/>{name: resendSignUpCode, fields: [username (hidden)]}]
 
-	Note over C: User fills in username + password
-
-	C->>S: setAuthState({ action: 'signUp', username, password })
-	Note over S: Create user, hash password, set cookie
+	C->>S: setAuthState({ action: 'confirmSignUp', username, code })
+	Note over S: Confirm the user, sign in automatically (emailPassword.autoSignIn), set cookie
 	S-->>C: state: signedIn, user: {userId, username}
 ```
 
-#### AuthBasic: Sign In
+#### Sign In
 
 ```mermaid
 sequenceDiagram
@@ -78,7 +78,7 @@ sequenceDiagram
 	S-->>C: state: signedIn, user: {userId, username}
 ```
 
-#### AuthBasic: Sign In (wrong password)
+#### Sign In (wrong password)
 
 ```mermaid
 sequenceDiagram
@@ -86,11 +86,27 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: setAuthState({ action: 'signIn', username, password })
-	Note over S: Credentials don't match
-	S-->>C: state: signedOut<br/>error: "Invalid username or password"
+	Note over S: Credentials don't match (an unknown user gets the same answer)
+	S-->>C: state: signedOut, retriable: true<br/>error: "Incorrect username or password"
 ```
 
-#### AuthBasic: Password Reset
+#### Sign In with MFA
+
+```mermaid
+sequenceDiagram
+	participant C as Client
+	participant S as Server
+
+	C->>S: setAuthState({ action: 'signIn', username, password })
+	Note over S: Cognito (or the local pool) returns an MFA challenge
+	S-->>C: state: confirmingSignIn<br/>actions: [{name: confirmSignIn, fields: [session (hidden), challenge (hidden), code]}]
+
+	C->>S: setAuthState({ action: 'confirmSignIn', session, challenge, code })
+	Note over S: Verify the code, set cookie
+	S-->>C: state: signedIn, user: {userId, username}
+```
+
+#### Password Reset
 
 ```mermaid
 sequenceDiagram
@@ -98,71 +114,43 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: setAuthState({ action: 'resetPassword', username })
-	Note over S: Generate code, store with TTL, send via email
-	S-->>C: state: confirmingPasswordReset<br/>actions: [{name: confirmResetPassword,<br/>fields: [username, code, newPassword]}]
+	Note over S: Send a reset code
+	S-->>C: state: confirmingPasswordReset<br/>actions: [{name: confirmResetPassword,<br/>fields: [username (hidden), code, newPassword]}]
 
 	C->>S: setAuthState({ action: 'confirmResetPassword',<br/>username, code, newPassword })
-	Note over S: Validate code, update password
+	Note over S: Validate code, update password, end the user's sessions
 	S-->>C: state: signedOut
 ```
 
-#### AuthOIDC: Sign In with Google
+#### Federated Sign-In
+
+A federated provider's action is an external form: its `url` is the block's sign-in route. The same flow serves a `store: 'builtin'` block's providers (verified by the backend) and a default-store block's providers (through Cognito managed login).
 
 ```mermaid
 sequenceDiagram
 	participant C as Client
-	participant G as Google
+	participant P as Identity provider
 	participant S as Server
 
 	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [{name: signIn:google,<br/>url: "https://accounts.google.com/...",<br/>method: GET, fields: []}]
+	S-->>C: state: signedOut<br/>actions: [{name: signIn:okta,<br/>url: "/aws-blocks/auth/signin/okta",<br/>method: GET, fields: []}]
 
-	Note over C: User clicks "Sign in with Google"
-	C->>G: GET https://accounts.google.com/...
+	Note over C: User clicks "Sign in with Okta"
+	C->>S: GET /aws-blocks/auth/signin/okta
+	S-->>C: 302 → the provider (PKCE, signed state)
+	C->>P: authorize
 
-	Note over G: User authenticates
+	Note over P: User authenticates
 
-	G->>S: GET /auth/callback?code=abc&state=xyz
-	Note over S: Exchange code, set cookie
-	S-->>C: 302 → /
+	P->>S: GET /aws-blocks/auth/callback?code=abc&state=xyz
+	Note over S: Check state, exchange code, verify tokens, set cookie
+	S-->>C: 302 → redirects.postSignInPath (default /)
 
 	C->>S: getAuthState()
 	S-->>C: state: signedIn, user: {userId, username}
 ```
 
-#### AuthCognito: Sign Up with Email Confirmation
-
-```mermaid
-sequenceDiagram
-	participant C as Client
-	participant S as Server
-
-	C->>S: setAuthState({ action: 'signUp', username, password, email })
-	Note over S: Cognito creates user, sends verification email
-	S-->>C: state: confirmingSignUp<br/>actions: [{name: confirmSignUp, fields: [code]},<br/>{name: resendCode, fields: []}]
-
-	C->>S: setAuthState({ action: 'confirmSignUp', code })
-	Note over S: Cognito confirms, auto-signs in, sets cookie
-	S-->>C: state: signedIn, user: {userId, username}
-```
-
-#### AuthCognito: Sign In with MFA
-
-```mermaid
-sequenceDiagram
-	participant C as Client
-	participant S as Server
-
-	C->>S: setAuthState({ action: 'signIn', username, password })
-	Note over S: Cognito returns MFA challenge
-	S-->>C: state: confirmingMfa<br/>actions: [{name: confirmMfa, fields: [code]}]
-
-	C->>S: setAuthState({ action: 'confirmMfa', code })
-	Note over S: Cognito verifies MFA, sets cookie
-	S-->>C: state: signedIn, user: {userId, username}
-```
-
-#### AuthCognito: Mixed Form + Federated
+#### Mixed Form + Federated
 
 ```mermaid
 sequenceDiagram
@@ -170,9 +158,9 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [<br/>{name: signIn, fields: [username, password]},<br/>{name: signUp, fields: [username, password, email]},<br/>{name: signIn:google, url: "https://...", method: GET, fields: []}<br/>]
+	S-->>C: state: signedOut<br/>actions: [<br/>{name: signIn, fields: [username, password]},<br/>{name: signUp, fields: [username, password, email]},<br/>{name: resetPassword, fields: [username]},<br/>{name: signIn:google, url: "/aws-blocks/auth/signin/google", method: GET, fields: []}<br/>]
 
-	Note over C: Authenticator renders:<br/>- Username/password form<br/>- "Create Account" link<br/>- "Sign in with Google" button
+	Note over C: Authenticator renders:<br/>- Username/password form<br/>- "Create Account" link<br/>- "Forgot Password" link<br/>- "Sign in with Google" button
 ```
 
 ## `BlocksAuth` contract notes

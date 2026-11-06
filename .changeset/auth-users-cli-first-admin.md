@@ -15,4 +15,4 @@ npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --
 - On a deployed stage it prints the AWS account and Region your credentials point at with the pool, so a wrong `--profile` shows before `--yes`.
 - Every write to a deployed pool needs `--yes`. Without it, the command checks everything, prints what it would do, and changes nothing.
 
-The README's first-admin recipe now uses the command. The `onSignIn` recipe is kept as an alternative, with its security notes.
+The README's first-admin recipe uses the command, with the `onSignIn` recipe as an alternative, with its security notes.
