@@ -149,7 +149,8 @@ export class AuthOIDC<
 
 	/**
 	 * Return the authenticated user, or throw `AuthOIDCErrors.NotAuthenticated`
-	 * / `TokenExpired` if the session is missing or expired.
+	 * (HTTP 401) if the session is missing or expired. An expired session whose
+	 * refresh fails is reported as `NotAuthenticated` too, not `TokenExpired`.
 	 */
 	async requireAuth(ctx: BlocksContext): Promise<OIDCUser> {
 		const user = await this._resolveUser(ctx);
