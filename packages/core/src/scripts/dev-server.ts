@@ -15,8 +15,16 @@ import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
-import { createDispatcher, type Dispatcher } from '../dispatch.js';
-import { clientGoneSignal, toDispatchRequest, writeInternalServerError, writeResponse } from '../http-server.js';
+import { createDispatcher, rpcResponseHeaders, type Dispatcher } from '../dispatch.js';
+import {
+  clientGoneSignal,
+  discardRemainingBody,
+  readBody,
+  toDispatchRequest,
+  writeInternalServerError,
+  writeResponse,
+} from '../http-server.js';
+import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from '../rpc.js';
 import { redactToJson } from '../redact.js';
 import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
@@ -1533,13 +1541,20 @@ function handleApiRequest(
     // set so far, so it is handed them again to keep the answer readable by the
     // browser.
     const corsHeaders = buildDevCorsHeaders(req.headers.origin || '');
-    const chunks: Buffer[] = [];
-    req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    // An aborted upload never emits 'end'; close the response instead of
-    // leaving it open.
-    req.on('error', () => res.destroy());
-    req.on('end', () => {
-      const body = Buffer.concat(chunks);
+    // JSON-RPC bodies are capped at MAX_RPC_BODY_BYTES, as in the deployed
+    // handlers; RawRoute bodies are read whole.
+    readBody(req, isRpc ? MAX_RPC_BODY_BYTES : Infinity).then(async (body) => {
+      if (body === undefined) {
+        // Drain the rest before answering, so the response isn't lost to a
+        // reset, then answer with the JSON-RPC 413 envelope the dispatcher
+        // gives (see parseRpcRequest).
+        await discardRemainingBody(req);
+        if (!req.complete) res.setHeader('Connection', 'close');
+        const envelope = payloadTooLargeResponse();
+        if (devRequestLogging().traffic) console.log('[rpc-out parse-error]', envelope);
+        writeResponse(res, { status: 200, headers: rpcResponseHeaders(corsHeaders), cookies: [], body: envelope }, undefined, corsHeaders);
+        return;
+      }
       // Verbose request/response logging — useful when debugging cross-stack
       // wire format mismatches (e.g. native client codegen vs server). Set
       // BLOCKS_DEV_QUIET=1 to suppress (BLOCKS_LOG_LEVEL=quiet|normal keeps only
@@ -1566,6 +1581,10 @@ function handleApiRequest(
           else writeInternalServerError(res, corsHeaders);
         },
       );
+    }, () => {
+      // An aborted upload never emits 'end'; close the response instead of
+      // leaving it open.
+      res.destroy();
     });
     return;
   }

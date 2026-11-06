@@ -86,6 +86,9 @@ export const api = (ctx) => ({
   async headers() {
     return { auth: ctx.request.headers.get('authorization'), host: ctx.request.headers.get('host') };
   },
+  async repeatedHeader() {
+    return { setCookie: ctx.request.headers.get('set-cookie') };
+  },
   async secret(input) {
     return { password: input.password };
   },
@@ -125,6 +128,9 @@ route('echoBody', 'POST', '/echo-body', async (ctx) => {
 route('url', 'GET', '/url', async (ctx) => {
   ctx.response.send({ url: ctx.request.url.href });
 });
+route('bodySize', 'POST', '/body-size', async (ctx) => {
+  ctx.response.send({ bytes: Buffer.byteLength(await ctx.request.text()) });
+});
 route('files', 'GET', '/files/*', async (ctx) => {
   ctx.response.send({ rest: ctx.request.params['*'] });
 });
@@ -148,13 +154,29 @@ function rpcBody(method: string, params: unknown = [], id: number | string = 1):
 interface Case {
   method: string;
   path: string;
-  headers?: Record<string, string>;
+  /** An array value is sent as that many header lines. */
+  headers?: Record<string, string | string[]>;
   body?: string;
+  /** Written as separate writes, with a pause between them, instead of `body`. */
+  chunks?: Buffer[];
 }
 
-function rpc(body: string, headers: Record<string, string> = {}, path = '/aws-blocks/api'): Case {
+function rpc(body: string, headers: Record<string, string | string[]> = {}, path = '/aws-blocks/api'): Case {
   return { method: 'POST', path, headers: { 'Content-Type': 'application/json', ...headers }, body };
 }
+
+/**
+ * `body` in two writes, split after the first byte of the first `€` in it, so
+ * neither write holds that character whole.
+ */
+function splitInsideEuro(body: string): Buffer[] {
+  const bytes = Buffer.from(body, 'utf-8');
+  const at = bytes.indexOf(Buffer.from('€', 'utf-8')) + 1;
+  return [bytes.subarray(0, at), bytes.subarray(at)];
+}
+
+/** Just over the JSON-RPC body limit (MAX_RPC_BODY_BYTES, 10 MiB). */
+const OVERSIZED_BYTES = 11 * 1024 * 1024;
 
 const CASES: Record<string, Case> = {
   'rpc success with a localhost origin, cookie and client user agent': rpc(rpcBody('api.echo', ['hi']), {
@@ -187,6 +209,23 @@ const CASES: Record<string, Case> = {
   'rpc body reaches the handler': rpc(rpcBody('api.body')),
   'rpc request headers reach the handler': rpc(rpcBody('api.headers'), { Authorization: 'Bearer t' }),
   'rpc redacts secrets from its log lines': rpc(rpcBody('api.secret', [{ password: 'hunter2-secret' }])),
+  'rpc url behind a loopback X-Forwarded-Host': rpc(rpcBody('api.echo', ['hi']), { 'X-Forwarded-Host': 'localhost:5173' }),
+  'rpc url ignores a non-loopback X-Forwarded-Host': rpc(rpcBody('api.echo', ['hi']), { 'X-Forwarded-Host': 'evil.example' }),
+  'rpc url ignores front-door-stamped headers': rpc(rpcBody('api.echo', ['hi']), {
+    'x-blocks-forwarded-host': 'stamp.example',
+    'x-blocks-forwarded-stage': 'prod',
+  }),
+  'rpc repeated request header reaches the handler joined': rpc(rpcBody('api.repeatedHeader'), {
+    'Set-Cookie': ['s1=1', 's2=2'],
+  }),
+  'rpc body split inside a multi-byte character': {
+    ...rpc(''),
+    body: undefined,
+    chunks: splitInsideEuro(rpcBody('api.echo', ['€'.repeat(5)])),
+  },
+  'rpc body over the size limit': rpc(rpcBody('api.echo', ['x'.repeat(OVERSIZED_BYTES)]), {
+    Origin: 'http://localhost:5173',
+  }),
   'GET on the RPC path': { method: 'GET', path: '/aws-blocks/api' },
   'GET on a per-namespace RPC path': { method: 'GET', path: '/aws-blocks/api/api' },
   'preflight on the RPC path': {
@@ -211,6 +250,27 @@ const CASES: Record<string, Case> = {
     body: JSON.stringify({ x: 1 }),
   },
   'raw route url with an unnormalized query': { method: 'GET', path: '/url?b=x%20y&a=1&flag' },
+  'raw route url behind a loopback X-Forwarded-Host': {
+    method: 'GET',
+    path: '/url',
+    headers: { 'X-Forwarded-Host': 'localhost:5173' },
+  },
+  'raw route url ignores a non-loopback X-Forwarded-Host': {
+    method: 'GET',
+    path: '/url',
+    headers: { 'X-Forwarded-Host': 'evil.example' },
+  },
+  'raw route url ignores front-door-stamped headers': {
+    method: 'GET',
+    path: '/url',
+    headers: { 'x-blocks-forwarded-host': 'stamp.example', 'x-blocks-forwarded-stage': 'prod' },
+  },
+  'raw route POST body over the RPC size limit': {
+    method: 'POST',
+    path: '/body-size',
+    headers: { 'Content-Type': 'text/plain' },
+    body: 'x'.repeat(OVERSIZED_BYTES),
+  },
   'raw route wildcard': { method: 'GET', path: '/files/a/b/c.txt' },
   'raw route three-segment POST': { method: 'POST', path: '/t/area/9', body: '' },
   'raw route empty 204': { method: 'GET', path: '/empty' },
@@ -232,6 +292,13 @@ const CASES: Record<string, Case> = {
 //   handler with all of them, not only the first.
 // - A RawRoute that sets a Content-Type and then throws keeps that Content-Type.
 // - ctx.request.url re-serializes the query string ("b=x+y&a=1&flag=").
+// - ctx.request.url takes its host from a loopback X-Forwarded-Host (a frontend
+//   dev server proxying to this one), as in the sandbox Lambda and container
+//   handlers; a non-loopback X-Forwarded-Host and the front-door-stamped
+//   x-blocks-forwarded-* headers are ignored.
+// - A request body is decoded as UTF-8 once it is complete, so a multi-byte
+//   character split across two chunks reaches the handler intact rather than
+//   as replacement characters.
 // - A RawRoute that sets an out-of-range status gets a plain 500, still with the
 //   dev CORS headers: its body is {"error":"Internal Server Error"} rather than
 //   {"error":"Internal error"}.
@@ -650,6 +717,108 @@ const EXPECTED: Record<string, unknown> = {
     "cookies": [],
     "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"password\":\"hunter2-secret\"},\"id\":1}"
   },
+  "rpc url behind a loopback X-Forwarded-Host": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:5173/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "rpc url ignores a non-loopback X-Forwarded-Host": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "rpc url ignores front-door-stamped headers": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "rpc repeated request header reaches the handler joined": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"setCookie\":\"s1=1, s2=2\"},\"id\":1}"
+  },
+  "rpc body split inside a multi-byte character": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"€€€€€\",\"url\":\"http://localhost:3000/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+  },
+  "rpc body over the size limit": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:5173",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":413,\"message\":\"Request body exceeds the 10485760 byte (10 MiB) limit\",\"data\":{\"name\":\"PayloadTooLarge\"}},\"id\":null}"
+  },
   "GET on the RPC path": {
     "status": 404,
     "headers": {
@@ -829,6 +998,74 @@ const EXPECTED: Record<string, unknown> = {
     "cookies": [],
     "body": "{\"url\":\"http://localhost:3000/url?b=x+y&a=1&flag=\"}"
   },
+  "raw route url behind a loopback X-Forwarded-Host": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"url\":\"http://localhost:5173/url\"}"
+  },
+  "raw route url ignores a non-loopback X-Forwarded-Host": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"url\":\"http://localhost:3000/url\"}"
+  },
+  "raw route url ignores front-door-stamped headers": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"url\":\"http://localhost:3000/url\"}"
+  },
+  "raw route POST body over the RPC size limit": {
+    "status": 200,
+    "headers": {
+      "access-control-allow-credentials": "true",
+      "access-control-allow-headers": "Content-Type, Authorization, x-blocks-user-agent",
+      "access-control-allow-methods": "GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-max-age": "7200",
+      "cache-control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "content-type": "application/json",
+      "expires": "0",
+      "pragma": "no-cache",
+      "vary": "Origin"
+    },
+    "cookies": [],
+    "body": "{\"bytes\":11534336}"
+  },
   "raw route wildcard": {
     "status": 200,
     "headers": {
@@ -968,7 +1205,17 @@ function send(port: number, c: Case): Promise<Captured> {
       },
     );
     req.on('error', reject);
-    req.end(c.body);
+    if (!c.chunks) {
+      req.end(c.body);
+      return;
+    }
+    // Pause between writes so the server reads each one separately.
+    const [first, ...rest] = c.chunks;
+    req.write(first);
+    setTimeout(() => {
+      for (const chunk of rest) req.write(chunk);
+      req.end();
+    }, 50);
   });
 }
 
@@ -1061,6 +1308,8 @@ startDevServer(${JSON.stringify({ backendPath: join(tempDir, 'backend.ts'), port
     assert.match(stdout, /\[rpc-in\] \{"jsonrpc":"2\.0","method":"api\.echo"/);
     assert.match(stdout, /\[rpc-call\] api\.echo \["hi"\]/);
     assert.match(stdout, /\[rpc-ok\] api\.echo \{"msg":"hi"/);
+    // The logged result is what the client receives: the ctx.response.send value.
+    assert.match(stdout, /\[rpc-ok\] api\.override \{"replaced":true\}\n/);
     assert.match(stdout, /\[rpc-in\] \{not json/);
     assert.match(stdout, /\[rpc-out parse-error\] \{"jsonrpc":"2\.0","error":\{"code":-32700/);
     assert.match(stdout, /\[rpc-err\] api\.fail Error - boom: internal detail\n {2}cause: driver detail\nError: boom: internal detail\n {4}at /);

@@ -461,8 +461,10 @@ function payloadTooLarge(pathname: string, origin: string, limitBytes: number): 
  * {@link OVERSIZED_BODY_LINGER_MS}. Answering first would let Node close a socket
  * that still holds unread data, which resets the connection and can discard the
  * 413 before the client reads it.
+ *
+ * @internal
  */
-function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
+export function discardRemainingBody(req: http.IncomingMessage): Promise<void> {
   if (req.complete) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(done, OVERSIZED_BODY_LINGER_MS);
