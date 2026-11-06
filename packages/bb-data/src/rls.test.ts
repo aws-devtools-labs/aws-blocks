@@ -3,7 +3,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert';
+import { ApiError } from '@aws-blocks/core';
 import { RLSEnabledDatabase } from './database.js';
+import { DatabaseErrors } from './errors.js';
 import { sql } from '@aws-blocks/data-common';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
 
@@ -142,6 +144,35 @@ test('withRLS: rolls back on query failure', async () => {
   await assert.rejects(() => db.withRLS({ userId: 'user-1' }).query(sql`SELECT bad`));
   const rollback = calls.find(c => c.method === 'rollbackTransaction');
   assert.ok(rollback, 'Expected rollbackTransaction to be called');
+});
+
+test('withRLS: transaction re-throws a callback ApiError unchanged after rolling back', async () => {
+  const { engine, calls } = createMockEngine();
+  const db = new RLSEnabledDatabase(engine);
+  const thrown = new ApiError('Item already reserved', 409, { name: 'AlreadyReservedException' });
+
+  await assert.rejects(
+    () => db.withRLS({ userId: 'user-1' }).transaction(async () => { throw thrown; }),
+    (err: unknown) => {
+      assert.strictEqual(err, thrown);
+      return true;
+    },
+  );
+  assert.ok(calls.some(c => c.method === 'rollbackTransaction'), 'Expected rollbackTransaction to be called');
+  assert.ok(!calls.some(c => c.method === 'commitTransaction'), 'must not commit');
+});
+
+test('withRLS: transaction still names a plain callback error TransactionFailed', async () => {
+  const { engine } = createMockEngine();
+  const db = new RLSEnabledDatabase(engine);
+
+  await assert.rejects(
+    () => db.withRLS({ userId: 'user-1' }).transaction(async () => { throw new Error('app error'); }),
+    (err: Error) => {
+      assert.strictEqual(err.name, DatabaseErrors.TransactionFailed);
+      return true;
+    },
+  );
 });
 
 // A caller-supplied `sub` or `role` in `claims` (for example passed through from

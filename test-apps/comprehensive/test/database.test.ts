@@ -98,6 +98,46 @@ export function databaseTests(getApi: () => typeof apiType) {
       await api.dbDelete(b);
     });
 
+    // An ApiError thrown inside db.transaction() must reach the client with its
+    // own status and name after the rollback, not as a 500 TransactionFailed.
+    test('Database - ApiError thrown in a transaction keeps its status over the wire', async () => {
+      const api = getApi();
+      const a = `t-${Date.now().toString(36)}-ca`;
+      const b = `t-${Date.now().toString(36)}-cb`;
+      await api.dbInsert(a, 'sender', 50);
+      await api.dbInsert(b, 'receiver', 0);
+      try {
+        await assert.rejects(
+          () => api.dbTransferOrConflict(a, b, 999),
+          (e: unknown) => {
+            assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+            assert.strictEqual(e.status, 409, 'the app error must keep its 409, not become a 500');
+            assert.strictEqual(e.name, 'InsufficientBalanceException');
+            assert.strictEqual(e.message, 'Insufficient balance');
+            return true;
+          },
+        );
+        // The debit ran before the throw; the rollback must undo it.
+        assert.strictEqual((await api.dbGet(a))!.value, 50);
+        assert.strictEqual((await api.dbGet(b))!.value, 0);
+      } finally {
+        await api.dbDelete(a);
+        await api.dbDelete(b);
+      }
+    });
+
+    test('Database - ApiError thrown in a withRLS() transaction keeps its status over the wire', async () => {
+      await assert.rejects(
+        () => getApi().dbRlsTransactionConflict(),
+        (e: unknown) => {
+          assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+          assert.strictEqual(e.status, 409);
+          assert.strictEqual(e.name, 'AlreadyReservedException');
+          return true;
+        },
+      );
+    });
+
     test('Database - duplicate insert returns UniqueConstraintViolation', async () => {
       const api = getApi();
       const id = `t-${Date.now().toString(36)}`;
