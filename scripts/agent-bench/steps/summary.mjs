@@ -7,7 +7,7 @@ import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:f
 import { join } from 'node:path';
 import { cellCost, compositeBand, isCountedFailKlass, isScoredCell, scorePerDollar, testRate, testStats, verdictOf } from './lib/scoring.mjs';
 import { buildAggregate, cellComposite, diffAgainstBaseline, renderDetailed, renderPreword } from './lib/overview.mjs';
-import { evaluateGates } from './lib/gates.mjs';
+import { evaluateGates, shouldPersistBaseline } from './lib/gates.mjs';
 import { redactDeep, redactSecrets } from './lib/secrets.mjs';
 
 const RESULTS_DIR = process.env.RESULTS_DIR ?? 'results';
@@ -329,6 +329,26 @@ if (process.env.AGGREGATE_PATH && cells.length > 0) {
 		writeFileSync(process.env.AGGREGATE_PATH, `${JSON.stringify(aggregate, null, 2)}\n`);
 	} catch (err) {
 		process.stderr.write(`[summary] failed to write aggregate to ${process.env.AGGREGATE_PATH}: ${err?.message ?? err}\n`);
+	}
+}
+
+// The same aggregate again, at BASELINE_CANDIDATE_PATH, ONLY when this run may become the
+// `latest-main` baseline (see shouldPersistBaseline). The workflow promotes this file, never the plain
+// aggregate, so a cancelled, untested or floor-failing main run keeps the previous pointer.
+if (process.env.BASELINE_CANDIDATE_PATH && cells.length > 0) {
+	const verdict = shouldPersistBaseline({
+		cancelled: ['BENCH_JOB_RESULT', 'BENCH_BUILD_RESULT'].some((k) => (process.env[k] ?? '').trim() === 'cancelled'),
+		testedCells: dataCells.filter((c) => testStats(c).denom > 0).length,
+		gates: gateResult.gates,
+	});
+	if (verdict.persist) {
+		try {
+			writeFileSync(process.env.BASELINE_CANDIDATE_PATH, `${JSON.stringify(aggregate, null, 2)}\n`);
+		} catch (err) {
+			process.stderr.write(`[summary] failed to write baseline candidate to ${process.env.BASELINE_CANDIDATE_PATH}: ${err?.message ?? err}\n`);
+		}
+	} else {
+		process.stderr.write(`[summary] not a baseline candidate: ${verdict.reason}\n`);
 	}
 }
 
