@@ -38,6 +38,11 @@ export interface ExternalTableRef {
 }
 
 // @public
+export interface GetOptions {
+    consistentRead?: boolean;
+}
+
+// @public
 export class KVStore<T = string> extends Scope {
     constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<T>);
     // (undocumented)
@@ -46,7 +51,7 @@ export class KVStore<T = string> extends Scope {
     static fromExisting(tableName: string): ExternalTableRef;
     // (undocumented)
     static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
-    get(key: string): Promise<T | null>;
+    get(key: string, options?: GetOptions): Promise<T | null>;
     // @internal
     protected log: ChildLogger;
     put(key: string, value: T, options?: PutOptions<T>): Promise<void>;

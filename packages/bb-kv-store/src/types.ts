@@ -54,6 +54,31 @@ export interface PutOptions<T = unknown> extends ConditionalWriteOptions<T> {
 }
 
 /**
+ * Options accepted by `get`.
+ */
+export interface GetOptions {
+	/**
+	 * Read with strong consistency, so the result reflects every write that
+	 * succeeded before the read. By default `get()` is eventually consistent on
+	 * AWS (a DynamoDB `GetItem` without `ConsistentRead`), and a read issued right
+	 * after a `put()` may briefly miss it or return the previous value. Set this
+	 * when the next step depends on a value that was just written, e.g. reading a
+	 * record back to authenticate against it. A strongly consistent read costs
+	 * twice the read capacity of an eventually consistent one. The local mock is
+	 * always strongly consistent.
+	 *
+	 * @defaultValue false
+	 *
+	 * @example
+	 * ```typescript
+	 * await users.put(username, record, { ifNotExists: true });
+	 * const fresh = await users.get(username, { consistentRead: true });
+	 * ```
+	 */
+	consistentRead?: boolean;
+}
+
+/**
  * Options accepted by `scan`.
  */
 export interface ScanOptions {
