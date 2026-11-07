@@ -49,7 +49,19 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, remapItemTooLarge, applyReadValidation } from './errors.js';
+import {
+	DistributedTableErrors,
+	DistributedTableMessages,
+	blocksError,
+	conditionalCheckFailed,
+	normalizeSortKeyCondition,
+	remapItemTooLarge,
+	applyReadValidation,
+	assertKeyShape,
+	assertKeyShapes,
+	assertIndexesShape,
+	assertQueryOrder,
+} from './errors.js';
 import type { KeyCondition, QueryOptions } from './types.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -93,6 +105,7 @@ export class DistributedTable<
 
 	constructor(scope: ScopeParent, id: string, public options: DistributedTableOptions<T, K, Indexes>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		assertIndexesShape(options.indexes);
 		// Default level is 'warn' (not 'error') so the readValidation='coerce'
 		// raw-fallback warning actually surfaces — it's the only log the block
 		// emits, so this doesn't add noise. Callers can pass their own logger.
@@ -111,6 +124,7 @@ export class DistributedTable<
 	}
 
 	async get(key: TableKey<T, K>, options?: GetOptions): Promise<T | null> {
+		assertKeyShape('get', this.keyConfig, key);
 		const result = await this.docClient.send(new GetCommand({
 			TableName: getSdkIdentifiers(this).tableName,
 			Key: this.buildKey(key),
@@ -121,6 +135,7 @@ export class DistributedTable<
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
 		await this.validateItem(item);
+		assertKeyShape('put', this.keyConfig, item);
 		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: item };
 
 		if (options?.ifNotExists) {
@@ -153,6 +168,7 @@ export class DistributedTable<
 	}
 
 	async delete(key: TableKey<T, K>, options?: DeleteOptions<T>): Promise<void> {
+		assertKeyShape('delete', this.keyConfig, key);
 		const command: any = { TableName: getSdkIdentifiers(this).tableName, Key: this.buildKey(key) };
 
 		if (options?.ifExists) {
@@ -183,7 +199,8 @@ export class DistributedTable<
 	 * Query items by index, yielding matches as an async stream with automatic
 	 * pagination over DynamoDB's `LastEvaluatedKey`.
 	 *
-	 * @throws {DistributedTableErrors.InvalidQuery} If `options.index` does not exist,
+	 * @throws {DistributedTableErrors.InvalidQuery} If `options.index` does not exist
+	 *   (the message lists the declared indexes), `order` is not `'asc'` or `'desc'`,
 	 *   the `where` clause is missing, the partition key is not given as
 	 *   `{ equals: value }`, or more than one sort-key condition is supplied
 	 *   (DynamoDB allows only one per query — use `between` for ranges).
@@ -192,7 +209,10 @@ export class DistributedTable<
 		options: QueryOptions<T, K, Indexes>,
 	): AsyncIterable<T> {
 		const indexConfig = options.index ? this.indexes[options.index as keyof Indexes] : this.keyConfig;
-		if (!indexConfig) throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexNotFound(options.index));
+		if (!indexConfig) {
+			throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexNotFound(options.index, Object.keys(this.indexes)));
+		}
+		assertQueryOrder(options.order);
 
 		const pkField = indexConfig.partitionKey;
 		const skField = indexConfig.sortKey;
@@ -249,6 +269,7 @@ export class DistributedTable<
 	}
 
 	async getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]> {
+		assertKeyShapes('getBatch', this.keyConfig, keys);
 		const results = new Map<string, T>();
 		const tableName = getSdkIdentifiers(this).tableName;
 
@@ -273,7 +294,10 @@ export class DistributedTable<
 	}
 
 	async putBatch(items: T[]): Promise<void> {
-		for (const item of items) await this.validateItem(item);
+		for (const [i, item] of items.entries()) {
+			await this.validateItem(item);
+			assertKeyShape('putBatch', this.keyConfig, item, i);
+		}
 		const tableName = getSdkIdentifiers(this).tableName;
 
 		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
@@ -295,6 +319,7 @@ export class DistributedTable<
 	}
 
 	async deleteBatch(keys: TableKey<T, K>[]): Promise<void> {
+		assertKeyShapes('deleteBatch', this.keyConfig, keys);
 		const tableName = getSdkIdentifiers(this).tableName;
 
 		for (const chunk of chunked(keys, BATCH_WRITE_MAX_REQUESTS)) {

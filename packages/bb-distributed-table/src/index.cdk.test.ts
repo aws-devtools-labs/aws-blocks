@@ -15,9 +15,9 @@ import assert from 'node:assert';
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 import { Template, Match, Annotations } from 'aws-cdk-lib/assertions';
-import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, type BlocksDefaults } from '@aws-blocks/core/cdk';
+import { Scope, DEFAULT_NODE_RUNTIME, BlocksPresets, isBlocksError, type BlocksDefaults } from '@aws-blocks/core/cdk';
 import { z } from 'zod';
-import { DistributedTable } from './index.cdk.js';
+import { DistributedTable, DistributedTableErrors } from './index.cdk.js';
 
 const userSchema = z.object({
 	userId: z.string(),
@@ -495,6 +495,26 @@ test('CDK: the GSI provider waiter state machine role trusts Step Functions with
 			],
 		},
 	});
+});
+
+test('CDK: indexes given as an array fail at synth instead of provisioning GSIs named "0", "1", …', () => {
+	for (const table of [undefined, DistributedTable.fromExisting('preexisting-users-table')]) {
+		const { stack, parent } = setup();
+		assert.throws(
+			() => new DistributedTable(parent, 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+				indexes: [{ partitionKey: 'email' }],
+				table,
+			}),
+			(err: unknown) => {
+				assert.ok(isBlocksError(err, DistributedTableErrors.InvalidQuery));
+				assert.match((err as Error).message, /indexes must be an object keyed by index name, e\.g\. indexes: \{ byStatus: .*got an array$/);
+				return true;
+			},
+		);
+		Template.fromStack(stack).resourceCountIs('AWS::CloudFormation::CustomResource', 0);
+	}
 });
 
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
