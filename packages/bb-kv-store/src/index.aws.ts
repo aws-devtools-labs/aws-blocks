@@ -13,8 +13,8 @@ import { TTL_ATTRIBUTE, isExpired, resolveTtlEpochSeconds } from './ttl.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
-export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions } from './types.js';
-import type { ScanOptions } from './types.js';
+export type { ConditionalWriteOptions, ConditionalDeleteOptions, PutOptions, KVStoreOptions, ExternalTableRef, ExternalKmsKeyRef, ScanOptions, GetOptions } from './types.js';
+import type { ScanOptions, GetOptions } from './types.js';
 
 /**
  * Simple key-value storage backed by DynamoDB.
@@ -59,13 +59,18 @@ export class KVStore<T = string> extends Scope {
 	 * Items whose TTL has passed are treated as absent even if DynamoDB has not
 	 * reaped them yet (deletion is asynchronous, typically within 48 hours).
 	 *
+	 * Eventually consistent by default; pass `{ consistentRead: true }` when the
+	 * read must reflect a write that just succeeded (costs twice the read capacity).
+	 *
 	 * @param key - The key to retrieve.
+	 * @param options - Optional read options (`consistentRead`).
 	 * @returns The value, or `null` if the key does not exist or has expired.
 	 */
-	async get(key: string): Promise<T | null> {
+	async get(key: string, options?: GetOptions): Promise<T | null> {
 		const result = await this.docClient.send(new GetCommand({
 			TableName: getSdkIdentifiers(this).tableName,
 			Key: { pk: key },
+			...(options?.consistentRead ? { ConsistentRead: true } : {}),
 		}));
 		if (!result.Item) return null;
 		if (isExpired(result.Item[TTL_ATTRIBUTE])) return null;
