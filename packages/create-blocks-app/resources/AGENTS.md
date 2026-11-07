@@ -146,7 +146,7 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 ### Secrets
 
 - `Secret` is read-only at runtime unless created with `{ allowRuntimeWrite: true }`, which adds `put()`. `generate: true` seeds a random value; otherwise `get()` returns `null` until a value is set.
-- Deployed, `get()` caches the value (an unset value too) for `cacheTtlSeconds`, default `300`; the local mock ignores the option. When the next call must see a value set or rotated outside the app, create the secret with `new Secret(scope, '<id>', { cacheTtlSeconds: 0 })` (a constructor option; `get()` takes only `{ version }`) and call `get()` inside the method.
+- Deployed, `get()` caches the value (an unset value too) for `cacheTtlSeconds`, default `300`; the local mock ignores the option. When the next call must see a value set or rotated outside the app, set `cacheTtlSeconds: 0` in the `Secret` constructor options and call `get()` inside the method; `get()` itself takes only `{ version }`. The second constructor argument is an id scoped to the app: a secret that others set or rotate under a known name takes that name as the `name` option, e.g. `new Secret(scope, 'stripe-key', { name: 'my-app/stripe-key', cacheTtlSeconds: 0 })`.
 - `put()` rotates the value and clears the cache. `get({ version: 'previous' })` returns the value before the latest change, or `null` before the first. Keep old key material in the `Secret`, not in a `KVStore` or table.
 
 ### Querying a DistributedTable
