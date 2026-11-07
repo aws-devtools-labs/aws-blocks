@@ -71,6 +71,16 @@ const settings = new DistributedTable(scope, 'settings', {
 await settings.get({ settingId: 'theme' });
 ```
 
+**The key is the item's identity.** `get()`, `put()` and `delete()`, and the `ifNotExists` / `ifExists` conditions, match the **whole** primary key: the partition key plus the sort key, if the table has one. With a composite key, the sort key field is unique only within its partition. In `orders` above, `orderId` is unique per `userId`, not across users: `put({ userId: 'bob', orderId: '001', … }, { ifNotExists: true })` succeeds even when `alice` already has an order `'001'`. When a field must be unique across the whole table (an id, an email, a handle), make it the whole key and serve grouped lists from an index:
+
+```typescript
+const members = new DistributedTable(scope, 'members', {
+  schema: memberSchema,
+  key: { partitionKey: 'email' },                                       // unique across the table
+  indexes: { byTeam: { partitionKey: 'teamId', sortKey: 'joinedAt' } }, // list a team's members
+});
+```
+
 **Read consistency:** on AWS, `get()` is eventually consistent by default (a DynamoDB `GetItem` without `ConsistentRead`), so a read right after a `put()` may briefly return `null` or an older version. When the next step depends on an item that was just written, such as an existence or ownership check, pass `{ consistentRead: true }`. A strongly consistent read costs twice the read capacity. The local mock is always strongly consistent. On AWS every other read (`getBatch()`, `query()`, `scan()`) stays eventually consistent.
 
 ```typescript
@@ -123,7 +133,7 @@ for await (const order of orders.query({
 Both `put` and `delete` accept optional conditions:
 
 ```typescript
-// Only write if key doesn't exist (idempotent create)
+// Only write if no item has this exact primary key (partition key + sort key)
 await table.put(item, { ifNotExists: true });
 
 // Only write if existing item's field matches (optimistic locking)
@@ -136,7 +146,7 @@ await table.delete(key, { ifExists: true });
 await table.delete(key, { ifFieldEquals: { status: 'archived' } });
 ```
 
-All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed`. They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), in both the mock and AWS runtime. Only `ifFieldEquals` optimistic-lock conflicts are flagged retriable; `ifNotExists` / `ifExists` existence assertions are **not** retriable (a blind retry fails identically).
+All condition failures throw with `error.name === DistributedTableErrors.ConditionalCheckFailed` (the value is `'ConditionalCheckFailedException'`; match the constant, not a string or the message). They serialize to JSON-RPC **409 (Conflict)** over the wire (not 500), in both the mock and AWS runtime. Only `ifFieldEquals` optimistic-lock conflicts are flagged retriable; `ifNotExists` / `ifExists` existence assertions are **not** retriable (a blind retry fails identically). Left uncaught, the error reaches the client under that name; when your API promises its own error name, catch it and throw that `ApiError` instead (see [Error Handling](#error-handling)).
 
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
 
@@ -192,14 +202,14 @@ Errors thrown by DistributedTable carry an `error.name` you can match with `isBl
 | `DistributedTableErrors.BatchIncomplete` | `BatchIncompleteException` | A batch op left entries unprocessed after the retry budget (sustained throttling). AWS runtime only. |
 
 ```typescript
-import { isBlocksError } from '@aws-blocks/core';
-import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+import { ApiError, DistributedTableErrors, isBlocksError } from '@aws-blocks/blocks';
 
 try {
-  await table.put(item, { ifNotExists: true });
+  await orders.put(order, { ifNotExists: true });
 } catch (e: unknown) {
   if (isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)) {
-    // item already exists
+    // an order with this userId + orderId already exists: report it under the API's own error name
+    throw new ApiError('Order already exists', 409, { name: 'OrderExists' });
   }
   if (isBlocksError(e, DistributedTableErrors.ItemTooLarge)) {
     // item > 400 KB — split it or store a reference instead
