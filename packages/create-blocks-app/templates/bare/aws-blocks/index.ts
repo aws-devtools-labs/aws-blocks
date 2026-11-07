@@ -62,6 +62,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // const items = new DistributedTable(scope, 'items', {
 //   schema: itemSchema,
 //   key: { partitionKey: 'userSub', sortKey: 'itemId' }, // userSub + itemId together identify one item
+//   // Another grouping or sort order is an index (an object keyed by name), not a different key:
+//   indexes: { byCreatedAt: { partitionKey: 'userSub', sortKey: 'createdAt' } },
 // });
 //
 // // Realtime:
@@ -79,8 +81,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 //     await rt.publish('items', user.userSub, { action: 'created', itemId });
 //     return item;
 //   },
+//   async getItem(itemId: string) {
+//     const user = await auth.requireAuth(context);
+//     return await items.get({ userSub: user.userSub, itemId }); // the whole key as an object; null when absent
+//   },
 //   async listItems() {
 //     const user = await auth.requireAuth(context);
-//     return await Array.fromAsync(items.query({ where: { userSub: { equals: user.userSub } } }));
+//     return await Array.fromAsync(items.query({
+//       index: 'byCreatedAt', where: { userSub: { equals: user.userSub } }, order: 'desc', // newest first ('asc' | 'desc')
+//     }));
 //   },
 // }));
