@@ -11,6 +11,10 @@ const scope = new Scope('my-app');
 // (`const auth = new Auth(scope, 'auth')`) and call it first — see
 // node_modules/@aws-blocks/bb-auth/README.md:
 //   const user = await auth.requireAuth(context);
+//
+// Clients call `<export name>.<method>()`, so this one is `api.greet()`. For
+// `orders.create()`, add `export const orders = new ApiNamespace(scope, 'orders', …)`
+// rather than a `create` method here. The second argument is only a label.
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async greet(name: string) {
     return { message: `Hello, ${name}!`, timestamp: Date.now() };
