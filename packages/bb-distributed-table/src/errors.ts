@@ -34,14 +34,14 @@ const mergeCoercedOverRaw = createDefu((obj, key, value) => {
  *
  * @example
  * ```typescript
- * import { isBlocksError } from '@aws-blocks/core';
- * import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+ * import { ApiError, DistributedTableErrors, isBlocksError } from '@aws-blocks/blocks';
  *
  * try {
- *   await table.put(item, { ifNotExists: true });
+ *   await orders.put(order, { ifNotExists: true });
  * } catch (e: unknown) {
  *   if (isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)) {
- *     // item already exists
+ *     // an order with this userId + orderId already exists: report it under the API's own error name
+ *     throw new ApiError('Order already exists', 409, { name: 'OrderExists' });
  *   }
  *   throw e;
  * }
