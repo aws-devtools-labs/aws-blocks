@@ -161,3 +161,23 @@ describe('scaffolded AGENTS.md polling snippet', () => {
 		});
 	});
 });
+
+// A custom auth form that calls `authApi.setAuthState()` directly signs the
+// user in on the server but never fires `onAuthChange`, so the page stays on
+// the sign-in form. The guide must point custom forms at `submitAuthAction`.
+describe('scaffolded AGENTS.md auth guidance', () => {
+	const lines = readFileSync(guidePath, 'utf-8').split('\n');
+	const frontendPart = (name: string) => lines.find((line) => line.trimStart().startsWith(`- \`${name}(authApi`));
+
+	it('says which calls fire onAuthChange', () => {
+		const line = frontendPart('onAuthChange');
+		assert.ok(line, 'AGENTS.md documents onAuthChange');
+		assert.match(line, /submitAuthAction/);
+	});
+
+	it('documents submitAuthAction and warns that a direct setAuthState call notifies nothing', () => {
+		const line = frontendPart('submitAuthAction');
+		assert.ok(line, 'AGENTS.md documents submitAuthAction in the frontend auth parts');
+		assert.match(line, /`authApi\.setAuthState\(\)`[^.]*notifies nothing/);
+	});
+});
