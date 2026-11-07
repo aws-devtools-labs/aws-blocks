@@ -4,6 +4,7 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
+- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class with its errors constant (e.g. `DistributedTable`, `DistributedTableErrors`) from `@aws-blocks/blocks`; browser code and tests import client helpers from `@aws-blocks/blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
 - **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`, plus its `API.md` / `DESIGN.md` where present. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
@@ -34,7 +35,7 @@ When a request names a call such as `orders.create(...)`, export `const orders =
 
 - Throw `new ApiError(message, status, { name, retriable })` (in `aws-blocks/`, import `ApiError` and `isBlocksError` from `@aws-blocks/blocks`), e.g. `throw new ApiError('Order not found', 404, { name: 'OrderNotFound' })`. The client receives the status, message, `name` and `retriable`. `retriable` defaults to `false`; set `retriable: true` only when retrying the same call can succeed.
 - A plain `Error` (even with `name` or `status` set on it) or a thrown non-`Error` reaches the client as an unnamed `500` with the message `Internal error`. Clients match the name, not the message: `isBlocksError(e, 'OrderNotFound')`.
-- In client code (`src/` and `test/`), import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`: there `@aws-blocks/blocks` itself exports nothing, because the frontend build and `npm run test:e2e` load its browser entry. A failed call throws an `ApiError`; check `e instanceof ApiError` when you also need `e.status`.
+- In client code (`src/` and `test/`), import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`: there `@aws-blocks/blocks` itself exports nothing, because the frontend build and `npm run test:e2e` load its browser entry. A failed call throws an `ApiError`. `isBlocksError(e, name)` narrows `e` to `Error & { name }`, which has no `status`, so check `e instanceof ApiError` before reading `e.status`: `npm run build` type-checks `test/` too.
 - `get()` on `DistributedTable`, `KVStore` and `FileBucket` returns `null` for a missing item; it does not throw. When the API promises a not-found error, turn that `null` into an `ApiError`.
 - `FileBucket.getUrl()` signs a URL without checking that the file exists, and `delete()` of a missing file succeeds. Call `get()` first when a download or delete must reject a missing file.
 
@@ -171,7 +172,7 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes.
+2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes. When a test run started its own server, it has stopped it by the time it exits, so there is nothing to stop or check afterwards.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
    - Run `npm run test:e2e` as often as needed; it reuses the server running on the `package.json` `"blocks.dev.port"` (default 3000, or 3001 for a backend-only app). To use another port, set it there rather than passing `npm run dev -- --port`, so the tests and `npm run dev:stop` find the same server.
