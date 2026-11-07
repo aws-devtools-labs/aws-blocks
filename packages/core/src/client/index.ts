@@ -3,6 +3,7 @@
 
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
+import type * as NodeFs from 'node:fs';
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
 import { contextFetch } from './fetch-store.js';
 import { fetchWithStaleConnectionRetry } from './stale-connection.js';
@@ -107,7 +108,12 @@ async function resolveApiUrl(): Promise<string> {
   // 3. Node.js: read config file from filesystem
   if (typeof process !== 'undefined' && process.versions?.node) {
     try {
-      const fs = await import(/* webpackIgnore: true */ 'node:fs');
+      // Platform-specific: `node:fs` doesn't exist in browsers, so it can't be
+      // a static import. The non-literal specifier keeps bundlers from
+      // resolving it for browser builds (Vite otherwise warns "externalized
+      // for browser compatibility"); this branch only runs under Node.js.
+      const nodeFsSpecifier = 'node:fs';
+      const fs: typeof NodeFs = await import(/* webpackIgnore: true */ /* @vite-ignore */ nodeFsSpecifier);
       const config = JSON.parse(fs.readFileSync('.blocks-sandbox/config.json', 'utf-8'));
       const validated = validateAndCache(config.apiUrl, 'config.json file');
       console.log('[Blocks] Using API (config.json file):', validated);
