@@ -1156,6 +1156,14 @@ export async function startDevServer(options: DevServerOptions) {
 
   // ── Start listening ────────────────────────────────────────────────────
   const onListening = async (): Promise<void> => {
+    // Record again now that we hold the port. Two concurrent starts (`npm run dev`
+    // and an e2e run that starts its own) can both pass the singleton guard before
+    // either binds; the one that binds second does so only after the other exited
+    // and removed its record, and would otherwise serve with no pidfile, so
+    // `dev:stop` would report nothing to stop.
+    try {
+      writeFileSync(pidfilePath, JSON.stringify({ pid: process.pid, ppid: process.ppid, port }));
+    } catch { /* best-effort, as at startup */ }
     console.log(`AWS Blocks local server running on http://localhost:${port}`);
     buildAndSendEvent({ command: 'dev', state: 'SUCCESS', duration: Date.now() - devStartTime });
 
