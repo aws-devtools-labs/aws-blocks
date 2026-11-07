@@ -202,17 +202,27 @@ export function blocksError(name: string, message: string): Error {
 }
 
 /**
- * Type guard for branching on a failed `AuthState` (the recommended
- * `setAuthState` client path) by its structured `errorName`.
+ * Type guard for branching on a failed `AuthState` (the value the auth
+ * state machine's `setAuthState` returns) by its structured `errorName`.
  *
  * The returned state is a plain object, not a thrown `Error`, so
  * `isBlocksError` does not apply — use this on the value returned by
  * `setAuthState`/`getAuthState`. Match on the BB error constant, never on
  * the human-facing `error` string.
  *
+ * In browser code, submit the action with `submitAuthAction` (from
+ * `@aws-blocks/blocks/ui`), which returns the same `AuthState` and also
+ * notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct
+ * `authApi.setAuthState()` call notifies nothing on the page, so a UI that
+ * renders from `onAuthChange` never sees the sign-in.
+ *
  * @example
  * ```typescript
- * const next = await authApi.setAuthState({ action: 'signIn', username, password });
+ * import { hasAuthError } from '@aws-blocks/blocks/client';
+ * import { submitAuthAction } from '@aws-blocks/blocks/ui';
+ * import { AuthErrors } from '@aws-blocks/bb-auth';
+ *
+ * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
  * if (hasAuthError(next, AuthErrors.NotAuthorized)) {
  *   // unknown user (or wrong password) → fall back to sign-up
  * }

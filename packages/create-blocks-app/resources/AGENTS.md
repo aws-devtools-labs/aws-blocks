@@ -27,7 +27,7 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 
 ### Methods are namespaced
 
-A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`. In browser code, send it as `submitAuthAction(authApi, { action: 'signUp', … })` instead, so the rest of the page sees the result; see **Auth on the frontend**.)
 
 When a request names a call such as `orders.create(...)`, export `const orders = new ApiNamespace(scope, 'orders', …)` and define `create` there. Adding `create` to `api`, or exporting `ordersApi`, does not provide `orders.create`. Update frontend callers and tests to the requested name; keep existing methods unless the request replaces them.
 
@@ -94,7 +94,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 - On the frontend, use these parts from `@aws-blocks/blocks/ui`. Attach them the way your frontend attaches DOM elements.
   - `Authenticator(authApi)`: an element with the sign-in, sign-up and confirm forms.
   - `AuthenticatedContent(authApi, render, fallback?)`: shows `render(user)` for a signed-in user and `fallback` for a signed-out user.
-  - `onAuthChange(authApi, callback)`: calls `callback(user)` when the session changes. Use it when you render the content yourself.
+  - `onAuthChange(authApi, callback)`: calls `callback(user)` with the current user, then again each time the user signs in or out through `Authenticator` or `submitAuthAction`. Use it when you render the content yourself.
+  - `submitAuthAction(authApi, { action: 'signIn', username, password })`: submits an auth action from your own form, returns the resulting `AuthState`, and notifies `onAuthChange` and `AuthenticatedContent`. A direct `authApi.setAuthState()` call sets the session cookie but notifies nothing on the page, so the UI stays signed out until a reload. Call `setAuthState` directly only in Node tests and scripts.
 - `codeDelivery` never skips the code step: every sign-up confirms its email with a code, with or without the hook. Locally the code is written to `.bb-data/<scope id>-<auth id>/last-code.json`, and passed to the hook too; the deployed app ignores the hook and Amazon Cognito emails the code.
 
 When the app is complete, a signed-out user reaches the sign-in form from the first page, the protected content appears after sign-in, and it is hidden again after sign-out.
