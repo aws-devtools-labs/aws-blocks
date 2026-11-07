@@ -13,7 +13,7 @@ The decisions behind this are [D-003](../DECISIONS.md) (the `name` crosses the w
 | `blocksError(name, message)` | `@aws-blocks/core` | Throw a named Building Block error from inside a block |
 | `brandBlocksError(err)` | `@aws-blocks/core` | Mark an already-built named `Error` as safe to send to the client |
 | `ApiError(message, status, options)` | `@aws-blocks/core` | Throw an error with a status code, usually from an API method |
-| `hasAuthError(state, name)` | `@aws-blocks/core` | Branch on a failed `AuthState` returned by `setAuthState` |
+| `hasAuthError(state, name)` | `@aws-blocks/core` (client code: `@aws-blocks/blocks/client`) | Branch on a failed `AuthState` returned by `setAuthState` or `submitAuthAction` |
 
 `isWireSafeError` is also exported. It is one of the checks the serializer uses, described under [Sending errors to the client](#sending-errors-to-the-client); the other, `isApiErrorLike`, is internal to core.
 
@@ -158,10 +158,14 @@ Anything a route writes itself through `ctx.response` is sent unchanged. A timeo
 - `errorName` — the Building Block error constant. It is set when the failure was an `ApiError` with a non-default name.
 - `retriable` — `true` when the user can retry the current step. `Auth` uses this to keep the user on the current challenge instead of starting over.
 
-The state is a plain object, not an `Error`, so use `hasAuthError` rather than `isBlocksError`:
+The state is a plain object, not an `Error`, so use `hasAuthError` rather than `isBlocksError`. In browser code, submit the action with `submitAuthAction` from `@aws-blocks/blocks/ui`: it returns the same `AuthState` and also notifies `onAuthChange` / `AuthenticatedContent` subscribers. A direct `authApi.setAuthState()` call notifies nothing on the page, so a UI that renders from `onAuthChange` never sees the sign-in.
 
 ```typescript
-const next = await authApi.setAuthState({ action: 'signIn', username, password });
+import { hasAuthError } from '@aws-blocks/blocks/client';
+import { submitAuthAction } from '@aws-blocks/blocks/ui';
+import { AuthErrors } from '@aws-blocks/bb-auth';
+
+const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
 if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 	// wrong username or password
 }
