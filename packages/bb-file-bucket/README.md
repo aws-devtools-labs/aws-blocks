@@ -19,7 +19,7 @@ const bucket = new FileBucket(scope, id, options?)
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `put(path, body, options?)` | `Promise<void>` | Upload a file. Overwrites any existing file at the path. |
-| `get(path, options?)` | `Promise<FileContent \| null>` | Download a file. Returns `null` if absent. Pass `{ versionId }` on versioned buckets. |
+| `get(path, options?)` | `Promise<FileContent \| null>` | Download a file. Returns `null` if absent. Pass `{ versionId }` on versioned buckets. It always reads the whole body: there is no metadata-only (HEAD) read, so `get()` is the only call that returns `contentType` and `metadata`. `scan()` returns `size` and `lastModified` without the body. |
 | `delete(path, options?)` | `Promise<void>` | Delete a file. No-op if absent. Pass `{ versionId }` on versioned buckets to permanently delete a version. |
 | `deleteBatch(paths)` | `Promise<void>` | Delete multiple files. Chunks internally at 1,000 keys. |
 | `getUrl(path, options?)` | `Promise<string>` | Generate a presigned download URL. Accepts `versionId` on versioned buckets. |
