@@ -43,7 +43,18 @@ import type {
 	TableKey,
 	ReadValidationMode,
 } from './types.js';
-import { DistributedTableErrors, DistributedTableMessages, blocksError, conditionalCheckFailed, normalizeSortKeyCondition, applyReadValidation } from './errors.js';
+import {
+	DistributedTableErrors,
+	DistributedTableMessages,
+	blocksError,
+	conditionalCheckFailed,
+	normalizeSortKeyCondition,
+	applyReadValidation,
+	assertKeyShape,
+	assertKeyShapes,
+	assertIndexesShape,
+	assertQueryOrder,
+} from './errors.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -141,6 +152,7 @@ export class DistributedTable<
 
 	constructor(scope: ScopeParent, id: string, public options: DistributedTableOptions<T, K, Indexes>) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
+		assertIndexesShape(options.indexes);
 		// Default level is 'warn' (not 'error') so the readValidation='coerce'
 		// raw-fallback warning actually surfaces — it's the only log the block
 		// emits, so this doesn't add noise. Callers can pass their own logger.
@@ -156,6 +168,7 @@ export class DistributedTable<
 
 	// The in-memory store is always strongly consistent, so `options.consistentRead` needs no handling.
 	async get(key: TableKey<T, K>, _options?: GetOptions): Promise<T | null> {
+		assertKeyShape('get', this.keyConfig, key);
 		return this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null);
 	}
 
@@ -171,6 +184,7 @@ export class DistributedTable<
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
 		await validateSchema(this.schema, item);
+		assertKeyShape('put', this.keyConfig, item);
 
 		const serialized = JSON.stringify(item);
 		if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
@@ -196,6 +210,7 @@ export class DistributedTable<
 	}
 
 	async delete(key: TableKey<T, K>, options?: DeleteOptions<T>): Promise<void> {
+		assertKeyShape('delete', this.keyConfig, key);
 		const keyStr = this.serializeKey(key);
 
 		// Existence assertion wins (see put): `ifExists` makes a conflict
@@ -232,7 +247,8 @@ export class DistributedTable<
 	 * })) { ... }
 	 * ```
 	 *
-	 * @throws {DistributedTableErrors.InvalidQuery} If `options.index` does not exist,
+	 * @throws {DistributedTableErrors.InvalidQuery} If `options.index` does not exist
+	 *   (the message lists the declared indexes), `order` is not `'asc'` or `'desc'`,
 	 *   the `where` clause is missing, the partition key is not given as
 	 *   `{ equals: value }`, or more than one sort-key condition is supplied
 	 *   (DynamoDB allows only one per query — use `between` for ranges).
@@ -241,7 +257,10 @@ export class DistributedTable<
 		options: QueryOptions<T, K, Indexes>,
 	): AsyncIterable<T> {
 		const indexConfig = options.index ? this.indexes[options.index as keyof Indexes] : this.keyConfig;
-		if (!indexConfig) throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexNotFound(options.index));
+		if (!indexConfig) {
+			throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexNotFound(options.index, Object.keys(this.indexes)));
+		}
+		assertQueryOrder(options.order);
 
 		const pkField = indexConfig.partitionKey;
 		const skField = indexConfig.sortKey;
@@ -315,6 +334,7 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async getBatch(keys: TableKey<T, K>[]): Promise<(T | null)[]> {
+		assertKeyShapes('getBatch', this.keyConfig, keys);
 		return Promise.all(
 			keys.map(key => this.reconcileRead(this.data.get(this.serializeKey(key)) ?? null)),
 		);
@@ -328,8 +348,9 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async putBatch(items: T[]): Promise<void> {
-		for (const item of items) {
+		for (const [i, item] of items.entries()) {
 			await validateSchema(this.schema, item);
+			assertKeyShape('putBatch', this.keyConfig, item, i);
 			const serialized = JSON.stringify(item);
 			if (Buffer.byteLength(serialized, 'utf8') > MAX_ITEM_BYTES) {
 				throw blocksError(DistributedTableErrors.ItemTooLarge, DistributedTableMessages.itemTooLarge(Buffer.byteLength(serialized, 'utf8')));
@@ -349,6 +370,7 @@ export class DistributedTable<
 	 *   sustained throttling. The local mock never throttles, so it does not throw this.
 	 */
 	async deleteBatch(keys: TableKey<T, K>[]): Promise<void> {
+		assertKeyShapes('deleteBatch', this.keyConfig, keys);
 		for (const key of keys) this.data.delete(this.serializeKey(key));
 		this.flushToDisk();
 	}

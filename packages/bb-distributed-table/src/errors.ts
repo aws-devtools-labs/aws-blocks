@@ -51,11 +51,16 @@ export const DistributedTableErrors = {
 	ConditionalCheckFailed: 'ConditionalCheckFailedException',
 	ValidationFailed: 'ValidationFailedException',
 	/**
-	 * The query or condition shape is invalid and was rejected before reaching
-	 * DynamoDB: a missing `where` clause, a partition key not given as
-	 * `{ equals: value }`, an unknown index, more than one sort-key condition, or
-	 * an empty `ifFieldEquals`. These are all caller bugs — something the caller
-	 * can fix by correcting the call. Catchable via
+	 * The call's input shape is invalid and was rejected before reaching
+	 * DynamoDB: a key that is not an object with every primary-key field (e.g.
+	 * `get('alice')` instead of `get({ userId: 'alice' })`, or a composite key
+	 * missing its sort key), an item without its key fields on `put()` /
+	 * `putBatch()`, `indexes` declared as something other than an object keyed by
+	 * index name, a missing `where` clause, a partition key not given as
+	 * `{ equals: value }`, an unknown index, an `order` other than `'asc'` /
+	 * `'desc'`, more than one sort-key condition, or an empty `ifFieldEquals`.
+	 * These are all caller bugs — something the caller can fix by correcting the
+	 * call. Thrown identically by the local mock and the AWS runtime. Catchable via
 	 * `isBlocksError(e, DistributedTableErrors.InvalidQuery)`.
 	 *
 	 * Kept distinct from {@link ItemTooLarge} (a runtime data condition) so a
@@ -127,7 +132,7 @@ export function blocksError(name: DistributedTableErrorName, message: string): E
  * on that specific put/delete call.
  */
 export function conditionalCheckFailed(retriable: boolean, cause?: unknown): ApiError {
-	return new ApiError('The conditional request failed', 409, {
+	return new ApiError(`${DistributedTableErrors.ConditionalCheckFailed}: The conditional request failed`, 409, {
 		name: DistributedTableErrors.ConditionalCheckFailed,
 		cause,
 		retriable,
@@ -162,13 +167,57 @@ export function normalizeSortKeyCondition<C extends Record<string, unknown>>(
 	return condition;
 }
 
+/** @internal A data method that takes a key (or an item carrying its key), named in the error message. */
+export type KeyedMethod = 'get' | 'delete' | 'getBatch' | 'deleteBatch' | 'put' | 'putBatch';
+
+/** @internal The primary-key fields a key or item must carry. */
+export interface KeyFields {
+	readonly partitionKey: string;
+	readonly sortKey?: string;
+}
+
+/** Quote and join up to two field names: `'userId' and 'createdAt'`. */
+function quoteFields(fields: readonly string[]): string {
+	return fields.map(f => `'${f}'`).join(' and ');
+}
+
+/**
+ * Describe a value's shape for an error message without echoing its contents:
+ * keys and items carry application data, and the message crosses the wire.
+ */
+function describeShape(value: unknown): string {
+	if (value === null) return 'null';
+	if (value === undefined) return 'undefined';
+	if (Array.isArray(value)) return 'an array';
+	return typeof value === 'object' ? 'an object' : `a ${typeof value}`;
+}
+
 /**
  * @internal Validation messages shared by the mock and AWS runtime. Centralised
  * here so the two implementations stay byte-for-byte in lockstep — parity tests
  * assert the same wording against both.
  */
 export const DistributedTableMessages = {
-	indexNotFound: (index: string | undefined) => `Index '${index}' not found`,
+	indexNotFound: (index: string | undefined, declared: readonly string[]) =>
+		`Index '${index}' not found; declared indexes: ${declared.length > 0 ? declared.map(i => `'${i}'`).join(', ') : 'none'}`,
+	invalidKey: (method: KeyedMethod, fields: readonly string[], got: string, position?: number) => {
+		const at = position === undefined ? '' : ` at index ${position}`;
+		const shape = `{ ${fields.map(f => `${f}: ...`).join(', ')} }`;
+		switch (method) {
+			case 'put':
+			case 'putBatch':
+				return `${method}() needs ${method === 'put' ? 'the item' : 'every item'} to include its key field${fields.length > 1 ? 's' : ''} ` +
+					`${quoteFields(fields)}; got ${got}${at}`;
+			case 'getBatch':
+			case 'deleteBatch':
+				return `${method}() takes an array of key objects with ${quoteFields(fields)}, e.g. ${method}([${shape}]); got ${got}${at}`;
+			default:
+				return `${method}() takes the key as an object with ${quoteFields(fields)}, e.g. ${method}(${shape}); got ${got}${at}`;
+		}
+	},
+	indexesMustBeObject: (got: string) =>
+		`indexes must be an object keyed by index name, e.g. indexes: { byStatus: { partitionKey: 'status', sortKey: 'createdAt' } }; got ${got}`,
+	invalidOrder: (got: string) => `query() order must be 'asc' or 'desc'; got ${got}`,
 	whereRequired: (pkField: string) =>
 		`query() requires a 'where' clause with partition key field '${pkField}'`,
 	partitionKeyEqualsRequired: (pkField: string) =>
@@ -183,6 +232,74 @@ export const DistributedTableMessages = {
 		`${operation} did not complete: ${remaining} entr${remaining === 1 ? 'y' : 'ies'} still unprocessed ` +
 		`after ${attempts} attempts (DynamoDB throttling or response-size limits). Retry with backoff.`,
 } as const;
+
+/**
+ * @internal Reject a key (or an item, for `put`/`putBatch`) that is not an object
+ * carrying every primary-key field with a value. Shared by the mock and AWS
+ * runtime so both fail the same way before any lookup or DynamoDB call: without
+ * it the mock serializes the missing fields and silently returns `null` (or
+ * stores a keyless item), while DynamoDB rejects the request with a generic
+ * `ValidationException`. Extra non-key fields are allowed (a whole item is a
+ * valid key).
+ *
+ * @param position Index of the value within a batch call, for the message.
+ * @throws {DistributedTableErrors.InvalidQuery} If the value is not an object or
+ *   a key field is `undefined` or `null`.
+ */
+export function assertKeyShape(method: KeyedMethod, keyConfig: KeyFields, value: unknown, position?: number): void {
+	const fields = keyConfig.sortKey ? [keyConfig.partitionKey, keyConfig.sortKey] : [keyConfig.partitionKey];
+	let got: string | undefined;
+	if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+		got = describeShape(value);
+	} else {
+		const missing = fields.filter(f => {
+			const v: unknown = Reflect.get(value, f);
+			return v === undefined || v === null;
+		});
+		if (missing.length > 0) got = `an object without a value for ${quoteFields(missing)}`;
+	}
+	if (got !== undefined) {
+		throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.invalidKey(method, fields, got, position));
+	}
+}
+
+/**
+ * @internal {@link assertKeyShape} for every entry of a batch call, checked
+ * before any entry is processed so a bad key never leaves a batch half applied.
+ *
+ * @throws {DistributedTableErrors.InvalidQuery} If any entry is malformed.
+ */
+export function assertKeyShapes(method: KeyedMethod, keyConfig: KeyFields, values: readonly unknown[]): void {
+	for (const [i, value] of values.entries()) assertKeyShape(method, keyConfig, value, i);
+}
+
+/**
+ * @internal Reject an `indexes` option that is not an object keyed by index name
+ * (most often an array of index configs, which would otherwise declare GSIs
+ * named `'0'`, `'1'`, …). `undefined` and `null` mean "no indexes". Shared by the
+ * mock, AWS runtime and CDK constructors.
+ *
+ * @throws {DistributedTableErrors.InvalidQuery} If `indexes` is an array or a primitive.
+ */
+export function assertIndexesShape(indexes: unknown): void {
+	if (indexes === undefined || indexes === null) return;
+	if (typeof indexes !== 'object' || Array.isArray(indexes)) {
+		throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.indexesMustBeObject(describeShape(indexes)));
+	}
+}
+
+/**
+ * @internal Reject a query `order` other than `'asc'` / `'desc'` (e.g. `'DESC'` or
+ * `'newest'`), which would otherwise silently sort ascending. `undefined` and
+ * `null` keep the default ascending order. Shared by the mock and AWS runtime.
+ *
+ * @throws {DistributedTableErrors.InvalidQuery} If `order` is set to anything else.
+ */
+export function assertQueryOrder(order: unknown): void {
+	if (order === undefined || order === null || order === 'asc' || order === 'desc') return;
+	const got = typeof order === 'string' ? `'${order}'` : describeShape(order);
+	throw blocksError(DistributedTableErrors.InvalidQuery, DistributedTableMessages.invalidOrder(got));
+}
 
 /**
  * @internal Re-map DynamoDB's generic `ValidationException` to the intent-revealing
