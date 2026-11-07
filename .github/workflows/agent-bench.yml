@@ -3,7 +3,7 @@ name: Agent Bench
 # Per-PR LLM-agent benchmark: each cell scaffolds a template, a builder agent builds it, then
 # build + Playwright spec run and a judge agent grades. Runs entirely on the GitHub runner.
 # Requires (agent-bench env): BENCH_ROLE_ARN secret (OIDC role with bedrock InvokeModelWithResponseStream
-# + Converse on the bench model, and s3 Put/Get on bench/* in the bench bucket) and BENCH_BUCKET var.
+# + InvokeModel on the bench model, and s3 Put/Get on bench/* in the bench bucket) and BENCH_BUCKET var.
 # Both come from test-infra/github-oidc-stack.ts.
 # Invoked by pr-agent-bench.yml, which owns the triggers + same-repo gate; the OIDC steps and
 # `environment: agent-bench` live on the jobs here because a `uses:` caller job cannot set environment.
@@ -206,9 +206,11 @@ jobs:
           # allow-list is exactly the model-invocation actions with a verified call site: the Strands
           # `BedrockModel` (builder/judge stream — see the ModelStreamUpdateEvent hook in 2-agent-run.ts
           # and 4-judge.ts) calls `bedrock:InvokeModelWithResponseStream`, and the CLI
-          # `bedrock-runtime converse` analysis (analysis.mjs bedrockConverse) calls `bedrock:Converse`.
-          # Non-streaming `InvokeModel` and `ConverseStream` are intentionally omitted — no path uses
-          # them. (Earlier this list omitted the Invoke* actions on the false assumption that the SDK
+          # `bedrock-runtime converse` analysis (analysis.mjs bedrockConverse) is authorized as
+          # `bedrock:InvokeModel` (the Converse API reference: "This operation requires permission for
+          # the bedrock:InvokeModel action"; IAM never checks a `bedrock:Converse` action, which is what
+          # denied every analysis call). `ConverseStream` is intentionally omitted — no path uses it.
+          # (Earlier this list omitted the Invoke* actions on the false assumption that the SDK
           # used ConverseStream — that is what 403'd every cell. NOTE: this is the SESSION half only;
           # the role's own identity policy must ALSO grant these actions or the intersection is still
           # empty.) Resources stay on model-invocation ARNs (inference-profile + foundation-model),
@@ -224,7 +226,7 @@ jobs:
                   "Effect": "Allow",
                   "Action": [
                     "bedrock:InvokeModelWithResponseStream",
-                    "bedrock:Converse"
+                    "bedrock:InvokeModel"
                   ],
                   "Resource": [
                     "arn:aws:bedrock:*:*:inference-profile/*",
@@ -514,10 +516,11 @@ jobs:
       pull-requests: write
     # `agent-bench` env holds BENCH_ROLE_ARN / BENCH_BUCKET, needed to read + write the S3 baseline.
     environment: agent-bench
-    # Defense-in-depth same-repo gate (caller already gates). always() so the table renders even
-    # when bench cells fail.
+    # Defense-in-depth same-repo gate (caller already gates). !cancelled() (not always()) so the table
+    # renders when bench cells FAIL, but a cancelled run (e.g. superseded by a newer push) measured
+    # nothing on purpose and must not overwrite the sticky PR comment or the baseline.
     if: >-
-      always() &&
+      !cancelled() &&
       (github.event_name == 'workflow_dispatch' ||
        github.event_name == 'push' ||
        github.event.pull_request.head.repo.full_name == github.repository)
@@ -605,10 +608,15 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || 'manual' }}
           # Baseline the fetch step wrote (absent => "no baseline").
           BASELINE_PATH: ${{ github.workspace }}/baseline.json
-          # summary.mjs writes the compact aggregate here; the persist step uploads it as the baseline.
+          # summary.mjs writes the compact aggregate here; the persist step uploads it as the commit-keyed
+          # baseline.
           AGGREGATE_PATH: ${{ github.workspace }}/bench-aggregate.json
           # summary.mjs writes one NDJSON line per scored cell here; persisted to the Athena prefix.
           ATHENA_NDJSON_PATH: ${{ github.workspace }}/bench-athena.ndjson
+          # Push-to-main only: summary.mjs writes the aggregate here too ONLY when the run qualifies as
+          # the latest-main baseline (not cancelled, >=1 cell ran tests, floor/harness gates passed —
+          # lib/gates.mjs shouldPersistBaseline); the persist step promotes this file, never AGGREGATE_PATH.
+          BASELINE_CANDIDATE_PATH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && format('{0}/bench-baseline-candidate.json', github.workspace) || '' }}
           # summary.mjs also writes the rendered report here so the next step can post it as a PR
           # comment. Written BEFORE the gate can exit 1, so a blocking run still comments.
           # Exported ONLY on pull_request: the comment step below runs only on PRs, so on a push-to-main
@@ -627,10 +635,11 @@ jobs:
 
       # Post the SAME report as a single sticky PR comment (upsert by marker), so the PR-vs-main delta
       # is visible on the PR itself — not only in the Actions run summary. Only on a same-repo PR (a
-      # fork PR has no token to comment with; push-to-main has no PR). if: always() so a BLOCKING run
-      # (summary.mjs exited 1) still posts the verdict that explains the red check.
+      # fork PR has no token to comment with; push-to-main has no PR). !cancelled() (not always()) so a
+      # BLOCKING run (summary.mjs exited 1) still posts the verdict that explains the red check, while a
+      # run cancelled mid-summary leaves the previous comment in place.
       - name: Comment bench report on PR (sticky)
-        if: always() && github.event_name == 'pull_request'
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -665,25 +674,31 @@ jobs:
           retention-days: 90
           overwrite: true
 
-      # Persist this run's aggregate as the COMMIT-keyed baseline (and update the latest-main pointer
-      # on push-to-main). Best-effort: never reds the summary job.
+      # Persist this run's aggregate as the COMMIT-keyed baseline, and on push-to-main promote it to the
+      # latest-main pointer only when summary.mjs wrote the baseline candidate (a cancelled, untested or
+      # floor-failing main run keeps the previous pointer). Best-effort: never reds the summary job.
       - name: Persist baseline to S3 (best-effort)
-        if: always() && steps.oidc.outcome == 'success'
+        if: ${{ !cancelled() && steps.oidc.outcome == 'success' }}
         env:
           BUCKET: ${{ vars.BENCH_BUCKET }}
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           AGG: ${{ github.workspace }}/bench-aggregate.json
+          CANDIDATE: ${{ github.workspace }}/bench-baseline-candidate.json
         run: |
           set -u
           bash scripts/agent-bench/steps/lib/s3-put.sh "$AGG" "s3://${BUCKET}/bench/runs/${BENCH_SHA}/results.json" "aggregate"
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            bash scripts/agent-bench/steps/lib/s3-put.sh "$AGG" "s3://${BUCKET}/bench/runs/latest-main.json" "latest-main pointer"
+            if [ -f "$CANDIDATE" ]; then
+              bash scripts/agent-bench/steps/lib/s3-put.sh "$CANDIDATE" "s3://${BUCKET}/bench/runs/latest-main.json" "latest-main pointer"
+            else
+              echo "::notice title=latest-main baseline kept::this run does not qualify as the baseline (see the [summary] log above); the previous latest-main pointer is unchanged."
+            fi
           fi
 
       # Persist the Athena NDJSON to a date-partitioned prefix so bench history is Athena-queryable.
       # Existing bench/* IAM covers it. Best-effort: never reds the job.
       - name: Persist Athena NDJSON to S3 (best-effort)
-        if: always() && steps.oidc.outcome == 'success'
+        if: ${{ !cancelled() && steps.oidc.outcome == 'success' }}
         env:
           BUCKET: ${{ vars.BENCH_BUCKET }}
           BENCH_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
