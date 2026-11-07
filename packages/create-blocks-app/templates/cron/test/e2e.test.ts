@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType } from 'aws-blocks';
 
@@ -26,7 +26,7 @@ async function waitForServer() {
     } catch {
       // The server is not listening yet.
     }
-    await setTimeout(1000);
+    await sleep(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
 }
@@ -63,7 +63,7 @@ function signalServer(pid: number, signal: NodeJS.Signals | 0) {
 }
 
 async function waitForServerExit(pid: number, ms: number) {
-  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await sleep(100)) {
     if (Date.now() >= deadline) return false;
   }
   return true;
@@ -98,7 +98,7 @@ test('app: server serves its Blocks config', async () => {
 test('heartbeat fires on its schedule and records the run', { timeout: 150_000 }, async () => {
   let run = await api.lastRun('heartbeat');
   for (let i = 0; i < 40 && !run; i++) {
-    await setTimeout(3000);
+    await sleep(3000);
     run = await api.lastRun('heartbeat');
   }
   assert.ok(run, 'heartbeat should have fired within 120 seconds');
