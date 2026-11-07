@@ -20,6 +20,9 @@ const scope = new Scope('my-app');
 
 // Every method below is a public API endpoint — no auth by default.
 // To gate one, add an auth block and call auth.requireAuth(context) at the top.
+// Clients call `<export name>.<method>()`, so this one is `api.greet()`. For
+// `orders.create()`, add `export const orders = new ApiNamespace(scope, 'orders', …)`
+// rather than a `create` method here. The second argument is only a label.
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async greet(name: string) {
     return { message: `Hello, ${name}!`, timestamp: Date.now() };
@@ -52,7 +55,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // });
 // const items = new DistributedTable(scope, 'items', {
 //   schema: itemSchema,
-//   key: { partitionKey: 'userId', sortKey: 'itemId' },
+//   key: { partitionKey: 'userId', sortKey: 'itemId' }, // userId + itemId together identify one item
 // });
 //
 // // Realtime:
