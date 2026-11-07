@@ -4,6 +4,7 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
+- **Imports:** backend code imports `Scope`, `ApiNamespace`, `ApiError`, `isBlocksError` and every Building Block class with its errors constant (e.g. `DistributedTable`, `DistributedTableErrors`) from `@aws-blocks/blocks`; browser code and tests import client helpers from `@aws-blocks/blocks/client`.
 - **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
 - **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`, plus its `API.md` / `DESIGN.md` where present. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
@@ -27,6 +28,16 @@ These are the load-bearing facts about how a Blocks app fits together. Knowing t
 ### Methods are namespaced
 
 A call is always `namespace.method(...)` — e.g. `api.createTodo(title)`, `api.listTodos()`. The namespace is the **exported variable name** in `aws-blocks/index.ts` (`export const api = …` → `api`; `export const authApi = auth.createApi()` → `authApi`), not the 2nd `ApiNamespace` argument. A bare method name with no namespace will not resolve. (Auth is the same shape but pre-built: `authApi` exposes `getAuthState`/`setAuthState` — sign-up is `authApi.setAuthState({ action: 'signUp', … })`, not a bare `signUp`.)
+
+When a request names a call such as `orders.create(...)`, export `const orders = new ApiNamespace(scope, 'orders', …)` and define `create` there. Adding `create` to `api`, or exporting `ordersApi`, does not provide `orders.create`. Update frontend callers and tests to the requested name; keep existing methods unless the request replaces them.
+
+### Errors that reach the client
+
+- Throw `new ApiError(message, status, { name, retriable })` (in `aws-blocks/`, import `ApiError` and `isBlocksError` from `@aws-blocks/blocks`), e.g. `throw new ApiError('Order not found', 404, { name: 'OrderNotFound' })`. The client receives the status, message, `name` and `retriable`. `retriable` defaults to `false`; set `retriable: true` only when retrying the same call can succeed.
+- A plain `Error` (even with `name` or `status` set on it) or a thrown non-`Error` reaches the client as an unnamed `500` with the message `Internal error`. Clients match the name, not the message: `isBlocksError(e, 'OrderNotFound')`.
+- In client code (`src/` and `test/`), import `ApiError` and `isBlocksError` from `@aws-blocks/blocks/client`: there `@aws-blocks/blocks` itself exports nothing, because the frontend build and `npm run test:e2e` load its browser entry. A failed call throws an `ApiError`. `isBlocksError(e, name)` narrows `e` to `Error & { name }`, which has no `status`, so check `e instanceof ApiError` before reading `e.status`: `npm run build` type-checks `test/` too.
+- `get()` on `DistributedTable`, `KVStore` and `FileBucket` returns `null` for a missing item; it does not throw. When the API promises a not-found error, turn that `null` into an `ApiError`.
+- `FileBucket.getUrl()` signs a URL without checking that the file exists, and `delete()` of a missing file succeeds. Call `get()` first when a download or delete must reject a missing file.
 
 ### Auth on the frontend
 
@@ -131,14 +142,43 @@ export function pollDashboard(render: (data: Dashboard) => void, intervalMs = 5_
 
 Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` when it unmounts.
 
+## Block specifics
+
+### Secrets
+
+- `Secret` is read-only at runtime unless created with `{ allowRuntimeWrite: true }`, which adds `put()`. `generate: true` seeds a random value; otherwise `get()` returns `null` until a value is set.
+- Deployed, `get()` caches the value (an unset value too) for `cacheTtlSeconds`, default `300`; the local mock ignores the option. When the next call must see a value set or rotated outside the app, set `cacheTtlSeconds: 0` in the `Secret` constructor options and call `get()` inside the method; `get()` itself takes only `{ version }`. The second constructor argument is an id scoped to the app: a secret that others set or rotate under a known name takes that name as the `name` option, e.g. `new Secret(scope, 'stripe-key', { name: 'my-app/stripe-key', cacheTtlSeconds: 0 })`.
+- `put()` rotates the value and clears the cache. `get({ version: 'previous' })` returns the value before the latest change, or `null` before the first. Keep old key material in the `Secret`, not in a `KVStore` or table.
+
+### Querying a DistributedTable
+
+- `query({ index?, where, limit?, order? })` returns an `AsyncIterable` (collect with `Array.fromAsync`). The partition key takes `{ equals }`; the sort key takes one of `equals`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `between`, `beginsWith`.
+- For cursor pages, sort on a unique, stable key (add a tie-breaker to timestamps), put the cursor in `where` (`{ greaterThan: cursor }` ascending, `{ lessThan: cursor }` descending), and query `limit: pageSize + 1` to detect a next page. Do not read from the start and skip in JavaScript, and do not cast the options to `any`.
+
+### Concurrent writes
+
+- `get()` then `put()` is not atomic. Create once: `put(item, { ifNotExists: true })`. Optimistic update: `put(fullItem, { ifFieldEquals: { version: oldVersion } })`. There is no `update()` or `patch()`; write the full item.
+- A failed condition throws a 409 named `DistributedTableErrors.ConditionalCheckFailed` (value `'ConditionalCheckFailedException'`; import from `@aws-blocks/blocks`). Catch it with `isBlocksError(e, DistributedTableErrors.ConditionalCheckFailed)` and throw your API's named `ApiError` when the request names one.
+
+### Schemas and existing rows
+
+- Pass a Standard Schema validator (e.g. Zod) as `schema`. A hand-written `~standard.validate` returns `{ value }` or `{ issues }`, not Zod's `{ success, data }`. Validate API inputs at runtime; TypeScript types do not.
+- For fields added to existing rows, give them schema defaults: the default `readValidation: 'coerce'` fills defaults on read but does not write them back. A query on a new index does not find old rows that lack its key fields until you backfill them.
+
+### AuthBasic options
+
+- Configure built-in policies on `new AuthBasic(scope, 'auth', { … })` instead of writing password or session code: `passwordPolicy` (password rules), `sessionDuration` (seconds, default `86400`), `lockout: { maxAttempts, windowSeconds, lockoutSeconds }` (defaults `5` / `900` / `900`; omit `lockout` to disable it). A locked account's sign-in throws `AccountLockedException` (429).
+
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
+2. Test with `npm run test:e2e`. Add tests to `test/e2e.test.ts` that call the API the way its existing tests do, and keep its `test.before`/`test.after`: they start a dev server only when nothing answers on the dev port (`package.json` `"blocks.dev.port"`, see step 3), wait until it is ready, and stop only a server they started. For API-only work this replaces a manual dev server plus curl probes. When a test run started its own server, it has stopped it by the time it exits, so there is nothing to stop or check afterwards.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
    - Run `npm run test:e2e` as often as needed; it reuses the server running on the `package.json` `"blocks.dev.port"` (default 3000, or 3001 for a backend-only app). To use another port, set it there rather than passing `npm run dev -- --port`, so the tests and `npm run dev:stop` find the same server.
    - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
+   - Restart only to check restart or persistence behavior (local data in `.bb-data/` survives restarts). Add no sleeps or port checks: the test setup already waits for readiness.
+   - Read a block doc section once. Open `.d.ts` files or source only for a concrete unanswered question or an observed error.
 4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
 
 ### Calling the API directly (troubleshooting only)
