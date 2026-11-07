@@ -213,24 +213,36 @@ Without an explicit `name`, the secret name is derived from the scope tree; find
 
 Each change keeps the prior value available as the **previous** version. This is useful during a key rollout: validate against both the new and the old value for a grace period.
 
-A key the app generates and rotates itself is **one** `Secret` with `generate: true` (so it has a value from the start) and `allowRuntimeWrite: true` (so the app can `put()` the next key):
+A key the app generates and rotates itself is **one** `Secret` with `generate: true` (so it has a value from the start) and `allowRuntimeWrite: true` (so the app can `put()` the next key). Rotate it from a scheduled job rather than from an API method, and accept signatures made with either the current or the previous key:
 
 ```typescript
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { CronJob } from '@aws-blocks/bb-cron-job';
+import { Secret } from '@aws-blocks/bb-secret';
 
 const signingKey = new Secret(scope, 'signing-key', { generate: true, allowRuntimeWrite: true });
 
-export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async rotateSigningKey() {
-    // Gate this method (e.g. an admin check) — every API method is public by default.
-    await signingKey.put(randomBytes(32).toString('hex')); // new current value; the replaced one becomes 'previous'
+// put() makes the new key current and keeps the replaced one as the 'previous' version.
+new CronJob(scope, 'rotate-signing-key', {
+  schedule: 'rate(7 days)',
+  handler: async () => {
+    await signingKey.put(randomBytes(32).toString('hex'));
   },
-  async verify(payload: string, signature: string) {
-    const current  = await signingKey.get();                       // live value
-    const previous = await signingKey.get({ version: 'previous' }); // value before the last change, or null
-    // return check(payload, signature, current) || (previous !== null && check(payload, signature, previous))
-  },
-}));
+});
+
+function matches(payload: string, signature: string, key: string | null): boolean {
+  if (key === null) return false;
+  const expected = Buffer.from(createHmac('sha256', key).update(payload).digest('hex'));
+  const given = Buffer.from(signature);
+  return expected.length === given.length && timingSafeEqual(expected, given);
+}
+
+// Call from your request handlers. Signatures made with the previous key stay valid until the next rotation.
+async function isValidSignature(payload: string, signature: string): Promise<boolean> {
+  const current = await signingKey.get();
+  const previous = await signingKey.get({ version: 'previous' }); // null until the first rotation
+  return matches(payload, signature, current) || matches(payload, signature, previous);
+}
 ```
 
 Keep the old key as this previous version — `put()` retains it for you. Don't pack `{ current, previous }` into one JSON value (the secret's value is then no longer the key, and every reader has to unpack it), and don't copy old keys into a `KVStore`, table or second `Secret` (that spreads key material into stores without the secret's access controls).
