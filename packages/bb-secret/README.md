@@ -60,7 +60,9 @@ This also applies to a secret wrapped via `fromExisting` — it is read-only unl
 
 ```typescript
 import { isBlocksError } from '@aws-blocks/core';
-import { SecretErrors } from '@aws-blocks/bb-secret';
+import { Secret, SecretErrors } from '@aws-blocks/bb-secret';
+
+const secret = new Secret(scope, 'api-key', { allowRuntimeWrite: true });
 
 try {
   await secret.put(value);
@@ -185,13 +187,13 @@ printf '%s' "$STRIPE_KEY" \
 aws secretsmanager describe-secret --secret-id my-app/stripe-key
 ```
 
-The Blocks app **creates** the secret (empty/random) when you deploy, so the value is set against a secret that already exists — run the CLI once the secret exists. The exact sequencing in your pipeline is up to you. Re-running `put-secret-value` overwrites (rotation); the next cold start reads the new value. Write to the **same region** the app deploys to, or reads see an unset secret.
+The Blocks app **creates** the secret (empty/random) when you deploy, so the value is set against a secret that already exists — run the CLI once the secret exists. The exact sequencing in your pipeline is up to you. Re-running `put-secret-value` overwrites (rotation); running instances pick up the new value once their cached copy expires (`cacheTtlSeconds`, default 300 s). Write to the **same region** the app deploys to, or reads see an unset secret.
 
 Without an explicit `name`, the secret name is derived from the scope tree; find it in the settings resource group, the console, or `aws secretsmanager list-secrets`.
 
 ### Rotating & removing
 
-- **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change on its next cold start — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
+- **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change once its cache entry expires (`cacheTtlSeconds`, default 300 s) — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
 - **Remove:** `aws secretsmanager delete-secret --secret-id <name>` (recoverable by default; `--force-delete-without-recovery` to skip the recovery window).
 
 ### Which approach, when

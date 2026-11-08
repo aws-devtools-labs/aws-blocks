@@ -20,6 +20,7 @@ import {
   generateTypesFile,
   generateMetaFile,
   generateIndexFile,
+  selectEligibleTables,
 } from '../db-pull.js';
 import { PgClientEngine } from '../engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from '../database.js';
@@ -61,7 +62,24 @@ describe('db pull E2E — introspect + generate + CRUD', { skip }, () => {
   test('detects auth.uid() tables for skipping', () => {
     assert.ok(result.tablesUsingSupabaseAuth.has('todos'), 'todos uses auth.uid()');
     assert.ok(!result.tablesUsingSupabaseAuth.has('jwt_policy_table'), 'jwt_policy_table uses auth.jwt() — should NOT be flagged');
-    assert.ok(!result.tablesUsingSupabaseAuth.has('composite_pk_items'), 'composite_pk_items has no RLS');
+    assert.ok(!result.tablesUsingSupabaseAuth.has('composite_pk_items'), 'composite_pk_items has no auth.uid() policy');
+  });
+
+  // The RLS gate read from the real catalog (pg_tables.rowsecurity, pg_policies):
+  // only tables with a primary key, RLS enabled and no Supabase Auth policies are generated.
+  test('selects the tables db pull generates CRUD for', () => {
+    const eligible = selectEligibleTables(result).map(t => t.name);
+    for (const name of ['jwt_policy_table', 'composite_pk_items', 'exotic_types', 'reserved_cols']) {
+      assert.ok(eligible.includes(name), `${name} should be eligible`);
+    }
+    assert.ok(!eligible.includes('todos'), 'todos uses Supabase Auth');
+    assert.ok(!eligible.includes('no_pk_log'), 'no_pk_log has no primary key (and RLS off)');
+    for (const name of ['jwt_policy_table', 'composite_pk_items', 'exotic_types', 'reserved_cols']) {
+      const table = result.tables.find(t => t.name === name);
+      assert.strictEqual(table?.hasRls, true, `${name} has RLS enabled in the catalog`);
+      assert.ok((table?.policyCount ?? 0) > 0, `${name} has at least one policy`);
+    }
+    assert.strictEqual(result.tables.find(t => t.name === 'no_pk_log')?.hasRls, false, 'no_pk_log has RLS disabled in the catalog');
   });
 
   test('detects composite primary key', () => {
@@ -113,7 +131,7 @@ describe('db pull E2E — introspect + generate + CRUD', { skip }, () => {
     );
   });
 
-  // ── CRUD assertions (non-RLS tables) ──────────────────────────────────
+  // ── CRUD assertions (tables shared through a USING (true) policy) ──────
 
   test('CRUD works on exotic_types table', async () => {
     const table = result.tables.find(t => t.name === 'exotic_types')!;

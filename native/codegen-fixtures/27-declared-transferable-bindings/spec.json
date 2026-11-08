@@ -184,7 +184,7 @@
         "kind": "transferable",
         "tag": "example-iot/device-link",
         "package": "example-iot-native",
-        "export": "deviceLink",
+        "export": "API_link",
         "abi": "blocks-transferable-v1",
         "genericArity": 1
       },

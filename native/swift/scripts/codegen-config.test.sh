@@ -168,11 +168,11 @@ let package = Package(
     targets: [
         .target(
             name: "App",
-            dependencies: [.product(name: "BlocksRuntime", package: "swift")],
+            dependencies: [.product(name: "BlocksRuntime", package: "$(basename "$PKG_DIR")")],
             path: "Sources/App",
             // Intentionally no \`resources:\` entry — this fixture proves the plugin
             // forwards the sidecar without one.
-            plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "swift")]
+            plugins: [.plugin(name: "BlocksCodegenBuildPlugin", package: "$(basename "$PKG_DIR")")]
         )
     ]
 )

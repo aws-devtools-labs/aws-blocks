@@ -55,13 +55,15 @@ A failed subscribe rejects only that subscription's `established` promise — ot
 - **Connect token:** Scoped to the Realtime instance (2-hour TTL). Passed as query string parameter on WebSocket connect. Gates who can open a connection.
 - **Channel token:** Scoped to a specific channel (1-hour TTL). Sent in the subscribe message. Gates who can subscribe to a channel.
 
-Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix (e.g., `collab`), so `validateChannelToken`'s `startsWith` check accepts any channel under that prefix.
+Both are HMAC-SHA256 signed with the same shared secret. The connect token's channel field is the instance prefix with a `$connect` suffix (e.g., `collab$connect`). It authorizes the `$connect` handshake only: a subscribe needs a channel token, whose scope always has a `/` after the instance prefix (`validateChannelToken` with a `requestedChannel` rejects any token whose scope has none).
+
+**Channel paths:** a subscribe or unsubscribe must name a channel path of the form `getChannel()` mints, `<instance>/<namespace>/<channel>`, of at most 1024 UTF-8 bytes (`isClientChannelPath`). The deployed handler and the local WebSocket server check this before the token or the connections table, answer an invalid subscribe with `{ type: 'error', message: 'Invalid channel' }` (no `channel` field), and ignore an invalid unsubscribe.
 
 ### Mock Middleware
 
 - Connection pool keyed by `wsUrl` (e.g., `ws://localhost:3001/realtime`)
 - Subscribe: `{ action: 'subscribe', channel, token }`
-- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
+- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }` (`{ type: 'error', message: 'Invalid channel' }` when `channel` is not a channel path)
 - Data: `{ type: 'message', channel, data }`
 
 ### AWS Middleware
@@ -69,13 +71,23 @@ Both are HMAC-SHA256 signed with the same shared secret. The connect token's cha
 - Connection pool keyed by `wsUrl` (API Gateway WebSocket stage URL)
 - Connect: `wss://{wsUrl}?token={connectToken}`
 - Subscribe: `{ action: 'subscribe', channel, token }`
-- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }`
+- Response: `{ type: 'subscribe_success', channel }` or `{ type: 'error', channel, message }` (`{ type: 'error', message: 'Invalid channel' }` when `channel` is not a channel path)
 - Data: `{ type: 'message', channel, data }`
 - Keep-alive: `{ action: 'ping' }` every ~9 minutes
 
 ### Server-Side Subscribe
 
 Server-side `subscribe()` opens a real WebSocket connection to the API Gateway endpoint, using the same connect token and channel token mechanism as client subscriptions. This means server-side subscribers receive messages published by any Lambda invocation, not just the current one. `publish()` also emits to a local EventEmitter for zero-latency delivery to same-invocation subscribers.
+
+Each server-side subscriber therefore has two delivery paths, and `publish()` drives both: it posts to every subscribed connection, including the publishing process's own WebSocket, and emits locally. Without coordination, a subscriber in the publishing process would run its handler twice per message. `server-subscribe.ts` makes the subscription decide which path delivers:
+
+- **Until API Gateway acknowledges the subscription** (`subscribe_success`), the socket isn't live. The local emitter delivers, and message frames on the socket are dropped.
+- **Once live**, the socket delivers every message and the local emitter skips that handler.
+- **After the socket closes or errors**, it isn't live again, and the local emitter takes over.
+
+So once a subscription is established, each published message runs a server-side handler once, matching the local mock. `test-apps/comprehensive` asserts one call per publish for both `getChannel().subscribe()` and `realtime.subscribe()`.
+
+Overall delivery is still at-least-once, not exactly-once. A message published from the same process while the subscription is being established can reach the handler twice: the local emitter delivers it because the socket isn't live yet, and if API Gateway has already registered the connection, the socket frame for the same message can arrive after `subscribe_success`. API Gateway delivery is also best-effort (see the README). Server-side handlers must therefore be idempotent.
 
 ## Infrastructure (CDK)
 

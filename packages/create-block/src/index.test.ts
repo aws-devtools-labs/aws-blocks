@@ -5,7 +5,7 @@ import assert from 'node:assert';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, test } from 'node:test';
+import { describe, mock, test } from 'node:test';
 import {
 	deriveNames,
 	findCustomerWorkspaceRoot,
@@ -184,7 +184,11 @@ describe('workspaces helpers', () => {
 		// extraction, so a future hardening of scopeFromPkgName can't silently
 		// regress security.
 		for (const name of ['@acme;rm -rf/app', '@a`b`/app', '@a|b/app', '@a$(id)/app', '@a b/app']) {
-			assert.strictEqual(validateScope(scopeFromPkgName(name) ?? '').ok, false, `expected "${name}" to be rejected`);
+			assert.strictEqual(
+				validateScope(scopeFromPkgName(name) ?? '').ok,
+				false,
+				`expected "${name}" to be rejected`,
+			);
 		}
 	});
 	test('workspacesCover matches exact entries and parent globs', () => {
@@ -333,4 +337,52 @@ describe('run() integration — customer mode', () => {
 			assert.ok(!existsSync(join(dir, 'packages')));
 		}),
 	);
+});
+
+describe('run() integration — external mode next steps', () => {
+	async function nextStepsCd(args: string[]): Promise<string | undefined> {
+		const dir = mkdtempSync(join(tmpdir(), 'cb-ext-run-'));
+		const prev = process.env.CREATE_BLOCK_SKIP_REGISTRY;
+		process.env.CREATE_BLOCK_SKIP_REGISTRY = '1';
+		const log = mock.method(console, 'log', () => {});
+		try {
+			const code = await run(
+				['Widget', '--scope', 'acme', '--yes', '--skip-install', '--skip-verify', ...args],
+				dir,
+			);
+			assert.strictEqual(code, 0);
+			const lines = log.mock.calls.map((c) => String(c.arguments[0]));
+			return lines.find((l) => l.trim().startsWith('1. cd '));
+		} finally {
+			log.mock.restore();
+			if (prev === undefined) delete process.env.CREATE_BLOCK_SKIP_REGISTRY;
+			else process.env.CREATE_BLOCK_SKIP_REGISTRY = prev;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+
+	test('cd line names the --dir target', async () => {
+		assert.strictEqual(
+			await nextStepsCd(['--dir', './custom-dir']),
+			'  1. cd custom-dir && npm run build && npm test',
+		);
+	});
+
+	test('cd line names the default folder without --dir', async () => {
+		assert.strictEqual(await nextStepsCd([]), '  1. cd bb-widget && npm run build && npm test');
+	});
+
+	test('cd line shell-quotes a --dir target with spaces', async () => {
+		assert.strictEqual(
+			await nextStepsCd(['--dir', 'custom dir']),
+			"  1. cd 'custom dir' && npm run build && npm test",
+		);
+	});
+
+	test('cd line shell-quotes shell metacharacters and single quotes literally', async () => {
+		assert.strictEqual(
+			await nextStepsCd(['--dir', "x;$(id)'y"]),
+			`  1. cd 'x;$(id)'\\''y' && npm run build && npm test`,
+		);
+	});
 });
