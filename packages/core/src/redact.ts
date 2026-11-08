@@ -69,6 +69,25 @@ function isSensitiveKey(key: string): boolean {
 }
 
 /**
+ * How many times one {@link redactForLogging} call may walk an object it has
+ * already walked (a shared reference reached again) before further repeats are
+ * emitted as `'[Repeated]'`. Without a cap, the walk is exponential on shared
+ * DAGs (`{ a: x, b: x }` nested a few dozen levels deep) and factorial on
+ * densely linked graphs.
+ */
+export const MAX_REPEATED_EXPANSIONS = 1000;
+
+/** Walk state for one {@link redactForLogging} call. */
+interface RedactWalk {
+  /** Objects on the current ancestor path. */
+  readonly ancestors: WeakSet<object>;
+  /** Every object walked so far. */
+  readonly walked: WeakSet<object>;
+  /** Re-walks of already-walked objects so far. */
+  repeats: number;
+}
+
+/**
  * Return a deep copy of `value` with the value of every sensitive field
  * replaced by {@link REDACTED}. Arrays and nested objects are walked; the
  * input is never mutated. Circular references are emitted as `'[Circular]'`.
@@ -77,26 +96,38 @@ function isSensitiveKey(key: string): boolean {
  * against the sensitive-key list, since a bare string has no field name to
  * key off.
  *
- * `seen` tracks the current ancestor PATH, not every node ever visited: each
- * node is added before its children are walked and removed afterwards. A
- * plain visited-set would flag the second appearance of a *shared* (non-cyclic)
- * reference as `'[Circular]'` — e.g. `{ a: shared, b: shared }` — silently
- * dropping real data from the log. Only a reference still open on the stack is
- * a genuine cycle.
+ * Cycle detection tracks the current ancestor PATH, not every node ever
+ * visited: each node is added before its children are walked and removed
+ * afterwards. A plain visited-set would flag the second appearance of a
+ * *shared* (non-cyclic) reference as `'[Circular]'` — e.g.
+ * `{ a: shared, b: shared }` — silently dropping real data from the log. Only a
+ * reference still open on the stack is a genuine cycle. Shared references are
+ * walked in full each time, up to {@link MAX_REPEATED_EXPANSIONS} repeats per
+ * call; later repeats are emitted as `'[Repeated]'` so the copy stays bounded.
  */
-export function redactForLogging(value: unknown, seen: WeakSet<object> = new WeakSet()): unknown {
+export function redactForLogging(value: unknown): unknown {
+  return redactNode(value, { ancestors: new WeakSet(), walked: new WeakSet(), repeats: 0 });
+}
+
+function redactNode(value: unknown, walk: RedactWalk): unknown {
   if (value === null || typeof value !== 'object') {
     return value;
   }
 
-  if (seen.has(value)) {
+  if (walk.ancestors.has(value)) {
     return '[Circular]';
   }
-  seen.add(value);
+  if (walk.walked.has(value)) {
+    if (walk.repeats >= MAX_REPEATED_EXPANSIONS) return '[Repeated]';
+    walk.repeats++;
+  } else {
+    walk.walked.add(value);
+  }
+  walk.ancestors.add(value);
 
   let out: unknown;
   if (Array.isArray(value)) {
-    out = value.map((item) => redactForLogging(item, seen));
+    out = value.map((item) => redactNode(item, walk));
   } else {
     const obj = value as Record<string, unknown>;
 
@@ -117,7 +148,7 @@ export function redactForLogging(value: unknown, seen: WeakSet<object> = new Wea
         // absent secret doesn't look like a populated one.
         result[key] = val === null || val === undefined ? val : REDACTED;
       } else {
-        result[key] = redactForLogging(val, seen);
+        result[key] = redactNode(val, walk);
       }
     }
     out = result;
@@ -125,7 +156,7 @@ export function redactForLogging(value: unknown, seen: WeakSet<object> = new Wea
 
   // Pop this node off the ancestor path now that its subtree is fully walked,
   // so sibling branches can reference the same object without false `[Circular]`.
-  seen.delete(value);
+  walk.ancestors.delete(value);
   return out;
 }
 
