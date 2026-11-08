@@ -416,6 +416,9 @@ async function dispatchRawRoute(
     ...NO_STORE_HEADERS,
   });
   let responseBody: any;
+  // A byte body is copied when it is sent, as `new Response(bytes)` does, so a
+  // handler that reuses its buffer afterwards can't change the response.
+  let binaryBody: Buffer | undefined;
 
   const context = {
     request: {
@@ -431,23 +434,25 @@ async function dispatchRawRoute(
       headers: responseHeaders,
       get status() { return responseStatus; },
       set status(code: number) { responseStatus = code; },
-      send: (body: any) => { responseBody = body; },
+      send: (body: any) => {
+        responseBody = body;
+        binaryBody = binaryResponseBody(body);
+      },
     },
   };
 
   try {
     await route.handler(context);
 
-    const binary = binaryResponseBody(responseBody);
     if (!responseHeaders.has('Content-Type')) {
-      responseHeaders.set('Content-Type', binary ? 'application/octet-stream' : 'application/json');
+      responseHeaders.set('Content-Type', binaryBody ? 'application/octet-stream' : 'application/json');
     }
     return {
       kind: 'raw-route',
       status: responseStatus,
       headers: withoutSetCookie(responseHeaders),
       cookies: setCookiesOf(responseHeaders),
-      body: binary ?? (responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : ''),
+      body: binaryBody ?? (responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : ''),
     };
   } catch (error: unknown) {
     logHandlerError({ source: 'raw-route', error }, request, 'RawRoute Error:');
