@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 import * as realCore from '@aws-blocks/core/scripts';
 import { resolvePackageBin } from './commands.js';
 import type { SpawnSpec } from './context.js';
-import { type FakeRun, fixtureApp, runCli } from './test-helpers.js';
+import { type FakeOptions, type FakeRun, fixtureApp, runCli } from './test-helpers.js';
 
 let server: Server;
 let requests: string[] = [];
@@ -90,6 +90,27 @@ beforeEach(() => {
 /** The real secret and config CLIs, instead of the test helpers' throwing fakes. */
 const REAL_VALUE_CLIS = { runSecretCli: realCore.runSecretCli, runConfigCli: realCore.runConfigCli };
 
+/**
+ * Run the CLI with {@link REAL_VALUE_CLIS}, collecting the lines they print. They print with
+ * console.log, which writes to this process's stdout, and `node --test` reads this file's
+ * results from that stdout: Node 22 can misread a line that starts with an emoji, read
+ * together with a result, as the length of the next result, and fail the whole file with
+ * "Unable to deserialize cloned data" (nodejs/node#64061, fixed in Node 24.20.0, not yet in 22).
+ */
+async function runWithRealValueClis(
+	argv: string[],
+	options: Omit<FakeOptions, 'core'>,
+): Promise<{ run: FakeRun; printed: string[] }> {
+	const printed: string[] = [];
+	const log = console.log;
+	console.log = (...args: unknown[]) => printed.push(args.join(' '));
+	try {
+		return { run: await runCli(argv, { ...options, core: REAL_VALUE_CLIS }), printed };
+	} finally {
+		console.log = log;
+	}
+}
+
 /** Run each spawned child for real, collecting its output. */
 function realSpawn(outputs: string[]): (spec: SpawnSpec) => { code: number | null } {
 	return (spec) => {
@@ -101,9 +122,10 @@ function realSpawn(outputs: string[]): (spec: SpawnSpec) => { code: number | nul
 
 describe('help never runs a passthrough tool with the user arguments', () => {
 	it('the harness sees a real side effect: "config remove KEY" reaches the store', async () => {
-		const run = await runCli(['config', 'remove', 'FLAG'], { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
+		const { run, printed } = await runWithRealValueClis(['config', 'remove', 'FLAG'], { cwd: fixtureApp() });
 		assert.strictEqual(run.code, 0, run.stderr);
 		assert.deepStrictEqual(requests, ['AmazonSSM.DeleteParameter']);
+		assert.deepStrictEqual(printed, ["🗑️  config 'FLAG' removed."]);
 	});
 
 	for (const argv of [
@@ -115,17 +137,9 @@ describe('help never runs a passthrough tool with the user arguments', () => {
 		['secret', 'set', 'API_KEY', '--value-stdin', '--help'],
 	]) {
 		it(`cdk-blocks ${argv.join(' ')}: exit 0, usage, no store request`, async () => {
-			const stdout: string[] = [];
-			const log = console.log;
-			console.log = (...args: unknown[]) => stdout.push(args.join(' '));
-			let run: FakeRun;
-			try {
-				run = await runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
-			} finally {
-				console.log = log;
-			}
+			const { run, printed } = await runWithRealValueClis(argv, { cwd: fixtureApp() });
 			assert.strictEqual(run.code, 0, run.stderr);
-			assert.match(stdout.join('\n'), /^Usage: cdk-blocks (secret|config) (remove|set) /);
+			assert.match(printed.join('\n'), /^Usage: cdk-blocks (secret|config) (remove|set) /);
 			assert.deepStrictEqual(requests, []);
 		});
 	}
@@ -189,7 +203,7 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			[['--no-input', 'secret', 'set', 'API_KEY'], {}],
 			[['secret', 'set', 'API_KEY'], { CI: 'true' }],
 		] as const) {
-			const run = await runCli([...argv], { cwd: fixtureApp(), stdinIsTTY: true, env, core: REAL_VALUE_CLIS });
+			const { run } = await runWithRealValueClis([...argv], { cwd: fixtureApp(), stdinIsTTY: true, env });
 			assert.strictEqual(run.code, 2, `${argv.join(' ')}: ${run.stderr}`);
 			assert.match(run.stderr, /this run cannot prompt \(--no-input or CI\).*--value-stdin/);
 			assert.deepStrictEqual(requests, []);
@@ -204,7 +218,7 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			[['secret', 'list', '--stage'], /--stage` requires a value/],
 			[['secret', 'remove', 'API_KEY', '--force'], /Refusing to force-delete .*--yes/],
 		] as const) {
-			const run = await runCli([...argv], { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
+			const { run } = await runWithRealValueClis([...argv], { cwd: fixtureApp() });
 			assert.strictEqual(run.code, 2, `${argv.join(' ')}: ${run.stderr}`);
 			assert.match(run.stderr, message);
 		}
@@ -217,7 +231,7 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 			['secret', 'remove', 'API_KEY', '--force', '--yes'],
 		]) {
 			requests = [];
-			const run = await runCli(argv, { cwd: fixtureApp(), core: REAL_VALUE_CLIS });
+			const { run, printed } = await runWithRealValueClis(argv, { cwd: fixtureApp() });
 			assert.strictEqual(run.code, 0, `${argv.join(' ')}: ${run.stderr}`);
 			// A forced delete first checks that the secret exists.
 			assert.deepStrictEqual(
@@ -225,6 +239,7 @@ describe('delegated commands: input, confirmations and usage errors', () => {
 				['secretsmanager.DescribeSecret', 'secretsmanager.DeleteSecret'],
 				argv.join(' '),
 			);
+			assert.deepStrictEqual(printed, ["🗑️  secret 'API_KEY' permanently removed (no recovery)."], argv.join(' '));
 		}
 	});
 
