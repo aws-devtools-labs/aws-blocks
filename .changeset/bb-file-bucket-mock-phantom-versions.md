@@ -2,4 +2,4 @@
 '@aws-blocks/bb-file-bucket': patch
 ---
 
-The local `FileBucket` mock no longer reports phantom versions for a key that is a prefix of another key. `listVersions('docs')` now returns `[]` when only `docs/readme.txt` was written, `get('docs', { versionId: 'readme.txt' })` returns `null` instead of throwing `EISDIR`, and `restoreVersion` throws `VersionNotFound`, matching AWS.
+The local `FileBucket` mock now treats a key that is only a prefix of other keys as missing, matching AWS. With only `docs/readme.txt` written, `get('docs')` and `get('docs', { versionId: 'readme.txt' })` return `null` instead of throwing `EISDIR`, `listVersions('docs')` returns `[]`, and `restoreVersion('docs', ...)` throws `VersionNotFound`.

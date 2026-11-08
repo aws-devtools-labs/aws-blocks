@@ -117,6 +117,12 @@ test('nested paths work', async () => {
 	assert.strictEqual(file.body.toString(), 'nested');
 });
 
+test('get on a key that is a prefix of another key returns null', async () => {
+	const bucket = new FileBucket(scope, 'test');
+	await bucket.put('prefix-docs/readme.txt', 'nested');
+	assert.strictEqual(await bucket.get('prefix-docs'), null);
+});
+
 // ── scan() ──────────────────────────────────────────────────────────────────
 
 test('scan yields all files', async () => {
@@ -329,6 +335,7 @@ test('versioned: key that is a prefix of another key has no phantom versions', a
 	await bucket.put('docs/readme.txt', 'v1');
 	await bucket.put('docs/readme.txt', 'v2');
 	assert.deepStrictEqual(await bucket.listVersions('docs'), []);
+	assert.strictEqual(await bucket.get('docs'), null);
 	assert.strictEqual(await bucket.get('docs', { versionId: 'readme.txt' }), null);
 	await assert.rejects(
 		bucket.restoreVersion('docs', 'readme.txt'),

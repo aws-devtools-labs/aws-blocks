@@ -191,7 +191,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 			return { body, contentType: meta.contentType, metadata: meta.metadata, size: body.length };
 		}
 		const filePath = contentPath(this.dataDir, path);
-		if (!existsSync(filePath)) return null;
+		if (!statSync(filePath, { throwIfNoEntry: false })?.isFile()) return null;
 		// Check for delete marker
 		if (this.versioned && existsSync(deleteMarkerPath(this.dataDir, path))) return null;
 
