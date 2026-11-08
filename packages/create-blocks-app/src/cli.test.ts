@@ -155,13 +155,17 @@ describe('create-blocks-app CLI argument parsing', () => {
   it('--template amplify in an existing non-Amplify project exits 1 before writing anything', () => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-amplify-existing-'));
     try {
-      writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'existing-app' }));
+      const pkg = JSON.stringify({ name: 'existing-app' });
+      writeFileSync(join(tmpDir, 'package.json'), pkg);
       const result = run([tmpDir, '--template', 'amplify', '--skip-install', '-y']);
       assert.strictEqual(result.exitCode, 1);
       assert.match(result.stderr, /amplify.*auto-selected/i);
       assert.doesNotMatch(result.stderr, /ENOENT/);
       assert.strictEqual(existsSync(join(tmpDir, 'aws-blocks')), false);
       assert.strictEqual(existsSync(join(tmpDir, '.blocks')), false);
+      assert.strictEqual(existsSync(join(tmpDir, 'cdk.json')), false);
+      assert.strictEqual(existsSync(join(tmpDir, '.gitignore')), false);
+      assert.strictEqual(readFileSync(join(tmpDir, 'package.json'), 'utf-8'), pkg);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

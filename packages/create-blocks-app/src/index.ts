@@ -323,8 +323,9 @@ async function addBlocksWorkspace(targetDir: string, options: {
 // An optional `blocksTemplateOverlayOnly: true` marks a template as an overlay
 // that's auto-selected when the CLI detects a matching existing project (e.g.
 // `amplify`) rather than a scaffoldable fresh-app starter; `createFreshProject`
-// rejects it up front. A folder whose package.json can't be read is still shown
-// in --help (flagged) but excluded from `--template` validation.
+// and `integrateWithExistingProject` reject it up front. A folder whose
+// package.json can't be read is still shown in --help (flagged) but excluded
+// from `--template` validation.
 //
 // Display order below is preserved from the previous hardcoded list so that
 // `--help` reads in the intended progression (default → bare → richer variants
@@ -415,8 +416,8 @@ async function rejectOverlayTemplate(templateName: string): Promise<void> {
   const overlayEntry = (await loadTemplateCatalog()).find(t => t.name === templateName);
   if (overlayEntry?.overlayOnly) {
     console.error(`Error: The \`${templateName}\` template is an overlay that's auto-selected`);
-    console.error('when the CLI detects a compatible existing project. It cannot be');
-    console.error('selected explicitly with --template.');
+    console.error('when the CLI detects a compatible existing project. This directory');
+    console.error("isn't one, so the template can't be used here.");
     console.error('');
     console.error('To scaffold a fresh Blocks app, choose a different template:');
     console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
