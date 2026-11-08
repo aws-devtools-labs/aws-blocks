@@ -1,12 +1,15 @@
 /**
  * AWS runtime `subscribe()` lifecycle tests.
  *
- * Uses a loopback fake SSM endpoint and a stub `globalThis.WebSocket`; no AWS calls.
+ * Under the default test conditions `@aws-blocks/bb-app-setting` resolves to its
+ * local mock, so the token secret comes from `.bb-data/settings.json` in a temp
+ * working directory. `globalThis.WebSocket` is stubbed; no network calls.
  */
 
 import assert from 'node:assert';
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import { Scope } from '@aws-blocks/core';
 import { Realtime } from './index.aws.js';
@@ -28,37 +31,21 @@ class FakeWebSocket {
 }
 
 describe('Realtime (AWS runtime): subscribe() unsubscribe', () => {
-	let srv: http.Server;
 	let rt: InstanceType<typeof Realtime>;
 	// Drains the cached secret promise and its `.then` continuation (no wall-clock wait).
 	const settle = async () => {
 		await (rt as unknown as { _cachedSecretPromise: Promise<unknown> })._cachedSecretPromise;
 		await new Promise(setImmediate);
 	};
-	const savedEnv = { ...process.env };
+	const savedCwd = process.cwd();
+	const savedWsUrl = process.env.BLOCKS_RT_WS_URL;
 	const savedWs = (globalThis as { WebSocket: unknown }).WebSocket;
+	let workDir: string;
 
 	before(async () => {
-		srv = http.createServer((req, res) => {
-			req.resume();
-			req.on('end', () => {
-				res.setHeader('content-type', 'application/x-amz-json-1.1');
-				res.end(
-					JSON.stringify({
-						Parameter: { Name: '/x', Value: JSON.stringify('test-secret'), Type: 'SecureString' },
-					}),
-				);
-			});
-		});
-		await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
-		Object.assign(process.env, {
-			AWS_ENDPOINT_URL: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`,
-			AWS_ACCESS_KEY_ID: 'fake',
-			AWS_SECRET_ACCESS_KEY: 'fake',
-			AWS_REGION: 'us-east-1',
-			AWS_EC2_METADATA_DISABLED: 'true',
-			BLOCKS_RT_WS_URL: 'wss://example.invalid/rt',
-		});
+		workDir = mkdtempSync(join(tmpdir(), 'bb-realtime-aws-'));
+		process.chdir(workDir);
+		process.env.BLOCKS_RT_WS_URL = 'wss://example.invalid/rt';
 		(globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
 		const schema = { '~standard': { version: 1, vendor: 't', validate: (v: unknown) => ({ value: v }) } } as const;
 		rt = new Realtime(new Scope('app'), 'rt', { namespaces: { chat: Realtime.namespace(schema) } });
@@ -66,8 +53,10 @@ describe('Realtime (AWS runtime): subscribe() unsubscribe', () => {
 	});
 
 	after(() => {
-		srv.close();
-		process.env = savedEnv;
+		process.chdir(savedCwd);
+		rmSync(workDir, { recursive: true, force: true });
+		if (savedWsUrl === undefined) delete process.env.BLOCKS_RT_WS_URL;
+		else process.env.BLOCKS_RT_WS_URL = savedWsUrl;
 		(globalThis as { WebSocket: unknown }).WebSocket = savedWs;
 	});
 
