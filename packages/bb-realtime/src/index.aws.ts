@@ -20,6 +20,7 @@ import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgen
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
+import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
 	ApiGatewayManagementApiClient,
@@ -63,6 +64,8 @@ interface ConnectionRecord {
 	expiresAt: number;
 	connectedAt?: number;
 	lastTtlSweep?: number;
+	/** On a channel record: unique to the subscribe that wrote it (see waitForChannelIndex). */
+	subscribeId?: string;
 }
 
 // ── Connections table schema (runtime validation — accepts anything) ────────
@@ -205,20 +208,23 @@ async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T 
 }
 
 /**
- * Wait until `connectionId`'s subscription to `channel` is on the channel-index GSI, where
- * `publish()` looks up subscribers. DynamoDB updates a GSI after the table write and reads it
- * eventually consistently, so a record just written may not be found there yet.
+ * Wait until the record that subscribe `subscribeId` wrote for `connectionId` and `channel` is
+ * on the channel-index GSI, where `publish()` looks up subscribers. DynamoDB updates a GSI after
+ * the table write and reads it eventually consistently, so a record just written may not be found
+ * there yet. Matching `subscribeId`, not only the keys, matters when the connection re-subscribes
+ * to the channel: until the unsubscribe's delete reaches the index, the index can still show the
+ * previous subscription's record, which is about to disappear.
  *
  * Never throws, and settles within {@link INDEX_VISIBLE_TIMEOUT_MS}: a lookup still running at
  * the deadline is abandoned, and a lookup that fails (e.g. read throttling that outlasted the SDK's
  * retries) ends the wait. Either way it resolves `{ visible: false }` with the reason.
  */
-async function waitForChannelIndex(connectionId: string, channel: string): Promise<ChannelIndexWait> {
+async function waitForChannelIndex(connectionId: string, channel: string, subscribeId: string): Promise<ChannelIndexWait> {
 	const table = connectionsTable();
 	const deadline = Date.now() + INDEX_VISIBLE_TIMEOUT_MS;
 	const notVisible = { visible: false, reason: `not visible after ${INDEX_VISIBLE_TIMEOUT_MS}ms` } as const;
 	for (let attempt = 0; ; attempt++) {
-		let found: unknown[] | typeof OUT_OF_BUDGET;
+		let found: ConnectionRecord[] | typeof OUT_OF_BUDGET;
 		try {
 			found = await beforeDeadline(Array.fromAsync(table.query({
 				index: 'channel-index',
@@ -230,7 +236,7 @@ async function waitForChannelIndex(connectionId: string, channel: string): Promi
 			return { visible: false, reason: `the lookup failed (${detail})` };
 		}
 		if (found === OUT_OF_BUDGET) return notVisible;
-		if (found.length > 0) return { visible: true };
+		if (found.some(r => r.subscribeId === subscribeId)) return { visible: true };
 		const delay = INDEX_POLL_DELAYS_MS[Math.min(attempt, INDEX_POLL_DELAYS_MS.length - 1)];
 		if (Date.now() + delay >= deadline) return notVisible;
 		await sleep(delay);
@@ -308,12 +314,15 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			}));
 			return { statusCode: 200 };
 		}
-		await table.put({ connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL });
+		// `subscribeId` tells this subscribe's record from an earlier one for the same connection and
+		// channel that the channel-index may still show (see waitForChannelIndex).
+		const subscribeId = randomUUID();
+		await table.put({ connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL, subscribeId });
 		// Confirm once publish() can find this subscription, so that a publish sent as soon as the
 		// client's `established` resolves reaches it instead of an index that lags the write. The
 		// wait is best effort: past its budget, or if a lookup fails, confirm anyway rather than
 		// leave `established` pending.
-		const index = await waitForChannelIndex(connectionId, msg.channel);
+		const index = await waitForChannelIndex(connectionId, msg.channel, subscribeId);
 		if (!index.visible) {
 			console.warn(`[Realtime] confirming the subscription to ${msg.channel} without seeing it on channel-index (${index.reason}); a publish sent right away may not reach it`);
 		}

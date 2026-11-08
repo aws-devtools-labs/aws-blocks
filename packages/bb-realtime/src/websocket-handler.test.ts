@@ -233,6 +233,73 @@ async function capturingWarnings(fn: () => Promise<void>): Promise<string[]> {
 	return warnings;
 }
 
+/** What a modeled channel-index shows for one connection and channel: a write's sequence number, or 0 for nothing. */
+interface ReplicatedIndex {
+	visibleWrite(connectionId: string, channel: string): number;
+	lastPut(connectionId: string, channel: string): number;
+}
+
+/**
+ * Run `fn` with a channel-index that follows the table the way a GSI does: each put reaches it
+ * `putLagMs` after the write and each delete `deleteLagMs` after, applied in write order, so until
+ * a later write arrives a query sees what the earlier writes left (including a deleted record).
+ */
+async function withReplicatedChannelIndex(
+	{ putLagMs, deleteLagMs }: { putLagMs: number; deleteLagMs: number },
+	fn: (index: ReplicatedIndex) => Promise<void>,
+): Promise<void> {
+	let seq = 0;
+	const writes = new Map<string, Array<{ seq: number; at: number; item: Record<string, unknown> | null }>>();
+	const keyOf = (connectionId: unknown, channel: unknown) => `${String(connectionId)} ${String(channel)}`;
+	const record = (key: string, lagMs: number, item: Record<string, unknown> | null) => {
+		const list = writes.get(key) ?? [];
+		list.push({ seq: ++seq, at: Date.now() + lagMs, item });
+		writes.set(key, list);
+	};
+	const visible = (key: string) =>
+		(writes.get(key) ?? []).filter(w => w.at <= Date.now()).reduce<{ seq: number; item: Record<string, unknown> | null } | undefined>(
+			(latest, w) => (latest && latest.seq > w.seq ? latest : w),
+			undefined,
+		);
+	const originalPut = DistributedTable.prototype.put;
+	const originalDelete = DistributedTable.prototype.delete;
+	const originalQuery = DistributedTable.prototype.query;
+	DistributedTable.prototype.put = function (this: InstanceType<typeof DistributedTable>, item: Record<string, unknown>, ...rest: unknown[]) {
+		record(keyOf(item.connectionId, item.channel), putLagMs, { ...item });
+		return (originalPut as (...args: unknown[]) => Promise<void>).call(this, item, ...rest);
+	} as typeof originalPut;
+	DistributedTable.prototype.delete = function (this: InstanceType<typeof DistributedTable>, key: Record<string, unknown>, ...rest: unknown[]) {
+		record(keyOf(key.connectionId, key.channel), deleteLagMs, null);
+		return (originalDelete as (...args: unknown[]) => Promise<void>).call(this, key, ...rest);
+	} as typeof originalDelete;
+	DistributedTable.prototype.query = function (
+		this: InstanceType<typeof DistributedTable>,
+		options: { index?: string; where: { channel?: { equals?: unknown }; connectionId?: { equals?: unknown } } },
+	) {
+		if (options.index !== 'channel-index') return (originalQuery as (o: unknown) => AsyncIterable<Record<string, unknown>>).call(this, options);
+		const channel = options.where.channel?.equals;
+		const connectionId = options.where.connectionId?.equals;
+		const shown = [...writes.keys()]
+			.map(key => visible(key)?.item)
+			.filter((item): item is Record<string, unknown> =>
+				!!item && item.channel === channel && (connectionId === undefined || item.connectionId === connectionId));
+		return (async function* () { yield* shown; })();
+	} as typeof originalQuery;
+	try {
+		await fn({
+			visibleWrite: (connectionId, channel) => {
+				const shown = visible(keyOf(connectionId, channel));
+				return shown?.item ? shown.seq : 0;
+			},
+			lastPut: (connectionId, channel) => (writes.get(keyOf(connectionId, channel)) ?? []).filter(w => w.item).at(-1)?.seq ?? 0,
+		});
+	} finally {
+		DistributedTable.prototype.put = originalPut;
+		DistributedTable.prototype.delete = originalDelete;
+		DistributedTable.prototype.query = originalQuery;
+	}
+}
+
 describe('WebSocket handler: subscribe confirmation and the channel index', () => {
 	it('confirms a subscribe only once publish() can find it, so the first publish after it is delivered', async () => {
 		await withLaggingChannelIndex(300, async () => {
@@ -243,6 +310,34 @@ describe('WebSocket handler: subscribe confirmation and the channel index', () =
 			// What a client does as soon as `established` resolves.
 			await rt.publish('chat', 'room-lag', { text: 'first' });
 			assert.deepStrictEqual(repliesTo(connectionId).at(-1), { type: 'message', channel: descriptor.channel, data: { text: 'first' } });
+		});
+	});
+
+	it('on a re-subscribe, waits for this subscribe\'s record, not the previous one the index still shows', async () => {
+		await withReplicatedChannelIndex({ putLagMs: 600, deleteLagMs: 250 }, async (index) => {
+			const { connectionId, descriptor } = await connected('room-again');
+			const subscribe = () => wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+			await subscribe();
+			// Unsubscribe, then subscribe again at once, as createChat does before it resumes a turn.
+			await wsHandler()(messageEvent(connectionId, { action: 'unsubscribe', channel: descriptor.channel }));
+			const shownWhenConfirmed: number[] = [];
+			const send = ApiGatewayManagementApiClient.prototype.send;
+			ApiGatewayManagementApiClient.prototype.send = function (this: ApiGatewayManagementApiClient, command: { input: Posted }) {
+				if (JSON.parse(command.input.Data).type === 'subscribe_success') shownWhenConfirmed.push(index.visibleWrite(connectionId, descriptor.channel));
+				return (send as (c: unknown) => Promise<unknown>).call(this, command);
+			} as typeof send;
+			try {
+				await subscribe();
+			} finally {
+				ApiGatewayManagementApiClient.prototype.send = send;
+			}
+			assert.deepStrictEqual(shownWhenConfirmed, [index.lastPut(connectionId, descriptor.channel)], 'confirmed once the index shows the new record');
+
+			// Real time on purpose: publish once the unsubscribe's delete has reached the index, as a
+			// resumed turn's chunks do a moment after the confirmation.
+			await delay(300);
+			await rt.publish('chat', 'room-again', { text: 'resumed' });
+			assert.deepStrictEqual(repliesTo(connectionId).at(-1), { type: 'message', channel: descriptor.channel, data: { text: 'resumed' } });
 		});
 	});
 
