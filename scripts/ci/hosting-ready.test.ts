@@ -79,16 +79,16 @@ describe('describeResponse', () => {
 });
 
 describe('waitForHostingReady', () => {
-	it('returns at once when the site already serves HTML', async () => {
+	it('returns after three HTML answers in a row', async () => {
 		const clock = fakeClock();
 		const fetch = seqFetch([res(200, 'text/html', HTML)]);
 		const r = await waitForHostingReady(URL_, { fetch, ...clock, log: () => {} });
-		assert.deepEqual(r, { attempts: 1, elapsedMs: 0 });
-		assert.deepEqual(clock.sleeps, []);
-		assert.deepEqual(fetch.urls, [URL_]);
+		assert.deepEqual(r, { attempts: 3, elapsedMs: 4_000 });
+		assert.deepEqual(clock.sleeps, [2_000, 2_000], 'polls every 2 s by default');
+		assert.deepEqual(fetch.urls, [URL_, URL_, URL_]);
 	});
 
-	it('waits through XML, a network error and an error page, then returns on the first HTML', async () => {
+	it('waits through XML, a network error and 503s, and starts the count again when HTML is followed by XML', async () => {
 		const clock = fakeClock();
 		const lines: string[] = [];
 		const fetch = seqFetch([
@@ -97,19 +97,26 @@ describe('waitForHostingReady', () => {
 			}),
 			res(200, 'application/xml', XML),
 			res(200, 'application/xml', XML),
-			res(503, 'text/html', 'No route found'),
+			// A router that refuses requests until it has its route table.
+			res(503, null, ''),
+			res(200, 'text/html; charset=utf-8', HTML),
+			// Another edge server without the route table yet.
+			res(200, 'application/xml', XML),
+			res(200, 'text/html; charset=utf-8', HTML),
+			res(200, 'text/html; charset=utf-8', HTML),
 			res(200, 'text/html; charset=utf-8', HTML),
 			res(200, 'application/xml', XML),
 		]);
-		const r = await waitForHostingReady(URL_, { fetch, ...clock, intervalMs: 5_000, log: (l) => lines.push(l) });
-		assert.deepEqual(r, { attempts: 5, elapsedMs: 20_000 });
-		assert.equal(fetch.urls.length, 5, 'stops at the first HTML response');
-		// One line per new kind of answer, then the result.
+		const r = await waitForHostingReady(URL_, { fetch, ...clock, log: (l) => lines.push(l) });
+		assert.deepEqual(r, { attempts: 9, elapsedMs: 16_000 });
+		assert.equal(fetch.urls.length, 9, 'stops at the third HTML answer in a row');
+		// One line per new kind of answer (again after HTML), then the result.
 		assert.deepEqual(lines, [
 			`⏳ ${URL_} is not serving the app yet: TypeError: fetch failed (ENOTFOUND)`,
 			`⏳ ${URL_} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
-			`⏳ ${URL_} is not serving the app yet: HTTP 503 text/html: No route found`,
-			`✅ ${URL_} serves HTML (20.0s after the deploy, 5 request(s))`,
+			`⏳ ${URL_} is not serving the app yet: HTTP 503 (no content-type)`,
+			`⏳ ${URL_} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
+			`✅ ${URL_} served HTML 3 time(s) in a row (16.0s after the deploy, 9 request(s))`,
 		]);
 	});
 
@@ -121,7 +128,7 @@ describe('waitForHostingReady', () => {
 			(error: Error) => {
 				assert.equal(
 					error.message,
-					`${URL_} did not serve an HTML document (HTTP 200, text/html) within 12s of the deploy (4 requests). ` +
+					`${URL_} did not serve an HTML document (HTTP 200, text/html) 3 time(s) in a row within 12s of the deploy (4 requests). ` +
 						`Last response: HTTP 200 application/xml: ${XML_SNIPPET}`,
 				);
 				return true;
@@ -155,7 +162,7 @@ describe('waitForHostingReady', () => {
 				const started = performance.now();
 				await assert.rejects(
 					waitForHostingReady(url, { timeoutMs, requestTimeoutMs, intervalMs: 50, log: () => {} }),
-					/did not serve an HTML document \(HTTP 200, text\/html\) within \d+s of the deploy \(\d+ requests\)\. Last response: TimeoutError/,
+					/did not serve an HTML document \(HTTP 200, text\/html\) 3 time\(s\) in a row within \d+s of the deploy \(\d+ requests\)\. Last response: TimeoutError/,
 				);
 				const elapsed = performance.now() - started;
 				assert.ok(elapsed >= timeoutMs, `waited ${elapsed} ms, less than the ${timeoutMs} ms budget`);
@@ -172,21 +179,50 @@ describe('waitForHostingReady', () => {
 		await assert.rejects(waitForHostingReady(undefined, { log: () => {} }), /no HostingUrl output/);
 	});
 
-	it('waits on a real server that answers XML, then HTML', async () => {
+	it('fails with the connection error when nothing listens on the port', async () => {
+		const server = createServer();
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+		const { port } = server.address() as AddressInfo;
+		await new Promise((resolve) => server.close(resolve));
+		await assert.rejects(
+			waitForHostingReady(`http://127.0.0.1:${port}/`, { timeoutMs: 100, intervalMs: 50, log: () => {} }),
+			/Last response: Error: connect ECONNREFUSED/,
+		);
+	});
+
+	it('waits on a real server through XML, 503 and a flap back to XML, each request on a new connection', async () => {
+		const answers = ['xml', '503', 'html', 'xml', 'html', 'html', 'html'];
 		let requests = 0;
-		const server = createServer((req, response) => {
-			requests += 1;
-			const ready = requests > 2;
-			response.writeHead(200, { 'content-type': ready ? 'text/html; charset=utf-8' : 'application/xml' });
-			response.end(ready ? HTML : XML);
+		let connections = 0;
+		const server = createServer((_req, response) => {
+			const answer = answers[Math.min(requests++, answers.length - 1)];
+			if (answer === '503') {
+				response.writeHead(503, { 'cache-control': 'no-store', 'retry-after': '5' });
+				response.end();
+				return;
+			}
+			response.writeHead(200, { 'content-type': answer === 'html' ? 'text/html; charset=utf-8' : 'application/xml' });
+			response.end(answer === 'html' ? HTML : XML);
+		});
+		server.on('connection', () => {
+			connections += 1;
 		});
 		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 		try {
 			const { port } = server.address() as AddressInfo;
+			const lines: string[] = [];
+			const r = await waitForHostingReady(`http://127.0.0.1:${port}/`, { intervalMs: 20, log: (l) => lines.push(l) });
+			assert.equal(r.attempts, 7);
+			assert.equal(requests, 7);
+			assert.equal(connections, 7, 'every request opens its own connection');
 			const url = `http://127.0.0.1:${port}/`;
-			const r = await waitForHostingReady(url, { intervalMs: 50, log: () => {} });
-			assert.equal(r.attempts, 3);
-			assert.equal(requests, 3);
+			assert.deepEqual(lines.slice(0, 3), [
+				`⏳ ${url} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
+				`⏳ ${url} is not serving the app yet: HTTP 503 (no content-type)`,
+				`⏳ ${url} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
+			]);
+			assert.match(lines[3], /^✅ .* served HTML 3 time\(s\) in a row /);
+			assert.equal(lines.length, 4);
 		} finally {
 			await new Promise((resolve) => server.close(resolve));
 		}
