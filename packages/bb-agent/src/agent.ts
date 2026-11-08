@@ -306,24 +306,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			// Same rule as core's RPC serializer: only a branded error's message is client-safe.
 			// Strands can wrap a provider error and keep the original as `cause`, which drops the
-			// brand from the outer error, so look a few levels down the chain for a branded one.
-			let clientMessage = 'Internal error';
-			let current: unknown = err;
-			for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
-				const { cause } = current;
-				if (isWireSafeError(current)) {
-					clientMessage = current.message;
-					break;
-				}
-				current = cause;
-			}
+			// brand from the outer error, so look down the cause chain for a branded one.
+			const causeChain = walkCauseChain(err);
+			const wireSafe = causeChain.find(isWireSafeError);
+			let clientMessage = wireSafe ? wireSafe.message : 'Internal error';
 			// Log the deepest cause's name/status/requestId alongside the message: the thrown
 			// error is often an opaque wrapper (e.g. SessionError over a raw AWS error on a
 			// non-enumerable .cause), so err.message alone cannot identify what actually failed.
 			// Also log the deepest cause's message: a branded error keeps raw detail (e.g. a
 			// canned-dictionary SyntaxError) only on its non-enumerable cause, which the logger drops.
-			let deepest: unknown = err;
-			for (let depth = 0; depth < 5 && deepest instanceof Error && deepest.cause !== undefined; depth++) deepest = deepest.cause;
+			const deepest = causeChain[causeChain.length - 1];
 			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err), ...(deepest !== err && deepest instanceof Error ? { cause: deepest.message } : {}) });
 			// An account-level model-access refusal (e.g. Anthropic first-time-use not submitted, or a
 			// model not entitled for the account) passes the health check and only fails at invoke. Replace
