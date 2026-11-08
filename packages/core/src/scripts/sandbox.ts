@@ -20,6 +20,7 @@ import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
+import { DEFAULT_RETRY_DELAYS_MS, THROTTLE_BACKOFF_DEFAULTS } from './destroy-retry-budget.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -1008,12 +1009,6 @@ export interface ThrottleBackoff {
 	budgetMs?: number;
 }
 
-const THROTTLE_BACKOFF_DEFAULTS: Required<ThrottleBackoff> = {
-	baseMs: 60_000,
-	maxDelayMs: 300_000,
-	budgetMs: 20 * 60_000,
-};
-
 /**
  * The wait before throttle retry number `retry` (0-based): exponential
  * (`baseMs * 2^retry`, capped at `maxDelayMs`) with equal jitter, i.e. a
@@ -1146,7 +1141,9 @@ export interface DestroyRetryDeps {
  * resource that failed for a different reason in the same attempt gets the
  * throttle schedule too: it is retried later, not hidden, and still fails the
  * call once the budget is spent. With 5-minute attempts a call can run for
- * about 30 minutes before it fails (about 18 with the ordinary schedule alone).
+ * about 30 minutes before it fails (about 18 with the ordinary schedule alone);
+ * `maxDestroyRetryMs` (./destroy-retry-budget.ts) gives the exact bound, 32
+ * minutes for 5-minute attempts.
  *
  * A Lambda@Edge function can only be deleted once CloudFront has removed its
  * replicas, which takes a few hours after its distribution is deleted. So when
@@ -1156,7 +1153,7 @@ export interface DestroyRetryDeps {
  * {@link DestroyRetryDeps.rerunCommand} again later.
  */
 export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<void> {
-	const retryDelays = deps.retryDelays ?? [60_000, 120_000];
+	const retryDelays = deps.retryDelays ?? DEFAULT_RETRY_DELAYS_MS;
 	const label = deps.successLabel ?? 'Sandbox';
 	const now = deps.now ?? Date.now;
 	const random = deps.random ?? Math.random;
