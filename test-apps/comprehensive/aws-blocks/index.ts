@@ -2126,13 +2126,18 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // Same contract on the withRLS() transaction path.
-  async dbRlsTransactionConflict() {
+  // Same contract on the withRLS() transaction path. The note is written first
+  // (it passes the policy) so the e2e also proves the rollback.
+  async dbRlsTransactionConflict(id: string) {
     const scoped = await db.withRLS({ userId: 'user-a' });
     await scoped.transaction(async (tx) => {
-      await tx.queryOne(sql`SELECT current_user AS r`);
+      await tx.execute(sql`INSERT INTO test_notes (id, owner_id, body) VALUES (${id}, ${'user-a'}, ${'reserved'})`);
       throw new ApiError('Already reserved', 409, { name: 'AlreadyReservedException' });
     });
+  },
+
+  async dbNoteExists(id: string) {
+    return (await db.queryOne(sql`SELECT id FROM test_notes WHERE id = ${id}`)) !== null;
   },
 
   // Kysely transaction atomicity on the real (pooled / Data API) engine.

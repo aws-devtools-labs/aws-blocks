@@ -127,8 +127,10 @@ export function databaseTests(getApi: () => typeof apiType) {
     });
 
     test('Database - ApiError thrown in a withRLS() transaction keeps its status over the wire', async () => {
+      const api = getApi();
+      const id = `n-${Date.now().toString(36)}-rls-tx`;
       await assert.rejects(
-        () => getApi().dbRlsTransactionConflict(),
+        () => api.dbRlsTransactionConflict(id),
         (e: unknown) => {
           assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
           assert.strictEqual(e.status, 409);
@@ -136,6 +138,8 @@ export function databaseTests(getApi: () => typeof apiType) {
           return true;
         },
       );
+      // The insert ran before the throw; the rollback must undo it.
+      assert.strictEqual(await api.dbNoteExists(id), false);
     });
 
     test('Database - duplicate insert returns UniqueConstraintViolation', async () => {
