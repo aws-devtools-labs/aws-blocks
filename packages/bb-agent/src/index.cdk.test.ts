@@ -83,6 +83,17 @@ test('CDK: Agent provisions an AgentCore Runtime for the loop', async () => {
 	);
 });
 
+test('CDK: the session bucket expires the turn outcomes complete() reads after a day', async () => {
+	// Every turn records its final chunk under bb-agent-turn-outcomes/ (turn-outcomes.ts), and only
+	// complete() reads it, so nothing deletes most of them: the lifecycle rule bounds their number.
+	const template = await synth();
+	const withRule = Object.values(template.findResources('AWS::S3::Bucket')).filter((bucket) =>
+		((bucket.Properties?.LifecycleConfiguration?.Rules ?? []) as Array<{ Prefix?: string; ExpirationInDays?: number; Status?: string }>)
+			.some((rule) => rule.Prefix === 'bb-agent-turn-outcomes/' && rule.ExpirationInDays === 1 && rule.Status === 'Enabled'),
+	);
+	assert.strictEqual(withRule.length, 1, 'exactly the session bucket carries the rule');
+});
+
 test('CDK: the loop runs as the shared execution role, which carries everything it touches', async () => {
 	const template = await synth();
 	const json = JSON.stringify(template.toJSON());

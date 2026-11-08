@@ -5,6 +5,7 @@ import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/co
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
+import type { RealtimeChannel, RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -17,6 +18,7 @@ import { messageSchema, conversationSchema, agentStreamChunkSchema } from './sch
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
 import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavailableMessage, classifyModelAccessError, InterruptError, walkCauseChain } from './errors.js';
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
+import { InProcessTurnOutcomes, type TurnOutcomeStore } from './turn-outcomes.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 
@@ -41,6 +43,13 @@ export interface AgentTurnPayload<TContext = DefaultToolContext> {
 	interruptResponses?: Array<{ interruptId: string; response: string }>;
 	/** Per-call tool context, forwarded to tool invocations. JSON-serializable. */
 	context?: TContext;
+	/**
+	 * Unique id of this dispatch, minted by `stream()`/`resume()`. The turn records its terminal
+	 * chunk under it before publishing that chunk, so `complete()` still settles when the chunk
+	 * went out before its subscription existed (see turn-outcomes.ts). Absent on a payload from an
+	 * older caller, in which case no outcome is recorded.
+	 */
+	dispatchId?: string;
 }
 
 /** Key under which the per-call tool context is threaded through Strands `invocationState`. */
@@ -67,6 +76,12 @@ const TOOL_CALL_COUNT_KEY = '__bbAgentToolCallCount';
 const COUNTED_TOOL_USE_IDS_KEY = '__bbAgentCountedToolUseIds';
 /** Id of the turn the counters belong to, so a new turn can zero them lazily. */
 const TURN_ID_KEY = '__bbAgentCapTurnId';
+
+/**
+ * Channels whose latest resume() an Agent instance remembers (see AgentBase.resumedDispatches).
+ * One entry per channel resumed in this process; the oldest goes first beyond the bound.
+ */
+const MAX_TRACKED_RESUMES = 1000;
 
 /**
  * Validate a runaway-protection cap: a positive integer, `false` to disable, or
@@ -218,6 +233,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	private snapshotStorage: SnapshotStorage;
 	/** Internal FileBucket for session storage. */
 	private sessionBucket: FileBucket;
+	/** Where a turn records its terminal chunk before publishing it, for complete() (see turn-outcomes.ts). */
+	private turnOutcomes: TurnOutcomeStore;
+	/** Order of this instance's dispatches, so complete() can tell whether a resume() came after its own turn. */
+	private dispatchSeq = 0;
+	/**
+	 * The latest resume() this instance dispatched on each Realtime channel. complete() on the result
+	 * of an earlier stream() on that channel waits for this dispatch instead (the README's headless
+	 * approval loop calls complete() again after resume()). Bounded by MAX_TRACKED_RESUMES.
+	 */
+	private resumedDispatches = new Map<string, { dispatchId: string; seq: number }>();
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
 
@@ -227,8 +252,11 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @param config - developer-facing agent configuration
 	 * @param modelConfig - which model to use, picked by subclass (model.local or model.deployed)
 	 * @param createSnapshotStorage - factory that receives the internal FileBucket and the agent's logger and returns the appropriate SnapshotStorage
+	 * @param createTurnOutcomes - factory for the store turns record their terminal chunk in for complete(), given the
+	 *   same bucket and logger. Defaults to an in-memory store, which only works when turns run in this process (the
+	 *   base dispatchTurn); a subclass that dispatches elsewhere must pass a store both processes reach.
 	 */
-	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket, log: ChildLogger) => SnapshotStorage) {
+	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>, modelConfig: ModelConfig | ModelConfig[] | undefined, createSnapshotStorage: (bucket: FileBucket, log: ChildLogger) => SnapshotStorage, createTurnOutcomes: (bucket: FileBucket, log: ChildLogger) => TurnOutcomeStore = () => new InProcessTurnOutcomes()) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = config?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.config = config;
@@ -240,6 +268,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// IDs shortened to keep S3 bucket names within the 63-char limit
 		this.sessionBucket = new FileBucket(this, 'sn');
 		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
+		this.turnOutcomes = createTurnOutcomes(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
 			this.conversations = new DistributedTable(this, 'convos', {
@@ -287,6 +316,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
 	 * itself fails to publish (e.g. a channel path over Realtime's size limit).
 	 *
+	 * Every terminal chunk (`done`, `error`, `interrupt`) is recorded under `payload.dispatchId`
+	 * before it is published (see {@link publishTerminal}), so `complete()` settles even when the
+	 * chunk went out before its subscription existed, or failed to publish at all.
+	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
@@ -294,7 +327,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		let channel: string | undefined;
 		try {
 			channel = this.chunksChannel(payload.channelId, payload.userId);
-			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context);
+			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context, payload.dispatchId);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			// Log the deepest cause's name/status/requestId alongside the message: the thrown
@@ -327,11 +360,30 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			if (channel === undefined) return;
 			const errorChunk: AgentStreamChunk = { type: 'error', error: clientMessage, ...(errorName && { errorName }) };
 			try {
-				await this.rt.publish('chunks', channel, errorChunk);
+				await this.publishTerminal(channel, payload.dispatchId, errorChunk);
 			} catch (publishErr) {
 				this.log.error('Failed to publish error chunk', { error: publishErr instanceof Error ? publishErr.message : String(publishErr) });
 			}
 		}
+	}
+
+	/**
+	 * Publish a turn's terminal chunk (`done`, `error` or `interrupt`), recording it under the
+	 * dispatch id first. The order matters: complete() subscribes, waits until the subscription is
+	 * established, and only then reads the record. So either this publish finds that subscription,
+	 * or the publish started before it was in place, in which case the record was already written
+	 * and complete()'s read sees it. Without a dispatch id (a payload from an older caller) nothing
+	 * is recorded and complete() relies on the live chunk alone.
+	 *
+	 * The chunk carries the dispatch id, so a complete() waiting for one dispatch ignores another's
+	 * final chunk on the same channel. That matters because the record is readable before the
+	 * publish finishes: a caller can read a paused turn's interrupt, resume, and subscribe for the
+	 * resumed dispatch while the paused turn's interrupt is still on its way.
+	 */
+	private async publishTerminal(channel: string, dispatchId: string | undefined, chunk: AgentStreamChunk): Promise<void> {
+		const terminal: AgentStreamChunk = dispatchId ? { ...chunk, dispatchId } : chunk;
+		if (dispatchId) await this.turnOutcomes.record(dispatchId, terminal);
+		await this.rt.publish('chunks', channel, terminal);
 	}
 
 	/**
@@ -380,8 +432,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @param userId - owner of the conversation, stored on every persisted message
 	 * @param interruptResponses - approval responses when resuming a turn paused on a HITL interrupt
 	 * @param context - per-call tool context, threaded to tool handlers via Strands invocationState
+	 * @param dispatchId - id the terminal chunk is recorded under for complete() (see {@link publishTerminal})
 	 */
-	private async runAgent(message: string, conversationId: string | undefined, channelId: string, userId: string, interruptResponses?: Array<{ interruptId: string; response: string }>, context?: TContext): Promise<void> {
+	private async runAgent(message: string, conversationId: string | undefined, channelId: string, userId: string, interruptResponses?: Array<{ interruptId: string; response: string }>, context?: TContext, dispatchId?: string): Promise<void> {
 		const { InterruptResponseContent, ModelStreamUpdateEvent, BeforeModelCallEvent, BeforeToolCallEvent, AfterToolCallEvent, AgentResultEvent } = await loadStrands();
 		const strandsAgent = await this.createStrandsAgent(conversationId, context);
 		const startTime = Date.now();
@@ -508,7 +561,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 						}
 						// Publish interrupt chunk with pending approvals
 						const pendingInterrupts = event.result.interrupts.map(i => ({ id: i.id, name: i.name, reason: i.reason }));
-						await this.rt.publish('chunks', channelId, {
+						await this.publishTerminal(channelId, dispatchId, {
 							type: 'interrupt',
 							interrupts: pendingInterrupts,
 						});
@@ -555,7 +608,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 				// 'tool-result', so no dangling tool_use is left behind for the next turn.
 				await this.messages.put({ conversationId, messageId: ulid(), role: 'assistant' as const, content: fullText, contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: stoppedError, latencyMs }) });
 			}
-			await this.rt.publish('chunks', channelId, { type: 'error', error: stoppedError });
+			await this.publishTerminal(channelId, dispatchId, { type: 'error', error: stoppedError });
 			return;
 		}
 
@@ -574,7 +627,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			}
 		}
 
-		await this.rt.publish('chunks', channelId, { type: 'done', text: fullText, usage });
+		await this.publishTerminal(channelId, dispatchId, { type: 'done', text: fullText, usage });
 	}
 
 	private async createStrandsAgent(conversationId?: string, fallbackContext?: TContext): Promise<StrandsAgent> {
@@ -707,6 +760,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * error) — rejects this `stream()` call itself rather than reaching the channel. Always `await`
 	 * `stream()` so a dispatch failure isn't lost.
 	 *
+	 * `complete()` doesn't have to be called before the turn ends. The turn records its final chunk
+	 * before publishing it, so `complete()` settles even when the turn finished before `complete()`
+	 * was called or before its subscription was in place. The record is kept for a day on AWS and
+	 * for the most recent 1,000 turns locally; if recording fails, `complete()` relies on the live
+	 * chunk alone. It waits with no timeout, since a turn can run for hours: bound it yourself where
+	 * a deadline applies, e.g. inside an API method (API Gateway ends a request after about 29
+	 * seconds). It rejects when the channel can't be subscribed and the turn hasn't recorded its
+	 * outcome yet; calling it again then subscribes again, with fresh channel credentials. After
+	 * `resume()` on the same channel, `complete()` waits for the resumed turn.
+	 *
 	 * @throws ConversationNotFound when `options.conversationId` was not created by
 	 *   createConversationId(options.userId) (a missing and a foreign conversation look the same).
 	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
@@ -722,39 +785,129 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		const rtChannel = this.chunksChannel(channelId, userId);
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
 		const context = this.resolveContext(options?.context);
-		await this.dispatchTurn({ message, conversationId, channelId, userId, context });
+		const dispatchId = crypto.randomUUID();
+		await this.dispatchTurn({ message, conversationId, channelId, userId, context, dispatchId });
+		const dispatched = { dispatchId, seq: ++this.dispatchSeq };
 		const channel = this.rt.getChannel('chunks', rtChannel);
 		// Most callers never await `channel`; don't let a rejection go unhandled.
 		channel.catch(() => {});
+		// The wait complete() returned last, shared by repeated and concurrent calls for the same dispatch.
+		let waiting: { dispatchId: string; outcome: Promise<AgentStreamChunk> } | undefined;
 		return {
 			channelId,
 			/** Realtime channel handle — subscribe to streaming chunks or return to client as Transferable. */
 			channel,
-			/** Wait for the complete response (server-side). Resolves on done, rejects on error. */
-			complete: () => new Promise<AgentStreamChunk>((resolve, reject) => {
-				const unsub = this.rt.subscribe('chunks', rtChannel, (data) => {
-					const chunk = data as AgentStreamChunk;
-					if (chunk.type === 'done') {
-						unsub();
-						resolve(chunk);
-					} else if (chunk.type === 'error') {
-						unsub();
-						// StreamFailed unless the server classified the failure (e.g. ModelUnavailable).
-						reject(agentErrorFromChunk(chunk));
-					} else if (chunk.type === 'interrupt') {
-						unsub();
-						reject(new InterruptError('Agent requires approval to continue', chunk.interrupts ?? []));
-					}
-				});
-			}),
+			/**
+			 * Wait for the complete response (server-side). Resolves on done, rejects on error.
+			 *
+			 * Rejects with InterruptError on an interrupt. Waits for this turn, or for a later resume()
+			 * of it on the same channel; calling it again returns the same outcome.
+			 */
+			complete: () => {
+				const target = this.awaitedDispatch(rtChannel, dispatched);
+				if (waiting?.dispatchId !== target) {
+					const outcome = this.waitForOutcome(rtChannel, target, () => {
+						if (waiting?.outcome === outcome) waiting = undefined;
+					});
+					waiting = { dispatchId: target, outcome };
+				}
+				return waiting.outcome;
+			},
 			toJSON() { return { channelId, channel: null }; },
 		};
+	}
+
+	/**
+	 * Settle with the terminal chunk of dispatch `dispatchId`: resolve on `done`, reject on `error`
+	 * (StreamFailed unless the server classified it) or `interrupt` (InterruptError).
+	 *
+	 * Subscribes first and reads the recorded outcome only once the subscription is established;
+	 * {@link publishTerminal} explains why that order can't miss the chunk. On AWS this relies on
+	 * `established` meaning that publish() can already find the subscription. No timeout: a turn
+	 * can legitimately run for hours.
+	 *
+	 * Each wait gets its own channel handle rather than reusing the one stream() returned: on AWS a
+	 * handle carries credentials signed when it was created (the channel token lasts an hour), and a
+	 * wait can start much later, e.g. after an approval that took longer than that.
+	 *
+	 * A live terminal chunk stamped with another dispatch's id (see publishTerminal) is ignored. One
+	 * without an id, published by an agent runtime that predates the stamp (e.g. mid-deploy), is
+	 * accepted as before, since it can't be attributed.
+	 *
+	 * When the channel can't be subscribed and no outcome is recorded, nothing can deliver the
+	 * outcome, so this rejects with the subscription error and calls `onUnobservable`, letting the
+	 * next complete() subscribe again instead of returning the same failure.
+	 */
+	private waitForOutcome(rtChannel: string, dispatchId: string, onUnobservable: () => void): Promise<AgentStreamChunk> {
+		return new Promise<AgentStreamChunk>((resolve, reject) => {
+			let settled = false;
+			let sub: RealtimeSubscription | undefined;
+			const settle = (chunk: AgentStreamChunk): void => {
+				if (settled || (chunk.type !== 'done' && chunk.type !== 'error' && chunk.type !== 'interrupt')) return;
+				if (chunk.dispatchId !== undefined && chunk.dispatchId !== dispatchId) return;
+				settled = true;
+				sub?.unsubscribe();
+				this.turnOutcomes.release(dispatchId);
+				if (chunk.type === 'done') resolve(chunk);
+				// StreamFailed unless the server classified the failure (e.g. ModelUnavailable).
+				else if (chunk.type === 'error') reject(agentErrorFromChunk(chunk));
+				else reject(new InterruptError('Agent requires approval to continue', chunk.interrupts ?? []));
+			};
+			const fail = (err: unknown): void => {
+				if (settled) return;
+				settled = true;
+				sub?.unsubscribe();
+				onUnobservable();
+				reject(err);
+			};
+			void (async () => {
+				let subscribeFailed = false;
+				let subscribeError: unknown;
+				try {
+					const channel: RealtimeChannel<AgentStreamChunk> = await this.rt.getChannel('chunks', rtChannel);
+					sub = channel.subscribe(settle);
+					await sub.established;
+				} catch (err) {
+					subscribeFailed = true;
+					subscribeError = err;
+				}
+				if (settled) return;
+				let recorded: AgentStreamChunk | null = null;
+				try {
+					recorded = await this.turnOutcomes.read(dispatchId);
+				} catch (err) {
+					// The live subscription can still deliver the outcome; only the fallback is lost.
+					this.log.warn('Failed to read turn outcome', { dispatchId, error: err instanceof Error ? err.message : String(err) });
+				}
+				if (recorded) settle(recorded);
+				else if (subscribeFailed) fail(subscribeError);
+			})().catch(fail);
+		});
+	}
+
+	/** The dispatch complete() on a stream() result waits for: its own, or a later resume() on its channel. */
+	private awaitedDispatch(rtChannel: string, own: { dispatchId: string; seq: number }): string {
+		const resumed = this.resumedDispatches.get(rtChannel);
+		return resumed && resumed.seq > own.seq ? resumed.dispatchId : own.dispatchId;
+	}
+
+	/** Remember `dispatchId` as the latest resume() on `rtChannel` (see resumedDispatches). */
+	private noteResume(rtChannel: string, dispatchId: string): void {
+		// Re-insert so the Map's insertion order is recency order and the bound drops the stalest channel.
+		this.resumedDispatches.delete(rtChannel);
+		this.resumedDispatches.set(rtChannel, { dispatchId, seq: ++this.dispatchSeq });
+		if (this.resumedDispatches.size > MAX_TRACKED_RESUMES) {
+			const oldest = this.resumedDispatches.keys().next();
+			if (!oldest.done) this.resumedDispatches.delete(oldest.value);
+		}
 	}
 
 	/**
 	 * Resume an interrupted agent with user's responses.
 	 * Dispatches a new turn that loads the session and continues from the interrupt point.
 	 * Chunks are published to the same channelId — use the existing subscription or call complete() again to wait for the result.
+	 * `complete()` on the result of the `stream()` that paused waits for this resumed turn when called after this
+	 * resolves, in the same process, and settles even if the resumed turn has already finished.
 	 *
 	 * Like `stream()`, errors surface on two paths: loop failures arrive as an `error` chunk on the
 	 * channel once the turn is dispatched, while a failure to *dispatch* (e.g. on AWS when the AgentCore
@@ -793,7 +946,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		// the channel (it throws, rather than failing in the background turn, for a userId that
 		// can't be scoped; see chunksChannel) and validate the tool context first: both are
 		// local checks.
-		this.chunksChannel(channelId, userId);
+		const rtChannel = this.chunksChannel(channelId, userId);
 		const context = this.resolveContext(options?.context);
 		// A non-owner must not be able to approve (or `trust`) someone else's pending tool call.
 		await this.assertOwnsConversation(conversationId, userId);
@@ -809,7 +962,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			interruptId: r.interruptId,
 			response: r.response != null ? String(r.response) : r.approved ? (r.trust ? 'trust' : 'yes') : 'no',
 		}));
-		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context });
+		const dispatchId = crypto.randomUUID();
+		await this.dispatchTurn({ message: '', conversationId, channelId, userId, interruptResponses: translated, context, dispatchId });
+		this.noteResume(rtChannel, dispatchId);
 	}
 
 	/**

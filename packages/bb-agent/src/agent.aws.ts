@@ -14,6 +14,7 @@ import { AgentBase, type AgentTurnPayload } from './agent.js';
 import { AgentErrors, blocksAgentError } from './errors.js';
 import type { AgentConfig, DefaultToolContext } from './types.js';
 import { BedrockModels } from './models.js';
+import { BucketTurnOutcomes } from './turn-outcomes.js';
 
 /**
  * AgentCore requires a `runtimeSessionId` of at least 33 characters. Conversation/channel ids
@@ -81,7 +82,16 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 	private _agentCore?: BedrockAgentCoreClient;
 
 	constructor(scope: ScopeParent, id: string, config: AgentConfig<TContext>) {
-		super(scope, id, config, config.model?.deployed ?? BedrockModels.BALANCED, createDeployedSnapshotStorage);
+		// The turn runs on the AgentCore Runtime and complete() in the Lambda, so turn outcomes go
+		// in the session bucket, which both run with access to (see turn-outcomes.ts).
+		super(
+			scope,
+			id,
+			config,
+			config.model?.deployed ?? BedrockModels.BALANCED,
+			createDeployedSnapshotStorage,
+			(bucket, log) => new BucketTurnOutcomes(bucket, log),
+		);
 	}
 
 	/**
@@ -118,6 +128,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 			userId: payload.userId,
 			interruptResponses: payload.interruptResponses,
 			context: payload.context,
+			dispatchId: payload.dispatchId,
 		};
 		await this._agentCore.send(
 			new InvokeAgentRuntimeCommand({

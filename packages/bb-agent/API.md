@@ -6,7 +6,7 @@
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
-import { RealtimeChannel } from '@aws-blocks/bb-realtime';
+import type { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { SnapshotStorage } from '@strands-agents/sdk';
@@ -74,6 +74,7 @@ export interface AgentResult {
 
 // @public (undocumented)
 export interface AgentStreamChunk {
+    dispatchId?: string;
     // (undocumented)
     error?: string;
     errorName?: string;
@@ -118,6 +119,7 @@ export interface AgentTurnPayload<TContext = DefaultToolContext> {
     channelId: string;
     context?: TContext;
     conversationId?: string;
+    dispatchId?: string;
     interruptResponses?: Array<{
         interruptId: string;
         response: string;
