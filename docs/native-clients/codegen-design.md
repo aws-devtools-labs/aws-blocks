@@ -156,6 +156,8 @@ Two `x-blocks-*` extension fields cover the gaps where standard OpenRPC doesn't 
 
 The full reference, including the tag table for native codegen authors, lives in [`schema-generation-guide-for-devs.md` § Spec extensions reference](./schema-generation-guide-for-devs.md#spec-extensions-reference).
 
+A tag maps to one runtime type, and the generated facade returns that type with the spec's type arguments applied (`RealtimeChannel<Cursor>`). One exception, on Dart only: an `oidc/client` whose spec names its providers returns `TypedOidcClient<P>`, an extension type over the runtime `OidcClient` that narrows `signIn`, `signInRelay` and `exchange` to the generated provider enum `P`. It adds no runtime type and no logic, only a compile-time view. It exists because Dart's generics are covariant: a class type parameter that methods only take, as `OidcClient`'s provider is, would be checked at runtime instead of compile time, so an upcast client would accept any provider. Swift and Kotlin make `OidcClient` itself generic. See [`schema-generation-guide-for-devs.md`](./schema-generation-guide-for-devs.md#x-blocks-type-args-on-a-methods-resultschema).
+
 #### Declared native packages and bindings
 
 Two top-level extension objects let a block declare its own native package instead of relying on a generator's hard-coded tag switch.
