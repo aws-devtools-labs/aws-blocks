@@ -22,6 +22,19 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
+  `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
+  of type `P` (and send its `providerName`) instead of a name, so a typo or
+  a provider the client doesn't have is a compile error. Generated clients
+  return one for a method whose spec names its providers. It is the same
+  object as the `OidcClient` it wraps, with no cost at runtime: every other
+  member is the client's, and it can be passed wherever an `OidcClient` is
+  expected, where it takes names again. `OidcClient` itself is unchanged.
+- Add `OidcProvider`, the interface a provider type implements:
+  `providerName` is the name the backend knows the provider by.
+- `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
+  its descriptor doesn't list or has no config for, as `signInRelay` does.
+  It used to fail a null check.
 
 ## 0.2.0
 

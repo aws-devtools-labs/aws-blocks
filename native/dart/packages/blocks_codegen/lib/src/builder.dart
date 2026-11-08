@@ -70,6 +70,7 @@ const blocksRuntimeTypeNames = {
   'OidcException',
   'OidcExchangeException',
   'OidcLoading',
+  'OidcProvider',
   'OidcSignedIn',
   'OidcSignedOut',
   'OidcUnknownProviderException',
@@ -80,6 +81,7 @@ const blocksRuntimeTypeNames = {
   'SessionStore',
   'StatePayload',
   'TokenStore',
+  'TypedOidcClient',
   'UnknownTransferable',
   'WebSocketPool',
 };

@@ -9,6 +9,10 @@
   pass the plain values the method needs instead. Decoding transferables,
   including inside models, lists, maps and realtime messages, is unchanged.
   Requires `blocks_runtime` with the matching change.
+- A declared native binding whose export is named `TypedOidcClient` or
+  `OidcProvider` is a generation error, as for every other public
+  `blocks_runtime` type, because the generated library imports the runtime
+  wholesale and the name would be ambiguous.
 
 ## 0.2.0
 
