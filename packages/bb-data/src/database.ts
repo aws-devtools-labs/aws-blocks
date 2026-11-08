@@ -101,10 +101,11 @@ export class RLSEnabledDatabase extends DatabaseBase {
    *
    * @param fn - Function receiving a {@link Transaction} with query/queryOne/execute methods
    * @returns The value returned by `fn`
-   * @throws {DatabaseErrors.TransactionFailed} If the transaction cannot be committed
-   *   or if `fn` throws a non-database error. An `ApiError` or branded Building
-   *   Block error thrown by `fn` is re-thrown unchanged after the rollback, so it
-   *   keeps its status and name.
+   * @throws {DatabaseErrors.TransactionFailed} If `fn` throws a plain `Error` that
+   *   carries no Building Block error name. Failures to begin or commit surface as
+   *   `ConnectionFailed`, `QueryFailed` or `SerializationFailure`. An `ApiError` or
+   *   branded Building Block error thrown by `fn` is re-thrown unchanged after the
+   *   rollback, so it keeps its status and name.
    *
    * @example
    * import { sql } from '@aws-blocks/bb-data';
