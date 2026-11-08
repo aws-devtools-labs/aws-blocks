@@ -28,6 +28,7 @@ describe('getRequestBaseUrl across duplicate copies of @aws-blocks/core', () => 
 	});
 
 	it('outside a request, both copies fall back to the request origin', () => {
+		assert.strictEqual(first.getRequestBaseUrl(ctx), 'https://abc123.execute-api.us-east-1.amazonaws.com');
 		assert.strictEqual(second.getRequestBaseUrl(ctx), 'https://abc123.execute-api.us-east-1.amazonaws.com');
 	});
 });
