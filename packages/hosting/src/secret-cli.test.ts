@@ -305,6 +305,11 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 			}
 			return {};
 		});
+		// Capture what `set` prints instead of letting it reach stdout: `node --test` reads this file's
+		// results from its stdout, and Node 22 misreads non-ASCII text (these lines start with emoji)
+		// written right after a result as a message length, failing the file with "Unable to
+		// deserialize cloned data" (nodejs/node#64061, fixed in Node 24.20.0, not yet in 22).
+		const log = mock.method(console, 'log', () => {});
 		const input = Object.assign(new PassThrough(), { isTTY: false });
 		const stdin = Object.getOwnPropertyDescriptor(process, 'stdin');
 		Object.defineProperty(process, 'stdin', { configurable: true, get: () => input });
@@ -315,6 +320,13 @@ void describe('runValueCli() — Secrets Manager edge cases', () => {
 			if (stdin) Object.defineProperty(process, 'stdin', stdin);
 		}
 		assert.deepStrictEqual(calls, ['CreateSecretCommand', 'RestoreSecretCommand', 'PutSecretValueCommand']);
+		assert.deepStrictEqual(
+			log.mock.calls.map((call) => call.arguments[0]),
+			[
+				"♻️  secret 'ZZ_DBG' was scheduled for deletion; restored it.",
+				"🔐 secret 'ZZ_DBG' set (blocks/secrets/ZZ_DBG).",
+			],
+		);
 	});
 
 	void it('reports a forced remove of a secret that does not exist as not set, and deletes nothing', async () => {
