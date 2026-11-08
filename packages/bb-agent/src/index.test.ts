@@ -4680,7 +4680,7 @@ describe('invokeTurn error redaction', () => {
 		);
 		const conversationId = await agent.createConversationId('test-user');
 		// Subscribe before dispatch so the in-process turn's error chunk can't be missed.
-		const channel = await agent.getChannel(conversationId);
+		const channel = await agent.getChannel(conversationId, { userId: 'test-user' });
 		const errorChunk = new Promise<AgentStreamChunk>((resolve) => {
 			channel.subscribe((chunk: AgentStreamChunk) => {
 				if (chunk.type === 'error') resolve(chunk);
@@ -4692,7 +4692,7 @@ describe('invokeTurn error redaction', () => {
 			(err: unknown) => err,
 		);
 		const chunk = await errorChunk;
-		const history = await agent.getConversation(conversationId);
+		const history = await agent.getConversation(conversationId, { userId: 'test-user' });
 		const persisted = history.filter((m) => m.role === 'assistant').map((m) => m.metadata);
 		return { chunk, rejection, persisted, errors };
 	}
@@ -4758,7 +4758,7 @@ describe('invokeTurn error redaction', () => {
 		try {
 			writeFileSync(filePath, `{ "release": ${MARKER} }`);
 			const conversationId = await agent.createConversationId('test-user');
-			const channel = await agent.getChannel(conversationId);
+			const channel = await agent.getChannel(conversationId, { userId: 'test-user' });
 			const errorChunk = new Promise<AgentStreamChunk>((resolve) => {
 				channel.subscribe((chunk: AgentStreamChunk) => {
 					if (chunk.type === 'error') resolve(chunk);
@@ -4770,7 +4770,7 @@ describe('invokeTurn error redaction', () => {
 				(err: unknown) => err,
 			);
 			const chunk = await errorChunk;
-			const history = await agent.getConversation(conversationId);
+			const history = await agent.getConversation(conversationId, { userId: 'test-user' });
 
 			const clientVisible = JSON.stringify({
 				chunk,
