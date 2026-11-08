@@ -375,7 +375,8 @@ export interface RepoFiles {
  * other than the {@link SKIPPED_DIRS}. Either way, shell scripts, Dockerfiles
  * and CI workflows count; `*.md`, `*.mdx` and `*.mdc` files, files over
  * {@link MAX_SCANNED_BYTES}, binary files (a NUL byte), the root
- * `package.json` (its scripts are checked after the rewrite) and symbolic
+ * `package.json` (its scripts are checked after the rewrite, and its other
+ * fields by {@link packageJsonUsers}) and symbolic
  * links, which are not followed, do not. Each file is read once, and only the
  * wrappers it names are kept. Above the project root, only the `repos` files
  * are read: the `package.json` files and CI, shell and Docker files of a
@@ -436,6 +437,25 @@ function wrapperUsers(
 			const uses = new Set(wrappers.filter((w) => refersTo(text, rel, w, { bare: true, prefix })).map((w) => w.path));
 			if (uses.size > 0) users.push({ path: [...up, rel].join('/'), uses });
 		}
+	}
+	return users;
+}
+
+/**
+ * The top-level fields of the app's `package.json` other than `scripts` that
+ * name one of `wrappers`, as `package.json#<field>`: a `lint-staged`,
+ * `simple-git-hooks` or `nodemonConfig` block runs commands as `scripts` do,
+ * so a bare `scripts/deploy.ts` or `deploy.ts` counts there as well.
+ */
+function packageJsonUsers(pkg: PackageJson, wrappers: readonly Wrapper[]): WrapperUser[] {
+	const users: WrapperUser[] = [];
+	for (const [field, value] of Object.entries(pkg)) {
+		if (field === 'scripts') continue;
+		const text = JSON.stringify(value);
+		const uses = new Set(
+			wrappers.filter((w) => refersTo(text, 'package.json', w, { bare: true })).map((w) => w.path),
+		);
+		if (uses.size > 0) users.push({ path: `package.json#${field}`, uses });
 	}
 	return users;
 }
@@ -801,7 +821,7 @@ export function planMigration(
 			});
 		}
 	}
-	const namers = wrapperUsers(root, wrappers, files, repos);
+	const namers = [...wrapperUsers(root, wrappers, files, repos), ...packageJsonUsers(pkg, wrappers)];
 	let changed = true;
 	while (changed) {
 		changed = false;

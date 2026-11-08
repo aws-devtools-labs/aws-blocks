@@ -207,6 +207,26 @@ describe('cdk-blocks migrate references', () => {
 		assert.deepStrictEqual(scriptsDir(root), ['console.ts', 'deploy.ts', 'destroy.ts', 'server.ts', 'typegen.ts']);
 	});
 
+	it('keeps a generated wrapper that a non-script field of the app package.json runs', async () => {
+		const root = writeApp('api-only@0ab6b047', (app) => {
+			app.packageJson['lint-staged'] = { '*.ts': 'tsx aws-blocks/scripts/typegen.ts' };
+			app.packageJson['simple-git-hooks'] = { 'pre-push': 'cd aws-blocks && npx tsx scripts/deploy.ts' };
+			app.packageJson.nodemonConfig = { exec: 'tsx aws-blocks\\scripts\\server.ts' };
+		});
+		const run = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(run.code, 1, run.stderr);
+		assert.deepStrictEqual(keptReasons(run.stdout), [
+			['aws-blocks/scripts/deploy.ts', 'generated, but still used by package.json#simple-git-hooks'],
+			['aws-blocks/scripts/server.ts', 'generated, but still used by package.json#nodemonConfig'],
+			['aws-blocks/scripts/typegen.ts', 'generated, but still used by package.json#lint-staged'],
+		]);
+		assert.deepStrictEqual(scriptsDir(root), ['deploy.ts', 'server.ts', 'typegen.ts']);
+		// The scripts still migrate, and the fields stay as they were.
+		const pkg: Record<string, unknown> = readPkg(root);
+		assert.strictEqual(readPkg(root).scripts.typegen, 'cdk-blocks generate types');
+		assert.deepStrictEqual(pkg['lint-staged'], { '*.ts': 'tsx aws-blocks/scripts/typegen.ts' });
+	});
+
 	it('keeps a generated wrapper that a Windows script or a package.json script names with backslashes', async () => {
 		const root = writeApp('api-only@0ab6b047', (app) => {
 			app.files['release.cmd'] = '@echo off\r\nnpx tsx aws-blocks\\scripts\\deploy.ts\r\n';
