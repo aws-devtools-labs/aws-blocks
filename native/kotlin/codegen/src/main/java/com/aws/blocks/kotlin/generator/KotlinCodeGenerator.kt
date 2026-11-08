@@ -4,6 +4,7 @@ import com.aws.blocks.kotlin.NamingUtils
 import com.aws.blocks.kotlin.model.ApiNamespace
 import com.aws.blocks.kotlin.model.CodegenModel
 import com.aws.blocks.kotlin.CodegenException
+import com.aws.blocks.kotlin.forDiagnostic
 import com.aws.blocks.kotlin.model.Constraints
 import com.aws.blocks.kotlin.model.DiscriminatorInfo
 import com.aws.blocks.kotlin.model.DiscriminatorType
@@ -119,21 +120,40 @@ private val RESERVED_FILE_NAMES = setOf("Types", "Serializers", "Servers")
 
 private const val API_SUFFIX = "Api"
 
+private const val SCHEMA_VERSION = 1
+
+private const val TRANSFERABLE_KIND = "transferable"
+
 private data class BoundTransferable(val type: ClassName, val genericArity: Int)
+
+private data class TypeNameClaim(val packageIdentity: String, val export: String, val genericArity: Int)
 
 private fun resolveBoundTransferables(
     catalogs: NativeCatalogs,
     excludedPackages: Set<String>,
-): Map<String, BoundTransferable> = catalogs.bindings
-    .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
-    .mapNotNull { binding ->
-        binding.kotlinPackage?.let { kotlinPackage ->
-            binding.tag to BoundTransferable(
-                ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export)),
-                binding.genericArity,
-            )
-        }
-    }.toMap()
+): Map<String, BoundTransferable> {
+    val claimants = mutableMapOf<String, TypeNameClaim>()
+    return catalogs.bindings
+        .filter { it.tag !in knownTransferableTags && it.packageIdentity !in excludedPackages }
+        .mapNotNull { binding ->
+            binding.kotlinPackage?.let { kotlinPackage ->
+                val type = ClassName(kotlinPackage, NamingUtils.exportTypeName(binding.export))
+                val claim = TypeNameClaim(binding.packageIdentity, binding.export, binding.genericArity)
+                val prior = claimants[type.canonicalName]
+                if (prior != null && prior != claim) {
+                    throw CodegenException(
+                        "x-blocks-native-bindings binds tag \"${binding.tag.forDiagnostic()}\" to " +
+                            "${type.canonicalName}, already resolved by export " +
+                            "\"${prior.export.forDiagnostic()}\" in package " +
+                            "\"${prior.packageIdentity.forDiagnostic()}\" " +
+                            "at generic arity ${prior.genericArity}",
+                    )
+                }
+                claimants[type.canonicalName] = claim
+                binding.tag to BoundTransferable(type, binding.genericArity)
+            }
+        }.toMap()
+}
 
 /**
  * Generates Kotlin source files from a [CodegenModel] using KotlinPoet.
@@ -177,6 +197,14 @@ class KotlinCodeGenerator(
         val warnings = mutableListOf<String>()
         val serializerRegistry = TransferableSerializerRegistry()
         val bound = resolveBoundTransferables(model.nativeCatalogs, excludedPackages)
+
+        for (declared in model.nativeCatalogs.declaredBindings.filter { it.kind != TRANSFERABLE_KIND }) {
+            warnings.add(
+                "AWSBLOCKS-NATIVE-004: binding '${declared.id.forDiagnostic()}' declares kind " +
+                    "'${declared.kind.forDiagnostic()}', which schema $SCHEMA_VERSION " +
+                    "does not define; ignored on kotlin.",
+            )
+        }
 
         for (namespace in model.apiNamespaces) {
             val original = toPascalCase(namespace.name)
@@ -261,14 +289,16 @@ class KotlinCodeGenerator(
 
         for (identity in (excludedPackages - model.nativeCatalogs.declaredPackages).sorted()) {
             warnings.add(
-                "AWSBLOCKS-NATIVE-006: excluded native package '$identity' is not declared by " +
+                "AWSBLOCKS-NATIVE-006: excluded native package '${identity.forDiagnostic()}' " +
+                    "is not declared by " +
                     "x-blocks-native-packages; nothing was opted out for it on kotlin.",
             )
         }
 
         for (identity in model.nativeCatalogs.unreferencedPackages - excludedPackages) {
             warnings.add(
-                "AWSBLOCKS-NATIVE-003: native package '$identity' is declared but no binding " +
+                "AWSBLOCKS-NATIVE-003: native package '${identity.forDiagnostic()}' is declared " +
+                    "but no binding " +
                     "references it; nothing is imported for it on kotlin.",
             )
         }
@@ -1849,7 +1879,7 @@ class KotlinCodeGenerator(
         val binding = bound[transferable.transferableName] ?: return null
         if (transferable.typeArgs.size != binding.genericArity) {
             throw CodegenException(
-                "$namespace.${operation.name} returns \"${transferable.transferableName}\", bound at " +
+                "$namespace.${operation.name.forDiagnostic()} returns \"${transferable.transferableName.forDiagnostic()}\", bound at " +
                     "genericArity ${binding.genericArity}, but its result carries " +
                     "${transferable.typeArgs.size} x-blocks-type-args entries",
             )
@@ -1915,8 +1945,8 @@ class KotlinCodeGenerator(
             1 -> "type argument ${models[0]}"
             else -> "type arguments ${models.joinToString(", ")}"
         }
-        val safeTag = transferable.transferableName.replace("\n", "\\n").replace("\r", "\\r")
-        return "AWSBLOCKS-NATIVE-001: $operation returns unbound transferable " +
+        val safeTag = transferable.transferableName.forDiagnostic()
+        return "AWSBLOCKS-NATIVE-001: ${operation.forDiagnostic()} returns unbound transferable " +
             "'$safeTag' on kotlin; generated UnknownTransferable with $typeArgClause."
     }
 

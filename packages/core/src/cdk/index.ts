@@ -15,6 +15,7 @@ import {
 } from '../common/index.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import {
+	assertBlocksDefaults,
 	assertCdkConditionActive,
 	BlocksBackend,
 	buildSharedGateway,
@@ -35,6 +36,7 @@ import {
 	publicApiUrl,
 	resolveApiFrontDoor,
 } from './api-front-door.js';
+import type { ApiDirectRoute } from './api-direct-routes.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
@@ -125,6 +127,8 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 	_apiWaf?: ResolvedApiWaf;
 	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
 	_apiFrontDoorMarked?: boolean;
+	/** The API paths a CloudFront front door routes straight to a container's load balancer; set with the gateway. @internal */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -240,6 +244,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 	static async create(scope: Construct, id: string, props: CoreBlocksStackProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksStack');
 
 		// Detect ambient pipeline stage scope set by Pipeline appFile imports
 		const pipelineScope = (globalThis as any)[__PIPELINE_STAGE_SCOPE__];

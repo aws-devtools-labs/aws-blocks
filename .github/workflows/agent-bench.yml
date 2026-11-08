@@ -30,13 +30,18 @@ env:
   NPM_CONFIG_FETCH_RETRY_MINTIMEOUT: '20000'
   NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: '120000'
 
+# Every job runs on ubuntu-24.04, not ubuntu-latest. ubuntu-latest moved to Ubuntu 26.04, where the
+# bench's pinned Playwright (scripts/ci/agent-bench-playwright) cannot install chromium ("Playwright
+# does not support chromium on ubuntu26.04-x64"), so no cell could run its tests. All four jobs
+# share the image so the self-check tests the isolation layout the cells actually run on. Move to
+# a newer image together with a Playwright version that supports it.
 jobs:
   # Build + pack the whole monorepo to a local npm registry ONCE per run, handed to every cell
   # as the dist-registry/ artifact (cells resolve @aws-blocks/* from the packed .tgz, not symlinks,
   # so every cell tests byte-identical packages). Replaces the per-cell monorepo rebuild. No AWS.
   build-blocks:
     name: build blocks (pack dist-registry once)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -66,7 +71,7 @@ jobs:
 
   bench:
     name: ${{ matrix.task }} · ${{ matrix.template }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Not the sum of the step caps: the capped steps add up to 130 min (Playwright package 5,
     # browser install 25, agent 35, build/test 12, judge 20, analyze 20, stage 10, S3 persist 3),
     # plus the uncapped ones. Even the main path (package 5 + browser 25 + agent 35 + build/test
@@ -499,7 +504,7 @@ jobs:
 
   summary:
     needs: [bench, build-blocks]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     # id-token: OIDC -> S3 to read/write the baseline. pull-requests: write posts the scoreboard as a
     # sticky PR comment (in addition to the Actions run summary) so the delta is visible on the PR.
@@ -696,7 +701,7 @@ jobs:
   # gate. Runs once per bench run, no AWS/OIDC.
   selfcheck:
     name: bench self-check (tsc + unit)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read

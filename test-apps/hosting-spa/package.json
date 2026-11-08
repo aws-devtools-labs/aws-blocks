@@ -28,7 +28,7 @@
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3",
     "tsx": "^4.23.15",
-    "vite": "^6.4.4",
+    "vite": "^6.4.5",
     "concurrently": "^8.2.2",
     "aws-cdk-lib": "^2.274.0",
     "constructs": "^10.8.1",
