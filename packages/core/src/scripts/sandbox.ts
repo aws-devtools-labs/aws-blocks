@@ -367,7 +367,13 @@ export async function startSandbox(options: SandboxOptions) {
   // FAIL event manually (mirroring the CDK-deploy failure path below) before
   // rethrowing — otherwise a no-creds abort sends no telemetry.
   try {
-    await assertAwsCredentials({ command: 'sandbox', invocation, projectRoot: process.cwd(), checkBootstrap: true });
+    await assertAwsCredentials({
+      command: 'sandbox',
+      invocation,
+      projectRoot: process.cwd(),
+      checkBootstrap: true,
+      expressBootstrap: true,
+    });
   } catch (error) {
     buildAndSendEvent({
       command: 'sandbox',
