@@ -13,9 +13,10 @@ deployed.
 
 1. Resolve the PR head and its merge-base with the PR base SHA.
 2. On credential-free runners, `npm ci`, `npm run build` and `npm run publish:local` at both commits.
-3. In the `harbor-bench` environment (blocks-team approval), each (arm, trial) matrix job runs
-   `prepare.py` to build one task with harness code from the workflow SHA and that arm's packed
-   registry. `run.py` runs Harbor with a dedicated Bedrock-only role.
+3. After one blocks-team approval of the `approval` job (environment `harbor-bench-approval`), each
+   (arm, trial) matrix job runs in the `harbor-bench` environment: `prepare.py` builds one task with
+   harness code from the workflow SHA and that arm's packed registry, and `run.py` runs Harbor with a
+   dedicated Bedrock-only role.
 4. Harbor sends the three `task/steps/*/instruction.md` prompts to one Claude Code session.
    Subagent and web tools are disabled.
 5. After each phase the root-owned verifier (`task/tests/verify.py`) kills agent servers,
@@ -184,8 +185,12 @@ machine: `calibrate.py` never uploads.
 
 ## Repository setup
 
-- Environment **`harbor-bench`** with required reviewers `@aws-devtools-labs/blocks-team` and
-  deployments restricted to `main`.
+- Environment **`harbor-bench-approval`** with required reviewers `@aws-devtools-labs/blocks-team`
+  and deployments restricted to `main`. It holds no secrets; its single `approval` job is the one
+  review per run.
+- Environment **`harbor-bench`** with deployments restricted to `main` and **no** required
+  reviewers: each benchmark matrix job references it, and reviewers here would be asked per job.
+  It holds the secrets below and is the OIDC subject the roles trust.
 - Environment secret **`AWS_ROLE_ARN`**: a role trusted for this repository's
   `:environment:harbor-bench` OIDC subject (audience `sts.amazonaws.com`, max session 10800 s)
   that only allows `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the
@@ -211,6 +216,15 @@ IDs, never prompts, commands, output, app files or exception text. Raw traces go
 private bucket, with the model credentials redacted, and the trace role is assumed only after
 the agent's containers are gone. This is not a hostile-code sandbox: the agent can read its
 model credentials and use the network until the session expires.
+
+The human approval is enforced by the workflow, not by IAM. Both roles trust the
+`:environment:harbor-bench` subject, and `harbor-bench` has no reviewers, so any workflow that
+runs on `main` and references `harbor-bench` can assume them. Today only this workflow does, and
+every job in it that uses `harbor-bench` needs the `approval` job. `scripts/ci/harbor-approval-gate.test.mjs`
+checks both on every PR: it fails if any other workflow file mentions `harbor-bench`, though not if
+the name is assembled at runtime from parts. Changes to `main` go through reviewed pull requests
+(repository admins can bypass that review), so a new `harbor-bench` reference needs that review
+instead of a per-run approval.
 
 ## Local verification
 

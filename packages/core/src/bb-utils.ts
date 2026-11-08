@@ -11,6 +11,7 @@ export { getMockDataDir } from './common/mock-data.js';
 export { assertNotMockInDeployedEnv } from './common/runtime-guard.js';
 export { API_NAMESPACE_MARKER } from './api.js';
 export { EventSourceMapping } from './lambda-handler.js';
+export { currentRequestId } from './request-context.js';
 export { constantTimeEquals } from './common/crypto.js';
 export { isLoopbackHost, isWildcardHost, isIpLiteral } from './common/loopback.js';
 // Defined in the config module (it owns the config-key contract), re-exported

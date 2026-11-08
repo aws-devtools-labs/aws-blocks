@@ -18,15 +18,26 @@ import com.aws.blocks.kotlin.model.ResolvedField
 import com.aws.blocks.kotlin.model.ResolvedType
 import com.aws.blocks.kotlin.model.RpcModel
 import com.aws.blocks.kotlin.model.ServerDefinition
+import com.aws.blocks.kotlin.model.TransferableTypeArg
 import com.aws.blocks.kotlin.model.TypeDefinition
 import com.aws.blocks.kotlin.model.TypeRef
 import com.aws.blocks.kotlin.model.UnionVariant
+import com.aws.blocks.kotlin.model.narrowsTypeArg
+import com.aws.blocks.kotlin.model.transferableTypeArg
 
 /** Where the local dev server listens, for a spec that declares no server of its own. */
 private const val DEFAULT_LOCAL_ORIGIN = "http://localhost:3001"
 
 /** The path a Blocks backend serves RPC on. */
 private const val DEFAULT_RPC_PATH = "/aws-blocks/api"
+
+/**
+ * What a narrowed type argument resolves to until something names it: the values the spec permits,
+ * with no name yet. The generator reads an unnamed one as the runtime type's own default.
+ */
+private fun narrowedPlaceholder(arg: TypeRef): ResolvedType.Enum =
+    ResolvedType.Enum(name = "", values = (arg as? TypeRef.UnionLiteral)?.values ?: emptyList())
+
 
 /**
  * Transforms an [RpcModel] into a language-independent [CodegenModel].
@@ -94,12 +105,11 @@ class CodegenModelBuilder {
             }
 
             val returnType = resolveType(method.result?.schema ?: TypeRef.Primitive("void"), collector, explicitName = method.result?.name)
+            val nestedTypes = collector.buildNestedTypesForMethod(method.name)
             val result = OperationResult(
-                type = returnType,
+                type = withNarrowedTypeArgs(returnType, parameters, nestedTypes),
                 description = method.result?.description
             )
-
-            val nestedTypes = collector.buildNestedTypesForMethod(method.name)
 
             val operation = Operation(
                 name = localName,
@@ -112,6 +122,123 @@ class CodegenModelBuilder {
             grouped.getOrPut(groupName) { mutableListOf() }.add(operation)
         }
         return grouped.map { (name, ops) -> ApiNamespace(name = name, operations = ops) }
+    }
+
+    // ── Narrowed type arguments ──────────────────────────────────────
+
+    /**
+     * Names the values each narrowed ([TransferableTypeArg.In]) type argument of an
+     * operation's own result permits, as an enum the generator emits in the operation's object.
+     *
+     * Only an operation's own result is narrowed: a transferable in any other position doesn't
+     * hydrate, so nothing could reference the enum. An argument the spec didn't resolve to string
+     * literals stays unnamed, which the generator reads as the runtime type's own default.
+     */
+    private fun withNarrowedTypeArgs(
+        resolved: ResolvedType,
+        parameters: List<OperationParameter>,
+        nestedTypes: List<NestedTypeNode>,
+    ): ResolvedType {
+        val transferable = unwrapTransferable(resolved) ?: return resolved
+        val taken = takenTypeNames(resolved, parameters, nestedTypes).toMutableSet()
+        var narrowed = resolved
+        for ((position, arg) in transferable.typeArgs.withIndex()) {
+            val declared = transferableTypeArg(transferable.transferableName, position)
+            if (declared !is TransferableTypeArg.In) continue
+            val values = (arg as? ResolvedType.Enum)?.takeIf { it.name.isEmpty() && it.values.isNotEmpty() }
+                ?: continue
+            val name = narrowedTypeName(declared.name, taken)
+            // Two narrowed arguments can't both take the tag's preferred name.
+            taken.add(name)
+            narrowed = replaceTypeArg(narrowed, position, values.copy(name = name))
+        }
+        return narrowed
+    }
+
+    /** The transferable a type is, or wraps in a nullable. */
+    private fun unwrapTransferable(type: ResolvedType): ResolvedType.Transferable? = when (type) {
+        is ResolvedType.Nullable -> unwrapTransferable(type.inner)
+        is ResolvedType.Transferable -> type
+        else -> null
+    }
+
+    /** Replaces one type argument, leaving every other position where the spec put it. */
+    private fun replaceTypeArg(resolved: ResolvedType, position: Int, typeArg: ResolvedType): ResolvedType =
+        when (resolved) {
+            is ResolvedType.Nullable -> ResolvedType.Nullable(replaceTypeArg(resolved.inner, position, typeArg))
+            is ResolvedType.Transferable -> resolved.copy(
+                typeArgs = resolved.typeArgs.mapIndexed { i, existing -> if (i == position) typeArg else existing },
+            )
+            else -> resolved
+        }
+
+    /**
+     * The tag's own name for the argument, unless something in the operation already answers to
+     * that name.
+     */
+    private fun narrowedTypeName(preferred: String, taken: Set<String>): String {
+        if (preferred !in taken) return preferred
+        var candidate = "Result$preferred"
+        var attempt = 2
+        while (candidate in taken) {
+            candidate = "Result$preferred$attempt"
+            attempt++
+        }
+        return candidate
+    }
+
+    /**
+     * The names a narrowed enum can't take: the types the operation's object declares, which it
+     * would sit beside, and the ones its own signature names, which it would displace.
+     *
+     * The generator resolves a type in an operation by name as well as by identity, so an enum
+     * sharing a name with a component schema the operation references would be handed back in its
+     * place — the parameter or field would take the enum's type rather than the schema's.
+     */
+    private fun takenTypeNames(
+        result: ResolvedType,
+        parameters: List<OperationParameter>,
+        nestedTypes: List<NestedTypeNode>,
+    ): Set<String> {
+        val taken = mutableSetOf<String>()
+        for (node in nestedTypes) taken.add(node.name)
+        for (parameter in parameters) collectNamedTypes(parameter.type, taken)
+        collectNamedTypes(result, taken)
+        return taken
+    }
+
+    private fun collectNamedTypes(type: ResolvedType, into: MutableSet<String>) {
+        when (type) {
+            // A name already seen stops the walk, so a schema that reaches itself terminates. An
+            // inline type can have no name, which says nothing about where the walk has been.
+            is ResolvedType.Record -> {
+                if (type.name.isNotEmpty() && !into.add(type.name)) return
+                type.fields.forEach { collectNamedTypes(it.type, into) }
+                type.additionalPropertiesType?.let { collectNamedTypes(it, into) }
+            }
+            is ResolvedType.Union -> {
+                if (type.name.isNotEmpty() && !into.add(type.name)) return
+                for (variant in type.variants) {
+                    into.add(variant.name)
+                    variant.payloadTypeName?.let { into.add(it) }
+                    variant.fields.forEach { collectNamedTypes(it.type, into) }
+                    variant.additionalPropertiesType?.let { collectNamedTypes(it, into) }
+                    variant.embeddedUnion?.let { collectNamedTypes(it, into) }
+                    variant.nestedTypes.forEach { collectNamedTypes(it.type, into) }
+                }
+            }
+            is ResolvedType.Enum -> into.add(type.name)
+            is ResolvedType.TypeReference -> into.add(type.name)
+            is ResolvedType.TupleType -> {
+                into.add(type.name)
+                type.elements.forEach { collectNamedTypes(it, into) }
+            }
+            is ResolvedType.ListType -> collectNamedTypes(type.elementType, into)
+            is ResolvedType.MapType -> collectNamedTypes(type.valueType, into)
+            is ResolvedType.Nullable -> collectNamedTypes(type.inner, into)
+            is ResolvedType.Transferable -> type.typeArgs.forEach { collectNamedTypes(it, into) }
+            is ResolvedType.Primitive, is ResolvedType.FormattedType -> Unit
+        }
     }
 
     // ── Type resolution (used after collection is complete) ───────────
@@ -163,7 +290,14 @@ class CodegenModelBuilder {
             is TypeRef.Nullable -> ResolvedType.Nullable(resolveType(typeRef.inner, collector))
             is TypeRef.Transferable -> ResolvedType.Transferable(
                 transferableName = typeRef.transferableName,
-                typeArgs = typeRef.typeArgs.map { resolveType(it, collector) },
+                // A narrowed argument names values rather than a type to generate, so it resolves
+                // to an unnamed placeholder: [withNarrowedTypeArgs] replaces an operation's own
+                // with the enum, and the generator reads the rest as the runtime type's default.
+                // Dropping it instead would shift every argument after it out of position.
+                typeArgs = typeRef.typeArgs.mapIndexed { position, arg ->
+                    if (narrowsTypeArg(typeRef.transferableName, position)) narrowedPlaceholder(arg)
+                    else resolveType(arg, collector)
+                },
             )
             is TypeRef.ObjectWithOneOf -> {
                 val name = collector.nameForTypeRef(typeRef) ?: ""
@@ -647,8 +781,10 @@ class CodegenModelBuilder {
                 }
 
                 is TypeRef.Transferable -> {
-                    // Recurse into type args to collect any referenced types
-                    for (arg in typeRef.typeArgs) {
+                    // Recurse into type args to collect any referenced types. A narrowed argument
+                    // names no type of its own, so it collects nothing here.
+                    for ((position, arg) in typeRef.typeArgs.withIndex()) {
+                        if (narrowsTypeArg(typeRef.transferableName, position)) continue
                         collect(arg, methodName, suffix, parentSchemaName, parentNodeId = parentNodeId)
                     }
                 }
