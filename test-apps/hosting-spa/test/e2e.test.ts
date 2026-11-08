@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -10,20 +9,15 @@ import { dirname, join } from 'node:path';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 
-// ── Deploy / Teardown ──────────────────────────────────────────────────────
+// ── Sandbox ────────────────────────────────────────────────────────────────
+// playwright.config.ts's globalSetup deploys the sandbox once per run (and
+// destroys it unless BLOCKS_SANDBOX_KEEP is set); each worker reads its URL.
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-spa sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-
     const outputs = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     // CDK appends a hash suffix to output keys — find by prefix
@@ -34,16 +28,6 @@ test.beforeAll(async () => {
     console.log(`\n✅ Deployed at: ${hostingUrl}\n`);
   } else {
     hostingUrl = process.env.HOSTING_URL || 'http://localhost:3000';
-  }
-});
-
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
   }
 });
 

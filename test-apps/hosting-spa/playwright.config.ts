@@ -6,6 +6,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './test',
   testMatch: '**/*.test.ts',
+  // Deploys the sandbox once per run, so a retry reuses it (see the file).
+  globalSetup: '../../scripts/ci/hosting-e2e-sandbox.ts',
   timeout: 60_000,
   expect: {
     timeout: 10_000,
