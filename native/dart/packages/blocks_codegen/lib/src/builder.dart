@@ -210,10 +210,49 @@ class TransferableType extends ResolvedType {
 
   final TransferableBinding? binding;
 
+  /// For an `oidc/client` whose `x-blocks-type-args[0]` is a string enum, the
+  /// provider names it lists, in spec order without duplicates; null for any
+  /// other transferable, or for an `oidc/client` that names none.
+  ///
+  /// A `TypedOidcClient<P>` only ever takes a `P` (in `signIn`,
+  /// `signInRelay` and `exchange`), never returns one, so its argument is
+  /// narrowed to these values rather than generated as a model, and isn't in
+  /// [typeArgs].
+  final List<String>? oidcProviders;
+
+  /// The provider enum generated for [oidcProviders]. The builder sets it on
+  /// a direct or optional operation result; an `oidc/client` anywhere else
+  /// (in a model, list, map or parameter) takes any provider and has none.
+  final OidcProviderEnum? providerEnum;
+
   const TransferableType({
     required this.blocksType,
     this.typeArgs = const [],
     this.binding,
+    this.oidcProviders,
+    this.providerEnum,
+  });
+}
+
+/// The enum generated for the providers an operation's `oidc/client` result
+/// names. Each value implements the runtime's `OidcProvider`, and the
+/// operation returns `TypedOidcClient<[name]>`.
+class OidcProviderEnum {
+  /// The enum's Dart name: the namespace's `…Api` class, the operation and
+  /// `Provider` (`AuthApiGetClientProvider`), or `…ResultProvider` (and a
+  /// warning) when the library already declares that name.
+  final String name;
+
+  /// The operation's dotted wire name, e.g. `auth.getClient`.
+  final String operation;
+
+  /// The provider names, in spec order without duplicates. Never empty.
+  final List<String> values;
+
+  const OidcProviderEnum({
+    required this.name,
+    required this.operation,
+    required this.values,
   });
 }
 
@@ -378,6 +417,9 @@ class CodegenModelBuilder {
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
   int _anonCounter = 0;
+  // Whether the spec holds an `oidc/client` anywhere, which reserves
+  // [oidcRuntimeTypeNames] (see [_assignDartTypeNames]).
+  bool _usesOidc = false;
 
   /// Resolves [rpc] into a model the generator can emit.
   ///
@@ -393,6 +435,7 @@ class CodegenModelBuilder {
     _warnings.clear();
     _bindings.clear();
     _anonCounter = 0;
+    _usesOidc = false;
     _warnUnmatchedOptOuts(rpc);
     _resolveBindings(rpc);
     // Pass 1: Resolve all named schemas (skip reserved names from blocks_runtime)
@@ -503,6 +546,8 @@ class CodegenModelBuilder {
       _warnings.add(_formatUnboundTransferable(operation, transferable));
     }
 
+    _assignOidcProviderEnums(namespaceMap);
+
     final namespaces = namespaceMap.entries
         .map((e) => Namespace(name: e.key, operations: e.value))
         .toList();
@@ -551,14 +596,17 @@ class CodegenModelBuilder {
       TransferableRef(blocksType: final kt, typeArgs: final args) =>
         TransferableType(
           blocksType: kt,
-          // An oidc/client's type argument names its providers, which the
-          // generated client doesn't use yet.
+          // An oidc/client's type argument names its providers: values its
+          // client takes, not a payload to model (see `oidcProviders`).
           typeArgs: kt == 'oidc/client'
               ? const []
               : args
                     .map((a) => _resolveTypeArgWithDedup(a, hint, path))
                     .toList(),
           binding: _bindings[kt],
+          oidcProviders: kt == 'oidc/client'
+              ? _oidcProviders(args, () => _usesOidc = true)
+              : null,
         ),
       MapRef(valueType: final vt) => MapType(
         _resolveType(vt, hint, false, path),
@@ -980,7 +1028,13 @@ class CodegenModelBuilder {
           _ => [_displayName(type)],
         },
     };
-    final ids = dartIdentifiers(names, reserved: generatedTopLevelNames);
+    final ids = dartIdentifiers(
+      names,
+      reserved: {
+        ...generatedTopLevelNames,
+        if (_usesOidc) ...oidcRuntimeTypeNames,
+      },
+    );
     String id(String name) => ids[name] ?? name;
     for (final type in declared) {
       switch (type) {
@@ -1576,7 +1630,94 @@ class CodegenModelBuilder {
     return TransferableType(
       blocksType: type.blocksType,
       typeArgs: type.typeArgs,
+      oidcProviders: type.oidcProviders,
+      providerEnum: type.providerEnum,
     );
+  }
+
+  /// The provider names of an `oidc/client` whose first type argument is a
+  /// string enum, in spec order without duplicates. Null when there is no
+  /// such argument or it lists no names, so the client takes any provider.
+  List<String>? _oidcProviders(List<TypeRef> args, void Function() seen) {
+    seen();
+    if (args.isEmpty) return null;
+    final first = args.first;
+    if (first is! UnionLiteralRef) return null;
+    final values = first.values.toSet().toList();
+    return values.isEmpty ? null : values;
+  }
+
+  /// Names the provider enum of each operation whose direct or optional
+  /// result is an `oidc/client` that names its providers, and sets it on the
+  /// result (see [TransferableType.providerEnum]).
+  ///
+  /// Runs after the type names are final, since the enum yields to them: it
+  /// is `<Api class><Operation>Provider`, or `…ResultProvider`, with a
+  /// warning, when the library already declares that name or the generated
+  /// code refers to it (followed by `$`s if that is taken too).
+  void _assignOidcProviderEnums(Map<String, List<Operation>> namespaceMap) {
+    final typeNames = modelTypeNames(_types.values);
+    final apiClasses = apiClassNamesOf(namespaceMap.keys.toList(), typeNames);
+    final taken = {
+      ...typeNames,
+      ...apiClasses.values,
+      ...generatedTopLevelNames,
+      ...referencedNames,
+      ...blocksRuntimeTypeNames,
+      ...dartCoreTypeNames,
+      ...oidcRuntimeTypeNames,
+    };
+    for (final MapEntry(key: ns, value: operations) in namespaceMap.entries) {
+      for (var i = 0; i < operations.length; i++) {
+        final operation = operations[i];
+        final result = operation.result;
+        final (transferable, nullable) = switch (result) {
+          TransferableType() => (result, false),
+          NullableType(inner: final TransferableType inner) => (inner, true),
+          _ => (null, false),
+        };
+        final values = transferable?.oidcProviders;
+        if (transferable == null || values == null) continue;
+        _warnCollisions(
+          'providers of ${escapeForDiagnostic(operation.fullName)}',
+          values,
+        );
+
+        final base = '${apiClasses[ns]}${pascalCase(operation.name)}';
+        final preferred = '${base}Provider';
+        var name = preferred;
+        if (taken.contains(name)) {
+          name = '${base}ResultProvider';
+          while (taken.contains(name)) {
+            name = '$name\$';
+          }
+          _warnings.add(
+            'Naming conflict: the provider enum of '
+            '${escapeForDiagnostic(operation.fullName)} is `$name`, because '
+            'the generated library already uses `$preferred`.',
+          );
+        }
+        taken.add(name);
+
+        final typed = TransferableType(
+          blocksType: transferable.blocksType,
+          typeArgs: transferable.typeArgs,
+          binding: transferable.binding,
+          oidcProviders: values,
+          providerEnum: OidcProviderEnum(
+            name: name,
+            operation: operation.fullName,
+            values: values,
+          ),
+        );
+        operations[i] = Operation(
+          name: operation.name,
+          fullName: operation.fullName,
+          params: operation.params,
+          result: nullable ? NullableType(typed) : typed,
+        );
+      }
+    }
   }
 
   String _capitalize(String s) =>
@@ -1601,3 +1742,60 @@ bool channelMessageHydratable(
       resolved is MapType ||
       (resolved is PrimitiveType && resolved.dartType == 'dynamic');
 }
+
+/// The names a generated library declares for [types]: `Blocks`, `Servers`,
+/// and every model, enum, union and variant class. The builder has already
+/// made each a usable identifier.
+Set<String> modelTypeNames(Iterable<ResolvedType> types) {
+  final names = {'Blocks', 'Servers'};
+  void addUnion(SealedClassType union) {
+    names.add(union.name);
+    for (final v in union.variants) {
+      names.add(v.className);
+      if (v.embeddedUnion case final embedded?) addUnion(embedded);
+    }
+  }
+
+  for (final type in types) {
+    switch (type) {
+      case RecordType(name: final n) || EnumType(name: final n):
+        names.add(n);
+      case SealedClassType():
+        addUnion(type);
+      default:
+        break;
+    }
+  }
+  return names;
+}
+
+/// The `…Api` class of each of [namespaces], keyed by the namespace's name:
+/// the name camel-cased and capitalized, then `Api` (`todos` is `TodosApi`,
+/// `a.b` is `ABApi`, `_default` is `$defaultApi`; see [dartIdentifiers]).
+/// The class is generated, so it yields to a type of the same name
+/// ([typeNames]; `TodosApi$`), and of namespaces that land on one class, the
+/// one whose name is already an identifier keeps it.
+Map<String, String> apiClassNamesOf(
+  List<String> namespaces,
+  Set<String> typeNames,
+) => dartIdentifiers(
+  [
+    ...namespaces.where((n) => sanitizeIdentifier(n) == n),
+    ...namespaces.where((n) => sanitizeIdentifier(n) != n),
+  ],
+  reserved: {...typeNames, ...generatedTopLevelNames},
+  sanitize: (n) {
+    final id = sanitizeIdentifier(n);
+    return '${id.isEmpty ? id : id[0].toUpperCase() + id.substring(1)}Api';
+  },
+);
+
+/// [name] as one PascalCase word: each run of letters and digits between
+/// other characters capitalized and joined, so the method `get_client` is
+/// `GetClient` and `getClient` is `GetClient`, as Swift and Kotlin spell an
+/// operation in a type name. A name with no letters or digits is empty.
+String pascalCase(String name) => name
+    .split(RegExp(r'[^a-zA-Z0-9]+'))
+    .where((part) => part.isNotEmpty)
+    .map((part) => part[0].toUpperCase() + part.substring(1))
+    .join();

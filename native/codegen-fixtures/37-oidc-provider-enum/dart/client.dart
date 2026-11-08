@@ -7,19 +7,42 @@
 import 'package:blocks_runtime/blocks_runtime.dart';
 export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
-export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;
+export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, TypedOidcClient, OidcProvider, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;
 
 // --- Models ---
 
 // --- API Namespaces ---
 
+/// The providers `auth.getClient` signs in with.
+enum AuthApiGetClientProvider implements OidcProvider {
+  google('google'),
+  github('github'),
+  mySso('my-sso'),
+  loginGov('login.gov')
+;
+
+  const AuthApiGetClientProvider(this.providerName);
+
+  @override
+  final String providerName;
+
+  /// The provider the backend knows as [name], or null if the spec named none.
+  static AuthApiGetClientProvider? fromProviderName(String name) {
+    for (final provider in values) {
+      if (provider.providerName == name) return provider;
+    }
+    return null;
+  }
+}
+
+
 class AuthApi {
   final BlocksClient _client;
   AuthApi(this._client);
 
-  Future<OidcClient> getClient() async {
+  Future<TypedOidcClient<AuthApiGetClientProvider>> getClient() async {
     final result = await _client.call('auth.getClient', const <dynamic>[]);
-    return OidcClient.fromJson(result as Map<String, dynamic>, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore);
+    return TypedOidcClient<AuthApiGetClientProvider>(OidcClient.fromJson(result as Map<String, dynamic>, baseUrl: _client.baseUrl, tokenStore: _client.tokenStore, sessionStore: _client.sessionStore));
   }
 }
 
