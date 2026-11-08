@@ -5,6 +5,10 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import type { api as apiType } from 'aws-blocks';
 
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+const isLocal = ENV === 'local';
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 interface CapturedEntry {
   level: string;
   message: string;
@@ -171,6 +175,41 @@ export function loggingTests(getApi: () => typeof apiType) {
         for (const entry of authEntries) {
           assert.strictEqual(entry.requestId, undefined, 'Auth child should NOT inherit request-scoped context');
         }
+      });
+    });
+
+    describe('invocation request id', () => {
+      test('lines carry no awsRequestId locally', { skip: !isLocal && 'local dev server only' }, async () => {
+        const api = getApi();
+        const result: LogResult = await api.logTestAllLevels();
+        const all = [...result.stdout, ...result.stderr];
+        assert.ok(all.length > 0, 'Expected log entries');
+        for (const entry of all) assert.strictEqual(entry.awsRequestId, undefined);
+      });
+
+      test('every line of one call carries the same invocation id, and calls differ', { skip: isLocal && 'deployed Lambda only' }, async () => {
+        const api = getApi();
+        const idsOf = (r: LogResult) => new Set([...r.stdout, ...r.stderr].map((e) => e.awsRequestId));
+        const first = idsOf(await api.logTestAllLevels());
+        const second = idsOf(await api.logTestAllLevels());
+        assert.strictEqual(first.size, 1, 'one invocation logs one id');
+        assert.strictEqual(second.size, 1, 'one invocation logs one id');
+        const [a] = first;
+        const [b] = second;
+        assert.match(String(a), UUID, 'the id is the Lambda awsRequestId');
+        assert.match(String(b), UUID, 'the id is the Lambda awsRequestId');
+        assert.notStrictEqual(a, b, 'separate calls carry separate ids');
+      });
+
+      test("an app's own requestId context field sits beside the invocation id", { skip: isLocal && 'deployed Lambda only' }, async () => {
+        const api = getApi();
+        const result = await api.logTestChildLoggers();
+        const all = [...result.stdout, ...result.stderr];
+        const ids = new Set(all.map((e: CapturedEntry) => e.awsRequestId));
+        assert.strictEqual(ids.size, 1, 'request-scoped and other child loggers share the invocation id');
+        assert.match(String([...ids][0]), UUID);
+        const reqEntries = all.filter((e: CapturedEntry) => e.requestId === result.requestId);
+        assert.ok(reqEntries.length > 0, 'the app-chosen requestId is kept');
       });
     });
 

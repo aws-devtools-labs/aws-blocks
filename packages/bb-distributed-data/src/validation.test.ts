@@ -222,10 +222,10 @@ describe('validateStatement — complex scenarios', () => {
     ));
   });
 
-  it('rejects partial index with ASYNC', () => {
-    assert.throws(
-      () => validateStatement('CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true'),
-      { name: 'DsqlValidationError' },
+  // DSQL supports partial indexes; dsql-lint 0.2.20 stopped rejecting them.
+  it('allows partial index with ASYNC', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('CREATE INDEX ASYNC idx_active ON users (email) WHERE active = true')
     );
   });
 
@@ -559,10 +559,9 @@ describe('validateStatement — index key sort order', () => {
     );
   });
 
-  it('rejects a partial index whose WHERE mentions a column like "description"', () => {
-    assert.throws(
-      () => validateStatement('CREATE INDEX ASYNC idx ON t (name) WHERE description IS NOT NULL'),
-      { name: 'DsqlValidationError' },
+  it('allows a partial index whose WHERE mentions a column like "description"', () => {
+    assert.doesNotThrow(() =>
+      validateStatement('CREATE INDEX ASYNC idx ON t (name) WHERE description IS NOT NULL')
     );
   });
 
