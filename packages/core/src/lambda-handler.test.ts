@@ -225,6 +225,20 @@ describe('createLambdaHandler — RPC body handling', () => {
     assert.strictEqual(body.error.code, -32600);
   });
 
+  it('returns Invalid Request for a literal JSON null body instead of throwing', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async noop() { return {}; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({ body: 'null' }));
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.id, null);
+  });
+
   it('decodes base64-encoded body', async () => {
     let capturedText = '';
 
@@ -494,6 +508,81 @@ describe('createLambdaHandler — RawRoute body handling', () => {
     assert.strictEqual(text.body, 'plain');
     assert.strictEqual(json.body, '{"a":1}');
     assert.ok(!text.isBase64Encoded && !json.isBase64Encoded);
+  });
+
+  it('labels a RawRoute byte response application/octet-stream unless the handler set a Content-Type', async () => {
+    registerRoute({ method: 'GET', path: '/bytes', handler: async (ctx) => ctx.response.send(Buffer.from([1, 2, 3])) });
+    registerRoute({
+      method: 'GET',
+      path: '/png',
+      handler: async (ctx) => {
+        ctx.response.headers.set('Content-Type', 'image/png');
+        ctx.response.send(Buffer.from([1, 2, 3]));
+      },
+    });
+    registerRoute({ method: 'GET', path: '/json', handler: async (ctx) => ctx.response.send({ a: 1 }) });
+    registerRoute({
+      method: 'GET',
+      path: '/json-bytes',
+      handler: async (ctx) => {
+        // Pre-encoded JSON: an explicit type wins over the byte default.
+        ctx.response.headers.set('Content-Type', 'application/json');
+        ctx.response.send(Buffer.from('{"a":1}'));
+      },
+    });
+    registerRoute({ method: 'GET', path: '/boom', handler: async () => { throw new Error('boom'); } });
+
+    const typeOf = async (path: string) =>
+      (await invoke({}, makeEvent({ httpMethod: 'GET', path, body: null }))).headers['content-type'];
+    assert.strictEqual(await typeOf('/bytes'), 'application/octet-stream');
+    assert.strictEqual(await typeOf('/png'), 'image/png');
+    assert.strictEqual(await typeOf('/json'), 'application/json');
+    assert.strictEqual(await typeOf('/json-bytes'), 'application/json');
+    assert.strictEqual(await typeOf('/boom'), 'application/json');
+  });
+
+  it('sends a SharedArrayBuffer response as bytes, and a buffer changed after send() does not change the response', async () => {
+    const shared = new SharedArrayBuffer(2);
+    new Uint8Array(shared).set([0xab, 0xcd]);
+    registerRoute({ method: 'GET', path: '/shared', handler: async (ctx) => ctx.response.send(shared) });
+    registerRoute({
+      method: 'GET',
+      path: '/reused',
+      handler: async (ctx) => {
+        const buf = Buffer.from([1, 2, 3]);
+        ctx.response.send(buf);
+        buf.fill(0);
+      },
+    });
+
+    const sharedResult = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/shared', body: null }));
+    assert.strictEqual(sharedResult.isBase64Encoded, true);
+    assert.deepStrictEqual([...Buffer.from(sharedResult.body, 'base64')], [0xab, 0xcd]);
+    const reused = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/reused', body: null }));
+    assert.deepStrictEqual([...Buffer.from(reused.body, 'base64')], [1, 2, 3]);
+  });
+
+  it('hands each read of ctx.request.body its own copy, so text() still sees the bytes the client sent', async () => {
+    let text = '';
+    registerRoute({
+      method: 'POST',
+      path: '/mutate',
+      handler: async (ctx) => {
+        const reader = ctx.request.body!.getReader();
+        const { value } = await reader.read();
+        value!.fill(0x41);
+        text = await ctx.request.text();
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, makeEvent({
+      httpMethod: 'POST',
+      path: '/mutate',
+      body: Buffer.from('hello').toString('base64'),
+      isBase64Encoded: true,
+    }));
+    assert.strictEqual(text, 'hello');
   });
 
   it('ctx.request.json() works for RawRoute POST with JSON body', async () => {
@@ -2361,5 +2450,82 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
     const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
+});
+
+// ── request id in scope ─────────────────────────────────────────────────────
+// Each invocation runs with its Lambda awsRequestId in scope, so Building Blocks
+// (bb-logger) can tag their output with it. Overlapping invocations on one
+// container must each see their own id.
+
+describe('createLambdaHandler — request id in scope', () => {
+  const ctx = (awsRequestId: string): LambdaContext => ({ awsRequestId, getRemainingTimeInMillis: () => 30_000 });
+  const readStore = () =>
+    (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__?.getStore();
+
+  it('makes the invocation awsRequestId visible to the backend method', async () => {
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => backend);
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-111'));
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-111' });
+  });
+
+  it('keeps overlapping invocations apart', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const backend = {
+      api: (_c: BlocksContext) => ({
+        async slow() { await gate; return { id: readStore() ?? null }; },
+        async fast() { return { id: readStore() ?? null }; },
+      }),
+    };
+    const handler = createLambdaHandler(async () => backend);
+    const call = (method: string, id: string) =>
+      handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: [], id: 1 }) }), ctx(id)) as Promise<any>;
+    const slow = call('slow', 'req-slow');
+    const fast = await call('fast', 'req-fast');
+    release();
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(fast.body)), { id: 'req-fast' });
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse((await slow).body)), { id: 'req-slow' });
+  });
+
+  it('has no request id outside an invocation', () => {
+    assert.strictEqual(readStore(), undefined);
+  });
+
+  it('imports the backend outside the first invocation request id', async () => {
+    let idAtImport: unknown = 'not-imported';
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => {
+      idAtImport = readStore();
+      return backend;
+    });
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-first'));
+    assert.strictEqual(idAtImport, undefined);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-first' });
+  });
+});
+
+describe('request-context — request id store registration', () => {
+  const KEY = '__BLOCKS_REQUEST_ID_STORE__';
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  it('replaces a non-store value at the globalThis key instead of throwing on use', async () => {
+    const original = globals[KEY];
+    globals[KEY] = { not: 'a store' };
+    try {
+      const fresh = await import(`./request-context.js?non-store-${Date.now()}`);
+      assert.strictEqual(fresh.currentRequestId(), undefined);
+      assert.strictEqual(fresh.requestIdStore.run('req-x', () => fresh.currentRequestId()), 'req-x');
+      assert.strictEqual(globals[KEY], fresh.requestIdStore);
+    } finally {
+      globals[KEY] = original;
+    }
+  });
+
+  it('a second copy of core reuses the registered store', async () => {
+    const original = globals[KEY];
+    const fresh = await import(`./request-context.js?second-copy-${Date.now()}`);
+    assert.strictEqual(fresh.requestIdStore, original);
   });
 });

@@ -488,7 +488,7 @@ async function wireContributor(root: string, names: DerivedNames, dryRun: boolea
 			(s) =>
 				insertBetweenMarkers(
 					s,
-					`/**\n * **${className}** — TODO: one-line summary shown in IDE hover.\n *\n * Package: \`${pkgName}\`\n * Full docs: \`README.md\` in the package directory above.\n */\nexport { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
+					`/**\n * **${className}** — TODO: one-line summary shown in IDE hover.\n *\n * Package: \`${pkgName}\`\n * Full docs: \`docs/${folder}/README.md\` in \`@aws-blocks/blocks\`.\n */\nexport { ${className}, ${className}Errors } from '${pkgName}';\nexport type { ${className}Options } from '${pkgName}';`,
 				),
 			'packages/blocks/src/index.ts → re-export',
 		);
@@ -915,11 +915,20 @@ export async function run(argv: string[], cwd: string): Promise<number> {
 		}
 	}
 
-	printNextSteps(mode, names);
+	printNextSteps(mode, names, relative(cwd, targetDir) || '.');
 	return 0;
 }
 
-function printNextSteps(mode: Mode, names: DerivedNames): void {
+/**
+ * Quote a path for a copy-pasteable POSIX shell command. Paths made only of safe characters print
+ * as-is; anything else (spaces, `;`, `$`, quotes, ...) is single-quoted so the shell treats it literally.
+ */
+function shellQuotePath(path: string): string {
+	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(path)) return path;
+	return `'${path.replace(/'/g, `'\\''`)}'`;
+}
+
+function printNextSteps(mode: Mode, names: DerivedNames, targetRel: string): void {
 	console.log('\nNext steps:');
 	if (mode === 'contributor') {
 		console.log(`  1. Implement ${names.className}'s API in packages/${names.folder}/src/.`);
@@ -932,7 +941,7 @@ function printNextSteps(mode: Mode, names: DerivedNames): void {
 		console.log(`  2. Import it in your backend: import { ${names.className} } from '${names.pkgName}';`);
 		console.log(`     (it's linked into your workspace — no publish needed).`);
 	} else {
-		console.log(`  1. cd ${names.folder} && npm run build && npm test`);
+		console.log(`  1. cd ${shellQuotePath(targetRel)} && npm run build && npm test`);
 		console.log(`  2. Implement ${names.className}'s API in src/, then publish (keywords: ["aws-blocks"]).`);
 	}
 }

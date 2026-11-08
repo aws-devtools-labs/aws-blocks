@@ -19,7 +19,18 @@ import { fileURLToPath } from 'node:url';
  * umbrella + internal/support packages, and the scaffolding CLIs
  * (`create-blocks-app`, `create-block`) which ship a README but aren't `bb-*`.
  */
-export const EXCLUDED = new Set(['blocks', 'data-common', 'foundations', 'create-blocks-app', 'create-block', 'bb-lambda-compute', 'bb-container-compute']);
+export const EXCLUDED = new Set([
+	'blocks',
+	'data-common',
+	'foundations',
+	'create-blocks-app',
+	'create-block',
+	'bb-lambda-compute',
+	'bb-container-compute',
+	// Preview block the umbrella does not depend on or re-export yet. Remove when
+	// @aws-blocks/blocks switches its Database export to bb-database.
+	'bb-database',
+]);
 
 /** Absolute path to the monorepo's `packages/` directory. */
 export const packagesDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'packages');

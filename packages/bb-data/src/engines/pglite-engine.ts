@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { PGlite } from '@electric-sql/pglite';
+import { PGlite, type Extensions } from '@electric-sql/pglite';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,6 +12,7 @@ import {
 } from '@aws-blocks/data-common';
 import { closeOnProcessExit, pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { DatabaseErrors, wrapError, reTagged, requestError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { resolveExtensions } from './pglite-extensions.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -160,11 +161,37 @@ export class PGliteEngine implements DatabaseEngine {
    * @param createClient - factory for the underlying PGlite instance; defaults
    *   to a real `PGlite`. Exposed as a seam so tests can inject an instance
    *   that simulates a WASM init trap.
+   *
+   * To load Postgres extensions (PostGIS, pgvector) use the async
+   * {@link PGliteEngine.create} factory instead — extension packages are
+   * resolved by dynamic import, which the synchronous constructor cannot do.
    */
   constructor(dataDir: string = '.bb-data', createClient: (dataDir: string) => PGlite = createLocalPglite) {
     this.dataDir = dataDir;
     this.createClient = createClient;
     this.db = this.createDb();
+  }
+
+  /**
+   * Construct a PGliteEngine with Postgres extensions loaded (PostGIS, pgvector).
+   *
+   * Extensions are resolved by dynamic `import()` of their optional peer packages
+   * (see {@link resolveExtensions}), so this is async where the constructor is
+   * sync. The resolved `{ namespace: extension }` object is captured in the
+   * `createClient` closure, so it is reapplied on every PGlite instance the
+   * init-trap retry path recreates — the extensions survive a WASM-trap retry.
+   *
+   * When `extensions` is empty/undefined this is equivalent to `new PGliteEngine(dataDir)`.
+   *
+   * @param dataDir - directory PGlite persists to (nested paths are created).
+   * @param extensions - extension names from `DatabaseOptions.extensions`.
+   */
+  static async create(dataDir: string = '.bb-data', extensions?: readonly string[]): Promise<PGliteEngine> {
+    const resolved = await resolveExtensions(extensions);
+    if (Object.keys(resolved).length === 0) {
+      return new PGliteEngine(dataDir);
+    }
+    return new PGliteEngine(dataDir, (dir) => new PGlite(dir, { extensions: withUnrefTimers(resolved) }));
   }
 
   /**
@@ -330,5 +357,15 @@ export class PGliteEngine implements DatabaseEngine {
  * the process alive by itself (see {@link pgliteUnrefTimersExtension}).
  */
 function createLocalPglite(dataDir: string): PGlite {
-  return new PGlite(dataDir, { extensions: { awsBlocksUnrefTimers: pgliteUnrefTimersExtension } });
+  return new PGlite(dataDir, { extensions: withUnrefTimers({}) });
+}
+
+/**
+ * Add the unref-timers extension to a resolved user extension set, so a
+ * short-lived script that declares `extensions` still exits on its own. The
+ * `awsBlocksUnrefTimers` key cannot collide with the `postgis` / `vector`
+ * namespaces.
+ */
+export function withUnrefTimers(extensions: Extensions): Extensions {
+  return { awsBlocksUnrefTimers: pgliteUnrefTimersExtension, ...extensions };
 }

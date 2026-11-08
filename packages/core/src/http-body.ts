@@ -1,69 +1,53 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { types } from 'node:util';
-import type { BlocksContext } from './api.js';
+// Request and response body handling shared by every transport (the Lambda
+// handler, the container HTTP server, the local dev server), so a handler sees
+// the same bytes and its byte responses go out unchanged on each.
 
-/** The request accessors built by {@link requestBodyAccessors}. @internal */
-export type RequestBodyAccessors = Pick<BlocksContext['request'], 'body' | 'json' | 'text'>;
+import { types } from 'node:util';
+import type { DispatchRequestBody } from './dispatch.js';
 
 /**
- * Build the `body`/`text()`/`json()` request accessors from the raw request
- * bytes, shared by the Lambda handler and the dev server so both hand a
- * handler exactly the bytes the client sent.
- *
- * `text()` and `json()` decode the bytes as UTF-8 on first use; pass `text`
- * when the caller already has the decoded string. They keep working after
- * `body` has been read.
+ * The {@link DispatchRequestBody} for the raw request bytes: the bytes decoded
+ * once as UTF-8 for `text()`/`json()`, and a stream of the exact bytes for
+ * `ctx.request.body` (`null` when there are none).
  *
  * @internal
  */
-export function requestBodyAccessors(bytes: Buffer, text?: string): RequestBodyAccessors {
-	let decoded = text;
-	const getText = () => (decoded ??= bytes.toString('utf-8'));
-	return {
-		body: bytes.byteLength === 0 ? null : bytesToStream(bytes),
-		text: async () => getText(),
-		json: async () => JSON.parse(getText()),
-	};
-}
-
-function bytesToStream(bytes: Buffer): ReadableStream<Uint8Array> {
-	// A small Buffer can be a view into Node's shared allocation pool; copy it so
-	// `chunk.buffer` exposes only this body. A Buffer that owns its whole
-	// ArrayBuffer is passed through without copying.
-	const chunk =
-		bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : new Uint8Array(bytes);
-	return new ReadableStream<Uint8Array>({
-		start(controller) {
-			controller.enqueue(chunk);
-			controller.close();
-		},
-	});
+export function requestBodyFromBytes(bytes: Buffer): DispatchRequestBody {
+  return { text: bytes.toString('utf-8'), stream: bytes.length > 0 ? bytesStream(bytes) : null };
 }
 
 /**
- * The bytes of a binary `ctx.response.send()` body — an `ArrayBuffer` or any
- * `ArrayBufferView` (`Buffer`, `Uint8Array`, other typed arrays, `DataView`) —
- * or `undefined` for a text/JSON body.
+ * The raw body bytes as a stream. Each read gets its own copy, so a handler
+ * that mutates the chunk can't change what `text()`/`json()` decode.
+ */
+function bytesStream(bytes: Buffer): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller) {
+        controller.enqueue(new Uint8Array(bytes));
+        controller.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+/**
+ * The bytes of a binary `ctx.response.send()` body — an `ArrayBuffer`,
+ * `SharedArrayBuffer` or any `ArrayBufferView` (`Buffer`, `Uint8Array`, other
+ * typed arrays, `DataView`) — or `undefined` for a text/JSON body. The bytes are
+ * copied, so a handler that reuses its buffer after `send()` can't change the
+ * response.
  *
  * @internal
  */
 export function binaryResponseBody(body: unknown): Buffer | undefined {
-	// `types.isArrayBuffer`, not `instanceof`: an ArrayBuffer from another realm
-	// (a `vm` context) must still be sent as bytes.
-	if (types.isArrayBuffer(body)) return Buffer.from(body);
-	if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
-	return undefined;
-}
-
-/**
- * Serialize a non-binary `ctx.response.send()` body: strings as-is, anything
- * else as JSON, nothing as the empty string.
- *
- * @internal
- */
-export function textResponseBody(body: unknown): string {
-	if (body === undefined) return '';
-	return typeof body === 'string' ? body : JSON.stringify(body);
+  // `types.isAnyArrayBuffer`, not `instanceof`: an ArrayBuffer from another realm
+  // (a `vm` context) must still be sent as bytes.
+  if (types.isAnyArrayBuffer(body)) return Buffer.from(new Uint8Array(body));
+  if (ArrayBuffer.isView(body)) return Buffer.from(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+  return undefined;
 }
