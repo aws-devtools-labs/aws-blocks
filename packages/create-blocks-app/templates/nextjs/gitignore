@@ -4,13 +4,18 @@ node_modules/
 # Next.js
 .next/
 out/
+# OpenNext build output (the deploy writes it)
+.open-next/
 
 # Build
 dist/
+# TypeScript incremental build info (next build writes tsconfig.tsbuildinfo)
+*.tsbuildinfo
 
 # Blocks
 /.blocks-sandbox/
 cdk.out/
+.bb-data/
 
 # Secrets and key material — never commit
 .env

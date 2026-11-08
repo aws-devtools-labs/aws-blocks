@@ -296,6 +296,29 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       });
     }
 
+    for (const [label, frontDoor, extra] of cases) {
+      it(`${label} with \`inPlaceBuild\`: the proxy does not wait for the uploads (no switch-over to gate)`, () => {
+        const { t } = synth(spaManifest(), frontDoor, { errorPages: undefined, ...extra, inPlaceBuild: true });
+        const deps = proxyDependsOn(t);
+        for (const u of uploads(t)) assert.ok(!deps.includes(u), `${label}: proxy does not wait for ${u}`);
+      });
+    }
+
+    it('the CloudFront door ignores `inPlaceBuild`: its template is unchanged', () => {
+      const without = synth(spaManifest(), undefined).t.toJSON();
+      const withIt = synth(spaManifest(), undefined, { inPlaceBuild: true }).t.toJSON();
+      assert.deepEqual(withIt, without);
+    });
+
+    it('with `inPlaceBuild`, an upload declared later is not ordered before the proxy either', () => {
+      const stack = new Stack(new App(), 'LaterInPlace', { env: { account: '111111111111', region: 'us-west-2' } });
+      const hosting = new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: { kind: 'alb' }, inPlaceBuild: true });
+      const later = new Bucket(stack, 'Later');
+      hosting.addBuildAssetDependency(later);
+      const deps = proxyDependsOn(Template.fromStack(stack));
+      assert.ok(!deps.some((d) => d.startsWith('Later')), 'the proxy does not wait for the later dependency');
+    });
+
     it('an upload declared later (the runtime config) is ordered before the proxy too', () => {
       const stack = new Stack(new App(), 'Later', { env: { account: '111111111111', region: 'us-west-2' } });
       const hosting = new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: { kind: 'alb' } });

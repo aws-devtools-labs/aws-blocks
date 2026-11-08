@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -114,5 +115,52 @@ console.log('REGISTRY ' + JSON.stringify(Scope.getRegisteredBlocks()));
 		const registry = JSON.parse(line.slice('REGISTRY '.length));
 		assert.deepStrictEqual(registry.blocks, [{ name: 'KVStore', version: '9.9.9' }]);
 		assert.strictEqual(registry.totalCount, 1);
+	});
+});
+
+describe('generateDeployClient — the tsx loader', () => {
+	let tmp: string;
+	let runner: string;
+	const clientPath = () => join(tmp, 'aws-blocks', 'client.js');
+	// An app that cannot resolve `tsx` itself: a directory with no node_modules on its path.
+	const run = (env: NodeJS.ProcessEnv) =>
+		spawnSync(process.execPath, [runner], {
+			cwd: tmp,
+			env: { ...process.env, NODE_OPTIONS: '', BLOCKS_TSX_IMPORT: '', ...env },
+			encoding: 'utf-8',
+			timeout: STEP_TIMEOUT_MS,
+			killSignal: 'SIGKILL',
+		});
+
+	before(() => {
+		tmp = mkdtempSync(join(tmpdir(), 'blocks-deploy-codegen-tsx-'));
+		writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'fixture-app', type: 'module' }));
+		mkdirSync(join(tmp, 'aws-blocks'), { recursive: true });
+		const foundationPath = join(tmp, 'aws-blocks', 'index.ts');
+		writeFileSync(foundationPath, `export const api = { hello: async (): Promise<string> => 'hi' };\n`);
+		runner = join(tmp, 'runner.mjs');
+		writeFileSync(
+			runner,
+			`import { generateDeployClient } from ${JSON.stringify(pathToFileURL(join(distScripts, 'deploy-client-codegen.js')).href)};
+await generateDeployClient(${JSON.stringify(foundationPath)}, ${JSON.stringify(clientPath())});
+`,
+		);
+	});
+
+	after(() => {
+		rmSync(tmp, { recursive: true, force: true });
+	});
+
+	it('fails when the app cannot resolve tsx and BLOCKS_TSX_IMPORT is unset', () => {
+		const result = run({});
+		assert.notStrictEqual(result.status, 0, 'the fixture app unexpectedly resolves tsx');
+		assert.match(String(result.stderr), /tsx/);
+	});
+
+	it('loads the worker with the tsx loader that BLOCKS_TSX_IMPORT names', () => {
+		const loader = pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href;
+		const result = run({ BLOCKS_TSX_IMPORT: loader });
+		assert.strictEqual(result.status, 0, `stderr:\n${String(result.stderr)}`);
+		assert.match(readFileSync(clientPath(), 'utf-8'), /export const api = /);
 	});
 });

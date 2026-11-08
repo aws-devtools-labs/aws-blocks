@@ -21,6 +21,7 @@ import com.aws.blocks.example.screens.KvStoreScreen
 import com.aws.blocks.example.screens.RealtimeScreen
 import com.aws.blocks.example.screens.TodoScreen
 import com.aws.blocks.example.theme.AppTheme
+import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
 import blocks.testapp.api
 import blocks.testapp.authApi
@@ -43,7 +44,9 @@ fun App() {
 
     // The client keeps sign-in state in memory, so it is owned here rather than by the Auth
     // tab: a per-tab client would be replaced on every visit, discarding the signed-in user.
-    var oidcClient by remember { mutableStateOf<OidcClient?>(null) }
+    // The spec names the backend's providers, so the client is typed by the enum generated for
+    // them and sign-in takes one of its constants rather than a string.
+    var oidcClient by remember { mutableStateOf<OidcClient<AuthApi.GetClient.Provider>?>(null) }
     var oidcError by remember { mutableStateOf<String?>(null) }
 
     // A client that has not signed in this launch reports no user, so the starting point comes

@@ -4,7 +4,7 @@
 // ignore_for_file: constant_identifier_names
 
 import 'package:blocks_runtime/blocks_runtime.dart';
-import 'package:example_iot_native/example_iot_native.dart' show DeviceHandle, DeviceLink;
+import 'package:example_iot_native/example_iot_native.dart' show APILink, DeviceHandle;
 import 'package:example_sensor_native/example_sensor_native.dart' show SensorStream;
 export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpcException, SessionStore, InMemorySessionStore;
 export 'package:blocks_runtime/blocks_runtime.dart' show RealtimeChannel, FileDownloadHandle, FileUploadHandle;
@@ -99,12 +99,12 @@ class ApiApi {
     return DeviceHandle.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-iot/device-handle'));
   }
 
-  Future<DeviceLink<ConnectDeviceResultMessage>> connectDevice({required String deviceId}) async {
+  Future<APILink<ConnectDeviceResultMessage>> connectDevice({required String deviceId}) async {
     final params = <String, dynamic>{
       'deviceId': deviceId,
     };
     final result = await _client.call('api.connectDevice', params);
-    return DeviceLink<ConnectDeviceResultMessage>.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-iot/device-link'), (json) => ConnectDeviceResultMessage.fromJson(json));
+    return APILink<ConnectDeviceResultMessage>.fromBlocksDescriptor(validateTransferableDescriptor(result, expectedTag: 'example-iot/device-link'), (json) => ConnectDeviceResultMessage.fromJson(json));
   }
 
   Future<DeviceHandle> findDeviceHandle({required String serialNumber}) async {

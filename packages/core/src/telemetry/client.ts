@@ -33,11 +33,13 @@ function getEndpoint(): string {
  * @returns The file path if the flag is present, undefined otherwise.
  *
  * @example
- * // Capture telemetry to file and send it, with telemetry enabled:
- * // npx tsx aws-blocks/scripts/server.ts --telemetry-file=/tmp/events.json
+ * // Capture telemetry to file and send it, with telemetry enabled. The flag
+ * // must reach the process that runs the dev server or deploy runner, e.g.
+ * // through an app's npm script:
+ * // npm run dev -- --telemetry-file=/tmp/events.json
  *
  * // Capture without sending — redirect the endpoint instead of opting out:
- * // BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 npx tsx aws-blocks/scripts/server.ts \
+ * // BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 npm run dev -- \
  * //   --telemetry-file=/tmp/events.json
  */
 export function getTelemetryFilePath(): string | undefined {

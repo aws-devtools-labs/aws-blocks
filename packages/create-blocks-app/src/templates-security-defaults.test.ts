@@ -30,6 +30,7 @@ const SECRET_PATHS = [
   'credentials',
   'config/credentials',
   '.aws/credentials',
+  '.bb-data/settings.json',
 ];
 
 /** App files that must stay committable despite the secret patterns. */

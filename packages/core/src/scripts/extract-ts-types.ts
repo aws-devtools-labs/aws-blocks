@@ -18,7 +18,7 @@ import { dirname, resolve } from 'path';
 import { existsSync } from 'fs';
 
 /**
- * The handler argument of `new ApiNamespace(scope, name, handler, options?)`: the
+ * The handler argument of `new ApiNamespace(scope, label, handler, options?)`: the
  * first function expression after the scope, else the third argument. Not simply
  * the last argument — with the optional fourth `options` argument that would be
  * the options object, and the namespace's methods would be missed.
@@ -210,7 +210,7 @@ export function extractMethodTypes(sourcePath: string): Map<string, MethodTypeIn
 	sourceFile = program.getSourceFile(absPath);
 	if (!sourceFile) return result;
 
-	// Find new ApiNamespace(scope, name, handler) and extract methods using the type checker
+	// Find new ApiNamespace(scope, label, handler) and extract methods using the type checker
 	ts.forEachChild(sourceFile, function visit(node) {
 		if (ts.isNewExpression(node)) {
 			const fnName = node.expression;

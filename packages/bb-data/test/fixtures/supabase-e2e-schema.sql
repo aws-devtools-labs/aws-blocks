@@ -28,7 +28,11 @@ CREATE TABLE IF NOT EXISTS composite_pk_items (
   PRIMARY KEY (order_id, product_id)
 );
 
-ALTER TABLE composite_pk_items DISABLE ROW LEVEL SECURITY;
+ALTER TABLE composite_pk_items ENABLE ROW LEVEL SECURITY;
+-- db pull only generates CRUD for tables with RLS enabled. This policy shares the
+-- table with every signed-in user on purpose, so the CRUD E2E can exercise it.
+DROP POLICY IF EXISTS "shared" ON composite_pk_items;
+CREATE POLICY "shared" ON composite_pk_items FOR ALL TO authenticated USING (true) WITH CHECK (true);
 GRANT SELECT, INSERT, UPDATE, DELETE ON composite_pk_items TO authenticated;
 
 -- ── No PK (append-only log) ─────────────────────────────────────────────
@@ -53,7 +57,11 @@ CREATE TABLE IF NOT EXISTS exotic_types (
   search_vector tsvector
 );
 
-ALTER TABLE exotic_types DISABLE ROW LEVEL SECURITY;
+ALTER TABLE exotic_types ENABLE ROW LEVEL SECURITY;
+-- db pull only generates CRUD for tables with RLS enabled. This policy shares the
+-- table with every signed-in user on purpose, so the CRUD E2E can exercise it.
+DROP POLICY IF EXISTS "shared" ON exotic_types;
+CREATE POLICY "shared" ON exotic_types FOR ALL TO authenticated USING (true) WITH CHECK (true);
 GRANT SELECT, INSERT, UPDATE, DELETE ON exotic_types TO authenticated;
 
 -- ── Reserved-word columns ───────────────────────────────────────────────
@@ -65,7 +73,11 @@ CREATE TABLE IF NOT EXISTS reserved_cols (
   "select" boolean NOT NULL DEFAULT false
 );
 
-ALTER TABLE reserved_cols DISABLE ROW LEVEL SECURITY;
+ALTER TABLE reserved_cols ENABLE ROW LEVEL SECURITY;
+-- db pull only generates CRUD for tables with RLS enabled. This policy shares the
+-- table with every signed-in user on purpose, so the CRUD E2E can exercise it.
+DROP POLICY IF EXISTS "shared" ON reserved_cols;
+CREATE POLICY "shared" ON reserved_cols FOR ALL TO authenticated USING (true) WITH CHECK (true);
 GRANT SELECT, INSERT, UPDATE, DELETE ON reserved_cols TO authenticated;
 GRANT USAGE, SELECT ON SEQUENCE reserved_cols_id_seq TO authenticated;
 
