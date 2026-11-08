@@ -56,6 +56,9 @@ import {
 import type { HostingResources } from '../types.js';
 import type { CdnConstruct, CdnConstructProps } from './cdn_construct.js';
 import { buildHostingPlan } from '../plan/hosting-plan.js';
+import { routeSpecificity } from '../plan/route-table.js';
+import { removeUnusedAwsCliLayers } from './aws_cli_layers.js';
+import { prependBasePath } from '../adapters/shared/basepath.js';
 import { albDoor } from './alb_door.js';
 import { AlbConstruct } from './alb_construct.js';
 import {
@@ -72,6 +75,7 @@ import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedPro
 import { cloudFrontDoor } from './cloudfront_door.js';
 import { buildFrontDoor } from './custom_door.js';
 import { buildDoorInput } from './door_input.js';
+import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
 import type { DoorInput, FrontDoorResult } from './front_door.js';
 import {
   type FrontDoorKind,
@@ -532,6 +536,42 @@ export type HostingConstructProps = {
      */
     paths?: readonly string[];
   };
+
+  /**
+   * Build no image-optimization function, even when the manifest declares
+   * one. On the API Gateway HTTP door the framework image endpoints
+   * (`/_next/image`, `/_ipx/*`, `/_image`) are then answered by the asset
+   * proxy with the source image, unoptimized; a remote source is redirected
+   * to itself when its host is in the manifest's image allowlist
+   * (`imageOptimization.domains` / `remotePatterns`), else 404. Set by core
+   * `Hosting` for `imageOptimization: false` (`HostingPresets.preview`).
+   * @default false
+   */
+  skipImageOptimization?: boolean;
+
+  /**
+   * The manifest's `buildId` stays the same while the build is unchanged
+   * (core `Hosting` `buildId: 'fixed'` keys it on the build's content,
+   * `HostingPresets.preview`), so a re-deploy uploads under the
+   * `builds/<buildId>/` prefix the door already serves.
+   *
+   * There is then no switch-over to a new build, so the door's
+   * `FrontDoorResult.cutover` constructs (the ALB and API Gateway asset
+   * proxies, whose environment names the prefix) are not ordered after the
+   * asset uploads or after the uploads registered later through
+   * {@link HostingConstruct.addBuildAssetDependency}. CloudFormation creates
+   * them alongside the uploads, which takes the proxy (its role, policy and
+   * function) off the end of a first deploy. A door's `onUpload` resources
+   * still run after every upload.
+   *
+   * Use it only for throwaway environments: while a deploy that changes the
+   * build runs, the door can serve the new prefix before its files are
+   * uploaded. The CloudFront door
+   * ignores it (its edge cache would keep serving the overwritten files; core
+   * `Hosting` rejects `buildId: 'fixed'` behind it).
+   * @default false
+   */
+  inPlaceBuild?: boolean;
   // NOTE: S3-website is not a public front-door *kind* — it is an ORIGIN, not a
   // front door (it fronts nothing). It is surfaced as `frontDoor: 'none'` (serve
   // the origin directly); `s3-website` is the internal door name
@@ -766,6 +806,12 @@ export class HostingConstruct extends Construct {
     assertAlbCertificateHasDomain(props.frontDoor, f.domain);
     assertComputeReachableByDoor(props.compute?.type, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
     assertMiddlewareReachableByDoor(manifest, resolved.kind, stackedRouter ? 'stacked' : resolved.kind);
+    assertEdgeRoutesReachableByDoor(
+      manifest,
+      resolved.kind,
+      stackedRouter ? 'stacked' : resolved.kind,
+      typeof props.frontDoor === 'object' && props.frontDoor?.kind === 'apiGateway' && (props.frontDoor.api ?? 'http') === 'http',
+    );
     this.doorCapabilities = doorCapabilitiesFor(props.frontDoor);
     assertServerReachableByDoor(
       manifest,
@@ -1138,7 +1184,7 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 4. Image optimization Lambda ----
-    if (manifest.imageOptimization) {
+    if (manifest.imageOptimization && !props.skipImageOptimization) {
       const imageConstruct = new ComputeConstruct(this, 'ImageOptimization', {
         name: 'image-optimization',
         computeResource: {
@@ -1943,6 +1989,10 @@ export class HostingConstruct extends Construct {
             apiGateway: {
               ...common,
               errorPages: this.doorInput.app.errorPages,
+              computeRoutes: directComputeRoutes(manifest, this.computeFunctions, serverName),
+              ...(props.skipImageOptimization
+                ? { imageFallback: { hosts: imageRemoteHosts(manifest), pathPrefixes: imagePathEndpoints(manifest) } }
+                : {}),
               // Custom domain: names come from `domain`; the regional cert is the
               // door's `certificate` (BYO, stack-region) or `domain.certificate`,
               // else DNS-validated against the hosted zone by the construct.
@@ -2036,17 +2086,28 @@ export class HostingConstruct extends Construct {
     }
 
     // ---- 11-bis. Default 404 page (multi-page static only) ----
-    // Set by the CDN construct only for multi-page static sites
-    // (spaFallback === false) that shipped no 404.html and got no
-    // user-supplied notFound page. Deploy it so the wired CloudFront 403/404
-    // → /builds/<id>/_not_found.html responses resolve from S3.
-    if (cdn?.defaultNotFoundPageHtml) {
-      new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
-        sources: [Source.data(NOT_FOUND_PAGE_KEY, cdn.defaultNotFoundPageHtml)],
-        destinationBucket: this.bucket,
-        destinationKeyPrefix: `builds/${buildId}/`,
-        prune: false,
-      });
+    // For multi-page static sites (spaFallback === false) that shipped no
+    // 404.html and got no user-supplied notFound page. Deploy it so the page
+    // every door serves for a miss resolves from S3: the CloudFront door's
+    // wired 403/404 → /builds/<id>/_not_found.html responses (decided by the
+    // CDN construct), and on every other door the asset proxy's (or a
+    // bring-your-own door's) `app.errorPages.notFound`.
+    const defaultNotFoundPageHtml = cdn
+      ? cdn.defaultNotFoundPageHtml
+      : this.servesDefaultNotFoundPage(manifest, props)
+        ? DEFAULT_NOT_FOUND_PAGE_HTML
+        : undefined;
+    if (defaultNotFoundPageHtml) {
+      // A build upload like any other: the cutover waits for it, so a miss
+      // never reaches the new build before its 404 page does.
+      buildAssetDeployments.push(
+        new BucketDeployment(this, 'DefaultNotFoundPageDeployment', {
+          sources: [Source.data(NOT_FOUND_PAGE_KEY, defaultNotFoundPageHtml)],
+          destinationBucket: this.bucket,
+          destinationKeyPrefix: `builds/${buildId}/`,
+          prune: false,
+        }),
+      );
     }
 
     // ---- 11a. Custom error pages ----
@@ -2376,7 +2437,9 @@ export class HostingConstruct extends Construct {
     // upload here, and — recorded with the post-upload constructs — for the
     // uploads declared later (`addBuildAssetDependency`, e.g. the resolved
     // runtime config), so the previous build serves until the new one is whole.
-    for (const c of cutover) {
+    // An in-place build (`inPlaceBuild`) has no new build to switch to: the
+    // prefix never changes, so the cutover is created alongside the uploads.
+    for (const c of props.inPlaceBuild ? [] : cutover) {
       for (const dep of buildAssetDeployments) c.node.addDependency(dep);
       this.postUploadConstructs.push(c);
     }
@@ -2458,6 +2521,11 @@ export class HostingConstruct extends Construct {
         return [];
       },
     });
+
+    // An in-place build behind a door without CloudFront drops the AWS CLI
+    // layers no upload handler uses (see `aws_cli_layers.ts`). The CloudFront
+    // door ignores `inPlaceBuild`, and every other build keeps its layers.
+    if (props.inPlaceBuild && !cdn) removeUnusedAwsCliLayers(this);
   }
 
   /**
@@ -2517,6 +2585,17 @@ export class HostingConstruct extends Construct {
    * provisioned, and the feature props. Has no effect on the template unless a
    * door reads `origins.server.url` (created on first read).
    */
+  /**
+   * Whether this deploy serves AWS Blocks' default 404 page
+   * (`needsDefaultNotFoundPage`): a multi-page static site with no 404 page of
+   * its own. Not behind `'none'`: an S3 website answers a miss from its own
+   * error document, in its own bucket.
+   */
+  private servesDefaultNotFoundPage(manifest: DeployManifest, props: HostingConstructProps): boolean {
+    if (this.frontDoorKind === 'none') return false;
+    return needsDefaultNotFoundPage(manifest, { userNotFound: !!props.errorPages?.notFound });
+  }
+
   private assembleDoorInput(
     plan: import('../plan/types.js').HostingPlan,
     manifest: DeployManifest,
@@ -2558,7 +2637,7 @@ export class HostingConstruct extends Construct {
       monitoring: resolved.features.monitoring,
       geoRestriction: resolved.features.geoRestriction,
       errorPages: props.errorPages,
-      frameworkErrorPages: frameworkErrorPagesOf(manifest),
+      frameworkErrorPages: frameworkErrorPagesOf(manifest, this.servesDefaultNotFoundPage(manifest, props)),
       skewProtection: resolved.features.skewProtection,
     });
   }
@@ -2675,6 +2754,64 @@ export const doorCapabilitiesFor = (frontDoor: HostingConstructProps['frontDoor'
 };
 
 /**
+ * The routes a regional door sends straight to a compute other than the
+ * server and the image function (e.g. a Next.js `runtime: 'edge'` route built
+ * as a regional function): the route table lists them as server routes.
+ * Lambda@Edge functions are reached only through CloudFront and are skipped.
+ *
+ * @param manifest the deploy manifest.
+ * @param computeFunctions the functions built for the manifest's compute.
+ * @param serverName the server compute's name, if any.
+ * @returns `{ pattern, computeName }` (basePath-prefixed), most-specific first.
+ */
+const directComputeRoutes = (
+  manifest: DeployManifest,
+  computeFunctions: ReadonlyMap<string, unknown>,
+  serverName: string | undefined,
+): { pattern: string; computeName: string }[] =>
+  manifest.routes
+    .filter(
+      (r) =>
+        r.target !== serverName &&
+        r.target !== 'image-optimization' &&
+        computeFunctions.has(r.target) &&
+        manifest.compute[r.target]?.type !== 'edge',
+    )
+    .map((r) => ({ pattern: prependBasePath(manifest.basePath, r.pattern), computeName: r.target }))
+    .sort((a, b) => routeSpecificity(b.pattern) - routeSpecificity(a.pattern));
+
+/**
+ * The path-form image endpoints the manifest routes to the image function
+ * (Nuxt IPX: `/_ipx/*` by default, or a custom `runtimeConfig.ipx.baseURL`),
+ * as basePath-relative prefixes. The query-form endpoints (`/_next/image`,
+ * `/_image`) are matched by name.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the prefixes, e.g. `['/img']`.
+ */
+const imagePathEndpoints = (manifest: DeployManifest): string[] =>
+  manifest.routes
+    .filter((r) => r.target === 'image-optimization' && r.pattern.endsWith('/*'))
+    .map((r) => `/${r.pattern.slice(0, -2).replace(/^\/+/, '')}`)
+    .filter((p) => !p.startsWith('/_next/') && p !== '/_image');
+
+/**
+ * The remote image hosts the app allows its image optimizer to fetch: the
+ * manifest's `imageOptimization.domains` and `remotePatterns` hostnames, or,
+ * with no image function, its `imageRemoteSources`.
+ *
+ * @param manifest the deploy manifest.
+ * @returns the hosts (may carry a `*.` / `**.` wildcard prefix).
+ */
+const imageRemoteHosts = (manifest: DeployManifest): string[] => [
+  ...(manifest.imageOptimization?.domains ?? []),
+  ...(manifest.imageOptimization?.remotePatterns ?? []).map((p) => p.hostname),
+  ...(manifest.imageRemoteSources?.domains ?? []),
+  ...(manifest.imageRemoteSources?.remotePatterns ?? []).map((p) => p.hostname),
+];
+
+
+/**
  * How the selected front door invokes the server-rendering compute. Known
  * before the compute is built, so the server answers in a form the door can
  * carry (see `DoorCapabilities.streaming`).
@@ -2713,16 +2850,23 @@ const assertServerReachableByDoor = (manifest: DeployManifest, capabilities: Doo
 
 /**
  * The error pages the framework build shipped (`manifest.errorPages`, e.g. a
- * SPA's `404.html`), as object keys under the build prefix. `DoorInput`
- * carries them as `app.errorPages` when the app sets none, so every door —
- * the CloudFront and stacked edges, the regional doors' asset proxies, a
- * bring-your-own door through `cf.errorPages` — serves the same page.
+ * SPA's `404.html`), as object keys under the build prefix — else, for a
+ * multi-page static site that shipped no 404 page, AWS Blocks' default one
+ * (`_not_found.html`, see `default_not_found.ts`). `DoorInput` carries them as
+ * `app.errorPages` when the app sets none, so every door — the CloudFront and
+ * stacked edges, the regional doors' asset proxies, a bring-your-own door
+ * through `cf.errorPages` — serves the same page.
  *
- * @returns the pages, or `undefined` when the build shipped none.
+ * @param manifest the deploy manifest.
+ * @param defaultNotFound whether the deploy serves the default 404 page (`needsDefaultNotFoundPage`).
+ * @returns the pages, or `undefined` when there are none.
  */
-const frameworkErrorPagesOf = (manifest: DeployManifest): { notFound?: string; serverError?: string } | undefined => {
+const frameworkErrorPagesOf = (
+  manifest: DeployManifest,
+  defaultNotFound = false,
+): { notFound?: string; serverError?: string } | undefined => {
   const key = (page: string | undefined) => page?.replace(/^\/+/, '') || undefined;
-  const notFound = key(manifest.errorPages?.[404]);
+  const notFound = key(manifest.errorPages?.[404]) ?? (defaultNotFound ? NOT_FOUND_PAGE_KEY : undefined);
   const serverError = key(manifest.errorPages?.[500]);
   if (!notFound && !serverError) return undefined;
   return { ...(notFound ? { notFound } : {}), ...(serverError ? { serverError } : {}) };
@@ -2834,6 +2978,42 @@ const assertMiddlewareReachableByDoor = (manifest: DeployManifest, kind: string,
     resolution:
       "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or move the middleware's logic into the pages " +
       'or route handlers before choosing another door.',
+  });
+};
+
+/**
+ * Fail synth for a Lambda@Edge compute (`type: 'edge'`, for example a Next.js
+ * `runtime: 'edge'` route) behind a door other than CloudFront: only a
+ * CloudFront distribution invokes Lambda@Edge, so the route would never reach
+ * its function.
+ *
+ * The resolution depends on the door: only the API Gateway HTTP API door can
+ * run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`),
+ * so behind any other door the fix is to change the door.
+ *
+ * @param httpApi whether the door is the API Gateway HTTP API door.
+ * @throws HostingError('EdgeRouteNeedsCloudFrontDoorError') naming the computes and the door.
+ */
+const assertEdgeRoutesReachableByDoor = (
+  manifest: DeployManifest,
+  kind: string,
+  label: string = kind,
+  httpApi = false,
+): void => {
+  if (kind === 'cloudfront') return;
+  const edge = Object.entries(manifest.compute)
+    .filter(([, resource]) => resource.type === 'edge')
+    .map(([name]) => name);
+  if (edge.length === 0) return;
+  throw new HostingError('EdgeRouteNeedsCloudFrontDoorError', {
+    message:
+      `The app has Lambda@Edge computes (${edge.join(', ')}), which only the CloudFront door invokes; the '${label}' ` +
+      'front door would deploy them with no route reaching them.',
+    resolution: httpApi
+      ? "Run them as regional functions (`edgeRoutes: 'regional'` on core `Hosting`, the default behind this door), " +
+        'or use the CloudFront door.'
+      : "Use the CloudFront door (omit `frontDoor`, or `'cloudfront'`), or the API Gateway HTTP API door " +
+        "(`frontDoor: { kind: 'apiGateway' }`), which runs them as regional functions.",
   });
 };
 

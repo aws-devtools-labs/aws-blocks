@@ -22,7 +22,7 @@ const agent = new Agent(scope, 'support-agent', {
 
 // Create a conversation and stream a response
 const conversationId = await agent.createConversationId('user-123');
-const channel = await agent.getChannel(conversationId);
+const channel = await agent.getChannel(conversationId, { userId: 'user-123' });
 const sub = channel.subscribe((chunk) => { /* handle chunk */ });
 await sub.established;
 const result = await agent.stream('Until when are you open tomorrow?', { conversationId, userId: 'user-123' });
@@ -42,11 +42,11 @@ const agent = new Agent(scope, id, config)
 | `stream(message, options?)` | `Promise<AgentStreamResult>` | Submit a message. Returns immediately with `{ channelId, channel, complete }`. |
 | `resume(channelId, responses, options?)` | `Promise<void>` | Resume an interrupted agent with user responses. Chunks publish to the same channel. |
 | `createConversationId(userId)` | `Promise<string>` | Generate a new conversation ID (UUID). |
-| `getConversation(id, options?)` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. See [Reading conversation history](#reading-conversation-history). |
+| `getConversation(id, { userId, limit? })` | `Promise<Message[]>` | Get messages in a conversation, returned **oldest-first** (chronological). Pass `{ limit }` to return only the **most recent N**, still ordered oldest-first. Empty unless `userId` owns the conversation. See [Reading conversation history](#reading-conversation-history). |
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
-| `getPendingInterrupts(conversationId)` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). |
-| `getChannel(channelId)` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. |
+| `getPendingInterrupts(conversationId, { userId })` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
+| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `inferenceOnly` agents ignore the `userId` (their channels are not user-scoped), but pass the session's `userId` anyway, not a placeholder. |
 
 `stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
@@ -54,38 +54,41 @@ const agent = new Agent(scope, id, config)
 
 ```typescript
 // Correct: subscribe first, await established, then send
-const channel = await agent.getChannel(conversationId);
+const channel = await agent.getChannel(conversationId, { userId });
 const sub = channel.subscribe((chunk) => { /* handle chunk */ });
 await sub.established;
 await agent.stream(message, { conversationId, userId });
 
 // Wrong: send first, subscribe after — early chunks lost
 await agent.stream(message, { conversationId, userId });
-const channel = await agent.getChannel(conversationId); // too late!
+const channel = await agent.getChannel(conversationId, { userId }); // too late!
 ```
 
-The `useChat` hook (see [Client Hook](#client-hook--usechat)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
+The `useChat` hook (see [Client Hook](#client-hook--usechat-deprecated)) handles this ordering automatically. Use it instead of hand-rolling stream logic.
 
-### Authorization (caller responsibility)
+### Authorization
 
-The Agent BB scopes data by `conversationId`, which is an unguessable UUID, but it does **not** authorize the caller against a conversation on read paths. `getConversation(id)` and `getPendingInterrupts(conversationId)` take only an id, so any caller that supplies a valid conversation ID gets the messages back.
+Every method that takes a `userId` treats it as the caller's identity and checks it against the conversation's owner (the `userId` passed to `createConversationId`):
 
-Your API handler owns authorization: derive `userId` from the authenticated session and verify the conversation belongs to that user before reading it. `listConversations(userId)` returns only the conversations a user owns, so it's the safe way to resolve which conversation IDs a caller may access:
+- `stream()` and `resume()` throw `AgentErrors.ConversationNotFound` when `options.conversationId` doesn't belong to `options.userId`. A non-owner can't add turns to someone else's conversation or approve their pending tool calls.
+- `getConversation(id, { userId })` and `getPendingInterrupts(conversationId, { userId })` return `[]` for a conversation the user doesn't own.
+- `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
+- `getChannel(channelId, { userId })` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
+- With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` unless the second argument is an options object with a `userId` (`{ userId }`), so a call written for the older signatures, such as `getConversation(id)` or `getConversation(id, { limit })`, fails loudly instead of returning data.
+- A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
+
+**`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
+
+These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async getMessages(conversationId: string) {
-    const user = await auth.getCurrentUser(context);
-    const owned = await agent.listConversations(user.userId);
-    if (!owned.some(c => c.conversationId === conversationId)) {
-      throw new Error('Not found');
-    }
-    return agent.getConversation(conversationId);
+    const user = await auth.requireAuth(context);
+    return agent.getConversation(conversationId, { userId: user.userId });
   },
 }));
 ```
-
-`deleteConversation(id, userId)` is owner-scoped internally — it verifies the conversation belongs to `userId` before deleting anything, so a non-owner call is a no-op.
 
 ### AgentStreamResult
 
@@ -107,7 +110,7 @@ Each chunk published to the Realtime channel has a `type` and type-specific fiel
 | `tool-call` | `toolName: string`, `input: JSONValue` | Agent is calling a tool. |
 | `tool-result` | `toolName: string`, `text: string` | Tool returned a result. |
 | `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
-| `error` | `error: string` | Agent encountered an error. |
+| `error` | `error: string`, `errorName?: string` | Agent encountered an error. `errorName` is set when the failure was classified — e.g. `ModelUnavailableException` when Bedrock refuses to invoke the model for this account. |
 | `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
 
 ### Message Roles
@@ -137,6 +140,7 @@ Each `Message` returned by `getConversation()` carries a `metadata` object. The 
 | `usage` | `{ inputTokens, outputTokens, totalTokens }` | `assistant` — token usage for the turn. |
 | `latencyMs` | `number` | `assistant` — turn latency. |
 | `error` | `string` | any row where the turn errored. |
+| `errorName` | `string` | a row where the turn errored and the failure was classified — the `AgentErrors` name (for example `ModelUnavailableException`). |
 
 #### Tool-approval (HITL) row sequence
 
@@ -152,13 +156,13 @@ user → interrupt → approval → tool-call → tool-result → assistant
 
 #### Reading conversation history
 
-`getConversation(id)` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
+`getConversation(id, { userId })` returns the full history **oldest-first (chronological)**. Internally the store is read newest-first and the result is reversed before returning, so:
 
 - With no `limit`, you get every message in chronological order.
 - With `{ limit: N }`, you get the **most recent N** messages, still ordered oldest-first (not the first N). `limit: 0` (or any negative value) returns an empty array.
 
 ```typescript
-const recent = await agent.getConversation(id, { limit: 10 }); // last 10, oldest-first
+const recent = await agent.getConversation(id, { userId, limit: 10 }); // last 10, oldest-first
 const first = recent[0];           // oldest of the 10
 const last  = recent.at(-1);       // newest message
 ```
@@ -201,7 +205,7 @@ Model configuration is optional. When omitted, the agent defaults to `BedrockMod
 | `provider` | `'bedrock' \| 'openai-api' \| 'canned'` | Model provider. |
 | `modelId` | `string` | Model ID. Required for bedrock and openai-api. |
 | `endpoint` | `string` | API endpoint. For openai-api (defaults to api.openai.com). |
-| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. |
+| `apiKey` | `string \| () => Promise<string>` | API key for openai-api. Accepts a string or async resolver. Falls back to `OPENAI_API_KEY` env var. For a [Bedrock Mantle](#bedrock-via-mantle) endpoint, omit it (an empty string counts as omitted) to authenticate with short-term Bedrock API keys minted from the agent's AWS credentials (`OPENAI_API_KEY` is not used). |
 | `inferenceConfig` | `{ temperature?, topP?, maxTokens?, stopSequences? }` | Optional inference parameters. |
 | `cannedResponses` | `Record<string, string> \| string` | Canned-provider response dictionary, or path to a JSON dictionary. Ignored by real model providers. |
 | `guardrail` | `{ identifier, version, trace? }` | Bedrock only. Attach an existing Amazon Bedrock guardrail to every model call. See [Bedrock Guardrails](#bedrock-guardrails). |
@@ -249,6 +253,8 @@ model: {
 #### Bedrock Presets
 
 Pre-configured model presets for quick setup. Names are capability-based so the underlying model can be upgraded without breaking your code. These use [global inference profiles](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html) — requests may be routed to any supported AWS region for optimal throughput. If your workload has data residency requirements, specify a region-scoped inference profile explicitly instead of using a preset.
+
+All the presets are **Anthropic** models. Before first use in an AWS account, submit Anthropic's one-time use case details form and activate the model's one-time AWS Marketplace subscription — see [AWS Credentials (Bedrock)](#aws-credentials-bedrock).
 
 ```typescript
 import { Agent, BedrockModels} from '@aws-blocks/bb-agent';
@@ -327,7 +333,7 @@ Before selecting a model, the agent verifies its availability:
 - **OpenAI-compatible:** Pings `GET /v1/models` and checks if the specified model ID is in the response.
 - **Canned:** Always available (no external dependency).
 
-Health checks verify the model *exists* but cannot guarantee invoke access (e.g., EULA not accepted, quota limits). If all candidates fail, the agent throws `AgentErrors.ModelUnavailable`. Check logs for details.
+Health checks verify the model *exists* but cannot guarantee invoke access (e.g., EULA not accepted, Anthropic use case details not submitted, AWS Marketplace subscription not activated, model not available for the account, quota limits). If all candidates fail, the agent throws `AgentErrors.ModelUnavailable`. Check logs for details.
 
 To see detailed health check logs, pass a logger with `info` level:
 
@@ -371,9 +377,19 @@ const agent = new Agent(scope, 'agent', {
 
 The `bedrock` provider uses your configured AWS credentials. See [Strands quickstart](https://strandsagents.com/docs/user-guide/quickstart/typescript/#configuring-credentials) for setup instructions.
 
-**Model access must be enabled in your account.** The deployed agent's runtime role already grants the Bedrock invoke permissions (`bedrock:InvokeModel`, `InvokeModelWithResponseStream`, `GetInferenceProfile`, and foundation-model/inference-profile reads) — you do **not** add IAM for this. What you *do* need is **model access enabled for the specific inference profile you select**, granted per-account in the Bedrock console (Model access). A model whose access is not enabled fails the health check and, with no other candidate, throws `AgentErrors.ModelUnavailable`; a direct invoke of an un-enabled profile returns `AccessDeniedException` (403) — Bedrock's **account-level model-access** denial, not an IAM-policy denial, so the fix is enabling model access in the Bedrock console, not editing the runtime role.
+**Bedrock invoke permissions are already granted.** The deployed agent's runtime role grants the Bedrock invoke permissions (`bedrock:InvokeModel`, `InvokeModelWithResponseStream`, `GetInferenceProfile`, and foundation-model/inference-profile reads), so the agent can call any model your account has access to.
 
-A **global** inference profile (`global.…`, used by the [Bedrock presets](#bedrock-presets)) and a **regional** one (`us.…`, `eu.…`, `apac.…`) are **separate profiles with separate access grants** — enabling the regional profile does not enable the global one. If a preset is reported unavailable but you know the model is enabled, confirm access is enabled for the **`global.`** profile specifically, or pass an explicit regional `modelId` your account has enabled:
+**Most Bedrock models are enabled by default.** Access to most serverless models in Amazon Bedrock is enabled for every account, provided the AWS Marketplace permissions described below are in place for models sold through AWS Marketplace. Two one-time, per-account steps can still stand between a new account and the [Bedrock presets](#bedrock-presets), which are all Anthropic models. See [Access Amazon Bedrock foundation models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
+
+**Anthropic models need a one-time use case details form.** First-time customers submit **use case details** once per AWS account, either from the model catalog in the Amazon Bedrock console or with the [`PutUseCaseForModelAccess`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_PutUseCaseForModelAccess.html) API. Submitting it once from an AWS Organizations management account covers its member accounts. Until it is submitted, the agent's health check still passes (the inference profile exists), but invoking the model fails with *"Model use case details have not been submitted for this account"*. After submission, access can take several minutes to become active and invocation may keep returning `AccessDeniedException` meanwhile; [`GetFoundationModelAvailability`](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_GetFoundationModelAvailability.html) reports the current status. Models from other providers (for example Amazon Nova or OpenAI gpt-oss) do not need this form. In opt-in Regions the form must be submitted again.
+
+**Marketplace-sold models need a one-time subscription.** Models sold through AWS Marketplace — including all Anthropic models — are subscribed for an account the first time they are invoked by a principal that has the `aws-marketplace:Subscribe`, `aws-marketplace:Unsubscribe`, and `aws-marketplace:ViewSubscriptions` permissions. The agent's runtime role has only the Bedrock invoke permissions above, so until the subscription exists, invoking the model fails with *"… not authorized to perform the required AWS Marketplace actions …"*. Activate it once per account by invoking the model (for example, from the Amazon Bedrock console playground) as a principal with those Marketplace permissions; after that, the runtime role can invoke it.
+
+**"Not available for this account" is an entitlement.** Some models (often the newest ones) are not available to every account; invoking one returns *"… is not available for this account"*, sometimes with a suggestion to contact AWS Sales. Choose a different model or preset, or contact AWS to make the model available to your account.
+
+These invoke-time refusals surface as an `error` chunk carrying an actionable message, and `complete()` rejects with `AgentErrors.ModelUnavailable` (`createChat`'s and `useChat`'s `onError` receive the same branded error as their `cause` argument). A model that fails the health check and has no other candidate also throws `AgentErrors.ModelUnavailable`.
+
+A **global** inference profile (`global.…`, used by the [Bedrock presets](#bedrock-presets)) and a **regional** one (`us.…`, `eu.…`, `apac.…`) are **separate profiles** — a model being usable through a regional profile does not guarantee the global one is. If a preset is reported unavailable but you know the model works in your account, confirm the **`global.`** profile specifically, or pass an explicit regional `modelId` your account can invoke:
 
 ```typescript
 // Explicit regional profile instead of a global-profile preset
@@ -384,6 +400,21 @@ model: { deployed: { provider: 'bedrock', modelId: 'us.anthropic.claude-opus-4-8
 
 Amazon Bedrock exposes an OpenAI-compatible endpoint via [Bedrock Mantle](https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html). Use it with `provider: 'openai-api'` and set the endpoint to `https://bedrock-mantle.<region>.api.aws/v1`.
 
+```typescript
+model: {
+  deployed: { provider: 'openai-api', modelId: 'openai.gpt-oss-120b', endpoint: 'https://bedrock-mantle.us-east-1.api.aws/v1' },
+}
+```
+
+When `apiKey` is omitted (or an empty string) for a Mantle endpoint (an `https://bedrock-mantle.<region>.api.aws` URL), the agent mints short-term Bedrock API keys from the AWS credentials it runs with and refreshes them automatically before they expire, so long sessions keep working:
+
+- **Deployed**, the agent runs as the runtime role, which is granted `bedrock-mantle:CreateInference`, `bedrock-mantle:ListModels` and `bedrock-mantle:GetModel` on the endpoint region's Mantle projects, plus `bedrock-mantle:CallWithBearerToken` limited to short-term keys (`bedrock-mantle:BearerTokenType` = `SHORT_TERM`).
+- **Locally**, it uses your local AWS credentials, which need those same permissions.
+- `OPENAI_API_KEY` is not used for Mantle endpoints.
+- An explicit `apiKey` (for example a long-term Bedrock API key) still takes precedence. The deployed role is then not granted the `bedrock-mantle` permissions, since the key carries its own identity.
+
+Only models that support the Chat Completions API (`/v1/chat/completions`) work with this provider, such as the OpenAI gpt-oss models. Anthropic Claude models on Mantle support only the Messages API; use them with `provider: 'bedrock'` instead. Some model lines are served from `/openai/v1` rather than `/v1` — check the model card for the base path.
+
 ### Error Handling
 
 ```typescript
@@ -391,7 +422,7 @@ import { isBlocksError } from '@aws-blocks/core';
 import { AgentErrors } from '@aws-blocks/bb-agent';
 
 try {
-  await agent.getConversation(id);
+  await agent.getConversation(id, { userId });
 } catch (e: unknown) {
   if (isBlocksError(e, AgentErrors.PersistenceRequired)) {
     // agent is in inferenceOnly mode
@@ -403,10 +434,12 @@ try {
 |-------|------|
 | `AgentErrors.PersistenceRequired` | Conversation CRUD called on an inferenceOnly agent. |
 | `AgentErrors.InvalidModelConfig` | Missing modelId, apiKey, unknown provider, or `needsApproval` + `interrupt` both specified. |
-| `AgentErrors.ModelUnavailable` | All model candidates failed health checks. Check logs for details. |
+| `AgentErrors.ModelUnavailable` | All model candidates failed health checks, or Bedrock refused to invoke the model for account-level reasons (Anthropic use case details not submitted, one-time AWS Marketplace subscription not activated, model not available for the account). The message says what to do; check logs for details. |
 | `AgentErrors.StreamFailed` | Agent encountered an error during execution. |
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
+| `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
+| `AgentErrors.InvalidUsage` | With persistence enabled: `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without an options object containing the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key. |
 
 ### Streaming Mode
 
@@ -530,7 +563,7 @@ const agent = new Agent(scope, 'support', {
   }),
 });
 
-const user = await auth.getCurrentUser(requestContext);
+const user = await auth.requireAuth(requestContext);
 await agent.stream(message, { conversationId, userId: user.userId, context: { userId: user.userId } });
 ```
 
@@ -739,7 +772,7 @@ while (true) {
 
 ## Inference-Only (No Persistence)
 
-Set `inferenceOnly: true` for stateless tasks that don't need conversation history — classification, extraction, summarization. No DynamoDB tables or session storage are created.
+Set `inferenceOnly: true` for stateless tasks that don't need conversation history — classification, extraction, summarization. The conversation and message tables are not created. The agent's S3 session bucket is still created; it holds session snapshots for turns that pass a `conversationId`.
 
 ```typescript
 const classifier = new Agent(scope, 'classifier', {
@@ -899,7 +932,7 @@ You get all of this with **no app code** when you use `realtimeTransport` — it
 
 ### React: hold the instance once, drive `useState` from the callbacks
 
-`createChat` is a factory, so it must **not** run on every render — recreating it drops the transport subscription and conversation state each time. Hold the single instance (and the transport it wraps) in a `useRef`, created lazily so it survives re-renders, and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal; thread a `userId` through `createConversation` / the transport's `sendMessage` the same way when your API needs it (or resolve the user server-side).
+`createChat` is a factory, so it must **not** run on every render — recreating it drops the transport subscription and conversation state each time. Hold the single instance (and the transport it wraps) in a `useRef`, created lazily so it survives re-renders, and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal and sends no `userId`: resolve the user from the session in your backend handlers (see [Authorization](#authorization)).
 
 ```tsx
 'use client'; // Next.js only — createChat opens a browser WebSocket, so it must run in a Client Component. Plain React (Vite/CRA) can omit this.
@@ -1015,7 +1048,7 @@ import { useChat } from '@aws-blocks/bb-agent/client';
 const chat = useChat({
   api: {
     sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
-    createConversation: () => api.createConversation(userId),
+    createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
     resume: (chId, responses, convId) => api.resume(chId, responses, convId),
   },
@@ -1048,6 +1081,8 @@ Complete wiring showing the backend API and frontend `useChat` connected togethe
 ```typescript
 import { Scope, ApiNamespace } from '@aws-blocks/core';
 import { Agent, BedrockModels } from '@aws-blocks/bb-agent';
+import type { InterruptResponse } from '@aws-blocks/bb-agent';
+import { AuthBasic } from '@aws-blocks/bb-auth-basic';
 
 const scope = new Scope('my-app');
 
@@ -1056,20 +1091,35 @@ const agent = new Agent(scope, 'chat', {
   systemPrompt: 'You are a helpful assistant.',
 });
 
+// Any auth block works (AuthBasic, AuthCognito, AuthOIDC); the userId comes from
+// the session, never from a request parameter. See "Authorization" above.
+const auth = new AuthBasic(scope, 'auth');
+
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async createConversation(userId: string) {
-    return { conversationId: await agent.createConversationId(userId) };
+  async createConversation() {
+    const user = await auth.requireAuth(context);
+    return { conversationId: await agent.createConversationId(user.userId) };
   },
-  async sendMessage(conversationId: string, message: string, channelId: string, userId: string) {
-    const result = await agent.stream(message, { conversationId, channelId, userId });
+  async sendMessage(conversationId: string, message: string, channelId: string) {
+    const user = await auth.requireAuth(context);
+    const result = await agent.stream(message, { conversationId, channelId, userId: user.userId });
     return { channelId: result.channelId };
   },
   async getConversation(conversationId: string) {
-    const messages = await agent.getConversation(conversationId);
-    return { messages };
+    const user = await auth.requireAuth(context);
+    return { messages: await agent.getConversation(conversationId, { userId: user.userId }) };
+  },
+  async getPendingInterrupts(conversationId: string) {
+    const user = await auth.requireAuth(context);
+    return { interrupts: await agent.getPendingInterrupts(conversationId, { userId: user.userId }) };
+  },
+  async resume(channelId: string, responses: InterruptResponse[], conversationId?: string) {
+    const user = await auth.requireAuth(context);
+    await agent.resume(channelId, responses, { conversationId, userId: user.userId });
   },
   async getChannel(channelId: string) {
-    return agent.getChannel(channelId);
+    const user = await auth.requireAuth(context);
+    return agent.getChannel(channelId, { userId: user.userId });
   },
 }));
 ```
@@ -1079,13 +1129,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 ```typescript
 import { useChat } from '@aws-blocks/bb-agent/client';
 
-const userId = getCurrentUserId();
-
 const chat = useChat({
   api: {
-    sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId, userId),
-    createConversation: () => api.createConversation(userId),
+    sendMessage: (convId, msg, chId) => api.sendMessage(convId, msg, chId),
+    createConversation: () => api.createConversation(),
     getConversation: (id) => api.getConversation(id),
+    resume: (chId, responses, convId) => api.resume(chId, responses, convId),
+    getPendingInterrupts: (id) => api.getPendingInterrupts(id),
   },
   // Forward the subscribe argument (`sub`) VERBATIM to the channel — it is an
   // options object carrying onMessage/onReconnect/onDisconnect. Passing only a
@@ -1096,6 +1146,7 @@ const chat = useChat({
   },
   onMessagesChange: (msgs) => renderMessages(msgs),
   onLoadingChange: (loading) => updateSpinner(loading),
+  onInterrupt: (interrupts) => showApprovalUI(interrupts),
 });
 
 // Send a message — useChat handles subscribe-before-send automatically
@@ -1109,7 +1160,7 @@ The example above is framework-agnostic on purpose — `useChat` has no React im
 
 ### 2. React: hold the instance once, drive `useState` from the callbacks
 
-`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. This example keeps the `api` wiring minimal — it omits the `userId` that the End-to-End example (#1) threads through `createConversation` / `sendMessage`; thread it the same way here when your API needs it (or resolve the user server-side).
+`useChat` is a factory, not a React hook, so it must **not** run on every render — recreating it drops the WebSocket subscription and conversation state each time. Hold the single instance in a `useRef` (created lazily so it survives re-renders), and turn the `onMessagesChange` / `onLoadingChange` / `onInterrupt` callbacks into `setState` calls so React re-renders when the mutable instance changes. The `api` wiring matches the End-to-End example (#1): the backend resolves the user from the session, so the client never sends a `userId`.
 
 ```tsx
 'use client'; // Next.js only — see the note below. Plain React (Vite/CRA) can omit this.
@@ -1224,7 +1275,7 @@ const agent = new Agent(scope, 'support', {
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async chat(message: string, conversationId: string) {
-    const user = await auth.getCurrentUser(context);
+    const user = await auth.requireAuth(context);
     return await agent.stream(message, {
       conversationId,
       userId: user.userId,
@@ -1270,7 +1321,7 @@ When `inferenceOnly: true`, the two DistributedTables are skipped (no conversati
 
 **"ValidationException"** — Model ID not recognized. Use `aws bedrock list-foundation-models --query "modelSummaries[].modelId"` to see available models.
 
-**Health check passes but invocation fails** — The health check verifies the model exists but cannot check EULA acceptance or account-level access.
+**Health check passes but invocation fails** — The health check verifies the model exists but cannot check EULA acceptance or account-level access. For Anthropic models (including all presets), submit the one-time use case details form; for *"not authorized to perform the required AWS Marketplace actions"*, invoke the model once as a principal with the AWS Marketplace subscription permissions; for *"not available for this account"*, pick a different model. See [AWS Credentials (Bedrock)](#aws-credentials-bedrock).
 
 ## See Also
 

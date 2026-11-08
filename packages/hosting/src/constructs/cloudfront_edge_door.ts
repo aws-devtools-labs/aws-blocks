@@ -230,6 +230,7 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
     const errorResponses = customErrorResponses(app.errorPages, {
       pathPrefix: buildPrefix(input),
       hasCompute: Boolean(origins.server),
+      pageKeys: true,
     });
 
     const additionalBehaviors: Record<string, BehaviorOptions> = {};
@@ -398,7 +399,7 @@ const planEdgeBehaviors = (
     wanted.push([pattern, target]);
   };
   for (const path of origins.api?.paths ?? []) add(path, 'api');
-  for (const r of customErrorResponses(app.errorPages, { pathPrefix: buildPrefix(input), hasCompute: Boolean(origins.server) })) {
+  for (const r of customErrorResponses(app.errorPages, { pathPrefix: buildPrefix(input), hasCompute: Boolean(origins.server), pageKeys: true })) {
     if (r.responsePagePath) add(r.responsePagePath, 's3');
   }
   // The catch-all is implicit in the route table: the server when there is

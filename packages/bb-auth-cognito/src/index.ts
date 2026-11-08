@@ -19,7 +19,7 @@ import {
 	Scope,
 	registerSdkIdentifiers,
 } from '@aws-blocks/core';
-import { getMockDataDir } from '@aws-blocks/core/bb-utils';
+import { getMockDataDir, assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
 import type { BlocksContext, ScopeParent } from '@aws-blocks/core';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
 import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
@@ -87,6 +87,9 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { declaredGroupNames } from './groups.js';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-auth-cognito');
 
 export * from './types.js';
 export { SessionStore, type SessionRecord } from './sessions.js';

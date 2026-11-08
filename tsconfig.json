@@ -7,6 +7,7 @@
     { "path": "packages/bb-kv-store" },
     { "path": "packages/bb-distributed-table" },
     { "path": "packages/bb-data" },
+    { "path": "packages/bb-database" },
     { "path": "packages/bb-realtime" },
     { "path": "packages/auth-common" },
     { "path": "packages/bb-auth-basic" },

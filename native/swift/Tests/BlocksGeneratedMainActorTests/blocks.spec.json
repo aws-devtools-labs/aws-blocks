@@ -8,9 +8,9 @@
   "methods": [
     { "name": "users.list", "params": [], "result": { "name": "R", "schema": { "type": "array", "items": { "type": "string" } } } },
     { "name": "client.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
-    { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client" } } },
-    { "name": "admin.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client" } } },
-    { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": { "type": "object", "properties": { "client": { "x-blocks-transferable": "oidc/client" } }, "required": ["client"] } } },
+    { "name": "auth.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google", "github", "my-sso"] }] } } },
+    { "name": "admin.getClient", "params": [], "result": { "name": "R", "schema": { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["okta"] }] } } },
+    { "name": "auth.getSetup", "params": [], "result": { "name": "R", "schema": { "type": "object", "properties": { "client": { "x-blocks-transferable": "oidc/client", "x-blocks-type-args": [{ "type": "string", "enum": ["google"] }] } }, "required": ["client"] } } },
     { "name": "class.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
     { "name": "type.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },
     { "name": "self.ping", "params": [], "result": { "name": "R", "schema": { "type": "string" } } },

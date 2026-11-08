@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { registerConfig, registerDashboardFinalizer, Scope } from '@aws-blocks/core/cdk';
-import { type ComputeDashboardSection, getComputes } from '@aws-blocks/core/cdk/internal';
+import { registerDashboardFinalizer, Scope } from '@aws-blocks/core/cdk';
+import { type ComputeDashboardSection, getComputes, registerSharedConfig } from '@aws-blocks/core/cdk/internal';
 import { CfnOutput, Fn, Stack } from 'aws-cdk-lib';
 import { Dashboard as CwDashboard } from 'aws-cdk-lib/aws-cloudwatch';
 import { BB_DASHBOARD_URL_ENV, mountDashboardRoute } from './routes.js';
@@ -142,8 +142,11 @@ export class Dashboard extends Scope {
 			config.dashboardName,
 		]);
 
-		// Pass the dashboard URL to the runtime Lambda via config registry.
-		registerConfig(this, BB_DASHBOARD_URL_ENV, this.url);
+		// Pass the dashboard URL to the runtime Lambda via config registry. One key
+		// per app, while an app may have several dashboards (DESIGN.md), so it keeps
+		// last-one-wins instead of registerConfig's conflict check; each dashboard's
+		// redirect route below gets its own URL directly.
+		registerSharedConfig(this, BB_DASHBOARD_URL_ENV, this.url);
 
 		// Register the redirect route so the Lambda handler dispatches it.
 		const routePath = options?.routePath;

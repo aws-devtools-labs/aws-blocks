@@ -46,6 +46,7 @@ start) are always added.
 Place your app in a VPC by passing a standard CDK VPC to `BlocksStack` or `BlocksBackend`:
 
 ```typescript
+import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 
 const vpc = new ec2.Vpc(app, 'AppVpc', { maxAzs: 2, natGateways: 1 });
@@ -64,10 +65,24 @@ AWS Blocks handles:
 
 ### Bring Your Own VPC
 
-For a shared or separately managed VPC:
+For a shared or separately managed VPC, look it up by ID with `ec2.Vpc.fromLookup`.
+`fromLookup` must be called inside a `Stack` scope (not the `App`) and the stack it
+lives in needs an explicit `env` (account + region) so CDK can perform the lookup.
+`BlocksStack.create` wires VPC placement during construction, so the VPC has to be
+resolved before that call — host the lookup in a small sibling stack and pass the
+resolved `IVpc` into `BlocksStack`:
 
 ```typescript
-const sharedVpc = ec2.Vpc.fromLookup(app, 'SharedVpc', { vpcId: 'vpc-abc123' });
+const env = {
+  account: process.env.CDK_DEFAULT_ACCOUNT,
+  region: process.env.CDK_DEFAULT_REGION,
+};
+
+// fromLookup needs a Stack scope with an explicit env; this sibling stack is
+// just a container for the lookup and holds no resources of its own.
+const lookupStack = new cdk.Stack(app, `${stackName}-vpc-ref`, { env });
+const sharedVpc = ec2.Vpc.fromLookup(lookupStack, 'SharedVpc', { vpcId: 'vpc-abc123' });
+
 await BlocksStack.create(app, stackName, {
   ...,
   defaults: { ...BlocksPresets.production, vpc: { network: sharedVpc } },  // Blocks provisions endpoints automatically

@@ -123,7 +123,11 @@ const flags = await getConfig('FEATURE_FLAGS'); // SSM
 ```
 
 Each getter reads `process.env.KEY` first, so **local dev needs no AWS** — put
-the value in a `.env` file. On a deployed function it fetches + decrypts from its
+the value in `.env.local`. That is the file the Blocks dev server (`npm run dev`)
+and the sandbox (`npm run sandbox`) load into the backend; they don't load `.env`,
+so a value only in `.env` isn't seen there and the getter throws
+`no config reference found`. (Next.js SSR code under `next dev` also reads `.env`,
+because Next loads it.) On a deployed function it fetches + decrypts from its
 store and caches per cold start (or per `cacheTtlSeconds`, for rotation without a
 redeploy).
 
@@ -255,7 +259,8 @@ Standalone hosting apps get two bundled CLIs:
 npx hosting-secret set STRIPE_KEY --prefix /myapp/secrets --region us-east-1   # hidden prompt
 cat key.txt | npx hosting-secret set STRIPE_KEY --value-stdin --prefix /myapp/secrets
 npx hosting-secret list --prefix /myapp/secrets
-npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets
+npx hosting-secret remove STRIPE_KEY --prefix /myapp/secrets               # recoverable
+npx hosting-secret remove STRIPE_KEY --force --yes --prefix /myapp/secrets # immediate, no recovery
 
 # SSM Parameter Store — a config value is non-sensitive, so a positional value is fine:
 npx hosting-config set FEATURE_FLAGS '{"beta":true}' --prefix /myapp/config
@@ -271,8 +276,11 @@ prompt still work). `list` prints names only, never values.
 
 `remove` on a **secret** is recoverable by default — the value enters Secrets
 Manager's recovery window and can be restored (guards against a typo'd prod key).
-Pass `--force` to delete immediately with no recovery. (`config` removes are always
-immediate — SSM Parameter Store has no recovery window.)
+Pass `--force` to delete immediately with no recovery. `--force` always needs
+`--yes` (or `-y`) to confirm, in every stage, and prints a warning naming the stage
+(or saying the un-staged value is shared by every stage, production included)
+before it deletes. (`config` removes are always immediate — SSM Parameter Store has
+no recovery window — so `--force` changes nothing there and needs no `--yes`.)
 
 > **Footguns to know.**
 > 1. **Region.** `--region` (or `AWS_REGION`) must match the region the app deploys
@@ -289,6 +297,42 @@ immediate — SSM Parameter Store has no recovery window.)
 >    value — put production-only secrets in a stage-scoped slot and keep only a
 >    safe cross-stage default (e.g. a sandbox credential) in the shared slot. Two
 >    constructs sharing a prefix are not isolated from each other.
+
+## Next.js: the OpenNext version
+
+The Next.js adapter builds with [OpenNext](https://opennext.js.org/aws)
+(`@opennextjs/aws`). Declare it in your app so you control its version and the
+build doesn't download it:
+
+```bash
+npm install --save-dev @opennextjs/aws@~4.1.14
+```
+
+- The adapter is verified against `@opennextjs/aws` `>=3.10.0 <3.11.0 || >=4.0.0 <4.2.0`.
+  Outside that range the build warns and continues.
+- If the app doesn't declare OpenNext, the adapter builds with
+  `@opennextjs/aws@4.1.14` and prints a warning.
+- OpenNext declares the Next.js versions it supports as a `next` peer range
+  (4.1.14: `>=15.5.28 <16 || >=16.4.1`). When your `next` version is outside
+  it, the build prints a warning. Upgrade `next` within its major version to
+  one that range accepts.
+- A route with `runtime = 'edge'` is built as Lambda@Edge, which needs the
+  stack's region at synth time. Set `env` on the stack that holds `Hosting`:
+
+  ```ts
+  const blocksStack = await BlocksStack.create(app, stackName, {
+  	env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+  	// …
+  });
+  ```
+
+  Without it, synth fails with `EdgeComputeRequiresRegionError`. Outside
+  `us-east-1`, an Edge route also adds a separate `us-east-1` support stack
+  for the Lambda@Edge function, so bootstrap `us-east-1` too
+  (`npx cdk bootstrap aws://<account>/us-east-1`). Tearing down a sandbox that
+  has more than one stack is tracked in
+  [#958](https://github.com/aws-devtools-labs/aws-blocks/pull/958) and
+  [#968](https://github.com/aws-devtools-labs/aws-blocks/pull/968).
 
 ## Architecture
 
@@ -459,13 +503,17 @@ Some apps need the CloudFront door:
   only on the CloudFront door. Behind any other door synth fails with
   `MiddlewareNeedsCloudFrontDoorError` rather than deploying the app with its
   middleware (and any route gating it does) skipped.
-- A streaming server (Next.js through OpenNext, or Nitro with
-  `awsLambda.streaming: true`) answers only through a door that streams: the
-  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. The ALB door, the
-  stacked door (its router is an ALB) and the HTTP API invoke the server
-  without streaming, so synth fails with
-  `StreamingServerNeedsStreamingDoorError` instead of deploying an app whose
-  pages never answer.
+- A streaming server handler answers only through a door that streams: the
+  CloudFront door or `{ kind: 'apiGateway', api: 'rest' }`. Behind the HTTP
+  API the Next.js and Nitro adapters build a buffered server instead (see
+  "The server behind the HTTP API"). The ALB door and the stacked door (its
+  router is an ALB) invoke the server without streaming, so with Next.js
+  through OpenNext, or Nitro with `awsLambda.streaming: true` on the
+  `aws-lambda` preset, synth fails with `StreamingServerNeedsStreamingDoorError`
+  instead of deploying an app whose pages never answer. Behind the HTTP API it
+  fails the same way only when the app forces a streaming build (a Nitro
+  `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
+  `open-next.config.ts` with a streaming wrapper).
 
 ### Settings per door kind
 
@@ -485,7 +533,7 @@ frontDoor: { kind: 'alb', features: { geoRestriction: { type: 'allowlist', count
 | `domain` | ✓ (certificate in us-east-1, aliases, Route 53 records, `wwwRedirect`) | ✓ (regional certificate, HTTPS listener, :80 → :443 redirect, Route 53 alias records; no `wwwRedirect`) | ✓ (regional; no `wwwRedirect`) | ✓ |
 | `waf` | ✓ (CLOUDFRONT-scoped web ACL) | ✓ (REGIONAL web ACL) | – | ✓ |
 | `logging` | ✓ | ✓ (the ALB's own logs: off unless set) | – | ✓ |
-| `monitoring` | ✓ | ✓ (`enabled` only: ALB 5xx and latency alarms, off unless set, no topic or subscriptions) | – | ✓ |
+| `monitoring` | ✓ | ✓ (`enabled` only: ALB 5xx and latency alarms, on unless `enabled: false`, no topic or subscriptions) | – | ✓ |
 | `skewProtection` | ✓ | – | – | ✓ |
 | `geoRestriction` | ✓ | – | – | ✓ |
 | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – |
@@ -523,15 +571,34 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
 certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
-cookies and every RPC then travel unencrypted. It also doesn't take over the
-API's address: the `ApiUrl` native clients use stays the backend's own HTTPS
-endpoint.
+cookies and every RPC then travel unencrypted.
+
+Only a CloudFront-backed door (the default, or the stacked door's edge) takes
+over the API's address. Under the backend's `apiFrontDoor: 'cloudfront'` it
+claims the API front-door role: the backend builds no distribution of its own,
+and `ApiUrl` (what native clients call) is the door's. Behind the ALB, API
+Gateway or a bring-your-own door, the API keeps the distribution
+`apiFrontDoor: 'cloudfront'` asks for, and `ApiUrl` stays on it; under the
+default `'apigateway'` tier, `ApiUrl` is the backend's own API Gateway URL
+behind every door. The browser reaches the API same-origin through the door
+either way.
+
+**The host the server sees.** The CloudFront door and the stacked door's edge
+set `x-forwarded-host` from the viewer's `Host`. Behind the ALB and API Gateway
+doors nothing in front does, so the server is given `Host` instead: a native
+Lambda handler (Nitro's `aws-lambda` preset, OpenNext) through a small shim, and
+a Lambda Web Adapter server that reads its host from `x-forwarded-host` through
+`HOST_HEADER` (SvelteKit) by reading `host`. Any other Lambda Web Adapter server
+(Astro's Node adapter, Nitro's `node-server`) receives the request's headers as
+sent, so don't configure it to trust `x-forwarded-host` behind these doors.
 
 A door that invokes the server without streaming (the ALB, the stacked door's
-ALB router, the API Gateway HTTP API) gets a server built in buffered mode. Next.js
-is the exception: its OpenNext build targets a streaming API Gateway REST
-integration, so serve Next.js through CloudFront, the `'rest'` door, or a door
-that streams.
+ALB router, the API Gateway HTTP API) gets a server built in buffered mode.
+Behind the HTTP API that includes Next.js, which the adapter builds with
+OpenNext's buffered `aws-apigw-v2` handler. Behind the ALB and the stacked door,
+Next.js is the exception: its OpenNext build targets a streaming API Gateway
+REST integration, so serve it there through CloudFront, an API Gateway door, or
+a door that streams.
 
 Behind the ALB, the server's target group sends and expects multi-value
 headers, so several `Set-Cookie` headers survive. A Lambda Web Adapter server
@@ -579,7 +646,11 @@ semantics, using the same matching code:
 - header rules: every matching rule is added to a successful response (not to
   a redirect or an error, as at the CloudFront edge);
 - error pages: a missing static file answers with the 404 page (status 404),
-  an S3 failure with the 500 page (status 500).
+  an S3 failure with the 500 page (status 500). The 404 page is the app's
+  `errorPages.notFound`, else the framework build's, else, for a multi-page
+  static site that ships none (Astro `output: 'static'` without a 404 page),
+  AWS Blocks' default "404 — Page Not Found" page, as on the CloudFront door.
+  An SPA keeps its `index.html` fallback.
 
 Responses the door sends straight to a function or the backend don't pass
 through those proxies: server-rendered (SSR) and image-optimization responses,
@@ -609,7 +680,9 @@ from a file bucket. The same limits bind everything else these doors carry:
 
 **ALB listener rules.** Consecutive paths bound for the same target share a
 rule (up to five path values each, four beside the stacked router's header
-check), and routes that go where the default goes get no rule. A load balancer
+check, and at most six wildcards, `*` or `?`, per rule), and routes that go
+where the default goes get no rule. A single pattern with more than six
+wildcards fails synth (`UnsupportedRoutePatternError`). A load balancer
 allows 100 rules by default; synth warns above that
 (`@aws-blocks/hosting:AlbRuleLimit`).
 
@@ -645,6 +718,30 @@ build's hashed assets: a tab opened before a deploy that then lazy-loads one of
 its chunks gets a 404 (the website's error document) and needs a reload. The page is plain HTTP and the
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
+
+**The server behind the HTTP API.** An HTTP API Lambda integration sends the
+payload format 2.0 event and can't stream, so the server is built for it: the
+Next.js adapter generates OpenNext's `aws-apigw-v2` converter with the buffered
+`aws-lambda` wrapper (a hand-written `open-next.config.ts` must use the same
+pair), and the Nitro adapter builds the `node-server` preset (a Lambda Web
+Adapter server, run buffered) when the app sets no preset and the stack's
+region is pinned to one with a Lambda Web Adapter layer
+(`LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS`, exported from
+`@aws-blocks/hosting/adapters`). Otherwise, including a stack with no `env`,
+Nitro keeps the `aws-lambda` preset, which
+the HTTP API serves while `awsLambda.streaming` is off. A route served by
+a compute other than the server (for example a Next.js `runtime: 'edge'` route
+built as a regional function) gets its own route to that function. A
+Lambda@Edge compute behind any door other than CloudFront fails synth
+(`EdgeRouteNeedsCloudFrontDoorError`), since only CloudFront invokes it.
+
+**No image function.** With `imageOptimization: false` on core `Hosting`
+(which `HostingPresets.preview` sets) no image function is built, and the HTTP API routes the framework
+image endpoints (`/_next/image`, `/_ipx/*`, `/_image`, under the basePath) to
+the asset proxy, which serves the source image unoptimized. A remote source is
+redirected (302) to itself only when its host is in the manifest's image
+allowlist (`imageOptimization.domains`, `remotePatterns` hostnames); anything
+else is a 404. The proxy never fetches a remote URL.
 
 ### The stacked door
 
@@ -718,8 +815,9 @@ it is not an in-place update.
   `BLOCKS_PUBLIC_ORIGIN`, the CORS origin), so existing sessions (cookies are
   scoped to the old host) and bookmarks to the old address stop working.
 - **CloudFront → ALB or stacked** deletes the default distribution and its
-  alarms; the ALB door's (and the router's) alarms and access logs are off
-  unless you set them. The stacked door has no custom domain yet.
+  alarms; the ALB door's (and the router's) own alarms are on unless
+  `monitoring: { enabled: false }`, and its access logs are off unless you set
+  them. The stacked door has no custom domain yet.
 - **A custom domain moving between doors** (for example the CloudFront door's
   `domain` to an API Gateway or ALB door) creates Route 53 records of the same
   name under new logical IDs, which collides with the old ones while both
@@ -820,7 +918,9 @@ export const myAlbDoor = defineFrontDoor({
 - `app`: the app facts. `buildId`, `basePath`, `assetPrefix` (Next.js
   `assetPrefix`; only the Next.js adapter sets it), `spaFallback`, `routes`
   (most-specific first, each already joined to its origin object), `redirects`,
-  `headers` and `errorPages`.
+  `headers` and `errorPages` (the app's, else the framework build's, else, for
+  a multi-page static site with no 404 page, AWS Blocks' default
+  `_not_found.html`).
 - `origins`: what AWS Blocks provisioned.
   - `assets`: `{ bucket, prefix, sourceDir }`. The private bucket and the
     `builds/<buildId>/` prefix.

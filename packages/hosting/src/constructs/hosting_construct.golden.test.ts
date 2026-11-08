@@ -93,7 +93,7 @@ void describe('HostingConstruct — golden (default CloudFront) resource map', (
     const manifest: DeployManifest = {
       version: 1,
       compute: {},
-      staticAssets: { directory: tmpDir },
+      staticAssets: { directory: tmpDir, spaFallback: true },
       routes: [{ pattern: '/*', target: 'static' }],
       buildId: 'golden-spa',
     };

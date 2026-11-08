@@ -17,7 +17,7 @@ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import { Construct } from 'constructs';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
 import { ComputeBase } from './compute/compute.js';
-import { finalizeConfigRegistry, getConfigLocation, registerConfig } from './config-registry.js';
+import { finalizeConfigRegistry, getConfigLocation, getRegisteredConfigValue, registerConfig } from './config-registry.js';
 import { DEFAULT_NODE_RUNTIME } from './node-version.js';
 
 // getConfigLocation reads globalThis.CURRENT_BLOCKS_STACK to place the bucket under the owning
@@ -385,4 +385,19 @@ test('log bucket inherits the production preset posture: RETAIN + no autoDelete 
 			]),
 		},
 	});
+});
+
+test('getRegisteredConfigValue reads a registered value, read-only, and sees late registrations', () => {
+	const app = new cdk.App();
+	const stack = new cdk.Stack(app, 'S');
+	const child = new Construct(stack, 'Deep');
+	assert.strictEqual(getRegisteredConfigValue(child, 'BLOCKS_PUBLIC_ORIGIN'), undefined);
+	// A Lazy producer reads at synth, so a value registered after it was built is seen.
+	const lazy = cdk.Lazy.string({ produce: () => String(getRegisteredConfigValue(child, 'BLOCKS_PUBLIC_ORIGIN')) });
+	registerConfig(stack, 'BLOCKS_PUBLIC_ORIGIN', 'https://example.com');
+	assert.strictEqual(getRegisteredConfigValue(child, 'BLOCKS_PUBLIC_ORIGIN'), 'https://example.com');
+	assert.strictEqual(stack.resolve(lazy), 'https://example.com');
+	// Reading a missing key creates no entry and no resources.
+	assert.strictEqual(getRegisteredConfigValue(stack, 'MISSING'), undefined);
+	assert.strictEqual(Object.keys(Template.fromStack(stack).toJSON().Resources ?? {}).length, 0);
 });

@@ -775,7 +775,7 @@
         "BucketName": {
           "Ref": "HostingStorageHostingBucket8A6503F0"
         },
-        "Entries": "{\"meta\":\"{\\\"b\\\":\\\"golden-spa\\\",\\\"bp\\\":\\\"\\\",\\\"spa\\\":0,\\\"img\\\":\\\"\\\",\\\"srv\\\":0,\\\"aP\\\":\\\"\\\",\\\"ww\\\":\\\"\\\",\\\"sk\\\":1,\\\"oS3\\\":\\\"blocks-s3\\\",\\\"oSrv\\\":\\\"blocks-server\\\",\\\"oImg\\\":\\\"blocks-image\\\",\\\"rc\\\":0,\\\"dc\\\":0,\\\"hc\\\":0}\"}"
+        "Entries": "{\"meta\":\"{\\\"b\\\":\\\"golden-spa\\\",\\\"bp\\\":\\\"\\\",\\\"spa\\\":1,\\\"img\\\":\\\"\\\",\\\"srv\\\":0,\\\"aP\\\":\\\"\\\",\\\"ww\\\":\\\"\\\",\\\"sk\\\":1,\\\"oS3\\\":\\\"blocks-s3\\\",\\\"oSrv\\\":\\\"blocks-server\\\",\\\"oImg\\\":\\\"blocks-image\\\",\\\"rc\\\":0,\\\"dc\\\":0,\\\"hc\\\":0}\"}"
       },
       "DependsOn": [
         "HostingAssetDeploymentHtmlAwsCliLayerEE8779C9",

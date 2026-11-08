@@ -16,7 +16,7 @@
  * inline — no separate Lambdas needed.
  */
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgent } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
@@ -38,7 +38,8 @@ import type {
 	SubscribeOptions,
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validatePublishSize } from './utils.js';
+import { localListener, serverSubscribe, type ServerSubscription } from './server-subscribe.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validatePublishSize, isClientChannelPath } from './utils.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
@@ -94,11 +95,14 @@ interface WebSocketEvent {
 	body?: string;
 }
 
-/** Parsed message body from a WebSocket $default route. */
+/**
+ * Parsed message body from a WebSocket $default route. `channel` is checked with
+ * {@link isClientChannelPath} before use.
+ */
 interface WebSocketMessage {
 	action: 'subscribe' | 'unsubscribe' | 'ping';
-	channel?: string;
-	token?: string;
+	channel?: unknown;
+	token?: unknown;
 }
 
 /** Lambda response shape for WebSocket events. */
@@ -212,7 +216,25 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 
 	const callbackUrl = `https://${domainName}/${stage}`;
 
-	if (msg.action === 'subscribe' && msg.channel && msg.token) {
+	if ((msg.action === 'subscribe' || msg.action === 'unsubscribe') && !isClientChannelPath(msg.channel)) {
+		if (msg.action === 'subscribe') {
+			await getApigw(callbackUrl).send(new PostToConnectionCommand({
+				ConnectionId: connectionId,
+				Data: JSON.stringify({ type: 'error', message: 'Invalid channel' }),
+			}));
+		}
+		return { statusCode: 200 };
+	}
+
+	if (msg.action === 'subscribe' && isClientChannelPath(msg.channel)) {
+		if (typeof msg.token !== 'string' || !msg.token) {
+			// Same reply as the local WebSocket server (ws-server.ts).
+			await getApigw(callbackUrl).send(new PostToConnectionCommand({
+				ConnectionId: connectionId,
+				Data: JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }),
+			}));
+			return { statusCode: 200 };
+		}
 		const secret = await getTokenSecret();
 		const valid = validateChannelToken(msg.token, secret, msg.channel);
 		if (!valid) {
@@ -227,7 +249,7 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			ConnectionId: connectionId,
 			Data: JSON.stringify({ type: 'subscribe_success', channel: msg.channel }),
 		}));
-	} else if (msg.action === 'unsubscribe' && msg.channel) {
+	} else if (msg.action === 'unsubscribe' && isClientChannelPath(msg.channel)) {
 		await table.delete({ connectionId, channel: msg.channel });
 	} else if (msg.action === 'ping') {
 		// Get sentinel to read lastTtlSweep, then update TTL
@@ -254,80 +276,6 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 	return { statusCode: 200 };
 }
 
-// ── Server-side WebSocket subscribe ─────────────────────────────────────────
-
-function serverSubscribe(
-	wsUrl: string | undefined,
-	connectToken: string,
-	channel: string,
-	channelToken: string,
-	handler: (message: unknown) => void,
-	onDisconnect?: (reason: import('./types.js').DisconnectReason) => void,
-): RealtimeSubscription {
-	if (!wsUrl) {
-		const err = new Error('BLOCKS_RT_WS_URL not set — server-side subscribe unavailable');
-		err.name = 'ConnectionFailedException';
-		return { unsubscribe() {}, established: Promise.reject(brandBlocksError(err)) };
-	}
-
-	const url = `${wsUrl}?token=${encodeURIComponent(connectToken)}`;
-	const ws = new WebSocket(url);
-
-	let resolveEstablished: () => void;
-	let rejectEstablished: (err: Error) => void;
-	const established = new Promise<void>((resolve, reject) => {
-		resolveEstablished = resolve;
-		rejectEstablished = reject;
-	});
-
-	ws.onopen = () => {
-		ws.send(JSON.stringify({ action: 'subscribe', channel, token: channelToken }));
-	};
-
-	ws.onmessage = (event) => {
-		try {
-			const msg = JSON.parse(event.data as string);
-			if (msg.type === 'subscribe_success' && msg.channel === channel) {
-				resolveEstablished();
-			} else if (msg.type === 'error' && msg.channel === channel) {
-				const err = new Error(msg.message || 'Subscription rejected');
-				err.name = 'ConnectionFailedException';
-				rejectEstablished(brandBlocksError(err));
-			} else if (msg.type === 'message' && msg.channel === channel) {
-				try { handler(msg.data); } catch {}
-			}
-		} catch {}
-	};
-
-	ws.onerror = () => {
-		const err = new Error('WebSocket error');
-		err.name = 'ConnectionFailedException';
-		rejectEstablished(brandBlocksError(err));
-		if (onDisconnect) try { onDisconnect('error'); } catch {}
-	};
-
-	ws.onclose = (event) => {
-		const err = new Error('WebSocket closed');
-		err.name = 'ConnectionFailedException';
-		rejectEstablished(brandBlocksError(err));
-		if (onDisconnect) {
-			const reason: import('./types.js').DisconnectReason = event.code === 1001 ? 'timeout' : event.code === 1006 ? 'error' : 'unknown';
-			try { onDisconnect(reason); } catch {}
-		}
-	};
-
-	return {
-		unsubscribe() {
-			if (onDisconnect) try { onDisconnect('client'); } catch {}
-			ws.onmessage = null;
-			ws.onerror = null;
-			ws.onclose = null;
-			ws.close();
-		},
-		established,
-		connection: ws,
-	};
-}
 
 // ── Realtime ────────────────────────────────────────────────────────────────
 
@@ -440,10 +388,12 @@ export const Realtime: {
 		const ns = this._ns(namespace);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
-		// Local EventEmitter for same-invocation publish
-		this._localEmitter.on(fullChannel, handler);
 		// Real WebSocket for cross-invocation publish (established once secret resolves)
-		let wsSub: ReturnType<typeof serverSubscribe> | null = null;
+		let wsSub: ServerSubscription | null = null;
+		// Local EventEmitter for same-invocation publish, until the socket is live
+		// (see server-subscribe.ts), so each message reaches the handler once.
+		const local = localListener(handler, () => wsSub);
+		this._localEmitter.on(fullChannel, local);
 		const { wsUrl } = getSdkIdentifiers(this);
 		if (wsUrl) {
 			const fullId = this.fullId;
@@ -455,7 +405,7 @@ export const Realtime: {
 			}).catch(() => {});
 		}
 		return () => {
-			this._localEmitter.off(fullChannel, handler);
+			this._localEmitter.off(fullChannel, local);
 			if (wsSub) wsSub.unsubscribe();
 		};
 	}
@@ -477,13 +427,15 @@ export const Realtime: {
 			subscribe(handlerOrOptions: ((message: unknown) => void) | SubscribeOptions, _options?: never): RealtimeSubscription {
 				const handler = typeof handlerOrOptions === 'function' ? handlerOrOptions : handlerOrOptions.onMessage;
 				const onDisconnect = typeof handlerOrOptions === 'function' ? undefined : handlerOrOptions.onDisconnect;
-				// Local EventEmitter for same-invocation publish
-				localEmitter.on(fullChannel, handler);
 				// Real WebSocket for cross-invocation publish
 				const sub = serverSubscribe(wsUrl, connectToken, fullChannel, channelToken, handler, onDisconnect);
+				// Local EventEmitter for same-invocation publish, until the socket is
+				// live (see server-subscribe.ts), so each message reaches the handler once.
+				const local = localListener(handler, () => sub);
+				localEmitter.on(fullChannel, local);
 				return {
 					unsubscribe() {
-						localEmitter.off(fullChannel, handler);
+						localEmitter.off(fullChannel, local);
 						sub.unsubscribe();
 					},
 					established: sub.established,

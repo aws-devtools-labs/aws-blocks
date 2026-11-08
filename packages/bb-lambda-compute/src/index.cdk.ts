@@ -37,8 +37,9 @@ const LAMBDA_COMPUTE_BRAND: unique symbol = Symbol.for('blocks:LambdaCompute');
  * never caller-supplied — so every compute in an app runs the same backend and
  * agrees on the runtime resource-name namespace.
  *
- * @internal Not exported from the package's public entry point. Customers
- * cannot instantiate a compute until the customer-facing surface exists.
+ * @internal Not re-exported from `@aws-blocks/blocks`. Apps select it through
+ * the public `Compute` block (`{ type: 'serverless' }`, from `@aws-blocks/bb-compute`),
+ * and the umbrella constructs it as the app's default compute.
  */
 export class LambdaCompute extends ComputeBase {
 	/**
@@ -85,9 +86,8 @@ export class LambdaCompute extends ComputeBase {
 			entry: this.backendHandlerPath,
 			runtime: DEFAULT_NODE_RUNTIME,
 			// Default to arm64 (Graviton) — ~20% cheaper at equal performance, and
-			// transparent for the framework's own pure-JS bundles. `architecture` is
-			// internal for now (see types.ts); a customer override arrives with the
-			// public compute-configuration surface.
+			// transparent for the framework's own pure-JS bundles. Overridable via the
+			// `architecture` option (see types.ts).
 			architecture: options?.architecture ?? Architecture.ARM_64,
 			handler: 'handler',
 			role: this.executionRole,

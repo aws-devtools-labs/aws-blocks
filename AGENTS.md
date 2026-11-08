@@ -164,6 +164,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 - register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
 - add to the root `workspaces`
 - add an instance + test to `test-apps/comprehensive` (zero casts)
+- needs a step before `cdk deploy` (a guard, host-side migrations)? Declare it in the block's `package.json` as `"aws-blocks": { "predeploy": { "module": "./dist/predeploy.js", "stages": ["production"] } }` and export `predeploy(context)` from that module; core's `deploy` and `sandbox` scripts discover and run it (`context.synth()` gives the templates). Never add block-specific code to `packages/core/src/scripts`.
 - `npx changeset add`.
 
 ---
@@ -175,7 +176,8 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 1. Read `docs/design/API-DESIGN.md` for API guidelines (G1–G18)
 2. Study an existing BB (e.g., `packages/bb-kv-store/`) for the file pattern
 3. Read `docs/reference/building-block-structure.md` for conventions
-4. Follow the **"Authoring a NEW Building Block"** section above
+4. Read `docs/reference/error-model.md` for how to name, brand and throw errors
+5. Follow the **"Authoring a NEW Building Block"** section above
 
 ### Fixing a Bug
 **Always repro before you fix.** Write a failing test that demonstrates the bug — this is your red. Then make it green. Never fix a bug without a test that would have caught it.

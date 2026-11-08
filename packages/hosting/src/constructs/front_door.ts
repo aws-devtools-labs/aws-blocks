@@ -186,8 +186,11 @@ export type DoorApp = {
   /**
    * Custom error pages, as object keys relative to {@link AssetsOrigin.prefix}
    * (e.g. `404.html`): the app's `errorPages`, else the 404 and 500 pages the
-   * framework build shipped (e.g. a SPA's `404.html`). Present only when the
-   * app has one.
+   * framework build shipped (e.g. a SPA's `404.html`). A multi-page static
+   * site (no server, no SPA fallback) with no 404 page of its own gets AWS
+   * Blocks' default one as `notFound` (`_not_found.html`, uploaded with the
+   * build), the page the CloudFront door serves for the same miss. Present
+   * only when the app has one.
    */
   readonly errorPages?: { readonly notFound?: string; readonly serverError?: string };
 };
@@ -313,6 +316,10 @@ export type FrontDoorResult = {
    * one depend on every asset upload of the build, the later runtime-config
    * upload included, so CloudFormation updates it only once the new files are
    * in place and the previous build keeps serving until then.
+   *
+   * An in-place build (`HostingConstructProps.inPlaceBuild`, core `Hosting`
+   * `buildId: 'fixed'`) reuses one prefix, so there is nothing to switch:
+   * the cutover constructs are then not ordered after the uploads.
    */
   readonly cutover?: readonly IConstruct[];
 };

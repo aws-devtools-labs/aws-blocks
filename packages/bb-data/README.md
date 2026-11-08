@@ -117,13 +117,19 @@ const scoped = db.withRLS({ userId: 'user-123', role: 'authenticated' });
 const myPosts = await scoped.query<Post>(sql`SELECT * FROM posts`);
 ```
 
-> **Local (PGlite) prerequisite:** `withRLS` issues `SET LOCAL ROLE <role>` (default `authenticated`). PGlite has no such role by default, so a migration must create it or local queries fail with `role "authenticated" does not exist`. Add to your migrations:
+`request.jwt.claims` always carries `sub` = `userId` and `role` = the `role` you pass. Extra `claims` are merged in, but they can't override those two: a `sub` or `role` key in `claims` is ignored. Policies can therefore trust both, for example `USING (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')`. When you forward claims from an identity provider, put provider-specific values under their own keys (for example `claims: { idp_sub: token.sub }`).
+
+> **Prerequisite (local and AWS):** `withRLS` issues `SET LOCAL ROLE <role>` (default `authenticated`). The role must exist, and the database user must be a member of it. On PostgreSQL 16 and later, which Aurora runs, the user that creates a role gets only `ADMIN` on it, not `SET`, so grant the roles explicitly. Add to your migrations:
 >
 > ```sql
 > CREATE ROLE authenticated;
 > CREATE ROLE anon;
+> GRANT authenticated TO CURRENT_USER;
+> GRANT anon TO CURRENT_USER;
 > -- grant table privileges to these roles as needed, then define RLS policies
 > ```
+>
+> If the role switch is refused, every `withRLS()` call fails with a 500 `QueryFailed`, and the server log names the missing `GRANT`.
 
 ## CRUD Handlers
 
@@ -196,6 +202,7 @@ npx bb-data pull
 What it does:
 - Introspects your public-schema tables (read-only — your database is not modified)
 - Generates typed definitions, CRUD operations, and a personalized migration guide
+- Generates CRUD only for tables that have a primary key and **row-level security enabled**. Generated CRUD relies on RLS to decide which rows each user can access, and PostgreSQL applies no row filtering to a table without it. Tables without RLS are skipped with a warning that shows the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` to run; add policies for the table in a migration and re-run to include it. A table with RLS enabled but no policies is generated, but Postgres denies every row until it has one, so `db pull` marks it `Action required`. To share a table with every signed-in user on purpose (a lookup table, say), make that explicit with `CREATE POLICY "shared" ON public.<table> FOR ALL TO authenticated USING (true) WITH CHECK (true);`
 - Stores your connection string locally as `SUPABASE_DB_URL` in `.env.local` (encrypted in SSM on deploy). Only that entry is added or updated — other settings, comments, and the file's permissions are kept; the `SUPABASE_DB_URL` line itself is rewritten whole, so a comment at the end of it is not kept. If `.env.local` can't be updated safely (for example, the change would alter how another entry is read), `db pull` stops before generating any files and asks you to set the entry by hand. Choosing "production" does the same for `.env.production`.
 
 What it does NOT migrate: Supabase Auth, Storage, Realtime, or Edge Functions. If you use a third-party OIDC provider (Auth0, Clerk, Google, Cognito), you can wire it into Blocks — see the generated `MIGRATION_GUIDE.md#auth`.
@@ -217,6 +224,19 @@ try {
     // Duplicate key — email already exists. Serialized as HTTP 409 (Conflict),
     // not retriable (a blind retry of the same insert fails identically).
   }
+  if (isBlocksError(e, DatabaseErrors.PermissionDenied)) {
+    // Your statement was refused: a row-level-security policy rejected the row
+    // (for example a withRLS() user writing someone else's row), or the role has
+    // no grant on the table. Serialized as HTTP 403.
+  }
+  if (isBlocksError(e, DatabaseErrors.CheckViolation) || isBlocksError(e, DatabaseErrors.NotNullViolation)) {
+    // A value fails a CHECK constraint, or a required column is missing.
+    // Serialized as HTTP 400.
+  }
+  if (isBlocksError(e, DatabaseErrors.ForeignKeyViolation)) {
+    // The referenced row doesn't exist, or other rows still reference the one
+    // being deleted. Serialized as HTTP 409 (Conflict).
+  }
   if (isBlocksError(e, DatabaseErrors.QueryFailed)) {
     // General query failure (syntax error, missing table, etc.)
   }
@@ -233,6 +253,19 @@ try {
   }
 }
 ```
+
+The client-visible message of each error is a fixed string; the driver's own
+text, which names tables, columns and constraints, stays on the server as the
+error's `cause`. Only `SerializationFailure` and `ConnectionFailed` are worth
+retrying: the request errors (`PermissionDenied`, `CheckViolation`,
+`NotNullViolation`, `ForeignKeyViolation`, `UniqueConstraintViolation`) fail the
+same way every time.
+
+Each of these errors aborts the enclosing Postgres transaction. Inside a
+`db.transaction()` callback, a caught error leaves the transaction unusable: the
+next statement fails as `QueryFailed`. Catch them outside `transaction()`, or
+wrap the statement in a savepoint (`SAVEPOINT s` … `ROLLBACK TO SAVEPOINT s`) if
+the transaction should continue.
 
 ## What It Provisions (AWS)
 
@@ -316,6 +349,62 @@ try {
 - **Storage:** `.bb-data/{fullId}/` — persists across restarts, wipe with `rm -rf .bb-data`
 - **Migrations:** Run automatically on first query
 
+### Local Postgres extensions (PostGIS, pgvector)
+
+Aurora PostgreSQL supports extensions such as PostGIS and pgvector natively, but
+the local PGlite engine does not load any by default — so `CREATE EXTENSION postgis`
+works once deployed but fails in local dev, breaking local/production parity.
+
+Declare the extensions your app uses and they load in local dev too:
+
+```typescript
+const db = new Database(scope, 'main', {
+  extensions: ['postgis'],   // or ['pgvector'], or both
+});
+```
+
+- **Local-only.** Like `postgresVersion`, `extensions` is read only by the local
+  PGlite engine and ignored on AWS (Aurora loads these natively). Your app code is
+  unchanged across environments.
+- **Opt-in install.** Each extension ships as its own package, installed only if
+  you declare it:
+  - `postgis` → `npm install @electric-sql/pglite-postgis@0.2.11`
+  - `pgvector` → `npm install @electric-sql/pglite-pgvector@0.0.12`
+
+  Install the exact version shown: `bb-data` peer-pins it, and each extension
+  release pins its own `@electric-sql/pglite` version, so an unpinned install can
+  pull a release that conflicts with the `pglite` version `bb-data` uses.
+
+  If a declared extension's package is missing (or the name is unknown), the
+  first database interaction fails with an actionable error — the exact install
+  command for a missing package, or the list of supported names.
+- **Still run `CREATE EXTENSION`.** This option only makes the extension available;
+  issue `CREATE EXTENSION <name>` in a migration as you would on Postgres.
+
+Both extension packages are experimental upstream; because the install is opt-in,
+that risk stays with your app rather than every `bb-data` consumer.
+
+### Local vs. AWS: column types
+
+Array columns and `json` / `jsonb` columns return the same JavaScript values on
+both engines. Array columns (`text[]`, `int[]`, ...) come back as JS arrays and
+`json` / `jsonb` columns come back as parsed objects, whether you run locally on
+PGlite or on AWS over the RDS Data API. Element representation still follows the
+scalar notes below — e.g. `numeric[]` elements come back as strings over the
+Data API.
+
+Some scalar numeric types can still differ in representation between the two
+engines: `numeric` / `decimal` comes back as a string over the Data API, and
+`bigint` / `int8` comes back as a JS `number` over the Data API while the `pg` /
+PGlite driver returns it as a string by default. Cast or parse these explicitly
+if you need identical values across both engines.
+
+One Postgres type the RDS Data API cannot return is `tsvector`: selecting a
+`tsvector` column directly (for example `select *` on a table with a generated
+`search tsvector` column) fails on AWS. Exclude it from the select list — a
+`tsvector` is normally only used in a `WHERE` / `ORDER BY` full-text predicate,
+not read back as a value.
+
 ## Configuration
 
 ```typescript
@@ -328,6 +417,13 @@ interface DatabaseOptions {
   schema?: TableSchema;
   /** Aurora PostgreSQL engine version, e.g. '16.13'. Override the Aurora engine version. @default '16.13' */
   postgresVersion?: string;
+  /**
+   * Postgres extensions to load in the LOCAL PGlite engine, by name
+   * (e.g. ['postgis'] or ['pgvector']). Local-only, mirroring postgresVersion:
+   * ignored on Aurora, which supports these natively. Supported: 'postgis',
+   * 'pgvector'. See "Local Postgres extensions" below. @default []
+   */
+  extensions?: string[];
   /**
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
    * (also encrypts the auto-generated credentials secret). Supplying it turns

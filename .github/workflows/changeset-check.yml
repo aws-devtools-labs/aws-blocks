@@ -31,6 +31,8 @@ jobs:
         run: node --test scripts/changeset-guard.test.mjs
       - name: Test the keyword guard
         run: node --test scripts/keywords-guard.test.mjs
+      - name: Test the dependency changeset generator
+        run: node --test scripts/generate-dependency-changeset.test.mjs
       # Catches malformed changesets (broken frontmatter, unknown package,
       # invalid bump type) that the regex parser silently ignores and would
       # otherwise fail post-merge at `changeset version`. Validates only the
@@ -41,6 +43,9 @@ jobs:
         run: node --experimental-strip-types scripts/changeset-guard.ts verify-coverage
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          # Dependabot manifest bumps skip this check; the release job writes
+          # their changeset (publish-packages.yml).
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       - name: Block major version bumps (pre-release)
         run: node --experimental-strip-types scripts/changeset-guard.ts block-major
       # The umbrella re-exports its siblings and ships docs/ assembled from their

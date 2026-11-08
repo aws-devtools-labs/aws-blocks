@@ -1,0 +1,114 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, test } from 'node:test';
+import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
+import type { api as apiType } from 'aws-blocks';
+
+/**
+ * Multiple `Set-Cookie` values from one API method must all reach the client,
+ * attributes intact. On an error response only cookie deletions do (a 401 that
+ * clears a session cookie), and the error envelope is unchanged; a method that
+ * sets a live cookie and then throws must not issue it.
+ *
+ * On AWS the backend sits behind an API Gateway REST Lambda proxy, whose
+ * single-value `headers` map collapses repeated headers — cookies must travel
+ * in `multiValueHeaders`. The local dev server splits cookies itself, so this
+ * only proves the fix when run against a sandbox / production deploy
+ * (`test:e2e:sandbox`); locally it guards the dev-server path.
+ *
+ * Uses raw `fetch` because the shared cookie jar consumes `Set-Cookie`.
+ */
+function getApiUrl(): string {
+  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+  return config.apiUrl;
+}
+
+/** A Set-Cookie value's attributes (everything after `name=value`), lower-cased and sorted. */
+function cookieAttributes(setCookie: string): string[] {
+  return setCookie
+    .split(';')
+    .slice(1)
+    .map((a) => a.trim().toLowerCase())
+    .filter((a) => a.length > 0)
+    .sort();
+}
+
+export function responseCookieTests(getApi: () => typeof apiType) {
+  describe('API method response cookies', () => {
+    test('every Set-Cookie set by one API method reaches the client', { timeout: 15_000 }, async () => {
+      const prefix = `mc${Date.now().toString(36)}`;
+      const resp = await fetch(getApiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'api.setTwoCookies', params: [prefix], id: 1 }),
+      });
+      const body = await resp.json();
+      assert.ok(!body.error, `RPC setTwoCookies failed: ${JSON.stringify(body.error)}`);
+
+      const setCookies = resp.headers.getSetCookie?.() ?? [];
+      const ours = setCookies.filter((c) => c.startsWith(`${prefix}-`));
+      assert.deepStrictEqual(
+        ours.map((c) => c.split(';')[0]).sort(),
+        [`${prefix}-a=1`, `${prefix}-b=2`],
+        `Expected both cookies, got: ${setCookies.join(' | ')}`,
+      );
+      // Each cookie keeps its attributes end to end (no merge, no truncation).
+      for (const cookie of ours) {
+        assert.deepStrictEqual(
+          cookieAttributes(cookie),
+          ['httponly', 'path=/', 'samesite=lax', 'secure'],
+          `attributes changed in transit: ${cookie}`,
+        );
+      }
+    });
+
+    test('a method that sets a live cookie, clears another, then throws: only the deletion arrives, error intact', { timeout: 15_000 }, async () => {
+      const prefix = `mc${Date.now().toString(36)}`;
+      const resp = await fetch(getApiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'api.setLiveAndClearCookieThenThrow', params: [prefix], id: 1 }),
+      });
+      const body = await resp.json();
+      // The JSON-RPC error envelope is unchanged by the cookie filtering: still
+      // an HTTP 200 carrying the error in the body, as for any RPC error.
+      assert.strictEqual(resp.status, 200, `Expected HTTP 200 for an RPC error, got ${resp.status}`);
+      assert.strictEqual(body.error?.code, 409, `Expected a 409 RPC error, got: ${JSON.stringify(body)}`);
+      assert.strictEqual(body.error?.message, 'rejected after changing cookies');
+      assert.strictEqual(body.error?.data?.name, 'CookieTestRejected');
+      assert.strictEqual(body.result, undefined);
+
+      const setCookies = resp.headers.getSetCookie?.() ?? [];
+      const ours = setCookies.filter((c) => c.startsWith(`${prefix}-`));
+      assert.deepStrictEqual(
+        ours.map((c) => c.split(';')[0]),
+        [`${prefix}-gone=`],
+        `Expected only the deletion, got: ${setCookies.join(' | ')}`,
+      );
+      assert.deepStrictEqual(
+        cookieAttributes(ours[0]),
+        ['httponly', 'max-age=0', 'path=/', 'samesite=lax', 'secure'],
+        `deletion cookie attributes changed in transit: ${ours[0]}`,
+      );
+    });
+
+    test('a cookie cleared by a method that then throws reaches the client with the error', { timeout: 15_000 }, async () => {
+      const name = `mc${Date.now().toString(36)}-clear`;
+      const resp = await fetch(getApiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'api.clearCookieThenThrow', params: [name], id: 1 }),
+      });
+      const body = await resp.json();
+      assert.strictEqual(body.error?.code, 401, `Expected a 401 RPC error, got: ${JSON.stringify(body)}`);
+      assert.strictEqual(body.error?.data?.name, 'NotAuthenticated');
+
+      const setCookies = resp.headers.getSetCookie?.() ?? [];
+      const cleared = setCookies.find((c) => c.startsWith(`${name}=;`));
+      assert.ok(cleared, `Expected the clearing Set-Cookie for ${name}, got: ${setCookies.join(' | ')}`);
+      assert.match(cleared, /Max-Age=0/);
+    });
+  });
+}

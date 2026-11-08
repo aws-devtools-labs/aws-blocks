@@ -16,8 +16,20 @@ export interface ModelConfig {
 	 */
 	provider: 'bedrock' | 'openai-api' | 'canned';
 	modelId?: string;
+	/**
+	 * Base URL of the OpenAI-compatible API for the `openai-api` provider (e.g. `http://localhost:11434/v1`).
+	 * For Amazon Bedrock Mantle, use `https://bedrock-mantle.<region>.api.aws/v1` (some model lines use `/openai/v1`);
+	 * only models that support the Chat Completions API work with this provider.
+	 */
 	endpoint?: string;
-	/** API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var. */
+	/**
+	 * API key for openai-api provider. Accepts a string or an async resolver (e.g., `() => appSetting.get()`). Falls back to OPENAI_API_KEY env var.
+	 *
+	 * For a Bedrock Mantle `endpoint`, omit it to authenticate with short-term Bedrock API keys minted from the
+	 * AWS credentials the agent runs with, refreshed automatically; `OPENAI_API_KEY` is not used for Mantle. The
+	 * deployed runtime role is then granted the needed `bedrock-mantle` permissions. An empty string is treated as
+	 * omitted. An explicit key takes precedence.
+	 */
 	apiKey?: string | (() => Promise<string>);
 	/**
 	 * Canned provider phrase-to-response dictionary, or a path to a JSON dictionary. Custom entries replace built-in keyword responses.
@@ -376,10 +388,21 @@ export interface ToolCallRecord {
 }
 
 export interface StreamOptions<TContext = DefaultToolContext> {
+	/**
+	 * Conversation to continue. Must have been created by `createConversationId(userId)` for the
+	 * same `userId`, or `stream()` throws ConversationNotFound (not checked for `inferenceOnly` agents).
+	 */
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
+	/**
+	 * Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset.
+	 * With persistence the chunks are published on this channel scoped to `userId`; subscribe with
+	 * `getChannel(channelId, { userId })`.
+	 */
 	channelId?: string;
-	/** User ID for conversation scoping. Defaults to 'anonymous'. */
+	/**
+	 * User ID for conversation scoping. Required when persistence is enabled (take it from the
+	 * authenticated session); defaults to 'anonymous' only for `inferenceOnly` agents.
+	 */
 	userId?: string;
 	/**
 	 * Per-call context forwarded to every tool invocation as `context`. Use it to pass
@@ -399,7 +422,10 @@ export interface StreamOptions<TContext = DefaultToolContext> {
  * and the `complete()` helper is dropped (functions don't serialize).
  */
 export interface AgentStreamResult {
-	/** Realtime channel ID where chunks are published. */
+	/**
+	 * Realtime channel ID where chunks are published (the one you passed, or the default). With
+	 * persistence it is scoped to the caller: subscribe with `getChannel(channelId, { userId })`.
+	 */
 	channelId: string;
 	/**
 	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.
@@ -423,6 +449,12 @@ export interface AgentStreamChunk {
 	input?: JSONValue;
 	usage?: TokenUsage;
 	error?: string;
+	/**
+	 * On an `error` chunk, the `AgentErrors` name the failure was classified as (for example
+	 * `ModelUnavailableException` for a Bedrock model the account cannot invoke). Absent for an
+	 * unclassified failure, which clients surface as `StreamFailed`.
+	 */
+	errorName?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
 }
 
@@ -434,6 +466,11 @@ export interface MessageMetadata {
 	usage?: TokenUsage;
 	latencyMs?: number;
 	error?: string;
+	/**
+	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for
+	 * example `ModelUnavailableException`). Absent for an unclassified failure.
+	 */
+	errorName?: string;
 }
 
 export interface Message {

@@ -142,20 +142,32 @@ export const coalesceRoutes = (
     }
     groups.get(parent)!.push(r);
   }
+  // The kind each explicit row routes its pattern to — a coalesced wildcard
+  // must not collide with an existing `parent/*` row of another kind.
+  const explicitKind = new Map<string, TerseRouteKind>(rows.map(([p, k]) => [p, k]));
   const out: [string, TerseRouteKind][] = [];
   for (const parent of order) {
     const members = groups.get(parent)!;
     const uniformKind = members.every((m) => m[1] === members[0][1]);
+    // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
+    // note above) so non-prebuilt children render on-demand instead of
+    // 404ing from S3. Compute/image groups keep their kind.
+    const kind: TerseRouteKind = isrActive && members[0][1] === 's' ? 'c' : members[0][1];
+    // The table may already route `parent/*` itself, to another kind (Next.js
+    // `/_next/*` → static, with `/_next/data/*` and `/_next/image*` → server
+    // when no image origin exists). Its children are narrower exceptions to
+    // it; coalescing them would emit a second `parent/*` row that captures
+    // the whole subtree (`/_next/static/*` → server → 404), so keep them.
+    // The members' own kind is compared, not the ISR-flipped one: prerendered
+    // pages under a static `parent/*` row (Nitro's `/blog/*`) are no exception
+    // to it, and still coalesce.
+    const wildcardKind = explicitKind.get(`${parent}/*`);
+    const collides = wildcardKind !== undefined && wildcardKind !== members[0][1];
     // Coalesce only a real fan-out (≥2) under a non-root parent of one kind.
     // A non-empty parent guarantees the wildcard is scoped to a subtree and
     // never becomes a bare `/*` that would swallow the whole site.
-    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0;
+    const coalesceThis = members.length >= 2 && uniformKind && parent.length > 0 && !collides;
     if (coalesceThis) {
-      // Under ISR, a coalesced STATIC group becomes a COMPUTE wildcard (see
-      // note above) so non-prebuilt children render on-demand instead of
-      // 404ing from S3. Compute/image groups keep their kind.
-      const kind: TerseRouteKind =
-        isrActive && members[0][1] === 's' ? 'c' : members[0][1];
       out.push([`${parent}/*`, kind]);
     } else {
       out.push(...members);
@@ -221,7 +233,9 @@ export type BuildRouteTableInput = {
  * lifted here so every front-door adapter shares one implementation):
  *   1. Classify each `manifest.routes` entry as static / server / image
  *      (basePath-RELATIVE patterns; catch-all and edge-target routes excluded).
- *   2. Coalesce SSG fan-out into `parent/*` wildcards (bounded table).
+ *   2. Coalesce SSG fan-out into `parent/*` wildcards (bounded table). Routes
+ *      marked `exact` skip this step and keep their own row; an exact row
+ *      replaces a coalesced wildcard with the same pattern.
  *   3. Prepend basePath ONCE (idempotent), after coalescing.
  *   4. Sort by descending specificity (first-match ordering).
  *
@@ -244,6 +258,9 @@ export const buildRouteTable = (input: BuildRouteTableInput): RouteEntry[] => {
   // relative keeps the root parent at `''` so the behavior is identical to the
   // no-basePath case, just shifted under the prefix.
   const rows: [string, TerseRouteKind][] = [];
+  // Routes the adapter marked `exact` skip coalescing (and its ISR flip) and
+  // keep their own row — see `RouteBehavior.exact`.
+  const exactRows: [string, TerseRouteKind][] = [];
   for (const route of manifest.routes) {
     if (route.pattern === '/*' || route.pattern === '*') continue; // catch-all is implicit
     // Lambda@Edge route functions get a dedicated CloudFront behavior that
@@ -265,10 +282,16 @@ export const buildRouteTable = (input: BuildRouteTableInput): RouteEntry[] => {
         (imagePrefix !== undefined &&
           rel === normalizePattern(`${imagePrefix}/*`)));
     const kind: TerseRouteKind = isImage ? 'i' : isStatic ? 's' : 'c';
-    rows.push([rel, kind]);
+    (route.exact === true ? exactRows : rows).push([rel, kind]);
   }
 
-  const coalescedRel = coalesceRoutes(rows, { isrActive });
+  // An exact row wins over a coalesced wildcard with the same pattern (e.g. a
+  // frozen page's `/blog/featured/*` and a coalesced `/blog/featured/*`).
+  const exactPatterns = new Set(exactRows.map(([p]) => p));
+  const coalescedRel = [
+    ...coalesceRoutes(rows, { isrActive }).filter(([p]) => !exactPatterns.has(p)),
+    ...exactRows,
+  ];
   // Prepend basePath ONCE, after coalescing (idempotent).
   const coalesced: [string, TerseRouteKind][] = coalescedRel.map(([p, k]) => [
     prependBasePath(basePath, p),

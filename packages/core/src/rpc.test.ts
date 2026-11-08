@@ -61,6 +61,17 @@ describe('-32600 Invalid Request error shape', () => {
     }
   });
 
+  it('returns Invalid Request for a JSON null body', () => {
+    const result = parseRpcRequest('null');
+    assert.strictEqual(result.ok, false);
+    if (!result.ok) {
+      const parsed = JSON.parse(result.response);
+      assert.strictEqual(parsed.error.code, RpcErrorCode.InvalidRequest);
+      assert.strictEqual(parsed.error.data.name, 'InvalidRequest');
+      assert.strictEqual(parsed.id, null);
+    }
+  });
+
   it('includes data.name when method lacks namespace dot separator', () => {
     const result = parseRpcRequest(JSON.stringify({ jsonrpc: '2.0', method: 'noNamespace', id: 7 }));
     assert.strictEqual(result.ok, false);
@@ -181,7 +192,7 @@ describe('errorResponseFromCatch does not leak backend internals', () => {
     // Most Building Blocks define a local blocksError() with a package-specific
     // message format, then stamp the wire-safe brand through core's
     // brandBlocksError(). This simulates that path: a fresh named Error built by a
-    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth-oidc) and
+    // BB (here with an UNPREFIXED message, like bb-app-setting / bb-auth) and
     // branded. Its BB name AND message must cross the wire.
     const bbErr = new Error('Invalid email address');
     bbErr.name = 'InvalidInputException';

@@ -4,11 +4,22 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 import { signInPoller } from './poll-for-signin.js';
 
 const NotAuthenticated = 'NotAuthenticatedException';
+
+const ENV = process.env.BLOCKS_TEST_ENV || 'local';
+
+/**
+ * The stub IdP is sandbox-only: in production the comprehensive app configures
+ * a placeholder real provider instead (see the AuthOIDC section of
+ * `aws-blocks/index.ts`), so every suite that drives the stub sign-in flow is
+ * skipped there. They still run in local and sandbox.
+ */
+const stubSkip = ENV === 'production' && 'stub IdP is sandbox-only';
 
 function getBaseUrl(): string {
   const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
@@ -102,7 +113,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
   describe('AuthOIDC', () => {
 
-    describe('providers', () => {
+    describe('providers', { skip: stubSkip }, () => {
       test('returns configured provider names', async () => {
         const api = getApi();
         const providers = await api.oidcGetProviders();
@@ -134,7 +145,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('sign-in flow', () => {
+    describe('sign-in flow', { skip: stubSkip }, () => {
       test('getSignInUrl returns a valid authorize URL for google', async () => {
         const api = getApi();
         const { url } = await api.oidcGetSignInUrl('google');
@@ -278,7 +289,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('onSignIn hook', () => {
+    describe('onSignIn hook', { skip: stubSkip }, () => {
       test('onSignIn fires on successful sign-in', async () => {
         const baseUrl = getBaseUrl();
         const api = getApi();
@@ -372,7 +383,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('userId format', () => {
+    describe('userId format', { skip: stubSkip }, () => {
       test('userId is ${iss}:${sub}', async () => {
         const baseUrl = getBaseUrl();
 
@@ -401,7 +412,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('createApi state machine', () => {
+    describe('createApi state machine', { skip: stubSkip }, () => {
       test('signedOut state has one action per provider', async () => {
         const baseUrl = getBaseUrl();
 
@@ -421,7 +432,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('callback errors', () => {
+    describe('callback errors', { skip: stubSkip }, () => {
       test('callback without pending cookie returns error', async () => {
         const baseUrl = getBaseUrl();
         // Hit callback directly without going through the sign-in flow
@@ -448,7 +459,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('signOut', () => {
+    describe('signOut', { skip: stubSkip }, () => {
       test('signOut clears session and returns 204', async () => {
         const baseUrl = getBaseUrl();
 
@@ -483,7 +494,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('stub IdP routes', () => {
+    describe('stub IdP routes', { skip: stubSkip }, () => {
       test('discovery endpoint returns valid OIDC configuration', async () => {
         const baseUrl = getBaseUrl();
         const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/.well-known/openid-configuration`);
@@ -519,7 +530,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('onSignIn profile upsert', () => {
+    describe('onSignIn profile upsert', { skip: stubSkip }, () => {
       test('sign-in flow works and onSignIn upserts profile', async () => {
         const baseUrl = getBaseUrl();
         const api = getApi();
@@ -640,7 +651,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('client-initiated PKCE', () => {
+    describe('client-initiated PKCE', { skip: stubSkip }, () => {
       test('GET /aws-blocks/auth/authorize-params/:provider returns public params', async () => {
         const baseUrl = getBaseUrl();
         const resp = await fetch(`${baseUrl}/aws-blocks/auth/authorize-params/google`);
@@ -773,7 +784,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('bearer-token auth (native clients)', () => {
+    describe('bearer-token auth (native clients)', { skip: stubSkip }, () => {
       // These tests exercise the native-client path on the second instance
       // (`oidc-auth-extras`), which enables `allowBearerAuth: true`. The flow:
       //   1. Client does PKCE exchange → /aws-blocks/auth/extras/exchange returns
@@ -877,7 +888,7 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
       });
     });
 
-    describe('relay flow (native clients)', () => {
+    describe('relay flow (native clients)', { skip: stubSkip }, () => {
       // These tests exercise the full relay round-trip against the third
       // AuthOIDC instance (`oidc-auth-relay`), which has:
       //   - allowedRelayOrigins: [relayOrigin('testapp://auth')]
@@ -1286,7 +1297,173 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(resp.status, 302, 'HTTPS redirect_uri should be accepted');
       });
     });
+
+    describe('production app configures no stub provider', { skip: ENV !== 'production' && 'production-only' }, () => {
+      // These tests verify the comprehensive app's provider selection: in
+      // production it configures no stubIdp() provider, so no stub route is
+      // registered. The runtime mount gate itself (stub routes are mounted only
+      // when the deployment type is 'sandbox') is covered by
+      // packages/bb-auth-oidc/src/index.aws.test.ts.
+      //
+      // Every stub provider name any comprehensive AuthOIDC instance uses in
+      // local/sandbox. None of them may have a route on a production stack.
+      const stubProviderNames = ['google', 'corporate', 'google-extras', 'google-relay'];
+
+      test('production configures the real provider, not the stubs', async () => {
+        const api = getApi();
+        const providers = await api.oidcGetProviders();
+        assert.deepStrictEqual(providers, ['google']);
+      });
+
+      for (const name of stubProviderNames) {
+        test(`GET stub discovery for '${name}' is 404`, async () => {
+          const baseUrl = getBaseUrl();
+          const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/${name}/.well-known/openid-configuration`, { redirect: 'manual' });
+          await resp.text();
+          assert.strictEqual(resp.status, 404, `stub discovery route for '${name}' must not exist in production`);
+        });
+      }
+
+      test('POST stub token endpoint is 404', async () => {
+        const baseUrl = getBaseUrl();
+        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/token`, {
+          method: 'POST',
+          redirect: 'manual',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code: 'any',
+            redirect_uri: 'https://example.com/cb',
+            code_verifier: 'any',
+            client_id: STUB_CLIENT_ID,
+          }).toString(),
+        });
+        await resp.text();
+        assert.strictEqual(resp.status, 404, 'stub token route must not exist in production');
+      });
+
+      test('GET stub authorize endpoint is 404', async () => {
+        const baseUrl = getBaseUrl();
+        const resp = await fetch(`${baseUrl}/aws-blocks/auth/idp/google/authorize`, { redirect: 'manual' });
+        await resp.text();
+        assert.strictEqual(resp.status, 404, 'stub authorize route must not exist in production');
+      });
+    });
+
+    describe('stub IdP code signing', { skip: stubSkip }, () => {
+      // A code minted by one stub provider's /authorize, exchanged at a given
+      // provider's /token. All other fields of the token request are taken from
+      // the same authorize request, so a rejection can only come from the code.
+      const redirectUri = 'https://example.com/cb';
+
+      async function authorizeCode(baseUrl: string, provider: string, challenge: string): Promise<string> {
+        const resp = await fetch(
+          `${baseUrl}/aws-blocks/auth/idp/${provider}/authorize?` + new URLSearchParams({
+            response_type: 'code',
+            client_id: STUB_CLIENT_ID,
+            redirect_uri: redirectUri,
+            scope: 'openid',
+            state: 'code-signing-state',
+            nonce: 'code-signing-nonce',
+            code_challenge: challenge,
+            code_challenge_method: 'S256',
+          }).toString(),
+          { redirect: 'manual' },
+        );
+        assert.strictEqual(resp.status, 302, `authorize at '${provider}' should 302, got ${resp.status}`);
+        const code = new URL(resp.headers.get('location')!).searchParams.get('code');
+        assert.ok(code, `authorize at '${provider}' should return a code`);
+        return code;
+      }
+
+      function exchangeCode(baseUrl: string, provider: string, code: string, verifier: string): Promise<Response> {
+        return fetch(`${baseUrl}/aws-blocks/auth/idp/${provider}/token`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri,
+            code_verifier: verifier,
+            client_id: STUB_CLIENT_ID,
+          }).toString(),
+        });
+      }
+
+      test('a code minted by the stub exchanges at its own provider (control)', async () => {
+        const baseUrl = getBaseUrl();
+        const { verifier, challenge } = await pkcePair();
+        const code = await authorizeCode(baseUrl, 'google', challenge);
+        const resp = await exchangeCode(baseUrl, 'google', code, verifier);
+        assert.strictEqual(resp.status, 200, `exchange should succeed, got ${resp.status}: ${await resp.clone().text()}`);
+        const body = await resp.json() as any;
+        assert.ok(body.id_token, 'should return an id_token');
+      });
+
+      test('a code signed with the former fixed signing secret is rejected', async () => {
+        const baseUrl = getBaseUrl();
+        const { verifier, challenge } = await pkcePair();
+        // Same payload shape the stub mints, with client, redirect URI and PKCE
+        // challenge that match the token request below — only the key differs.
+        const code = encodeStubCode({
+          clientId: STUB_CLIENT_ID,
+          codeChallenge: challenge,
+          codeChallengeMethod: 'S256',
+          state: 'code-signing-state',
+          nonce: 'code-signing-nonce',
+          redirectUri,
+          scopes: ['openid'],
+          user: { sub: 'stub-google-user', email: 'google-user@stub.invalid', name: 'Stub google User' },
+          exp: Math.floor(Date.now() / 1000) + 300,
+        }, FORMER_STUB_CODE_SECRET);
+        const resp = await exchangeCode(baseUrl, 'google', code, verifier);
+        assert.strictEqual(resp.status, 400, `expected 400, got ${resp.status}`);
+        const body = await resp.json() as any;
+        assert.strictEqual(body.error, 'invalid_grant');
+        assert.strictEqual(body.id_token, undefined, 'must not issue an id_token');
+      });
+
+      test('a code minted by one provider is rejected by another provider', async () => {
+        const baseUrl = getBaseUrl();
+        const { verifier, challenge } = await pkcePair();
+        const code = await authorizeCode(baseUrl, 'google', challenge);
+
+        const crossResp = await exchangeCode(baseUrl, 'corporate', code, verifier);
+        assert.strictEqual(crossResp.status, 400, `expected 400, got ${crossResp.status}`);
+        const crossBody = await crossResp.json() as any;
+        assert.strictEqual(crossBody.error, 'invalid_grant');
+        assert.strictEqual(crossBody.id_token, undefined, 'must not issue an id_token');
+
+        // The same code is still valid at the provider that minted it, so the
+        // rejection above comes from the provider binding, not a bad request.
+        const ownResp = await exchangeCode(baseUrl, 'google', code, verifier);
+        assert.strictEqual(ownResp.status, 200, `own-provider exchange should succeed, got ${ownResp.status}`);
+      });
+    });
   });
+}
+
+/** Client id the stub IdP hands out (see `authorize-params`). */
+const STUB_CLIENT_ID = 'stub-client-id';
+
+/** The fixed code-signing secret the stub IdP used before per-deployment keys. */
+const FORMER_STUB_CODE_SECRET = 'blocks-stub-idp-code-signing-secret-not-for-production';
+
+/** Encode a stub authorization code the way the stub does: `base64url(JSON).HMAC-SHA256`. */
+function encodeStubCode(payload: object, secret: string): string {
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const mac = createHmac('sha256', secret).update(body).digest('base64url');
+  return `${body}.${mac}`;
+}
+
+/** Generate a PKCE verifier and its S256 challenge. */
+async function pkcePair(): Promise<{ verifier: string; challenge: string }> {
+  const verifierBytes = new Uint8Array(32);
+  crypto.getRandomValues(verifierBytes);
+  const verifier = Buffer.from(verifierBytes).toString('base64url');
+  const challengeDigest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  const challenge = Buffer.from(new Uint8Array(challengeDigest)).toString('base64url');
+  return { verifier, challenge };
 }
 
 /**

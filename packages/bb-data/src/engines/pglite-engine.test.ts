@@ -5,7 +5,8 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { ApiError } from '@aws-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
-import { PGliteEngine } from './pglite-engine.js';
+import { PGliteEngine, withUnrefTimers } from './pglite-engine.js';
+import { pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { DatabaseErrors } from '../errors.js';
 import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -91,6 +92,96 @@ test('duplicate key throws UniqueConstraintViolation as ApiError status 409', as
       assert.strictEqual(err.retriable, false, 'duplicate key is not retriable');
       return true;
     }
+  );
+});
+
+// Request errors: what the caller asked for is invalid or not allowed, so each
+// surfaces as a named 4xx ApiError instead of a generic 500 QueryFailed. Real
+// PGlite enforces every constraint and policy here, so this runs the full path.
+async function setupRequestErrorSchema(): Promise<void> {
+  await setup();
+  await engine.execute(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+  END $$`);
+  await engine.execute('CREATE TABLE projects (id INT PRIMARY KEY, name TEXT NOT NULL CHECK (char_length(name) BETWEEN 1 AND 20))');
+  await engine.execute(`CREATE TABLE notes (
+    id INT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    project_id INT REFERENCES projects (id),
+    body TEXT NOT NULL
+  )`);
+  await engine.execute('ALTER TABLE notes ENABLE ROW LEVEL SECURITY');
+  await engine.execute(`CREATE POLICY notes_own ON notes TO authenticated
+    USING (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')
+    WITH CHECK (owner_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')`);
+  await engine.execute('GRANT SELECT, INSERT ON notes TO authenticated');
+  await engine.execute("INSERT INTO projects VALUES (1, 'demo')");
+}
+
+function assertRequestError(status: number, name: string) {
+  return (err: unknown) => {
+    assert.ok(err instanceof ApiError, `expected an ApiError, got ${err}`);
+    assert.strictEqual(err.status, status);
+    assert.strictEqual(err.name, name);
+    assert.strictEqual(err.retriable, false, 'a request error fails the same way on retry');
+    // The driver text names tables and constraints: kept as cause, never in the message.
+    assert.ok(err.cause instanceof Error, 'driver error kept as cause');
+    assert.ok(!err.message.includes((err.cause as Error).message), 'driver text must not reach the message');
+    return true;
+  };
+}
+
+/** Run `sql` as the `authenticated` role with `sub` claims, as withRLS() does. */
+async function asUser(sub: string, sql: string): Promise<void> {
+  const handle = await engine.beginTransaction();
+  try {
+    await engine.executeInTransaction(handle, 'SET LOCAL ROLE authenticated');
+    await engine.executeInTransaction(handle, "SELECT set_config('request.jwt.claims', $1, true)", [JSON.stringify({ sub })]);
+    await engine.executeInTransaction(handle, sql);
+    await engine.commitTransaction(handle);
+  } catch (e) {
+    await engine.rollbackTransaction(handle);
+    throw e;
+  }
+}
+
+test('check constraint violation (23514) throws CheckViolation as ApiError status 400', async () => {
+  await setupRequestErrorSchema();
+  await assert.rejects(
+    () => engine.execute("INSERT INTO projects VALUES (2, '')"),
+    assertRequestError(400, DatabaseErrors.CheckViolation),
+  );
+});
+
+test('not-null violation (23502) throws NotNullViolation as ApiError status 400', async () => {
+  await setupRequestErrorSchema();
+  await assert.rejects(
+    () => engine.execute('INSERT INTO projects (id) VALUES (3)'),
+    assertRequestError(400, DatabaseErrors.NotNullViolation),
+  );
+});
+
+test('foreign key violation (23503) throws ForeignKeyViolation as ApiError status 409', async () => {
+  await setupRequestErrorSchema();
+  await assert.rejects(
+    () => engine.execute("INSERT INTO notes VALUES (1, 'u1', 999, 'x')"),
+    assertRequestError(409, DatabaseErrors.ForeignKeyViolation),
+  );
+});
+
+test('row-level security rejection (42501) throws PermissionDenied as ApiError status 403', async () => {
+  await setupRequestErrorSchema();
+  await assert.rejects(
+    () => asUser('user-a', "INSERT INTO notes VALUES (2, 'user-b', 1, 'not mine')"),
+    assertRequestError(403, DatabaseErrors.PermissionDenied),
+  );
+});
+
+test('missing grant (42501) throws PermissionDenied as ApiError status 403', async () => {
+  await setupRequestErrorSchema();
+  await assert.rejects(
+    () => asUser('user-a', "UPDATE projects SET name = 'x' WHERE id = 1"),
+    assertRequestError(403, DatabaseErrors.PermissionDenied),
   );
 });
 
@@ -335,6 +426,42 @@ test('recovers on a later call after the init-retry budget is exhausted', async 
   assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
 });
 
+// --- #234: Postgres extensions (PGlite.create / PGliteEngine.create) ---
+// With an extension declared, `CREATE EXTENSION` succeeds locally and the
+// extension's types/functions are usable — restoring parity with Aurora, which
+// supports these natively. Without it, the same SQL fails.
+
+test('PGliteEngine.create with no extensions behaves like the plain engine', async () => {
+  engine = await PGliteEngine.create(TEST_DIR);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  const rows = await engine.query('SELECT * FROM t');
+  assert.deepStrictEqual(rows, []);
+});
+
+test('pgvector extension: CREATE EXTENSION vector succeeds and a vector column works', async () => {
+  engine = await PGliteEngine.create(join(TEST_DIR, 'vec'), ['pgvector']);
+  await engine.execute('CREATE EXTENSION IF NOT EXISTS vector');
+  await engine.execute('CREATE TABLE items (id TEXT PRIMARY KEY, embedding vector(3))');
+  await engine.execute("INSERT INTO items (id, embedding) VALUES ('a', '[1,2,3]')");
+  // Nearest-neighbour ordering operator proves the extension is actually loaded.
+  const rows = await engine.query<{ id: string }>(
+    "SELECT id FROM items ORDER BY embedding <-> '[1,2,3]' LIMIT 1",
+  );
+  assert.deepStrictEqual(rows, [{ id: 'a' }]);
+});
+
+test('without the extension declared, CREATE EXTENSION vector fails', async () => {
+  engine = new PGliteEngine(join(TEST_DIR, 'novec'));
+  await assert.rejects(
+    () => engine.execute('CREATE EXTENSION vector'),
+    (err: Error) => {
+      // PGlite reports the missing extension control file as a query failure.
+      assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+});
+
 // --- Regression: destroy() before the first query ---
 // PGlite 0.5.10's close() never resolves while the instance is still
 // initializing (electric-sql/pglite#1148). The other tests always query before
@@ -371,4 +498,12 @@ test('destroy waits for PGlite init to settle before closing', async () => {
   engine = new PGliteEngine(join(TEST_DIR, 'destroy-waits-for-init'), factory);
   await settlesWithin(engine.destroy(), 5_000, 'destroy()');
   assert.strictEqual(closed, true, 'destroy() should close the instance once init settles');
+});
+
+test('withUnrefTimers keeps the unref-timers extension alongside user extensions', async () => {
+  const user = { vector: { name: 'vector', setup: async () => ({}) } };
+  const merged = withUnrefTimers(user);
+  assert.strictEqual(merged.awsBlocksUnrefTimers, pgliteUnrefTimersExtension);
+  assert.strictEqual(merged.vector, user.vector);
+  assert.deepStrictEqual(Object.keys(withUnrefTimers({})), ['awsBlocksUnrefTimers']);
 });

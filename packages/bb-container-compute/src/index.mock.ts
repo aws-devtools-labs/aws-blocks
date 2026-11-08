@@ -10,5 +10,11 @@
  * assigned to a container run their handlers in-process locally, exactly as they
  * do on the default compute, so a container assignment is transparent in dev.
  */
+
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-container-compute');
+
 export { ContainerCompute } from './index.aws.js';
 export type { ContainerComputeProps } from './types.js';

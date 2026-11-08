@@ -11,6 +11,8 @@ import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 
 import {
 	buildingBlockParent,
+	getCachedConfigValue,
+	getDeploymentType,
 	getSdkIdentifiers,
 	installClientUserAgent,
 	registerSdkIdentifiers,
@@ -27,6 +29,12 @@ import { SessionManager } from './engines/session-manager.js';
 import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
 import { cognitoEnvPrefix, cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
+
+// Provider names already warned about, so the not-mounted warnings below log
+// once per provider per container rather than once per construction.
+// Bounded by the app's distinct stub provider names (a small fixed set); entries
+// are never removed because the dedupe must persist for the life of the container.
+const warnedStubProviders = new Set<string>();
 
 export { AuthOIDCErrors, type AuthOIDCErrorName } from './errors.js';
 export {
@@ -158,9 +166,40 @@ export class AuthOIDC<
 		});
 		mountAuthRoutes(this);
 
+		// Stub IdP routes are mounted only on sandbox deployments. The CDK entry
+		// rejects stub providers at synth for other deployments; this check
+		// covers runtime code paired with an older config (e.g. a `cdk watch`
+		// hotswap). It never throws: this entry is also imported during client
+		// code generation outside compute, where the type is 'local'.
+		//
+		// When a stub provider is not mounted, the warning depends on why:
+		// - 'production' with a BLOCKS_DEPLOYMENT_TYPE value in the config: the
+		//   app was deployed outside the sandbox dev loop.
+		// - 'production' with NO BLOCKS_DEPLOYMENT_TYPE value: the config was
+		//   written before the key existed (e.g. code hotswapped by `cdk watch`
+		//   onto an older config), so `getDeploymentType()` falls back to
+		//   'production'. A full sandbox deploy rewrites the config.
+		// - 'local': no Blocks deployed configuration (local dev, tests, client
+		//   code generation). Not mounted and silent, since this is the normal
+		//   codegen path and there is no compute-agnostic way to tell it apart
+		//   from compute that Blocks does not configure.
+		// The loaded config value (the source `getDeploymentType()` reads on
+		// deployed compute) only selects the message; the mount decision uses
+		// `getDeploymentType()` alone.
+		const deploymentType = getDeploymentType();
 		for (const provider of options.providers) {
-			if (provider.kind === 'stub') {
-				mountStubIdpRoutes(this, provider);
+			if (provider.kind !== 'stub') continue;
+			if (deploymentType === 'sandbox') {
+				mountStubIdpRoutes(this, provider, { codeSecret: cookieSecret });
+			} else if (deploymentType === 'production' && !warnedStubProviders.has(provider.name)) {
+				warnedStubProviders.add(provider.name); // dedupe: warn once per provider per container
+				if (getCachedConfigValue('BLOCKS_DEPLOYMENT_TYPE') === undefined) {
+					console.warn(
+						`AuthOIDC: stubIdp provider '${provider.name}' is not mounted: this deployment's config predates BLOCKS_DEPLOYMENT_TYPE. Restart \`npm run sandbox\` (its initial full deploy refreshes the config).`,
+					);
+				} else {
+					console.warn(`AuthOIDC: stubIdp provider '${provider.name}' is not mounted outside a sandbox deployment.`);
+				}
 			}
 		}
 	}

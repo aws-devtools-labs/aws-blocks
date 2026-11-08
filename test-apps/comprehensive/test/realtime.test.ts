@@ -56,6 +56,20 @@ export function realtimeTests(getApi: () => typeof apiType) {
 			});
 		});
 
+		describe('Delivery count', () => {
+			// One publish must run a server-side subscriber's handler once, including
+			// when the publish comes from the subscriber's own invocation.
+			test('one publish runs a getChannel().subscribe() handler once', { timeout: 30_000 }, async () => {
+				const { calls } = await getApi().realtimeChannelSubscribeOnePublishCount(`once-ch-${Date.now()}`);
+				assert.strictEqual(calls, 1);
+			});
+
+			test('one publish runs a realtime.subscribe() handler once', { timeout: 30_000 }, async () => {
+				const { calls } = await getApi().realtimeSubscribeOnePublishCount(`once-rt-${Date.now()}`);
+				assert.strictEqual(calls, 1);
+			});
+		});
+
 		describe('Channel Scoping', () => {
 			test('multiple channels share a connection and receive their own messages with no cross-contamination', async () => {
 				const api = getApi();
