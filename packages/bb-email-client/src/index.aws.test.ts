@@ -291,6 +291,9 @@ describe('EmailClient.send error mapping (aws runtime)', () => {
 		{ sesName: 'ThrottlingException', expected: EmailErrors.RateLimited },
 		{ sesName: 'BadRequestException', expected: EmailErrors.InvalidInput },
 		{ sesName: 'AccessDeniedException', expected: EmailErrors.SendFailed },
+		// An unbranded SDK error that happens to share an EmailErrors name is still SES text:
+		// it is mapped like any other unknown SES error, never rethrown as-is.
+		{ sesName: EmailErrors.AccountPaused, expected: EmailErrors.SendFailed },
 	];
 
 	for (const { sesName, expected } of cases) {

@@ -139,7 +139,6 @@ export class EmailClient extends Scope {
 			const response = await this.client.send(command);
 			return { messageId: response.MessageId ?? '' };
 		} catch (err) {
-			if (err instanceof Error && err.name in EmailErrors) throw err;
 			this.log.error('SES SendEmail failed', { error: err });
 			throw mapSesError(err);
 		}
