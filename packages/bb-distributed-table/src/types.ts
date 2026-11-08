@@ -245,6 +245,10 @@ export type KeyCondition<T, K extends TableKeyConfig<T>> =
  * conditions, `index` selects a GSI (omit for primary key), and `limit`
  * and `order` control result size and sort direction.
  *
+ * Index queries are sparse, like DynamoDB indexes: an item with no value (or
+ * `null`) for the index's partition or sort key is not in that index, so it
+ * is never returned, even without a sort-key condition.
+ *
  * @example
  * ```typescript
  * // Primary key query (no index)

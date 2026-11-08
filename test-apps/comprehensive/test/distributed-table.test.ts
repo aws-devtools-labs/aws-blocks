@@ -3,6 +3,7 @@
 
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
+import { setTimeout as delay } from 'node:timers/promises';
 import { isBlocksError, ApiError } from '@aws-blocks/core';
 import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 import type { api as apiType } from 'aws-blocks';
@@ -444,6 +445,37 @@ export function distributedTableTests(getApi: () => typeof apiType) {
         assert.ok(item);
         assert.strictEqual(item.data, 'hello');
         assert.strictEqual(item.expiresAt, futureExpiry);
+      });
+    });
+
+    // ── undefined values and sparse indexes ───────────────────────────────
+
+    describe('undefined values and sparse indexes', () => {
+      test('put stores nested undefined as dropped map keys and null list entries', async () => {
+        const api = getApi(); const pk = uid();
+        await api.nestedTablePut(pk, 'a');
+        assert.deepStrictEqual(await api.nestedTableGet({ pk, sk: 'a' }), { pk, sk: 'a', meta: { k: 1 }, tags: [1, null, 3] });
+      });
+
+      test('putBatch stores nested undefined the same way', async () => {
+        const api = getApi(); const pk = uid();
+        await api.nestedTablePutBatch(pk, ['a', 'b']);
+        assert.deepStrictEqual(await api.nestedTableGet({ pk, sk: 'b' }), { pk, sk: 'b', meta: { k: 1 }, tags: [1, null, 3] });
+      });
+
+      test('an index query skips items without the index sort key', async () => {
+        const api = getApi(); const pk = uid();
+        await api.nestedTablePut(pk, 'shipped', 'sent', 5);
+        await api.nestedTablePut(pk, 'pending', 'held');
+        // Index reads are eventually consistent on AWS (a real deploy, so no fake
+        // clock): poll briefly for the indexed item.
+        const query = () => api.nestedTableQuery({ index: 'byShipped', where: { pk: { equals: pk } } });
+        let rows = await query();
+        for (let attempt = 0; rows.length < 1 && attempt < 20; attempt++) {
+          await delay(500);
+          rows = await query();
+        }
+        assert.deepStrictEqual(rows, [{ pk, sk: 'shipped', meta: { note: 'sent', k: 1 }, tags: [1, 2, 3], shippedAt: 5 }]);
       });
     });
 

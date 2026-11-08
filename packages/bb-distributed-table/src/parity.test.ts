@@ -8,7 +8,8 @@ import { DistributedTable, DistributedTableErrors } from './index.mock.js';
 import { DistributedTable as AwsDistributedTable } from './index.aws.js';
 import { isBlocksError } from '@aws-blocks/core';
 import { z } from 'zod';
-import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { DistributedTableOptions } from './types.js';
 
 beforeEach(() => {
@@ -45,18 +46,23 @@ function awsTableWithFakeClient<T>(
 }
 
 /**
- * Build an AWS-runtime DistributedTable that keeps its real DocumentClient, so
+ * Build an AWS-runtime DistributedTable whose DocumentClient is real, so
  * lib-dynamodb marshalling runs, but short-circuits every request at the
  * `build` step (after serialization, before signing and sending). Returns the
  * table plus the marshalled (AttributeValue-form) input of each command sent.
+ *
+ * The client gets a fixed region and static fake credentials: the serialize
+ * step resolves both before `build`, so without them the test would depend on
+ * the machine's AWS environment. Nothing is sent, so the credentials are never used.
  */
 function awsTableCapturingMarshalledInput<T>(id: string, options: DistributedTableOptions<T>) {
-	// Endpoint resolution in the serialize step needs a region; nothing is sent.
-	process.env.AWS_REGION ??= 'us-east-1';
 	const table = new AwsDistributedTable<T>(testScope(), id, options);
 	const sent: Record<string, unknown>[] = [];
-	// `docClient` is private; the test reaches it only to install the capture middleware.
-	const { docClient } = table as unknown as { docClient: DynamoDBDocumentClient };
+	// Same DocumentClient defaults as the table's own client (`DynamoDBDocumentClient.from(client)`).
+	const docClient = DynamoDBDocumentClient.from(new DynamoDBClient({
+		region: 'us-east-1',
+		credentials: { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'fake-secret-for-tests' },
+	}));
 	docClient.middlewareStack.add(
 		() => async (args: { input: object }) => {
 			sent.push({ ...args.input });
@@ -64,6 +70,9 @@ function awsTableCapturingMarshalledInput<T>(id: string, options: DistributedTab
 		},
 		{ step: 'build', name: 'captureMarshalledInput' },
 	);
+	// `docClient` is private; the test swaps it only to install the capture client.
+	const internals = table as unknown as { docClient: DynamoDBDocumentClient };
+	internals.docClient = docClient;
 	return { table, sent };
 }
 
@@ -948,10 +957,33 @@ describe('undefined values nested in an item are stored the same way on the mock
 		await table.put({ ...item, tags: [] }, { ifFieldEquals: { meta: { note: undefined, k: 1 } } });
 		assert.deepStrictEqual((await table.get({ id: 'a' }))?.tags, []);
 	});
+
+	// The schema is checked against the normalized item, so an item that would be
+	// stored in a shape the schema rejects (here `null` in a list of optional
+	// numbers) fails the write instead of failing every later `strict` read.
+	describe('put validates the item as it will be stored', () => {
+		const optionalEntries = { schema: z.object({ id: z.string(), tags: z.array(z.number().optional()) }), key: { partitionKey: 'id' } } as const;
+		const holey = { id: 'h', tags: [1, undefined, 3] };
+		const isValidationFailed = (err: unknown) => isBlocksError(err, DistributedTableErrors.ValidationFailed);
+
+		test('mock put and putBatch reject an undefined list entry the schema does not allow as null', async () => {
+			const table = new DistributedTable(testScope(), 'undef-validate-mock', optionalEntries);
+			await assert.rejects(table.put(holey), isValidationFailed);
+			await assert.rejects(table.putBatch([holey]), isValidationFailed);
+			assert.equal(await table.get({ id: 'h' }), null);
+		});
+
+		test('AWS put and putBatch reject it the same way, before sending', async () => {
+			const { table, sent } = awsTableCapturingMarshalledInput('undef-validate-aws', optionalEntries);
+			await assert.rejects(table.put(holey), isValidationFailed);
+			await assert.rejects(table.putBatch([holey]), isValidationFailed);
+			assert.equal(sent.length, 0);
+		});
+	});
 });
 
 describe('mock index queries are sparse like DynamoDB GSIs', () => {
-	const schema = z.object({ id: z.string(), status: z.string().optional(), shippedAt: z.number().optional() });
+	const schema = z.object({ id: z.string(), status: z.string().optional(), shippedAt: z.number().nullish() });
 	const options = {
 		schema,
 		key: { partitionKey: 'id' },
@@ -963,6 +995,14 @@ describe('mock index queries are sparse like DynamoDB GSIs', () => {
 		await table.put({ id: 'a', status: 'open', shippedAt: 5 });
 		await table.put({ id: 'b', status: 'open' });
 		await table.put({ id: 'c', shippedAt: 7 });
+		const rows = await collect(table.query({ index: 'byShipped', where: { status: { equals: 'open' } } }));
+		assert.deepStrictEqual(rows.map(r => r.id), ['a']);
+	});
+
+	test('an item whose index sort-key attribute is null is not returned by an index query', async () => {
+		const table = new DistributedTable(testScope(), 'sparse-gsi-null', options);
+		await table.put({ id: 'a', status: 'open', shippedAt: 5 });
+		await table.put({ id: 'n', status: 'open', shippedAt: null });
 		const rows = await collect(table.query({ index: 'byShipped', where: { status: { equals: 'open' } } }));
 		assert.deepStrictEqual(rows.map(r => r.id), ['a']);
 	});

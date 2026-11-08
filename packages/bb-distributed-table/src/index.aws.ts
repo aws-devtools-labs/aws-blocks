@@ -120,10 +120,12 @@ export class DistributedTable<
 	}
 
 	async put(item: T, options?: PutOptions<T>): Promise<void> {
-		await this.validateItem(item);
 		// Store `undefined` nested in maps/lists the way the mock does (dropped /
-		// `null`) instead of letting the DocumentClient reject it.
-		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: normalizeUndefinedValues(item) };
+		// `null`) instead of letting the DocumentClient reject it, and validate that
+		// stored shape, so a write the schema accepts can always be read back.
+		const stored = normalizeUndefinedValues(item);
+		await this.validateItem(stored);
+		const command: any = { TableName: getSdkIdentifiers(this).tableName, Item: stored };
 
 		if (options?.ifNotExists) {
 			command.ConditionExpression = 'attribute_not_exists(#pk)';
@@ -275,13 +277,15 @@ export class DistributedTable<
 	}
 
 	async putBatch(items: T[]): Promise<void> {
-		for (const item of items) await this.validateItem(item);
+		// Normalize, then validate the stored shape, as in `put`.
+		const stored = items.map(item => normalizeUndefinedValues(item));
+		for (const item of stored) await this.validateItem(item);
 		const tableName = getSdkIdentifiers(this).tableName;
 
-		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
+		for (const chunk of chunked(stored, BATCH_WRITE_MAX_REQUESTS)) {
 			await this.retryUnprocessed(
 				'putBatch',
-				chunk.map(item => ({ PutRequest: { Item: normalizeUndefinedValues(item) as any } })),
+				chunk.map(item => ({ PutRequest: { Item: item as any } })),
 				async requests => {
 					try {
 						const resp = await this.docClient.send(new BatchWriteCommand({
