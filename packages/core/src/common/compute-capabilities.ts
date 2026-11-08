@@ -96,7 +96,24 @@ export type ScalingSignal =
  * a compute that drains AsyncJob queues, CPU otherwise.
  */
 export interface ContainerScaling {
+	/**
+	 * Fewest running instances. Use `1` or more for most workloads: a running
+	 * instance picks up a job within seconds.
+	 *
+	 * Set `0` only for long-running jobs that can tolerate high latency before
+	 * they start. The compute then scales to zero between jobs, and a waiting
+	 * AsyncJob message or CronJob tick has to start an instance first. That
+	 * usually takes a few minutes, and up to about 20 minutes when the job's queue
+	 * has been idle for more than six hours (SQS stops publishing queue metrics
+	 * for an idle queue, and they take up to 15 minutes to resume).
+	 *
+	 * `0` requires at least one AsyncJob or CronJob on the compute and the default
+	 * (or `queue-depth`) scaling strategy, and fails synth otherwise: with no job
+	 * nothing would start an instance, and a `cpu` or `memory` strategy could
+	 * scale in to zero while a job is still running.
+	 */
 	minInstances: number;
+	/** Most running instances. At least 1. */
 	maxInstances: number;
 	strategy?: ScalingSignal | ScalingSignal[];
 }

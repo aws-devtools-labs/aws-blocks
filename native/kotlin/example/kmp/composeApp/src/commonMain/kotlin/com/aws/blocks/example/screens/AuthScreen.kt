@@ -20,6 +20,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
@@ -38,7 +39,7 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AuthScreen(
-    client: OidcClient?,
+    client: OidcClient<AuthApi.GetClient.Provider>?,
     loadError: String?,
     restoredState: AuthState?,
     modifier: Modifier = Modifier
@@ -81,19 +82,23 @@ fun AuthScreen(
                     }
                 }) { Text("Sign Out") }
             } else {
-                client.providers.forEach { provider ->
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                runCatching { client.signIn(provider) }
-                                    .onSuccess { output = "Signed in as: ${it.username}" }
-                                    .onFailure { output = "Error: ${it.message}" }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("Sign in with $provider") }
-                    Spacer(Modifier.height(8.dp))
-                }
+                // `entries` is what the spec named when it was generated; `client.providers` is
+                // what the deployed backend reports now, so show the ones both agree on.
+                AuthApi.GetClient.Provider.entries
+                    .filter { it.providerName in client.providers }
+                    .forEach { provider ->
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    runCatching { client.signIn(provider) }
+                                        .onSuccess { output = "Signed in as: ${it.username}" }
+                                        .onFailure { output = "Error: ${it.message}" }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Sign in with ${provider.providerName}") }
+                        Spacer(Modifier.height(8.dp))
+                    }
             }
         }
 

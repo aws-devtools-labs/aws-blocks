@@ -103,3 +103,79 @@ test('pull refuses (exit 1) in a non-TTY context and does NOT run headless off S
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('pull --help states the exit code that pull without a terminal really has', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  try {
+    const env = { BB_DATA_COMMAND: '' };
+    const run = runCli(['pull'], dir, env);
+    assert.strictEqual(run.status, 1);
+    assert.match(runCli(['pull', '--help'], dir, env).stdout, new RegExp(`exits ${run.status} without one\\.`));
+    // `cdk-blocks db pull` refuses before bb-data runs, with exit 2: blocks' own test checks that code.
+    assert.match(
+      runCli(['pull', '--help'], dir, { BB_DATA_COMMAND: 'cdk-blocks db' }).stdout,
+      /Usage: cdk-blocks db pull[\s\S]*exits 2 without one \(or with --no-input or CI\)\./,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('--help and -h print the verb usage and exit 0 without touching any database', () => {
+  // A dir with no migrations/ and an external-DB env var: running any verb would
+  // exit 1 (missing dir, external guard, or no TTY). Help must short-circuit all of it.
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  const env = { SUPABASE_DB_URL: 'postgresql://postgres.ref:pw@aws-0-us-east-1.pooler.supabase.com:5432/postgres' };
+  try {
+    const cases: [string[], RegExp][] = [
+      [['migrate', '--help'], /Usage: bb-data migrate \[dir\]/],
+      [['migrate', './nowhere', '--url', 'postgres://u:p@h/db', '-h'], /Usage: bb-data migrate/],
+      [['status', '-h'], /Usage: bb-data status \[dir\]/],
+      [['generate-types', 'out.ts', '--help'], /Usage: bb-data generate-types \[output\]/],
+      [['pull', './out', '--help'], /Usage: bb-data pull \[output-dir\]/],
+      [['--help'], /Commands:\n {2}pull/],
+      [['-h', 'migrate'], /Usage: bb-data migrate/],
+    ];
+    for (const [args, usage] of cases) {
+      const r = runCli(args, dir, env);
+      assert.strictEqual(r.status, 0, `${args.join(' ')}: ${r.stderr}`);
+      assert.match(r.stdout, usage, args.join(' '));
+      assert.match(r.stdout, /--help/, `${args.join(' ')} lists -h, --help`);
+    }
+    assert.match(runCli(['migrate', '--help'], dir).stdout, /--url <conn>[\s\S]*--stage <name>[\s\S]*--regenerate-types/);
+    assert.strictEqual(existsSync(join(dir, '.bb-data')), false, 'no local database was opened');
+    assert.strictEqual(existsSync(join(dir, 'out.ts')), false);
+    assert.strictEqual(existsSync(join(dir, 'out')), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the verb usage names the command in BB_DATA_COMMAND, which runs this CLI', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  try {
+    for (const verb of ['migrate', 'status', 'generate-types', 'pull']) {
+      const r = runCli([verb, '--help'], dir, { BB_DATA_COMMAND: 'cdk-blocks db' });
+      assert.strictEqual(r.status, 0, r.stderr);
+      assert.match(r.stdout, new RegExp(`Usage: cdk-blocks db ${verb} `), verb);
+      assert.doesNotMatch(r.stdout, /(?<!\.)bb-data /, verb);
+    }
+    assert.match(runCli(['status', '--help'], dir, { BB_DATA_COMMAND: '' }).stdout, /Usage: bb-data status /);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('without --help, an unknown verb still prints the overview and a missing migrations dir still exits 1', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'bb-data-cli-'));
+  try {
+    const unknown = runCli(['nope'], dir);
+    assert.strictEqual(unknown.status, 0);
+    assert.match(unknown.stdout, /bb-data CLI/);
+    const missing = runCli(['migrate', './nowhere'], dir);
+    assert.strictEqual(missing.status, 1);
+    assert.match(missing.stderr, /Migrations directory not found: \.\/nowhere/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

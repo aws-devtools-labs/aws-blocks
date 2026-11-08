@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { AwsCredentialIdentity } from '@smithy/types';
+import { profileArg } from './credential-guidance.js';
 import { REGION_CODE } from './deployment-target.js';
 
 /**
@@ -69,8 +70,8 @@ export const sdkBootstrapVersionReader: BootstrapVersionReader = async ({ region
 
 /** Input for {@link cdkBootstrapFailure}. */
 export interface CdkBootstrapCheckOptions extends BootstrapTarget {
-	/** The npm script name, used in the message (for example `sandbox` or `deploy`). */
-	command: string;
+	/** How the user runs the deploy, used in the message (for example `npm run deploy` or `cdk-blocks deploy`). */
+	invocation: string;
 	/** The account ID from STS GetCallerIdentity. */
 	account: string;
 	/** The `@aws-cdk/core:bootstrapQualifier` context value; the default qualifier when unset. */
@@ -85,11 +86,12 @@ export interface CdkBootstrapCheckOptions extends BootstrapTarget {
  *
  * The printed command passes `--app=` so that `cdk bootstrap` does not synthesize
  * the app in `cdk.json` to find environments: the command names the environment.
- * Run in the project directory, CDK still reads the profile and the bootstrap
- * qualifier from `cdk.json`.
+ * It passes the profile the deploy used too, so that it runs in the same account
+ * from a shell that does not export it. Run in the project directory, CDK still
+ * reads the bootstrap qualifier from `cdk.json`.
  */
 export async function cdkBootstrapFailure({
-	command,
+	invocation,
 	account,
 	region,
 	profile,
@@ -109,10 +111,10 @@ export async function cdkBootstrapFailure({
 	const accountArg = ACCOUNT_ID.test(account) ? account : '<account-id>';
 	const regionArg = REGION_CODE.test(region) ? region : '<region>';
 	return [
-		`CDK is not bootstrapped in Region ${regionArg} of account ${accountArg}, so \`npm run ${command}\` cannot deploy there ` +
+		`CDK is not bootstrapped in Region ${regionArg} of account ${accountArg}, so \`${invocation}\` cannot deploy there ` +
 			`(SSM parameter ${parameterName} not found).`,
 		'  Bootstrap once per account and Region. From this project directory, run:',
-		`    npx cdk bootstrap aws://${accountArg}/${regionArg} --app=`,
+		`    npx cdk bootstrap aws://${accountArg}/${regionArg} --app=${profile ? ` --profile ${profileArg(profile)}` : ''}`,
 		'  This creates the CDKToolkit CloudFormation stack: the S3 bucket, ECR repository and IAM roles that CDK deploys with.',
 		...(qualifier === DEFAULT_BOOTSTRAP_QUALIFIER
 			? [
@@ -121,6 +123,6 @@ export async function cdkBootstrapFailure({
 				]
 			: []),
 		`  See ${BOOTSTRAP_DOCS_URL}`,
-		`Then re-run \`npm run ${command}\`.`,
+		`Then re-run \`${invocation}\`.`,
 	].join('\n');
 }

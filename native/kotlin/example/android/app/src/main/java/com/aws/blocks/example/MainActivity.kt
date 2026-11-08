@@ -99,7 +99,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun OidcAuth(auth: AuthApi) {
-    var oidcClient by remember { mutableStateOf<OidcClient?>(null) }
+    // The spec names the backend's providers, so the client is typed by the enum generated for
+    // them and sign-in takes one of its constants rather than a string.
+    var oidcClient by remember { mutableStateOf<OidcClient<AuthApi.GetClient.Provider>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     // A client that has not signed in this launch reports no user, so the starting point comes
@@ -151,19 +153,23 @@ fun OidcAuth(auth: AuthApi) {
                 Text("Sign Out")
             }
         } else {
-            client.providers.forEach { provider ->
-                Button(
-                    onClick = {
-                        scope.launch {
-                            error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Sign in with $provider")
+            // `entries` is what the spec named when it was generated; `client.providers` is what
+            // the deployed backend reports now, so show the ones both agree on.
+            AuthApi.GetClient.Provider.entries
+                .filter { it.providerName in client.providers }
+                .forEach { provider ->
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Sign in with ${provider.providerName}")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
         }
 
         if (error != null) {

@@ -184,6 +184,7 @@ class OpenRpcParser {
         );
       }
       return NativeBinding(
+        id: _requiredField(binding, 'id', path),
         kind: kind,
         tag: tag,
         package: _requiredField(binding, 'package', path),

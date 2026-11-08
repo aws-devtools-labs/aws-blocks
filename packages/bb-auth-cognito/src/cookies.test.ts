@@ -3,6 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
+import type { BlocksContext } from '@aws-blocks/core';
 import {
 	signSessionId,
 	verifySessionId,
@@ -117,7 +118,46 @@ describe('setSessionCookie', () => {
 		assert.ok(header.includes('Secure'), header);
 		assert.ok(!header.includes('Partitioned'), header);
 	});
+
+	test('on deployed compute, a request claiming a localhost Origin cannot drop Secure or Partitioned', () => {
+		withDeployedEnv(() => {
+			const lax = localhostContext();
+			setSessionCookie(lax, FULL_ID, 'signed.value', 3600);
+			assert.ok(lax.response.headers.get('Set-Cookie')?.includes('SameSite=Lax; Secure'));
+
+			const cross = localhostContext();
+			setSessionCookie(cross, FULL_ID, 'signed.value', 3600, true);
+			assert.ok(cross.response.headers.get('Set-Cookie')?.includes('SameSite=None; Secure; Partitioned'));
+
+			const cleared = localhostContext();
+			clearSessionCookie(cleared, FULL_ID);
+			assert.ok(cleared.response.headers.get('Set-Cookie')?.includes('Secure'));
+		});
+	});
 });
+
+/** A request context whose `Origin` claims to be the local dev server. */
+function localhostContext(): BlocksContext {
+	const ctx = mockContext();
+	ctx.request.headers.set('origin', 'http://localhost:3000');
+	return ctx as unknown as BlocksContext;
+}
+
+/** Run `fn` with the two variables synth stamps on Blocks-configured compute. */
+function withDeployedEnv(fn: () => void): void {
+	const keys = ['BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const;
+	const previous = keys.map((k) => process.env[k]);
+	process.env.BLOCKS_CONFIG_BUCKET = 'config-bucket';
+	process.env.BLOCKS_CONFIG_KEY = 'config.json';
+	try {
+		fn();
+	} finally {
+		keys.forEach((k, i) => {
+			if (previous[i] === undefined) delete process.env[k];
+			else process.env[k] = previous[i];
+		});
+	}
+}
 
 // ─── clearSessionCookie ─────────────────────────────────────────────────────
 

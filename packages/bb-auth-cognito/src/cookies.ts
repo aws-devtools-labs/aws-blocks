@@ -4,18 +4,19 @@
 import crypto from 'node:crypto';
 import type { BlocksContext } from '@aws-blocks/core';
 import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
-import { buildCookieSecurityAttrs, isLoopbackRequest } from '@aws-blocks/auth-common/cookies';
+import { buildCookieSecurityAttrs, isLocalDevRequest } from '@aws-blocks/auth-common/cookies';
 
 /**
  * Build the full cookie-attribute string (everything after `name=value`)
  * for a session cookie on this request. Security attributes come from the
  * shared {@link buildCookieSecurityAttrs} helper (D-007); `isLocalhost` is
- * detected per-request from the `Origin`/`Host` header.
+ * true only for a loopback request in a local process, so on deployed compute
+ * a request header cannot drop `Secure` (see {@link isLocalDevRequest}).
  */
 function cookieAttrsForRequest(ctx: BlocksContext, crossDomain: boolean): string {
 	const security = buildCookieSecurityAttrs({
 		crossDomain,
-		isLocalhost: isLoopbackRequest(ctx),
+		isLocalhost: isLocalDevRequest(ctx),
 	});
 	return `HttpOnly; ${security}; Path=/`;
 }
