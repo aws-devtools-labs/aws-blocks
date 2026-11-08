@@ -5,7 +5,8 @@ import { test, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { ApiError } from '@aws-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
-import { PGliteEngine } from './pglite-engine.js';
+import { PGliteEngine, withUnrefTimers } from './pglite-engine.js';
+import { pgliteUnrefTimersExtension } from '@aws-blocks/data-common/internal';
 import { DatabaseErrors } from '../errors.js';
 import { rmSync, existsSync, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -425,6 +426,42 @@ test('recovers on a later call after the init-retry budget is exhausted', async 
   assert.ok(creates >= 4, 'engine should build a fresh instance after exhaustion');
 });
 
+// --- #234: Postgres extensions (PGlite.create / PGliteEngine.create) ---
+// With an extension declared, `CREATE EXTENSION` succeeds locally and the
+// extension's types/functions are usable — restoring parity with Aurora, which
+// supports these natively. Without it, the same SQL fails.
+
+test('PGliteEngine.create with no extensions behaves like the plain engine', async () => {
+  engine = await PGliteEngine.create(TEST_DIR);
+  await engine.execute('CREATE TABLE t (id TEXT PRIMARY KEY)');
+  const rows = await engine.query('SELECT * FROM t');
+  assert.deepStrictEqual(rows, []);
+});
+
+test('pgvector extension: CREATE EXTENSION vector succeeds and a vector column works', async () => {
+  engine = await PGliteEngine.create(join(TEST_DIR, 'vec'), ['pgvector']);
+  await engine.execute('CREATE EXTENSION IF NOT EXISTS vector');
+  await engine.execute('CREATE TABLE items (id TEXT PRIMARY KEY, embedding vector(3))');
+  await engine.execute("INSERT INTO items (id, embedding) VALUES ('a', '[1,2,3]')");
+  // Nearest-neighbour ordering operator proves the extension is actually loaded.
+  const rows = await engine.query<{ id: string }>(
+    "SELECT id FROM items ORDER BY embedding <-> '[1,2,3]' LIMIT 1",
+  );
+  assert.deepStrictEqual(rows, [{ id: 'a' }]);
+});
+
+test('without the extension declared, CREATE EXTENSION vector fails', async () => {
+  engine = new PGliteEngine(join(TEST_DIR, 'novec'));
+  await assert.rejects(
+    () => engine.execute('CREATE EXTENSION vector'),
+    (err: Error) => {
+      // PGlite reports the missing extension control file as a query failure.
+      assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
+      return true;
+    },
+  );
+});
+
 // --- Regression: destroy() before the first query ---
 // PGlite 0.5.10's close() never resolves while the instance is still
 // initializing (electric-sql/pglite#1148). The other tests always query before
@@ -461,4 +498,12 @@ test('destroy waits for PGlite init to settle before closing', async () => {
   engine = new PGliteEngine(join(TEST_DIR, 'destroy-waits-for-init'), factory);
   await settlesWithin(engine.destroy(), 5_000, 'destroy()');
   assert.strictEqual(closed, true, 'destroy() should close the instance once init settles');
+});
+
+test('withUnrefTimers keeps the unref-timers extension alongside user extensions', async () => {
+  const user = { vector: { name: 'vector', setup: async () => ({}) } };
+  const merged = withUnrefTimers(user);
+  assert.strictEqual(merged.awsBlocksUnrefTimers, pgliteUnrefTimersExtension);
+  assert.strictEqual(merged.vector, user.vector);
+  assert.deepStrictEqual(Object.keys(withUnrefTimers({})), ['awsBlocksUnrefTimers']);
 });

@@ -531,3 +531,35 @@ describe('deployment type propagation (synth -> runtime)', () => {
 		}
 	}
 });
+
+// Apps scaffolded before `defaults` became required call create() without it.
+// cdk runs index.cdk.ts through a loader that doesn't type-check, so the props
+// arrive without `defaults` at runtime. Both entry points must fail with an
+// actionable Blocks error that names the fix and links the upgrade guide, not
+// a raw TypeError from deep inside the constructor.
+describe('create() without defaults (apps from older templates)', () => {
+	const assertMissingDefaultsError = (e: unknown) => {
+		assert.ok(e instanceof Error);
+		assert.ok(!(e instanceof TypeError), `expected a Blocks error, got ${e.name}: ${e.message}`);
+		assert.match(e.message, /requires a `defaults` field/);
+		assert.match(e.message, /defaults: sandboxMode \? BlocksPresets\.sandbox : BlocksPresets\.production/);
+		assert.match(e.message, /import \{ BlocksPresets \} from '@aws-blocks\/blocks\/cdk'/);
+		assert.match(e.message, /docs\/guides\/upgrading-older-apps\.md/);
+		return true;
+	};
+	const propsWithoutDefaults = () =>
+		({
+			backendHandlerPath: handlerPath,
+			backendCDKPath: factoryBackendPath,
+			defaultComputeFactory: stubComputeFactory,
+		}) as unknown as Parameters<typeof BlocksStack.create>[2];
+
+	test('BlocksStack.create() names the fix instead of throwing a TypeError', async () => {
+		await assert.rejects(() => BlocksStack.create(new cdk.App(), 'NoDefaultsStack', propsWithoutDefaults()), assertMissingDefaultsError);
+	});
+
+	test('BlocksBackend.create() names the fix and links the upgrade guide', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'Host');
+		await assert.rejects(() => BlocksBackend.create(stack, 'NoDefaultsBackend', propsWithoutDefaults()), assertMissingDefaultsError);
+	});
+});

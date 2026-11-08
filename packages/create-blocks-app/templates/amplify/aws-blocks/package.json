@@ -15,6 +15,6 @@
   "dependencies": {
     "@aws-blocks/blocks": "*",
     "@aws-blocks/bb-kv-store": "*",
-    "aws-jwt-verify": "^5.0.0"
+    "aws-jwt-verify": "^5.2.1"
   }
 }

@@ -91,7 +91,7 @@ const auth = new AuthBasic(scope, id, options?)
 | `signIn(username, password, context)` | `Promise<AuthBasicUser>` | Authenticate and set session cookie. Rejects unconfirmed users. When `lockout` is enabled, throws `AccountLockedException` (429) while the account is locked after too many failed attempts. |
 | `signOut(context)` | `Promise<void>` | Revoke the presented session server-side (a replayed cookie is rejected) and clear the session cookie. The local cookie is always cleared; if the server-side revocation write fails it throws `SignOutIncompleteException` (503) so the caller can retry. |
 | `resetPassword(username)` | `Promise<void>` | Send a password reset code. Only when `codeDelivery` is set. |
-| `confirmResetPassword(username, code, newPassword)` | `Promise<void>` | Complete password reset with verification code. |
+| `confirmResetPassword(username, code, newPassword)` | `Promise<void>` | Complete password reset with verification code. Also invalidates every session issued before the reset, so a token stolen beforehand stops authenticating (reported as `SessionRevokedException`). Throws `SignOutIncompleteException` (503) if outstanding sessions could not be invalidated; the password is not changed in that case and the code is spent, so request a new code with `resetPassword` and try again. |
 | `createApi()` | `ApiNamespace` | Create the state machine API for the Authenticator component. |
 
 **Action input shape:** `createApi()` returns the state-machine API. `setAuthState` takes a single FLAT discriminated input — `{ action, ...fields }`, never a nested `{ action, data: {...} }`. Examples: `{ action: 'signIn', username, password }`, `{ action: 'signUp', username, password }`, `{ action: 'confirmSignUp', username, code, password }`, `{ action: 'resetPassword', username }`, `{ action: 'confirmResetPassword', username, code, newPassword }`. See the `AuthActionInput` type in `@aws-blocks/auth-common`.
@@ -117,6 +117,7 @@ const auth = new AuthBasic(scope, id, options?)
 | `logger` | `ChildLogger` | — | Optional logger for internal operations. When omitted, a default Logger at error level is created. |
 | `crossDomain` | `boolean` | `false` | Set to `true` when the frontend and API are on different registrable domains (e.g. frontend on Vercel, API on AWS). Switches the session cookie to `SameSite=None; Secure; Partitioned`. |
 | `lockout` | `LockoutPolicy` | — (disabled) | Sign-in throttling / account lockout. Omit to disable (default). Pass `{}` to enable with defaults, or override `maxAttempts` (5), `windowSeconds` (900), `lockoutSeconds` (900). See [Sign-in throttling](#sign-in-throttling). |
+| `metrics` | `MetricsEmitter` | — (no metrics) | Emits `SignInSuccess` / `SignInFailure` / `SignInLocked` counts for alarming. Pass a `Metrics` instance from `@aws-blocks/bb-metrics`. See [Alarming on failed sign-ins](#alarming-on-failed-sign-ins). |
 
 ### Password Policy
 
@@ -162,9 +163,9 @@ try {
 | `AuthBasicErrors.UserAlreadyExists` | `UserAlreadyExistsException` | Duplicate username on sign-up |
 | `AuthBasicErrors.InvalidPassword` | `InvalidPasswordException` | Password doesn't meet policy |
 | `AuthBasicErrors.SessionExpired` | `SessionExpiredException` | `requireAuth` with no/expired session |
-| `AuthBasicErrors.SessionRevoked` | `SessionRevokedException` | `requireAuth` with a token that was revoked at sign-out (still unexpired, but invalidated) |
+| `AuthBasicErrors.SessionRevoked` | `SessionRevokedException` | `requireAuth` with a token invalidated while still unexpired — either revoked at sign-out, or issued before a password reset (which invalidates all prior sessions) |
 | `AuthBasicErrors.InvalidCode` | `InvalidCodeException` | Wrong or expired verification code (signup or reset) |
-| `AuthBasicErrors.SignOutIncomplete` | `SignOutIncompleteException` | `signOut` cleared the local cookie but the server-side revocation write failed (e.g. a DynamoDB throttle); status 503 — retry to revoke the token |
+| `AuthBasicErrors.SignOutIncomplete` | `SignOutIncompleteException` | A session-invalidation write failed server-side (e.g. a DynamoDB throttle); status 503. From `signOut`: the local cookie was cleared but the token could not be revoked, so retry the sign-out. From `confirmResetPassword`: the password was not changed, so request a new reset code and try again. Both actions share this name, so branch on the action you called as well as the name when choosing what to tell the user |
 | `AuthBasicErrors.AccountLocked` | `AccountLockedException` | `signIn` rejected because the account is locked after too many failed attempts (only when `lockout` is enabled); status 429 — try again after the lockout window |
 
 ### Branching on the `setAuthState` client path
@@ -238,7 +239,7 @@ Set `crossDomain: true` only when the frontend and API are served from **differe
 const auth = new AuthBasic(app, 'auth', { crossDomain: true });
 ```
 
-On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS).
+On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS). This applies only to the local dev server (`npm run dev`). Deployed compute takes the attributes from deploy configuration, so a request header cannot drop them. That includes a sandbox (`npm run sandbox`): its dev server proxies the API to deployed compute, so sandbox sign-in on `http://localhost` gets `Secure` (and `Partitioned` with `crossDomain: true`).
 
 ### Revocation: read cost and consistency
 
@@ -273,3 +274,48 @@ Throttling is **opt-in** — with no `lockout` option, sign-in is unlimited and 
 The counter is a best-effort read-modify-write, not an atomic increment, so highly concurrent failures for the same username (across many Lambda instances) can lose an increment and make the lock trip slightly later than `maxAttempts` suggests. The lockout window is measured from the moment the count first reaches `maxAttempts`, so a lock always holds for the full `lockoutSeconds` once tripped.
 
 > **Local development:** the mock KVStore is in-memory, so lockout counters (like all AuthBasic state) reset when the dev server restarts.
+
+## Alarming on failed sign-ins
+
+Pass a `Metrics` instance as the `metrics` option and AuthBasic emits one CloudWatch count per sign-in, so you can alarm on a spike in failures:
+
+```typescript
+import { AuthBasic, Metrics } from '@aws-blocks/blocks';
+
+// aws-blocks/index.ts, with `const scope = new Scope('my-app')`
+const authMetrics = new Metrics(scope, 'authMetrics', { namespace: 'MyApp/Auth' });
+const auth = new AuthBasic(scope, 'auth', { lockout: {}, metrics: authMetrics });
+```
+
+| Metric | Emitted when |
+|---|---|
+| `SignInFailure` | Unknown user, unconfirmed user, or wrong password. One name for all three, so the metric does not reveal which usernames exist. |
+| `SignInLocked` | A sign-in is refused because the account is locked out (needs `lockout`). |
+| `SignInSuccess` | A session is issued. |
+
+Each data point is a `Count` of `1` with the dimension `AuthBlock` set to the AuthBasic instance's `fullId`. On deployed compute that `fullId` starts with the stack name you pass to `BlocksStack.create`: with stack `production`, `new AuthBasic(new Scope('my-app'), 'auth')` emits `AuthBlock=production-my-app-auth`. (Locally, with no stack, it is `my-app-auth`.) A CloudWatch alarm must name the same dimensions, plus any `defaultDimensions` you gave the `Metrics` instance. In `aws-blocks/index.cdk.ts`:
+
+```typescript
+import { Duration } from 'aws-cdk-lib';
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+
+const stackName = 'production';
+export const blocksStack = await BlocksStack.create(app, stackName, { /* ... */ });
+
+new Alarm(blocksStack, 'SignInFailureAlarm', {
+  metric: new Metric({
+    namespace: 'MyApp/Auth', // the Metrics instance's namespace
+    metricName: 'SignInFailure',
+    dimensionsMap: { AuthBlock: `${stackName}-my-app-auth` }, // the deployed AuthBasic fullId
+    statistic: 'Sum',
+    period: Duration.minutes(5),
+  }),
+  threshold: 100,
+  evaluationPeriods: 1,
+  comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+  // SignInFailure only has data points when a sign-in fails, so treat a quiet period as OK.
+  treatMissingData: TreatMissingData.NOT_BREACHING,
+});
+```
+
+With no `metrics` option nothing is emitted. Emitting is best-effort: an error from the emitter is logged and never changes the sign-in result.

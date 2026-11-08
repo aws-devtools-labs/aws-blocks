@@ -157,7 +157,7 @@ one provider per name per pool).
 ### Credential values, placeholders, and rotation
 
 A `secret: true` `AppSetting` is an **SSM SecureString** at `/<fullId>` — not an
-AWS Secrets Manager entry, so the `blocks secret` CLI (Secrets Manager) does not
+AWS Secrets Manager entry, so the `cdk-blocks secret` CLI (Secrets Manager) does not
 populate it. The value is set by writing the SecureString directly
 (`aws ssm put-parameter … --type SecureString --overwrite`) or via the
 `AppSetting` runtime `put()`.
