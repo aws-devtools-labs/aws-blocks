@@ -1,7 +1,7 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createServer, type Server } from 'node:http';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -49,8 +49,7 @@ describe('dev-server telemetry integration', () => {
     const addr = telemetryServer.address() as { port: number };
 
     // 2. Create a minimal backend file and preload script in a temp directory
-    tmpDir = join(tmpdir(), `dev-telemetry-test-${Date.now()}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), 'dev-telemetry-test-'));
     writeFileSync(join(tmpDir, 'backend.ts'), `export const hello = { greet: () => 'world' };\n`);
 
     // Polyfill process.loadEnvFile for Node <21

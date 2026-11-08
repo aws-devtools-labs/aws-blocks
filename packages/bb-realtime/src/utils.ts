@@ -55,6 +55,23 @@ export function validateChannelPath(fullChannel: string): void {
 }
 
 /**
+ * Whether `channel` is a channel path a WebSocket client may subscribe to or
+ * unsubscribe from. Clients send the path back verbatim from a channel handle,
+ * so it must have the shape `getChannel()` mints — `<instance>/<namespace>/<channel>`
+ * — and fit the DynamoDB sort key limit (1024 bytes UTF-8). Anything else
+ * (a non-string, an empty or oversized path, a path without an instance and
+ * namespace, or the connection-tracking record key) is rejected before it
+ * reaches the connections table.
+ */
+export function isClientChannelPath(channel: unknown): channel is string {
+	if (typeof channel !== 'string') return false;
+	if (Buffer.byteLength(channel, 'utf8') > MAX_CHANNEL_BYTES) return false;
+	const instanceEnd = channel.indexOf('/');
+	if (instanceEnd <= 0) return false;
+	return channel.indexOf('/', instanceEnd + 1) !== -1;
+}
+
+/**
  * Validate that a publish message fits within the API Gateway WebSocket
  * logical message size limit (128 KiB). The message includes the envelope
  * (type + channel) so we check the full serialized payload.
@@ -106,8 +123,16 @@ export function mintConnectToken(scopePrefix: string, secret: string, ttlSeconds
 
 /**
  * Validate a channel token. Returns the decoded payload if valid, null if not.
- * Works for both channel-scoped and connect (instance-scoped) tokens — the
- * `requestedChannel` startsWith check handles both cases.
+ * Without `requestedChannel` (the `$connect` handshake), any validly signed,
+ * unexpired token is accepted.
+ *
+ * With `requestedChannel` (a subscribe), the token's scope must equal the
+ * channel or be a `/`-separated prefix of it, and only a channel token is
+ * accepted. A connect token's scope is `<instance>$connect`, so the prefix check
+ * already limits it to `<instance>$connect/...`, where nothing is published (the
+ * server publishes to `<instance>/<namespace>/...`). The `/` check rejects it
+ * outright: a channel token's scope always has a `/` after the instance prefix,
+ * and a connect token's has none as long as the instance's scope id doesn't.
  */
 export function validateChannelToken(
 	token: string,
@@ -123,6 +148,8 @@ export function validateChannelToken(
 		if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
 		if (requestedChannel) {
 			if (!payload.channel) return null;
+			// Only channel tokens authorize a subscription (see the doc comment).
+			if (!payload.channel.includes('/')) return null;
 			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
 		}
 		return payload;

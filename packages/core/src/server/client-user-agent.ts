@@ -38,7 +38,7 @@ const CLIENT_USER_AGENT_PATTERN =
  *
  * @param raw - Raw header value; may be `null` (as `Headers.get()` returns) or omitted.
  * @returns The `client/<lang>/<version>` token, or `undefined` if missing or malformed.
- * @internal Used by the Lambda handler; not public API.
+ * @internal Used by the HTTP dispatcher (the Lambda handler and the container server); not public API.
  */
 export function validateClientUserAgentToken(raw?: string | null): string | undefined {
   if (typeof raw !== 'string' || raw.length === 0) return undefined;
@@ -60,8 +60,8 @@ declare global {
 
 /**
  * Reads the validated per-request token from the `globalThis` store, or
- * `undefined` if unset. Reading it there avoids importing the Lambda handler
- * that creates it.
+ * `undefined` if unset. Reading it there avoids importing the request context
+ * (`request-context.ts`) that creates it.
  *
  * @internal Used by `installClientUserAgent` and tests.
  */

@@ -42,9 +42,10 @@ export interface ScopeOptions {
    * scope that sets `compute`, then the app's default compute.
    *
    * What follows it:
-   * - `AsyncJob`: a serverless or container compute.
-   * - `ApiNamespace` and `CronJob`: a serverless compute only for now. Under a
-   *   container compute they fail synth with an error naming the compute.
+   * - `AsyncJob` and `CronJob`: a serverless or container compute.
+   * - `ApiNamespace`: a serverless or container compute. A container serves
+   *   it through its load balancer, so it needs at least one running task
+   *   (`scaling.minInstances: 0` fails synth).
    * - `Realtime` and `RawRoute` always run on the default compute, inside such
    *   a scope too.
    *
