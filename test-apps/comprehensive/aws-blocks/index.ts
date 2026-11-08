@@ -387,17 +387,32 @@ const dsql = new DistributedDatabase(scope, 'dsql', {
 });
 
 // bb-database: one Database block, running on a cluster.
-// `dbx` owns an Aurora DSQL cluster; its migrations default to
-// ./aws-blocks/migrations/dbx and are written in DSQL, as AWS documents it.
-const dbx = new SqlDatabase(scope, 'dbx');
+// Every cluster here is an Aurora DSQL cluster, and the production stack
+// leaves all of them out: E2E Sandbox and E2E Production deploy this app into
+// one E2E account per PR, whose 20-cluster DSQL quota the other PRs running
+// there share (see test/dsql-cluster-budget-synth.test.ts). Nothing in
+// bb-database depends on the stage, so E2E Sandbox deploys and tests all of it,
+// and the production stack keeps the `dsql` DistributedDatabase above.
+function createSqlDatabases() {
+  // `dbx` owns an Aurora DSQL cluster; its migrations default to
+  // ./aws-blocks/migrations/dbx and are written in DSQL, as AWS documents it.
+  const dbx = new SqlDatabase(scope, 'dbx');
+  // `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
+  // Both migrations create a table named `items`; dbxb's adds a foreign key, a
+  // check constraint, an index and a view in the DSQL forms (NOT VALID + ASYNC validation, ASYNC index).
+  const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
+  const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
+  const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
+  return { dbx, dbxa, dbxb };
+}
+const sqlDatabases = getDeploymentType() === 'production' ? undefined : createSqlDatabases();
+// The blocks the bb-database methods below run on. A production stack has none.
+function sqlDatabaseBlocks() {
+  if (!sqlDatabases) throw new ApiError('bb-database is not deployed on the production stack of this app', 501);
+  return sqlDatabases;
+}
 // A result schema: the row type derives from this value, and every row is validated against it.
 const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), category: z.string() });
-// `dbxa` and `dbxb` share one DSQL cluster, each in its own schema.
-// Both migrations create a table named `items`; dbxb's adds a foreign key, a
-// check constraint, an index and a view in the DSQL forms (NOT VALID + ASYNC validation, ASYNC index).
-const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
-const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
-const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -1780,6 +1795,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // ------------------------------------------------------------------------
 
   async dbxInfo() {
+    const { dbx, dbxa, dbxb } = sqlDatabaseBlocks();
     return {
       dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
       dbxa: { cluster: dbxa.cluster, schemaName: dbxa.schemaName },
@@ -1788,29 +1804,34 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async dbxInsert(id: string, name: string, value: number) {
+    const { dbx } = sqlDatabaseBlocks();
     const { rowCount } = await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${name}, ${value})`);
     return { rowCount };
   },
 
   async dbxGet(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     return await dbx.queryOne<{ id: string; name: string; value: number; category: string }>(
       sql`SELECT * FROM dbx_items WHERE id = ${id}`,
     );
   },
 
   async dbxList() {
+    const { dbx } = sqlDatabaseBlocks();
     return await dbx.query<{ id: string; name: string; value: number; category: string }>(
       sql`SELECT * FROM dbx_items ORDER BY id`,
     );
   },
 
   async dbxDelete(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     const { rowCount } = await dbx.execute(sql`DELETE FROM dbx_items WHERE id = ${id}`);
     return { rowCount };
   },
 
   // A read-modify-write with no side effects: safe to re-run on a conflict.
   async dbxTransfer(fromId: string, toId: string, amount: number) {
+    const { dbx } = sqlDatabaseBlocks();
     await dbx.transaction(
       async (tx) => {
         const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
@@ -1825,6 +1846,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // A 404 thrown inside the callback must reach the client as a 404, not as TransactionFailed.
   async dbxTransferStrict(fromId: string, toId: string, amount: number) {
+    const { dbx } = sqlDatabaseBlocks();
     await dbx.transaction(async (tx) => {
       const sender = await tx.queryOne<{ value: number }>(sql`SELECT value FROM dbx_items WHERE id = ${fromId}`);
       if (!sender) throw new ApiError('no such sender', 404);
@@ -1836,10 +1858,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // The result type comes from the schema, not from a type argument.
   async dbxGetValidated(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     return await dbx.queryOne(sql`SELECT id, name, value, category FROM dbx_items WHERE id = ${id}`, { schema: DbxItem });
   },
 
   async dbxSchemaMismatch(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     try {
       await dbx.queryOne(sql`SELECT id, name, value FROM dbx_items WHERE id = ${id}`, {
         schema: z.object({ id: z.string(), name: z.string(), value: z.string() }),
@@ -1853,6 +1877,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // Local mode only: simulateConflict() (from the testing entry) throws in the
   // Lambda runtime, so the handler reports that nothing was simulated and the test skips.
   async dbxSimulatedConflictTransfer(fromId: string, toId: string, amount: number) {
+    const { dbx } = sqlDatabaseBlocks();
     try {
       simulateConflict(dbx);
     } catch {
@@ -1871,6 +1896,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async dbxDuplicateInsert(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     try {
       await dbx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'dup'}, ${0})`);
       return { error: null };
@@ -1882,6 +1908,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // DDL on the app connection of a distributed cluster: the mock's guard
   // locally, DSQL's own 42501 (→ QueryFailed) when deployed.
   async dbxRejectDdl() {
+    const { dbx } = sqlDatabaseBlocks();
     try {
       await dbx.execute(sql`CREATE TABLE dbx_should_not_exist (id TEXT PRIMARY KEY)`);
       return { error: null };
@@ -1891,6 +1918,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async dbxRejectTruncate() {
+    const { dbx } = sqlDatabaseBlocks();
     try {
       await dbx.execute(sql`TRUNCATE dbx_items`);
       return { error: null };
@@ -1902,6 +1930,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // More than 3,000 rows in one transaction: TransactionRowLimitExceeded, from
   // the mock locally and from DSQL's SQLSTATE 54000 when deployed. Nothing is kept.
   async dbxRowLimit() {
+    const { dbx } = sqlDatabaseBlocks();
     const prefix = `limit-${Date.now().toString(36)}-`;
     let error: string | null = null;
     try {
@@ -1922,6 +1951,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // A block-level execute() inside the callback runs in the transaction: when the callback throws, nothing
   // is kept, locally and on DSQL (where the statement would otherwise auto-commit on another connection).
   async dbxBlockWriteInAbortedTransaction(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     let aborted = false;
     try {
       await dbx.transaction(async () => {
@@ -1938,6 +1968,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // A block-level query() inside the callback sees the callback's own uncommitted write.
   async dbxBlockReadInTransaction(id: string) {
+    const { dbx } = sqlDatabaseBlocks();
     const seenInside = await dbx.transaction(async (tx) => {
       await tx.execute(sql`INSERT INTO dbx_items (id, name, value) VALUES (${id}, ${'inside'}, ${1})`);
       const row = await dbx.queryOne<{ id: string }>(sql`SELECT id FROM dbx_items WHERE id = ${id}`);
@@ -1949,6 +1980,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // Shared distributed cluster: two blocks, two schemas, one table name.
   async dbxaAdd(sku: string, qty: number) {
+    const { dbxa } = sqlDatabaseBlocks();
     // BIGINT identity: a number locally and on DSQL alike; the schema checks it in both.
     return await dbxa.queryOne(sql`INSERT INTO items (sku, qty) VALUES (${sku}, ${qty}) RETURNING id, sku, qty`, {
       schema: z.object({ id: z.number(), sku: z.string(), qty: z.number() }),
@@ -1956,11 +1988,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async dbxaDelete(sku: string) {
+    const { dbxa } = sqlDatabaseBlocks();
     const { rowCount } = await dbxa.execute(sql`DELETE FROM items WHERE sku = ${sku}`);
     return { rowCount };
   },
 
   async dbxbAdd(accountId: string, owner: string, amount: number) {
+    const { dbxb } = sqlDatabaseBlocks();
     await dbxb.transaction(async (tx) => {
       await tx.execute(sql`INSERT INTO accounts (id, owner) VALUES (${accountId}, ${owner}) ON CONFLICT (id) DO NOTHING`);
       await tx.execute(sql`INSERT INTO items (account_id, amount) VALUES (${accountId}, ${amount})`);
@@ -1972,6 +2006,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // The validated foreign key refuses an orphan; the check constraint refuses a negative amount.
   async dbxbRejectOrphan(accountId: string) {
+    const { dbxb } = sqlDatabaseBlocks();
     const outcome = async (fn: () => Promise<unknown>) => {
       try {
         await fn();
@@ -1993,12 +2028,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // ON DELETE CASCADE on DSQL: the cascaded rows count toward the row limit, but a handful is fine.
   async dbxbDeleteAccount(accountId: string) {
+    const { dbxb } = sqlDatabaseBlocks();
     await dbxb.execute(sql`DELETE FROM accounts WHERE id = ${accountId}`);
     const row = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items WHERE account_id = ${accountId}`);
     return { remainingItems: row?.n ?? 0 };
   },
 
   async sharedClusterCounts() {
+    const { dbxa, dbxb } = sqlDatabaseBlocks();
     const a = await dbxa.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
     const b = await dbxb.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM items`);
     return { dbxa: a?.n ?? 0, dbxb: b?.n ?? 0 };
