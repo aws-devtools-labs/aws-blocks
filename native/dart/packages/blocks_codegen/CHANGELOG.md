@@ -4,6 +4,10 @@
   class name (`Foo` and `foo`) being declared as one class twice, which did not
   compile. The later arm now takes its namespace's prefix (`ApiFooInput`), as
   an arm named like another type already does.
+- A declared native binding whose export is named `TypedOidcClient` or
+  `OidcProvider` is a generation error, as for every other public
+  `blocks_runtime` type, because the generated library imports the runtime
+  wholesale and the name would be ambiguous.
 - **Requires `blocks_runtime` 0.1.5.** Generated clients call APIs that
   `blocks_runtime` 0.1.4 doesn't have (`blocksDeepEquals`, `blocksDeepHash`,
   `RealtimeChannel.fromJsonValue`, `toJson()` on the transferables, a

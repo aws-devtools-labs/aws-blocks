@@ -16,6 +16,12 @@ import 'token_store.dart';
 import 'transferable_descriptor.dart';
 
 /// OIDC client implementing PKCE-based auth with token management.
+///
+/// [signIn], [signInRelay] and [exchange] take a provider by the name the
+/// backend knows it by. A generated client whose spec names a method's
+/// providers returns a `TypedOidcClient` instead, the same client with those
+/// methods narrowed to an enum of that method's providers, so a provider the
+/// client doesn't have is a compile error.
 class OidcClient implements AuthProvider {
   final String exchangePath;
   final String refreshPath;
@@ -129,11 +135,22 @@ class OidcClient implements AuthProvider {
 
   // --- Sign in (requires BrowserLauncher) ---
 
+  /// Signs in with [provider] through the direct custom-scheme flow, with
+  /// [redirectUri] as the IdP `redirect_uri`. Most IdPs reject a custom-scheme
+  /// `redirect_uri`; [signInRelay] is the flow that works with them.
+  ///
+  /// Throws [OidcUnknownProviderException] when [providers] doesn't list
+  /// [provider], or [providerConfigs] has no entry for it.
   Future<OidcUser> signIn(
     String provider, {
     required BrowserLauncher launcher,
     required String redirectUri,
   }) async {
+    final config = providerConfigs[provider];
+    if (!providers.contains(provider) || config == null) {
+      throw OidcUnknownProviderException(provider);
+    }
+
     final verifier = generateVerifier();
     final challenge = generateChallenge(verifier);
     final state = generateVerifier();
@@ -143,7 +160,6 @@ class OidcClient implements AuthProvider {
     await tokenStore.set('oidc_state', state);
     await tokenStore.set('oidc_nonce', nonce);
 
-    final config = providerConfigs[provider]!;
     final authorizeUri = Uri.parse(config.authorizeUrl).replace(
       queryParameters: {
         'client_id': config.clientId,
@@ -204,6 +220,9 @@ class OidcClient implements AuthProvider {
   ///
   /// [relayTo] must be the custom-scheme URI registered in the backend's
   /// `allowedRelayOrigins` (e.g. `myappscheme://oidcRedirect`).
+  ///
+  /// Throws [OidcUnknownProviderException] when [providers] doesn't list
+  /// [provider].
   Future<OidcUser> signInRelay(
     String provider, {
     required BrowserLauncher launcher,
