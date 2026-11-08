@@ -18,7 +18,10 @@ function sharedRequestBaseUrlStore(): AsyncLocalStorage<string> {
 
 /**
  * Per-request store for the request's externally reachable base URL (origin
- * plus API Gateway stage prefix), set by the Lambda handler around dispatch.
+ * plus API Gateway stage prefix), set by the dispatcher (`createDispatcher`)
+ * around every RawRoute and RPC call, from the `baseUrl` that each transport
+ * (the Lambda handler, the container HTTP server, the local dev server) must
+ * supply with its request.
  *
  * One store per process, held on `globalThis`: the first copy of
  * `@aws-blocks/core` to load creates it and every later copy reuses it. With a
@@ -40,8 +43,12 @@ export const requestBaseUrl: AsyncLocalStorage<string> = sharedRequestBaseUrlSto
  * instead of `ctx.request.url.origin`.
  *
  * - Deployed: the request's host and protocol, plus `/{stage}` for a REST API stage.
+ * - On a container compute: the front-door-stamped host, plus the stamped stage.
  * - Sandbox (the dev-server front door): `http://localhost:<port>`, no stage.
- * - Local dev, or outside a request: `ctx.request.url.origin`.
+ * - Local dev: the dev server's origin.
+ * - Outside a dispatched request (a hand-built `ctx`, e.g. in a unit test):
+ *   `ctx.request.url.origin`. Every transport sets the store for every request
+ *   it dispatches, so a handler never reaches this fallback.
  *
  * Resolves across duplicate copies of `@aws-blocks/core` (see {@link requestBaseUrl}).
  */

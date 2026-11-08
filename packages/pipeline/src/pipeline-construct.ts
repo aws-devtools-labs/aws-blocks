@@ -111,7 +111,7 @@ const DEFAULT_SYNTH_PARTIAL_BUILD_SPEC = codebuild.BuildSpec.fromObject({
  * new Pipeline(stack, 'Pipeline', {
  *   source: {
  *     repo: 'my-org/my-app',
- *     connectionArn: 'arn:aws:codeconnections:us-east-1:123456789:connection/abc',
+ *     connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc',
  *   },
  *   branches: [
  *     {

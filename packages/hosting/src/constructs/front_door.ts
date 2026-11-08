@@ -316,6 +316,10 @@ export type FrontDoorResult = {
    * one depend on every asset upload of the build, the later runtime-config
    * upload included, so CloudFormation updates it only once the new files are
    * in place and the previous build keeps serving until then.
+   *
+   * An in-place build (`HostingConstructProps.inPlaceBuild`, core `Hosting`
+   * `buildId: 'fixed'`) reuses one prefix, so there is nothing to switch:
+   * the cutover constructs are then not ordered after the uploads.
    */
   readonly cutover?: readonly IConstruct[];
 };

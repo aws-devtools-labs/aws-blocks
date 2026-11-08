@@ -87,6 +87,24 @@ export type DeployManifest = {
   /** Image optimization (separate Lambda if present) */
   imageOptimization?: ImageConfig;
 
+  /**
+   * The remote image sources the app allows, for a build with no image
+   * function (`skipImageOptimization`): a door that answers the image
+   * endpoints itself redirects a remote source only to these hosts. Set by the
+   * Nitro (`@nuxt/image` `image.domains`) and Astro (`image.domains`,
+   * `image.remotePatterns`) adapters; a manifest with `imageOptimization`
+   * carries them there instead.
+   */
+  imageRemoteSources?: {
+    /** Exact hostnames. */
+    domains?: string[];
+    /**
+     * Patterns; only `hostname` (with an optional `*.` / `**.` prefix) is
+     * matched. Hostname `'**'` matches any host.
+     */
+    remotePatterns?: RemotePattern[];
+  };
+
   /** Middleware (edge function if present) */
   middleware?: MiddlewareConfig;
 

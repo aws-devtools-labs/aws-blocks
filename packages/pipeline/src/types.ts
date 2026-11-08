@@ -41,7 +41,7 @@ export interface PipelineSourceConfig {
    *
    * @see https://docs.aws.amazon.com/dtconsole/latest/userguide/connections-create-github.html
    *
-   * @example 'arn:aws:codeconnections:us-east-1:123456789:connection/abc-def'
+   * @example 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc-def'
    *
    * Accepts a `config('CONNECTION_ARN')` marker (SSM) to keep the ARN out of
    * source. It is resolved at **synth time** and inlined as a literal into the
@@ -327,7 +327,7 @@ export interface PostStageContext<TConfig = Record<string, unknown>> {
  * new Pipeline(stack, 'Pipeline', {
  *   source: {
  *     repo: 'my-org/my-app',
- *     connectionArn: 'arn:aws:codeconnections:us-east-1:123456789:connection/abc',
+ *     connectionArn: 'arn:aws:codeconnections:us-east-1:123456789012:connection/abc',
  *   },
  *   branches: [
  *     {

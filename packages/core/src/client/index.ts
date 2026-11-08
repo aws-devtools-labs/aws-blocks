@@ -149,7 +149,7 @@ export interface BlocksRequest {
   /**
    * The namespace this call targets: the backend **export** name (e.g. `'api'`,
    * `'authApi'` for `export const authApi = auth.createApi()`), not the
-   * `ApiNamespace` constructor's `name` argument. The request URL's
+   * `ApiNamespace` constructor's `label` argument. The request URL's
    * `/{namespace}` segment is built from this value after middleware runs, so a
    * middleware that changes it changes both the path and the body.
    */
@@ -389,8 +389,17 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
           body: encodeRpcRequest(request.apiNamespace, request.method, request.args),
         });
         
-        const rpcBody = await response.json();
-        const result = decodeRpcResponse(rpcBody); // throws ApiError on RPC error
+        // A non-JSON body (e.g. a gateway's HTML error page) decodes as no
+        // envelope, so it surfaces as an ApiError carrying the HTTP status.
+        const text = await response.text();
+        let rpcBody: unknown;
+        try {
+          rpcBody = JSON.parse(text);
+        } catch {
+          rpcBody = undefined;
+        }
+        // Throws ApiError on an RPC error or a body that is not a JSON-RPC envelope.
+        const result = decodeRpcResponse(rpcBody, response.status);
         return processResponse(result);
       };
     }

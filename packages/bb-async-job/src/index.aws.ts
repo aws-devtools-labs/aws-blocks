@@ -232,7 +232,7 @@ export class AsyncJob<T = unknown> extends Scope {
 	 * `dispatchJobToWorker`). Running each job in its own worker is what makes the
 	 * per-handler wall-clock limit *enforced* rather than cooperative: on timeout
 	 * the parent hard-terminates the worker, so even a pure CPU busy-loop is
-	 * stopped. The limit is the compute's `timeoutSeconds`, stamped as
+	 * stopped. The limit is this job's `timeoutSeconds`, stamped as
 	 * `BLOCKS_HANDLER_TIMEOUT_<id>` at synth.
 	 *
 	 * Concurrency is bounded by `BLOCKS_HANDLER_CONCURRENCY_<id>` (the poller's

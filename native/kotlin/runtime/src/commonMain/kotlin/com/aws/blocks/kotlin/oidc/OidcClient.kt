@@ -30,10 +30,18 @@ import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
-class OidcClient internal constructor(
+/**
+ * Signs a user in with one of the backend's OIDC providers.
+ *
+ * [P] is the providers this client signs in with. A spec that resolves its provider names to
+ * string literals generates an [OidcProvider] enum for them, so `signIn` takes only those
+ * providers; one that doesn't leaves the client an `OidcClient<AnyProvider>`, whose `signIn`
+ * takes any provider name.
+ */
+class OidcClient<P : OidcProvider> internal constructor(
     private val config: OidcClientConfig,
     private val httpClient: HttpClient,
-    private val server: BlocksServer
+    private val server: BlocksServer,
 ) {
     private val _authState = MutableStateFlow<OidcAuthState>(OidcAuthState.Loading)
     val authState: StateFlow<OidcAuthState> = _authState.asStateFlow()
@@ -59,14 +67,17 @@ class OidcClient internal constructor(
      * the flow finishes.
      *
      * ```kotlin
-     * val user = client.signIn("google")
+     * val user = client.signIn(AuthApi.GetClient.Provider.Google)
      * ```
      *
-     * @param provider one of [providers]; anything else throws [OidcUnknownProviderException].
+     * @param provider one of the providers the spec named for this client. A client whose spec
+     *   named none is an `OidcClient<AnyProvider>`, which signs in by name instead.
      * @param options per-attempt settings. Only the JVM target has any, controlling what the
      *   browser is shown once sign-in finishes; see `OidcSignInPlatformOptions` in `jvmMain`.
      * @return the signed-in user, which also becomes the value of [authState].
-     * @throws OidcUnknownProviderException if [provider] is not one the backend configured.
+     * @throws OidcUnknownProviderException if [provider] is not one the backend configured. The
+     *   spec names the providers the backend had when it was generated, which can have drifted
+     *   from what [providers] reports now.
      * @throws OidcCancelledException if the user abandoned the flow, or it timed out.
      * @throws OidcCallbackException if the identity provider reported an error, or the
      *   callback's state or CSRF value did not match what was sent.
@@ -74,12 +85,13 @@ class OidcClient internal constructor(
      * @throws BlocksException if the Blocks instance this client came from has been closed.
      */
     suspend fun signIn(
-        provider: String,
+        provider: P,
         options: OidcSignInOptions = OidcSignInOptions(),
     ): OidcUser {
         ensureOpen()
-        if (provider !in config.providers) {
-            throw OidcUnknownProviderException(provider)
+        val name = provider.providerName
+        if (name !in config.providers) {
+            throw OidcUnknownProviderException(name)
         }
 
         val csrf = Pkce.generateRandom()
@@ -91,7 +103,7 @@ class OidcClient internal constructor(
         val session = platformLauncher.openSession(config.relayTo, options)
         try {
             // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
-            val params = fetchAuthorizeParams(provider, csrf, session.relayTo)
+            val params = fetchAuthorizeParams(name, csrf, session.relayTo)
 
             // Step 2: Build the full authorize URL. redirect_uri points to the BACKEND's callback (HTTPS).
             val callbackUrl = server.rawRoute(config.callbackPath)
@@ -213,13 +225,14 @@ class OidcClient internal constructor(
         verifier: String,
         state: String,
         nonce: String,
-        provider: String,
+        provider: P,
         callbackUrl: String,
         iss: String? = null
     ): OidcUser {
         ensureOpen()
-        if (provider !in config.providers) {
-            throw OidcUnknownProviderException(provider)
+        val name = provider.providerName
+        if (name !in config.providers) {
+            throw OidcUnknownProviderException(name)
         }
 
         val body = buildJsonObject {
@@ -227,7 +240,7 @@ class OidcClient internal constructor(
             put("verifier", verifier)
             put("state", state)
             put("nonce", nonce)
-            put("provider", provider)
+            put("provider", name)
             put("callbackUrl", callbackUrl)
             if (iss != null) put("iss", iss)
         }
@@ -315,19 +328,54 @@ class OidcClient internal constructor(
         private const val EXCHANGE_FAILED = "exchange_failed"
         private const val CANCELLED = "cancelled"
 
-        fun fromJson(element: JsonElement, blocksClient: BlocksClient, relayTo: String): OidcClient {
-            return fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo)
-        }
+        /**
+         * The client for a `getClient` descriptor. [P] comes from the call site: the enum
+         * generated for a spec that named its providers, or [AnyProvider] for one that didn't.
+         */
+        fun <P : OidcProvider> fromJson(
+            element: JsonElement,
+            blocksClient: BlocksClient,
+            relayTo: String,
+        ): OidcClient<P> = fromJson(element, blocksClient.httpClient, blocksClient.server, relayTo)
 
-        internal fun fromJson(
+        internal fun <P : OidcProvider> fromJson(
             element: JsonElement,
             httpClient: HttpClient,
             server: BlocksServer,
-            relayTo: String
-        ): OidcClient {
+            relayTo: String,
+        ): OidcClient<P> {
             val config = BlocksJson.decodeFromJsonElement<OidcClientConfig>(element)
                 .copy(relayTo = relayTo)
             return OidcClient(config, httpClient, server)
         }
     }
 }
+
+/**
+ * Signs in with [provider], the name the backend knows it by.
+ *
+ * Only a client whose providers the spec didn't name signs in by name; one typed by a generated
+ * provider enum takes a constant of that enum instead.
+ *
+ * @param options per-attempt settings, as on [OidcClient.signIn].
+ */
+suspend fun OidcClient<AnyProvider>.signIn(
+    provider: String,
+    options: OidcSignInOptions = OidcSignInOptions(),
+): OidcUser = signIn(AnyProvider(provider), options)
+
+/**
+ * Exchanges a callback's code for a user against [provider], the name the backend knows it by.
+ *
+ * Only a client whose providers the spec didn't name exchanges by name; one typed by a generated
+ * provider enum takes a constant of that enum instead.
+ */
+suspend fun OidcClient<AnyProvider>.exchange(
+    code: String,
+    verifier: String,
+    state: String,
+    nonce: String,
+    provider: String,
+    callbackUrl: String,
+    iss: String? = null,
+): OidcUser = exchange(code, verifier, state, nonce, AnyProvider(provider), callbackUrl, iss)

@@ -130,7 +130,7 @@ The factory a declared package must expose is specified in [the schema generatio
 ```kotlin
 val blocks = Blocks()
 val client = blocks.authApi.getClient()
-val user = client.signIn("google")
+val user = client.signIn(AuthApi.GetClient.Provider.Google)
 ```
 
 On the JVM target the system browser is left open on a loopback address once sign-in finishes,
@@ -139,7 +139,7 @@ replace it per outcome, from a JVM source set:
 
 ```kotlin
 client.signIn(
-    provider = "google",
+    provider = AuthApi.GetClient.Provider.Google,
     options = OidcSignInOptions(
         OidcSignInPlatformOptions(
             // Send the browser to your own page, so the user ends on a real domain.
@@ -187,6 +187,56 @@ Android and iOS have no options to set — their in-app browser dismisses itself
 
 Bringing your window to the front after sign-in is the app's job; `signIn` returning is the
 signal.
+
+### Typed OIDC Providers
+
+`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. When the
+spec names an OIDC client's providers, the method's object gets a `Provider` enum that implements
+`OidcProvider`, whose constants carry the names the backend knows them by, and `getClient()`
+returns a client typed by it:
+
+```kotlin
+val client = blocks.authApi.getClient()        // OidcClient<AuthApi.GetClient.Provider>
+val user = client.signIn(AuthApi.GetClient.Provider.Google)
+
+// A sign-in screen. `entries` is what the spec named when it was generated; `client.providers` is
+// what the deployed backend reports now, so the screen shows the providers both agree on.
+AuthApi.GetClient.Provider.entries
+    .filter { it.providerName in client.providers }
+    .forEach { provider ->
+        Button(onClick = { scope.launch { client.signIn(provider) } }) {
+            Text("Sign in with ${provider.providerName}")
+        }
+    }
+```
+
+A provider name that is not a legal identifier is still spelled as one, and keeps the name it
+signs in with: `login.gov` becomes `LoginGov("login.gov")`. Because the constant's name is rebuilt
+from the value, `valueOf` can't find one by the name the backend uses — the generated
+`fromProviderName` does:
+
+```kotlin
+// Restoring a provider read from a saved session, or off a deep-link callback
+val provider = AuthApi.GetClient.Provider.fromProviderName(saved) ?: return
+client.signIn(provider)
+```
+
+When the spec does not name them — the providers resolved to plain strings — `getClient()` returns
+`OidcClient<AnyProvider>`, whose `signIn` and `exchange` take a provider name, as before:
+
+```kotlin
+// Signing in by name is an extension on this one instantiation, so it needs importing.
+import com.aws.blocks.kotlin.oidc.signIn
+
+val client = blocks.authApi.getClient()        // OidcClient<AnyProvider>
+val user = client.signIn("google")
+```
+
+Without that import the call resolves to the member that takes a provider, and the compiler reports
+an `AnyProvider` was expected rather than a missing import.
+
+When the method's object already uses the name `Provider`, the enum is `ResultProvider` and codegen
+prints a `kotlin:` warning that names it.
 
 ## Gradle Tasks
 

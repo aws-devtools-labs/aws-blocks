@@ -96,6 +96,34 @@ describe('AWS getBatch retries UnprocessedKeys returned by BatchGetItem until al
 	});
 });
 
+describe('get({ consistentRead }) asks DynamoDB for a strongly consistent read; the mock is always consistent', () => {
+	const schema = z.object({ id: z.string(), value: z.number() });
+	const options = { schema, key: { partitionKey: 'id' } };
+
+	test('AWS sends ConsistentRead: true only when consistentRead is set', async () => {
+		const inputs: any[] = [];
+		const table = awsTableWithFakeClient('get-consistent-1', options, async command => {
+			inputs.push(command.input);
+			return { Item: { id: 'a', value: 1 } };
+		});
+
+		assert.deepStrictEqual(await table.get({ id: 'a' }, { consistentRead: true }), { id: 'a', value: 1 });
+		await table.get({ id: 'a' });
+		await table.get({ id: 'a' }, { consistentRead: false });
+
+		assert.strictEqual(inputs[0].ConsistentRead, true);
+		assert.strictEqual(inputs[1].ConsistentRead, undefined, 'the default stays eventually consistent');
+		assert.strictEqual(inputs[2].ConsistentRead, undefined);
+	});
+
+	test('the mock returns a just-written item with or without consistentRead', async () => {
+		const table = new DistributedTable(testScope(), 'get-consistent-mock', { schema, key: { partitionKey: 'id' } });
+		await table.put({ id: 'a', value: 1 });
+		assert.deepStrictEqual(await table.get({ id: 'a' }, { consistentRead: true }), { id: 'a', value: 1 });
+		assert.deepStrictEqual(await table.get({ id: 'a' }), { id: 'a', value: 1 });
+	});
+});
+
 describe('AWS putBatch retries UnprocessedItems returned by BatchWriteItem', () => {
 	const schema = z.object({ id: z.string(), value: z.number() });
 	const options = { schema, key: { partitionKey: 'id' } };
