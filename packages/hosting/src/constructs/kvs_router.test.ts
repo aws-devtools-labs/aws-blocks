@@ -1252,12 +1252,23 @@ void describe('request fn — bare prerendered route under basePath → S3 (Issu
   });
 });
 
-void describe('request fn — G10 fail-open when meta is missing', () => {
-  void it('returns the request unchanged (no origin selected) if KVS has no meta', async () => {
-    const { output, selectedOrigin } = await runRequestFn(reqCode, {}, req('/x'));
-    assert.equal(selectedOrigin, null);
-    assert.equal(output.uri, '/x'); // untouched — fail open, don't 5xx
-  });
+void describe('request fn — G10 fail closed when meta is missing', () => {
+  // On a first deploy the distribution serves for tens of seconds before the
+  // KvKeys write (it runs last), and the write then takes seconds to reach
+  // every edge. Forwarding the request unchanged in that window sent `/` to
+  // the bucket root, which answered `200 application/xml` instead of the page
+  // (cacheable for the default behavior's TTL), and every other path to a
+  // missing key.
+  for (const uri of ['/', '/about', '/index.html', '/builds/b1/index.html']) {
+    void it(`answers ${uri} with an uncached 503 and selects no origin if KVS has no meta`, async () => {
+      const { output, selectedOrigin } = await runRequestFn(reqCode, {}, req(uri));
+      assert.equal(selectedOrigin, null);
+      assert.equal(output.statusCode, 503);
+      assert.equal(output.uri, undefined, 'a generated response, not a forwarded request');
+      assert.equal(output.headers['cache-control'].value, 'no-store');
+      assert.equal(output.headers['retry-after'].value, '5');
+    });
+  }
 });
 
 void describe('request fn — G11 default kind when no route matches', () => {

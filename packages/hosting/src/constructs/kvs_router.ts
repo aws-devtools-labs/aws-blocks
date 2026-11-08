@@ -556,9 +556,56 @@ export const headerRowsJs = (rows: string, indent: string): string =>
  * asset onto the current build, skipping its `__dpl` pin — the exact #245 bug,
  * inverted. `slice(-5)` on a <5-char string returns the whole string, never `.html`.
  *
+ * No `meta` (the route table has not reached this edge yet, or the KVS read
+ * failed) answers `503` with `Cache-Control: no-store` and `Retry-After`,
+ * rather than forwarding the request unchanged. On a first deploy the
+ * distribution serves for tens of seconds before the gated KvKeys write, which
+ * then takes seconds to propagate. An unchanged request reaches the default
+ * S3 origin at the bucket root: `/` is answered `200 application/xml` instead
+ * of the site's page, cacheable for the default behavior's TTL, and every
+ * other path is a missing key. A response
+ * generated here is never cached, so the site serves normally once `meta`
+ * arrives.
+ *
+ * Step rationale (kept here, out of the shipped source, for the size limit):
+ *
+ * - 2. assetPrefix strip — MUST run BEFORE the basePath 308. Next.js does NOT
+ *   prefix assetPrefix with basePath: with basePath='/app' and
+ *   assetPrefix='/cdn-static' the browser fetches /cdn-static/_next/static/*
+ *   (no /app). assetPrefix is an ALTERNATIVE asset prefix, not additive with
+ *   basePath. So we strip the assetPrefix and, when a basePath is also set,
+ *   RE-MAP the asset into the basePath form (/cdn-static/_next/* ->
+ *   /app/_next/*). That puts it in the exact shape a normal (no-assetPrefix)
+ *   basePath asset already has, so it matches the basePath-prefixed route
+ *   table, the basePath 308 does NOT fire (it is now under basePath), and the
+ *   static branch (4c) strips basePath back off before the build-id rewrite.
+ *   Ordering matters: if the basePath 308 ran first it would see
+ *   /cdn-static/... (not under /app) and 308 to /app/cdn-static/... -> 404 ->
+ *   the browser rejects the HTML 404 as a non-executable script (the reported
+ *   bug).
+ * - 2b. basePath canonical 308. MUST preserve the query string — e.g.
+ *   /_next/image?url=...&w=64 redirecting to /app/_next/image WITHOUT the query
+ *   hits the image optimizer with no url param -> 400 "url parameter is
+ *   required" (and any ?ms=/?tag= API param is likewise lost). Mirrors the www
+ *   301 and appends the rebuilt query string.
+ * - 3. origin selection also tries the trailing-slash-normalized form, so a
+ *   route stored as exact '/about' still matches a '/about/' request (the old
+ *   per-behavior model emitted derived bare-path behaviors for this; here we
+ *   normalize at match time). Without this, '/about/' would miss → default to
+ *   the SSR origin on compute deploys, re-rendering a page that should be
+ *   served statically from S3.
+ * - 4a. image-opt origin strips basePath first. The image optimizer (Next
+ *   /_next/image, Nuxt IPX /_ipx) parses the source path relative to its OWN
+ *   base (e.g. IPX baseURL '/_ipx'), so a deployed basePath like '/myapp' must
+ *   be removed — otherwise the optimizer sees '/myapp/_ipx/...', fails to
+ *   match its prefix, and 404s. (Mirrors the static branch's basePath strip.)
+ * - 4c. the `__dpl` skew cookie is honored only when skew protection is
+ *   enabled — a stale `__dpl` from a previously-enabled deploy must not pin a
+ *   visitor to a deleted build.
+ *
  * NOTE: this function source ships to CloudFront, which enforces a 10 KB code
- * limit — keep in-function comments terse (the rationale lives here in the
- * JSDoc, which does NOT ship).
+ * limit — keep in-function comments to one-line step labels (the rationale
+ * lives here in the JSDoc, which does NOT ship).
  */
 export const generateKvsRouterRequestCode = (): string => `import cf from 'cloudfront';
 ${SHARED_CF_HELPERS}
@@ -575,7 +622,7 @@ async function handler(event) {
   var request = event.request;
   var uri = request.uri;
   var meta = await getJson('meta', null);
-  if (!meta) { return request; }
+  if (!meta) { return { statusCode: 503, statusDescription: 'Service Unavailable', headers: { 'cache-control': { value: 'no-store' }, 'retry-after': { value: '5' } } }; }
 
   // 0. Already-prefixed asset fetches (CloudFront custom-error responses
   // re-request /builds/<id>/<page> through this same behavior). Send straight
@@ -608,21 +655,7 @@ ${redirectRowsJs('drows', '    ')}
 
   var bp = meta.bp;
 
-  // 2. assetPrefix strip — MUST run BEFORE the basePath 308 below.
-  //
-  // Next.js does NOT prefix assetPrefix with basePath: with basePath='/app' and
-  // assetPrefix='/cdn-static' the browser fetches /cdn-static/_next/static/*
-  // (no /app). assetPrefix is an ALTERNATIVE asset prefix, not additive with
-  // basePath. So we strip the assetPrefix and, when a basePath is also set,
-  // RE-MAP the asset into the basePath form (/cdn-static/_next/* ->
-  // /app/_next/*). That puts it in the exact shape a normal (no-assetPrefix)
-  // basePath asset already has, so it matches the basePath-prefixed route table,
-  // the basePath 308 below does NOT fire (it is now under basePath), and the
-  // static branch (4c) strips basePath back off before the build-id rewrite.
-  //
-  // Ordering matters: if the basePath 308 ran first it would see /cdn-static/...
-  // (not under /app) and 308 to /app/cdn-static/... -> 404 -> the browser
-  // rejects the HTML 404 as a non-executable script (the reported bug).
+  // 2. assetPrefix strip, BEFORE the basePath 308 (see JSDoc).
   if (meta.aP && (uri === meta.aP || uri.indexOf(meta.aP + '/') === 0)) {
     uri = uri.substring(meta.aP.length);
     if (uri.length === 0) { uri = '/'; }
@@ -631,11 +664,7 @@ ${redirectRowsJs('drows', '    ')}
     }
   }
 
-  // 2b. basePath canonical 308. MUST preserve the query string — e.g.
-  // /_next/image?url=...&w=64 redirecting to /app/_next/image WITHOUT the query
-  // hits the image optimizer with no url param -> 400 "url parameter is
-  // required" (and any ?ms=/?tag= API param is likewise lost). Mirror the www
-  // 301 above and append the rebuilt query string.
+  // 2b. basePath canonical 308, keeping the query string (see JSDoc).
   if (bp) {
     if (uri !== bp && uri.indexOf(bp + '/') !== 0) {
       var target = uri === '/' ? bp + '/' : bp + uri;
@@ -643,12 +672,7 @@ ${redirectRowsJs('drows', '    ')}
     }
   }
 
-  // 3. origin selection: scan route table for first match. Also try the
-  // trailing-slash-normalized form so a route stored as exact '/about' still
-  // matches a '/about/' request (the old per-behavior model emitted derived
-  // bare-path behaviors for this; here we normalize at match time). Without
-  // this, '/about/' would miss → default to the SSR origin on compute deploys,
-  // re-rendering a page that should be served statically from S3.
+  // 3. origin selection: first route-table match, also on the URI without its trailing slash (see JSDoc).
   var altUri = (uri.length > 1 && uri.charAt(uri.length - 1) === '/')
     ? uri.substring(0, uri.length - 1)
     : null;
@@ -667,12 +691,7 @@ ${redirectRowsJs('drows', '    ')}
   // static/image routes share a cache key: drop credential cache-key entries.
   if (kind !== 'c') { stripCred(request, meta); }
 
-  // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix).
-  // The image optimizer (Next /_next/image, Nuxt IPX /_ipx) parses the source
-  // path relative to its OWN base (e.g. IPX baseURL '/_ipx'), so a deployed
-  // basePath like '/myapp' must be removed first — otherwise the optimizer
-  // sees '/myapp/_ipx/...' , fails to match its prefix, and 404s. (Mirrors the
-  // basePath strip the static branch already does.)
+  // 4a. image-opt origin — strip basePath, then keep URI (no build-id prefix; see JSDoc).
   if (kind === 'i') {
     uri = stripBasePath(uri, bp);
     request.uri = uri;
@@ -690,9 +709,7 @@ ${redirectRowsJs('drows', '    ')}
   // prefix. (assetPrefix was already stripped up front in step 2b.)
   cf.selectRequestOriginById(meta.oS3);
   uri = stripBasePath(uri, bp);
-  // resolve build-id from skew cookie (__dpl) if valid, else metadata default.
-  // Only honor the cookie when skew protection is enabled — a stale __dpl from
-  // a previously-enabled deploy must not pin a visitor to a deleted build.
+  // build-id: the valid __dpl skew cookie when skew protection is on, else meta.b (see JSDoc).
   var buildId = meta.b;
   if (meta.sk) {
     var cookie = request.cookies['__dpl'];
