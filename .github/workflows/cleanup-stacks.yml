@@ -1100,40 +1100,151 @@ jobs:
           # errexit + pipefail (see the e2e step): catch a failure anywhere in a pipe.
           set -eo pipefail
           . scripts/ci/aws-error.sh
+          # A custom response headers policy counts against an account quota and
+          # can outlive its stack, so orphans are swept here. CloudFront refuses to
+          # delete a policy a distribution uses, but that is not proof of an orphan:
+          # a hosting deploy creates its policy a few minutes before the
+          # distribution that uses it, and a sweep in that window deleted the
+          # policies of two in-flight deploys, whose distributions then failed with
+          # "The specified response headers policy does not exist".
+          #
+          # A policy is deleted only if ALL of these hold:
+          #   (a) it was last modified more than 6 hours ago, well past the longest
+          #       CI job (120 minutes). A time that doesn't parse counts as young;
+          #   (b) no CloudFormation stack that isn't DELETE_COMPLETE, in any region,
+          #       owns it (by policy id). CloudFront is global, so a stack in any
+          #       region can own one;
+          #   (c) CloudFront agrees no distribution uses it (the delete succeeds).
+          # FAILS CLOSED: if the ownership set can't be read completely, nothing is
+          # deleted this run (the next scheduled run retries).
+          # Tests: scripts/ci/sweep-response-headers-policies.test.mjs.
           echo "🔍 Checking for orphaned CloudFront Response Headers Policies..."
+          SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/null}
           # A failed listing is a warning with the CLI's reason, not "none found".
           LIST_ERR=$(mktemp)
+          trap 'rm -f "$LIST_ERR"' EXIT
           if ! POLICIES=$(aws cloudfront list-response-headers-policies \
             --type custom \
-            --query "ResponseHeadersPolicyList.Items[*].[ResponseHeadersPolicy.Id,ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name]" \
+            --query "ResponseHeadersPolicyList.Items[*].[ResponseHeadersPolicy.Id,ResponseHeadersPolicy.LastModifiedTime,ResponseHeadersPolicy.ResponseHeadersPolicyConfig.Name]" \
             --output text 2>"$LIST_ERR"); then
             aws_annotate warning "$LIST_ERR" "cloudfront list-response-headers-policies failed, so no policy is swept this run"
-            rm -f "$LIST_ERR"
             exit 0
           fi
-          rm -f "$LIST_ERR"
-
-          if [ -z "$POLICIES" ]; then
+          # An account without custom policies lists as "None".
+          if [ -z "$POLICIES" ] || [ "$POLICIES" = None ]; then
             echo "✅ No custom Response Headers Policies found"
             exit 0
           fi
 
-          DELETED=0
-          SKIPPED=0
-          while read -r ID NAME; do
-            if [ -z "$ID" ]; then continue; fi
-            ETAG=$(aws cloudfront get-response-headers-policy --id "$ID" --query 'ETag' --output text 2>/dev/null || echo "")
-            if [ -n "$ETAG" ]; then
-              if aws cloudfront delete-response-headers-policy --id "$ID" --if-match "$ETAG" 2>/dev/null; then
-                echo "🗑️ Deleted orphaned policy: $NAME ($ID)"
-                DELETED=$((DELETED+1))
-              else
-                echo "  ⏭️ Skipped $NAME (in use by a distribution)"
-                SKIPPED=$((SKIPPED+1))
-              fi
+          # (a) Policies first, owners second: a policy past the age gate was
+          # created by a stack that is either gone or still listed below, with
+          # the policy's id already recorded as one of its resources.
+          CUTOFF=$(date -u -d '6 hours ago' +%s)
+          CANDIDATES=""
+          SKIPPED_YOUNG=0
+          while IFS=$'\t' read -r ID MODIFIED NAME; do
+            { [ -z "$ID" ] || [ "$ID" = None ]; } && continue
+            MODIFIED_TS=$(date -d "$MODIFIED" +%s 2>/dev/null || echo "")
+            if ! [ "$MODIFIED_TS" -lt "$CUTOFF" ] 2>/dev/null; then
+              SKIPPED_YOUNG=$((SKIPPED_YOUNG + 1))
+              continue
             fi
+            CANDIDATES="$CANDIDATES$ID"$'\t'"$NAME"$'\n'
           done <<< "$POLICIES"
-          echo "✅ Cleanup complete. Deleted $DELETED orphaned policies, skipped $SKIPPED in-use policies."
+
+          # (b) Ownership set: the id of every AWS::CloudFront::ResponseHeadersPolicy
+          # of every stack in any status but DELETE_COMPLETE, in every region. Read
+          # only when a policy passed the age gate. Paginated list-stack-resources
+          # by stack ID, as in the CloudWatch role step above.
+          OWNED_IDS=""
+          OWNERSHIP_INCOMPLETE=0
+          if [ -n "$CANDIDATES" ]; then
+            if ! REGIONS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws ec2 describe-regions \
+              --query 'Regions[].RegionName' --output text 2>"$LIST_ERR"); then
+              aws_annotate warning "$LIST_ERR" "ec2 describe-regions failed, so the ownership set is incomplete and no policy is deleted this run"
+              REGIONS=""
+              OWNERSHIP_INCOMPLETE=1
+            fi
+            # Every StackStatus but DELETE_COMPLETE.
+            STATUSES=(CREATE_IN_PROGRESS CREATE_FAILED CREATE_COMPLETE ROLLBACK_IN_PROGRESS ROLLBACK_FAILED ROLLBACK_COMPLETE
+              DELETE_IN_PROGRESS DELETE_FAILED UPDATE_IN_PROGRESS UPDATE_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_COMPLETE UPDATE_FAILED
+              UPDATE_ROLLBACK_IN_PROGRESS UPDATE_ROLLBACK_FAILED UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS UPDATE_ROLLBACK_COMPLETE
+              REVIEW_IN_PROGRESS IMPORT_IN_PROGRESS IMPORT_COMPLETE IMPORT_ROLLBACK_IN_PROGRESS IMPORT_ROLLBACK_FAILED IMPORT_ROLLBACK_COMPLETE)
+            for R in $REGIONS; do
+              if ! STACKS=$(AWS_RETRY_MODE=adaptive AWS_MAX_ATTEMPTS=8 aws cloudformation list-stacks --region "$R" \
+                --stack-status-filter "${STATUSES[@]}" --query "StackSummaries[].StackId" --output text 2>"$LIST_ERR"); then
+                echo "  list-stacks failed in $R, so the ownership set is incomplete this run: $(aws_error_reason "$LIST_ERR")"
+                OWNERSHIP_INCOMPLETE=1
+                continue
+              fi
+              for S in $(echo "$STACKS" | tr '\t' '\n' | sort -u); do
+                { [ -z "$S" ] || [ "$S" = None ]; } && continue
+                # A few attempts, so one throttled call doesn't defer the whole sweep.
+                LISTED=0
+                for ATTEMPT in 1 2 3; do
+                  if IDS=$(aws cloudformation list-stack-resources --region "$R" --stack-name "$S" \
+                    --query "StackResourceSummaries[?ResourceType=='AWS::CloudFront::ResponseHeadersPolicy'].PhysicalResourceId" \
+                    --output text 2>"$LIST_ERR"); then
+                    LISTED=1
+                    break
+                  fi
+                  sleep $((ATTEMPT * 5))
+                done
+                if [ "$LISTED" -eq 1 ]; then
+                  OWNED_IDS="$OWNED_IDS$(echo "$IDS" | tr '\t' '\n')"$'\n'
+                else
+                  # By name: the stack id is an ARN, which carries the account id.
+                  # A log line, not an annotation: GitHub shows at most 10 per step,
+                  # and the deferral warning below covers it.
+                  STACK_NAME=${S#*:stack/}
+                  echo "  list-stack-resources failed for ${STACK_NAME%%/*} in $R, so the ownership set is incomplete this run: $(aws_error_reason "$LIST_ERR")"
+                  OWNERSHIP_INCOMPLETE=1
+                fi
+              done
+            done
+          fi
+
+          DELETED=0
+          SKIPPED_OWNED=0
+          SKIPPED_IN_USE=0
+          DEFERRED=0
+          FAILED=0
+          while IFS=$'\t' read -r ID NAME; do
+            [ -z "$ID" ] && continue
+            if grep -qxF -- "$ID" <<<"$OWNED_IDS"; then
+              echo "  ⏭️ Skipped $NAME ($ID): owned by a stack"
+              SKIPPED_OWNED=$((SKIPPED_OWNED + 1))
+              continue
+            fi
+            if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ]; then
+              DEFERRED=$((DEFERRED + 1))
+              continue
+            fi
+            # (c) CloudFront refuses the delete while a distribution uses the policy.
+            if ETAG=$(aws cloudfront get-response-headers-policy --id "$ID" --query 'ETag' --output text 2>"$LIST_ERR") &&
+              aws cloudfront delete-response-headers-policy --id "$ID" --if-match "$ETAG" 2>"$LIST_ERR"; then
+              echo "🗑️ Deleted orphaned policy: $NAME ($ID)"
+              DELETED=$((DELETED + 1))
+            elif grep -q ResponseHeadersPolicyInUse "$LIST_ERR"; then
+              echo "  ⏭️ Skipped $NAME ($ID): in use by a distribution"
+              SKIPPED_IN_USE=$((SKIPPED_IN_USE + 1))
+            else
+              echo "  ⚠️ Failed to delete $NAME ($ID), will retry next run: $(aws_error_reason "$LIST_ERR")"
+              FAILED=$((FAILED + 1))
+            fi
+          done <<< "$CANDIDATES"
+
+          echo ""
+          echo "## CloudFront Response Headers Policy Cleanup Summary" | tee -a "$SUMMARY"
+          echo "- Orphaned policies deleted: $DELETED" | tee -a "$SUMMARY"
+          echo "- Skipped (< 6h since last change): $SKIPPED_YOUNG" | tee -a "$SUMMARY"
+          echo "- Skipped (owned by a stack): $SKIPPED_OWNED" | tee -a "$SUMMARY"
+          echo "- Skipped (in use by a distribution): $SKIPPED_IN_USE" | tee -a "$SUMMARY"
+          echo "- Failed (will retry next run): $FAILED" | tee -a "$SUMMARY"
+          echo "- Deferred to next run (incomplete ownership set): $DEFERRED" | tee -a "$SUMMARY"
+          if [ "$DEFERRED" -gt 0 ]; then
+            echo "::warning::Response headers policy sweep deferred $DEFERRED candidate(s) to the next scheduled run: the ownership set is incomplete (the step log names the listing that failed)"
+          fi
 
       - name: Cleanup orphaned Lambda and RDS log groups
         if: always() && matrix.environment == 'e2e'

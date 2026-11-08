@@ -353,6 +353,12 @@ jobs:
       - name: Test the orphaned log group sweep
         run: node --test scripts/ci/sweep-log-groups.test.mjs
 
+      # The scheduled stack cleanup (cleanup-stacks.yml) deletes orphaned CloudFront
+      # response headers policies with this step; it must never delete one a stack
+      # still owns, such as a deploy's whose distribution isn't created yet.
+      - name: Test the orphaned response headers policy sweep
+        run: node --test scripts/ci/sweep-response-headers-policies.test.mjs
+
       # Tests the splitter the local-unit jobs use.
       - name: Test the unit test sharding
         run: node --test scripts/ci/unit-test-shard.test.mjs
