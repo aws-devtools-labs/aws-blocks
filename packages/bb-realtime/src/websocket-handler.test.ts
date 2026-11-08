@@ -12,6 +12,7 @@
  */
 import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ApiGatewayManagementApiClient } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Scope } from '@aws-blocks/core';
@@ -166,6 +167,130 @@ describe('WebSocket handler: subscribe', () => {
 			assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
 		});
 	}
+});
+
+/**
+ * Run `fn` with a channel-index that lags the table the way a DynamoDB GSI does: `publish()`
+ * finds a channel's subscribers there, but DynamoDB updates the index after the table write, so
+ * an index query sees a record only `lagMs` after its put.
+ */
+async function withLaggingChannelIndex(lagMs: number, fn: () => Promise<void>): Promise<void> {
+	const visibleAt = new Map<string, number>();
+	const recordKey = (r: { connectionId?: unknown; channel?: unknown }) => `${String(r.connectionId)} ${String(r.channel)}`;
+	const originalPut = DistributedTable.prototype.put;
+	const originalQuery = DistributedTable.prototype.query;
+	DistributedTable.prototype.put = function (this: InstanceType<typeof DistributedTable>, item: Record<string, unknown>, ...rest: unknown[]) {
+		visibleAt.set(recordKey(item), Date.now() + lagMs);
+		return (originalPut as (...args: unknown[]) => Promise<void>).call(this, item, ...rest);
+	} as typeof originalPut;
+	DistributedTable.prototype.query = function (this: InstanceType<typeof DistributedTable>, options: { index?: string }) {
+		const records = (originalQuery as (o: unknown) => AsyncIterable<Record<string, unknown>>).call(this, options);
+		if (options.index !== 'channel-index') return records;
+		return (async function* () {
+			for await (const r of records) if ((visibleAt.get(recordKey(r)) ?? 0) <= Date.now()) yield r;
+		})();
+	} as typeof originalQuery;
+	try {
+		await fn();
+	} finally {
+		DistributedTable.prototype.put = originalPut;
+		DistributedTable.prototype.query = originalQuery;
+	}
+}
+
+/**
+ * Run `fn` with every channel-index query answered by `lookup()` instead of the table, passing it
+ * the number of channel-index queries made so far.
+ */
+async function withChannelIndexLookup(
+	lookup: () => AsyncIterable<Record<string, unknown>>,
+	fn: (lookups: () => number) => Promise<void>,
+): Promise<void> {
+	let count = 0;
+	const originalQuery = DistributedTable.prototype.query;
+	DistributedTable.prototype.query = function (this: InstanceType<typeof DistributedTable>, options: { index?: string }) {
+		if (options.index !== 'channel-index') return (originalQuery as (o: unknown) => AsyncIterable<Record<string, unknown>>).call(this, options);
+		count++;
+		return lookup();
+	} as typeof originalQuery;
+	try {
+		await fn(() => count);
+	} finally {
+		DistributedTable.prototype.query = originalQuery;
+	}
+}
+
+/** Run `fn` with console.warn captured; returns what it warned. */
+async function capturingWarnings(fn: () => Promise<void>): Promise<string[]> {
+	const warnings: string[] = [];
+	const originalWarn = console.warn;
+	console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+	try {
+		await fn();
+	} finally {
+		console.warn = originalWarn;
+	}
+	return warnings;
+}
+
+describe('WebSocket handler: subscribe confirmation and the channel index', () => {
+	it('confirms a subscribe only once publish() can find it, so the first publish after it is delivered', async () => {
+		await withLaggingChannelIndex(300, async () => {
+			const { connectionId, descriptor } = await connected('room-lag');
+			await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+			assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'subscribe_success', channel: descriptor.channel }]);
+
+			// What a client does as soon as `established` resolves.
+			await rt.publish('chat', 'room-lag', { text: 'first' });
+			assert.deepStrictEqual(repliesTo(connectionId).at(-1), { type: 'message', channel: descriptor.channel, data: { text: 'first' } });
+		});
+	});
+
+	it('still confirms, with a warning, a subscribe the index has not shown after its wait', async () => {
+		const warnings = await capturingWarnings(() => withLaggingChannelIndex(Number.POSITIVE_INFINITY, async () => {
+			const { connectionId, descriptor } = await connected('room-never');
+			const started = Date.now();
+			await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+			assert.ok(Date.now() - started < 5000, 'the wait is bounded');
+			assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'subscribe_success', channel: descriptor.channel }]);
+		}));
+		assert.ok(warnings.some(w => /without seeing it on channel-index \(not visible after 3000ms\)/.test(w)), 'the late index is reported');
+	});
+
+	it('confirms, with a warning, a subscribe whose channel-index lookup fails after the record was written', async () => {
+		const throttled = Object.assign(new Error('The level of configured provisioned throughput for the index was exceeded.'), {
+			name: 'ProvisionedThroughputExceededException',
+		});
+		const warnings = await capturingWarnings(() => withChannelIndexLookup(
+			// What DistributedTable's query does once the SDK has given up retrying the throttled read.
+			() => ({ [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(throttled) }) }),
+			async () => {
+				const { connectionId, descriptor } = await connected('room-throttled');
+				const res = await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+				assert.strictEqual(res.statusCode, 200);
+				assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__', descriptor.channel].sort(), 'the subscription was recorded');
+				assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'subscribe_success', channel: descriptor.channel }]);
+			},
+		));
+		assert.ok(warnings.some(w => /the lookup failed \(ProvisionedThroughputExceededException: /.test(w)), 'the failed lookup is reported');
+	});
+
+	it('confirms within its budget when a channel-index lookup never answers, and stops looking', { timeout: 10_000 }, async () => {
+		const never: AsyncIterable<Record<string, unknown>> = { [Symbol.asyncIterator]: () => ({ next: () => new Promise<never>(() => {}) }) };
+		const warnings = await capturingWarnings(() => withChannelIndexLookup(() => never, async (lookups) => {
+			const { connectionId, descriptor } = await connected('room-hung');
+			const started = Date.now();
+			await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+			const elapsed = Date.now() - started;
+			assert.ok(elapsed >= 2900 && elapsed < 4000, `confirmed at the 3000 ms budget (after ${elapsed} ms)`);
+			assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'subscribe_success', channel: descriptor.channel }]);
+			assert.strictEqual(lookups(), 1, 'one lookup, abandoned at the deadline');
+			// Real time on purpose: a poll left running in the background would show up as more lookups.
+			await delay(500);
+			assert.strictEqual(lookups(), 1, 'nothing keeps polling after the confirmation');
+		}));
+		assert.ok(warnings.some(w => /without seeing it on channel-index \(not visible after 3000ms\)/.test(w)), 'the timeout is reported');
+	});
 });
 
 describe('WebSocket handler: unsubscribe', () => {

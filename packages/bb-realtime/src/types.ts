@@ -58,7 +58,13 @@ export interface SubscribeOptions<T = unknown> {
 export interface RealtimeSubscription {
 	/** Stop receiving messages. */
 	unsubscribe(): void;
-	/** Resolves when the server confirms the subscription. Rejects on auth failure. */
+	/**
+	 * Resolves when the server confirms the subscription. Rejects on auth failure.
+	 *
+	 * Deployed, the server confirms once `publish()` can find the subscription, which can take a
+	 * moment after the subscribe, or after at most about 3 s if it can't tell (it then logs a
+	 * warning, and a message published right away may not arrive).
+	 */
 	established: Promise<void>;
 	/** The underlying WebSocket connection shared across subscriptions to the same endpoint. Only present on client-side subscriptions. Implemented as a live getter, so it always reflects the current socket: after a transparent reconnect it returns the fresh socket rather than the closed one captured at subscribe time. */
 	connection?: WebSocket;

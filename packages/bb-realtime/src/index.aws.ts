@@ -20,6 +20,7 @@ import { Scope, registerSdkIdentifiers, getSdkIdentifiers, installClientUserAgen
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { EventEmitter } from 'events';
+import { setTimeout as sleep } from 'node:timers/promises';
 import {
 	ApiGatewayManagementApiClient,
 	PostToConnectionCommand,
@@ -80,6 +81,14 @@ const SENTINEL_SK = '__connection__';
 const SENTINEL_TTL = 9000;   // 2.5 hours
 const CHANNEL_TTL = 3600;    // 1 hour
 const SWEEP_INTERVAL = 1800; // 30 minutes
+
+/**
+ * The budget a subscribe has to see its record on the channel-index GSI before it is confirmed
+ * anyway (milliseconds), covering every lookup and every pause, and the pauses between lookups
+ * (the last value repeats).
+ */
+const INDEX_VISIBLE_TIMEOUT_MS = 3000;
+const INDEX_POLL_DELAYS_MS = [20, 40, 80, 160, 320];
 
 // ── WebSocket event types ───────────────────────────────────────────────────
 
@@ -173,6 +182,61 @@ async function queryConnectionsByChannel(channel: string): Promise<string[]> {
 	return records.map(r => r.connectionId);
 }
 
+/** How a wait for a subscription to show up on the channel-index GSI ended. */
+type ChannelIndexWait = { visible: true } | { visible: false; reason: string };
+
+const OUT_OF_BUDGET = Symbol('out of budget');
+
+/**
+ * Settle with `work`'s outcome, or with {@link OUT_OF_BUDGET} once `deadline` (epoch ms) passes.
+ * `work` is not cancelled at the deadline (DistributedTable queries take no abort signal): it runs
+ * to completion on its own and its outcome, including a rejection, is ignored.
+ */
+async function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T | typeof OUT_OF_BUDGET> {
+	const timer = new AbortController();
+	try {
+		return await Promise.race([
+			work,
+			sleep(Math.max(0, deadline - Date.now()), OUT_OF_BUDGET, { signal: timer.signal }),
+		]);
+	} finally {
+		timer.abort();
+	}
+}
+
+/**
+ * Wait until `connectionId`'s subscription to `channel` is on the channel-index GSI, where
+ * `publish()` looks up subscribers. DynamoDB updates a GSI after the table write and reads it
+ * eventually consistently, so a record just written may not be found there yet.
+ *
+ * Never throws, and settles within {@link INDEX_VISIBLE_TIMEOUT_MS}: a lookup still running at
+ * the deadline is abandoned, and a lookup that fails (e.g. read throttling that outlasted the SDK's
+ * retries) ends the wait. Either way it resolves `{ visible: false }` with the reason.
+ */
+async function waitForChannelIndex(connectionId: string, channel: string): Promise<ChannelIndexWait> {
+	const table = connectionsTable();
+	const deadline = Date.now() + INDEX_VISIBLE_TIMEOUT_MS;
+	const notVisible = { visible: false, reason: `not visible after ${INDEX_VISIBLE_TIMEOUT_MS}ms` } as const;
+	for (let attempt = 0; ; attempt++) {
+		let found: unknown[] | typeof OUT_OF_BUDGET;
+		try {
+			found = await beforeDeadline(Array.fromAsync(table.query({
+				index: 'channel-index',
+				where: { channel: { equals: channel }, connectionId: { equals: connectionId } },
+				limit: 1,
+			})), deadline);
+		} catch (error) {
+			const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+			return { visible: false, reason: `the lookup failed (${detail})` };
+		}
+		if (found === OUT_OF_BUDGET) return notVisible;
+		if (found.length > 0) return { visible: true };
+		const delay = INDEX_POLL_DELAYS_MS[Math.min(attempt, INDEX_POLL_DELAYS_MS.length - 1)];
+		if (Date.now() + delay >= deadline) return notVisible;
+		await sleep(delay);
+	}
+}
+
 async function deleteConnectionRecords(connectionId: string): Promise<void> {
 	const table = connectionsTable();
 	const records = await Array.fromAsync(table.query({
@@ -245,6 +309,14 @@ async function handleWebSocketEvent(event: any): Promise<any> {
 			return { statusCode: 200 };
 		}
 		await table.put({ connectionId, channel: msg.channel, expiresAt: now + CHANNEL_TTL });
+		// Confirm once publish() can find this subscription, so that a publish sent as soon as the
+		// client's `established` resolves reaches it instead of an index that lags the write. The
+		// wait is best effort: past its budget, or if a lookup fails, confirm anyway rather than
+		// leave `established` pending.
+		const index = await waitForChannelIndex(connectionId, msg.channel);
+		if (!index.visible) {
+			console.warn(`[Realtime] confirming the subscription to ${msg.channel} without seeing it on channel-index (${index.reason}); a publish sent right away may not reach it`);
+		}
 		await getApigw(callbackUrl).send(new PostToConnectionCommand({
 			ConnectionId: connectionId,
 			Data: JSON.stringify({ type: 'subscribe_success', channel: msg.channel }),
