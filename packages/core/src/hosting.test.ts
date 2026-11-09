@@ -731,10 +731,10 @@ describe('Hosting', () => {
         ] as const) {
           assert.strictEqual(lambdaUrl(id, viewerHost), `https://${viewerHost}${BLOCKS_RPC_PREFIX}/reports`, viewerHost);
         }
-        // A host neither door serves keeps the gateway URL.
+        // A host neither door serves keeps the gateway's host (the route path has no stage).
         assert.strictEqual(
           lambdaUrl(hostingId, 'other.cloudfront.net'),
-          `https://abc123.execute-api.us-east-1.amazonaws.com/prod${BLOCKS_RPC_PREFIX}/reports`,
+          `https://abc123.execute-api.us-east-1.amazonaws.com${BLOCKS_RPC_PREFIX}/reports`,
         );
       } finally {
         if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;

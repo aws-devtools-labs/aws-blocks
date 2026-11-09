@@ -182,8 +182,8 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
 
   Through a Blocks CloudFront front door, `ctx.request.url` is the CloudFront
   (or custom-domain) URL in a container namespace and in a namespace on a
-  Lambda compute alike, with no API Gateway stage. Called at the gateway's
-  `execute-api` URL directly, both report that URL, stage included.
+  Lambda compute alike. Called at the gateway's `execute-api` URL directly,
+  both report the gateway's host.
 - **Everything else stays on the default compute:** namespaces with no
   `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
   routes (`/aws-blocks/auth/*`).

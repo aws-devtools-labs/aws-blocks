@@ -112,8 +112,9 @@ with readiness on port **8081** (503 while draining).
   gets the gateway's `Host` and the stage in its API Gateway event. So the
   gateway stamps its public host and stage (`x-blocks-forwarded-host` /
   `x-blocks-forwarded-stage`, from its request context, overwriting any client
-  value), and the container builds `ctx.request.url` from them: the same URL
-  the Lambda handler reports. A request whose stamped headers aren't one
+  value), and the container builds `ctx.request.url` from the host and
+  `getRequestBaseUrl()` from the host and stage: the same values the Lambda
+  handler reports, so the stage is never in the path. A request whose stamped headers aren't one
   well-formed value each — a client copy under another letter case, say — is
   refused with a 400.
 - **CloudFront front doors.** On the `apiFrontDoor: 'cloudfront'` tier, the
@@ -148,7 +149,8 @@ with readiness on port **8081** (503 while draining).
     the gateway proxies to, take it when it is one of the backend's front-door
     hosts (`BLOCKS_PUBLIC_HOSTS`, which each CloudFront door registers): a
     container namespace and a Lambda one behind the same door report the same
-    URL. The gateway is reachable directly, so the header alone proves nothing; a
+    URL, while `getRequestBaseUrl()` stays the gateway's host and stage. The
+    gateway is reachable directly, so the header alone proves nothing; a
     forged value can only name another of the app's own domains. These behaviors
     keep the client's `x-forwarded-host`: the sandbox dev server proxies through
     the distribution and names its loopback origin there.

@@ -15,6 +15,9 @@ import { PUBLIC_HOST_HEADER } from './constants.js';
 import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
+// The request base URL store (see `buildEventBaseUrl`, which the dispatcher puts
+// in it) lives with `getRequestBaseUrl()`, shared across copies of `@aws-blocks/core`.
+export { requestBaseUrl } from './common/request-base-url.js';
 
 // The request-scoped stores and the forwarded-host gate live in request-context.ts
 // so the container HTTP server shares them; re-exported here for existing imports.
@@ -62,34 +65,37 @@ function decodeEventBody(event: any): { bodyText: string; bodyStream: ReadableSt
   return { bodyText, bodyStream };
 }
 
+/** The fields of an API Gateway Lambda event that its origin and stage are read from. */
+type EventOriginFields = {
+  headers?: Record<string, string | undefined> | null;
+  multiValueHeaders?: Record<string, unknown> | null;
+  requestContext?: { stage?: string } | null;
+};
+
 /**
- * Reconstruct the absolute request URL from an API Gateway Lambda event.
+ * Where a Lambda event arrived: the gateway-side origin and the API Gateway stage
+ * prefix of that origin's external URLs (`''` when there is none) — together the
+ * base URL the backend itself is reachable at — and the origin the client called,
+ * which `ctx.request.url` reports. A loopback forwarded host contributes only its
+ * host: its own query, fragment or userinfo (`localhost:3000?a=b`) never rides along.
  *
- * - Path comes from `event.path` (API Gateway v1) or `event.requestContext.http.path` (v2).
- * - Query string from `event.multiValueQueryStringParameters` when present (preserves duplicates),
- *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
- *   front door), the URL is rebuilt as the browser-visible origin: that host,
- *   plain `http`, and **no** API Gateway stage prefix.
- * - Otherwise, behind a Blocks CloudFront front door — which drops the viewer's
- *   `Host` and stamps it as `x-blocks-public-host` instead — the URL is the one the
- *   viewer called: `https://<that host><path>`, no stage (CloudFront serves the
- *   API from the gateway's stage as its origin path). Taken only when the host is
- *   one of the backend's own front-door hosts; see {@link trustedPublicHost}.
+ *   front door), both origins are the browser-visible one: that host, plain `http`,
+ *   and **no** stage prefix. See {@link isLoopbackForwardedHost} for the gate.
  * - Otherwise host comes from `Host`/`host`, protocol from `x-forwarded-proto`
- *   (default `https`), and the stage prefix is prepended. See
- *   {@link isLoopbackForwardedHost} for the loopback gate.
- *
- * @internal Exported for testing only.
+ *   (default `https`), and the prefix is `/{stage}` for a REST API stage. An HTTP
+ *   API's `$default` stage has no path, so it gets none.
+ * - Behind a Blocks CloudFront front door — which drops the viewer's `Host` and
+ *   stamps it as `x-blocks-public-host` instead — the client called
+ *   `https://<that host>` (CloudFront adds the stage as the gateway origin's path).
+ *   Taken only when the host is one of the backend's own front-door hosts; see
+ *   {@link trustedPublicHost}. The base URL stays the gateway's, for code that must
+ *   address the gateway directly (an issuer URL the Lambda fetches).
  */
-export function buildEventUrl(event: any): URL {
-  const path: string = event.path || event.requestContext?.http?.path || '/';
+function resolveEventOrigin(event: EventOriginFields): { origin: string; stagePrefix: string; viewerOrigin: string } {
   const forwardedHost: string | undefined =
     event.headers?.['x-forwarded-host'] || event.headers?.['X-Forwarded-Host'];
-  const publicHost = trustedPublicHost(singleEventHeader(event, PUBLIC_HOST_HEADER));
 
-  let origin: string;
-  let fullPath: string;
   if (isLoopbackForwardedHost(forwardedHost)) {
     // Trusted sandbox dev-server front door. The browser reached the backend at
     // `http://localhost:<port><path>` and the proxy forwarded it to execute-api.
@@ -106,33 +112,61 @@ export function buildEventUrl(event: any): URL {
     // A user-supplied TLS front door (`https://localhost`) is a known, unsupported
     // limitation; the proper fix is a config-derived front-door origin rather than
     // header inference.
-    origin = `http://${forwardedHost}`;
-    fullPath = path;
-  } else if (publicHost) {
-    // A Blocks CloudFront front door: the viewer called `https://<publicHost>`, and
-    // CloudFront added the stage as the gateway origin's path, so it isn't part
-    // of the public path (the container behind the same door reports the same).
-    origin = `https://${publicHost}`;
-    fullPath = path;
-  } else {
-    const host = event.headers?.Host || event.headers?.host || 'localhost';
-    const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || 'https';
-    origin = `${proto}://${host}`;
-    // API Gateway REST APIs have a stage prefix (e.g. /prod) that's part of the
-    // external URL but NOT included in event.path. Include it so ctx.request.url
-    // reflects the full external-facing URL — needed for callback URLs, stub IdP
-    // issuer URLs, etc.
-    const stage = event.requestContext?.stage;
-    fullPath = stage ? `/${stage}${path}` : path;
+    const origin = new URL(`http://${forwardedHost}`).origin;
+    return { origin, stagePrefix: '', viewerOrigin: origin };
   }
 
-  // Start from the origin alone, then assign the path: resolved against the
-  // origin, a path starting `//` or `/\` is a network-path reference that swaps
-  // the host (`//evil.example/x` → `https://evil.example/x`), and a forwarded
-  // host's own query, fragment or userinfo (`localhost:3000?a=b`) must not ride
-  // along. The container builds its URL the same way.
-  const url = new URL(new URL(origin).origin);
-  url.pathname = fullPath;
+  const host = event.headers?.Host || event.headers?.host || 'localhost';
+  const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || 'https';
+  // API Gateway REST APIs have a stage prefix (e.g. /prod) that's part of the
+  // gateway's external URL but NOT included in event.path. It belongs to the
+  // base URL (callback URLs, stub IdP issuer URLs, etc.), not to the route path.
+  const stage = event.requestContext?.stage;
+  const origin = `${proto}://${host}`;
+  const publicHost = trustedPublicHost(singleEventHeader(event, PUBLIC_HOST_HEADER));
+  return {
+    origin,
+    stagePrefix: stage && stage !== '$default' ? `/${stage}` : '',
+    viewerOrigin: publicHost ? `https://${publicHost}` : origin,
+  };
+}
+
+/**
+ * The externally reachable base URL of a Lambda event: its origin plus the API
+ * Gateway stage prefix, without a trailing slash. Exposed to handlers through
+ * {@link requestBaseUrl} / `getRequestBaseUrl()`.
+ */
+function buildEventBaseUrl(event: EventOriginFields): string {
+  const { origin, stagePrefix } = resolveEventOrigin(event);
+  return `${origin}${stagePrefix}`;
+}
+
+/**
+ * Reconstruct the absolute request URL from an API Gateway Lambda event.
+ *
+ * - Path comes from `event.path` (API Gateway v1) or `event.requestContext.http.path` (v2):
+ *   the route path, the same one the dev server sees. It never includes the API Gateway
+ *   stage — every front door adds the stage on its way to the gateway, so it is not part
+ *   of the path the app routes on. Use {@link buildEventBaseUrl} for the stage-bearing base.
+ * - Query string from `event.multiValueQueryStringParameters` when present (preserves duplicates),
+ *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
+ * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
+ *   front door), the URL is rebuilt as the browser-visible origin: that host and
+ *   plain `http`. Behind a Blocks CloudFront front door it is the URL the viewer
+ *   called (`x-blocks-public-host`, when it names one of the backend's front-door
+ *   hosts). Otherwise host comes from `Host`/`host` and protocol from
+ *   `x-forwarded-proto` (default `https`). See {@link resolveEventOrigin}.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildEventUrl(event: any): URL {
+  const path: string = event.path || event.requestContext?.http?.path || '/';
+  const { viewerOrigin } = resolveEventOrigin(event);
+
+  // Assign the path rather than resolving it against the origin: `new URL(path, origin)`
+  // reads a path starting with `//` as a protocol-relative reference and swaps the host.
+  const url = new URL(viewerOrigin);
+  url.pathname = path;
 
   if (event.rawQueryString) {
     url.search = `?${event.rawQueryString}`;
@@ -534,6 +568,7 @@ function toDispatchRequest(event: any, signal?: AbortSignal): DispatchRequest {
     clientUserAgent: event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
     headers: () => new Headers(event.headers || {}),
     url: () => buildEventUrl(event),
+    baseUrl: () => buildEventBaseUrl(event),
     body: () => {
       const { bodyText, bodyStream } = decodeEventBody(event);
       return { text: bodyText, stream: bodyStream };

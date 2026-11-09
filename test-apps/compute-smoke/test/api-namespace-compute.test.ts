@@ -13,7 +13,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
-import { rpcCall, type ComputeTestContext } from './context.js';
+import { requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = { functionName: string | null; memoryMb: string | null; requestUrl: string };
 
@@ -48,7 +48,7 @@ export function apiNamespaceComputeTests(ctx: ComputeTestContext) {
       // viewer's, so the URL is the one the client called — the same a container
       // handler behind the same door reports (container-api-namespace.test.ts).
       const onReports = await whereAmI('reports');
-      assert.strictEqual(onReports.requestUrl, `${ctx.apiUrl()}/reports`);
+      assert.strictEqual(onReports.requestUrl, requestUrlFor(ctx.apiUrl(), 'reports'));
     });
 
     test('a call to the bare endpoint runs on the default compute', async () => {
