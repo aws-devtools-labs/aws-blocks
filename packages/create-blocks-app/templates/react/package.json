@@ -12,23 +12,31 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "spec": "blocks-generate-spec",
-    "dev:server": "tsx watch aws-blocks/scripts/server.ts",
-    "dev": "tsx watch aws-blocks/scripts/server.ts",
-    "dev:stop": "tsx aws-blocks/scripts/stop.ts",
-    "sandbox": "tsx aws-blocks/scripts/sandbox.ts",
-    "sandbox:destroy": "tsx -C cdk aws-blocks/scripts/sandbox-destroy.ts",
-    "sandbox:console": "tsx aws-blocks/scripts/console.ts",
-    "cleanup": "tsx aws-blocks/scripts/cleanup.ts",
-    "prebuild": "blocks-generate-client",
+    "spec": "cdk-blocks generate spec",
+    "dev:server": "cdk-blocks dev",
+    "dev": "cdk-blocks dev",
+    "dev:stop": "cdk-blocks dev stop",
+    "sandbox": "cdk-blocks sandbox",
+    "sandbox:deploy": "cdk-blocks sandbox deploy",
+    "sandbox:preview": "cdk-blocks sandbox preview",
+    "sandbox:destroy": "cdk-blocks sandbox destroy",
+    "sandbox:console": "cdk-blocks sandbox console",
+    "cleanup": "cdk-blocks dev stop --all",
+    "prebuild": "cdk-blocks generate client",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "deploy": "tsx aws-blocks/scripts/deploy.ts",
-    "secret": "tsx aws-blocks/scripts/secret.ts",
-    "typegen": "tsx aws-blocks/scripts/typegen.ts",
-    "destroy": "tsx aws-blocks/scripts/destroy.ts",
-    "test:e2e": "tsx -C browser test/e2e.test.ts",
-    "vendorize": "blocks-vendorize"
+    "deploy": "cdk-blocks deploy",
+    "secret": "cdk-blocks secret",
+    "config": "cdk-blocks config",
+    "typegen": "cdk-blocks generate types",
+    "destroy": "cdk-blocks destroy",
+    "test:e2e": "tsx -C browser --test-force-exit test/e2e.test.ts",
+    "vendorize": "cdk-blocks vendorize"
+  },
+  "blocks": {
+    "dev": {
+      "frontendPort": 3100
+    }
   },
   "dependencies": {
     "@aws-blocks/blocks": "*",
@@ -43,11 +51,11 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^4.7.0",
     "typescript": "^5.9.3",
-    "vite": "^6.4.4",
+    "vite": "^6.4.5",
     "tsx": "^4.23.15",
     "esbuild": "^0.28.2",
-    "aws-cdk": "^2.1145.0",
-    "aws-cdk-lib": "^2.273.0",
+    "aws-cdk": "^2.1147.0",
+    "aws-cdk-lib": "^2.275.0",
     "constructs": "^10.8.1"
   }
 }

@@ -35,7 +35,7 @@ private final class RecordingURLProtocol: URLProtocol {
         Self.lock.withLock { Self.recorded.append((method, request.url)) }
         let result = switch method {
         case "users.list": #"["ada"]"#
-        case "auth.getClient": #"{"exchangePath":"/auth/exchange","signOutPath":"/auth/signout"}"#
+        case "auth.getClient": #"{"exchangePath":"/auth/exchange","signOutPath":"/auth/signout","providers":["google","github","my-sso"]}"#
         case "admin.getClient": #"{"exchangePath":"/admin/exchange","signOutPath":"/auth/signout"}"#
         default: #""pong""#
         }
@@ -133,6 +133,21 @@ final class GeneratedEntryPointTests: XCTestCase {
         XCTAssertIdentical(blocks.client.tokenStore as AnyObject, store)
     }
 
+    func testTypedSignInSendsTheProvidersWireName() async throws {
+        let blocks = Blocks(server: Servers.local, session: mockSession())
+        // Typed by its own providers, so `auth.signIn(provider: Admin.GetClient.Provider.okta, ...)` doesn't compile.
+        let auth: OIDCClient<Auth.GetClient.Provider> = try await blocks.auth.getClient()
+        XCTAssertEqual(Auth.GetClient.Provider.allCases.map(\.rawValue), ["google", "github", "my-sso"])
+        XCTAssertEqual(Admin.GetClient.Provider.allCases, [.okta])
+        do {
+            _ = try await auth.signIn(provider: .mySso, relayTo: "app://auth", launcher: UnusedLauncher())
+            XCTFail("expected the stubbed authorize-params response to fail sign-in")
+        } catch OIDCError.callbackError {
+            // The recorder answers authorize-params with an RPC body, so sign-in stops after that request.
+        }
+        XCTAssertTrue(RecordingURLProtocol.urls.contains(URL(string: "http://localhost:3001/auth/authorize-params/my-sso")), "\(RecordingURLProtocol.urls)")
+    }
+
     func testCloseFailsLaterCallsFromEveryNamespace() async {
         let blocks = Blocks(session: mockSession())
         blocks.close()
@@ -194,4 +209,11 @@ final class GeneratedEntryPointTests: XCTestCase {
     }
 
     private func requireSendable<T: Sendable>(_: T.Type) {}
+}
+
+private struct UnusedLauncher: BlocksRuntime.BrowserLauncher {
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        XCTFail("sign-in should stop before the browser opens")
+        return authorizeURL
+    }
 }

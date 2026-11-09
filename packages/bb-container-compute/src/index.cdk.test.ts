@@ -17,7 +17,8 @@ import { fileURLToPath } from 'node:url';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute';
 import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
+import { containerMainEntry } from './bundle.js';
 import { ContainerCompute } from './index.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -287,5 +288,510 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 				Match.objectLike({ Image: 'public.ecr.aws/example/custom-node:24' }),
 			]),
 		});
+	});
+});
+
+describe('ContainerCompute — scale from zero (minInstances: 0)', () => {
+	async function makeScalingStack(id: string) {
+		const app = new cdk.App();
+		return BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+	}
+
+	/** Build a compute that drains one queue, finalize it, and return the template. */
+	async function synthWithQueue(id: string, scaling: { minInstances: number; maxInstances: number }) {
+		const stack = await makeScalingStack(id);
+		const compute = new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.25, memory: 512 }, scaling });
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		compute.finalize();
+		return Template.fromStack(stack as unknown as cdk.Stack);
+	}
+
+	/** Alarms whose metric math reads only the Visible count: the wake policy's alarm. */
+	function wakeAlarms(template: Template) {
+		return Object.values(template.findResources('AWS::CloudWatch::Alarm'))
+			.map((a) => (a as { Properties: Record<string, unknown> }).Properties)
+			.filter((p) => {
+				const s = JSON.stringify(p.Metrics ?? []);
+				return s.includes('ApproximateNumberOfMessagesVisible') && !s.includes('NotVisible');
+			});
+	}
+
+	test('deploys at zero tasks and adds a task when a message is waiting', async () => {
+		const template = await synthWithQueue('ContainerScaleFromZero', { minInstances: 0, maxInstances: 2 });
+
+		// Autoscaling owns the count, so the template declares none (see below).
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: Match.absent() });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 0,
+			MaxCapacity: 2,
+		});
+
+		// The wake alarm fires at one or more waiting (Visible) messages. It must
+		// not count in-flight messages, or a running job would keep adding tasks.
+		const alarms = wakeAlarms(template);
+		assert.strictEqual(alarms.length, 1, `one wake alarm; got ${JSON.stringify(alarms)}`);
+		assert.strictEqual(alarms[0].ComparisonOperator, 'GreaterThanOrEqualToThreshold');
+		assert.strictEqual(alarms[0].Threshold, 1);
+
+		// Its policy adds one task.
+		const policies = Object.values(template.findResources('AWS::ApplicationAutoScaling::ScalingPolicy')).map(
+			(p) => (p as { Properties: Record<string, any> }).Properties,
+		);
+		const wake = policies.find((p) => String(p.PolicyName).includes('WakeOnWaitingMessages'));
+		assert.ok(wake, `a wake policy exists; got ${policies.map((p) => p.PolicyName).join(', ')}`);
+		assert.deepStrictEqual(
+			wake.StepScalingPolicyConfiguration.StepAdjustments.map(
+				(s: { ScalingAdjustment: number }) => s.ScalingAdjustment,
+			),
+			[1],
+		);
+	});
+
+	test('wires autoscaling for minInstances 0 even when maxInstances is 1', async () => {
+		const template = await synthWithQueue('ContainerScaleFromZeroMaxOne', { minInstances: 0, maxInstances: 1 });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 0,
+			MaxCapacity: 1,
+		});
+		assert.strictEqual(wakeAlarms(template).length, 1);
+	});
+
+	test('a compute that keeps at least one task gets no wake policy', async () => {
+		const template = await synthWithQueue('ContainerNoWake', { minInstances: 1, maxInstances: 3 });
+		assert.strictEqual(wakeAlarms(template).length, 0);
+	});
+
+	test('a single fixed instance still gets no autoscaling', async () => {
+		const template = await synthWithQueue('ContainerFixedOne', { minInstances: 1, maxInstances: 1 });
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 0);
+	});
+
+	test('rejects instance bounds that would fail at deploy', async () => {
+		const stack = await makeScalingStack('ContainerBadBounds');
+		const cases: Array<[{ minInstances: number; maxInstances: number }, RegExp]> = [
+			[{ minInstances: -1, maxInstances: 2 }, /minInstances must be an integer of 0 or more/],
+			[{ minInstances: 0.5, maxInstances: 2 }, /minInstances must be an integer of 0 or more/],
+			[{ minInstances: 0, maxInstances: 0 }, /maxInstances must be an integer of 1 or more/],
+			[{ minInstances: 3, maxInstances: 2 }, /minInstances \(3\) must not exceed maxInstances \(2\)/],
+		];
+		cases.forEach(([scaling, message], i) => {
+			assert.throws(() => new ContainerCompute(stack as never, `bad${i}`, { scaling }), message);
+		});
+	});
+});
+
+describe('ContainerCompute — deploys leave running jobs alone where they can', () => {
+	async function synth(id: string, scaling?: { minInstances: number; maxInstances: number }) {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'worker', { size: { vcpu: 0.25, memory: 512 }, scaling });
+		compute.finalize();
+		return Template.fromStack(stack as unknown as cdk.Stack);
+	}
+
+	// CloudFormation re-sends a declared DesiredCount on every update of the
+	// service, and new code means a new task definition, so a declared count would
+	// reset the autoscaled count on nearly every deploy.
+	test('an autoscaled service declares no DesiredCount', async () => {
+		const template = await synth('ContainerAutoscaledCount', { minInstances: 1, maxInstances: 4 });
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: Match.absent() });
+		template.hasResourceProperties('AWS::ApplicationAutoScaling::ScalableTarget', {
+			MinCapacity: 1,
+			MaxCapacity: 4,
+		});
+	});
+
+	test('a fixed-size service keeps its declared DesiredCount', async () => {
+		// maxInstances 1 with minInstances 1 is a single fixed task: nothing scales it.
+		const template = await synth('ContainerFixedCount', { minInstances: 1, maxInstances: 1 });
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
+		template.resourceCountIs('AWS::ApplicationAutoScaling::ScalableTarget', 0);
+	});
+
+	test('a service with no scaling declares one task', async () => {
+		const template = await synth('ContainerDefaultCount');
+		template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
+	});
+
+	test('the container gets the Fargate maximum stopTimeout, and the runtime drains just under it', async () => {
+		const template = await synth('ContainerStopTimeout');
+		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+			ContainerDefinitions: Match.arrayWith([
+				Match.objectLike({
+					StopTimeout: 120,
+					Environment: Match.arrayWith([{ Name: 'BLOCKS_DRAIN_GRACE_SECONDS', Value: '110' }]),
+				}),
+			]),
+		});
+	});
+});
+
+describe('ContainerCompute — review: scale-to-zero guards, wake cooldown, error naming', () => {
+	async function stackFor(id: string) {
+		const app = new cdk.App();
+		return BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+	}
+
+	test('minInstances 0 with no queue fails at finalize, naming the compute', async () => {
+		const stack = await stackFor('ContainerZeroNoQueue');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2 },
+		});
+		assert.throws(
+			() => compute.finalize(),
+			/Container compute 'ContainerZeroNoQueue\/worker': scaling\.minInstances is 0, but no AsyncJob or CronJob runs on this compute/,
+		);
+	});
+
+	test('minInstances 0 with a cpu strategy fails at finalize', async () => {
+		const stack = await stackFor('ContainerZeroCpu');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2, strategy: { on: 'cpu', targetPercent: 60 } },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		assert.throws(() => compute.finalize(), /minInstances is 0 with a 'cpu' scaling strategy/);
+	});
+
+	test('minInstances 0 with an explicit queue-depth strategy is allowed', async () => {
+		const stack = await stackFor('ContainerZeroQueueDepth');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 2, strategy: { on: 'queue-depth', backlogPerInstance: 50 } },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		assert.doesNotThrow(() => compute.finalize());
+	});
+
+	test('the wake policy waits 5 minutes between adding tasks', async () => {
+		const stack = await stackFor('ContainerWakeCooldown');
+		const compute = new ContainerCompute(stack as never, 'worker', {
+			scaling: { minInstances: 0, maxInstances: 3 },
+		});
+		const sqs = await import('aws-cdk-lib/aws-sqs');
+		compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+		compute.finalize();
+		const policies = Object.values(
+			Template.fromStack(stack as unknown as cdk.Stack).findResources(
+				'AWS::ApplicationAutoScaling::ScalingPolicy',
+			),
+		).map(
+			(p) =>
+				(p as { Properties: { PolicyName: string; StepScalingPolicyConfiguration?: { Cooldown?: number } } })
+					.Properties,
+		);
+		const wake = policies.find((p) => p.PolicyName.includes('WakeOnWaitingMessages'));
+		assert.strictEqual(wake?.StepScalingPolicyConfiguration?.Cooldown, 300);
+	});
+});
+
+describe('ContainerCompute — API ingress', () => {
+	async function stackWith(ids: string[], stackId = `ApiIngress${ids.join('')}`) {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, stackId, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const computes = ids.map((id) => new ContainerCompute(stack as never, id));
+		return { stack: stack as unknown as cdk.Stack, computes };
+	}
+
+	test('provisions nothing for a container that serves no API', async () => {
+		const { stack, computes } = await stackWith(['worker']);
+		computes[0].finalize();
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 0);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 0);
+	});
+
+	test('returns the same ingress on every call', async () => {
+		const { stack, computes } = await stackWith(['render']);
+		const first = computes[0].apiIngress();
+		assert.ok(first && first.kind === 'load-balancer');
+		assert.strictEqual(computes[0].apiIngress(), first);
+		Template.fromStack(stack).resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+	});
+
+	test('shares one load balancer and one listener; a rule per routed path', async () => {
+		const { stack, computes } = await stackWith(['render', 'preview']);
+		const [render, preview] = computes.map((c) => c.apiIngress());
+		assert.ok(render?.kind === 'load-balancer' && preview?.kind === 'load-balancer');
+		assert.strictEqual(render.loadBalancer, preview.loadBalancer);
+		assert.strictEqual(render.port, 10_000);
+		assert.strictEqual(preview.port, 10_000);
+		render.routePath('/aws-blocks/api/render');
+		preview.routePath('/aws-blocks/api/preview');
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+		template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+			Scheme: 'internal',
+			LoadBalancerAttributes: Match.arrayWith([
+				{ Key: 'routing.http.drop_invalid_header_fields.enabled', Value: 'true' },
+			]),
+		});
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+		template.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+			Port: 10_000,
+			DefaultActions: [Match.objectLike({ Type: 'fixed-response', FixedResponseConfig: Match.objectLike({ StatusCode: '404' }) })],
+		});
+		template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+	});
+
+	test('a rule keeps its priority whatever other paths are routed, in any order', async () => {
+		const prioritiesFor = async (paths: string[]) => {
+			// Same stack id: a compute's fullId (and so its rules' ids) includes the stack name.
+			const { stack, computes } = await stackWith(['render'], 'ApiIngressPriorities');
+			const ingress = computes[0].apiIngress();
+			assert.ok(ingress?.kind === 'load-balancer');
+			for (const path of paths) ingress.routePath(path);
+			const rules = Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule');
+			return Object.fromEntries(
+				Object.values(rules).map((r) => [r.Properties.Conditions[0].PathPatternConfig.Values[0], r.Properties.Priority]),
+			);
+		};
+		const both = await prioritiesFor(['/aws-blocks/api/render', '/aws-blocks/api/preview']);
+		const reversed = await prioritiesFor(['/aws-blocks/api/preview', '/aws-blocks/api/render']);
+		const alone = await prioritiesFor(['/aws-blocks/api/render']);
+		assert.notStrictEqual(both['/aws-blocks/api/render'], both['/aws-blocks/api/preview']);
+		assert.deepStrictEqual(reversed, both);
+		assert.strictEqual(alone['/aws-blocks/api/render'], both['/aws-blocks/api/render']);
+		for (const priority of Object.values(both) as number[]) assert.ok(priority >= 1 && priority <= 50_000);
+	});
+
+	test('only a compute that serves API traffic tells its image entry to serve the API', async () => {
+		const { stack, computes } = await stackWith(['render', 'worker']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/aws-blocks/api/render');
+		const envOf = (compute: string) => {
+			const [, taskDef] = Object.entries(Template.fromStack(stack).findResources('AWS::ECS::TaskDefinition')).find(([id]) =>
+				id.includes(compute),
+			) ?? [];
+			const env: Array<{ Name: string; Value: unknown }> = (taskDef as any).Properties.ContainerDefinitions[0].Environment;
+			return env.find((e) => e.Name === 'BLOCKS_CONTAINER_SERVES_API')?.Value;
+		};
+		assert.strictEqual(envOf('render'), 'true');
+		assert.strictEqual(envOf('worker'), undefined);
+	});
+
+	test("a rule's id follows its path, not the compute serving it", async () => {
+		const ruleIdOn = async (compute: string) => {
+			const { stack, computes } = await stackWith(['render', 'preview'], 'ApiIngressMove');
+			const ingress = computes.find((c) => c.node.id === compute)?.apiIngress();
+			assert.ok(ingress?.kind === 'load-balancer');
+			ingress.routePath('/aws-blocks/api/render');
+			return Object.keys(Template.fromStack(stack).findResources('AWS::ElasticLoadBalancingV2::ListenerRule'));
+		};
+		// Moving a namespace between containers updates its rule in place, never replaces it.
+		assert.deepStrictEqual(await ruleIdOn('preview'), await ruleIdOn('render'));
+	});
+
+	test('two paths that map to one rule priority fail synth, naming both and their computes', async () => {
+		const { computes } = await stackWith(['render', 'preview']);
+		const [render, preview] = computes.map((c) => c.apiIngress());
+		assert.ok(render?.kind === 'load-balancer' && preview?.kind === 'load-balancer');
+		render.routePath('/aws-blocks/api/orders428');
+		assert.throws(
+			() => preview.routePath('/aws-blocks/api/orders842'),
+			/'\/aws-blocks\/api\/orders428' \(compute 'ApiIngressrenderpreview\/render'\) and '\/aws-blocks\/api\/orders842' \(compute 'ApiIngressrenderpreview\/preview'\) map to the same load balancer rule priority/,
+		);
+	});
+
+	test('a path longer than a rule can match fails synth', async () => {
+		const { computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		const path = `/aws-blocks/api/${'n'.repeat(113)}`;
+		assert.throws(() => ingress.routePath(path), /129 characters; a load balancer rule matches at most 128/);
+	});
+
+	test('warns once more namespaces share the load balancer than its default rule quota', async () => {
+		const { stack, computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		let routed = 0;
+		for (let i = 0; routed < 101; i++) {
+			try {
+				ingress.routePath(`/aws-blocks/api/ns${i}`);
+				routed++;
+			} catch {
+				// A name that collides with an earlier one's priority: skip it.
+			}
+		}
+		const warnings = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('More than 100 container API namespaces'));
+		assert.strictEqual(warnings.length, 1);
+	});
+
+	test('a compute that serves API traffic needs a running task', async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'ApiIngressMinZero', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 0, maxInstances: 2 } });
+		assert.throws(
+			() => compute.apiIngress(),
+			/Compute 'ApiIngressMinZero\/render' serves API namespaces, so it needs a running task: set scaling\.minInstances to 1 or more, or give the namespace its own compute/,
+		);
+	});
+
+	test('a compute that serves API traffic and drains a queue scales on CPU, and the queue only adds tasks', async () => {
+		const scalingOf = async (servesApi: boolean) => {
+			const app = new cdk.App();
+			const stack = await BlocksStack.create(app, `ApiIngressScaling${servesApi}`, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: backendPath,
+				defaults: BlocksPresets.production,
+				defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+			} as never);
+			const compute = new ContainerCompute(stack as never, 'render', { scaling: { minInstances: 1, maxInstances: 4 } });
+			const sqs = await import('aws-cdk-lib/aws-sqs');
+			compute.registerOwnedQueue(new sqs.Queue(stack as unknown as cdk.Stack, 'OwnedQueue'));
+			if (servesApi) {
+				const ingress = compute.apiIngress();
+				assert.ok(ingress?.kind === 'load-balancer');
+				ingress.routePath('/aws-blocks/api/render');
+			}
+			compute.finalize();
+			const policies = Object.values(Template.fromStack(stack as unknown as cdk.Stack).findResources('AWS::ApplicationAutoScaling::ScalingPolicy'));
+			const steps = policies
+				.filter((p) => p.Properties.PolicyType === 'StepScaling')
+				.flatMap((p) => p.Properties.StepScalingPolicyConfiguration.StepAdjustments.map((s: { ScalingAdjustment: number }) => s.ScalingAdjustment));
+			const cpu = policies.filter(
+				(p) => p.Properties.TargetTrackingScalingPolicyConfiguration?.PredefinedMetricSpecification?.PredefinedMetricType === 'ECSServiceAverageCPUUtilization',
+			);
+			return { cpu: cpu.length, scalesIn: steps.some((s: number) => s < 0), scalesOut: steps.some((s: number) => s > 0) };
+		};
+		assert.deepStrictEqual(await scalingOf(true), { cpu: 1, scalesIn: false, scalesOut: true });
+		assert.deepStrictEqual(await scalingOf(false), { cpu: 0, scalesIn: true, scalesOut: true }, 'a job-only compute keeps queue-depth scaling');
+	});
+
+	test('the service waits for the rule that forwards to it', async () => {
+		const { stack, computes } = await stackWith(['render']);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		ingress.routePath('/aws-blocks/api/render');
+		const template = Template.fromStack(stack).toJSON();
+		const [ruleId] = Object.entries(template.Resources).find(([, r]: [string, any]) => r.Type === 'AWS::ElasticLoadBalancingV2::ListenerRule') ?? [];
+		const [, service] = Object.entries(template.Resources).find(([, r]: [string, any]) => r.Type === 'AWS::ECS::Service') ?? [];
+		assert.ok(ruleId && (service as any).DependsOn.includes(ruleId), 'service depends on its listener rule');
+	});
+
+	test('adds API widgets to the compute dashboard section', async () => {
+		const { computes } = await stackWith(['render']);
+		const titles = (compute: ContainerCompute) =>
+			JSON.stringify(compute.dashboardSection('us-east-1')).match(/API (Requests|Latency|Task Health)[^"]*/g) ?? [];
+		assert.deepStrictEqual(titles(computes[0]), []);
+		const ingress = computes[0].apiIngress();
+		assert.ok(ingress?.kind === 'load-balancer');
+		assert.deepStrictEqual(titles(computes[0]), [], 'no API widgets before a path is routed');
+		ingress.routePath('/aws-blocks/api/render');
+		assert.deepStrictEqual(titles(computes[0]).sort(), ['API Latency (p99)', 'API Requests and 5xx Errors', 'API Task Health']);
+	});
+});
+
+describe('ContainerCompute — image entry', () => {
+	test('serves the backend\'s API only when the compute says it serves API traffic', () => {
+		const entry = containerMainEntry('/app/backend.js');
+		assert.match(entry, /const backend = await import\("\/app\/backend\.js"\);/);
+		assert.match(entry, /await runContainer\(process\.env\.BLOCKS_CONTAINER_SERVES_API === 'true' \? \{ backend \} : \{\}\);/);
+	});
+});
+
+describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
+	type TrustStatement = {
+		Effect?: string;
+		Action?: unknown;
+		Principal?: { Service?: unknown };
+		Condition?: Record<string, Record<string, unknown>>;
+	};
+
+	/** Matches a statement whose `Principal.Service` (a string or a list) is exactly `service`. */
+	const trusts =
+		(service: string) =>
+		(s: TrustStatement): boolean => {
+			const value = s.Principal?.Service;
+			const services = Array.isArray(value) ? value : [value];
+			return services.includes(service);
+		};
+
+	async function synthTrust(id: string, computeIds: string[]) {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		for (const computeId of computeIds) new ContainerCompute(stack as never, computeId, {});
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		// The shared execution role is the one that trusts both Lambda and ecs-tasks. Each task
+		// definition's own CDK-created task execution role also trusts ecs-tasks, so skip those.
+		const roles = Object.values(template.findResources('AWS::IAM::Role')).filter((r) => {
+			const all = (r.Properties?.AssumeRolePolicyDocument?.Statement ?? []) as TrustStatement[];
+			return all.some(trusts('ecs-tasks.amazonaws.com')) && all.some(trusts('lambda.amazonaws.com'));
+		});
+		assert.strictEqual(roles.length, 1, 'exactly one shared role trusts both lambda and ecs-tasks');
+		const statements = roles[0].Properties.AssumeRolePolicyDocument.Statement as TrustStatement[];
+		const ecs = statements.filter(trusts('ecs-tasks.amazonaws.com'));
+		const lambda = statements.filter(trusts('lambda.amazonaws.com'));
+		return { ecs, lambda };
+	}
+
+	test('the ecs-tasks trust is scoped by aws:SourceAccount and aws:SourceArn to this account and region', async () => {
+		const { ecs } = await synthTrust('EcsTrustScoped', ['worker']);
+		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement');
+		const trust = ecs[0];
+
+		assert.strictEqual(trust.Effect, 'Allow');
+		assert.deepStrictEqual(trust.Action, 'sts:AssumeRole');
+		assert.deepStrictEqual(trust.Condition?.StringEquals?.['aws:SourceAccount'], { Ref: 'AWS::AccountId' });
+		assert.deepStrictEqual(trust.Condition?.ArnLike?.['aws:SourceArn'], {
+			'Fn::Join': [
+				'',
+				[
+					'arn:',
+					{ Ref: 'AWS::Partition' },
+					':ecs:',
+					{ Ref: 'AWS::Region' },
+					':',
+					{ Ref: 'AWS::AccountId' },
+					':*',
+				],
+			],
+		});
+	});
+
+	test('the lambda trust on the same role keeps no condition', async () => {
+		const { lambda } = await synthTrust('EcsTrustLambda', ['worker']);
+		assert.strictEqual(lambda.length, 1, 'one lambda trust statement');
+		assert.strictEqual(lambda[0].Effect, 'Allow');
+		assert.deepStrictEqual(lambda[0].Action, 'sts:AssumeRole');
+		assert.strictEqual(lambda[0].Condition, undefined);
+	});
+
+	test('several container computes on one role add the ecs-tasks trust once', async () => {
+		const { ecs } = await synthTrust('EcsTrustOnce', ['a', 'b', 'c']);
+		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement across three computes');
 	});
 });

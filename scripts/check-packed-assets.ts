@@ -3,8 +3,9 @@
 
 /**
  * Checks that every asset directory a publishable package's compiled code loads
- * with `Code.fromAsset(join(__dirname, '<dir>'))` is in that package's npm pack
- * listing.
+ * with `Code.fromAsset(join(__dirname, '<dir>'))`, or names as the `bundleDir` of a
+ * `deployTimeLambdaCode` spec (`@aws-blocks/core/cdk/internal`), is in that package's npm
+ * pack listing. A `bundleDir` is relative to the calling module, like `__dirname`.
  *
  * Such a directory comes from a package-local bundle step (esbuild into
  * `dist/<dir>/`). The release runs only the root `npm run build`, so a bundle
@@ -24,6 +25,25 @@ const PACKAGES_DIR = join(ROOT, 'packages');
 
 /** `Code.fromAsset(join(__dirname, 'dir'))`, also as `path.join(...)`. Group 2 is the directory. */
 const ASSET_REF = /Code\.fromAsset\(\s*(?:path\.)?join\(\s*__dirname\s*,\s*(['"])([^'"]+)\1\s*\)/g;
+
+/**
+ * `bundleDir: 'dir'` in a file that calls `deployTimeLambdaCode`. Group 2 is the directory.
+ * The spec is often a module-level constant, so the key is matched anywhere in such a file.
+ */
+const BUNDLE_DIR_REF = /\bbundleDir\s*:\s*(['"])([^'"]+)\1/g;
+
+/**
+ * Whether the match at `index` sits on a block-comment line, i.e. a line that
+ * starts (after indentation) with `/*`, `/**` or `*` — how tsc emits JSDoc. The
+ * match is taken from the raw source and only then filtered, rather than
+ * stripping comments with a regex first: a regex is fooled by string literals
+ * (`'@aws-sdk/*'` before a spec and `'*\/'` after it would remove the real
+ * `bundleDir` line between them), and a scanner by regex literals.
+ */
+function isOnCommentLine(source: string, index: number): boolean {
+	const lineStart = source.lastIndexOf('\n', index) + 1;
+	return /^\s*(\/\*|\*)/.test(source.slice(lineStart, index));
+}
 
 interface AssetRef {
 	/** Package-relative path of the compiled file holding the reference. */
@@ -51,7 +71,16 @@ function findAssetRefs(pkgDir: string): AssetRef[] {
 	const refs: AssetRef[] = [];
 	for (const abs of files.sort()) {
 		const file = relative(pkgDir, abs).split(sep).join('/');
-		for (const match of readFileSync(abs, 'utf-8').matchAll(ASSET_REF)) {
+		const source = readFileSync(abs, 'utf-8');
+		const matches = [...source.matchAll(ASSET_REF)];
+		// tsc keeps JSDoc, and an `@example` naming a `bundleDir` (as `deployTimeLambdaCode`'s
+		// own does) loads nothing, so a match on a comment line is skipped.
+		if (source.includes('deployTimeLambdaCode')) {
+			for (const m of source.matchAll(BUNDLE_DIR_REF)) {
+				if (!isOnCommentLine(source, m.index)) matches.push(m);
+			}
+		}
+		for (const match of matches) {
 			refs.push({ file, asset: posix.normalize(posix.join(posix.dirname(file), match[2])) });
 		}
 	}
@@ -98,7 +127,9 @@ function main(): number {
 	console.log();
 
 	if (checked === 0) {
-		console.error('ERROR: found no Code.fromAsset(join(__dirname, ...)) references under packages/*/dist.');
+		console.error(
+			'ERROR: found no Code.fromAsset(join(__dirname, ...)) or deployTimeLambdaCode references under packages/*/dist.',
+		);
 		console.error('Run `npm run build` first.');
 		return 1;
 	}

@@ -96,7 +96,24 @@ export type ScalingSignal =
  * a compute that drains AsyncJob queues, CPU otherwise.
  */
 export interface ContainerScaling {
+	/**
+	 * Fewest running instances. Use `1` or more for most workloads: a running
+	 * instance picks up a job within seconds.
+	 *
+	 * Set `0` only for long-running jobs that can tolerate high latency before
+	 * they start. The compute then scales to zero between jobs, and a waiting
+	 * AsyncJob message or CronJob tick has to start an instance first. That
+	 * usually takes a few minutes, and up to about 20 minutes when the job's queue
+	 * has been idle for more than six hours (SQS stops publishing queue metrics
+	 * for an idle queue, and they take up to 15 minutes to resume).
+	 *
+	 * `0` requires at least one AsyncJob or CronJob on the compute and the default
+	 * (or `queue-depth`) scaling strategy, and fails synth otherwise: with no job
+	 * nothing would start an instance, and a `cpu` or `memory` strategy could
+	 * scale in to zero while a job is still running.
+	 */
 	minInstances: number;
+	/** Most running instances. At least 1. */
 	maxInstances: number;
 	strategy?: ScalingSignal | ScalingSignal[];
 }
@@ -107,13 +124,27 @@ export interface ContainerScaling {
  * unique to this type.
  */
 export interface ServerlessComputeOptions {
-	/** Memory (MB). CPU scales with memory on a serverless compute. */
+	/**
+	 * Memory (MB). CPU scales with memory on a serverless compute. The default is
+	 * sized for the shared handler, which serves both the synchronous API path
+	 * and async (SQS/AsyncJob) work; an API-only compute that never drains a
+	 * queue can usually run on far less. Lower it when the compute handles only
+	 * request/response traffic.
+	 */
 	memory?: number;
 	/**
 	 * The compute's inherent max runtime ceiling, in seconds (the Lambda function
 	 * timeout, up to {@link LAMBDA_MAX_TIMEOUT_SECONDS}). A ceiling, not a job's
 	 * deadline: a job's `timeoutSeconds` must be ≤ it. Defaults to the platform
 	 * maximum.
+	 *
+	 * This is the ASYNC ceiling: the synchronous API path is bounded separately
+	 * by API Gateway's 29s integration timeout no matter how high this is, so
+	 * raising it only affects async/queue work. An API-only compute does not need
+	 * a large value here, but keep it at or above 30s: the handler caps each HTTP
+	 * request at the smaller of its 28s guard and this timeout, so a smaller value
+	 * cuts the sync request deadline short. Leave it at the default unless async
+	 * jobs need a specific ceiling.
 	 */
 	maxTimeoutSeconds?: number;
 }

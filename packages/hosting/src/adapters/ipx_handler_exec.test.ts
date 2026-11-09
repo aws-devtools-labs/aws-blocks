@@ -23,7 +23,7 @@ import { IPX_LAMBDA_HANDLER_SOURCE } from './ipx_lambda_template.js';
 
 type LambdaResult = { statusCode: number; headers: Record<string, string>; body: string };
 type Handler = (event: unknown) => Promise<LambdaResult>;
-type Control = { s3Bytes: Uint8Array; remoteBytes: Uint8Array; outputType: string };
+type Control = { s3Bytes: Uint8Array; remoteBytes: Uint8Array; outputType: string; lastPath?: string };
 
 const SVG = new TextEncoder().encode('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>');
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
@@ -38,6 +38,7 @@ export const createIPX = (opts) => opts;
 export const ipxHttpStorage = () => ({ name: 'http', getMeta: async () => ({}), getData: async () => control.remoteBytes });
 export const createIPXWebServer = (ipx) => async (req) => {
   const url = new URL(req.url);
+  control.lastPath = url.pathname;
   const rest = url.pathname.replace(/^\\/+/, '');
   const id = decodeURIComponent(rest.slice(rest.indexOf('/') + 1));
   const storage = /^https?:/.test(id) ? ipx.httpStorage : ipx.storage;
@@ -156,3 +157,35 @@ void describe('generated IPX handler — SVG gate (executed, not string-matched)
     assert.strictEqual(res.headers['content-type'], 'image/svg+xml');
   });
 });
+
+void describe('generated IPX handler — the app base path (executed)', () => {
+  const at = (rawPath: string) => ({ version: '2.0', rawPath, rawQueryString: '', headers: {}, requestContext: { http: { method: 'GET' } } });
+  const reached = async (env: Record<string, string | undefined>, rawPath: string): Promise<string | undefined> => {
+    const handler = await loadHandler({ ...BASE_ENV, ...env });
+    control.s3Bytes = PNG;
+    control.outputType = 'image/png';
+    control.lastPath = undefined;
+    const res = await handler(at(rawPath));
+    assert.strictEqual(res.statusCode, 200, rawPath);
+    return control.lastPath;
+  };
+
+  // Behind the ALB and API Gateway doors the full path arrives; behind the
+  // CloudFront door the router has already stripped the base path.
+  void it('strips the base path and the IPX prefix, with or without the base path in front', async () => {
+    assert.strictEqual(await reached({ IPX_APP_BASE_URL: '/myapp' }, '/myapp/_ipx/s_64x64/pic.png'), '/s_64x64/pic.png');
+    assert.strictEqual(await reached({ IPX_APP_BASE_URL: '/myapp' }, '/_ipx/s_64x64/pic.png'), '/s_64x64/pic.png');
+  });
+
+  void it('with a custom IPX base URL too', async () => {
+    assert.strictEqual(
+      await reached({ IPX_APP_BASE_URL: '/myapp', IPX_BASE_URL: '/img-cdn' }, '/myapp/img-cdn/w_100/pic.png'),
+      '/w_100/pic.png',
+    );
+  });
+
+  void it('without a base path, only the IPX prefix is stripped', async () => {
+    assert.strictEqual(await reached({ IPX_APP_BASE_URL: undefined }, '/_ipx/s_64x64/pic.png'), '/s_64x64/pic.png');
+  });
+});
+

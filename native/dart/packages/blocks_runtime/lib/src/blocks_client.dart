@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
 import 'blocks_rpc_exception.dart';
+import 'response_url.dart';
 import 'rpc_user_agent_headers.dart';
 import 'session_store.dart';
 import 'token_store.dart';
@@ -38,7 +39,7 @@ class BlocksClient {
   Future<dynamic> call(String method, Map<String, dynamic> params) async {
     final response = await _doCall(method, params);
 
-    if (response.statusCode == 401 && authProvider != null) {
+    if (response.response.statusCode == 401 && authProvider != null) {
       await authProvider!.onAuthFailure();
       final retry = await _doCall(method, params);
       return _parseResponse(retry);
@@ -47,7 +48,7 @@ class BlocksClient {
     return _parseResponse(response);
   }
 
-  Future<http.Response> _doCall(
+  Future<ResponseWithUrl> _doCall(
     String method,
     Map<String, dynamic> params,
   ) async {
@@ -59,6 +60,7 @@ class BlocksClient {
       'id': id,
     });
 
+    final requestUri = _rpcUri(baseUrl, method);
     final headers = <String, String>{
       'Content-Type': 'application/json',
       ...rpcUserAgentHeaders(),
@@ -71,14 +73,15 @@ class BlocksClient {
         headers['authorization'] = 'Bearer $token';
       }
     } else {
-      final cookie = sessionStore.cookieHeader;
+      final cookie = sessionStore.cookieHeaderFor(requestUri);
       if (cookie != null) {
         headers['cookie'] = cookie;
       }
     }
 
-    return _httpClient.post(
-      _rpcUri(baseUrl, method),
+    return postWithResponseUrl(
+      _httpClient,
+      requestUri,
       headers: headers,
       body: body,
     );
@@ -101,9 +104,13 @@ class BlocksClient {
     return Uri.parse('${baseUrl.substring(0, end)}/$segment');
   }
 
-  dynamic _parseResponse(http.Response response) {
+  dynamic _parseResponse(ResponseWithUrl result) {
+    final response = result.response;
     // Parse set-cookie headers
-    sessionStore.setCookies(response.headers['set-cookie']);
+    sessionStore.setCookies(
+      response.headers['set-cookie'],
+      requestUri: result.url,
+    );
 
     final json = jsonDecode(response.body) as Map<String, dynamic>;
     if (json.containsKey('error')) {

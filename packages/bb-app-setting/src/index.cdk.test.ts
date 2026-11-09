@@ -358,3 +358,19 @@ test('CDK: bulk-init role can read + re-key secrets (ssm:GetParameter + kms:Encr
 		'no GenerateDataKey* — standard-tier SecureStrings do not use it',
 	);
 });
+
+test('CDK: the secret-init Lambda sets an explicit timeout (not the 3 s Lambda default)', () => {
+	const { stack, parent } = setup();
+	new AppSetting(parent, 'my-secret', { secret: true, name: '/myapp/secret-key' });
+	const template = Template.fromStack(stack);
+
+	// Regression: without an explicit timeout the function ran with Lambda's 3 s
+	// default, and a slow cold start failed BlocksSecretsBulk ("Task timed out
+	// after 3.00 seconds"), rolling back the whole deploy.
+	const lambdas = template.findResources('AWS::Lambda::Function');
+	const initFns = Object.entries(lambdas)
+		.filter(([logicalId]) => logicalId.startsWith('BlocksSecretInitFn'))
+		.map(([, fn]) => fn);
+	assert.strictEqual(initFns.length, 1, 'expected exactly one secret-init Lambda');
+	assert.strictEqual(initFns[0]?.Properties?.Timeout, 120);
+});

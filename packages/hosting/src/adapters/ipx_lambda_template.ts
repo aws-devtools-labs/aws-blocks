@@ -283,8 +283,16 @@ const log = (msg) =>
  * that value into IPX_BASE_URL on this Lambda.
  */
 const ipxBaseURL = (process.env.IPX_BASE_URL || '/_ipx').replace(/\\/+$/, '');
+/**
+ * The app's base path (Nuxt \`app.baseURL\`, e.g. /myapp), when it has one.
+ * The CloudFront door's router strips it before the request reaches this
+ * Lambda; the ALB and API Gateway doors route the full path here. Strip an
+ * optional base path first, so both shapes reach IPX as /<modifiers>/<id>.
+ */
+const appBaseURL = (process.env.IPX_APP_BASE_URL || '').replace(/\\/+$/, '');
+const escapeRe = (value) => value.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
 const ipxStripPattern = new RegExp(
-  '^' + ipxBaseURL.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&'),
+  '^' + (appBaseURL ? '(?:' + escapeRe(appBaseURL) + ')?' : '') + escapeRe(ipxBaseURL),
 );
 
 /**

@@ -1,19 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { AsyncJob } from '@aws-blocks/bb-async-job';
+import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
+import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import type { ScopeParent } from '@aws-blocks/core';
+import { blocksError, getOrCreateOnRoot, registerConfig, Scope } from '@aws-blocks/core/cdk';
+import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
-import { Scope, blocksError, getOrCreateOnRoot } from '@aws-blocks/core/cdk';
-import type { ScopeParent } from '@aws-blocks/core';
-import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
+import { Queue } from 'aws-cdk-lib/aws-sqs';
 import type { Construct } from 'constructs';
-import type {
-	CronJobEvent,
-	CronJobOptions,
-} from './types.js';
-import { validateSchedule, validateTimezone } from './schedule.js';
 import { CronJobErrors } from './errors.js';
+import { CRON_RUNNER_ID, cronRunnerConfigKey, toCronJobEvent } from './runner.js';
+import { validateSchedule, validateTimezone } from './schedule.js';
+import type { CronJobEvent, CronJobOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
 export { CronJobErrors } from './errors.js';
@@ -31,29 +33,83 @@ export class CronJob<T = void> extends Scope {
 		validateSchedule(options.schedule);
 		if (options.timezone !== undefined) validateTimezone(options.timezone);
 
-		// The scheduler invokes the compute's function directly, so a CronJob
-		// currently requires a Lambda compute. Other compute types need a
-		// different scheduler target (e.g. EventBridge → ECS) — not yet supported.
-		// The brand check (not `instanceof`) survives duplicate bb-lambda-compute
-		// copies in one dependency tree.
+		// Assign the requested compute (if any) before anything reads `this.compute`;
+		// without one the job runs on its scope's compute (else the default).
+		// `resolve()` returns the concrete compute the framework wires against (a
+		// backing resolves to itself; the `Compute` block resolves to the backing
+		// it owns). The internal runner job below inherits it through the scope
+		// chain.
+		if (options.compute) {
+			this._compute = options.compute.resolve();
+		}
+
+		// On a Lambda compute the scheduler invokes the function directly. On a
+		// container compute it sends each tick to an internal AsyncJob's queue,
+		// which the container drains like any container AsyncJob. Any other
+		// compute type has no delivery path. The brand checks (not `instanceof`)
+		// survive duplicate compute-package copies in one dependency tree.
 		const compute = this.compute;
-		if (!LambdaCompute.isLambdaCompute(compute)) {
+		const foreign = foreignComputeProblem(this, compute);
+		if (foreign) throw blocksError(CronJobErrors.UnsupportedCompute, `CronJob "${this.fullId}" ${foreign}`);
+		const onLambda = LambdaCompute.isLambdaCompute(compute);
+		const onContainer = ContainerCompute.isContainerCompute(compute);
+		if (!onLambda && !onContainer) {
 			throw blocksError(
 				CronJobErrors.UnsupportedCompute,
-				`CronJob "${this.fullId}" currently supports only a Lambda compute.`,
+				`CronJob "${this.fullId}" runs only on a serverless or container compute, but resolves to ` +
+					`${compute.type} compute '${compute.node.path}' (its own \`compute\`, or its scope's).`,
 			);
 		}
-		const lambdaArn = compute.fn.functionArn;
-		const schedulerRole = getOrCreateSchedulerRole(this, lambdaArn);
 
-		// The payload EventBridge sends to the Lambda.
-		// <aws.scheduler.scheduled-time> is resolved by EventBridge at invocation time.
-		const targetInput = JSON.stringify({
-			source: 'blocks.cronjob',
-			jobName: this.fullId,
-			scheduledTime: '<aws.scheduler.scheduled-time>',
-			input: options.input,
-		});
+		const schedulerRole = getOrCreateSchedulerRole(this);
+		let targetArn: string;
+		let targetInput: string;
+
+		if (onLambda) {
+			// Claim the key the Lambda runtime registers this job's handler under, so
+			// two jobs with the same `fullId` fail synth instead of on cold start.
+			this.registerLambdaEventHandler('blocks.cronjob', this.fullId);
+			targetArn = compute.fn.functionArn;
+			allowSchedulerToInvoke(schedulerRole, compute.fn);
+			// The payload EventBridge sends to the Lambda.
+			// <aws.scheduler.scheduled-time> is resolved by EventBridge at invocation time.
+			targetInput = JSON.stringify({
+				source: 'blocks.cronjob',
+				jobName: this.fullId,
+				scheduledTime: '<aws.scheduler.scheduled-time>',
+				input: options.input,
+			});
+		} else {
+			// The runner is a plain AsyncJob on this job's compute (inherited from
+			// `_compute` above, or from the scope). It owns the queue, DLQ,
+			// owner-matched container poller, enforced timeout, and queue-depth
+			// autoscaling registration. The marker tells the runtime entry to
+			// construct the same child, so its handler resolves; a serverless CronJob
+			// registers no marker, and the runtime builds no runner for it.
+			registerConfig(this, cronRunnerConfigKey(this.fullId), '1');
+			new AsyncJob<CronJobEvent<T>>(this, CRON_RUNNER_ID, {
+				handler: async (event) => options.handler(toCronJobEvent(event)),
+				timeoutSeconds: options.timeoutSeconds,
+				logger: options.logger,
+			});
+			// The AsyncJob's queue is its `queue` child. Found by id (the composed
+			// AsyncJob is typed by its default entry, which has no CDK members);
+			// `instanceof` narrows it without a cast and fails loud if the child
+			// ever moves.
+			const queue = this.node.findChild(CRON_RUNNER_ID).node.tryFindChild('queue');
+			if (!(queue instanceof Queue)) {
+				throw new Error(`CronJob "${this.fullId}": internal AsyncJob runner has no queue.`);
+			}
+			targetArn = queue.queueArn;
+			queue.grantSendMessages(schedulerRole);
+			// The message body the runner's handler receives. Same fields the Lambda
+			// path sends, minus the Lambda event-routing `source`.
+			targetInput = JSON.stringify({
+				jobName: this.fullId,
+				scheduledTime: '<aws.scheduler.scheduled-time>',
+				input: options.input,
+			});
+		}
 
 		this.schedule = new scheduler.CfnSchedule(this, 'Schedule', {
 			name: `${this.fullId}`.substring(0, 64),
@@ -63,7 +119,7 @@ export class CronJob<T = void> extends Scope {
 			description: options.description,
 			flexibleTimeWindow: { mode: 'OFF' },
 			target: {
-				arn: lambdaArn,
+				arn: targetArn,
 				roleArn: schedulerRole.roleArn,
 				input: targetInput,
 			},
@@ -77,8 +133,9 @@ const SCHEDULER_ROLE_KEY = Symbol.for('BLOCKS_SCHEDULER_ROLE');
 
 // Keyed on (and parented under) the owning backend root, so two BlocksBackends in
 // one cdk.Stack each get their own scheduler role — the role grants invoke on that
-// backend's handler, so sharing A's role would pin B's schedule to A's Lambda.
-function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Role {
+// backend's handlers, so sharing A's role would let B's schedules invoke A's Lambdas.
+// Each CronJob grants the role access to its own target (a function or a queue).
+function getOrCreateSchedulerRole(scope: Construct): iam.Role {
 	return getOrCreateOnRoot(scope, SCHEDULER_ROLE_KEY, (root) => {
 		// The trust is limited to EventBridge Scheduler schedules in this account and region.
 		// Scheduler reports the schedule GROUP ARN (not the individual schedule ARN) as aws:SourceArn,
@@ -95,10 +152,27 @@ function getOrCreateSchedulerRole(scope: Construct, handlerArn: string): iam.Rol
 				},
 			}),
 		});
-		role.addToPolicy(new iam.PolicyStatement({
-			actions: ['lambda:InvokeFunction'],
-			resources: [handlerArn],
-		}));
 		return role;
 	});
+}
+
+// The functions (by construct address) each scheduler role may already invoke,
+// so a compute shared by several jobs is granted once.
+const invokableBySchedulerRole = new WeakMap<iam.Role, Set<string>>();
+
+// Grant the shared scheduler role invoke on one job's function. Jobs on different
+// computes target different functions, so every target is granted — not just the
+// first job's.
+function allowSchedulerToInvoke(
+	role: iam.Role,
+	fn: { readonly node: Construct['node']; readonly functionArn: string },
+): void {
+	let granted = invokableBySchedulerRole.get(role);
+	if (!granted) {
+		granted = new Set();
+		invokableBySchedulerRole.set(role, granted);
+	}
+	if (granted.has(fn.node.addr)) return;
+	granted.add(fn.node.addr);
+	role.addToPolicy(new iam.PolicyStatement({ actions: ['lambda:InvokeFunction'], resources: [fn.functionArn] }));
 }

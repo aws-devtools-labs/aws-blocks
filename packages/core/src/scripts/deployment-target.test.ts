@@ -125,6 +125,26 @@ describe('resolveDeploymentTarget', () => {
 		});
 	});
 
+	it('reads the bootstrap qualifier from cdk.json, cdk.context.json, then ~/.cdk.json, as CDK does', async () => {
+		const key = '@aws-cdk/core:bootstrapQualifier';
+		const qualifier = async () => (await resolveDeploymentTarget({ env, projectRoot })).bootstrapQualifier;
+		assert.equal(await qualifier(), undefined);
+		await writeFile(join(home, '.cdk.json'), JSON.stringify({ context: { [key]: 'user' } }));
+		assert.equal(await qualifier(), 'user');
+		await writeFile(join(projectRoot, 'cdk.context.json'), JSON.stringify({ [key]: 'cached' }));
+		assert.equal(await qualifier(), 'cached');
+		await writeFile(join(projectRoot, 'cdk.json'), JSON.stringify({ context: { [key]: 'project' } }));
+		assert.equal(await qualifier(), 'project');
+	});
+
+	it('treats a malformed cdk.context.json as setting no qualifier, and leaves the error to CDK', async () => {
+		await writeFile(join(projectRoot, 'cdk.context.json'), '{not json');
+		assert.deepEqual(await resolveDeploymentTarget({ env, projectRoot }), {
+			region: 'us-east-1',
+			profile: undefined,
+		});
+	});
+
 	it('reads Regions from absolute AWS_CONFIG_FILE and AWS_SHARED_CREDENTIALS_FILE paths', async () => {
 		await writeFile(join(home, 'custom-config'), '[default]\nregion=eu-west-1\n');
 		await writeFile(join(home, 'custom-credentials'), '[default]\nregion=eu-north-1\n');

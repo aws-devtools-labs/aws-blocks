@@ -14,13 +14,15 @@
 import assert from 'node:assert';
 import { before, describe, test } from 'node:test';
 import * as cdk from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import { Code, type IFunction, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import type { Construct } from 'constructs';
 import { API_NAMESPACE_COMPUTE, ApiNamespace } from '../api.js';
 import { BlocksPresets } from './blocks-defaults.js';
-import { ComputeBase } from './compute/compute.js';
+import { type ComputeApiIngress, ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import { Scope } from './index.js';
 import { createSharedGateway, resolveNamespaceRoutes } from './shared-gateway.js';
@@ -151,6 +153,32 @@ describe('createSharedGateway — single shared REST API', () => {
 		});
 	});
 
+	test('caps every Lambda integration at API Gateway’s 29s request ceiling', () => {
+		const { stack, compute } = setup('SharedGwIntegrationTimeout');
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+		});
+
+		const template = Template.fromStack(stack);
+		// Every Lambda (AWS_PROXY) integration carries TimeoutInMillis: 29000 — the
+		// function timeout (up to 900s for async work) is unreachable on the
+		// synchronous HTTP path, so the integration pins the real boundary. The
+		// root MOCK method CDK auto-creates has no Lambda and no timeout.
+		const methods = template.findResources('AWS::ApiGateway::Method');
+		const proxyIntegrations = Object.values(methods)
+			.map((m) => (m.Properties as { Integration?: { Type?: string; TimeoutInMillis?: number } }).Integration)
+			.filter((i): i is { Type?: string; TimeoutInMillis?: number } => i?.Type === 'AWS_PROXY');
+		assert.ok(proxyIntegrations.length > 0, 'at least one Lambda integration is created');
+		for (const integration of proxyIntegrations) {
+			assert.strictEqual(
+				integration.TimeoutInMillis,
+				29000,
+				'each Lambda integration is pinned to the 29s API Gateway request ceiling',
+			);
+		}
+	});
+
 	test('routes the RPC endpoint, per-namespace RPC paths, RawRoute sub-paths, and every other path', () => {
 		const { stack, compute } = setup('SharedGwTree');
 		createSharedGateway(stack, {
@@ -246,6 +274,34 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 		]);
 	});
 
+	test('pins the 29s integration timeout on the per-compute fan-out integration too', () => {
+		// The single-compute path and the per-compute fan-out build their Lambda
+		// integrations on separate code paths; this covers the fan-out loop so a
+		// dropped `timeout:` on the per-compute integration is caught.
+		const { stack, defaultCompute, ordersCompute } = fanOut('FanOutTimeout');
+		const backendModule = { orders: namespaceOn(stack, ordersCompute, 'orders') };
+
+		createSharedGateway(stack, {
+			namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
+			defaultCompute,
+			defaults: BlocksPresets.production,
+		});
+
+		const methods = Template.fromStack(stack).findResources('AWS::ApiGateway::Method');
+		const proxyIntegrations = Object.values(methods)
+			.map((m) => (m.Properties as { Integration?: { Type?: string; TimeoutInMillis?: number } }).Integration)
+			.filter((i): i is { Type?: string; TimeoutInMillis?: number } => i?.Type === 'AWS_PROXY');
+		// Two computes ⇒ more than the single-compute count; every one pinned.
+		assert.ok(proxyIntegrations.length > 1, 'fan-out creates Lambda integrations on both computes');
+		for (const integration of proxyIntegrations) {
+			assert.strictEqual(
+				integration.TimeoutInMillis,
+				29000,
+				'each fan-out Lambda integration is pinned to the 29s API Gateway request ceiling',
+			);
+		}
+	});
+
 	test('gives each routed function one API-scoped invoke permission, however many namespaces it hosts', () => {
 		const { stack, defaultCompute, ordersCompute, ordersFnId } = fanOut('FanOutPermission');
 		const backendModule = {
@@ -289,7 +345,10 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 
 	test('rejects a namespace on a compute that accepts no API traffic', () => {
 		const { stack, defaultCompute } = fanOut('FanOutWorker');
-		const workerCompute = new StubCompute(stack, 'WorkerCompute', makeFn(stack, 'WorkerFn'), false);
+		// Nested like the `Compute` block's backing, so the message must name the
+		// customer's `WorkerCompute`, not the internal `backing` child.
+		const workerScope = new Scope('WorkerCompute', { parent: stack as never });
+		const workerCompute = new StubCompute(workerScope, 'backing', makeFn(stack, 'WorkerFn'), false);
 		const backendModule = { jobs: namespaceOn(stack, workerCompute, 'jobs') };
 
 		assert.throws(
@@ -299,13 +358,24 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 					defaultCompute,
 					defaults: BlocksPresets.production,
 				}),
-			/Compute 'WorkerCompute' hosts API namespaces \(jobs\) but accepts no API traffic/,
+			/Compute 'FanOutWorker\/WorkerCompute\/backing' hosts API namespaces \(jobs\) but accepts no API traffic/,
 		);
 	});
 
-	test('rejects an export name API Gateway cannot use as a path segment', () => {
-		const { stack, defaultCompute, ordersCompute } = fanOut('FanOutBadName');
-		const backendModule = { café: namespaceOn(stack, ordersCompute, 'cafe') };
+	test("names the namespaces when a compute's ingress refuses them", () => {
+		const { stack, defaultCompute } = fanOut('FanOutRefuse');
+		/** A compute whose ingress throws, like a container that may scale to zero. */
+		class RefusingCompute extends StubCompute {
+			override apiIngress(): never {
+				throw new Error('needs a running task');
+			}
+		}
+		const refuseScope = new Scope('RefuseCompute', { parent: stack as never });
+		const refuseCompute = new RefusingCompute(refuseScope, 'backing', makeFn(stack, 'RefuseFn'));
+		const backendModule = {
+			render: namespaceOn(stack, refuseCompute, 'render'),
+			preview: namespaceOn(stack, refuseCompute, 'preview'),
+		};
 
 		assert.throws(
 			() =>
@@ -314,7 +384,24 @@ describe('createSharedGateway — multi-compute fan-out', () => {
 					defaultCompute,
 					defaults: BlocksPresets.production,
 				}),
-			/API namespace export 'café' can't be routed to compute 'OrdersCompute'/,
+			/^Error: API namespaces \(render, preview\) on compute 'FanOutRefuse\/RefuseCompute\/backing': needs a running task$/,
+		);
+	});
+
+	test('rejects an export name API Gateway cannot use as a path segment', () => {
+		const { stack, defaultCompute } = fanOut('FanOutBadName');
+		const cafeScope = new Scope('CafeCompute', { parent: stack as never });
+		const cafeCompute = new StubCompute(cafeScope, 'backing', makeFn(stack, 'BadNameFn'));
+		const backendModule = { café: namespaceOn(stack, cafeCompute, 'cafe') };
+
+		assert.throws(
+			() =>
+				createSharedGateway(stack, {
+					namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack)),
+					defaultCompute,
+					defaults: BlocksPresets.production,
+				}),
+			/API namespace export 'café' can't be routed to compute 'FanOutBadName\/CafeCompute\/backing'/,
 		);
 	});
 });
@@ -375,7 +462,7 @@ describe('resolveNamespaceRoutes', () => {
 	});
 
 	test("uses the namespace's own compute resolver, not its scope's compute", () => {
-		// Stands in for the future per-namespace compute option: the namespace
+		// What the `compute` option does, without a real Compute block: the namespace
 		// resolves to a different compute than its scope does, and routing follows
 		// the namespace.
 		const { stack, defaultCompute, ordersCompute } = computes('RoutesOwnResolver');
@@ -394,6 +481,23 @@ describe('resolveNamespaceRoutes', () => {
 			getComputes(stack),
 		);
 		assert.strictEqual(routes.size, 0);
+		// Inherited from its scope (the cached sub-module case): skipped silently.
+		assert.strictEqual(Annotations.fromStack(otherStack).findWarning('*', Match.anyValue()).length, 0);
+	});
+
+	test("warns when a namespace's explicit compute is another backend's, and skips it", () => {
+		const { stack, defaultCompute } = computes('RoutesForeignExplicit');
+		const otherStack = new cdk.Stack(new cdk.App(), 'RoutesForeignExplicitOther');
+		const foreignCompute = new StubCompute(otherStack, 'ForeignCompute', makeFn(otherStack, 'ForeignFn'));
+		const reports = new ApiNamespace(stack as never, 'reports', () => ({ async ping() {} }), {
+			compute: { resolve: () => foreignCompute as ComputeBase & { readonly type: 'serverless' } },
+		});
+		const routes = resolveNamespaceRoutes({ reports }, defaultCompute, getComputes(stack));
+		assert.strictEqual(routes.size, 0);
+		Annotations.fromStack(otherStack).hasWarning(
+			'/RoutesForeignExplicitOther/ForeignCompute',
+			Match.stringLikeRegexp("API namespace export 'reports' was given compute 'RoutesForeignExplicitOther/ForeignCompute', which belongs to another backend"),
+		);
 	});
 
 	test('resolves the compute when called, not when the namespace was constructed', () => {
@@ -496,5 +600,122 @@ describe('createSharedGateway — stage access logging (defaults.accessLogging)'
 		const template = Template.fromStack(stack);
 		template.resourceCountIs('AWS::ApiGateway::Account', 0);
 		template.hasResourceProperties('AWS::ApiGateway::Stage', { AccessLogSetting: Match.absent() });
+	});
+});
+
+// ── Load-balanced computes (containers) ─────────────────────────────────────
+
+/** A compute whose HTTP server sits behind a listener on a shared internal ALB. */
+class StubLoadBalancedCompute extends StubCompute {
+	constructor(
+		scope: Construct,
+		id: string,
+		private readonly ingress: ComputeApiIngress,
+	) {
+		super(scope, id, undefined as never, false);
+	}
+	override apiIngress(): ComputeApiIngress {
+		return this.ingress;
+	}
+}
+
+describe('createSharedGateway — load-balanced computes', () => {
+	function loadBalanced() {
+		const { stack, compute } = setup('LoadBalancedStack');
+		const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+		const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+		const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+		const routed: Record<string, string[]> = { render: [], batch: [] };
+		const ingress = (compute: string): ComputeApiIngress => ({
+			kind: 'load-balancer',
+			loadBalancer,
+			port: 10_000,
+			vpc,
+			subnets,
+			routePath: (path) => routed[compute].push(path),
+		});
+		const render = new StubLoadBalancedCompute(stack, 'Render', ingress('render'));
+		const batch = new StubLoadBalancedCompute(stack, 'Batch', ingress('batch'));
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+			namespaceRoutes: new Map<ComputeBase, string[]>([
+				[render, ['render', 'preview']],
+				[batch, ['batch']],
+			]),
+		});
+		const template = Template.fromStack(stack);
+		return { template, routed, resources: template.toJSON().Resources as Record<string, { Type: string; Properties: any }> };
+	}
+
+	test('one VPC link for the backend, however many computes and namespaces', () => {
+		loadBalanced().template.resourceCountIs('AWS::ApiGatewayV2::VpcLink', 1);
+	});
+
+	test('routes each namespace path on its compute’s load balancer', () => {
+		assert.deepStrictEqual(loadBalanced().routed, {
+			render: ['/aws-blocks/api/render', '/aws-blocks/api/preview'],
+			batch: ['/aws-blocks/api/batch'],
+		});
+	});
+
+	test('each namespace proxies to the listener port at its own path', () => {
+		const { resources } = loadBalanced();
+		const pathPart = (id: string) => resources[id]?.Properties.PathPart;
+		const byPath = Object.fromEntries(
+			Object.values(resources)
+				.filter((r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.Integration?.ConnectionType === 'VPC_LINK')
+				.map((m) => [pathPart(m.Properties.ResourceId.Ref), JSON.stringify(m.Properties.Integration.Uri)]),
+		);
+		assert.deepStrictEqual(Object.keys(byPath).sort(), ['batch', 'preview', 'render']);
+		assert.match(byPath.render, /:10000\/aws-blocks\/api\/render"/);
+		assert.match(byPath.preview, /:10000\/aws-blocks\/api\/preview"/);
+		assert.match(byPath.batch, /:10000\/aws-blocks\/api\/batch"/);
+	});
+
+	test('each VPC link integration carries the 29s integration timeout', () => {
+		const { resources } = loadBalanced();
+		const timeouts = Object.values(resources)
+			.filter((r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.Integration?.ConnectionType === 'VPC_LINK')
+			.map((m) => m.Properties.Integration.TimeoutInMillis);
+		assert.deepStrictEqual(timeouts, [29_000, 29_000, 29_000]);
+	});
+
+	test('the load balancer admits the VPC link on the listener port range, in one rule', () => {
+		const { resources } = loadBalanced();
+		const rules = Object.values(resources)
+			.filter((r) => r.Type === 'AWS::EC2::SecurityGroupIngress')
+			.map((r) => [r.Properties.FromPort, r.Properties.ToPort]);
+		assert.deepStrictEqual(rules, [[10_000, 10_999]]);
+	});
+
+	test('a function compute keeps its Lambda integration alongside', () => {
+		const { stack, compute } = setup('MixedStack');
+		const vpc = new ec2.Vpc(stack, 'Vpc', { maxAzs: 2, natGateways: 0 });
+		const subnets = { subnetType: ec2.SubnetType.PRIVATE_ISOLATED };
+		const loadBalancer = new elbv2.ApplicationLoadBalancer(stack, 'Alb', { vpc, vpcSubnets: subnets });
+		const reports = new StubCompute(stack, 'Reports', makeFn(stack, 'ReportsFn'));
+		const render = new StubLoadBalancedCompute(stack, 'Render', {
+			kind: 'load-balancer',
+			loadBalancer,
+			port: 10_000,
+			vpc,
+			subnets,
+			routePath: () => {},
+		});
+		createSharedGateway(stack, {
+			defaultCompute: compute,
+			defaults: BlocksPresets.production,
+			namespaceRoutes: new Map<ComputeBase, string[]>([
+				[reports, ['reports']],
+				[render, ['render']],
+			]),
+		});
+		const methods = Object.values(Template.fromStack(stack).toJSON().Resources as Record<string, any>).filter(
+			(r) => r.Type === 'AWS::ApiGateway::Method' && r.Properties.HttpMethod === 'ANY' && r.Properties.Integration,
+		);
+		const types = methods.map((m) => m.Properties.Integration.Type);
+		assert.ok(types.includes('AWS_PROXY'), 'Lambda proxy for the function compute');
+		assert.strictEqual(types.filter((t) => t === 'HTTP_PROXY').length, 1, 'one HTTP proxy for the container namespace');
 	});
 });

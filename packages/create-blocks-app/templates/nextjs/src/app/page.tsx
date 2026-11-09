@@ -1,6 +1,7 @@
 import { Suspense } from 'react';
 import { api } from 'aws-blocks';
 import { ClientGreeting } from './client';
+import { SectionBoundary } from './section-boundary';
 
 // Opt out of static prerendering — the Blocks API URL is only available at
 // request time (Lambda env vars), not at build time during `cdk deploy`.
@@ -32,15 +33,19 @@ export default function Home() {
       <section style={{ marginBottom: '2rem' }}>
         <h2>Server Component with Suspense</h2>
         <p>This data is fetched on the server with streaming:</p>
-        <Suspense fallback={<ServerTimeLoading />}>
-          <ServerTime />
-        </Suspense>
+        <SectionBoundary>
+          <Suspense fallback={<ServerTimeLoading />}>
+            <ServerTime />
+          </Suspense>
+        </SectionBoundary>
       </section>
 
       <section>
         <h2>Client Component</h2>
         <p>This component runs in the browser and calls the Blocks API:</p>
-        <ClientGreeting />
+        <SectionBoundary>
+          <ClientGreeting />
+        </SectionBoundary>
       </section>
     </main>
   );

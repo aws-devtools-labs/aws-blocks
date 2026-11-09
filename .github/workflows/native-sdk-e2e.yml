@@ -5,6 +5,10 @@ name: Native SDK E2E
 # always-when-relevant, deploy a per-run sandbox to the shared repo account for
 # the sandbox suite (same-repo PRs + manual dispatch only), and expose a single
 # always-running required gate so unrelated/fork PRs don't block branch protection.
+#
+# Jobs check out the PR's merge commit (actions/checkout's default), the
+# commit GitHub reads this file from, so a step added on main finds its script
+# even when the PR branch predates it.
 
 on:
   pull_request:
@@ -36,7 +40,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - id: e2e-slot
         uses: ./.github/actions/e2e-slot
@@ -83,7 +86,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -120,7 +122,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -218,7 +219,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -226,7 +226,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
@@ -270,7 +270,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -349,8 +348,9 @@ jobs:
 
   # Sandbox E2E — deploys a per-run stack to the shared repo AWS account.
   # Runs on same-repo PRs (fork PRs can't access secrets/OIDC) and on manual
-  # dispatch. Deploy uses `npm run deploy` (aws-blocks/scripts/deploy.ts ->
-  # aws-blocks/index.cdk.ts); the API serves JSON-RPC under `/aws-blocks/api`.
+  # dispatch. Deploy uses `npm run deploy:sandbox` (aws-blocks/scripts/deploy-sandbox.ts
+  # -> startSandbox deployOnly -> aws-blocks/index.cdk.ts with sandboxMode); the
+  # API serves JSON-RPC under `/aws-blocks/api`.
   dart-e2e-sandbox:
     permissions:
       contents: read
@@ -362,11 +362,14 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
-    # Deploy sandbox alone is ~21 min (sequential DynamoDB GSI custom-resource
-    # backfill), plus npm ci (~2m) + build (~4m) ≈ 27 min before any test runs.
-    # 30 left too little headroom (test squeaked in but the job tripped the
-    # wall / Destroy could be skipped → leaked stacks). Stop-gap until
-    # deploy-once-per-run lands.
+    # Deploy sandbox used to take ~21 min (sequential DynamoDB GSI custom-resource
+    # backfill); 30 min left too little headroom (the job tripped the wall and
+    # Destroy could be skipped -> leaked stacks).
+    # test-apps/native-bindings/aws-blocks/index.cdk.ts now defaults sandboxMode
+    # on, so the GSIs are built with the table and the deploy takes about 3
+    # minutes. 45 stays until this job has 10 green runs with sandboxMode on,
+    # then drops to 30 unless the slowest of them came within 5 min of that
+    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -374,7 +377,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -399,6 +401,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -406,7 +409,7 @@ jobs:
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
-        run: npm run deploy
+        run: npm run deploy:sandbox
 
       - name: Seed Cognito returning-customer test user
         working-directory: test-apps/native-bindings
@@ -491,10 +494,14 @@ jobs:
           dart pub get
           dart run bin/e2e_test.dart
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   swift-e2e-sandbox:
     permissions:
@@ -507,9 +514,11 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-26
-    # Same ~27-min deploy+build overhead as dart-e2e-sandbox; the slower
-    # xcodebuild blew past 30 (and skipped Destroy → leaked stack). Raise to 45.
-    # Stop-gap until deploy-once-per-run lands.
+    # Same deploy history as dart-e2e-sandbox; with the old ~27-min deploy+build
+    # the slower xcodebuild blew past 30 (and skipped Destroy -> leaked stack).
+    # 45 stays until this job has 10 green runs with sandboxMode on, then drops
+    # to 35 unless the slowest of them came within 5 min of that
+    # (https://github.com/aws-devtools-labs/aws-blocks/issues/986).
     timeout-minutes: 45
     environment: e2e
     env:
@@ -517,7 +526,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -534,6 +542,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -541,7 +550,7 @@ jobs:
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
-        run: npm run deploy
+        run: npm run deploy:sandbox
 
       - name: Resolve BLOCKS_URL
         id: url
@@ -593,10 +602,14 @@ jobs:
             -scheme BlocksE2ETests \
             -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   kotlin-e2e-sandbox:
     permissions:
@@ -609,8 +622,9 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ${{ matrix.runs-on }}
-    # Per-leg: iOS deploy + simulator build exceeds a flat 30 min. Matches the
-    # Swift iOS sandbox job and the non-sandbox Kotlin job above.
+    # Per-leg: iOS deploy + simulator build exceeded a flat 30 min with the
+    # serial GSI deploy. For now the same 45 as the Swift sandbox job; see each
+    # leg's note for when it drops.
     timeout-minutes: ${{ matrix.timeout }}
     environment: e2e
     strategy:
@@ -621,13 +635,17 @@ jobs:
             suffix: jvm
             runs-on: ubuntu-latest
             gradle-task: jvmTest
-            # The sandbox deploy alone takes 19-25 min (two serial GSI custom
-            # resources), so 30 min left no room for the build, tests and destroy.
+            # The sandbox deploy took 19-25 min before sandboxMode (serial GSI
+            # custom resources), so 30 min left no room for the build, tests and
+            # destroy. 45 stays until this leg has 10 green runs with
+            # sandboxMode on, then drops to 30 by the rule in #986.
             timeout: 45
           - label: iOS
             suffix: ios
             runs-on: macos-15
             gradle-task: iosSimulatorArm64Test
+            # Drops to 30 after 10 green runs with sandboxMode on, by the rule
+            # in #986.
             timeout: 45
     env:
       # Manual runs have no PR number. They use the short run number (d-prefixed
@@ -638,7 +656,6 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -646,7 +663,7 @@ jobs:
           node-version-file: '.nvmrc'
           cache: npm
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: 17
@@ -655,6 +672,7 @@ jobs:
       - run: npm run build
 
       - name: Configure AWS credentials
+        id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
@@ -662,7 +680,7 @@ jobs:
 
       - name: Deploy sandbox
         working-directory: test-apps/native-bindings
-        run: npm run deploy
+        run: npm run deploy:sandbox
 
       - name: Resolve BLOCKS_URL
         id: url
@@ -716,10 +734,14 @@ jobs:
           BLOCKS_URL: ${{ steps.url.outputs.blocks_url }}
         run: ./gradlew ${{ matrix.gradle-task }}
 
+      # e2e-cleanup.mjs first stops what earlier steps left running (after a
+      # cancel, a deploy:sandbox could otherwise submit its stack after the
+      # destroy), and reports a failed destroy as a warning. It runs only once AWS credentials were set up: before that
+      # nothing was deployed, and there is nothing to destroy it with.
       - name: Destroy sandbox
-        if: always()
+        if: always() && steps.aws-creds.outcome == 'success'
         working-directory: test-apps/native-bindings
-        run: npm run destroy || true
+        run: node "$GITHUB_WORKSPACE/scripts/ci/e2e-cleanup.mjs" -- npm run sandbox:destroy
 
   # Aggregate gate so this can be a single required status check in branch
   # protection. Always runs (even when the e2e jobs are skipped for unrelated

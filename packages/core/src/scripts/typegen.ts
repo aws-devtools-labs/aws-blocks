@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * `blocks typegen` — generate the type-safe key augmentation for `getSecret` /
+ * `cdk-blocks typegen` — generate the type-safe key augmentation for `getSecret` /
  * `getConfig` in a Blocks app. Statically scans the app's `secret('...')` /
  * `config('...')` calls (no execution, no AWS credentials) and writes a `.d.ts`
  * that narrows the runtime getters to your declared keys (autocomplete + typo

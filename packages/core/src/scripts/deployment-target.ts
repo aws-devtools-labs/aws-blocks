@@ -21,7 +21,18 @@ export interface DeploymentTarget {
 	 * selects one. The SDK reads `AWS_PROFILE` itself.
 	 */
 	profile?: string;
+	/**
+	 * The `@aws-cdk/core:bootstrapQualifier` context value, if any: from `cdk.json`, then
+	 * `cdk.context.json`, then `~/.cdk.json`, the order in which CDK looks it up.
+	 */
+	bootstrapQualifier?: string;
 }
+
+/** The context key that selects the CDK bootstrap resources for the default stack synthesizer. */
+const BOOTSTRAP_QUALIFIER_CONTEXT = '@aws-cdk/core:bootstrapQualifier';
+
+/** A Region code; any other value prints quoted or as a placeholder, so that it cannot write terminal control sequences. */
+export const REGION_CODE = /^[a-z0-9-]+$/;
 
 async function readCdkSettings(path: string): Promise<Record<string, unknown>> {
 	try {
@@ -32,6 +43,25 @@ async function readCdkSettings(path: string): Promise<Record<string, unknown>> {
 	}
 	// Do not show the path or the file contents. This error can go to telemetry.
 	throw new Error('Could not read CDK configuration. Check cdk.json and ~/.cdk.json before deploying.');
+}
+
+/**
+ * Read `cdk.context.json`. CDK rejects a malformed file itself, so here it only
+ * means that the file sets no context.
+ */
+async function readCdkContext(path: string): Promise<unknown> {
+	try {
+		return JSON.parse(await readFile(path, 'utf8'));
+	} catch {
+		return undefined;
+	}
+}
+
+/** The bootstrap qualifier in a context object, when it is a non-empty string. */
+function contextQualifier(context: unknown): string | undefined {
+	if (context === null || typeof context !== 'object') return undefined;
+	const value: unknown = Reflect.get(context, BOOTSTRAP_QUALIFIER_CONTEXT);
+	return typeof value === 'string' && value ? value : undefined;
 }
 
 /** The home directory, as the SDK and CDK find it. */
@@ -84,9 +114,10 @@ export async function resolveDeploymentTarget({
 	projectRoot = process.cwd(),
 }: DeploymentTargetOptions = {}): Promise<DeploymentTarget> {
 	const home = homeDirectory(env);
-	const [userSettings, projectSettings] = await Promise.all([
+	const [userSettings, projectSettings, projectContext] = await Promise.all([
 		readCdkSettings(join(home, '.cdk.json')),
 		readCdkSettings(join(projectRoot, 'cdk.json')),
+		readCdkContext(join(projectRoot, 'cdk.context.json')),
 	]);
 	const settings = { ...userSettings, ...projectSettings };
 	const settingsProfile = typeof settings.profile === 'string' && settings.profile ? settings.profile : undefined;
@@ -96,10 +127,15 @@ export async function resolveDeploymentTarget({
 	const hasEnvKeys = environmentAccessKeys(env) !== undefined;
 	const passDefaultProfile = !env.AWS_PROFILE && !hasEnvKeys && Boolean(env.AWS_DEFAULT_PROFILE);
 	const profile = settingsProfile ?? (passDefaultProfile ? env.AWS_DEFAULT_PROFILE : undefined);
+	const qualifier =
+		contextQualifier(projectSettings.context) ??
+		contextQualifier(projectContext) ??
+		contextQualifier(userSettings.context);
+	const bootstrapQualifier = qualifier ? { bootstrapQualifier: qualifier } : {};
 	const cdkRegion = typeof settings.region === 'string' && settings.region ? settings.region : null;
 	const region =
 		cdkRegion || env.AWS_REGION || env.AMAZON_REGION || env.AWS_DEFAULT_REGION || env.AMAZON_DEFAULT_REGION;
-	if (region) return { region, profile };
+	if (region) return { region, profile, ...bootstrapQualifier };
 
 	const { loadSharedConfigFiles } = await import('@smithy/shared-ini-file-loader');
 	const { configFile, credentialsFile } = await loadSharedConfigFiles({
@@ -116,5 +152,6 @@ export async function resolveDeploymentTarget({
 			configFile.default?.region ??
 			null,
 		profile,
+		...bootstrapQualifier,
 	};
 }

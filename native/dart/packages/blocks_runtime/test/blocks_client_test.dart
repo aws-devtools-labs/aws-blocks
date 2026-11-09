@@ -159,5 +159,157 @@ void main() {
       await client.call('test', {});
       expect(sentHeaders!['cookie'], 'token=xyz');
     });
+
+    Future<String?> cookieSentTo(
+      String baseUrl,
+      InMemorySessionStore store,
+    ) async {
+      String? sent;
+      final mockClient = MockClient((req) async {
+        sent = req.headers['cookie'];
+        return http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+        );
+      });
+      await BlocksClient(
+        baseUrl: baseUrl,
+        client: mockClient,
+        sessionStore: store,
+      ).call('test', {});
+      return sent;
+    }
+
+    test('stores cookies scoped to the responding host', () async {
+      final store = InMemorySessionStore();
+      final mockClient = MockClient(
+        (req) async => http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+          headers: {'set-cookie': 'session=abc123; Path=/; HttpOnly'},
+          request: req,
+        ),
+      );
+      await BlocksClient(
+        baseUrl: 'http://test/aws-blocks/api',
+        client: mockClient,
+        sessionStore: store,
+      ).call('test', {});
+      expect(
+        await cookieSentTo('http://test/aws-blocks/api', store),
+        'session=abc123',
+      );
+      expect(await cookieSentTo('http://other/aws-blocks/api', store), isNull);
+    });
+
+    test('sends a Secure cookie only over https', () async {
+      final store = InMemorySessionStore()
+        ..setCookies(
+          'session=s; Path=/; Secure',
+          requestUri: Uri.parse('https://test/aws-blocks/api'),
+        );
+      expect(
+        await cookieSentTo('https://test/aws-blocks/api', store),
+        'session=s',
+      );
+      expect(await cookieSentTo('http://test/aws-blocks/api', store), isNull);
+    });
+
+    test('sends a cookie only to paths under its Path', () async {
+      final store = InMemorySessionStore()
+        ..setCookies(
+          'session=s; Path=/prod',
+          requestUri: Uri.parse('https://test/prod/aws-blocks/api'),
+        );
+      expect(
+        await cookieSentTo('https://test/prod/aws-blocks/api', store),
+        'session=s',
+      );
+      expect(
+        await cookieSentTo('https://test/beta/aws-blocks/api', store),
+        isNull,
+      );
+    });
+
+    test('scopes cookies to the URL the response came from', () async {
+      final store = InMemorySessionStore();
+      final redirectingClient = _FinalUrlClient(
+        Uri.parse('https://final/next/aws-blocks/api'),
+        jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+        headers: {'set-cookie': 'session=abc123; HttpOnly'},
+      );
+      await BlocksClient(
+        baseUrl: 'https://test/aws-blocks/api',
+        client: redirectingClient,
+        sessionStore: store,
+      ).call('test', {});
+      expect(
+        await cookieSentTo('https://final/next/aws-blocks/api', store),
+        'session=abc123',
+      );
+      expect(
+        await cookieSentTo('https://final/other/aws-blocks/api', store),
+        isNull,
+      );
+      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+    });
+
+    test('drops a cookie the server expires', () async {
+      final store = InMemorySessionStore()
+        ..setCookies(
+          'session=s; Path=/',
+          requestUri: Uri.parse('https://test/aws-blocks/api'),
+        );
+      final mockClient = MockClient(
+        (req) async => http.Response(
+          jsonEncode({'jsonrpc': '2.0', 'result': null, 'id': 1}),
+          200,
+          headers: {'set-cookie': 'session=; Max-Age=0; Path=/'},
+          request: req,
+        ),
+      );
+      await BlocksClient(
+        baseUrl: 'https://test/aws-blocks/api',
+        client: mockClient,
+        sessionStore: store,
+      ).call('test', {});
+      expect(store.cookies, isEmpty);
+      expect(await cookieSentTo('https://test/aws-blocks/api', store), isNull);
+    });
   });
+}
+
+/// Streamed response that reports the URL it was received from, as clients
+/// that follow redirects do.
+class _ResponseWithFinalUrl extends http.StreamedResponse
+    implements http.BaseResponseWithUrl {
+  _ResponseWithFinalUrl(
+    super.stream,
+    super.statusCode, {
+    required this.url,
+    super.request,
+    super.headers,
+  });
+
+  @override
+  final Uri url;
+}
+
+/// Client whose responses report [finalUrl], simulating a followed redirect.
+class _FinalUrlClient extends http.BaseClient {
+  _FinalUrlClient(this.finalUrl, this.body, {this.headers = const {}});
+
+  final Uri finalUrl;
+  final String body;
+  final Map<String, String> headers;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async =>
+      _ResponseWithFinalUrl(
+        Stream.value(utf8.encode(body)),
+        200,
+        url: finalUrl,
+        request: request,
+        headers: headers,
+      );
 }

@@ -1,17 +1,29 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
-import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
+import { inspect } from 'node:util';
+import { clearRouteRegistry, ApiError, blocksError, getRegisteredRoutes, isWireSafeError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
+import { requestBaseUrl } from '@aws-blocks/core/lambda-handler';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
-import { handleDiscovery, handleJwks, handleAuthorize, handleAuthorizeSubmit, stubIssuerUrl } from './engines/stub-idp.js';
-import { buildExchangeUrl } from './engines/oidc-client-engine.js';
+import {
+	handleDiscovery,
+	handleJwks,
+	handleAuthorize,
+	handleAuthorizeSubmit,
+	stubIssuerUrl,
+	deriveStubCodeKey,
+	stubCodeEncode,
+	stubCodeDecode,
+} from './engines/stub-idp.js';
+import { buildExchangeUrl, withCause } from './engines/oidc-client-engine.js';
 import { SignJWT, generateKeyPair, exportJWK } from 'jose';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
@@ -52,7 +64,9 @@ class CallbackProbe extends AuthOIDC {
 }
 
 describe('computeCallbackUrl — public origin (Phase C)', () => {
-	const GATEWAY = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/real/signin/p';
+	const GATEWAY_ORIGIN = 'https://abc123.execute-api.us-east-1.amazonaws.com';
+	// `ctx.request.url` as the deployed handler builds it: the route path, no stage.
+	const GATEWAY = `${GATEWAY_ORIGIN}/aws-blocks/auth/real/signin/p`;
 
 	afterEach(() => { delete process.env.BLOCKS_PUBLIC_ORIGIN; });
 
@@ -62,18 +76,23 @@ describe('computeCallbackUrl — public origin (Phase C)', () => {
 		// Even though the request landed on the raw execute-api host with a /prod
 		// stage, the redirect_uri is built from the trusted CloudFront origin so
 		// the cookie-scoped public domain is used and no stage leaks in.
-		assert.strictEqual(
-			auth.callbackUrlFor(freshContext(GATEWAY)),
-			'https://app.example.com/aws-blocks/auth/callback',
-		);
+		const url = requestBaseUrl.run(`${GATEWAY_ORIGIN}/prod`, () => auth.callbackUrlFor(freshContext(GATEWAY)));
+		assert.strictEqual(url, 'https://app.example.com/aws-blocks/auth/callback');
 	});
 
-	test('falls back to the request URL (preserving stage) when unset — sandbox/local', () => {
+	test('falls back to the request base URL (preserving stage) when unset — deploy reached at the gateway', () => {
+		delete process.env.BLOCKS_PUBLIC_ORIGIN;
+		const auth = new CallbackProbe(ROOT, unique('cb'), { providers: [stubIdp({ name: 'p' })] });
+		const url = requestBaseUrl.run(`${GATEWAY_ORIGIN}/prod`, () => auth.callbackUrlFor(freshContext(GATEWAY)));
+		assert.strictEqual(url, `${GATEWAY_ORIGIN}/prod/aws-blocks/auth/callback`);
+	});
+
+	test('falls back to the request origin when unset — local dev', () => {
 		delete process.env.BLOCKS_PUBLIC_ORIGIN;
 		const auth = new CallbackProbe(ROOT, unique('cb'), { providers: [stubIdp({ name: 'p' })] });
 		assert.strictEqual(
-			auth.callbackUrlFor(freshContext(GATEWAY)),
-			'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback',
+			auth.callbackUrlFor(freshContext('http://localhost:3000/aws-blocks/auth/real/signin/p')),
+			'http://localhost:3000/aws-blocks/auth/callback',
 		);
 	});
 });
@@ -377,6 +396,7 @@ describe('AuthOIDC construction validation', () => {
 
 describe('stub IdP /authorize', () => {
 	const HTTPS_REDIRECT = 'https://app.example.com/aws-blocks/auth/callback';
+	const stubOpts = { codeKey: () => deriveStubCodeKey('test-cookie-secret', 'google') };
 
 	function authorizeContext(provider: string, params: Record<string, string>, body?: string) {
 		const url = new URL(`http://localhost:3000/aws-blocks/auth/idp/${provider}/authorize`);
@@ -408,7 +428,7 @@ describe('stub IdP /authorize', () => {
 	test('interactive default renders a login screen (200 HTML)', async () => {
 		const provider = stubIdp({ name: 'google' });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 200);
 		assert.strictEqual(cap.headers.get('Content-Type'), 'text/html');
 		assert.match(String(cap.sent), /Blocks stub IdP: sign in/);
@@ -416,10 +436,11 @@ describe('stub IdP /authorize', () => {
 	});
 
 	test('login form action preserves the API Gateway stage prefix', async () => {
-		// Behind a deployed gateway the request path carries a stage (e.g. /prod).
-		// The picker POST must keep it, or the form posts to a non-existent
-		// resource and API Gateway returns Forbidden.
-		const url = new URL('https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/idp/google/authorize');
+		// Behind a deployed gateway the request's base URL carries a stage (e.g.
+		// /prod), while `ctx.request.url` is the route path. The picker POST must
+		// keep the stage, or the form posts to a non-existent resource and API
+		// Gateway returns Forbidden.
+		const url = new URL('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/auth/idp/google/authorize');
 		for (const [k, v] of Object.entries(baseParams)) url.searchParams.set(k, v);
 		let sent: unknown;
 		const ctx = {
@@ -431,7 +452,9 @@ describe('stub IdP /authorize', () => {
 			},
 		} as any;
 		const provider = stubIdp({ name: 'google' });
-		await handleAuthorize(provider, ctx);
+		await requestBaseUrl.run('https://abc123.execute-api.us-east-1.amazonaws.com/prod', () =>
+			handleAuthorize(provider, ctx, stubOpts),
+		);
 		assert.match(
 			String(sent),
 			/action="https:\/\/abc123\.execute-api\.us-east-1\.amazonaws\.com\/prod\/aws-blocks\/auth\/idp\/google\/authorize"/,
@@ -441,7 +464,7 @@ describe('stub IdP /authorize', () => {
 	test('onAuthorize returning a user auto-approves (302 to callback)', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		const location = cap.headers.get('Location')!;
 		assert.match(location, /^https:\/\/app\.example\.com\/aws-blocks\/auth\/callback\?code=/);
@@ -451,7 +474,7 @@ describe('stub IdP /authorize', () => {
 	test('onAuthorize throwing denies (302 with error)', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: () => { throw new Error('nope'); } });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		assert.match(cap.headers.get('Location')!, /error=access_denied/);
 	});
@@ -462,7 +485,7 @@ describe('stub IdP /authorize', () => {
 			onAuthorize: (req) => req.users.find((u) => u.email === req.loginHint),
 		});
 		const cap = authorizeContext('google', { ...baseParams, login_hint: 'google-user@stub.invalid' });
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302, 'matching loginHint signs in');
 		assert.match(cap.headers.get('Location')!, /code=/);
 	});
@@ -476,7 +499,7 @@ describe('stub IdP /authorize', () => {
 			],
 		});
 		const cap = authorizeContext('corporate', baseParams);
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 200);
 		const html = String(cap.sent);
 		assert.match(html, /alice@example\.com/);
@@ -495,7 +518,7 @@ describe('stub IdP /authorize', () => {
 			onAuthorize: (req) => req.users.find((u) => u.email === req.loginHint),
 		});
 		const cap = authorizeContext('corporate', { ...baseParams, login_hint: 'bob@example.com' });
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302, 'inline user matched by loginHint signs in');
 		assert.match(cap.headers.get('Location')!, /code=/);
 	});
@@ -503,7 +526,7 @@ describe('stub IdP /authorize', () => {
 	test('rejects custom-scheme redirect_uri', async () => {
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => req.users[0] });
 		const cap = authorizeContext('google', { ...baseParams, redirect_uri: 'myapp://callback' });
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 	});
 
@@ -513,7 +536,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/spa-callback?scope=openid',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -527,7 +550,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/callback?state=abc',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -541,7 +564,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/callback?error_description=x',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -555,7 +578,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?State=abc',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302, 'capital-S `State` is a distinct, non-reserved query key');
 		assert.match(cap.headers.get('Location')!, /State=abc/);
 		assert.match(cap.headers.get('Location')!, /code=/);
@@ -567,7 +590,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/auth/callback#state=1',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 400);
 		assert.deepStrictEqual(cap.sent, {
 			error: 'invalid_request',
@@ -581,7 +604,7 @@ describe('stub IdP /authorize', () => {
 			...baseParams,
 			redirect_uri: 'https://app.example.com/aws-blocks/auth/callback?tenant=acme',
 		});
-		await handleAuthorize(provider, cap.ctx);
+		await handleAuthorize(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		assert.match(cap.headers.get('Location')!, /tenant=acme/);
 		assert.match(cap.headers.get('Location')!, /code=/);
@@ -591,7 +614,7 @@ describe('stub IdP /authorize', () => {
 		const provider = stubIdp({ name: 'google' });
 		const form = new URLSearchParams({ ...baseParams, scope: 'openid email', sub: 'stub-google-user' });
 		const cap = authorizeContext('google', {}, form.toString());
-		await handleAuthorizeSubmit(provider, cap.ctx);
+		await handleAuthorizeSubmit(provider, cap.ctx, stubOpts);
 		assert.strictEqual(cap.status, 302);
 		assert.match(cap.headers.get('Location')!, /^https:\/\/app\.example\.com\/aws-blocks\/auth\/callback\?code=/);
 	});
@@ -608,7 +631,7 @@ describe('stub IdP /authorize', () => {
 			onAuthorize: (req) => { seen = req.users.map((u) => u.sub); return req.users.find((u) => u.email === req.loginHint); },
 		});
 		const cap = authorizeContext('google', { ...baseParams, login_hint: 'bob@example.com' });
-		await handleAuthorize(provider, cap.ctx, dir);
+		await handleAuthorize(provider, cap.ctx, { ...stubOpts, dataDir: dir });
 		rmSync(dir, { recursive: true, force: true });
 		assert.deepStrictEqual(seen, ['alice', 'bob']);
 		assert.strictEqual(cap.status, 302, 'picked Bob by loginHint');
@@ -619,10 +642,97 @@ describe('stub IdP /authorize', () => {
 		let seen: string[] = [];
 		const provider = stubIdp({ name: 'google', onAuthorize: (req) => { seen = req.users.map((u) => u.sub); return req.users[0]; } });
 		const cap = authorizeContext('google', baseParams);
-		await handleAuthorize(provider, cap.ctx, dir);
+		await handleAuthorize(provider, cap.ctx, { ...stubOpts, dataDir: dir });
 		rmSync(dir, { recursive: true, force: true });
 		assert.deepStrictEqual(seen, ['stub-google-user']);
 		assert.strictEqual(cap.status, 302);
+	});
+});
+
+describe('stub IdP authorization-code signing', () => {
+	const payload = () => ({
+		clientId: 'stub-client-id',
+		codeChallenge: 'abc',
+		codeChallengeMethod: 'S256',
+		state: 'xyz',
+		nonce: 'n',
+		redirectUri: 'https://app.example.com/aws-blocks/auth/callback',
+		scopes: ['openid'],
+		user: { sub: 'stub-google-user', email: 'google-user@stub.invalid' },
+		exp: Math.floor(Date.now() / 1000) + 300,
+	});
+	const keyA = deriveStubCodeKey('test-cookie-secret', 'A');
+
+	test('round-trips a code signed with a derived key', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const decoded = stubCodeDecode(code, keyA);
+		assert.ok(decoded);
+		assert.strictEqual(decoded.clientId, 'stub-client-id');
+		assert.strictEqual(decoded.user.sub, 'stub-google-user');
+	});
+
+	test('key derivation is deterministic per secret and provider', () => {
+		assert.ok(deriveStubCodeKey('test-cookie-secret', 'A').equals(keyA));
+		assert.ok(!deriveStubCodeKey('other-cookie-secret', 'A').equals(keyA));
+	});
+
+	test('rejects a code signed with a different key (the former fixed key)', () => {
+		const code = stubCodeEncode(payload(), 'blocks-stub-idp-code-signing-secret-not-for-production');
+		assert.strictEqual(stubCodeDecode(code, keyA), null);
+	});
+
+	test('rejects a code whose payload was modified', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const dot = code.lastIndexOf('.');
+		const body = code.slice(0, dot);
+		const i = Math.floor(body.length / 2);
+		const flipped = body.slice(0, i) + (body[i] === 'A' ? 'B' : 'A') + body.slice(i + 1);
+		assert.strictEqual(stubCodeDecode(`${flipped}${code.slice(dot)}`, keyA), null);
+	});
+
+	test('returns null without throwing for a truncated or wrong-length MAC', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		assert.doesNotThrow(() => stubCodeDecode(code.slice(0, -4), keyA));
+		assert.strictEqual(stubCodeDecode(code.slice(0, -4), keyA), null);
+		assert.strictEqual(stubCodeDecode(`${code}AAAA`, keyA), null);
+		assert.strictEqual(stubCodeDecode(code.slice(0, code.lastIndexOf('.') + 1), keyA), null);
+		assert.strictEqual(stubCodeDecode('no-dot-here', keyA), null);
+	});
+
+	test('rejects a MAC with trailing base64 padding appended', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		assert.strictEqual(stubCodeDecode(`${code}=`, keyA), null);
+		assert.strictEqual(stubCodeDecode(`${code}==`, keyA), null);
+	});
+
+	test('rejects a MAC whose last character is flipped to a byte-equivalent spelling', () => {
+		// A 32-byte MAC is 43 base64url chars; the last char's low 2 bits are
+		// unused, so toggling its lowest alphabet bit decodes to the same bytes.
+		const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+		const code = stubCodeEncode(payload(), keyA);
+		const last = code[code.length - 1];
+		const sibling = alphabet[alphabet.indexOf(last) ^ 1];
+		const tampered = code.slice(0, -1) + sibling;
+		assert.notStrictEqual(tampered, code);
+		assert.strictEqual(stubCodeDecode(tampered, keyA), null);
+	});
+
+	test('rejects a MAC with an inserted non-base64url character', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const dot = code.lastIndexOf('.');
+		const i = dot + 1 + Math.floor((code.length - dot - 1) / 2);
+		assert.strictEqual(stubCodeDecode(`${code.slice(0, i)}!${code.slice(i)}`, keyA), null);
+	});
+
+	test('rejects a code minted for provider A under provider B\'s key', () => {
+		const code = stubCodeEncode(payload(), keyA);
+		const keyB = deriveStubCodeKey('test-cookie-secret', 'B');
+		assert.strictEqual(stubCodeDecode(code, keyB), null);
+	});
+
+	test('rejects an expired code signed with the right key', () => {
+		const code = stubCodeEncode({ ...payload(), exp: Math.floor(Date.now() / 1000) - 1 }, keyA);
+		assert.strictEqual(stubCodeDecode(code, keyA), null);
 	});
 });
 
@@ -1152,6 +1262,37 @@ describe('Cognito issuer validation - cross-pool rejection', () => {
 		const user = await engine.verifyAccessToken(token, ctx);
 		assert.strictEqual(user, null, 'token from wrong region must be rejected');
 	});
+
+	describe('token-endpoint failure keeps the Cognito response body off the wire', () => {
+		const RAW_BODY = '{"error":"invalid_client","error_description":"Client 123456789012 arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_LegitPool1"}';
+
+		afterEach(() => {
+			mock.restoreAll();
+		});
+
+		test('handleExchange throws a stable branded message with the body on a non-enumerable cause', async () => {
+			mock.method(globalThis, 'fetch', async () => new Response(RAW_BODY, { status: 400 }));
+			const engine = makeCognitoEngine(LEGITIMATE_POOL_ID);
+
+			const thrown = await engine
+				.handleExchange(
+					{ code: 'c', verifier: 'v', state: 's', nonce: 'n', provider: 'google', callbackUrl: 'http://localhost:3000/aws-blocks/auth/callback' },
+					freshContext(),
+				)
+				.then(
+					() => assert.fail('handleExchange should reject'),
+					(err: unknown) => err,
+				);
+
+			assert.ok(thrown instanceof Error);
+			assert.ok(isWireSafeError(thrown), 'still a branded engine error');
+			assert.ok(thrown.message.includes('HTTP 400'), `the status is kept, got: ${thrown.message}`);
+			assert.ok(!thrown.message.includes('123456789012'), `message must not embed the token-endpoint body: ${thrown.message}`);
+			assert.ok(!thrown.message.includes('invalid_client'));
+			assert.ok(thrown.cause instanceof Error && thrown.cause.message === RAW_BODY, 'the body is kept on cause for server-side diagnostics');
+			assert.ok(!Object.keys(thrown).includes('cause'), 'cause is non-enumerable (Core rule 5)');
+		});
+	});
 });
 
 describe('alg:none rejection', () => {
@@ -1286,4 +1427,156 @@ describe('alg:none rejection', () => {
 		const user = await auth.getCurrentUser(ctx);
 		assert.strictEqual(user, null, 'alg:none with valid claims must still be rejected');
 	});
+});
+
+// ── Route error redaction ─────────────────────────────────────────────────────
+//
+// The auth RawRoutes catch their own errors, so core's RawRoute sanitizer never
+// sees them. An unbranded error (an `onSignIn` hook's driver error, an SSM/SDK
+// failure) must collapse to a nameless generic 500 with the original logged
+// server-side; an ApiError or a branded Building Block error keeps its status,
+// name and message.
+
+describe('auth routes never echo raw error text', () => {
+	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: ssm:GetParameter';
+
+	// Every route-facing AuthOIDC method throws `failure`, so each route's catch is
+	// exercised directly. The callback route's second catch (server-initiated
+	// exchange) is reached by dispatching to 'server-exchange' first.
+	class FailingAuth extends AuthOIDC {
+		failure: unknown = new Error('unset');
+		dispatchFails = true;
+		override async handleCallbackDispatch(): Promise<{ kind: 'server-exchange' }> {
+			if (this.dispatchFails) throw this.failure;
+			return { kind: 'server-exchange' };
+		}
+		override async handleCallback(): Promise<never> {
+			throw this.failure;
+		}
+		override async getSignInUrl(): Promise<never> {
+			throw this.failure;
+		}
+		override async handleExchange(): Promise<never> {
+			throw this.failure;
+		}
+		override async getAuthorizeParams(): Promise<never> {
+			throw this.failure;
+		}
+		override async refreshBearerTokens(): Promise<never> {
+			throw this.failure;
+		}
+	}
+
+	const VALID_CSRF = 'c'.repeat(32);
+	type RouteCase = { label: string; method: string; path: string; body?: unknown; rawBody?: string; dispatchFails?: boolean };
+	const routeCases: RouteCase[] = [
+		{ label: 'callback (dispatch)', method: 'GET', path: '/aws-blocks/auth/callback' },
+		{ label: 'callback (server exchange)', method: 'GET', path: '/aws-blocks/auth/callback', dispatchFails: false },
+		{ label: 'signin', method: 'GET', path: '/aws-blocks/auth/signin/google' },
+		{
+			label: 'exchange',
+			method: 'POST',
+			path: '/aws-blocks/auth/exchange',
+			body: { code: 'c', verifier: 'v', state: 's', provider: 'google', callbackUrl: 'http://localhost:3000/aws-blocks/auth/callback' },
+		},
+		{ label: 'authorize-params GET', method: 'GET', path: '/aws-blocks/auth/authorize-params/google' },
+		{ label: 'authorize-params POST', method: 'POST', path: '/aws-blocks/auth/authorize-params/google', body: { csrf: VALID_CSRF } },
+		{ label: 'refresh', method: 'POST', path: '/aws-blocks/auth/refresh', body: { refreshToken: 'r', provider: 'google' } },
+	];
+
+	function setup(failure: unknown) {
+		const errors: unknown[] = [];
+		const logger: ChildLogger = {
+			debug() {},
+			info() {},
+			warn() {},
+			error(message, context) {
+				// inspect() renders an Error's message, as the real logger does; JSON.stringify drops it.
+				errors.push(inspect({ message, context }));
+			},
+			child: () => logger,
+		};
+		const auth = new FailingAuth(ROOT, unique('route-redact'), {
+			providers: [stubIdp({ name: 'google' })],
+			allowBearerAuth: true,
+			logger,
+		});
+		auth.failure = failure;
+		return { auth, errors };
+	}
+
+	async function invoke(auth: FailingAuth, c: RouteCase) {
+		auth.dispatchFails = c.dispatchFails ?? true;
+		const route = getRegisteredRoutes().find((r) => r.method === c.method && r.path === c.path);
+		assert.ok(route, `route ${c.method} ${c.path} should be mounted`);
+		let status = 200;
+		let sent: unknown;
+		const ctx = {
+			request: {
+				headers: new Headers(),
+				body: null,
+				// `rawBody` reproduces the runtime's `JSON.parse(bodyText)` on a malformed body.
+				json: async () => (c.rawBody !== undefined ? JSON.parse(c.rawBody) : c.body),
+				text: async () => c.rawBody ?? JSON.stringify(c.body ?? null),
+				url: new URL(`http://localhost:3000${c.path}?code=x&state=y`),
+				params: {},
+			},
+			response: {
+				headers: new Headers(),
+				get status() { return status; },
+				set status(v: number) { status = v; },
+				send: (b: unknown) => { sent = b; },
+			},
+		} as unknown as BlocksContext;
+		await route.handler(ctx);
+		return { status, body: sent as { error?: string; name?: string } };
+	}
+
+	for (const c of routeCases) {
+		test(`${c.label}: an unbranded error becomes a nameless generic 500 and is logged`, async () => {
+			const { auth, errors } = setup(new Error(RAW_DETAIL));
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 500);
+			assert.deepStrictEqual(body, { error: 'Internal error' });
+			assert.ok(JSON.stringify(errors).includes(RAW_DETAIL), 'the original error is logged server-side');
+		});
+
+		test(`${c.label}: an ApiError keeps its status, name and message`, async () => {
+			const { auth } = setup(new ApiError('Sign-in is disabled for this account', 403, { name: 'SignInBlockedException' }));
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 403);
+			assert.deepStrictEqual(body, { error: 'Sign-in is disabled for this account', name: 'SignInBlockedException' });
+		});
+
+		test(`${c.label}: a branded Building Block error keeps its name and message as a 400`, async () => {
+			const branded = blocksError(AuthOIDCErrors.InvalidState, 'state mismatch');
+			const { auth } = setup(branded);
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 400);
+			assert.deepStrictEqual(body, { error: branded.message, name: AuthOIDCErrors.InvalidState });
+		});
+	}
+
+	for (const path of ['/aws-blocks/auth/exchange', '/aws-blocks/auth/refresh']) {
+		test(`${path}: a malformed JSON body is a 400 for missing fields, not a 500`, async () => {
+			const { auth } = setup(new Error('unreachable'));
+			const { status, body } = await invoke(auth, { label: 'malformed', method: 'POST', path, rawBody: '{not json' });
+			assert.strictEqual(status, 400);
+			assert.match(String(body.error), /Missing required fields/);
+		});
+	}
+
+	// A failed Cognito token exchange throws a branded engine error whose response body rides
+	// only on the non-enumerable `cause`. The body must stay off the wire but reach the log.
+	const TOKEN_BODY = '{"error":"invalid_client","error_description":"Client 123456789012 rejected"}';
+	for (const c of routeCases.filter((rc) => rc.label === 'exchange' || rc.label === 'callback (server exchange)')) {
+		test(`${c.label}: a branded error's cause is logged server-side and kept out of the response`, async () => {
+			const failure = withCause(blocksError('AuthOIDCEngineError', 'CognitoFederationEngine: Cognito token exchange failed (HTTP 400)'), new Error(TOKEN_BODY));
+			const { auth, errors } = setup(failure);
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 400);
+			assert.ok(!JSON.stringify(body).includes('123456789012'), `response must not carry the token-endpoint body: ${JSON.stringify(body)}`);
+			assert.ok(JSON.stringify(errors).includes('invalid_client'), 'the token-endpoint body is logged server-side');
+		});
+	}
 });

@@ -37,20 +37,28 @@ const bucket = new FileBucket(scope, id, options?)
 | `noncurrentVersionExpirationDays` | `number` | Days after which **noncurrent** (superseded) object versions are permanently expired, bounding the storage cost that versioning would otherwise let grow unbounded. Only applies when versioning is enabled (the default). **Default: `90`.** Must be a positive integer — a non-positive or non-integer value throws at synth. There is no disable sentinel; to drop the rule entirely, disable versioning (`versioned: false`). Ignored by the mock and browser runtimes. |
 | `corsRules` | `CorsRule[]` | CORS rules for browser-based access. **Default: none — browsers block every cross-origin `fetch()` to the deployed bucket.** Required whenever browser code fetches a presigned URL directly (`download()` / `upload()` on a file handle, or `fetch()` on a `getUrl()` / `putUrl()` URL) against a deployed sandbox or production stack. Not inherited from the stack's `defaults.allowedOrigins` or the Hosting domain. Ignored when `bucket` wraps an existing bucket. See [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors), and [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
-| `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.accessLogging`)** when omitted — so a production-postured stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
+| `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.storageAccessLogging`, then `BlocksDefaults.accessLogging`)** when omitted — so a stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
+| `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can be added to a deployed bucket, but can't be turned off once on. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
 
 All FileBucket-provisioned buckets **enforce TLS unconditionally** (`enforceSSL: true`) — CDK attaches a bucket policy denying any request where `aws:SecureTransport` is `false`, closing the in-transit exposure gap. This is not configurable.
 
+The S3 bucket name is derived from the scope chain: the FileBucket id joined to its parent scope ids with `-`. If that name fits S3's 63-character limit, it is used as-is. If it is longer, it is shortened to the start of the name plus `-` and an 8-character hash. The shortened name is the same on every deploy and different from the names of other buckets. A name that breaks any other S3 naming rule (for example, one with uppercase letters) still fails `cdk synth` with a `ValidationFailed` error. To read the resolved name, call `getSdkIdentifiers(bucket).bucketName` (from `@aws-blocks/blocks`).
+
 ### PutOptions
 
 | Option | Type | Description |
 |--------|------|-------------|
 | `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. |
-| `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
+| `metadata` | `Record<string, string>` | Custom metadata key-value pairs, set when the object is written. It can't be edited in place: each `put()` replaces it, so a `put()` without `metadata` leaves none. See [Changing Metadata](#changing-metadata). S3 stores the keys in lowercase, so use lowercase keys. |
 | `cacheControl` | `string` | Cache-Control header value. |
+
+### Presigned URL options
+
+`getUrl`, `putUrl`, `getFileHandle`, and `createUploadHandle` accept `expiresIn` in seconds. It must be an integer from `1` to `604800` (seven days); the default is `3600`.
 
 ### CorsRule
 
@@ -105,6 +113,7 @@ if (!file) {
 | `FileBucketErrors.FileNotFound` | `NoSuchKey` | Surfaced by presigned-URL 404s etc. **Not** thrown by `get()`, which returns `null`. |
 | `FileBucketErrors.FileTooLarge` | `EntityTooLarge` | File exceeds size limits. |
 | `FileBucketErrors.VersionNotFound` | `NoSuchVersion` | Thrown by `restoreVersion()` when the target `versionId` cannot be resolved. |
+| `FileBucketErrors.PresignedUploadUnsupported` | `PresignedUploadUnsupported` | Thrown by `putUrl()` and `createUploadHandle()` on a bucket with `objectLock` — see [Object Lock](#object-lock). |
 
 ```typescript
 import { isBlocksError } from '@aws-blocks/core';
@@ -138,6 +147,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 }));
 ```
+
+### Changing Metadata
+
+Object metadata is fixed when the object is written: S3 can only change metadata by rewriting the object, and FileBucket doesn't expose S3's server-side copy (`CopyObject`), so there is no call that edits it. Every `put()` replaces the object's metadata with what it passes, and a `put()` without `metadata` leaves the object with none. To change metadata, `put()` the same body again with the complete new set:
+
+```typescript
+const bucket = new FileBucket(scope, 'documents');
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async markReviewed(path: string) {
+    const file = await bucket.get(path);
+    if (!file) return null;
+    await bucket.put(path, file.body, {
+      contentType: file.contentType,
+      metadata: { ...file.metadata, status: 'reviewed' },
+    });
+    return { status: 'reviewed' };
+  },
+}));
+```
+
+- The rewrite downloads and re-uploads the whole object, so it costs a GET and a PUT and takes longer for a large file.
+- `get()` doesn't return `cacheControl`. If you set one, pass it again.
+- Versioning is on by default (see [Versioned Bucket](#versioned-bucket)), so each rewrite stores another full copy of the object as a noncurrent version. It's kept, and billed, for `noncurrentVersionExpirationDays` (default 90). Until then the previous metadata stays on the previous version, and `restoreVersion()` brings it back with that version.
+- The rewrite isn't atomic. Anything written to the object between the `get()` and the `put()` (a new body or other metadata) is overwritten with what was read, and FileBucket has no conditional write to guard against it. Avoid rewriting objects that other code may be updating at the same time.
+- Uploads through presigned URLs (`putUrl()`, `createUploadHandle()`) carry no custom metadata. Set it afterwards with a rewrite like the one above.
+- S3 stores metadata keys in lowercase, so `get()` on AWS returns `{ owner: … }` for a key written as `Owner`. The local mock keeps the case you wrote (see [Mock vs AWS Behavior Differences](./DESIGN.md#mock-vs-aws-behavior-differences)). Use lowercase keys so both return the same thing.
 
 ### Presigned Upload URL
 
@@ -252,6 +288,27 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
+On a versioned bucket, `delete(path)` creates a delete marker without removing
+stored data versions; `get()` returns `null` and `scan()` omits the file.
+`delete(path, { versionId })` permanently removes that specific data version.
+On S3, deleting the current data version exposes the next entry in the version
+history, which may be another data version or a delete marker.
+
+The local mock reconciles its current body and metadata with the next stored
+data version when the newest data version is permanently deleted, or removes
+the current copies when none remain. This creates no replacement version and
+does not remove an active delete-marker flag; `get()` and `scan()` still honor
+that flag.
+
+**Local limitation:** the mock keeps only an active delete-marker flag, not
+delete markers ordered within the version history. A subsequent `put()` removes
+the flag. Consequently, `put(old)` → `delete()` → `put(replacement)` → permanent
+deletion of the replacement can expose `old` locally, whereas S3 would make the
+earlier delete marker current and treat the key as deleted. This case is not
+fixed by current-copy reconciliation. See
+[Mock vs AWS Behavior Differences](./DESIGN.md#mock-vs-aws-behavior-differences)
+and use a sandbox when testing deletion history across re-uploads.
+
 ### Access Logging
 
 Opt in to S3 server access logging. A dedicated, locked-down log bucket is provisioned and access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox, `ONE_YEAR` in production):
@@ -263,6 +320,46 @@ const bucket = new FileBucket(scope, 'uploads', {
   accessLogging: true,
 });
 ```
+
+To turn S3 access logging on for every FileBucket without enabling API Gateway access logging, set `storageAccessLogging` on the stack defaults:
+
+```typescript
+await BlocksStack.create(app, stackName, {
+  // ...
+  defaults: { ...BlocksPresets.production, storageAccessLogging: true },
+});
+```
+
+### Encryption with KMS
+
+Objects are encrypted with S3-managed keys (SSE-S3) by default. To control the key yourself, use a customer-managed KMS key:
+
+```typescript
+// A dedicated key for this bucket (yearly rotation, removed with the bucket).
+const invoices = new FileBucket(scope, 'invoices', { encryption: 'customer-managed' });
+
+// Or share a key you already own across buckets and tables.
+const key = FileBucket.fromKmsKey('arn:aws:kms:us-east-1:111122223333:key/abcd-1234');
+const exports = new FileBucket(scope, 'exports', { encryption: key });
+```
+
+The runtime role is granted `kms:Decrypt` / `kms:GenerateDataKey*` on the key, so `put`/`get` and presigned URLs keep working. For a key you bring yourself, its key policy must delegate to IAM in the account (the default key policy does). KMS adds a monthly key charge; S3 Bucket Keys keep per-request KMS charges low.
+
+### Object Lock
+
+Protect files from being overwritten or permanently deleted for a fixed period (write-once-read-many):
+
+```typescript
+const auditLog = new FileBucket(scope, 'audit-log', {
+  objectLock: { mode: 'governance', retentionDays: 365 },
+});
+```
+
+Every new version is locked for `retentionDays`. `delete(path)` still hides the file (S3 adds a delete marker), but permanently deleting a locked version with `delete(path, { versionId })` fails until the lock expires. In `'compliance'` mode nobody, including the account root user, can remove a locked version early; `'governance'` mode allows principals with `s3:BypassGovernanceRetention` to do so.
+
+**Upload through the backend.** S3 requires a signed `Content-MD5` or checksum header on every upload to an Object Lock bucket. A presigned URL is created before the file is known, so it can't carry one, and S3 rejects the upload. On these buckets `putUrl()` and `createUploadHandle()` throw `FileBucketErrors.PresignedUploadUnsupported` (locally and on AWS) rather than return a URL that fails. `put()` works, because the SDK adds the checksum. Downloads (`getUrl()`, `getFileHandle()`) are unaffected.
+
+Object Lock can be added to a bucket that is already deployed, but S3 can't turn it off once it's on. Locked objects also block teardown, so the bucket must be retained — pass `removalPolicy: 'retain'` when using Object Lock in a sandbox.
 
 ## Best Practices
 
@@ -285,7 +382,8 @@ const bucket = new FileBucket(scope, 'uploads', {
 
 ## Local Development
 
-Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Versioning is fully supported locally. Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
+Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Version-aware operations are available locally, with the historical delete-marker limitation described under [Versioned Bucket](#versioned-bucket). Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
 
+When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` continue to select the current file.
 
 

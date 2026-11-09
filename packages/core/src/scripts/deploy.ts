@@ -1,10 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { ensureSecrets, loadProductionEnv } from './ensure-secrets.js';
 import { assertAwsCredentials } from './preflight-credentials.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
@@ -12,8 +10,11 @@ import { resolveDeploymentTarget } from './deployment-target.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { runStreaming, buildCdkDeployArgs, formatDeploySignal } from './deploy-stream.js';
-import { waitForLiveBuild, type InvalidationProbe, type WaitForLiveResult } from './wait-live.js';
+import { generateDeployClient } from './deploy-client-codegen.js';
+import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
+import { createCdkOutput } from './cdk-output.js';
+import { log } from './log.js';
 
 export interface DeployOptions {
   cdkAppPath: string;
@@ -27,6 +28,24 @@ export interface DeployOptions {
   waitLive?: boolean;
   /** Overall budget for the liveness wait, in seconds. Defaults to 180. */
   waitLiveTimeoutSec?: number;
+  /**
+   * Called with the outputs of the deployed stack as soon as the deploy has read
+   * them from `.blocks-sandbox/outputs.json`, before the liveness wait. A launcher
+   * that reports the result records them here: a sandbox deploy of the same app
+   * rewrites that file with only its own stack, and can do so during the wait.
+   */
+  onDeployed?: (deployed: DeployedStack) => void;
+  /** How the user runs the deploy, in the guidance (for example `cdk-blocks deploy`). Default: `npm run deploy`. */
+  invocation?: string;
+}
+
+/** The stack a production deploy deployed, from the outputs it read. */
+export interface DeployedStack {
+  /** The stack whose outputs carry `ApiUrl`. */
+  stack: string;
+  apiUrl: string;
+  /** The frontend URL, when the stack hosts a frontend. */
+  hostingUrl?: string;
 }
 
 /** Default liveness-wait budget (seconds). */
@@ -208,7 +227,7 @@ export function makeInvalidationProbe(
 
 export async function deploy(options: DeployOptions) {
   return trackCommand('deploy', async () => {
-    console.log('🏗️  Preparing deployment...');
+    log.progress('🏗️  Preparing deployment...');
 
     // Resolve the liveness-wait config: an explicit option wins, else read the
     // flags from argv so the thin template wrapper needs no arg plumbing. Only
@@ -226,44 +245,48 @@ export async function deploy(options: DeployOptions) {
 
     process.env.BLOCKS_STAGE = 'production';
 
-    // Fail fast if AWS credentials are missing/expired, before generating the
-    // client and spending time in synth only to hit an opaque CDK credential error.
-    await assertAwsCredentials({ command: 'deploy', projectRoot: options.projectRoot });
+    // Fail fast if AWS credentials are missing/expired, or the account and Region were
+    // never CDK-bootstrapped, before generating the client and spending time in synth
+    // only to hit an opaque CDK error.
+    await assertAwsCredentials({
+      command: 'deploy',
+      invocation: options.invocation,
+      projectRoot: options.projectRoot,
+      checkBootstrap: true,
+    });
 
     // Provision secrets for production. projectRoot must match the root cdk
     // synth uses (passed as --context below) so the written parameter name
     // equals the one the app resolves at synth.
     const secrets = await ensureSecrets('production', options.projectRoot);
     if (secrets.created.length > 0 || secrets.updated.length > 0) {
-      console.log(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
+      log.progress(`🔐 Secrets provisioned: ${[...secrets.created, ...secrets.updated].join(', ')}`);
     }
 
     // Apply external-database migrations to the production database before
     // deploying. No-op unless this app uses an external DB and has ./migrations.
     await applyExternalMigrations({ stage: 'production' });
     
-    // Import backend to populate BB registry for telemetry
+    // Generate client code FIRST (before cdk deploy triggers the Vite build).
+    // This also populates the BB registry for telemetry — from a child process,
+    // never by importing the backend here: an in-process import loads the local
+    // mock layer, whose runtimes (PGlite, CronJob schedulers, …) kept this
+    // process alive forever after the deploy finished.
     const foundationPath = resolve(options.projectRoot, 'aws-blocks/index.ts');
-    try {
-      await import(pathToFileURL(foundationPath).href);
-    } catch { /* ignore import errors */ }
-
-    // Generate client code FIRST (before cdk deploy triggers the Vite build)
     const clientPath = join(dirname(foundationPath), 'client.js');
-    console.log('📝 Generating client code...');
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const workerPath = join(__dirname, 'generate-client-worker.js');
-    execFileSync('node', ['--conditions=aws-runtime', '--import', 'tsx', workerPath, foundationPath, clientPath], {
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
+    log.progress('📝 Generating client code...');
+    await generateDeployClient(foundationPath, clientPath);
 
-    console.log('🚀 Deploying to AWS...');
-    console.log('   (This may take a few minutes on first deploy)');
-    console.log('   - Backend API (Lambda + API Gateway)');
-    console.log('   - Frontend hosting (S3 + CloudFront)');
-    console.log('   Streaming CloudFormation events below; the deploy keeps running if this');
-    console.log('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
+    log.progress('🚀 Deploying to AWS...');
+    log.detail('   (This may take a few minutes on first deploy)');
+    // Not "Frontend hosting": the app may have none, and that is known only from its outputs.
+    log.detail('   - Backend API (Lambda + API Gateway), and frontend hosting when the app defines it');
+    log.detail('   Streaming CloudFormation events below; the deploy keeps running if this');
+    log.detail('   process is backgrounded (press Ctrl-C, or send SIGTERM twice, to abort).');
+
+    // At BLOCKS_LOG_LEVEL=quiet|normal the CDK stream is condensed and the raw
+    // lines are retained, so a failure below can still print them.
+    const cdkOutput = createCdkOutput({ label: 'cdk deploy', verb: 'deploy' });
 
     // Captured from the CDK progress stream the moment CloudFront's URL appears
     // — well before CREATE_COMPLETE and the post-run outputs.json read. Printing
@@ -292,6 +315,7 @@ export async function deploy(options: DeployOptions) {
             ...getCdkTelemetryEnv('production'),
             ...getFrameworkSinkEnv(frameworkSink),
           },
+          curated: cdkOutput.streams,
           onHostingUrl: (url) => {
             earlyHostingUrl = url;
             // Not the canonical BLOCKS_DEPLOYED line (that needs the API URL,
@@ -312,6 +336,7 @@ export async function deploy(options: DeployOptions) {
       // *reason* is still there. The CDK CLI keeps error-level output on stderr
       // even under `--ci`, and the entrypoint prints the error itself with
       // `console.error(error)`.
+      cdkOutput.printRetained();
       console.log('\n❌ Deployment failed.');
       registerFrameworkFromSink(frameworkSink);
       throw error;
@@ -320,7 +345,13 @@ export async function deploy(options: DeployOptions) {
     registerFrameworkFromSink(frameworkSink);
 
     const outputs = JSON.parse(readFileSync(join(options.projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
-    const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
+    // `--all` can write more than one stack's outputs (e.g. the us-east-1
+    // CloudFront-alarm monitoring stack). Pick the group that carries `ApiUrl`
+    // — the main Blocks stack, which also holds the Hosting outputs — rather
+    // than relying on the write order of the outputs file. Falls back to the
+    // first group so a single-stack app is unchanged.
+    const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
+    const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
     const apiUrl = stackOutputs.ApiUrl;
 
     // Pair the frontend URL, build id, and invalidation id from the SAME
@@ -334,6 +365,7 @@ export async function deploy(options: DeployOptions) {
     if (!apiUrl) {
       throw new Error('Could not find API URL in CDK outputs');
     }
+    options.onDeployed?.({ stack, apiUrl, hostingUrl });
     
     // Write config.json with API endpoint
     const config: Record<string, string> = { apiUrl, environment: 'production' };
@@ -353,7 +385,7 @@ export async function deploy(options: DeployOptions) {
     // and for the degenerate case of a frontend with no build-id output.
     if (waitLive && hostingUrl && expectedBuildId) {
       const timeoutMs = waitLiveTimeoutSec * 1000;
-      console.log(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
+      log.progress(`\n⏳ Waiting for the new build to go live at ${hostingUrl} (up to ${timeoutMs / 1000}s)…`);
 
       // For a compute deploy, also wait on the fire-and-forget `/*`
       // invalidation. The output carries `<distributionId>/<invalidationId>`;
@@ -392,7 +424,7 @@ export async function deploy(options: DeployOptions) {
           sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
           onAttempt: ({ attempt, result: r, detail }) => {
             if (r !== 'live') {
-              console.log(`   …not live yet (attempt ${attempt}: ${r}${detail ? ` — ${detail}` : ''})`);
+              log.detail(`   …not live yet (attempt ${attempt}: ${r}${detail ? ` — ${detail}` : ''})`);
             }
           },
         });
@@ -427,7 +459,7 @@ export async function deploy(options: DeployOptions) {
       // A frontend with no build-id output: the config poll has nothing to
       // match, so it would wait the whole budget and fail. Skip it with a note
       // rather than waste the time — re-synthesize to emit HostingBuildId.
-      console.log(
+      log.progress(
         '\nℹ️  --wait-live skipped: this stack emits no HostingBuildId output, so build liveness ' +
           'cannot be confirmed. Re-synthesize with the current hosting construct to enable it.',
       );

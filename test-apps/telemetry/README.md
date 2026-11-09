@@ -17,6 +17,44 @@ test apps:
   ordering and length are covered by the unit suites (`packages/core/src/telemetry/
   telemetry.test.ts`, "keeps every event when one run emits several").
 
+## Concurrent groups
+
+The suite runs three groups at the same time; inside each group the cases run
+in order:
+
+- **local commands**: every case that needs no AWS account, from this
+  directory with the real HOME (unless a case sets its own). They run in order
+  because several write the project config (`.blocks/config.json`) or the real
+  HOME's global config.
+- **AWS sandbox lifecycle**: `sandbox`, `sandbox:destroy` and `console`.
+- **AWS production lifecycle**: `deploy` and `destroy`.
+
+API Gateway allows one edge-optimized CreateRestApi, and one DeleteRestApi,
+every 30 s per account, and the app's stack has one REST API. So every deploy
+that reaches AWS starts at least 60 s after the previous one, and every destroy
+60 s after the previous destroy, whichever group runs them. The sandbox group,
+the longer one, takes the first deploy slot.
+
+Each AWS group runs its commands in its own copy of the app under
+`.e2e-groups/<group>/app` (git-ignored, removed at the end) with its own HOME.
+The copy keeps the CLI state that lives in the project root apart: `cdk.out`
+(two cdk processes on one `cdk.out` collide on its lock), `.blocks-sandbox/`
+and the generated client. The HOME keeps the local group's global-config
+cases from disabling telemetry for a cloud command; it is seeded with the
+pinned installation-id and links to the real `~/.aws`, `~/.npm`, `~/.npmrc`
+and `~/.cdk.json` (whose `profile` and `region` pick the deployment target).
+AWS credentials must therefore come from the environment (as in CI) or from
+`~/.aws`; a credential helper that keeps its state elsewhere in HOME won't
+find it. The copy takes the app entries listed in the test's `APP_ENTRIES`;
+a new top-level entry in this directory fails the run until it is added
+there or to `APP_EXCLUDED`.
+
+A suite-level `before()` writes one fresh sandbox id to this directory and to
+both copies. Sandbox and production stack names differ
+(`bb-telemetry-e2e-<id>-...` and `bb-telemetry-e2e-prod-...-<id>`), so the groups
+never share a stack, and the destroy scripts run from this directory (the CI
+"Cleanup stacks" step) still reach a stack either group left behind.
+
 ## Pinned installation ID
 
 Matching the CI setup (the "Seed fixed e2e telemetry installation ID" step in

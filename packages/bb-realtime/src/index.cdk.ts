@@ -194,6 +194,9 @@ export class Realtime extends BuildingBlockScope {
 			);
 		}
 		getOrCreateSharedInfra(compute.fn, this);
+		// Claim the key the Lambda runtime registers this block's WebSocket handler
+		// under, so two blocks with the same `fullId` fail synth instead of on cold start.
+		this.registerLambdaEventHandler('blocks.websocket', this.fullId);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {
