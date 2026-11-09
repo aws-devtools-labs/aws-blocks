@@ -724,6 +724,15 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 		Condition?: Record<string, Record<string, unknown>>;
 	};
 
+	/** Matches a statement whose `Principal.Service` (a string or a list) is exactly `service`. */
+	const trusts =
+		(service: string) =>
+		(s: TrustStatement): boolean => {
+			const value = s.Principal?.Service;
+			const services = Array.isArray(value) ? value : [value];
+			return services.includes(service);
+		};
+
 	async function synthTrust(id: string, computeIds: string[]) {
 		const app = new cdk.App();
 		const stack = await BlocksStack.create(app, id, {
@@ -737,13 +746,13 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 		// The shared execution role is the one that trusts both Lambda and ecs-tasks. Each task
 		// definition's own CDK-created task execution role also trusts ecs-tasks, so skip those.
 		const roles = Object.values(template.findResources('AWS::IAM::Role')).filter((r) => {
-			const trust = JSON.stringify(r.Properties?.AssumeRolePolicyDocument ?? {});
-			return trust.includes('ecs-tasks.amazonaws.com') && trust.includes('lambda.amazonaws.com');
+			const all = (r.Properties?.AssumeRolePolicyDocument?.Statement ?? []) as TrustStatement[];
+			return all.some(trusts('ecs-tasks.amazonaws.com')) && all.some(trusts('lambda.amazonaws.com'));
 		});
 		assert.strictEqual(roles.length, 1, 'exactly one shared role trusts both lambda and ecs-tasks');
 		const statements = roles[0].Properties.AssumeRolePolicyDocument.Statement as TrustStatement[];
-		const ecs = statements.filter((s) => JSON.stringify(s.Principal).includes('ecs-tasks.amazonaws.com'));
-		const lambda = statements.filter((s) => JSON.stringify(s.Principal).includes('lambda.amazonaws.com'));
+		const ecs = statements.filter(trusts('ecs-tasks.amazonaws.com'));
+		const lambda = statements.filter(trusts('lambda.amazonaws.com'));
 		return { ecs, lambda };
 	}
 
