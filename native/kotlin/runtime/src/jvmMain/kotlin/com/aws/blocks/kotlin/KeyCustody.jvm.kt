@@ -1,5 +1,9 @@
 package com.aws.blocks.kotlin
 
+import java.nio.file.Path
+import java.security.SecureRandom
+import java.util.UUID
+
 /** The size of the AES key every store encrypts its entries with. */
 internal const val AES_KEY_SIZE = 32
 
@@ -60,3 +64,51 @@ internal fun keyAlias(name: String, applicationId: String): String {
     require(!name.contains(':')) { "A store name may not contain ':', and '$name' does" }
     return "$name:$applicationId"
 }
+
+/**
+ * The custody a store on this machine should use: the host OS store when it works, and a key
+ * beside the entries when it does not.
+ *
+ * [osCandidate] builds the OS-held custody for this machine, or returns null when there is none to
+ * try. It is a parameter so a test can supply one that misbehaves.
+ *
+ * Any failure falls back, rather than distinguishing a store that is absent from one that is
+ * present and behaving oddly. The two deserve different responses in principle, but this library
+ * has no way to report the difference, so failing closed on the second would make an application
+ * crash the only signal — worse than the degradation it would be avoiding.
+ */
+internal fun selectKeyCustody(
+    directory: Path,
+    osCandidate: (Path) -> KeyCustody? = ::osKeyCustody,
+): KeyCustody {
+    val candidate = runCatching { osCandidate(directory) }.getOrNull() ?: return FileKeyCustody(directory)
+    return if (passesSelfTest(candidate)) candidate else FileKeyCustody(directory)
+}
+
+/**
+ * Proves a store can hold a key and give it back before a real key is entrusted to it.
+ *
+ * The probe alias is random because these stores are machine-wide: with a fixed one, two
+ * applications starting at the same moment overwrite each other's probe and both conclude the
+ * store is broken. The probe is removed whether or not it succeeded.
+ */
+private fun passesSelfTest(candidate: KeyCustody): Boolean {
+    val alias = "self-test:" + UUID.randomUUID()
+    val probe = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
+    return try {
+        candidate.storeIfAbsent(alias, probe)
+        candidate.load(alias)?.contentEquals(probe) == true
+    } catch (_: Exception) {
+        false
+    } finally {
+        runCatching { candidate.delete(alias) }
+    }
+}
+
+/**
+ * The OS-held custody for this machine, or null where none is implemented yet.
+ *
+ * Every platform falls through to null for now, so each keeps the behaviour it has today until its
+ * binding lands.
+ */
+private fun osKeyCustody(directory: Path): KeyCustody? = null
