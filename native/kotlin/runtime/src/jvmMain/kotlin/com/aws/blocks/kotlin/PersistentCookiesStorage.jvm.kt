@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin
 
 import java.io.File
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -36,14 +37,22 @@ internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage 
  * [applicationId] names the key rather than the directory: a key held by the host OS sits in a
  * machine-wide store, so it needs the id to tell one application's key from another's. It is passed
  * separately because [directory] carries the id only in reduced form.
+ *
+ * [custodyFor] is where the key is kept. A test overrides it to stay on a file beside the entries,
+ * because the alternative is reaching the machine's real secret store on every run.
  */
-internal fun cookieJarIn(directory: File, applicationId: String): PersistentCookiesStorage =
+internal fun cookieJarIn(
+    directory: File,
+    applicationId: String,
+    custodyFor: (Path) -> KeyCustody = ::selectKeyCustody,
+): PersistentCookiesStorage =
     jarsByLocation.computeIfAbsent(directory.absoluteFile.normalize().path) {
         PersistentCookiesStorage(
             EncryptedFileKeyValueStore(
                 COOKIE_STORE_NAME,
                 directory,
                 keyAlias(COOKIE_STORE_NAME, applicationId),
+                custodyFor,
             ),
         )
     }

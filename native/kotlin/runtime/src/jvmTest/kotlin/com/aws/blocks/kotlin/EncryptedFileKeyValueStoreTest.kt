@@ -225,10 +225,11 @@ class EncryptedFileKeyValueStoreTest {
 
     @Test
     fun takesItsKeyFromTheCustodyItWasGiven() = runTest {
-        val key = ByteArray(32) { 3 }
-        val custody = FileKeyCustody(storageDir.toPath())
-        Files.createDirectories(storageDir.toPath())
-        custody.storeIfAbsent("cookies:com.example.app", key)
+        // Deliberately a custody no default could produce: it keeps the key in memory and writes
+        // nothing. Were the store to consult the machine's own custody instead of this one, it would
+        // find no key, mint a different one, and leave a `.key` behind — both of which are asserted
+        // below. A file-backed stand-in here would be indistinguishable from the default.
+        val custody = InMemoryKeyCustody(ByteArray(32) { 3 })
 
         val store = EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") { custody }
         store.put("jar", "hello")
@@ -236,6 +237,24 @@ class EncryptedFileKeyValueStoreTest {
         // A second store handed the same custody reads what the first wrote.
         EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") { custody }
             .get("jar") shouldBe "hello"
+
+        custody.loads shouldBe 2
+        File(storageDir, ".key").exists() shouldBe false
+    }
+
+    /** Holds one key, in memory, under any alias. Nothing on this machine resolves to it. */
+    private class InMemoryKeyCustody(private val key: ByteArray) : KeyCustody {
+        override val tier = KeyTier.OS
+        var loads = 0
+
+        override fun load(alias: String): ByteArray {
+            loads++
+            return key
+        }
+
+        override fun storeIfAbsent(alias: String, key: ByteArray) = this.key
+
+        override fun delete(alias: String) = Unit
     }
 
     @Test

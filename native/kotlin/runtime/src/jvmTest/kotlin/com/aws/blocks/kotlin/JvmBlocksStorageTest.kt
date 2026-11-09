@@ -67,7 +67,11 @@ class JvmBlocksStorageTest {
     ): Blocks = Blocks(
         BlocksConfig(server = server, applicationId = applicationId),
         backend.engine(),
-        cookieJarIn(applicationStorageDirectory(applicationId, root), applicationId),
+        // Pinned to a key beside the entries: this test is about jar sharing, and left on the
+        // default it would reach the machine's real secret store on every run.
+        cookieJarIn(applicationStorageDirectory(applicationId, root), applicationId) {
+            FileKeyCustody(it)
+        },
     )
 
     @Test

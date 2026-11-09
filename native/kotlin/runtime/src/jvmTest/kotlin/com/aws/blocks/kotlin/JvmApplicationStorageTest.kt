@@ -26,9 +26,16 @@ class JvmApplicationStorageTest {
         root.deleteRecursively()
     }
 
-    /** A jar as a freshly launched application would build one, so each call stands in for a launch. */
+    /**
+     * A jar as a freshly launched application would build one, so each call stands in for a launch.
+     *
+     * Pinned to a key beside the entries. What this test is about is which directory an id resolves
+     * to, and left on the default it would reach the machine's real secret store on every run.
+     */
     private fun jarFor(applicationId: String) =
-        cookieJarIn(applicationStorageDirectory(applicationId, root), applicationId)
+        cookieJarIn(applicationStorageDirectory(applicationId, root), applicationId) {
+            FileKeyCustody(it)
+        }
 
     @Test
     fun `an application reads back the session it stored`() = runTest {
