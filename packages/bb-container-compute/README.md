@@ -119,12 +119,14 @@ only supplies the runtime environment.
 
 ECS pulls the image again at every task start, and the container runs with the
 stack's shared execution role. A tag such as `my-image:24` can point at
-different bytes on each start, so pin the image by digest:
+different bytes on each start, so pin the image by digest. Use the
+`repository@sha256:<digest>` form, which ECS documents (it lists `:tag` or
+`@digest`, not both), and keep the tag in a comment:
 
 ```ts
 new Compute(scope, 'worker', {
   type: 'container',
-  image: 'public.ecr.aws/my-registry/my-image:24@sha256:<64-hex digest>',
+  image: 'public.ecr.aws/my-registry/my-image@sha256:<64-hex digest>', // my-image:24
 });
 ```
 
@@ -135,7 +137,7 @@ doesn't add a digest to it or change its user.
 
 The default image is ECR Public's mirror of the Docker official
 `node:24-slim` image, pinned by digest:
-`public.ecr.aws/docker/library/node:24-slim@sha256:…` (the full reference is
+`public.ecr.aws/docker/library/node@sha256:…` (the full reference is
 `DEFAULT_CONTAINER_IMAGE` in `src/default-image.ts`). It doesn't change
 between deploys until a Blocks release bumps the digest. The image's default
 user is root.

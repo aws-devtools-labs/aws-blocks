@@ -117,7 +117,7 @@ type is a compile error.
   `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible), pinned by
   digest. At boot, a small bootstrap script uses the task's role to download
   your code from S3 and starts it. ECS pulls the image at every task start, so
-  pin a custom image by digest (`my-image:24@sha256:<digest>`) rather than a
+  pin a custom image by digest (`my-image@sha256:<digest>`) rather than a
   tag.
 
 ## API namespaces

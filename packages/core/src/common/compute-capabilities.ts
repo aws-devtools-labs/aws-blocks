@@ -169,7 +169,7 @@ export interface ContainerComputeOptions {
 	 *
 	 * ECS pulls the image at every task start, and the container runs with the
 	 * stack's shared execution role, so pin a custom image by digest
-	 * (`registry/repo:tag@sha256:<digest>`) rather than a tag that can be
+	 * (`registry/repo@sha256:<digest>`) rather than a tag that can be
 	 * re-pushed. Blocks uses this value verbatim.
 	 *
 	 * @default `public.ecr.aws/docker/library/node:24-slim` — a stock, public,

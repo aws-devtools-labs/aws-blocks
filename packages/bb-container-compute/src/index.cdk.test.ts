@@ -293,8 +293,8 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 });
 
 describe('ContainerCompute — default image is pinned by digest', () => {
-	/** The default image as an immutable reference: ECR Public's Node 24 slim, tag plus index digest. */
-	const DIGEST_PINNED_DEFAULT = /^public\.ecr\.aws\/docker\/library\/node:24-slim@sha256:[0-9a-f]{64}$/;
+	/** The default image as an immutable reference: ECR Public's Node image by index digest only (`repository@sha256:…`, the form ECS documents). */
+	const DIGEST_PINNED_DEFAULT = /^public\.ecr\.aws\/docker\/library\/node@sha256:[0-9a-f]{64}$/;
 
 	async function synthImages(id: string, image?: string): Promise<string[]> {
 		const app = new cdk.App();
@@ -318,6 +318,7 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 		const images = await synthImages('ContainerPinnedDefaultStack');
 		assert.strictEqual(images.length, 1, `expected one container; got ${JSON.stringify(images)}`);
 		assert.match(images[0], DIGEST_PINNED_DEFAULT);
+		assert.strictEqual(images[0], DEFAULT_CONTAINER_IMAGE, 'the task definition carries the pinned constant verbatim');
 	});
 
 	test('the default image constant is a digest reference, so a floating tag cannot be shipped', () => {
