@@ -18,10 +18,20 @@ export type BlocksContext = {
      * and `event.headers.host`. May include a trusted `x-forwarded-proto`
      * to pick http vs https.
      *
-     * On a container compute: the host and stage the front door the request
-     * came through stamped on it (`x-blocks-forwarded-host` /
-     * `x-blocks-forwarded-stage`), so the URL is the one the Lambda handler
-     * reports for the same request.
+     * On a container compute: the host the front door the request came through
+     * stamped on it (`x-blocks-forwarded-host`), so the URL is the one the Lambda
+     * handler reports for the same request. The stamped stage
+     * (`x-blocks-forwarded-stage`) is not part of the path, as on Lambda.
+     *
+     * `url.pathname` is the route path: the same for a request under `npm run dev`
+     * and on AWS, and never prefixed with the API Gateway stage (e.g. `/prod`).
+     * Every front door adds the stage on its way to the gateway, so it is not part
+     * of the path the app routes on. To sub-route under a wildcard, use
+     * `params['*']`.
+     *
+     * Behind a front door (e.g. `Hosting`'s CloudFront distribution), `url.origin`
+     * is the API Gateway host the backend received, not the browser's. Build public
+     * links from the app's own configured origin, not from this URL.
      */
     url: URL;
     /**
