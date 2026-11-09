@@ -16,6 +16,7 @@
     }
   },
   "dependencies": {
-    "astro": "^7.4.4"
+    "astro": "^7.4.4",
+    "preact": "^11.1.1"
   }
 }
