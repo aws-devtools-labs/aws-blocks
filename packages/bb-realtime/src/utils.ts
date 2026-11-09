@@ -55,6 +55,51 @@ export function validateChannelPath(fullChannel: string): void {
 }
 
 /**
+ * Which channels a channel token authorizes: `'subtree'` covers the channel and
+ * every `/`-separated sub-channel of it, `'exact'` covers only the channel.
+ */
+export type ChannelTokenScope = 'exact' | 'subtree';
+
+/**
+ * Validate the user-facing `channel` argument of `publish()`, `subscribe()` and
+ * `getChannel()`. `/` is allowed and separates segments, but a name that is
+ * empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a
+ * `.` or `..` segment is rejected: such a name either collides with another
+ * channel's path or reads like a path traversal, and none of them is needed to
+ * name a channel.
+ *
+ * @throws {RealtimeErrors.ValidationFailed} If the name breaks one of these rules.
+ */
+export function validateChannelName(channel: string): void {
+	if (typeof channel !== 'string') return;
+	if (channel === '') {
+		throw blocksError(RealtimeErrors.ValidationFailed, 'Channel name must not be empty');
+	}
+	for (const segment of channel.split('/')) {
+		if (segment === '') {
+			throw blocksError(RealtimeErrors.ValidationFailed,
+				'Invalid channel name: it must not start or end with "/" or contain an empty segment ("//")');
+		}
+		if (segment === '.' || segment === '..') {
+			throw blocksError(RealtimeErrors.ValidationFailed,
+				'Invalid channel name: "." and ".." are not allowed as channel segments');
+		}
+	}
+}
+
+/**
+ * Resolve the token scope from `getChannel()` options, defaulting to `'subtree'`.
+ *
+ * @throws {RealtimeErrors.ValidationFailed} If `scope` is set to anything other than `'exact'` or `'subtree'`.
+ */
+export function resolveChannelTokenScope(options?: { scope?: unknown }): ChannelTokenScope {
+	const scope = options?.scope;
+	if (scope === undefined || scope === 'subtree') return 'subtree';
+	if (scope === 'exact') return 'exact';
+	throw blocksError(RealtimeErrors.ValidationFailed, 'getChannel() option "scope" must be "exact" or "subtree"');
+}
+
+/**
  * Whether `channel` is a channel path a WebSocket client may subscribe to or
  * unsubscribe from. Clients send the path back verbatim from a channel handle,
  * so it must have the shape `getChannel()` mints — `<instance>/<namespace>/<channel>`
@@ -93,13 +138,19 @@ export function validatePublishSize(fullChannel: string, data: unknown): void {
  *
  * Format: `{base64url(payload)}.{base64url(hmac)}`
  * Payload: `{ "channel": "/namespace/template/sub", "exp": <unix_seconds> }`
+ *
+ * `scope` decides which channels the token authorizes (see `validateChannelToken`):
+ * `'subtree'` (the default) authorizes the channel and every `/`-separated
+ * sub-channel of it and mints exactly the payload above, byte for byte, so it
+ * matches every token issued before `scope` existed. `'exact'` adds
+ * `"scope": "exact"` to the payload and authorizes only the channel itself.
  */
-export function mintChannelToken(channel: string, secret: string, ttlSeconds = 3600): string {
+export function mintChannelToken(channel: string, secret: string, ttlSeconds = 3600, scope: ChannelTokenScope = 'subtree'): string {
 	if (!secret) {
 		throw blocksError(RealtimeErrors.ConnectionFailed, 'Refusing to mint token: signing secret is empty or missing');
 	}
 	const exp = Math.floor(Date.now() / 1000) + ttlSeconds;
-	const payload = JSON.stringify({ channel, exp });
+	const payload = JSON.stringify(scope === 'exact' ? { channel, exp, scope } : { channel, exp });
 	const sig = createHmac('sha256', secret).update(payload).digest('base64url');
 	const payloadB64 = Buffer.from(payload).toString('base64url');
 	return `${payloadB64}.${sig}`;
@@ -133,12 +184,17 @@ export function mintConnectToken(scopePrefix: string, secret: string, ttlSeconds
  * server publishes to `<instance>/<namespace>/...`). The `/` check rejects it
  * outright: a channel token's scope always has a `/` after the instance prefix,
  * and a connect token's has none as long as the instance's scope id doesn't.
+ *
+ * A token minted with `scope: 'exact'` (payload `"scope": "exact"`) must equal
+ * the requested channel; its sub-channels are rejected. A token without a
+ * `scope` field (the default, and every token minted before the field existed)
+ * keeps the prefix rule above. Any other `scope` value is rejected.
  */
 export function validateChannelToken(
 	token: string,
 	secret: string,
 	requestedChannel?: string,
-): { channel: string; exp: number } | null {
+): { channel: string; exp: number; scope?: 'exact' } | null {
 	try {
 		const [payloadB64, sig] = token.split('.');
 		if (!payloadB64 || !sig) return null;
@@ -150,7 +206,11 @@ export function validateChannelToken(
 			if (!payload.channel) return null;
 			// Only channel tokens authorize a subscription (see the doc comment).
 			if (!payload.channel.includes('/')) return null;
-			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
+			if (payload.scope !== undefined && payload.scope !== 'exact') return null;
+			if (requestedChannel !== payload.channel) {
+				if (payload.scope === 'exact') return null;
+				if (!requestedChannel.startsWith(payload.channel + '/')) return null;
+			}
 		}
 		return payload;
 	} catch {
