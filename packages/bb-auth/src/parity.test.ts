@@ -177,7 +177,7 @@ describe('parity: user attributes', () => {
 	});
 
 	test('updateUserAttributes: a changed email awaits its code, anything else is updated — same outcome map', async () => {
-		const options = { users: { attributes: [{ name: 'team' }] } } as const;
+		const options = { users: { attributes: [{ name: 'team', userWritable: true }] } } as const;
 		const mock = await mockSignedIn(options);
 		const aws = await awsSignedIn(options);
 		aws.h.on('UpdateUserAttributesCommand', () => ({

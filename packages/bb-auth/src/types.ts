@@ -1264,10 +1264,56 @@ export interface UserAttribute {
 	name: string;
 	/** Attribute type. @default 'String' */
 	type?: 'String' | 'Number';
-	/** Whether the attribute is mutable after creation. @default true */
+	/**
+	 * Whether the attribute is mutable after creation. @default true
+	 *
+	 * Fixed once the pool exists: Cognito cannot change an existing custom
+	 * attribute's mutability, so the block refuses the change at synth. An
+	 * attribute the app uses to decide what a user may do (a role, a tenant, a
+	 * plan) is best declared `mutable: false` (when it never changes) and never
+	 * `userWritable`, and set with `auth.admin.createUser`.
+	 */
 	mutable?: boolean;
-	/** Whether the attribute is required at sign-up. @default false */
+	/**
+	 * Whether the attribute is required at sign-up. @default false
+	 *
+	 * The sign-up form (`createApi()`) asks the user for every required
+	 * attribute, so a required attribute must also be `userWritable: true`;
+	 * the block refuses the combination otherwise, at construction.
+	 */
 	required?: boolean;
+	/**
+	 * Whether end users may write the attribute themselves: through `signUp`
+	 * (including the `createApi()` sign-up form), `updateUserAttributes` and a
+	 * new-password challenge's `userAttributes`. @default false
+	 *
+	 * Unset, only the server writes it, through `auth.admin` (`createUser`,
+	 * which is IAM-authorized). A self-service write that names the attribute,
+	 * prefixed or bare, is rejected as a whole with 401
+	 * `NotAuthorizedException` and nothing is stored, locally as on AWS. On a
+	 * pool this block creates, the app client's `WriteAttributes` lists the
+	 * standard attributes and exactly the custom attributes marked
+	 * `userWritable`, so Cognito applies the same rule. On a wrapped pool
+	 * (`userPool: Auth.fromExisting(…)`) declare the attributes users may
+	 * write here with `userWritable: true`; every other `custom:` attribute
+	 * is refused for self-service writes.
+	 *
+	 * ⚠️ Never set it on an attribute the app uses to decide what a user may
+	 * do (a role, a tenant, a plan): the user could then choose its value.
+	 *
+	 * @example
+	 * ```ts
+	 * new Auth(scope, 'auth', {
+	 *   users: {
+	 *     attributes: [
+	 *       { name: 'department', userWritable: true }, // a profile field the user edits
+	 *       { name: 'tenant', mutable: false },          // set by the server: auth.admin.createUser
+	 *     ],
+	 *   },
+	 * });
+	 * ```
+	 */
+	userWritable?: boolean;
 }
 
 /** Settings for {@link CognitoAuthOptions.users}. */
@@ -1304,6 +1350,12 @@ export interface UserPoolOptions {
 	 * only standard attributes and the attributes declared here, with string
 	 * values; anything else is rejected with `InvalidParameterException`, by
 	 * the local runtime as by Cognito.
+	 *
+	 * End users write a custom attribute themselves (`signUp`,
+	 * `updateUserAttributes`, a new-password challenge) only when it is
+	 * declared `userWritable: true`; any other `custom:` attribute in such a
+	 * write is rejected with `NotAuthorizedException`. `admin.createUser` may
+	 * write every declared attribute. See {@link UserAttribute.userWritable}.
 	 *
 	 * ⚠️ **Not a profile database.** Keep profile data in `KVStore` or
 	 * `DistributedTable`, keyed on `user.userSub`.

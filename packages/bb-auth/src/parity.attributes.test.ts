@@ -42,9 +42,19 @@ const PASSWORD = 'Passw0rd!';
 let n = 0;
 const root = (): ScopeParent => ({ id: `parityattr${process.pid}x${++n}` });
 
-/** A pool with one mutable and one immutable custom attribute, and the admin surface. */
+/**
+ * A pool with three custom attributes and the admin surface: `team` (mutable,
+ * user-writable), `tier` (immutable, user-writable: chosen once at sign-up)
+ * and `role` (mutable, not user-writable: only `admin.createUser` writes it).
+ */
 const OPTIONS = {
-	users: { attributes: [{ name: 'team' }, { name: 'tier', mutable: false }] },
+	users: {
+		attributes: [
+			{ name: 'team', userWritable: true },
+			{ name: 'tier', mutable: false, userWritable: true },
+			{ name: 'role' },
+		],
+	},
 	admin: {},
 } as const;
 
@@ -71,14 +81,14 @@ const OPTIONS = {
  *   (<https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_AttributeType.html>)
  * - "If your app tries to set a value for an attribute that it isn't
  *   authorized to write, Amazon Cognito returns `NotAuthorizedException`."
- *   (the guide, "Attribute permissions and scopes"). The app client sets
- *   no `WriteAttributes`: "your app can write the values of the Standard
- *   attributes of your user pool", while reads by default cover "`email_verified`,
- *   `phone_number_verified`, and the standard attributes"
+ *   (the guide, "Attribute permissions and scopes"). The app client's
+ *   `WriteAttributes` (`mapClientWriteAttributes`) are the standard
+ *   attributes and the custom attributes declared `userWritable: true`
  *   (<https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_CreateUserPoolClient.html>),
- *   so the verified flags are not client-writable. `AdminCreateUser` is
- *   IAM-authorized, and an administrator may mark a contact verified
- *   (the guide, "email").
+ *   so the verified flags and `custom:role` are not client-writable, and
+ *   neither is a name Cognito does not know as written (`Custom:team`).
+ *   `AdminCreateUser` is IAM-authorized, and an administrator may mark a
+ *   contact verified (the guide, "email") or write any custom attribute.
  * - "You can only write a value to an immutable attribute when you create a
  *   user." (the guide, "Custom attributes"); `sub` "has a fixed value".
  *
@@ -114,7 +124,9 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 	const custom = new Map([
 		['custom:team', { mutable: true }],
 		['custom:tier', { mutable: false }],
+		['custom:role', { mutable: true }],
 	]);
+	const clientWritableCustom = new Set(['custom:team', 'custom:tier']);
 	const validate = (list: unknown, write: 'create' | 'adminCreate' | 'update') => {
 		const entries = (Array.isArray(list) ? list : []).map((entry: unknown) => ({
 			key: String(Reflect.get(Object(entry), 'Name')),
@@ -138,7 +150,8 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 		}
 		// 3. The app client's write permissions.
 		for (const { key } of entries) {
-			if (write !== 'adminCreate' && verifiedFlags.has(key)) {
+			const customName = key.trim().toLowerCase().startsWith('custom:');
+			if (write !== 'adminCreate' && (verifiedFlags.has(key) || (customName && !clientWritableCustom.has(key)))) {
 				throw cognitoError('NotAuthorizedException', 'A client attempted to write unauthorized attribute');
 			}
 		}
@@ -280,7 +293,6 @@ const CREATE_CASES: readonly [label: string, attributes: Record<string, unknown>
 		INVALID,
 	],
 	['an unknown name with a string value', { email: 'bob@example.com', nickname_: 'b' }, INVALID],
-	['an undeclared `custom:` attribute', { email: 'bob@example.com', 'custom:dept': 'x' }, INVALID],
 	['a non-string value on a standard attribute', { email: 'bob@example.com', name: 42 }, INVALID],
 	['a non-string value on a custom attribute', { email: 'bob@example.com', team: true }, INVALID],
 	['an object value on a standard attribute', { email: 'bob@example.com', name: { first: 'Bob' } }, INVALID],
@@ -296,6 +308,41 @@ describe('parity: attributes on signUp (SignUp)', () => {
 		['a 2,048-character value', { email: 'bob@example.com', name: 'x'.repeat(2048) }, 'ok'],
 		['`email_verified` (not client-writable)', { email: 'bob@example.com', email_verified: 'true' }, UNAUTHORIZED],
 		['`phone_number_verified`', { phone_number: '+15555550100', phone_number_verified: 'true' }, UNAUTHORIZED],
+		[
+			'an undeclared `custom:` attribute (not user-writable)',
+			{ email: 'bob@example.com', 'custom:dept': 'x' },
+			UNAUTHORIZED,
+		],
+		[
+			'a declared custom attribute that is not `userWritable`, bare',
+			{ email: 'bob@example.com', role: 'admin' },
+			UNAUTHORIZED,
+		],
+		[
+			'a declared custom attribute that is not `userWritable`, prefixed',
+			{ email: 'bob@example.com', 'custom:role': 'admin' },
+			UNAUTHORIZED,
+		],
+		[
+			'a user-writable custom attribute with a differently cased prefix',
+			{ email: 'bob@example.com', 'Custom:team': 'ops' },
+			UNAUTHORIZED,
+		],
+		[
+			'a user-writable custom attribute with whitespace before the prefix',
+			{ email: 'bob@example.com', ' custom:team': 'ops' },
+			UNAUTHORIZED,
+		],
+		[
+			'a user-writable custom attribute with whitespace after the name',
+			{ email: 'bob@example.com', 'custom:team ': 'ops' },
+			UNAUTHORIZED,
+		],
+		[
+			'an upper-case prefix on a non-writable attribute',
+			{ email: 'bob@example.com', 'CUSTOM:role': 'admin' },
+			UNAUTHORIZED,
+		],
 	] as const) {
 		test(label, async () => {
 			const mock = new MockAuth(root(), 'auth', OPTIONS);
@@ -367,7 +414,11 @@ describe('parity: attributes on updateUserAttributes (UpdateUserAttributes)', ()
 	for (const [label, attributes, expected] of [
 		['a standard and a mutable custom attribute', { name: 'Alice', team: 'ops' }, 'ok'],
 		['an attribute the pool does not have', { attributes: { name: 'Alice' } }, INVALID],
-		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }, INVALID],
+		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }, UNAUTHORIZED],
+		['a declared custom attribute that is not `userWritable`, bare', { role: 'admin' }, UNAUTHORIZED],
+		['a declared custom attribute that is not `userWritable`, prefixed', { 'custom:role': 'admin' }, UNAUTHORIZED],
+		['a differently cased prefix', { 'Custom:team': 'ops' }, UNAUTHORIZED],
+		['whitespace around the prefix', { ' custom:role': 'admin' }, UNAUTHORIZED],
 		['a non-string value', { name: 7 }, INVALID],
 		['an object value', { name: { first: 'Alice' } }, INVALID],
 		['an array value', { team: ['ops'] }, INVALID],
@@ -412,6 +463,12 @@ describe('parity: attributes on admin.createUser (AdminCreateUser)', () => {
 			{ email: 'bob@example.com', email_verified: 'true' },
 			'ok',
 		],
+		[
+			'a custom attribute that is not `userWritable` (an administrator writes every declared one)',
+			{ email: 'bob@example.com', role: 'admin', 'custom:tier': 'gold' },
+			'ok',
+		],
+		['an undeclared `custom:` attribute', { email: 'bob@example.com', 'custom:dept': 'x' }, INVALID],
 	] as const) {
 		test(label, async () => {
 			const mock = new MockAuth(root(), 'auth', OPTIONS);
@@ -463,7 +520,9 @@ describe('parity: userAttributes on the new-password challenge (RespondToAuthCha
 		['a null value', { name: null }, INVALID],
 		['a 2,049-character value', { name: 'x'.repeat(2049) }, INVALID],
 		['`sub`', { sub: 'mine' }, INVALID],
-		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }, INVALID],
+		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }, UNAUTHORIZED],
+		['a declared custom attribute that is not `userWritable`', { role: 'admin' }, UNAUTHORIZED],
+		['a differently cased prefix', { 'CUSTOM:role': 'admin' }, UNAUTHORIZED],
 		['an immutable custom attribute (`tier`)', { tier: 'platinum' }, INVALID],
 		['`email_verified` (not client-writable)', { email_verified: 'true' }, UNAUTHORIZED],
 	] as const) {
@@ -639,10 +698,13 @@ describe('parity: signUp on a `selfSignUp: false` pool', () => {
 });
 
 describe('mock: an external pool (`Auth.fromExisting`) — its schema is not known locally', () => {
-	test('any `custom:` attribute is accepted; every other rule still applies', async () => {
-		const auth = new MockAuth(root(), 'auth', { userPool: MockAuth.fromExisting('us-east-1_Existing') });
+	test('admin.createUser may write any `custom:` attribute; every other rule still applies', async () => {
+		const auth = new MockAuth(root(), 'auth', {
+			userPool: MockAuth.fromExisting('us-east-1_Existing'),
+			admin: {},
+		});
 		assert.strictEqual(
-			await outcome(untyped(auth, 'signUp', 'bob', PASSWORD, { attributes: { 'custom:dept': 'x' } })),
+			await outcome(untyped(auth.admin, 'createUser', 'bob', { attributes: { 'custom:dept': 'x' } })),
 			'ok',
 		);
 		assert.deepStrictEqual(
@@ -653,5 +715,124 @@ describe('mock: an external pool (`Auth.fromExisting`) — its schema is not kno
 			await outcome(untyped(auth, 'signUp', 'dave', PASSWORD, { attributes: { 'custom:dept': 1 } })),
 			INVALID,
 		);
+	});
+
+	test('end users write only the declared `userWritable` attributes', async () => {
+		const auth = new MockAuth(root(), 'auth', {
+			userPool: MockAuth.fromExisting('us-east-1_Existing'),
+			users: { attributes: [{ name: 'dept', userWritable: true }, { name: 'role' }] },
+		});
+		assert.strictEqual(
+			await outcome(untyped(auth, 'signUp', 'bob', PASSWORD, { attributes: { dept: 'x' } })),
+			'ok',
+		);
+		for (const attributes of [{ 'custom:other': 'x' }, { role: 'admin' }, { 'custom:role': 'admin' }]) {
+			assert.deepStrictEqual(
+				await outcome(untyped(auth, 'signUp', 'carol', PASSWORD, { attributes })),
+				UNAUTHORIZED,
+				JSON.stringify(attributes),
+			);
+		}
+	});
+});
+
+/**
+ * `users.attributes[].userWritable`: an end user's own write (`signUp`, the
+ * `createApi()` sign-up form, `updateUserAttributes`, a new-password
+ * challenge) may name only the custom attributes marked `userWritable: true`.
+ * The rest of the write is not applied: nothing is stored, and the AWS engine
+ * sends no Cognito call.
+ */
+describe('parity: only `userWritable` custom attributes are writable by end users', () => {
+	test('signUp naming a non-writable attribute stores no user, on either runtime', async () => {
+		const mock = new MockAuth(root(), 'auth', OPTIONS);
+		const aws = makeAwsAuth(OPTIONS);
+		cognitoSchema(aws);
+		const attributes = { email: 'bob@example.com', team: 'ops', role: 'admin' };
+		assert.deepStrictEqual(await outcome(untyped(mock, 'signUp', 'bob', PASSWORD, { attributes })), UNAUTHORIZED);
+		assert.deepStrictEqual(
+			await outcome(untyped(aws.auth, 'signUp', 'bob', PASSWORD, { attributes })),
+			UNAUTHORIZED,
+		);
+		assert.strictEqual(await mock.admin.getUser('bob'), null, 'no local user');
+		assert.ok(!aws.sent.some((c) => c.name === 'SignUpCommand'), 'the AWS engine sends no SignUp');
+	});
+
+	test('the createApi() sign-up form rejects a non-writable attribute in both runtimes', async () => {
+		const input = {
+			action: 'signUp',
+			username: 'bob',
+			password: PASSWORD,
+			email: 'bob@example.com',
+			role: 'admin',
+		};
+		const mock = new MockAuth(root(), 'auth', OPTIONS);
+		const aws = makeAwsAuth(OPTIONS);
+		cognitoSchema(aws);
+		const states = [];
+		for (const api of [mock.createApi(), aws.auth.createApi()]) {
+			const browser = new Browser();
+			const state = await browser.request((ctx) => untyped(bindAuthApi(api, ctx), 'setAuthState', input));
+			assert.ok(typeof state === 'object' && state !== null);
+			states.push({ state: Reflect.get(state, 'state'), errorName: Reflect.get(state, 'errorName') });
+		}
+		const expected = { state: 'signedOut', errorName: 'NotAuthorizedException' };
+		assert.deepStrictEqual(states[0], expected, 'mock');
+		assert.deepStrictEqual(states[1], expected, 'aws');
+		assert.strictEqual(await mock.admin.getUser('bob'), null, 'no local user');
+		assert.ok(!aws.sent.some((c) => c.name === 'SignUpCommand'), 'the AWS engine sends no SignUp');
+	});
+
+	test('the createApi() sign-up form accepts a user-writable attribute', async () => {
+		const mock = new MockAuth(root(), 'auth', OPTIONS);
+		const browser = new Browser();
+		await browser.request((ctx) =>
+			untyped(bindAuthApi(mock.createApi(), ctx), 'setAuthState', {
+				action: 'signUp',
+				username: 'bob',
+				password: PASSWORD,
+				email: 'bob@example.com',
+				team: 'ops',
+			}),
+		);
+		const user = await mock.admin.getUser('bob');
+		assert.strictEqual(user?.attributes['custom:team'], 'ops');
+	});
+
+	test('updateUserAttributes naming a non-writable attribute changes nothing, and sends no call on AWS', async () => {
+		const mock = await mockSignedIn();
+		const before = await mock.browser.request((ctx) => mock.auth.getUserAttributes(ctx));
+		assert.deepStrictEqual(
+			await outcome(
+				mock.browser.request((ctx) =>
+					untyped(mock.auth, 'updateUserAttributes', ctx, { team: 'platform', role: 'admin' }),
+				),
+			),
+			UNAUTHORIZED,
+		);
+		assert.deepStrictEqual(await mock.browser.request((ctx) => mock.auth.getUserAttributes(ctx)), before);
+
+		const aws = await awsSignedIn();
+		assert.deepStrictEqual(
+			await outcome(
+				aws.browser.request((ctx) =>
+					untyped(aws.auth, 'updateUserAttributes', ctx, { team: 'platform', role: 'admin' }),
+				),
+			),
+			UNAUTHORIZED,
+		);
+		assert.ok(
+			!aws.h.sent.some((c) => c.name === 'UpdateUserAttributesCommand'),
+			'the AWS engine sends no UpdateUserAttributes',
+		);
+	});
+
+	test('admin.createUser writes a custom attribute that is not `userWritable`', async () => {
+		const mock = new MockAuth(root(), 'auth', OPTIONS);
+		await mock.admin.createUser('carol', {
+			temporaryPassword: 'Temp-Passw0rd!',
+			attributes: { email: 'carol@example.com', role: 'editor' },
+		});
+		assert.strictEqual((await mock.admin.getUser('carol'))?.attributes['custom:role'], 'editor');
 	});
 });

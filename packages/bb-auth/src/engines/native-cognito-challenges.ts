@@ -306,7 +306,9 @@ export function mapChallengeToNextStep(
  * The `userAttributes` are checked against the schema-independent write rules
  * first (`attribute-write-rules.ts`, as an `update`): a non-string or
  * over-long value or `sub` throws `InvalidParameterException`, a verified flag
- * `NotAuthorizedException`, before any `RespondToAuthChallenge`.
+ * `NotAuthorizedException`, before any `RespondToAuthChallenge`. So does a
+ * `custom:` attribute outside `userWritable` (the
+ * `userWritableAttributes` of the block's options).
  *
  * @internal
  */
@@ -315,6 +317,7 @@ export function buildChallengeResponses(
 	username: string,
 	response: string,
 	userAttributes: Partial<Record<string, string>> | undefined,
+	userWritable: ReadonlySet<string>,
 ): Record<string, string> {
 	switch (challengeName) {
 		case 'SMS_MFA':
@@ -351,7 +354,7 @@ export function buildChallengeResponses(
 		case 'NEW_PASSWORD_REQUIRED': {
 			// Written to the existing user through the app client, like
 			// `UpdateUserAttributes`: checked before the SDK call.
-			checkAttributeValues(userAttributes ?? {}, 'update');
+			checkAttributeValues(userAttributes ?? {}, 'update', userWritable);
 			const body: Record<string, string> = { USERNAME: username, NEW_PASSWORD: response };
 			for (const [name, value] of Object.entries(userAttributes ?? {})) {
 				if (value === undefined) continue;

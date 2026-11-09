@@ -264,7 +264,9 @@ describe('AWS attribute filtering', () => {
 	});
 
 	test('updateUserAttributes prefixes declared custom attrs and reports per-attribute outcomes', async () => {
-		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String', mutable: true }] } });
+		const h = makeAwsAuth({
+			users: { attributes: [{ name: 'department', type: 'String', mutable: true, userWritable: true }] },
+		});
 		const b = new Browser();
 		const tokens = h.idp.authResult('alice');
 		await signInAs(h, b, 'alice', tokens);
@@ -296,7 +298,9 @@ describe('AWS attribute filtering', () => {
 	// Auth: the single-attribute `updateUserAttribute` was dropped; the
 	// same call is `updateUserAttributes` with one key.
 	test('updateUserAttribute (single) returns that attribute’s outcome', async () => {
-		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String', mutable: true }] } });
+		const h = makeAwsAuth({
+			users: { attributes: [{ name: 'department', type: 'String', mutable: true, userWritable: true }] },
+		});
 		const b = new Browser();
 		await signInAs(h, b, 'alice');
 		h.on('UpdateUserAttributesCommand', () => ({}));

@@ -156,6 +156,41 @@ export const adminApi = new ApiNamespace(scope, 'adminApi', (context) => ({
 
 `requireRole` reads the user's groups live from the user pool, so a group change applies at the user's next request, not at their next sign-in. To require the group on every method of a namespace, use `auth.protect(scope, 'adminApi', { methods }, { role: 'admin' })` instead ([Protect every method](#protect-every-method)).
 
+### Custom attributes: what users may write themselves
+
+Declare custom attributes in `users.attributes`. End users may write one themselves (through `signUp`, the `createApi()` sign-up form, `updateUserAttributes` or a new-password step) only when it is marked `userWritable: true`. Anything else is written by your server with `auth.admin.createUser`:
+
+```ts
+// aws-blocks/index.ts
+import { ApiNamespace, Auth, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const auth = new Auth(scope, 'auth', {
+  users: {
+    attributes: [
+      { name: 'department', userWritable: true }, // a profile field the user edits
+      { name: 'plan' }, // read by the app to decide what the user may do: server-written only
+    ],
+  },
+  admin: {}, // auth.admin.createUser writes every declared attribute
+});
+export const authApi = auth.createApi();
+
+export const profileApi = new ApiNamespace(scope, 'profileApi', (context) => ({
+  async setDepartment(department: string) {
+    await auth.requireAuth(context);
+    // A declared name is prefixed for you: this writes `custom:department`.
+    return auth.updateUserAttributes(context, { department });
+  },
+}));
+```
+
+- A write that names a custom attribute not marked `userWritable`, bare (`plan`) or prefixed (`custom:plan`), is rejected as a whole with 401 `NotAuthorizedException`, and nothing is stored. So is a name whose `custom:` prefix differs in case or surrounding whitespace (`Custom:department`). The same holds locally and on AWS: on a pool this block creates, the app client's `WriteAttributes` list the standard attributes and only the `userWritable` custom attributes, and the block checks the write before it calls Cognito.
+- Never mark an attribute `userWritable` when the app reads it to decide what a user may do (a role, a tenant, a plan): the user could then pick its value. Use groups (`users.groups`, `requireRole`) for roles where you can, and declare such an attribute `mutable: false` when it never changes.
+- `required: true` puts the attribute on the sign-up form, so it needs `userWritable: true` too; the block refuses the combination otherwise, at construction.
+- With `userPool: Auth.fromExisting(…)` the block cannot see the pool's schema: declare in `users.attributes` each custom attribute your users write themselves, with `userWritable: true`. End users cannot write any other `custom:` attribute; `auth.admin.createUser` still can.
+- `mutable` keeps its default (`true`). Cognito cannot change an existing custom attribute's mutability, so the block refuses a changed `mutable` at synth ([DESIGN.md](./DESIGN.md#immutability-guard)).
+
 ### The first admin
 
 `requireRole(context, 'admin')` needs someone in `admin` already. Make the first one with the `users` command, once: sign up as yourself, then add your account to the group. It works the same on the local pool and on a deployed one:
@@ -181,7 +216,7 @@ npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --
 
 - `user.attributes.email` is not proof that the user owns the address. A signed-in user can change their own email (`updateUserAttributes`), and a pool this block creates does not turn on Cognito's verification-before-update, so the new address applies at once, unverified (`email_verified: false` until the user confirms the code). `user.attributes` does not carry `email_verified`, so read the pool's record with `auth.admin.getUser` (or, for the signed-in user, `getUserAttributes`) and require `email_verified === 'true'`. The same holds for `phone_number`.
 - A federated user's email is the identity provider's claim, not a verification by this pool: leave federated users out, or trust only a provider whose claims you control.
-- With `userPool: Auth.fromExisting(…)`, check that the app client's `WriteAttributes` does not include `email_verified` (Cognito allows it): a user who can write the flag can mark any address verified. The client of a pool this block creates sets no `WriteAttributes`, and Cognito's default write set leaves both verified flags out, so its users cannot write them (`NotAuthorizedException`, locally too).
+- With `userPool: Auth.fromExisting(…)`, check that the app client's `WriteAttributes` does not include `email_verified` (Cognito allows it): a user who can write the flag can mark any address verified. The client this block creates lists the standard attributes and the `userWritable` custom attributes in its `WriteAttributes`, never the verified flags, so its users cannot write them (`NotAuthorizedException`, locally too).
 
 ```ts
 // aws-blocks/index.ts

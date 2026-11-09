@@ -42,8 +42,9 @@ import { frozenAuthCognitoSynths } from './test-support/legacy-fixtures.js';
 /**
  * THE ALLOWLIST — the only differences `Auth` may have from `AuthCognito`, and
  * only on the `AWS::Cognito::UserPool` resource. Nothing else is tolerated —
- * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST})
- * and the password-reset grant ({@link withoutResetGrant}).
+ * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST}),
+ * the password-reset grant ({@link withoutResetGrant}) and the app client's
+ * `WriteAttributes` ({@link CLIENT_ALLOWLIST}).
  *
  * The pool honours the stack defaults when `removalPolicy` /
  * `deletionProtection` are unset. `AuthCognito` hard-codes `DESTROY` unless
@@ -89,6 +90,55 @@ function stripAllowlistedProperties(
 	const copy = { ...authProps };
 	for (const [key, allowed] of Object.entries(POOL_ALLOWLIST.properties[preset])) {
 		if (cognitoProps?.[key] === undefined && copy[key] === allowed) delete copy[key];
+	}
+	return copy;
+}
+
+/**
+ * THE CLIENT ALLOWLIST — one property `Auth` adds to the native app client
+ * (`client`): `WriteAttributes`, which `AuthCognito` left unset (Cognito's
+ * default: every attribute but the verified flags). `Auth` lists the standard
+ * attributes and only the custom attributes declared `userWritable: true`;
+ * no pair declares one, so the value must be exactly the standard set. An
+ * in-place client update ("Update requires: No interruption"): the client and
+ * its refresh tokens are kept.
+ */
+const CLIENT_ALLOWLIST = {
+	WriteAttributes: [
+		'address',
+		'birthdate',
+		'email',
+		'family_name',
+		'gender',
+		'given_name',
+		'locale',
+		'middle_name',
+		'name',
+		'nickname',
+		'phone_number',
+		'picture',
+		'preferred_username',
+		'profile',
+		'updated_at',
+		'website',
+		'zoneinfo',
+	],
+} as const;
+
+/**
+ * `Auth`'s client `Properties` with the allowlisted additions removed — only
+ * where `AuthCognito` does not set the key and `Auth` sets exactly the allowed
+ * value. Anything else is left in, so the comparison fails on it.
+ */
+function stripAllowlistedClientProperties(
+	cognitoProps: Record<string, unknown> | undefined,
+	authProps: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+	const copy = { ...authProps };
+	for (const [key, allowed] of Object.entries(CLIENT_ALLOWLIST)) {
+		if (cognitoProps?.[key] === undefined && JSON.stringify(copy[key]) === JSON.stringify(allowed)) {
+			delete copy[key];
+		}
 	}
 	return copy;
 }
@@ -206,6 +256,14 @@ function withoutAllowlisted(
 			authPool[1].Properties,
 		);
 	}
+	const cognitoClient = resourceOfType(cognito, 'AWS::Cognito::UserPoolClient');
+	const authClient = resourceOfType(auth, 'AWS::Cognito::UserPoolClient');
+	if (authClient?.[1].Properties) {
+		authClient[1].Properties = stripAllowlistedClientProperties(
+			cognitoClient?.[1].Properties,
+			authClient[1].Properties,
+		);
+	}
 	for (const template of [cognito, auth]) {
 		const pool = resourceOfType(template, 'AWS::Cognito::UserPool');
 		if (pool) {
@@ -281,7 +339,7 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 					},
 				);
 
-				test('client Properties are identical', () => {
+				test('client Properties are identical except WriteAttributes', () => {
 					const cognitoClient = resourceOfType(
 						authCognito(name, preset).template,
 						'AWS::Cognito::UserPoolClient',
@@ -292,7 +350,11 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 					);
 					assert.ok(cognitoClient && authClient, 'both sides synthesize the `client`');
 					assert.strictEqual(authClient[0], cognitoClient[0], 'client logical id');
-					assertSame(cognitoClient[1].Properties, authClient[1].Properties, 'client Properties');
+					assertSame(
+						cognitoClient[1].Properties,
+						stripAllowlistedClientProperties(cognitoClient[1].Properties, authClient[1].Properties),
+						'client Properties',
+					);
 				});
 
 				test('the whole template is identical (except the allowlist)', () => {

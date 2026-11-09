@@ -486,7 +486,10 @@ describe('mock engine — MFA', () => {
 		assert.ok(enrolled.status === 'continueSignIn' && enrolled.nextStep.name === 'CONFIRM_SIGN_IN_WITH_TOTP_CODE');
 
 		// The same block (same id, same .bb-data), rebuilt without TOTP.
-		const after = new Auth(parent, 'auth', { mfa: { mode: 'optional', types: ['SMS'] }, codeDelivery: sink.deliver });
+		const after = new Auth(parent, 'auth', {
+			mfa: { mode: 'optional', types: ['SMS'] },
+			codeDelivery: sink.deliver,
+		});
 		const b2 = new Browser();
 		const r = await b2.request((ctx) => after.signIn('oli', PASSWORD, ctx));
 		assert.strictEqual(r.status, 'signedIn', 'TOTP is no longer offered, and SMS is not enrolled');
@@ -632,7 +635,7 @@ describe('mock engine — devices, attributes, deleteUser', () => {
 	test('attributes: live reads, custom prefixing, contact changes need a code', async () => {
 		const sink = codeSink();
 		const auth = new Auth(root(), 'auth', {
-			users: { attributes: [{ name: 'department' }] },
+			users: { attributes: [{ name: 'department', userWritable: true }] },
 			codeDelivery: sink.deliver,
 		});
 		await register(auth, sink, 'sam');

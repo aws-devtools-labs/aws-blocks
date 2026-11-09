@@ -359,6 +359,7 @@ const USER_ATTRIBUTE = {
 	type: 'value',
 	mutable: 'boolean',
 	required: 'boolean',
+	userWritable: 'boolean',
 } as const satisfies ShapeOf<UserAttribute>;
 
 const USER_GROUP = {
@@ -1012,4 +1013,34 @@ function assertConsistentOptions(id: string, options: unknown): void {
 			`Auth '${id}': passkeys requires \`users.authFlow: 'USER_AUTH'\`. Passkeys ride on the USER_AUTH choice-based flow.`,
 		);
 	}
+	const notWritable = findRequiredNotUserWritable(options);
+	if (notWritable.length > 0) {
+		const list = notWritable.map((n) => `\`${n}\``).join(', ');
+		throw new Error(
+			`Auth '${id}': users.attributes ${list} ${notWritable.length === 1 ? 'is' : 'are'} \`required: true\` but not \`userWritable: true\`. ` +
+				'The sign-up form asks the user for every required attribute, and users may write only the attributes marked userWritable. ' +
+				'Add `userWritable: true`, or drop `required` and set the attribute with `auth.admin.createUser`.',
+		);
+	}
+}
+
+/**
+ * The names of the declared `users.attributes` that are `required: true` but
+ * not `userWritable: true`, in declaration order. The sign-up form collects
+ * every required attribute from the user, and a self-service write may name
+ * only the `userWritable` ones, so the pair could never sign anyone up.
+ *
+ * @internal
+ */
+export function findRequiredNotUserWritable(options: unknown): string[] {
+	const attributes = field(field(options, 'users'), 'attributes');
+	if (!Array.isArray(attributes)) return [];
+	const found: string[] = [];
+	for (const attr of attributes) {
+		if (field(attr, 'required') === true && field(attr, 'userWritable') !== true) {
+			const name = field(attr, 'name');
+			found.push(typeof name === 'string' ? name : String(name));
+		}
+	}
+	return found;
 }

@@ -41,7 +41,8 @@ const auth = new Auth(scope, 'auth', {
     signInWith: ['email'],
     caseSensitive: false,
     groups: ['editors', 'readers'],
-    attributes: [{ name: 'department' }],
+    // A profile field the signed-in user edits (updateUserAttributes).
+    attributes: [{ name: 'department', userWritable: true }],
   },
   codeDelivery: async (username, code, purpose) => {
     lastCode = { username, code, purpose };
@@ -200,7 +201,8 @@ export const api = auth.protect(scope, 'api', {
     // call `confirmAttribute` with the emailed code.
     //
     // `updateUserAttributes` only accepts the attributes declared in
-    // `users.attributes` (plus the standard ones).
+    // `users.attributes` (plus the standard ones), and of the custom ones only
+    // those marked `userWritable: true`.
     async updateDepartment(department: string) {
       return await auth.updateUserAttributes(context, { department });
     },

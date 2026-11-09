@@ -248,7 +248,8 @@ const authC = new Auth(scope, 'authC', {
     passwordPolicy: { minLength: 8, requireDigits: true },
   },
   users: {
-    attributes: [{ name: 'department' }],
+    // A profile field the signed-in user edits (updateUserAttributes).
+    attributes: [{ name: 'department', userWritable: true }],
     groups: ['admins', 'readers'],
   },
   // Enable the opt-in admin surface (auth.admin) for the sandbox admin e2e

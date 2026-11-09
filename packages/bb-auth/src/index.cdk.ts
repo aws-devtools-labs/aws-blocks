@@ -66,6 +66,7 @@ import {
 	adminIamActions,
 	CLIENT_IAM_ACTIONS,
 	mapAutoVerify,
+	mapClientWriteAttributes,
 	mapCustomAttributes,
 	mapFeaturePlan,
 	mapMfaMode,
@@ -330,6 +331,13 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					adminUserPassword: false,
 					user: emailPassword && authFlow === 'USER_AUTH',
 				},
+				// End users write the standard attributes and only the custom
+				// attributes declared `userWritable: true`. Updates in place, like
+				// `ExplicitAuthFlows`. Not set on the hosted-UI client: Cognito
+				// writes a federated user's mapped attributes through it, and its
+				// tokens carry no `aws.cognito.signin.user.admin` scope, so they
+				// cannot call `UpdateUserAttributes`.
+				writeAttributes: mapClientWriteAttributes(opts.users?.attributes),
 			});
 
 			// ── Hosted-UI federation ────────────────────────────────────────

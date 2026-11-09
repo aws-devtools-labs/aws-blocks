@@ -23,15 +23,25 @@
  * - **Value over 2,048 characters** → `InvalidParameterException`
  *   (`AttributeType.Value`: "Maximum length of 2048").
  * - **`email_verified` / `phone_number_verified` through the app client**
- *   (`signUp`, `update`) → `NotAuthorizedException`: the client sets no
- *   `WriteAttributes`, and the verified flags are not in the default write
- *   set. `AdminCreateUser` is IAM-authorized and may write them.
+ *   (`signUp`, `update`) → `NotAuthorizedException`: the client's
+ *   `WriteAttributes` (`index.cdk.ts`) leave the verified flags out.
+ *   `AdminCreateUser` is IAM-authorized and may write them.
+ * - **A `custom:` attribute not declared `userWritable: true` through the
+ *   app client** (`signUp`, `update`) → `NotAuthorizedException`: the
+ *   client's `WriteAttributes` list only the `userWritable` custom
+ *   attributes. A name whose prefix differs only in case or surrounding
+ *   whitespace (`Custom:role`, ` custom:role`) counts as a `custom:` name and
+ *   is rejected too, rather than passed on as some other attribute. The
+ *   writable set comes from the options ({@link userWritableAttributes}), not
+ *   the pool, so this rule needs no schema either. `AdminCreateUser` may
+ *   write every custom attribute.
  * - **`sub`** → `InvalidParameterException`: Cognito-assigned and immutable,
  *   so no call writes it.
  *
  * The schema-dependent rules — an unknown name, an undeclared `custom:`
- * attribute, an immutable custom attribute after creation — are left to the
- * caller: the local engine knows the schema it provisions
+ * attribute (reached only by `AdminCreateUser`: on the app-client calls an
+ * undeclared one is outside the `userWritable` set), an immutable custom
+ * attribute after creation — are left to the caller: the local engine knows the schema it provisions
  * (`MockAttributeSchema`), and on AWS Cognito knows the deployed one and
  * answers `InvalidParameterException`, which reaches the client as is.
  *
@@ -41,7 +51,8 @@
  *
  * 1. every value is a string (`InvalidParameterException`);
  * 2. every value is within 2,048 characters (`InvalidParameterException`);
- * 3. the app client may write every name: no verified flag on `signUp` /
+ * 3. the app client may write every name: no verified flag and no
+ *    `custom:` attribute outside the `userWritable` set on `signUp` /
  *    `update` (`NotAuthorizedException`);
  * 4. the pool schema: `sub` here, then the caller's schema rules (unknown
  *    name, undeclared `custom:`, immutable after creation), all
@@ -58,12 +69,14 @@
  * 400 locally and 401 on AWS. Before any attribute rule, `signUp` checks that
  * the pool allows self-service sign-up at all ({@link signUpNotPermitted}).
  *
- * Pure: imports only `../errors.js`, so it is safe in the AWS import graph.
+ * Pure: imports only `../errors.js` (and types), so it is safe in the AWS
+ * import graph.
  *
  * @internal
  */
 
 import { AuthErrors } from '../errors.js';
+import type { UserAttribute } from '../types.js';
 
 /**
  * Which call writes the attributes:
@@ -83,6 +96,25 @@ export type AttributeWrite = 'signUp' | 'adminCreateUser' | 'update';
  * @internal
  */
 export const VERIFIED_FLAGS: ReadonlySet<string> = new Set(['email_verified', 'phone_number_verified']);
+
+/**
+ * The `custom:` attribute names end users may write through the app client:
+ * the declared `users.attributes` with `userWritable: true`, prefixed. The
+ * CDK layer lists the same names in the app client's `WriteAttributes`.
+ *
+ * @internal
+ */
+export function userWritableAttributes(attributes: readonly UserAttribute[] | undefined): ReadonlySet<string> {
+	return new Set((attributes ?? []).filter((a) => a.userWritable === true).map((a) => `custom:${a.name}`));
+}
+
+/**
+ * Whether `name` names a custom attribute: `custom:` up to letter case and
+ * surrounding whitespace, so a variant spelling cannot pass as another name.
+ */
+function isCustomAttributeName(name: string): boolean {
+	return name.trim().toLowerCase().startsWith('custom:');
+}
 
 /** `AttributeType.Value`: "Maximum length of 2048". */
 const MAX_VALUE_LENGTH = 2048;
@@ -130,16 +162,22 @@ export function immutableAttributeError(name: string): Error {
  *
  * The rules apply in the module's precedence order, each over every
  * attribute before the next: a non-string value anywhere wins over a
- * value over 2,048 characters, which wins over a verified flag through the
- * app client (`signUp`, `update`; `adminCreateUser` may write them), which
- * wins over `sub`. Within one rule, the first attribute in input order is
- * reported. The Cognito engine calls this before it sends the write: a
+ * value over 2,048 characters, which wins over a name the app client may not
+ * write (a verified flag, or a `custom:` name outside `userWritable`, on
+ * `signUp` and `update`; `adminCreateUser` may write them), which wins over
+ * `sub`. `userWritable` is the {@link userWritableAttributes} of the block's
+ * options; `adminCreateUser` ignores it. Within one rule, the first
+ * attribute in input order is reported. The Cognito engine calls this before it sends the write: a
  * rejected write sends nothing. The local engine calls it first too, then
  * applies its schema rules (`MockAttributeSchema`).
  *
  * @internal
  */
-export function checkAttributeValues(attributes: Readonly<Record<string, unknown>>, write: AttributeWrite): void {
+export function checkAttributeValues(
+	attributes: Readonly<Record<string, unknown>>,
+	write: AttributeWrite,
+	userWritable: ReadonlySet<string>,
+): void {
 	const values: [name: string, value: string][] = [];
 	// 1. The wire shape: every value a string.
 	for (const [name, value] of Object.entries(attributes)) {
@@ -164,7 +202,7 @@ export function checkAttributeValues(attributes: Readonly<Record<string, unknown
 	// 3. The app client's write permissions (the admin API is IAM-authorized).
 	if (write !== 'adminCreateUser') {
 		for (const [name] of values) {
-			if (VERIFIED_FLAGS.has(name)) {
+			if (VERIFIED_FLAGS.has(name) || (isCustomAttributeName(name) && !userWritable.has(name))) {
 				throw rejection(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
 			}
 		}

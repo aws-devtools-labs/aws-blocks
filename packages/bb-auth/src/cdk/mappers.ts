@@ -66,6 +66,13 @@ export function mapMfaTypes(types: readonly ('SMS' | 'TOTP' | 'EMAIL')[]): cogni
 /**
  * Custom attributes. `UserAttribute.required` is not mapped: Cognito cannot
  * make a custom attribute required (the same as `AuthCognito`).
+ * `UserAttribute.userWritable` is not part of the schema either: it decides
+ * the app client's `WriteAttributes` ({@link mapClientWriteAttributes}).
+ *
+ * `mutable` defaults to `true` and must keep that default: Cognito cannot
+ * change an existing custom attribute's mutability, so a different default
+ * would change the schema of every deployed pool that left it unset, which
+ * the immutability guard refuses (and Cognito would reject on update).
  */
 export function mapCustomAttributes(
 	attrs?: readonly UserAttribute[],
@@ -80,6 +87,45 @@ export function mapCustomAttributes(
 				: new cognito.StringAttribute({ mutable });
 	}
 	return out;
+}
+
+/**
+ * The native app client's `WriteAttributes`: every standard attribute except
+ * the verified flags (`email_verified`, `phone_number_verified` — Cognito's
+ * default write set leaves them out too), plus only the custom attributes
+ * declared `userWritable: true`. The standard set is Cognito's default one,
+ * so sign-up (email / phone as username or alias) and `updateUserAttributes`
+ * on standard attributes behave as before; a custom attribute without
+ * `userWritable` is writable through `auth.admin` only, which is
+ * IAM-authorized and not bound by the client's permissions.
+ *
+ * `WriteAttributes` updates the client in place ("Update requires: No
+ * interruption"), so the client and its refresh tokens are kept. The runtime
+ * applies the same rule before any Cognito call (`userWritableAttributes` in
+ * `engines/attribute-write-rules.ts`).
+ */
+export function mapClientWriteAttributes(attrs?: readonly UserAttribute[]): cognito.ClientAttributes {
+	return new cognito.ClientAttributes()
+		.withStandardAttributes({
+			address: true,
+			birthdate: true,
+			email: true,
+			familyName: true,
+			gender: true,
+			givenName: true,
+			locale: true,
+			middleName: true,
+			fullname: true,
+			nickname: true,
+			phoneNumber: true,
+			profilePicture: true,
+			preferredUsername: true,
+			profilePage: true,
+			timezone: true,
+			lastUpdateTime: true,
+			website: true,
+		})
+		.withCustomAttributes(...(attrs ?? []).filter((a) => a.userWritable === true).map((a) => a.name));
 }
 
 /**

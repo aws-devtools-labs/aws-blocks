@@ -69,9 +69,9 @@ const SCENARIOS: {
 	},
 	{
 		name: 'custom attribute',
-		users: { attributes: [{ name: 'tenant' }] },
+		users: { attributes: [{ name: 'team', userWritable: true }] },
 		login: 'ada',
-		attributes: { email: 'ada@example.com', tenant: 't-1' },
+		attributes: { email: 'ada@example.com', team: 't-1' },
 	},
 ];
 

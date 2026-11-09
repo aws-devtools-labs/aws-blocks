@@ -346,7 +346,7 @@ describe('AWS challenge round-trip (signIn → confirmSignIn)', () => {
 
 describe('AWS signUp / confirmSignUp', () => {
 	test('SignUp input: client id, credentials, attributes (declared custom attrs prefixed)', async () => {
-		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String' }] } });
+		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String', userWritable: true }] } });
 		h.on('SignUpCommand', () => ({
 			UserConfirmed: false,
 			UserSub: 'sub-new',

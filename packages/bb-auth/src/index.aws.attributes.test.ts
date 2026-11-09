@@ -35,7 +35,7 @@ beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
-const OPTIONS = { users: { attributes: [{ name: 'team' }] }, admin: {} } as const;
+const OPTIONS = { users: { attributes: [{ name: 'team', userWritable: true }, { name: 'role' }] }, admin: {} } as const;
 
 const INVALID = { name: AuthErrors.InvalidParameter, code: 400, retriable: true } as const;
 const UNAUTHORIZED = { name: AuthErrors.NotAuthorized, code: 401, retriable: false } as const;
@@ -180,6 +180,45 @@ describe('AWS: the other schema-independent rules are checked before the SDK cal
 		});
 	}
 
+	for (const write of ['signUp', 'updateUserAttributes', 'newPasswordChallenge'] as const) {
+		test(`${write}: a \`custom:\` attribute that is not \`userWritable\` is 401 NotAuthorizedException`, async () => {
+			for (const attributes of [
+				{ role: 'admin' },
+				{ 'custom:role': 'admin' },
+				{ 'custom:dept': 'x' },
+				{ 'Custom:team': 'ops' },
+				{ ' custom:team': 'ops' },
+				{ team: 'ops', 'CUSTOM:role': 'admin' },
+			]) {
+				const { result, sent } = await WRITES[write](attributes);
+				assert.deepStrictEqual(result, UNAUTHORIZED, JSON.stringify(attributes));
+				assert.deepStrictEqual(sent, [], JSON.stringify(attributes));
+			}
+		});
+	}
+
+	test('adminCreateUser: a custom attribute that is not `userWritable` is sent (IAM-authorized)', async () => {
+		const h = makeAwsAuth(OPTIONS);
+		h.on('AdminCreateUserCommand', (input) => ({
+			User: { Username: String(input.Username), Enabled: true, Attributes: [] },
+		}));
+		await h.auth.admin.createUser('bob', { attributes: { email: 'bob@example.com', role: 'admin' } });
+		assert.deepStrictEqual(h.sent[0]?.input.UserAttributes, [
+			{ Name: 'email', Value: 'bob@example.com' },
+			{ Name: 'custom:role', Value: 'admin' },
+		]);
+	});
+
+	test('signUp: a `userWritable` custom attribute is sent, prefixed', async () => {
+		const h = makeAwsAuth(OPTIONS);
+		h.on('SignUpCommand', () => ({ UserConfirmed: false, UserSub: 'sub-bob' }));
+		await h.auth.signUp('bob', PASSWORD, { attributes: { email: 'bob@example.com', team: 'ops' } });
+		assert.deepStrictEqual(h.sent[0]?.input.UserAttributes, [
+			{ Name: 'email', Value: 'bob@example.com' },
+			{ Name: 'custom:team', Value: 'ops' },
+		]);
+	});
+
 	test('signUp: a rejected value anywhere in the write sends nothing, valid attributes before it included', async () => {
 		const { result, sent } = await WRITES.signUp({ email: 'bob@example.com', name: 'Bob', team: { x: 1 } });
 		assert.deepStrictEqual(result, INVALID);
@@ -207,10 +246,7 @@ describe('AWS: what the engine leaves to Cognito', () => {
 		]);
 	});
 
-	for (const [label, attributes] of [
-		['an unknown name', { nickname_: 'b' }],
-		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }],
-	] as const) {
+	for (const [label, attributes] of [['an unknown name', { nickname_: 'b' }]] as const) {
 		test(`${label} reaches Cognito, whose InvalidParameterException is the canonical 400`, async () => {
 			const h = makeAwsAuth(OPTIONS);
 			h.on('SignUpCommand', () => {
@@ -223,7 +259,7 @@ describe('AWS: what the engine leaves to Cognito', () => {
 	}
 
 	test('an immutable attribute on update reaches Cognito, whose InvalidParameterException is the canonical 400', async () => {
-		const h = makeAwsAuth({ users: { attributes: [{ name: 'tier', mutable: false }] } });
+		const h = makeAwsAuth({ users: { attributes: [{ name: 'tier', mutable: false, userWritable: true }] } });
 		const browser = new Browser();
 		await signInAs(h, browser, 'alice');
 		h.on('UpdateUserAttributesCommand', () => {

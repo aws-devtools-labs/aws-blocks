@@ -158,7 +158,7 @@ describe('AWS sign-in challenges → next steps → ChallengeResponses', () => {
 	});
 
 	test('NEW_PASSWORD_REQUIRED → required attributes; the answer carries NEW_PASSWORD + prefixed attributes', async () => {
-		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String' }] } });
+		const h = makeAwsAuth({ users: { attributes: [{ name: 'department', type: 'String', userWritable: true }] } });
 		const b = new Browser();
 		h.on('InitiateAuthCommand', () => ({
 			ChallengeName: 'NEW_PASSWORD_REQUIRED',

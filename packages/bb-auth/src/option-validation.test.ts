@@ -34,6 +34,7 @@ import {
 	assertKnownAuthOptions,
 	findInvalidAuthOptions,
 	findPasswordOnlyOptions,
+	findRequiredNotUserWritable,
 	findStoreConflicts,
 	findUnknownAuthOptions,
 } from './option-validation.js';
@@ -832,6 +833,7 @@ describe('boolean options are type-checked, not only key-checked', () => {
 		['providers.partner.signRequest', (v) => ({ providers: { partner: { type: 'saml', signRequest: v } } })],
 		['users.attributes[0].mutable', (v) => ({ users: { attributes: [{ name: 'dept', mutable: v }] } })],
 		['users.attributes[0].required', (v) => ({ users: { attributes: [{ name: 'dept', required: v }] } })],
+		['users.attributes[0].userWritable', (v) => ({ users: { attributes: [{ name: 'dept', userWritable: v }] } })],
 		[
 			'users.deviceTracking.challengeRequiredOnNewDevice',
 			(v) => ({ users: { deviceTracking: { challengeRequiredOnNewDevice: v } } }),
@@ -1315,6 +1317,66 @@ describe('emailPassword: false with an email + password only option is rejected 
 		assert.match(
 			message(() => new CdkAuth(stack as unknown as ScopeParent, 'auth', conflicting)),
 			expected,
+		);
+	});
+});
+
+describe('a required custom attribute must be userWritable', () => {
+	function message(construct: () => unknown): string {
+		try {
+			construct();
+		} catch (e) {
+			return e instanceof Error ? e.message : String(e);
+		}
+		assert.fail('expected the constructor to throw');
+	}
+
+	test('each required attribute without userWritable is named, in declaration order', () => {
+		assert.deepStrictEqual(
+			findRequiredNotUserWritable({
+				users: {
+					attributes: [
+						{ name: 'a', required: true },
+						{ name: 'b', required: true, userWritable: true },
+						{ name: 'c' },
+						{ name: 'd', required: true, userWritable: false },
+					],
+				},
+			}),
+			['a', 'd'],
+		);
+		assert.deepStrictEqual(findRequiredNotUserWritable({}), []);
+	});
+
+	const conflicting = { users: { attributes: [{ name: 'dept', required: true }] } } as const;
+	const expected = /^Auth 'auth': users\.attributes `dept` is `required: true` but not `userWritable: true`\./;
+
+	test('mock (default entry)', () => {
+		assert.match(
+			message(() => new Auth(root(), 'auth', conflicting)),
+			expected,
+		);
+	});
+
+	test('AWS runtime entry', () => {
+		assert.match(
+			message(() => new AwsAuth(root(), 'auth', conflicting)),
+			expected,
+		);
+	});
+
+	test('CDK entry (fails synth)', () => {
+		const stack = Object.assign(new cdk.Stack(new cdk.App(), 'OptValReqStack'), { id: 'OptValReqStack' });
+		// Test plumbing: a bare stack is an acceptable CDK parent.
+		assert.match(
+			message(() => new CdkAuth(stack as unknown as ScopeParent, 'auth', conflicting)),
+			expected,
+		);
+	});
+
+	test('required and userWritable together pass', () => {
+		assert.ok(
+			new Auth(root(), 'auth', { users: { attributes: [{ name: 'dept', required: true, userWritable: true }] } }),
 		);
 	});
 });
