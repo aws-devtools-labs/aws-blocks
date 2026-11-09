@@ -23,7 +23,7 @@ class EncryptedFileKeyValueStoreTest {
 
     private fun store() = EncryptedFileKeyValueStore("cookies", root)
 
-    private val storageDir get() = File(root, ".blocks/cookies")
+    private val storageDir get() = File(root, "cookies")
 
     @AfterTest
     fun cleanUp() {

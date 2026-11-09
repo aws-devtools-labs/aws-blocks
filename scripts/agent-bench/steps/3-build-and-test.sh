@@ -23,7 +23,7 @@ AGENT_EXEC=(node "$(cd "$(dirname "$0")" && pwd)/lib/agent-exec.mjs")
 agent_run() { "${AGENT_EXEC[@]}" run "$WORKSPACE" "$@"; }
 
 # Pin to the lockfile-resolved version so the browser/runner stay reproducible.
-PW_VERSION="1.60.0"
+PW_VERSION="1.64.1"
 
 # Per-cell scratch dir for the supervisor's captures (runner-owned, 0700: the agent user can't reach
 # or pre-create anything in it).
