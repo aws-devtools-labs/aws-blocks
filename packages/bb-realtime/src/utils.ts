@@ -80,11 +80,11 @@ export function validateChannelName(channel: string): void {
 		throw blocksError(RealtimeErrors.ValidationFailed,
 			`Channel name must be a string (got ${raw === null ? 'null' : typeof raw})`);
 	}
-	channel = String(raw);
-	if (channel === '') {
+	const name = String(raw);
+	if (name === '') {
 		throw blocksError(RealtimeErrors.ValidationFailed, 'Channel name must not be empty');
 	}
-	for (const segment of channel.split('/')) {
+	for (const segment of name.split('/')) {
 		if (segment === '') {
 			throw blocksError(RealtimeErrors.ValidationFailed,
 				'Invalid channel name: it must not start or end with "/" or contain an empty segment ("//")');
@@ -231,7 +231,7 @@ export function validateChannelToken(
 			if (typeof channel !== 'string' || !channel.includes('/')) return null;
 			if (requestedChannel !== channel) {
 				if (scope === 'exact') return null;
-				if (!requestedChannel.startsWith(channel + '/')) return null;
+				if (!requestedChannel.startsWith(`${channel}/`)) return null;
 			}
 		}
 		return { channel: typeof channel === 'string' ? channel : undefined, exp: payload.exp, scope };

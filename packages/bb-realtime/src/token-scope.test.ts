@@ -205,7 +205,7 @@ describe('Channel token scope: exact vs subtree', () => {
 			if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
 			if (!payload.channel) return null;
 			if (!payload.channel.includes('/')) return null;
-			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(payload.channel + '/')) return null;
+			if (requestedChannel !== payload.channel && !requestedChannel.startsWith(`${payload.channel}/`)) return null;
 			return payload;
 		}
 		const exact = mintChannelToken(TENANT, SECRET, 60, 'exact');
