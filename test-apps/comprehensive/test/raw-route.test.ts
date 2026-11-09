@@ -56,6 +56,15 @@ export function rawRouteTests() {
       assert.strictEqual(body.path, 'image.png');
     });
 
+    test('GET /files/* — ctx.request.url.pathname is the route path, without an API Gateway stage', async () => {
+      const res = await fetch(`${getBaseUrl()}/files/docs/readme.md`);
+      assert.strictEqual(res.status, 200);
+      const body = await res.json();
+      // Not `new URL(...).pathname` of the fetched URL: in sandbox that URL is the
+      // execute-api stage URL (`/prod/files/...`), and the handler must not see `/prod`.
+      assert.strictEqual(body.pathname, '/files/docs/readme.md');
+    });
+
     // ── POST with body ────────────────────────────────────────────────────
 
     test('POST /echo — reads and echoes JSON body', async () => {

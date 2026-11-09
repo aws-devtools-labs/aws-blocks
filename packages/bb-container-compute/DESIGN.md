@@ -112,8 +112,9 @@ with readiness on port **8081** (503 while draining).
   gets the gateway's `Host` and the stage in its API Gateway event. So the
   gateway stamps its public host and stage (`x-blocks-forwarded-host` /
   `x-blocks-forwarded-stage`, from its request context, overwriting any client
-  value), and the container builds `ctx.request.url` from them: the same URL
-  the Lambda handler reports. A request whose stamped headers aren't one
+  value), and the container builds `ctx.request.url` from the host and
+  `getRequestBaseUrl()` from the host and stage: the same values the Lambda
+  handler reports, so the stage is never in the path. A request whose stamped headers aren't one
   well-formed value each — a client copy under another letter case, say — is
   refused with a 400.
 - **CloudFront front doors.** On the `apiFrontDoor: 'cloudfront'` tier, the
