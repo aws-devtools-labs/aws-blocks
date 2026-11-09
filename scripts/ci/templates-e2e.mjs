@@ -111,7 +111,7 @@ async function main() {
 		}
 	}
 
-	// ── Step 2: start the local registry (node + tsx loader, no shim needed) ──
+	// ── Step 2: start the local registry (node --experimental-strip-types) ──
 	console.log('\n=== Step 2: Start local registry ===');
 	await startRegistry({ root: ROOT, registryUrl: REGISTRY_URL, children });
 	console.log('  Registry ready.');
