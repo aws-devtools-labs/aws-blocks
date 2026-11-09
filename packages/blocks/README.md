@@ -252,7 +252,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 });
 ```
 
-Every synth writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth. See `npm run docs core` for permissions boundary scope and shared-account guidance. For shared-account policies, pipeline setup, and adoption steps, run `npm run docs core/SHARED-ACCOUNT.md` (`docs/core/SHARED-ACCOUNT.md` in the installed package).
+Every synth writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth. Outside a sandbox, synth fails when the boundary is the AWS managed `AdministratorAccess`, `PowerUserAccess` or `IAMFullAccess` policy (unless `permissionsBoundaryAllowPermissive: true` is set) or conflicts with CDK's `@aws-cdk/core:permissionsBoundary` context; a sandbox only warns. See `npm run docs core` for permissions boundary scope and shared-account guidance. For shared-account policies, pipeline setup, and adoption steps, run `npm run docs core/SHARED-ACCOUNT.md` (`docs/core/SHARED-ACCOUNT.md` in the installed package).
 
 ## VPC Support
 

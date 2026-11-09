@@ -285,8 +285,10 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		);
 	});
 
-	test('wins over the CDK @aws-cdk/core:permissionsBoundary context for Blocks roles, and warns', async () => {
-		const app = new cdk.App({ context: { '@aws-cdk/core:permissionsBoundary': { name: 'platform-boundary' } } });
+	test('in sandbox, wins over the CDK @aws-cdk/core:permissionsBoundary context for Blocks roles, and warns', async () => {
+		const app = new cdk.App({
+			context: { sandboxMode: 'true', '@aws-cdk/core:permissionsBoundary': { name: 'platform-boundary' } },
+		});
 		const stack = new cdk.Stack(app, 'ContextAndOptionStack');
 		new iam.Role(stack, 'CustomerOwnedRole', { assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com') });
 		await makeBackend(stack, 'Blocks', withBoundary('app-boundary'));
@@ -298,6 +300,49 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 		assertEveryRoleBounded(template, arnForName('app-boundary'), (id) => !id.startsWith('CustomerOwnedRole'));
 		Annotations.fromStack(stack).hasWarning('/ContextAndOptionStack/Blocks', Match.stringLikeRegexp('context'));
 	});
+
+	test('outside sandbox, a boundary that differs from the CDK context fails synth', async () => {
+		const app = new cdk.App({ context: { '@aws-cdk/core:permissionsBoundary': { name: 'platform-boundary' } } });
+		const stack = new cdk.Stack(app, 'ContextConflictStack');
+		await assert.rejects(
+			makeBackend(stack, 'Blocks', withBoundary('app-boundary')),
+			/permissionsBoundary.*@aws-cdk\/core:permissionsBoundary/s,
+		);
+	});
+
+	test('outside sandbox, a boundary given as an ARN context that differs fails synth too', async () => {
+		const app = new cdk.App({
+			context: {
+				'@aws-cdk/core:permissionsBoundary': { arn: 'arn:aws:iam::123456789012:policy/platform-boundary' },
+			},
+		});
+		const stack = new cdk.Stack(app, 'ContextArnConflictStack');
+		await assert.rejects(
+			makeBackend(stack, 'Blocks', withBoundary('arn:aws:iam::123456789012:policy/app-boundary')),
+			/permissionsBoundary.*@aws-cdk\/core:permissionsBoundary/s,
+		);
+	});
+
+	for (const [label, context, option] of [
+		['by name', { name: 'platform-boundary' }, 'platform-boundary'],
+		[
+			'by ARN',
+			{ arn: 'arn:aws:iam::123456789012:policy/platform-boundary' },
+			'arn:aws:iam::123456789012:policy/platform-boundary',
+		],
+	] as const) {
+		test(`outside sandbox, a boundary equal to the CDK context (${label}) synthesizes without a conflict`, async () => {
+			const app = new cdk.App({ context: { '@aws-cdk/core:permissionsBoundary': context } });
+			const stack = new cdk.Stack(app, 'ContextEqualStack');
+			await makeBackend(stack, 'Blocks', withBoundary(option));
+			const template = Template.fromStack(stack);
+			assert.ok(rolesOf(template).length > 0);
+			assert.deepStrictEqual(
+				Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('permissionsBoundary')),
+				[],
+			);
+		});
+	}
 
 	test('the CDK context alone still bounds every Blocks role (the option is not required)', async () => {
 		const app = new cdk.App({ context: { '@aws-cdk/core:permissionsBoundary': { name: 'platform-boundary' } } });
@@ -327,6 +372,58 @@ describe('defaults.permissionsBoundary — BlocksBackend', () => {
 			await assert.rejects(makeBackend(stack, 'Blocks', withBoundary(bad)), pattern);
 		});
 	}
+});
+
+describe('defaults.permissionsBoundary — permissive AWS managed policies', () => {
+	const permissive: [string, () => BlocksDefaults['permissionsBoundary']][] = [
+		['the AdministratorAccess ARN', () => 'arn:aws:iam::aws:policy/AdministratorAccess'],
+		['the PowerUserAccess ARN', () => 'arn:aws:iam::aws:policy/PowerUserAccess'],
+		['the IAMFullAccess ARN (GovCloud partition)', () => 'arn:aws-us-gov:iam::aws:policy/IAMFullAccess'],
+		[
+			'iam.ManagedPolicy.fromAwsManagedPolicyName("AdministratorAccess")',
+			() => iam.ManagedPolicy.fromAwsManagedPolicyName('AdministratorAccess'),
+		],
+	];
+
+	for (const [label, input] of permissive) {
+		test(`outside sandbox, rejects ${label} with an actionable error`, async () => {
+			const app = new cdk.App();
+			const stack = new cdk.Stack(app, 'PermissiveBoundaryStack');
+			await assert.rejects(
+				makeBackend(stack, 'Blocks', withBoundary(input())),
+				/permissionsBoundary.*permissionsBoundaryAllowPermissive/s,
+			);
+		});
+
+		test(`in sandbox, ${label} still synthesizes, with a warning`, async () => {
+			const app = new cdk.App({ context: { sandboxMode: 'true' } });
+			const stack = new cdk.Stack(app, 'PermissiveSandboxStack');
+			await makeBackend(stack, 'Blocks', withBoundary(input()));
+			Annotations.fromStack(stack).hasWarning(
+				'/PermissiveSandboxStack/Blocks',
+				Match.stringLikeRegexp('permissive'),
+			);
+		});
+	}
+
+	test('outside sandbox, permissionsBoundaryAllowPermissive: true accepts it and applies it', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'PermissiveAllowedStack');
+		await makeBackend(stack, 'Blocks', {
+			...withBoundary('arn:aws:iam::aws:policy/AdministratorAccess'),
+			permissionsBoundaryAllowPermissive: true,
+		});
+		assertEveryRoleBounded(Template.fromStack(stack), 'arn:aws:iam::aws:policy/AdministratorAccess');
+		assert.deepStrictEqual(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('permissive')), []);
+	});
+
+	test('a customer-managed policy that shares an AWS managed name is not treated as permissive', async () => {
+		const app = new cdk.App();
+		const stack = new cdk.Stack(app, 'SameNameStack');
+		// A bare name resolves in the deploying account, not to the AWS managed policy.
+		await makeBackend(stack, 'Blocks', withBoundary('AdministratorAccess'));
+		assertEveryRoleBounded(Template.fromStack(stack), arnForName('AdministratorAccess'));
+	});
 });
 
 describe('defaults.permissionsBoundary — legacy BlocksStack', () => {
