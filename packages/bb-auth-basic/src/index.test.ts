@@ -13,10 +13,12 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspect } from 'node:util';
 import jwt from 'jsonwebtoken';
 import type { BlocksContext } from '@aws-blocks/core';
-import { Scope, hasAuthError } from '@aws-blocks/core';
+import { ApiError, Scope, blocksError, hasAuthError } from '@aws-blocks/core';
 import type { AuthStateApi } from '@aws-blocks/auth-common';
+import type { EmitOptions, MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { AuthBasic, AuthBasicErrors, type AuthBasicOptions } from './index.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -96,7 +98,7 @@ describe('AuthBasic setAuthState errorName', () => {
 		try {
 			const api = apiFor(auth, ctx());
 			const next = await api.setAuthState({ action: 'signIn', username: 'alice', password: 'password123' });
-			assert.strictEqual(next.error, 'An unexpected error occurred');
+			assert.strictEqual(next.error, 'Internal error');
 			assert.strictEqual(next.errorName, undefined);
 		} finally {
 			store.get = realGet;
@@ -130,6 +132,84 @@ describe('AuthBasic confirm forms echo the username (no blank retype)', () => {
 		assert.ok(field, 'confirmResetPassword exposes a username field');
 		assert.strictEqual(field!.type, 'hidden');
 		assert.strictEqual(field!.defaultValue, 'bob@example.com');
+	});
+});
+
+describe('AuthBasic setAuthState never returns raw backend error text', () => {
+	// What an SES / DynamoDB / SSM failure looks like: the message embeds the
+	// account id and resource ARN. It must stay in the server log.
+	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: ses:SendEmail on arn:aws:ses:us-east-1:123456789012:identity/internal@example.com';
+
+	function recordingLogger(): { logger: NonNullable<AuthBasicOptions['logger']>; errors: unknown[] } {
+		const errors: unknown[] = [];
+		const logger: NonNullable<AuthBasicOptions['logger']> = {
+			debug() {},
+			info() {},
+			warn() {},
+			error(message, context) {
+				// inspect() renders an Error's message, as the real logger does; JSON.stringify drops it.
+				errors.push(inspect({ message, context }));
+			},
+			child: () => logger,
+		};
+		return { logger, errors };
+	}
+
+	test('an unbranded error is returned as a generic message and logged server-side', async () => {
+		const { logger, errors } = recordingLogger();
+		const auth = makeAuth({
+			logger,
+			codeDelivery: async () => {
+				throw new Error(RAW_DETAIL);
+			},
+		});
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'carol@example.com', password: 'password123' });
+
+		assert.strictEqual(next.state, 'signedOut');
+		assert.strictEqual(next.error, 'Internal error');
+		assert.strictEqual(next.errorName, undefined, 'a raw error carries no structured name');
+		assert.ok(!JSON.stringify(next).includes('123456789012'), 'no account id in the returned AuthState');
+		assert.ok(JSON.stringify(errors).includes(RAW_DETAIL), 'the original error is logged server-side');
+	});
+
+	test('an ApiError thrown by the app keeps its message and name', async () => {
+		const auth = makeAuth({
+			codeDelivery: async () => {
+				throw new ApiError('That address cannot receive email', 400, { name: 'UndeliverableAddressException' });
+			},
+		});
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'dave@example.com', password: 'password123' });
+
+		assert.strictEqual(next.error, 'That address cannot receive email');
+		assert.strictEqual(next.errorName, 'UndeliverableAddressException');
+	});
+
+	test('a branded Building Block error keeps its message', async () => {
+		const branded = blocksError('DeliveryQuotaExceededException', 'Too many codes requested, try again later');
+		const auth = makeAuth({
+			codeDelivery: async () => {
+				throw branded;
+			},
+		});
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'erin@example.com', password: 'password123' });
+
+		assert.strictEqual(next.error, branded.message);
+	});
+
+	test('the built-in ApiError messages still reach the client unchanged', async () => {
+		const auth = makeAuth();
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signIn', username: 'nobody', password: 'whatever1' });
+
+		assert.strictEqual(next.error, 'Invalid username or password');
+		assert.strictEqual(next.errorName, AuthBasicErrors.InvalidCredentials);
 	});
 });
 
@@ -1125,5 +1205,112 @@ describe('AuthBasic telemetry registration', () => {
 			[{ name: BB_NAME, version: BB_VERSION }],
 		);
 		assert.strictEqual(customBlocksCount, 0, 'must not be filtered out as an unnamed custom block');
+	});
+});
+
+/** A `MetricsEmitter` that records every `emit`, or throws when `failing` is set. */
+function recordingMetrics(failing = false): MetricsEmitter & { emitted: { name: string; value: number; options?: EmitOptions }[] } {
+	const emitted: { name: string; value: number; options?: EmitOptions }[] = [];
+	const emitter = {
+		emitted,
+		emit(name: string, value: number, options?: EmitOptions): void {
+			if (failing) throw new Error('metrics backend unavailable');
+			emitted.push({ name, value, options });
+		},
+		emitBatch(): void {},
+		flush(): void {},
+		child(): MetricsEmitter {
+			return emitter;
+		},
+	};
+	return emitter;
+}
+
+describe('AuthBasic sign-in metrics', () => {
+	test('a successful sign-in emits SignInSuccess with the AuthBlock dimension', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics });
+		await auth.signUp('alice', 'password123');
+		await auth.signIn('alice', 'password123', ctx());
+		assert.deepStrictEqual(metrics.emitted, [
+			{ name: 'SignInSuccess', value: 1, options: { unit: 'Count', dimensions: { AuthBlock: auth.fullId } } },
+		]);
+	});
+
+	test('an unknown user and an unconfirmed user each emit SignInFailure', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics, codeDelivery: async () => {} });
+		// carol stays unconfirmed: with codeDelivery set, signUp leaves the account pending.
+		await auth.signUp('carol', 'password123');
+		await assert.rejects(() => auth.signIn('nobody', 'password123', ctx()));
+		await assert.rejects(() => auth.signIn('carol', 'password123', ctx()));
+		assert.deepStrictEqual(
+			metrics.emitted.map((m) => m.name),
+			['SignInFailure', 'SignInFailure'],
+		);
+	});
+
+	test('wrong password emits SignInFailure', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics });
+		await auth.signUp('alice', 'password123');
+		await assert.rejects(
+			() => auth.signIn('alice', 'wrong-password', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+		);
+		assert.deepStrictEqual(metrics.emitted.map((m) => m.name), ['SignInFailure']);
+		assert.deepStrictEqual(metrics.emitted[0].options?.dimensions, { AuthBlock: auth.fullId });
+	});
+
+	test('a sign-in refused by the lockout emits SignInLocked', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics, lockout: { maxAttempts: 2 } });
+		await auth.signUp('alice', 'password123');
+		await assert.rejects(() => auth.signIn('alice', 'wrong-1', ctx()));
+		await assert.rejects(() => auth.signIn('alice', 'wrong-2', ctx()));
+		await assert.rejects(
+			() => auth.signIn('alice', 'password123', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.AccountLocked,
+		);
+		assert.deepStrictEqual(
+			metrics.emitted.map((m) => m.name),
+			['SignInFailure', 'SignInFailure', 'SignInLocked'],
+		);
+	});
+
+	test('a failure is counted even when the lockout counter read fails', async () => {
+		const metrics = recordingMetrics();
+		const auth = makeAuth({ metrics, lockout: {} });
+		await auth.signUp('alice', 'password123');
+		const codes = codesStore(auth);
+		const realGet = codes.get.bind(codes);
+		// Each sign-in reads the counter twice: the lockout pre-check, then
+		// recordFailedSignIn. Let every pre-check pass and fail every second read.
+		let reads = 0;
+		codes.get = async (k: string) => {
+			if (k.startsWith('lockout:') && ++reads % 2 === 0) throw new Error('ProvisionedThroughputExceededException');
+			return realGet(k);
+		};
+		try {
+			await assert.rejects(() => auth.signIn('alice', 'wrong-password', ctx()));
+			await assert.rejects(() => auth.signIn('nobody', 'password123', ctx()));
+		} finally {
+			codes.get = realGet;
+		}
+		assert.deepStrictEqual(
+			metrics.emitted.map((m) => m.name),
+			['SignInFailure', 'SignInFailure'],
+		);
+	});
+
+	test('an emitter that throws does not change the sign-in result', async () => {
+		const auth = makeAuth({ metrics: recordingMetrics(true) });
+		await auth.signUp('alice', 'password123');
+		const user = await auth.signIn('alice', 'password123', ctx());
+		assert.strictEqual(user.username, 'alice');
+		await assert.rejects(
+			() => auth.signIn('alice', 'wrong-password', ctx()),
+			(e: Error & { name?: string }) => e.name === AuthBasicErrors.InvalidCredentials,
+		);
 	});
 });

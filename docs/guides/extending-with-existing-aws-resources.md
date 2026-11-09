@@ -284,7 +284,8 @@ export const api = new ApiNamespace(scope, 'api', () => ({
 - **Mocks still work.** `npm run dev` writes to the local mock store, not the
   real table.
 - **No accidental mutation.** The BB will *not* modify the wrapped resource —
-  no schema changes, no IAM grants beyond what you wire up yourself.
+  no schema changes and no resource policy edits. The only IAM change is the
+  grant on `blocksStack.executionRole` described above.
 - Typed API parity with a Blocks-managed resource — call sites don't know the
   difference.
 

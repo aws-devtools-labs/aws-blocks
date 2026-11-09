@@ -12,6 +12,7 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { AuthBasicErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -101,6 +102,10 @@ export interface AuthBasicOptions {
 	 * - Password reset (user requests a code, enters it with new password)
 	 *
 	 * When absent, signup is immediate and password reset is not available.
+	 *
+	 * If the callback throws during `setAuthState()`, an `ApiError` (or a branded Building
+	 * Block error) reaches the client as `AuthState.error`; any other error is logged and
+	 * reported as `'Internal error'`.
 	 */
 	codeDelivery?: CodeDeliveryFn;
 	/**
@@ -133,6 +138,27 @@ export interface AuthBasicOptions {
 	lockout?: LockoutPolicy;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+	/**
+	 * Optional metrics emitter for sign-in outcomes, so you can alarm on failed
+	 * sign-ins. When omitted, no metrics are emitted.
+	 *
+	 * Each `signIn` emits one `Count` data point with the dimension
+	 * `AuthBlock: <this instance's fullId>`:
+	 *
+	 * - `SignInSuccess` — a session was issued.
+	 * - `SignInFailure` — unknown user, unconfirmed user, or wrong password
+	 *   (one name for all three, so the metric does not reveal which usernames exist).
+	 * - `SignInLocked` — refused because the account is locked out (see `lockout`).
+	 *
+	 * Emitting is best-effort: an emit error is logged and never fails the sign-in.
+	 *
+	 * @example
+	 * ```typescript
+	 * const metrics = new Metrics(scope, 'authMetrics', { namespace: 'MyApp/Auth' });
+	 * const auth = new AuthBasic(scope, 'auth', { lockout: {}, metrics });
+	 * ```
+	 */
+	metrics?: MetricsEmitter;
 }
 
 /** Internal user record stored in KVStore. */
@@ -260,10 +286,13 @@ export class AuthBasic extends Scope implements BlocksAuth {
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
+	/** Sign-in outcome metrics, or undefined when the `metrics` option is not passed. */
+	private readonly metrics?: MetricsEmitter;
 
 	constructor(scope: ScopeParent, id: string, options?: AuthBasicOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, bbVersion: BB_VERSION });
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
+		this.metrics = options?.metrics;
 		this.users = new KVStore(this, 'users');
 		this.jwtSecret = new AppSetting(this, 'jwt-secret', { secret: true });
 		// `ttl: true` lets DynamoDB physically reap expired entries. The store
@@ -540,17 +569,22 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		if (!record || record.unconfirmed) {
 			// Count the failure before throwing so repeated attempts against an
 			// existing-but-unconfirmed (or absent) username still trip the lock.
+			// The metric goes first: the counter read can throw, and the failure is
+			// already decided.
+			this.emitSignInMetric('SignInFailure');
 			await this.recordFailedSignIn(username);
 			throw new ApiError('Invalid username or password', 401, { name: AuthBasicErrors.InvalidCredentials });
 		}
 		const valid = await bcrypt.compare(password, record.hash);
 		if (!valid) {
+			this.emitSignInMetric('SignInFailure');
 			await this.recordFailedSignIn(username);
 			throw new ApiError('Invalid username or password', 401, { name: AuthBasicErrors.InvalidCredentials });
 		}
 		// Success: clear any accumulated failure count so the user starts fresh.
 		await this.clearLockout(username);
 		await this.setCookie(context, username);
+		this.emitSignInMetric('SignInSuccess');
 		return this.toAuthBasicUser(username, record);
 	}
 
@@ -939,6 +973,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		const lockedAt = record.lockedAt ?? record.firstFailAt;
 		const lockExpiresAt = lockedAt + this.lockout.lockoutSeconds * 1000;
 		if (Date.now() < lockExpiresAt) {
+			this.emitSignInMetric('SignInLocked');
 			throw new ApiError('Too many failed sign-in attempts; try again later', 429, {
 				name: AuthBasicErrors.AccountLocked,
 			});
@@ -982,6 +1017,19 @@ export class AuthBasic extends Scope implements BlocksAuth {
 			await this.codes.put(this.lockoutKey(username), JSON.stringify(next), { ttlSeconds });
 		} catch (e) {
 			this.log.error('AuthBasic: failed to record sign-in throttle counter', { error: e });
+		}
+	}
+
+	/**
+	 * Emit one sign-in outcome metric (see the `metrics` option). Best-effort: an
+	 * emit error is logged, never thrown, so metrics can't change a sign-in result.
+	 */
+	private emitSignInMetric(name: 'SignInSuccess' | 'SignInFailure' | 'SignInLocked'): void {
+		if (!this.metrics) return;
+		try {
+			this.metrics.emit(name, 1, { unit: 'Count', dimensions: { AuthBlock: this.fullId } });
+		} catch (e) {
+			this.log.error('AuthBasic: failed to emit sign-in metric', { error: e, metric: name });
 		}
 	}
 
@@ -1071,20 +1119,23 @@ export class AuthBasic extends Scope implements BlocksAuth {
 						default:
 							return { ...this.signedOutState(), error: `Unknown action: ${(input as any).action}` };
 					}
-				} catch (e: any) {
+				} catch (e) {
 					// A signOut always clears the cookie (via its finally), so the
 					// session is gone even when the revocation write failed — report
 					// signed-out rather than the still-valid request cookie's signedIn.
 					const currentUser = input.action === 'signOut' ? null : await this.getUserFromCookie(context);
 					const base = currentUser ? signedInState(currentUser) : this.signedOutState();
-					// Surface the message only for a wire-safe error (an ApiError, or a
-					// BB error branded via blocksError) — a raw SDK/driver error's
-					// message can carry $metadata/ARNs, so it gets a generic message,
-					// never echoed. The name crosses the wire only when it is an
-					// intentional, non-default BB error constant.
-					const errorMessage = isWireSafeError(e) ? e.message : 'An unexpected error occurred';
+					// The name crosses the wire only when it is an intentional, non-default BB error constant.
 					const errorName = e instanceof ApiError && e.name !== DEFAULT_API_ERROR_NAME ? e.name : undefined;
-					return { ...base, error: errorMessage, ...(errorName ? { errorName } : {}) };
+					// AuthState is returned to unauthenticated clients, so only an ApiError's or a
+					// branded BB error's message is client-safe. Anything else (an SDK, KVStore,
+					// AppSetting or codeDelivery failure) can name accounts and ARNs: log it and
+					// return the same generic message core's RPC serializer uses.
+					if (!isWireSafeError(e)) {
+						this.log.error('AuthBasic setAuthState failed', { action: input.action, error: e });
+						return { ...base, error: 'Internal error' };
+					}
+					return { ...base, error: e.message, ...(errorName ? { errorName } : {}) };
 				}
 			},
 		}));

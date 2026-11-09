@@ -24,6 +24,7 @@ import {
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
+import { type ApiDirectRoute, admitCloudFront, cloudFrontReachableRoutes } from './api-direct-routes.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
@@ -325,7 +326,7 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * Call once, after the backend module has imported and every compute exists.
  * The gateway's catch-all resources front the default compute's function (its
  * `apiHandler()`), and every other compute's namespaces are routed to that
- * compute's function — by export name, read from `backendModule` (see
+ * compute — its function, or a container's load balancer — by export name, read from `backendModule` (see
  * `resolveNamespaceRoutes`). It is built in the default compute's construct scope, so
  * its logical IDs match the per-compute gateway it replaced — existing
  * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
@@ -357,6 +358,13 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
+	// Container namespaces skip the gateway only where CloudFront is the API's front
+	// door. On the `apigateway` tier a CloudFront Hosting forwards them to the gateway
+	// like every other path, so its stage — WAF, throttling, access logs — sees them.
+	// A namespace whose VPC CloudFront can't reach (no public subnets) stays on the
+	// gateway's VPC link, which serves every container namespace on both tiers.
+	owner._apiDirectRoutes = cloudfront ? cloudFrontReachableRoutes(owner, sharedGateway.directRoutes) : [];
+	for (const { ingress } of owner._apiDirectRoutes) admitCloudFront(ingress.loadBalancer);
 	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
 }
@@ -469,6 +477,8 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_apiWaf?: ResolvedApiWaf;
 	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
 	_apiFrontDoorMarked?: boolean;
+	/** The API paths a CloudFront front door routes straight to a container's load balancer; set with the gateway. @internal */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this

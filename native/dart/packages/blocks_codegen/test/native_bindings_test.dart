@@ -280,6 +280,25 @@ void main() {
       expect(output, contains('Future<DeviceLink> connectDevice()'));
     });
 
+    test('only each segment\'s first character is raised', () {
+      for (final entry in const {
+        'iot_API': 'IotAPI',
+        'iot-API': 'IotAPI',
+        'iot.API': 'IotAPI',
+        'DEVICE_LINK': 'DEVICELINK',
+      }.entries) {
+        final output = _generate(
+          _build(_specWith(_binding(export: entry.key))),
+        );
+
+        expect(
+          output,
+          contains('Future<${entry.value}> connectDevice()'),
+          reason: entry.key,
+        );
+      }
+    });
+
     test('a declared package is not imported when no result uses its tag', () {
       final output = _generate(
         _build(
@@ -549,6 +568,25 @@ void main() {
       expect(
         () => _build(spec),
         _throwsFormat("export 'deviceLink' in package 'a-native'"),
+      );
+    });
+
+    test('one export declared at two generic arities is an error', () {
+      expect(
+        () => _build(
+          _specJson(
+            extras: _catalogs(
+              bindings: [
+                _binding(),
+                _binding(tag: 'other/link', genericArity: 1),
+              ],
+            ),
+          ),
+        ),
+        _throwsFormat(
+          "export 'deviceLink' in package 'example-iot-native' "
+          'at generic arity 0',
+        ),
       );
     });
 
@@ -1292,10 +1330,33 @@ void main() {
       for (final export in const ['_private', '2device', 'device link']) {
         expect(
           () => _build(_specWith(_binding(export: export))),
-          _throwsFormat("export '$export' does not name a public Dart type"),
+          _throwsFormat(
+            "export '$export' is not a -, _ or . joined run of "
+            'alphanumeric segments starting with a letter, so it cannot name '
+            'a public Dart type',
+          ),
           reason: export,
         );
       }
+    });
+
+    test('a newline in a rejected export cannot split the diagnostic', () {
+      expect(
+        () => _build(
+          _specWith(
+            _binding(export: 'deviceLink\nAWSBLOCKS-NATIVE-999: forged'),
+          ),
+        ),
+        throwsA(
+          isA<FormatException>()
+              .having(
+                (e) => e.message,
+                'message',
+                contains(r"export 'deviceLink\nAWSBLOCKS-NATIVE-999: forged'"),
+              )
+              .having((e) => e.message, 'message', isNot(contains('\n'))),
+        ),
+      );
     });
 
     test('type-arg count disagreeing with the declared arity', () {
