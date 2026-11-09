@@ -36,7 +36,8 @@ Open http://localhost:3000 after `npm run dev`.
   `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie. It is
   also `Secure` except on plain-HTTP localhost, the same rule as the auth cookie.
 - **FileBucket, AppSetting, Secret, EmailClient, AsyncJob, KnowledgeBase** —
-  upload/download (paths scoped per user), `setFlag`, the API-key rotation
+  upload/download (paths scoped per user; `getUploadSlot` signs only the
+  content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
   methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
   `requireAuth`; `getFlag` and `jobRan` stay public.
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in

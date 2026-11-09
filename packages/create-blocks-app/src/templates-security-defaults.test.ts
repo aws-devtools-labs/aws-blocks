@@ -423,9 +423,14 @@ describe('create-blocks-app template file buckets are versioned and uploads are 
       assert.doesNotMatch(source, /versioned:\s*false/, `${name} must keep FileBucket versioning on`);
     });
 
-    if (source.includes('.putUrl(')) {
+    // `createUploadHandle` signs a presigned PUT too (from `putUrl` on AWS).
+    if (/\.(putUrl|createUploadHandle)\(/.test(source)) {
       it(`${name}: presigned uploads check the content type against an allowlist`, () => {
-        assert.match(source, /ALLOWED_UPLOAD_TYPES\.has\(contentType\)/, `${name} must check contentType before putUrl`);
+        assert.match(
+          source,
+          /ALLOWED_UPLOAD_TYPES\.has\(contentType\)/,
+          `${name} must check contentType before putUrl / createUploadHandle`,
+        );
       });
     }
   }

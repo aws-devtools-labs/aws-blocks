@@ -34,6 +34,13 @@ const userKey = (username: string, key: string) => `user:${encodeURIComponent(us
 /** FileBucket path under the signed-in user's own prefix (`/` in a username is encoded). */
 const userPath = (username: string, path: string) => `users/${encodeURIComponent(username)}/${path}`;
 
+/**
+ * Content types `getUploadSlot` will sign for. The upload handle is a presigned
+ * PUT that only succeeds with the Content-Type it was signed with, so this list
+ * is what a client can store. Extend it for the file types your app accepts.
+ */
+const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'application/pdf', 'image/png', 'image/jpeg']);
+
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
 // Hover over Building Blocks to see docstrings with usage, best practices, and performance characteristics
@@ -141,9 +148,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // live `.upload(body)` / `.download()` objects, so the browser transfers
   // bytes directly to/from storage without managing presigned URLs by hand.
   // Paths are scoped to the signed-in user, so one user can't read or
-  // overwrite another user's files.
+  // overwrite another user's files, and only the content types in
+  // ALLOWED_UPLOAD_TYPES get an upload handle.
   async getUploadSlot(path: string, contentType: string) {
     const user = await auth.requireAuth(context);
+    if (!ALLOWED_UPLOAD_TYPES.has(contentType)) {
+      throw new ApiError(`Unsupported content type: ${contentType}`, 400, { name: 'UnsupportedContentTypeException' });
+    }
     return files.createUploadHandle(userPath(user.username, path), { contentType });
   },
 
@@ -341,10 +352,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   // reach the client instead of being scrubbed to a generic 500. A non-positive
   // amount is declined up front: a negative one would pass the guard and move
   // money the other way, out of an account whose balance was never checked.
+  // RPC arguments aren't type-checked at runtime, so a non-number (a numeric
+  // string passes `> 0`) is declined here too instead of reaching the SQL.
   async transfer(from: string, to: string, amount: number) {
     const user = await auth.requireAuth(context);
-    if (!(amount > 0)) {
-      throw new ApiError('transfer declined: amount must be positive', 400, { name: 'TransferDeclined' });
+    if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
+      throw new ApiError('transfer declined: amount must be a positive number', 400, { name: 'TransferDeclined' });
     }
     await ledger.transaction(async (tx) => {
       const { rowCount: debited } = await tx.execute(

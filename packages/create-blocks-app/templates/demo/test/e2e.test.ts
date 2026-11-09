@@ -190,6 +190,13 @@ test('FileBucket - upload then download round-trips', async (t) => {
   assert.strictEqual(text, payload);
 });
 
+// Only the allowed content types get an upload handle: a presigned PUT stores
+// whatever Content-Type it was signed with.
+test('FileBucket - an unsupported content type is declined', async () => {
+  await signUp(`ctype-${uniqueSuffix()}`);
+  await assert.rejects(api.getUploadSlot('uploads/page.html', 'text/html'), { status: 400 });
+});
+
 // ─── AppSetting ───────────────────────────────────────────────────────────────
 // A runtime config value backed by SSM Parameter Store (local file in dev).
 test('AppSetting - set and get a flag', async () => {
@@ -317,15 +324,28 @@ test('DistributedDatabase - a declined transfer rolls back atomically', async ()
     'a negative transfer should be declined',
   );
   assert.strictEqual((await api.balanceOf('dave')).balance, 0, 'dave not debited by a negative transfer');
+
+  // RPC arguments aren't checked at runtime: a numeric string passes `> 0`, so
+  // it must be declined up front rather than reach the SQL.
+  const stringAmount: number = JSON.parse('"5"');
+  await assert.rejects(
+    () => api.transfer('carol', 'dave', stringAmount),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    'a non-number amount should be declined',
+  );
+  assert.strictEqual((await api.balanceOf('carol')).balance, 50, 'carol not debited by a non-number amount');
+  assert.strictEqual((await api.balanceOf('dave')).balance, 0, 'dave not credited by a non-number amount');
 });
 
 // Accounts belong to the user who opened them: another user neither sees them
-// nor can move money out of them, even using the same account names.
-test("DistributedDatabase - a user cannot read or debit another user's accounts", async () => {
+// nor can move money into or out of them, even using the same account names.
+test("DistributedDatabase - a user cannot read, debit or credit another user's accounts", async () => {
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
 
-  await signUp(`ledger-owner-${uniqueSuffix()}`);
+  const owner = `ledger-owner-${uniqueSuffix()}`;
+  await signUp(owner);
   await api.openAccount('savings', 100);
+  await api.openAccount('checking', 0);
 
   await signUp(`ledger-other-${uniqueSuffix()}`);
   assert.strictEqual((await api.balanceOf('savings')).balance, null, "another user's account is not visible");
@@ -336,6 +356,18 @@ test("DistributedDatabase - a user cannot read or debit another user's accounts"
     "debiting another user's account should be declined",
   );
   assert.strictEqual((await api.balanceOf('checking')).balance, 0, 'nothing was credited');
+
+  // The credit leg is scoped too: a transfer into the caller's own `checking`
+  // must not also credit the owner's account of the same name.
+  await api.openAccount('savings', 10);
+  await api.transfer('savings', 'checking', 5);
+  assert.strictEqual((await api.balanceOf('checking')).balance, 5, "the caller's own account is credited");
+
+  const signIn = await authApi.setAuthState({ action: 'signIn', username: owner, password: 'Password1!' });
+  assert.strictEqual(signIn.state, 'signedIn', `signIn: ${signIn.error ?? ''}`);
+  assert.strictEqual((await api.balanceOf('checking')).balance, 0, "the owner's checking was not credited");
+  assert.strictEqual((await api.balanceOf('savings')).balance, 100, "the owner's savings did not move");
+  await authApi.setAuthState({ action: 'signOut' });
 });
 
 // Todos are keyed by the owner's username. `updates` is typed, but RPC arguments
