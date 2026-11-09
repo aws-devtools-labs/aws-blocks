@@ -284,9 +284,10 @@ describe('createLambdaHandler — RPC body handling', () => {
 });
 
 describe('createLambdaHandler — strict API namespace placement (defaults.strictNamespacePlacement)', () => {
-  // What the CDK layer writes when `reports` is placed on compute `app-reports`:
-  // the placement map in the backend config, and the compute's own id only on
-  // that compute.
+  // What the CDK layer sets when `reports` is placed on compute `app-reports`:
+  // the placement map in the environment of every API compute, and the
+  // compute's own id only on that compute. The handler reads both from
+  // process.env, as a deployed function does.
   const PLACEMENT = JSON.stringify({ reports: 'app-reports' });
 
   function withEnv(vars: Record<string, string>, fn: () => Promise<void>): () => Promise<void> {
@@ -356,6 +357,63 @@ describe('createLambdaHandler — strict API namespace placement (defaults.stric
     const body = JSON.parse((await invoke(placedBackend(calls), rpc('reports'))).body);
     assert.strictEqual(body.result, 'reports');
   });
+
+  it('a refused namespace writes a 404 RpcErrors metric through onRpcError', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, AWS_LAMBDA_FUNCTION_NAME: 'app-default-fn' },
+    async () => {
+      const lines: string[] = [];
+      const savedWrite = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+        if (text.includes('"_aws"')) {
+          lines.push(...text.split('\n').filter(Boolean));
+          return true;
+        }
+        return (savedWrite as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+      }) as typeof process.stdout.write;
+      try {
+        const body = JSON.parse((await invoke(placedBackend([]), rpc('reports'))).body);
+        assert.strictEqual(body.error?.code, -32601);
+      } finally {
+        process.stdout.write = savedWrite;
+      }
+      const metrics = lines.map((l) => JSON.parse(l));
+      assert.strictEqual(metrics.length, 1);
+      assert.strictEqual(metrics[0].Status, 404);
+      assert.strictEqual(metrics[0].StatusClass, '4xx');
+      assert.strictEqual(metrics[0].ApiNamespace, 'reports');
+      assert.strictEqual(metrics[0].FunctionName, 'app-default-fn');
+    },
+  ));
+
+  for (const [name, env, message] of [
+    ['a malformed placement map', { BLOCKS_API_NAMESPACE_COMPUTES: '{not json' }, /must be a JSON object/],
+    ['a compute id without a placement map', { BLOCKS_API_COMPUTE_ID: 'app-reports' }, /BLOCKS_API_COMPUTE_ID is set but/],
+  ] as const) {
+    it(`${name} fails initialization, and the next request retries it`, async () => {
+      const keys = ['BLOCKS_API_NAMESPACE_COMPUTES', 'BLOCKS_API_COMPUTE_ID'];
+      const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+      for (const k of keys) delete process.env[k];
+      Object.assign(process.env, env);
+      try {
+        const calls: string[] = [];
+        const handler = createLambdaHandler(async () => placedBackend(calls));
+        await assert.rejects(async () => handler(rpc('reports', '/aws-blocks/api/reports')), message);
+        assert.deepStrictEqual(calls, [], 'nothing was served');
+        // The same environment, once it carries a readable map, initializes.
+        for (const k of keys) delete process.env[k];
+        process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+        process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
+        const res = (await handler(rpc('reports', '/aws-blocks/api/reports'))) as { body: string };
+        assert.strictEqual(JSON.parse(res.body).result, 'reports');
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    });
+  }
 });
 
 // ── RawRoute body tests ─────────────────────────────────────────────────────
