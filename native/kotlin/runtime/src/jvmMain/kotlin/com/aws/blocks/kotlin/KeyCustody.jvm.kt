@@ -146,12 +146,14 @@ private fun passesSelfTest(candidate: KeyCustody): Boolean {
  * The OS-held custody for this machine, or null where none is implemented yet.
  *
  * macOS hands the key to the login keychain, which holds it and writes nothing beside the entries.
- * Every other platform falls through to null and so keeps the behaviour it has today until its
- * binding lands.
+ * Windows has no store of the right shape, so DPAPI wraps a key that stays in a file and [directory]
+ * is where it goes. Every other platform falls through to null and so keeps the behaviour it has
+ * today until its binding lands.
  */
 private fun osKeyCustody(directory: Path): KeyCustody? {
     val os = System.getProperty("os.name").orEmpty()
     return when {
+        os.startsWith("Windows") -> DpapiKeyCustody(directory)
         os.startsWith("Mac") -> KeychainKeyCustody(service = "aws-blocks")
         else -> null
     }
