@@ -519,6 +519,19 @@
         "HostingComputedefaultFunctionRole851C77D3"
       ]
     },
+    "HostingCdnSsrOriginVerifySecretF9EA198C": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Description": "The Referer header value CloudFront sends to the server (SSR) origin REST API.",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "IncludeSpace": false,
+          "PasswordLength": 64
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
+    },
     "HostingCdnSsrRestApi1DBCCCDD": {
       "Type": "AWS::ApiGateway::RestApi",
       "Properties": {
@@ -545,7 +558,18 @@
               "Action": "execute-api:Invoke",
               "Condition": {
                 "StringNotEquals": {
-                  "aws:Referer": "<hash>"
+                  "aws:Referer": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "{{resolve:secretsmanager:",
+                        {
+                          "Ref": "HostingCdnSsrOriginVerifySecretF9EA198C"
+                        },
+                        ":SecretString:::}}"
+                      ]
+                    ]
+                  }
                 }
               },
               "Effect": "Deny",
@@ -559,7 +583,7 @@
         }
       }
     },
-    "HostingCdnSsrRestApiDeploymentD26CB3A906e423fe3478a78f61a03ce411e4ceda": {
+    "HostingCdnSsrRestApiDeploymentD26CB3A90ec3e3c244a512882019d764c4adffc2": {
       "Type": "AWS::ApiGateway::Deployment",
       "Properties": {
         "Description": "Automatically created by the RestApi construct",
@@ -580,7 +604,7 @@
       "Type": "AWS::ApiGateway::Stage",
       "Properties": {
         "DeploymentId": {
-          "Ref": "HostingCdnSsrRestApiDeploymentD26CB3A906e423fe3478a78f61a03ce411e4ceda"
+          "Ref": "HostingCdnSsrRestApiDeploymentD26CB3A90ec3e3c244a512882019d764c4adffc2"
         },
         "RestApiId": {
           "Ref": "HostingCdnSsrRestApi1DBCCCDD"
@@ -1481,7 +1505,18 @@
               "OriginCustomHeaders": [
                 {
                   "HeaderName": "Referer",
-                  "HeaderValue": "<hash>"
+                  "HeaderValue": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "{{resolve:secretsmanager:",
+                        {
+                          "Ref": "HostingCdnSsrOriginVerifySecretF9EA198C"
+                        },
+                        ":SecretString:::}}"
+                      ]
+                    ]
+                  }
                 }
               ],
               "OriginPath": {

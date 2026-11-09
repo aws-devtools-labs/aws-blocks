@@ -468,6 +468,72 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
   resource-based policy. A small custom resource grants the distribution
   `lambda:InvokeWebFunctionEndpoint`.
 
+### The server origin's REST API (`compute.type: 'lambda'`)
+
+CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
+`execute-api` URL is public, so the API is locked to the distribution:
+
+- **Origin-verify secret.** The REST API's resource policy denies any request
+  whose `Referer` header is not a secret that CloudFront adds as an origin
+  custom header (a viewer's own `Referer` is replaced). The secret is random:
+  Secrets Manager generates it once per stack (a secret in the stack), and
+  both the policy and the CloudFront origin read it through a CloudFormation
+  `{{resolve:secretsmanager:…}}` dynamic reference, so it is in no template or
+  source. It is visible in plain text to anyone who can read the
+  distribution's config (`cloudfront:GetDistributionConfig`) or the API's
+  policy (`apigateway:GET`), and in the Secrets Manager secret.
+- **A separate image origin.** A Nuxt IPX image optimizer (`imageOptimization.baseURL`)
+  gets its own REST API with its own secret, so neither value reaches the other
+  Lambda.
+- **A web ACL on the stage.** With a Blocks-managed web ACL on the distribution
+  (`waf: { enabled: true }`), each server-origin stage also gets a REGIONAL web
+  ACL with the same rules (AWS managed common and known-bad-inputs rule groups,
+  and the per-IP rate limit at the same `rateLimit`), logged to a CloudWatch log
+  group named `aws-waf-logs-…` (the `Referer` header is redacted). Requests
+  from CloudFront carry an `x-blocks-front-door` marker (the stack's id) that
+  exempts them from the stage's rate rule, since they all come from edge IPs
+  and the distribution's own web ACL already rate-limits viewers. It follows
+  `waf.enabled` because each web ACL is billed per month; a `waf.webAclArn` of
+  your own adds nothing to the stage.
+- **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
+  access logs (`AccessLogFormat.jsonWithStandardFields()`) from each stage to a
+  CloudWatch log group. REST API access logging needs the account-level API
+  Gateway CloudWatch Logs role (`AWS::ApiGateway::Account`), which this then
+  creates once per stack (the same resource `@aws-blocks/core`'s
+  `defaults.accessLogging` uses). That setting is one per account and region:
+  a second stack that also creates it repoints it, and tearing that stack down
+  leaves it pointing at a deleted role. Turn it on in one stack per account and
+  region, or manage that role yourself.
+
+```ts
+frontDoor: {
+  features: {
+    waf: { enabled: true, rateLimit: 2000 }, // also on the server origin's stage
+    serverOrigin: {
+      accessLogging: true,
+      logRetention: RetentionDays.THREE_MONTHS, // default: one month (access and web ACL logs)
+    },
+  },
+}
+```
+
+**Upgrading from the earlier derived secret.** Earlier releases derived the
+header value from the stack name and construct path. The first deploy with the
+random secret updates the REST API policy within seconds, while the
+distribution takes minutes to carry the new header, so the server origin
+answers 403 in between. To upgrade without that window, deploy once with
+`serverOrigin: { acceptLegacyVerifyHeader: true }` (the policy then accepts
+both values), and then deploy again without it.
+
+**Rotating the secret.** Bump `serverOrigin.verifySecretRotation` (`1`, `2`, …)
+and deploy: Secrets Manager generates new values, and the REST API policies and
+the CloudFront origins update in the same deploy. Expect the same short window
+of 403s while the distribution propagates; rotate in a quiet window.
+
+The stacked door's CloudFront edge sends its own origin-verify header to the
+ALB router; without a router certificate it travels over plain HTTP, which core
+warns about at synth (`@aws-blocks/hosting:StackedRouterPlainHttp`).
+
 ## Front doors
 
 The front door is the public entry point in front of the app: it exposes one
@@ -536,7 +602,7 @@ frontDoor: { kind: 'alb', features: { geoRestriction: { type: 'allowlist', count
 | `monitoring` | ✓ | ✓ (`enabled` only: ALB 5xx and latency alarms, on unless `enabled: false`, no topic or subscriptions) | – | ✓ |
 | `skewProtection` | ✓ | – | – | ✓ |
 | `geoRestriction` | ✓ | – | – | ✓ |
-| `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – |
+| `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
 
 `geoRestriction.type` is `'allowlist'` or `'denylist'` (the legacy `'whitelist'`
 / `'blacklist'` still work and mean the same; any other value fails synth). The
@@ -1115,7 +1181,9 @@ new HostingConstruct(stack, 'Hosting', {
 
 CloudFront access logs are delivered to a dedicated, private S3 bucket. Two
 pipelines are supported via `frontDoor.features.logging.version` (the top-level
-`logging` prop is its deprecated alias):
+`logging` prop is its deprecated alias). The server origin's API Gateway stage logs
+separately, to CloudWatch Logs, when `frontDoor.features.serverOrigin.accessLogging`
+is on (see [The server origin's REST API](#the-server-origins-rest-api-computetype-lambda)):
 
 | | `'v1'` (default) | `'v2'` |
 | --- | --- | --- |
