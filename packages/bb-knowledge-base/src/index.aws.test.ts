@@ -697,7 +697,7 @@ describe('isSynced', () => {
 		}
 	});
 
-	test('throws IngestionFailed (with failureReasons) when the latest job FAILED', async () => {
+	test('throws IngestionFailed (failureReasons on cause) when the latest job FAILED', async () => {
 		const cleanup = setSyncEnv('TEST', 'RDY6');
 		mockAgentSend((cmd) => {
 			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
@@ -713,8 +713,51 @@ describe('isSynced', () => {
 				() => kb.isSynced(),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
-					assert.ok(err.message.includes('boom one'), 'message should include failure reasons');
-					assert.ok(err.message.includes('boom two'));
+					assert.ok(!err.message.includes('boom one'), 'message must not include raw failure reasons');
+					assert.deepStrictEqual((err.cause as Error & { failureReasons?: string[] }).failureReasons, [
+						'boom one',
+						'boom two',
+					]);
+					return true;
+				},
+			);
+		} finally {
+			cleanup();
+		}
+	});
+
+	test('keeps raw failureReasons out of the client-visible IngestionFailed error (kept on a non-enumerable cause)', async () => {
+		// failureReasons is raw Bedrock service text and can quote bucket names, object
+		// keys and ARNs. A branded error's message crosses the RPC wire, so the reasons
+		// must stay server-side on the non-enumerable `cause`.
+		const secret = 'arn:aws:s3:::internal-bucket/secret-path';
+		const cleanup = setSyncEnv('TEST', 'RDY6L');
+		mockAgentSend((cmd) => {
+			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-leak', status: 'FAILED' }] };
+			}
+			return { ingestionJob: { status: 'FAILED', failureReasons: [`Access denied to ${secret}`, 'second reason'] } };
+		});
+
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'rdy6l', { source: './knowledge' });
+			await assert.rejects(
+				() => kb.isSynced(),
+				(err: Error) => {
+					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+					assert.ok(isBlocksError(err, KnowledgeBaseErrors.IngestionFailed));
+					assert.ok(!err.message.includes(secret), `message must not carry raw failureReasons: ${err.message}`);
+					assert.ok(!err.message.includes('second reason'));
+					assert.ok(!JSON.stringify(err).includes(secret), 'JSON.stringify(err) must not carry raw failureReasons');
+					const desc = Object.getOwnPropertyDescriptor(err, 'cause');
+					assert.ok(desc, 'raw reasons should be preserved on `cause`');
+					assert.strictEqual(desc.enumerable, false, '`cause` must be non-enumerable');
+					assert.ok(err.cause instanceof Error);
+					assert.ok(err.cause.message.includes(secret), 'cause should keep the raw reasons server-side');
+					assert.deepStrictEqual(
+						(err.cause as Error & { failureReasons?: string[] }).failureReasons,
+						[`Access denied to ${secret}`, 'second reason'],
+					);
 					return true;
 				},
 			);
@@ -798,7 +841,7 @@ describe('waitUntilSynced', () => {
 		}
 	});
 
-	test('throws IngestionFailed (with failureReasons) when ingestion FAILED', async () => {
+	test('throws IngestionFailed (failureReasons on cause) when ingestion FAILED', async () => {
 		const cleanup = setSyncEnv('TEST', 'WUR3');
 		mockAgentSend((cmd) => {
 			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
@@ -813,7 +856,8 @@ describe('waitUntilSynced', () => {
 				() => kb.waitUntilSynced({ timeoutMs: 1000, pollIntervalMs: 10 }),
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
-					assert.ok(err.message.includes('S3 access denied'), 'should surface failure reasons');
+					assert.ok(!err.message.includes('S3 access denied'), 'message must not include raw failure reasons');
+					assert.ok(err.cause instanceof Error && err.cause.message.includes('S3 access denied'), 'cause keeps the reasons');
 					return true;
 				},
 			);
