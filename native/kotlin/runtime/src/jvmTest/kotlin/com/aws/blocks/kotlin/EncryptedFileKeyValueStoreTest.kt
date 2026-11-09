@@ -22,7 +22,14 @@ class EncryptedFileKeyValueStoreTest {
 
     private val root: File = Files.createTempDirectory("blocks-kv-test").toFile()
 
-    private fun store() = EncryptedFileKeyValueStore("cookies", root)
+    /**
+     * Pinned to the file tier. These tests are about the store's own mechanics — the AES envelope,
+     * atomic writes, `.key` permissions — so they must not depend on which custody this machine
+     * happens to offer. Left on the default, the suite would reach the real OS secret store on
+     * every run, which on macOS means a consent dialog.
+     */
+    private fun store() =
+        EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") { FileKeyCustody(it) }
 
     private val storageDir get() = File(root, "cookies")
 
@@ -66,7 +73,7 @@ class EncryptedFileKeyValueStoreTest {
         // neither could read what the other wrote.
         File(storageDir, ".key").exists() shouldBe true
         store.put("jar", "after")
-        EncryptedFileKeyValueStore("cookies", root).get("jar") shouldBe "after"
+        store().get("jar") shouldBe "after"
     }
 
     @Test
@@ -177,7 +184,7 @@ class EncryptedFileKeyValueStoreTest {
                 pool.submit {
                     start.await()
                     runBlocking {
-                        EncryptedFileKeyValueStore("cookies", root).put("entry-$index", "value-$index")
+                        store().put("entry-$index", "value-$index")
                     }
                 }
             }
@@ -214,5 +221,29 @@ class EncryptedFileKeyValueStoreTest {
                     PosixFilePermissions.fromString("rw-------")
             }
         }
+    }
+
+    @Test
+    fun takesItsKeyFromTheCustodyItWasGiven() = runTest {
+        val key = ByteArray(32) { 3 }
+        val custody = FileKeyCustody(storageDir.toPath())
+        Files.createDirectories(storageDir.toPath())
+        custody.storeIfAbsent("cookies:com.example.app", key)
+
+        val store = EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") { custody }
+        store.put("jar", "hello")
+
+        // A second store handed the same custody reads what the first wrote.
+        EncryptedFileKeyValueStore("cookies", root, "cookies:com.example.app") { custody }
+            .get("jar") shouldBe "hello"
+    }
+
+    @Test
+    fun reportsWhichTierItEndedUpWith() = runTest {
+        val store = store()
+        store.put("jar", "hello")
+
+        // File presence cannot stand in for this: the DPAPI tier keeps a file too.
+        store.keyTier shouldBe KeyTier.FILE
     }
 }

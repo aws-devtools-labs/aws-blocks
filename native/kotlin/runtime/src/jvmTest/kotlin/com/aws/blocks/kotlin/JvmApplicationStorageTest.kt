@@ -28,7 +28,7 @@ class JvmApplicationStorageTest {
 
     /** A jar as a freshly launched application would build one, so each call stands in for a launch. */
     private fun jarFor(applicationId: String) =
-        cookieJarIn(applicationStorageDirectory(applicationId, root))
+        cookieJarIn(applicationStorageDirectory(applicationId, root), applicationId)
 
     @Test
     fun `an application reads back the session it stored`() = runTest {

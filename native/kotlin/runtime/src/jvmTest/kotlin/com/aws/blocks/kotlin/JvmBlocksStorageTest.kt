@@ -67,7 +67,7 @@ class JvmBlocksStorageTest {
     ): Blocks = Blocks(
         BlocksConfig(server = server, applicationId = applicationId),
         backend.engine(),
-        cookieJarIn(applicationStorageDirectory(applicationId, root)),
+        cookieJarIn(applicationStorageDirectory(applicationId, root), applicationId),
     )
 
     @Test

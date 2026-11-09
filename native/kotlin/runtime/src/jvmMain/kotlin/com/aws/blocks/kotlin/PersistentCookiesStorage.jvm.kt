@@ -21,19 +21,31 @@ private val jarsByLocation = ConcurrentHashMap<String, PersistentCookiesStorage>
  * An instance with no application id gets a jar of its own: it persists nothing, so there is no
  * stored session for a second instance to agree with it about.
  */
-internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage =
-    applicationStorageDirectoryOrNull(applicationId)
-        ?.let { cookieJarIn(it) }
-        ?: PersistentCookiesStorage(InMemoryKeyValueStore())
+internal actual fun cookieJar(applicationId: String?): PersistentCookiesStorage {
+    val directory = applicationStorageDirectoryOrNull(applicationId)
+        ?: return PersistentCookiesStorage(InMemoryKeyValueStore())
+    // Non-null and non-blank, or the directory above would have been null.
+    return cookieJarIn(directory, applicationId.orEmpty())
+}
 
 /**
  * The one jar persisting to [directory]. Separate from [cookieJar] so a test can name a disposable
  * directory and still go through the registry, which is the part that keeps two instances from
  * discarding each other's cookies.
+ *
+ * [applicationId] names the key rather than the directory: a key held by the host OS sits in a
+ * machine-wide store, so it needs the id to tell one application's key from another's. It is passed
+ * separately because [directory] carries the id only in reduced form.
  */
-internal fun cookieJarIn(directory: File): PersistentCookiesStorage =
+internal fun cookieJarIn(directory: File, applicationId: String): PersistentCookiesStorage =
     jarsByLocation.computeIfAbsent(directory.absoluteFile.normalize().path) {
-        PersistentCookiesStorage(EncryptedFileKeyValueStore(COOKIE_STORE_NAME, directory))
+        PersistentCookiesStorage(
+            EncryptedFileKeyValueStore(
+                COOKIE_STORE_NAME,
+                directory,
+                keyAlias(COOKIE_STORE_NAME, applicationId),
+            ),
+        )
     }
 
 /**
