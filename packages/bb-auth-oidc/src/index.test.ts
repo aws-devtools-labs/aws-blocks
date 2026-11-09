@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
+import { requestBaseUrl } from '@aws-blocks/core/lambda-handler';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
 import {
 	handleDiscovery,
@@ -61,7 +62,9 @@ class CallbackProbe extends AuthOIDC {
 }
 
 describe('computeCallbackUrl — public origin (Phase C)', () => {
-	const GATEWAY = 'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/real/signin/p';
+	const GATEWAY_ORIGIN = 'https://abc123.execute-api.us-east-1.amazonaws.com';
+	// `ctx.request.url` as the deployed handler builds it: the route path, no stage.
+	const GATEWAY = `${GATEWAY_ORIGIN}/aws-blocks/auth/real/signin/p`;
 
 	afterEach(() => { delete process.env.BLOCKS_PUBLIC_ORIGIN; });
 
@@ -71,18 +74,23 @@ describe('computeCallbackUrl — public origin (Phase C)', () => {
 		// Even though the request landed on the raw execute-api host with a /prod
 		// stage, the redirect_uri is built from the trusted CloudFront origin so
 		// the cookie-scoped public domain is used and no stage leaks in.
-		assert.strictEqual(
-			auth.callbackUrlFor(freshContext(GATEWAY)),
-			'https://app.example.com/aws-blocks/auth/callback',
-		);
+		const url = requestBaseUrl.run(`${GATEWAY_ORIGIN}/prod`, () => auth.callbackUrlFor(freshContext(GATEWAY)));
+		assert.strictEqual(url, 'https://app.example.com/aws-blocks/auth/callback');
 	});
 
-	test('falls back to the request URL (preserving stage) when unset — sandbox/local', () => {
+	test('falls back to the request base URL (preserving stage) when unset — deploy reached at the gateway', () => {
+		delete process.env.BLOCKS_PUBLIC_ORIGIN;
+		const auth = new CallbackProbe(ROOT, unique('cb'), { providers: [stubIdp({ name: 'p' })] });
+		const url = requestBaseUrl.run(`${GATEWAY_ORIGIN}/prod`, () => auth.callbackUrlFor(freshContext(GATEWAY)));
+		assert.strictEqual(url, `${GATEWAY_ORIGIN}/prod/aws-blocks/auth/callback`);
+	});
+
+	test('falls back to the request origin when unset — local dev', () => {
 		delete process.env.BLOCKS_PUBLIC_ORIGIN;
 		const auth = new CallbackProbe(ROOT, unique('cb'), { providers: [stubIdp({ name: 'p' })] });
 		assert.strictEqual(
-			auth.callbackUrlFor(freshContext(GATEWAY)),
-			'https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback',
+			auth.callbackUrlFor(freshContext('http://localhost:3000/aws-blocks/auth/real/signin/p')),
+			'http://localhost:3000/aws-blocks/auth/callback',
 		);
 	});
 });
@@ -426,10 +434,11 @@ describe('stub IdP /authorize', () => {
 	});
 
 	test('login form action preserves the API Gateway stage prefix', async () => {
-		// Behind a deployed gateway the request path carries a stage (e.g. /prod).
-		// The picker POST must keep it, or the form posts to a non-existent
-		// resource and API Gateway returns Forbidden.
-		const url = new URL('https://abc123.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/idp/google/authorize');
+		// Behind a deployed gateway the request's base URL carries a stage (e.g.
+		// /prod), while `ctx.request.url` is the route path. The picker POST must
+		// keep the stage, or the form posts to a non-existent resource and API
+		// Gateway returns Forbidden.
+		const url = new URL('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/auth/idp/google/authorize');
 		for (const [k, v] of Object.entries(baseParams)) url.searchParams.set(k, v);
 		let sent: unknown;
 		const ctx = {
@@ -441,7 +450,9 @@ describe('stub IdP /authorize', () => {
 			},
 		} as any;
 		const provider = stubIdp({ name: 'google' });
-		await handleAuthorize(provider, ctx, stubOpts);
+		await requestBaseUrl.run('https://abc123.execute-api.us-east-1.amazonaws.com/prod', () =>
+			handleAuthorize(provider, ctx, stubOpts),
+		);
 		assert.match(
 			String(sent),
 			/action="https:\/\/abc123\.execute-api\.us-east-1\.amazonaws\.com\/prod\/aws-blocks\/auth\/idp\/google\/authorize"/,

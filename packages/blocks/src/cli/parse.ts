@@ -339,6 +339,7 @@ function checkQueryPath(path: string, json: JsonObjectShape, name: string): void
 		} else {
 			const fields = shape as JsonObjectShape;
 			if (Object.hasOwn(fields, segment)) shape = fields[segment];
+			else if (Object.hasOwn(fields, '*')) shape = fields['*'];
 			else problem = `${at === '' ? 'Fields' : `Fields of ${at}`}: ${Object.keys(fields).join(', ')}.`;
 		}
 		if (problem) {
