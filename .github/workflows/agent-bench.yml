@@ -250,7 +250,7 @@ jobs:
         env:
           BLOCKS_TELEMETRY_CANARY_ID: ${{ secrets.BLOCKS_TELEMETRY_CANARY_ID }}
 
-      # The verifier's Playwright (PW_VERSION, 1.60.0), installed with `npm ci` from the lockfile in
+      # The verifier's Playwright (PW_VERSION, 1.64.1), installed with `npm ci` from the lockfile in
       # scripts/ci/agent-bench-playwright: npm checks every tarball against its integrity, where
       # `npx playwright@<version>` would run whatever the npm cache restored above holds for that spec
       # (the browser install below needs no package install script, hence --ignore-scripts). The

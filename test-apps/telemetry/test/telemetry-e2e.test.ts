@@ -1287,7 +1287,7 @@ function localCommandSuites(): void {
         telemetryFile, env: { PORT: String(port) }, timeoutMs: 12_000,
       });
 
-      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'consent notice should NOT show when id exists');
+      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'consent notice should NOT show when id exists');
     });
   });
 
