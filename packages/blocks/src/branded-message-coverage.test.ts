@@ -74,21 +74,6 @@ const EXCEPTIONS: Exception[] = [
 		// `entry` is a row of the constant REQUEST_ERRORS table, so its message is a stable BB string.
 		reason: 'stable message from a constant table',
 	},
-	// mapSesError forwards the raw SES message. Remove these entries when #885 lands (it replaces them with stable messages).
-	...(
-		[
-			['DomainNotVerified', 2],
-			['SendFailed', 2],
-			['AccountPaused', 1],
-			['RateLimited', 1],
-			['InvalidInput', 1],
-		] as const
-	).map(([name, count]) => ({
-		file: 'bb-email-client/src/index.aws.ts',
-		call: `blocksError(EmailErrors.${name}, message)`,
-		count,
-		reason: 'fixed by #885',
-	})),
 	{
 		file: 'bb-realtime/src/aws-middleware.ts',
 		call: 'brandBlocksError(err)',
