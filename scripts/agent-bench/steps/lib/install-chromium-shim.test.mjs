@@ -12,11 +12,15 @@ import { fileURLToPath } from 'node:url';
 // wrap_real / the candidate loop against a future edit (the selfcheck job otherwise only covers TS).
 const SHIM = join(dirname(fileURLToPath(import.meta.url)), '..', 'install-chromium-shim.sh');
 
-/** Build a fake tree: a PATH `chromium` and a Playwright-layout chrome, each echoing their args. */
-function fixture() {
+/**
+ * Build a fake tree: a PATH `chromium` and a Playwright-layout chrome, each echoing their args.
+ * `platformDir` is Playwright's per-platform dir name (EXECUTABLE_PATHS in playwright-core):
+ * chrome-linux64 on linux-x64 (the runner), chrome-linux-arm64 on linux-arm64.
+ */
+function fixture(platformDir = 'chrome-linux64') {
 	const root = mkdtempSync(join(tmpdir(), 'shim-test-'));
 	const binDir = join(root, 'bin');
-	const pwDir = join(root, 'pw', 'chromium-1187', 'chrome-linux');
+	const pwDir = join(root, 'pw', 'chromium-1248', platformDir);
 	mkdirSync(binDir, { recursive: true });
 	mkdirSync(pwDir, { recursive: true });
 	const pathBin = join(binDir, 'chromium');
@@ -64,6 +68,21 @@ test('shim: wraps both the PATH binary and the Playwright binary', () => {
 		assert.match(readFileSync(fx.pwBin, 'utf8'), /Auto-generated chromium wrapper/);
 	} finally {
 		rmSync(fx.root, { recursive: true, force: true });
+	}
+});
+
+// Playwright never installs a plain chrome-linux dir on Linux, so a glob for only that one wraps
+// nothing on the runner while every other test here still passes.
+test('shim: wraps the Playwright binary under each Linux platform dir Playwright installs', () => {
+	for (const platformDir of ['chrome-linux64', 'chrome-linux-arm64']) {
+		const fx = fixture(platformDir);
+		try {
+			runShim(fx);
+			assert.ok(existsSync(`${fx.pwBin}.real`), `${platformDir}/chrome should be saved aside as .real`);
+			assert.match(readFileSync(fx.pwBin, 'utf8'), /Auto-generated chromium wrapper/, platformDir);
+		} finally {
+			rmSync(fx.root, { recursive: true, force: true });
+		}
 	}
 });
 
