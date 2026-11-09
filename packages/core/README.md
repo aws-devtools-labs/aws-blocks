@@ -364,7 +364,7 @@ And what you read from `ctx.request`:
 | On `ctx.request` | Notes |
 |---|---|
 | `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
-| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. |
+| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. `url.pathname` is the route path, the same under `npm run dev` and deployed: it never includes the API Gateway stage (`/prod`). Behind a front door such as `Hosting`, `url.origin` is the API Gateway host the backend received, not the browser's, so don't build public links from it. |
 | `headers` | Request `Headers`, including `cookie`. |
 | `json()` / `text()` / `body` | Body as parsed JSON, UTF-8 text, or a `ReadableStream<Uint8Array>` of the exact bytes the client sent. |
 | `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
@@ -403,6 +403,8 @@ new RawRoute(scope, 'upload', {
 On AWS, API Gateway hands every request body to the Lambda base64-encoded, and a byte response goes back the same way, which adds a third to its size. Within Lambda's 6 MB payload limit, that leaves roughly 4.5 MB for a request body or a byte response. Move larger files directly to and from S3 with `FileBucket`'s presigned `putUrl()`/`getUrl()`.
 
 Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+
+To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
 `path` can be omitted, in which case it is derived from the scope-chain IDs, so `Scope('app') → Scope('v1') → RawRoute('health')` gives `/v1/health`. That means restructuring your construct tree silently changes URLs, so pass an explicit `path` for anything a client depends on.
 

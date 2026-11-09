@@ -406,7 +406,7 @@ export interface NodeDispatchRequestInit {
   path: string;
   /** Public origin for request URLs (see {@link buildRequestUrl}). */
   publicOrigin?: string;
-  /** Whether to trust front-door-stamped headers (see {@link buildRequestUrl}). */
+  /** Whether to trust front-door-stamped headers (see {@link buildRequestUrl} and {@link buildRequestBaseUrl}). */
   trustForwardedHeaders?: boolean;
   signal?: AbortSignal;
   requestId?: string;
@@ -428,6 +428,7 @@ export function toDispatchRequest(req: http.IncomingMessage, body: Buffer, init:
     clientUserAgent: header(req, CLIENT_USER_AGENT_HEADER),
     headers: () => toHeaders(req),
     url: () => buildRequestUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
+    baseUrl: () => buildRequestBaseUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
     body: () => requestBodyFromBytes(body),
     signal: init.signal,
     requestId: init.requestId,
@@ -583,6 +584,28 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
 }
 
 /**
+ * The origin a request arrived at, and the API Gateway stage prefix of that
+ * origin's external URLs (`''` when there is none), in the order of
+ * {@link buildRequestUrl}.
+ */
+function resolveRequestOrigin(
+  req: http.IncomingMessage,
+  publicOrigin: string | undefined,
+  trustForwardedHeaders: boolean,
+): { origin: URL; stagePrefix: string } {
+  const forwardedHost = header(req, 'x-forwarded-host');
+  const stampedHost = trustForwardedHeaders ? header(req, FORWARDED_HOST_HEADER) : undefined;
+  if (isLoopbackForwardedHost(forwardedHost)) return { origin: new URL(`http://${forwardedHost}`), stagePrefix: '' };
+  if (stampedHost) {
+    const stamped = header(req, FORWARDED_STAGE_HEADER);
+    const stagePrefix = stamped && STAGE_PATTERN.test(stamped) ? `/${stamped}` : '';
+    return { origin: new URL(`https://${stampedHost}`), stagePrefix };
+  }
+  if (publicOrigin) return { origin: new URL(publicOrigin), stagePrefix: '' };
+  return { origin: new URL(`http://${requestHost(req)}`), stagePrefix: '' };
+}
+
+/**
  * The externally visible URL of a request — origin, path and query values as the
  * Lambda handler reports them in `ctx.request.url` for the same request:
  *
@@ -590,8 +613,9 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  *    `http://<that host><path>`, no stage. Applies with or without
  *    `trustForwardedHeaders`, as in the Lambda handler; only a loopback host is
  *    taken, so it never yields anything but a loopback `http://` URL.
- * 2. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}
- *    (+ optional {@link FORWARDED_STAGE_HEADER}): `https://<host>/<stage><path>`.
+ * 2. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}:
+ *    `https://<host><path>`. The path is the route path, with no stage, as on
+ *    Lambda; a stamped {@link FORWARDED_STAGE_HEADER} goes to {@link buildRequestBaseUrl}.
  * 3. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
  * 4. The request's own `Host`, over plain HTTP (local `docker run`).
  *
@@ -602,27 +626,30 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  */
 export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string, trustForwardedHeaders = false): URL {
   const { pathname, search } = splitTarget(req.url ?? '/');
-  const forwardedHost = header(req, 'x-forwarded-host');
-  const stampedHost = trustForwardedHeaders ? header(req, FORWARDED_HOST_HEADER) : undefined;
-  let url: URL;
-  let stage = '';
-  if (isLoopbackForwardedHost(forwardedHost)) {
-    url = new URL(`http://${forwardedHost}`);
-  } else if (stampedHost) {
-    url = new URL(`https://${stampedHost}`);
-    const stamped = header(req, FORWARDED_STAGE_HEADER);
-    if (stamped && STAGE_PATTERN.test(stamped)) stage = `/${stamped}`;
-  } else if (publicOrigin) {
-    url = new URL(publicOrigin);
-  } else {
-    url = new URL(`http://${requestHost(req)}`);
-  }
+  const url = resolveRequestOrigin(req, publicOrigin, trustForwardedHeaders).origin;
   // Assign the path rather than resolving the target against the origin.
-  url.pathname = `${stage}${pathname}`;
+  url.pathname = pathname;
   // Re-serialize the query the way the Lambda handler does (it rebuilds it from
   // API Gateway's parsed parameters), so `href` matches across transports.
   url.search = new URLSearchParams(search).toString();
   return url;
+}
+
+/**
+ * The externally reachable base URL of a request (`getRequestBaseUrl()`): the
+ * origin of {@link buildRequestUrl} plus the stamped API Gateway stage
+ * (`https://<host>/prod`), with no trailing slash, as the Lambda handler reports
+ * it for the same request.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildRequestBaseUrl(
+  req: http.IncomingMessage,
+  publicOrigin?: string,
+  trustForwardedHeaders = false,
+): string {
+  const { origin, stagePrefix } = resolveRequestOrigin(req, publicOrigin, trustForwardedHeaders);
+  return `${origin.origin}${stagePrefix}`;
 }
 
 /**
