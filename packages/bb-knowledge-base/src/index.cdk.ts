@@ -21,6 +21,7 @@ export type {
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,
+	IngestionFailureCause,
 } from './types.js';
 import { BB_NAME } from './version.js';
 export { KnowledgeBaseErrors } from './errors.js';
