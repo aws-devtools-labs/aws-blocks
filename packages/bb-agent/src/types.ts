@@ -388,10 +388,21 @@ export interface ToolCallRecord {
 }
 
 export interface StreamOptions<TContext = DefaultToolContext> {
+	/**
+	 * Conversation to continue. Must have been created by `createConversationId(userId)` for the
+	 * same `userId`, or `stream()` throws ConversationNotFound (not checked for `inferenceOnly` agents).
+	 */
 	conversationId?: string;
-	/** Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset. */
+	/**
+	 * Channel ID for Realtime delivery. Defaults to conversationId or a random UUID. Empty strings are treated as unset.
+	 * With persistence the chunks are published on this channel scoped to `userId`; subscribe with
+	 * `getChannel(channelId, { userId })`.
+	 */
 	channelId?: string;
-	/** User ID for conversation scoping. Defaults to 'anonymous'. */
+	/**
+	 * User ID for conversation scoping. Required when persistence is enabled (take it from the
+	 * authenticated session); defaults to 'anonymous' only for `inferenceOnly` agents.
+	 */
 	userId?: string;
 	/**
 	 * Per-call context forwarded to every tool invocation as `context`. Use it to pass
@@ -411,7 +422,10 @@ export interface StreamOptions<TContext = DefaultToolContext> {
  * and the `complete()` helper is dropped (functions don't serialize).
  */
 export interface AgentStreamResult {
-	/** Realtime channel ID where chunks are published. */
+	/**
+	 * Realtime channel ID where chunks are published (the one you passed, or the default). With
+	 * persistence it is scoped to the caller: subscribe with `getChannel(channelId, { userId })`.
+	 */
 	channelId: string;
 	/**
 	 * Realtime channel handle (server-side only). Nulled by `toJSON()` — clients subscribe from `channelId` instead.
@@ -434,6 +448,11 @@ export interface AgentStreamChunk {
 	toolName?: string;
 	input?: JSONValue;
 	usage?: TokenUsage;
+	/**
+	 * Set on an `error` chunk. The message of a branded Building Block error, or `'Internal error'`
+	 * for any other failure (raw model/SDK/storage text never reaches the client; it is logged
+	 * server-side).
+	 */
 	error?: string;
 	/**
 	 * On an `error` chunk, the `AgentErrors` name the failure was classified as (for example
@@ -451,6 +470,10 @@ export interface MessageMetadata {
 	toolOutput?: JSONValue;
 	usage?: TokenUsage;
 	latencyMs?: number;
+	/**
+	 * Why a turn ended early: a cap's stop reason, or a failed turn's client-safe message (a branded
+	 * Building Block error's message, or `'Internal error'`).
+	 */
 	error?: string;
 	/**
 	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for

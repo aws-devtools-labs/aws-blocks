@@ -11,6 +11,12 @@ export interface ComputeTestContext {
   readonly frontDoor: FrontDoor;
   /** The client endpoint, the stack's `ApiUrl` output. Set once the harness has deployed. */
   apiUrl(): string;
+  /**
+   * The Hosting distribution's public URL (its `HostingUrl` output), deployed on
+   * the `cloudfront` leg only (see aws-blocks/index.cdk.ts). Set once the harness
+   * has deployed.
+   */
+  hostingUrl(): string;
 }
 
 export type RpcReply = { result?: unknown; error?: { code?: number; message?: string; data?: { name?: string } } };
@@ -34,4 +40,20 @@ export async function apiRpc(ctx: ComputeTestContext, method: string, ...args: u
   const reply = await rpcCall(ctx.apiUrl(), `api.${method}`, args);
   if (reply.error) throw new Error(`RPC ${method} error: ${reply.error.message || JSON.stringify(reply.error)}`);
   return reply.result;
+}
+
+/**
+ * Call `fetchOne` every `intervalMs` until it returns a value, or `budgetMs`
+ * runs out; returns the value, or null if it never came.
+ */
+export async function pollFor<T>(
+  fetchOne: () => Promise<T | null>,
+  { budgetMs, intervalMs = 10_000 }: { budgetMs: number; intervalMs?: number },
+): Promise<T | null> {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const value = await fetchOne();
+    if (value != null || Date.now() >= deadline) return value ?? null;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
 }

@@ -128,4 +128,12 @@ process.on('exit', () => console.log('exit'));`);
 		assert.strictEqual(result.status, 0, result.stderr);
 		assert.strictEqual(result.stdout.trim(), 'exit');
 	});
+
+	it('runs later closes when an earlier close throws synchronously', () => {
+		const result = run(`closeOnProcessExit(() => { throw new Error('sync close failure'); });
+closeOnProcessExit(async () => { console.log('closed b'); });
+process.on('exit', () => console.log('exit'));`);
+		assert.strictEqual(result.status, 0, result.stderr);
+		assert.deepStrictEqual(result.stdout.trim().split('\n'), ['closed b', 'exit']);
+	});
 });

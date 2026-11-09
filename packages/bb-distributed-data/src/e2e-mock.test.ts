@@ -205,10 +205,9 @@ describe('DsqlMockEngine — CREATE INDEX ASYNC parity', () => {
     );
   });
 
-  it('rejects a partial CREATE INDEX ASYNC (WHERE clause)', async () => {
-    await assert.rejects(
+  it('accepts a partial CREATE INDEX ASYNC (WHERE clause) — supported since dsql-lint 0.2.20', async () => {
+    await assert.doesNotReject(
       () => engine.withDdl(() => db.execute(sql`CREATE INDEX ASYNC idx_users_active_email ON users(email) WHERE active = true`)),
-      { name: 'DsqlValidationError' },
     );
   });
 

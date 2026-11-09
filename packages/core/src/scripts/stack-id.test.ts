@@ -35,6 +35,19 @@ describe('getStackId', () => {
     writeFileSync(join(tmpDir, '.blocks', 'config.json'), JSON.stringify({ other: 'value' }));
     assert.throws(() => getStackId(tmpDir), /\.blocks\/config\.json not found/);
   });
+
+  it('says a config.json that is not JSON is invalid, not missing', () => {
+    tmpDir = join(tmpdir(), `stack-id-test-badjson-${Date.now()}`);
+    mkdirSync(join(tmpDir, '.blocks'), { recursive: true });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), '{bad json');
+    assert.throws(() => getStackId(tmpDir), (error: Error) => {
+      assert.match(error.message, /^\.blocks\/config\.json is not valid JSON \(.+\): fix .*config\.json\.$/);
+      assert.doesNotMatch(error.message, /not found/);
+      return true;
+    });
+    writeFileSync(join(tmpDir, '.blocks', 'config.json'), 'null');
+    assert.throws(() => getStackId(tmpDir), /not found or missing stackId/);
+  });
 });
 
 describe('getSandboxId', () => {
