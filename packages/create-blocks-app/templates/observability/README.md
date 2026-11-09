@@ -4,15 +4,16 @@ Backend-only AWS Blocks app showing the observability Building Blocks on one
 API call. `api.placeOrder(item)` writes a structured log line (**Logger**),
 emits an `OrdersPlaced` metric (**Metrics**) and runs inside a `placeOrder`
 trace segment (**Tracer**); a **Dashboard** brings them together in CloudWatch.
-No frontend included.
+`placeOrder` is gated by **AuthBasic** (`auth.requireAuth(context)`), so it
+needs a signed-in user. No frontend included.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template observability`
 
 ## Getting Started
 
 ```bash
-npm run dev        # start the local server, then call api.placeOrder
-npm run test:e2e   # checks the log line, metric, trace and dashboard route
+npm run dev        # start the local server, then sign in and call api.placeOrder
+npm run test:e2e   # checks auth, the log line, metric, trace and dashboard route
 ```
 
 What each one does locally and deployed:
@@ -78,9 +79,14 @@ The dev server settings (port; `"frontend": false` keeps it backend-only) are in
 
 ```bash
 # The dev server's RPC endpoint is JSON-RPC 2.0 at POST /aws-blocks/api:
-curl -X POST http://localhost:3001/aws-blocks/api \
+# placeOrder needs a signed-in user: sign up first and keep the session cookie in a jar
+# (outside the project, so the session token is never committed).
+curl -c /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
   -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","method":"api.placeOrder","params":["coffee"],"id":1}'
+  -d '{"jsonrpc":"2.0","method":"authApi.setAuthState","params":[{"action":"signUp","username":"me@example.com","password":"TestPass123!"}],"id":1}'
+curl -b /tmp/blocks-cookies.txt -X POST http://localhost:3001/aws-blocks/api \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"api.placeOrder","params":["coffee"],"id":2}'
 # method = "<namespace>.<methodName>" (namespace = the exported variable name in aws-blocks/index.ts: `export const api = …` → api); params = positional array.
 # Errors return HTTP 200 with an {"error":{...}} body (JSON-RPC), not a non-2xx status.
 ```

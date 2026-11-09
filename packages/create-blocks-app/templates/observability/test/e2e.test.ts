@@ -5,7 +5,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType } from 'aws-blocks';
+import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -14,6 +14,10 @@ installCookieJar();
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
+let authApi: typeof authApiType;
+// A new user each run: the local auth store persists, so a fixed username
+// would already exist when you rerun `npm run test:e2e` against the same server.
+const creds = { username: `orders-user-${Date.now()}@example.com`, password: 'TestPass123!' };
 // The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3001;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
@@ -50,6 +54,7 @@ test.before(async () => {
 
   const mod = await import('aws-blocks');
   api = mod.api;
+  authApi = mod.authApi;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
   for (let i = 0; i < 30; i++) {
@@ -155,7 +160,14 @@ test('app: server serves its Blocks config', async () => {
 // these tests to exercise your own code instead.
 let order: Awaited<ReturnType<typeof apiType.placeOrder>>;
 
+test('placeOrder rejects a signed-out caller', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.placeOrder('coffee'), { status: 401 });
+});
+
 test('placeOrder returns an order id and the trace id', async () => {
+  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  assert.strictEqual(signedUp.state, 'signedIn');
   order = await api.placeOrder('coffee');
   assert.ok(order.orderId, 'orderId should be set');
   assert.ok(order.traceId, 'traceId should be set: the Tracer samples every request by default');
