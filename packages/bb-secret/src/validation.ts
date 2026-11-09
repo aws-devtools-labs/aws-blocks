@@ -11,10 +11,12 @@ import { SecretErrors } from './errors.js';
 /**
  * Build the `SecretErrors.ValidationFailed` error for a schema rejection.
  *
- * The message, which reaches the RPC caller, is fixed and names at most the
- * first issue's path (schema keys). Schema libraries often quote the received
- * value in their issue messages (zod: `… received 's3cr3t'`), so those stay on
- * the non-enumerable `cause`, with the full `issues` array, for server-side logs.
+ * The message, which reaches the RPC caller, is fixed and carries no part of
+ * the input. Schema libraries often quote the received value in their issue
+ * messages (zod: `… received 's3cr3t'`), and record or map schemas report the
+ * input's own keys as the issue path, so both the first issue's message and its
+ * `path` stay on the non-enumerable `cause`, with the full `issues` array, for
+ * server-side logs.
  */
 export function secretValidationFailed(issues: ReadonlyArray<StandardSchemaV1.Issue>): Error {
 	const path = issues[0]?.path
@@ -22,11 +24,10 @@ export function secretValidationFailed(issues: ReadonlyArray<StandardSchemaV1.Is
 		.join('.');
 	const cause = Object.assign(new Error(issues[0]?.message ?? 'the secret value did not match the schema'), {
 		issues,
+		path,
 	});
 	const name = SecretErrors.ValidationFailed;
-	const error = new Error(`${name}: The secret value did not match the schema${path ? ` at '${path}'` : ''}`, {
-		cause,
-	});
+	const error = new Error(`${name}: The secret value did not match the schema`, { cause });
 	error.name = name;
 	return brandBlocksError(error);
 }

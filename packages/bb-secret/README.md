@@ -77,7 +77,7 @@ try {
 }
 ```
 
-A `ValidationFailed` error's message is fixed and never contains the secret value or the schema library's issue text, because schema libraries often quote the received value and the message reaches the client. It names at most the path of the first failing field, for example `The secret value did not match the schema at 'port'`. The original issues stay on the error's non-enumerable `cause` (`cause.issues`) for server-side logging.
+A `ValidationFailed` error's message is fixed and never contains the secret value or the schema library's issue text, because schema libraries often quote the received value and the message reaches the client. It doesn't name the failing field either, because a record or map schema reports the value's own keys as the path: the message is always `ValidationFailedException: The secret value did not match the schema`. The original issues and the first failing path stay on the error's non-enumerable `cause` (`cause.issues`, `cause.path`) for server-side logging.
 
 `get()` returns `null` for a missing value rather than throwing, so a missing secret is normal control flow, not an exception:
 

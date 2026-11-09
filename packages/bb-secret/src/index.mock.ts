@@ -128,8 +128,8 @@ class SecretImpl<T = string> extends Scope {
 	 * @param value - The new secret value.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
 	 *   The error message never contains the value or the schema library's issue text
-	 *   (it names at most the first issue's path); the original issues are on the
-	 *   non-enumerable `cause` for server-side logs.
+	 *   or the failing path, which a record schema takes from the value's keys; the
+	 *   original issues and path are on the non-enumerable `cause` for server-side logs.
 	 *
 	 * @example
 	 * ```typescript
@@ -215,8 +215,8 @@ class SecretImpl<T = string> extends Scope {
 	 * @returns The secret value, or `null` if that version has not been set.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the stored value is not valid JSON, or fails validation.
 	 *   The error message never contains the value or the schema library's issue text
-	 *   (it names at most the first issue's path); the original issues are on the
-	 *   non-enumerable `cause` for server-side logs.
+	 *   or the failing path, which a record schema takes from the value's keys; the
+	 *   original issues and path are on the non-enumerable `cause` for server-side logs.
 	 *
 	 * @example
 	 * ```typescript

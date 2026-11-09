@@ -206,7 +206,8 @@ describe('AWS runtime schema validation', () => {
 			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
 			assert.ok(!err.message.includes('s3cr3t-value'), `message leaks the value: ${err.message}`);
 			assert.ok(!JSON.stringify(err).includes('s3cr3t-value'), 'serialized error leaks the value');
-			assert.match(err.message, /apiKey/);
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			assert.strictEqual(Reflect.get(err.cause ?? {}, 'path'), 'apiKey');
 		} finally {
 			restore();
 		}

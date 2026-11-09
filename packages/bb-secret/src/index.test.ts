@@ -232,11 +232,29 @@ describe('Secret (mock)', () => {
 			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
 			assert.ok(!err.message.includes('s3cr3t-value'), `message leaks the value: ${err.message}`);
 			assert.ok(!JSON.stringify(err).includes('s3cr3t-value'), 'serialized error leaks the value');
-			assert.match(err.message, /apiKey/);
-			// The library's issues stay available server-side, off the enumerable surface.
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			// The library's issues and the failing path stay available server-side, off the enumerable surface.
 			const { cause } = err;
 			assert.ok(cause instanceof Error && cause.message.includes('s3cr3t-value'));
+			assert.strictEqual(Reflect.get(cause, 'path'), 'apiKey');
 			assert.ok(!Object.keys(err).includes('cause'));
+		});
+
+		test('get keeps record keys from the stored value out of a ValidationFailed error', async () => {
+			// A record schema reports the input's own keys as the issue path, so
+			// for a JSON secret whose keys are themselves secret, the path is data.
+			const scope = freshScope();
+			await writable(scope, 'keyed-config').put(JSON.stringify({ 's3cr3t-key': 'not-a-number' }));
+			const typed = new Secret(freshScope(), 'keyed-config', { schema: z.record(z.string(), z.number()) });
+			const err = await typed.get().then(
+				() => assert.fail('expected get() to throw'),
+				(e: unknown) => e,
+			);
+			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
+			assert.ok(!err.message.includes('s3cr3t-key'), `message leaks a record key: ${err.message}`);
+			assert.ok(!JSON.stringify(err).includes('s3cr3t-key'), 'serialized error leaks a record key');
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			assert.strictEqual(Reflect.get(err.cause ?? {}, 'path'), 's3cr3t-key');
 		});
 	});
 
