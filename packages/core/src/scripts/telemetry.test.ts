@@ -4,7 +4,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -72,6 +72,34 @@ function runGate(options: { cwd: string; env?: Record<string, string> }): boolea
   assert.strictEqual(result.status, 0, result.stderr);
   assert.match(result.stdout, /^(true|false)$/, `unexpected gate output: ${JSON.stringify(result.stdout)}`);
   return result.stdout === 'true';
+}
+
+// Same child-process reason as GATE_CHILD: the status must be read with HOME redirected.
+const STATUS_CHILD = `
+const [moduleUrl, projectRoot] = process.argv.slice(1);
+const { getTelemetryStatus } = await import(moduleUrl);
+process.stdout.write(JSON.stringify(getTelemetryStatus(projectRoot)));
+`;
+
+function readStatus(projectRoot: string, env: Record<string, string>): { enabled: boolean; projectConfig?: boolean } {
+  const consentUrl = new URL('../telemetry/consent.js', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', STATUS_CHILD, consentUrl, projectRoot], {
+    cwd: projectRoot,
+    encoding: 'utf-8',
+    timeout: 30_000,
+    env: { ...process.env, ...env },
+  });
+  assert.strictEqual(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+/** An app layout (`package.json` + `aws-blocks/`) with a nested `src/sub`; returns the real paths. */
+function createAppProject(dir: string): { root: string; sub: string } {
+  writeFileSync(join(dir, 'package.json'), '{"name":"app"}');
+  mkdirSync(join(dir, 'aws-blocks'));
+  mkdirSync(join(dir, 'src', 'sub'), { recursive: true });
+  const root = realpathSync(dir);
+  return { root, sub: join(root, 'src', 'sub') };
 }
 
 function writeTelemetryConfig(dir: string, enabled: boolean): void {
@@ -156,6 +184,42 @@ describe('telemetry CLI', () => {
       assert.ok(existsSync(configPath));
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       assert.strictEqual(config.telemetry.enabled, false);
+    });
+  });
+
+  describe('project-level writes resolve the project root', () => {
+    it('--disable from a subdirectory writes the project root and the root status reads disabled', () => {
+      const { root, sub } = createAppProject(tmpProject);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable'], { cwd: sub, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes(join(root, '.blocks', 'config.json')), `expected the root config path, got:\n${result.stdout}`);
+      assert.ok(!existsSync(join(sub, '.blocks')), 'must not write a config into the subdirectory');
+
+      const status = readStatus(root, env);
+      assert.strictEqual(status.projectConfig, false);
+      assert.strictEqual(status.enabled, false);
+    });
+
+    it('--enable from a subdirectory writes the project root', () => {
+      const { root, sub } = createAppProject(tmpProject);
+
+      const result = runCli(['--enable'], { cwd: sub, env: { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV } });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.strictEqual(JSON.parse(readFileSync(join(root, '.blocks', 'config.json'), 'utf-8')).telemetry.enabled, true);
+      assert.ok(!existsSync(join(sub, '.blocks')), 'must not write a config into the subdirectory');
+    });
+
+    it('falls back to the working directory when no project is found above it', () => {
+      const cwd = join(realpathSync(tmpProject), 'loose', 'dir');
+      mkdirSync(cwd, { recursive: true });
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      const result = runCli(['--disable'], { cwd, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.strictEqual(JSON.parse(readFileSync(join(cwd, '.blocks', 'config.json'), 'utf-8')).telemetry.enabled, false);
+      assert.strictEqual(readStatus(cwd, env).enabled, false);
     });
   });
 
