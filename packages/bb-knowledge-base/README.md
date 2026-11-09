@@ -180,7 +180,7 @@ try {
 |---|---|---|
 | `KnowledgeBaseErrors.RetrievalFailed` | `RetrievalFailedException` | Bedrock retrieval call failed |
 | `KnowledgeBaseErrors.NotReady` | `KnowledgeBaseNotReadyException` | KB not deployed or env vars missing |
-| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed — thrown by `isSynced()` / `waitUntilSynced()`. The message is stable and safe to return to clients; the raw Bedrock `failureReasons` (which can name buckets, object keys or ARNs) stay server-side on the non-enumerable `err.cause` (`cause.failureReasons`) and in the server log |
+| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed — thrown by `isSynced()` / `waitUntilSynced()`. The message is stable and safe to return to clients; when Bedrock reported `failureReasons` (raw text that can name buckets, object keys or ARNs), they stay server-side on the non-enumerable `err.cause` (type `IngestionFailureCause`; absent when none were reported, so read `cause?.failureReasons ?? []`) and in the server log |
 | `KnowledgeBaseErrors.Timeout` | `KnowledgeBaseTimeoutException` | `waitUntilSynced()` exceeded its timeout before ingestion completed |
 | `KnowledgeBaseErrors.InvalidSource` | `InvalidSourceConfigException` | Source folder not found or invalid config |
 | `KnowledgeBaseErrors.InvalidFilter` | `InvalidFilterException` | Invalid filter keys in Bedrock query |

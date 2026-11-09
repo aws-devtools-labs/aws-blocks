@@ -6,7 +6,7 @@ import assert from 'node:assert';
 import { BedrockAgentRuntimeClient } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockAgentClient } from '@aws-sdk/client-bedrock-agent';
 import { isBlocksError } from '@aws-blocks/core';
-import { KnowledgeBaseErrors, KnowledgeBase } from './index.aws.js';
+import { KnowledgeBaseErrors, KnowledgeBase, type IngestionFailureCause } from './index.aws.js';
 
 // ── SDK mock helpers ───────────────────────────────────────────────────────
 
@@ -714,7 +714,7 @@ describe('isSynced', () => {
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
 					assert.ok(!err.message.includes('boom one'), 'message must not include raw failure reasons');
-					assert.deepStrictEqual((err.cause as Error & { failureReasons?: string[] }).failureReasons, [
+					assert.deepStrictEqual((err.cause as IngestionFailureCause | undefined)?.failureReasons, [
 						'boom one',
 						'boom two',
 					]);
@@ -730,13 +730,13 @@ describe('isSynced', () => {
 		// failureReasons is raw Bedrock service text and can quote bucket names, object
 		// keys and ARNs. A branded error's message crosses the RPC wire, so the reasons
 		// must stay server-side on the non-enumerable `cause`.
-		const secret = 'arn:aws:s3:::internal-bucket/secret-path';
+		const rawReason = 'arn:aws:s3:::internal-bucket/private-path';
 		const cleanup = setSyncEnv('TEST', 'RDY6L');
 		mockAgentSend((cmd) => {
 			if (cmd.constructor.name === 'ListIngestionJobsCommand') {
-				return { ingestionJobSummaries: [{ ingestionJobId: 'job-leak', status: 'FAILED' }] };
+				return { ingestionJobSummaries: [{ ingestionJobId: 'job-failed-reasons', status: 'FAILED' }] };
 			}
-			return { ingestionJob: { status: 'FAILED', failureReasons: [`Access denied to ${secret}`, 'second reason'] } };
+			return { ingestionJob: { status: 'FAILED', failureReasons: [`Access denied to ${rawReason}`, 'second reason'] } };
 		});
 
 		try {
@@ -746,17 +746,17 @@ describe('isSynced', () => {
 				(err: Error) => {
 					assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
 					assert.ok(isBlocksError(err, KnowledgeBaseErrors.IngestionFailed));
-					assert.ok(!err.message.includes(secret), `message must not carry raw failureReasons: ${err.message}`);
+					assert.ok(!err.message.includes(rawReason), `message must not carry raw failureReasons: ${err.message}`);
 					assert.ok(!err.message.includes('second reason'));
-					assert.ok(!JSON.stringify(err).includes(secret), 'JSON.stringify(err) must not carry raw failureReasons');
+					assert.ok(!JSON.stringify(err).includes(rawReason), 'JSON.stringify(err) must not carry raw failureReasons');
 					const desc = Object.getOwnPropertyDescriptor(err, 'cause');
 					assert.ok(desc, 'raw reasons should be preserved on `cause`');
 					assert.strictEqual(desc.enumerable, false, '`cause` must be non-enumerable');
 					assert.ok(err.cause instanceof Error);
-					assert.ok(err.cause.message.includes(secret), 'cause should keep the raw reasons server-side');
+					assert.ok(err.cause.message.includes(rawReason), 'cause should keep the raw reasons server-side');
 					assert.deepStrictEqual(
-						(err.cause as Error & { failureReasons?: string[] }).failureReasons,
-						[`Access denied to ${secret}`, 'second reason'],
+						(err.cause as IngestionFailureCause | undefined)?.failureReasons,
+						[`Access denied to ${rawReason}`, 'second reason'],
 					);
 					return true;
 				},
@@ -766,6 +766,47 @@ describe('isSynced', () => {
 		}
 	});
 
+
+	test('throws IngestionFailed with the stable message and no cause when no failureReasons are available', async () => {
+		// Two reason-less paths: Bedrock reports an empty list, or the GetIngestionJob
+		// lookup itself fails. Either way the message is the same stable string and
+		// there is no `cause`, so callers must read `cause?.failureReasons ?? []`.
+		const cases: { id: string; getJob: () => unknown }[] = [
+			{ id: 'rdy6n', getJob: () => ({ ingestionJob: { status: 'FAILED', failureReasons: [] } }) },
+			{
+				id: 'rdy6e',
+				getJob: () => {
+					throw Object.assign(new Error('lookup failed'), { name: 'ThrottlingException' });
+				},
+			},
+		];
+		const messages: string[] = [];
+		for (const { id, getJob } of cases) {
+			const cleanup = setSyncEnv('TEST', id.toUpperCase());
+			mockAgentSend((cmd) => {
+				if (cmd.constructor.name === 'ListIngestionJobsCommand') {
+					return { ingestionJobSummaries: [{ ingestionJobId: `job-${id}`, status: 'FAILED' }] };
+				}
+				return getJob();
+			});
+			try {
+				const kb = new KnowledgeBase({ id: 'test' }, id, { source: './knowledge' });
+				await assert.rejects(
+					() => kb.isSynced(),
+					(err: Error) => {
+						assert.strictEqual(err.name, KnowledgeBaseErrors.IngestionFailed);
+						assert.strictEqual(err.cause, undefined, `${id}: no cause without reasons`);
+						assert.deepStrictEqual((err.cause as IngestionFailureCause | undefined)?.failureReasons ?? [], []);
+						messages.push(err.message);
+						return true;
+					},
+				);
+			} finally {
+				cleanup();
+			}
+		}
+		assert.strictEqual(messages[0], messages[1], 'both reason-less paths use the same stable message');
+	});
 	test('queries ListIngestionJobs with the configured ids, sorted by STARTED_AT desc, maxResults 1', async () => {
 		const cleanup = setSyncEnv('TEST', 'RDY7', { kbId: 'kb-aaa', dataSourceId: 'ds-bbb' });
 		let captured: any;
