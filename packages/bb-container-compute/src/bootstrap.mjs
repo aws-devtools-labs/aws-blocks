@@ -7,7 +7,7 @@
  * WHY THIS EXISTS
  * ---------------
  * The container compute deploys with NO local Docker build: it runs a stock
- * public Node image (`public.ecr.aws/docker/library/node:24-slim` by default, or
+ * public Node image (`public.ecr.aws/docker/library/node:24-slim`, pinned by digest, by default, or
  * the customer's `image`) verbatim, and the application code (`main.js` +
  * `worker.js`) is shipped separately as an S3 asset. A task command override runs
  * this script at boot; it downloads both bundles to `/app` and execs

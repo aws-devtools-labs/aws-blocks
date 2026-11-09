@@ -19,6 +19,7 @@ import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { containerMainEntry } from './bundle.js';
+import { DEFAULT_CONTAINER_IMAGE } from './default-image.js';
 import { ContainerCompute } from './index.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -223,13 +224,13 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 
 		const template = Template.fromStack(stack as unknown as cdk.Stack);
 
-		// The task runs the stock public Node 24 image by default, pulled by ECS —
-		// NOT a locally-built image asset (which would carry an account/region ECR
-		// URI). The command override runs the inlined bootstrap.
+		// The task runs the stock public Node 24 image by default (digest-pinned),
+		// pulled by ECS — NOT a locally-built image asset (which would carry an
+		// account/region ECR URI). The command override runs the inlined bootstrap.
 		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
 			ContainerDefinitions: Match.arrayWith([
 				Match.objectLike({
-					Image: 'public.ecr.aws/docker/library/node:24-slim',
+					Image: DEFAULT_CONTAINER_IMAGE,
 					EntryPoint: ['node', '-e'],
 					Command: Match.arrayWith([Match.stringLikeRegexp('bootstrap\\.mjs')]),
 				}),
@@ -288,6 +289,46 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 				Match.objectLike({ Image: 'public.ecr.aws/example/custom-node:24' }),
 			]),
 		});
+	});
+});
+
+describe('ContainerCompute — default image is pinned by digest', () => {
+	/** The default image as an immutable reference: ECR Public's Node 24 slim, tag plus index digest. */
+	const DIGEST_PINNED_DEFAULT = /^public\.ecr\.aws\/docker\/library\/node:24-slim@sha256:[0-9a-f]{64}$/;
+
+	async function synthImages(id: string, image?: string): Promise<string[]> {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		new ContainerCompute(stack as never, 'worker', {
+			size: { vcpu: 0.5, memory: 1024 },
+			...(image ? { image } : {}),
+		});
+		const taskDefs = Template.fromStack(stack as unknown as cdk.Stack).findResources('AWS::ECS::TaskDefinition');
+		return Object.values(taskDefs).flatMap((td: any) =>
+			(td.Properties?.ContainerDefinitions ?? []).map((c: any) => String(c.Image)),
+		);
+	}
+
+	test('the synthesized task definition uses the digest-pinned default image', async () => {
+		const images = await synthImages('ContainerPinnedDefaultStack');
+		assert.strictEqual(images.length, 1, `expected one container; got ${JSON.stringify(images)}`);
+		assert.match(images[0], DIGEST_PINNED_DEFAULT);
+	});
+
+	test('the default image constant is a digest reference, so a floating tag cannot be shipped', () => {
+		assert.match(DEFAULT_CONTAINER_IMAGE, DIGEST_PINNED_DEFAULT);
+	});
+
+	test('a custom image is never rewritten or pinned by Blocks (tag or digest)', async () => {
+		const tagged = 'public.ecr.aws/example/custom-node:24';
+		const pinned = `public.ecr.aws/example/custom-node:24@sha256:${'a'.repeat(64)}`;
+		assert.deepStrictEqual(await synthImages('ContainerCustomTagStack', tagged), [tagged]);
+		assert.deepStrictEqual(await synthImages('ContainerCustomDigestStack', pinned), [pinned]);
 	});
 });
 

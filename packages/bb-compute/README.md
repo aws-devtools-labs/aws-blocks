@@ -114,9 +114,11 @@ type is a compile error.
   and fetched at boot. So a custom image only supplies the runtime environment —
   it must provide a **Node 24** runtime on `PATH`, plus any system libraries your
   handlers need (e.g. media tooling). Defaults to
-  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). At boot, a
-  small bootstrap script uses the task's role to download your code from S3 and
-  starts it.
+  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible), pinned by
+  digest. At boot, a small bootstrap script uses the task's role to download
+  your code from S3 and starts it. ECS pulls the image at every task start, so
+  pin a custom image by digest (`my-image:24@sha256:<digest>`) rather than a
+  tag.
 
 ## API namespaces
 
