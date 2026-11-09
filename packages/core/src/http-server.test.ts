@@ -5,13 +5,14 @@ import { describe, it, before, after, beforeEach, afterEach, mock } from 'node:t
 import assert from 'node:assert';
 import * as http from 'node:http';
 import * as net from 'node:net';
-import { serveHttp, buildRequestUrl } from './http-server.js';
+import { serveHttp, buildRequestBaseUrl, buildRequestUrl } from './http-server.js';
 import type { HttpServerHandle, ServeHttpOptions } from './http-server.js';
 import { FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from './constants.js';
 import { createLambdaHandler, _resetCorsPatterns, requestClientUserAgent, requestCookies } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry } from './raw-route.js';
 import { MAX_RPC_BODY_BYTES, decodeRpcResponse } from './rpc.js';
 import type { BlocksContext } from './api.js';
+import { getRequestBaseUrl } from './common/request-base-url.js';
 
 const API_HOST = 'abc123.execute-api.us-west-2.amazonaws.com';
 const ALLOWED_ORIGIN = 'https://app.example.com';
@@ -211,6 +212,9 @@ const backend = {
     async stores() {
       return readStoresAcrossAwaits();
     },
+    async baseUrl() {
+      return { url: ctx.request.url.href, base: getRequestBaseUrl(ctx) };
+    },
   }),
 };
 
@@ -276,6 +280,13 @@ function registerRoutes() {
     path: '/url',
     handler: async (ctx) => {
       ctx.response.send({ url: ctx.request.url.href });
+    },
+  });
+  registerRoute({
+    method: 'GET',
+    path: '/base-url',
+    handler: async (ctx) => {
+      ctx.response.send({ url: ctx.request.url.href, base: getRequestBaseUrl(ctx) });
     },
   });
   registerRoute({
@@ -385,6 +396,9 @@ const PARITY: Array<{ name: string; method: string; target: string; headers?: Re
   { name: 'RawRoute request URL', method: 'GET', target: '/url?a=1' },
   { name: 'RawRoute request URL with an encoded and a valueless query', method: 'GET', target: '/url?q=a%20b&flag' },
   { name: 'RawRoute request URL behind a loopback forwarded host', method: 'GET', target: '/url', headers: { 'x-forwarded-host': 'localhost:3000' } },
+  { name: 'RawRoute request base URL (getRequestBaseUrl)', method: 'GET', target: '/base-url?a=1' },
+  { name: 'RawRoute request base URL behind a loopback forwarded host', method: 'GET', target: '/base-url', headers: { 'x-forwarded-host': 'localhost:3000' } },
+  { name: 'RPC request base URL (getRequestBaseUrl)', method: 'POST', target: '/aws-blocks/api', headers: json, body: rpc('api.baseUrl') },
   { name: 'repeated slashes collapse for routing', method: 'GET', target: '//users/42' },
   { name: 'a //host prefix is a path, not a host', method: 'GET', target: '//evil.example/users/42' },
   { name: 'percent-encoded dot segments are not resolved', method: 'GET', target: '/aws-blocks/%2e%2e/users/42' },
@@ -432,6 +446,14 @@ describe('serveHttp — parity with the Lambda handler', () => {
       assert.deepStrictEqual(viaHttp.headers['set-cookie'] ?? [], lambdaCookies);
     });
   }
+
+  it('gives a RawRoute the route path in its URL and the stage in getRequestBaseUrl, as the Lambda handler does', async () => {
+    const expected = { url: `https://${API_HOST}/base-url`, base: `https://${API_HOST}/prod` };
+    const viaLambda = await lambda(lambdaEvent('GET', '/base-url', {}));
+    const viaHttp = await send(server.port, 'GET', '/base-url', { [FORWARDED_HOST_HEADER]: API_HOST, [FORWARDED_STAGE_HEADER]: 'prod' });
+    assert.deepStrictEqual(JSON.parse(viaLambda.body), expected);
+    assert.deepStrictEqual(JSON.parse(viaHttp.body), expected);
+  });
 
   it('sends every Set-Cookie an RPC method sets, as the Lambda envelope does', async () => {
     const viaLambda = await lambda(lambdaEvent('POST', '/aws-blocks/api', json, rpc('api.login')));
@@ -865,14 +887,14 @@ describe('serveHttp — front-door-stamped headers', { timeout: 30_000 }, () => 
   const stamped = (lines: string[]) =>
     ['GET /url HTTP/1.1', 'Host: internal-alb', ...lines, 'Connection: close', '', ''].join('\r\n');
 
-  it('builds the request URL from one stamped host and stage', async () => {
+  it('builds the request URL from one stamped host, and the base URL from it and the stamped stage', async () => {
     const server = await start({ trustForwardedHeaders: true });
     try {
-      const reply = await send(server.port, 'GET', '/url', {
+      const reply = await send(server.port, 'GET', '/base-url', {
         'x-blocks-forwarded-host': API_HOST,
         'x-blocks-forwarded-stage': 'prod',
       });
-      assert.deepStrictEqual(JSON.parse(reply.body), { url: `https://${API_HOST}/prod/url` });
+      assert.deepStrictEqual(JSON.parse(reply.body), { url: `https://${API_HOST}/base-url`, base: `https://${API_HOST}/prod` });
     } finally {
       await server.close();
     }
@@ -1089,9 +1111,9 @@ const stamped = (host: string, stage?: string): Record<string, string> =>
   stage === undefined ? { [FORWARDED_HOST_HEADER]: host } : { [FORWARDED_HOST_HEADER]: host, [FORWARDED_STAGE_HEADER]: stage };
 
 describe('buildRequestUrl', () => {
-  it('uses the front-door-stamped host and stage when trusted', () => {
+  it('uses the front-door-stamped host when trusted, and leaves the stamped stage out of the path', () => {
     const url = buildRequestUrl(incoming('/aws-blocks/api/x?a=1', { host: 'alb.internal', ...stamped(API_HOST, 'prod') }), undefined, true);
-    assert.strictEqual(url.href, `https://${API_HOST}/prod/aws-blocks/api/x?a=1`);
+    assert.strictEqual(url.href, `https://${API_HOST}/aws-blocks/api/x?a=1`);
   });
 
   it('omits the stage when the front door stamps none (CloudFront)', () => {
@@ -1163,5 +1185,31 @@ describe('buildRequestUrl', () => {
   it('falls back to localhost for an empty Host header', () => {
     const url = buildRequestUrl(incoming('/x', { host: '' }));
     assert.strictEqual(url.href, 'http://localhost/x');
+  });
+});
+
+describe('buildRequestBaseUrl', () => {
+  it('is the stamped host plus the stamped stage when trusted', () => {
+    const base = buildRequestBaseUrl(incoming('/aws-blocks/api/x?a=1', { host: 'alb.internal', ...stamped(API_HOST, 'prod') }), undefined, true);
+    assert.strictEqual(base, `https://${API_HOST}/prod`);
+  });
+
+  it('has no stage when the front door stamps none, or one that is not a stage name', () => {
+    assert.strictEqual(buildRequestBaseUrl(incoming('/x', stamped('d111.cloudfront.net')), undefined, true), 'https://d111.cloudfront.net');
+    assert.strictEqual(buildRequestBaseUrl(incoming('/x', stamped(API_HOST, '/evil.example')), undefined, true), `https://${API_HOST}`);
+  });
+
+  it('ignores stamped headers when not trusted, and takes only the origin of the public origin', () => {
+    const req = incoming('/x', { host: 'alb.internal', ...stamped('evil.example', 'prod') });
+    assert.strictEqual(buildRequestBaseUrl(req, 'https://app.example.com/ignored/path'), 'https://app.example.com');
+  });
+
+  it('is the loopback X-Forwarded-Host (sandbox dev server), without the stage', () => {
+    const req = incoming('/x', { 'x-forwarded-host': 'localhost:3000', ...stamped(API_HOST, 'prod') });
+    assert.strictEqual(buildRequestBaseUrl(req, undefined, true), 'http://localhost:3000');
+  });
+
+  it("falls back to the request's own Host over plain HTTP", () => {
+    assert.strictEqual(buildRequestBaseUrl(incoming('/x', { host: 'localhost:8080' })), 'http://localhost:8080');
   });
 });
