@@ -720,6 +720,8 @@ describe('ContainerCompute — image entry', () => {
 
 describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 	type TrustStatement = {
+		Effect?: string;
+		Action?: unknown;
 		Principal?: { Service?: unknown };
 		Condition?: Record<string, Record<string, unknown>>;
 	};
@@ -761,6 +763,8 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement');
 		const trust = ecs[0];
 
+		assert.strictEqual(trust.Effect, 'Allow');
+		assert.deepStrictEqual(trust.Action, 'sts:AssumeRole');
 		assert.deepStrictEqual(trust.Condition?.StringEquals?.['aws:SourceAccount'], { Ref: 'AWS::AccountId' });
 		assert.deepStrictEqual(trust.Condition?.ArnLike?.['aws:SourceArn'], {
 			'Fn::Join': [
@@ -781,6 +785,8 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 	test('the lambda trust on the same role keeps no condition', async () => {
 		const { lambda } = await synthTrust('EcsTrustLambda', ['worker']);
 		assert.strictEqual(lambda.length, 1, 'one lambda trust statement');
+		assert.strictEqual(lambda[0].Effect, 'Allow');
+		assert.deepStrictEqual(lambda[0].Action, 'sts:AssumeRole');
 		assert.strictEqual(lambda[0].Condition, undefined);
 	});
 
