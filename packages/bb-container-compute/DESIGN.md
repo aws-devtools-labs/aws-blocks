@@ -14,7 +14,13 @@ self-starts the SQS pollers for the event handlers assigned to it.
   must be arm64-compatible.
 - **Task role.** The shared Blocks execution role, so every Building Block grant
   reaches the container exactly as it reaches the Lambda handler. The `ecs-tasks`
-  trust principal is appended to that role once per stack. The task role is also
+  trust principal is appended to that role once per role, scoped with
+  `aws:SourceAccount` (this account) and `aws:SourceArn`
+  (`arn:<partition>:ecs:<region>:<account>:*`) so only ECS tasks in this account
+  and region can assume it — the
+  [recommended task-role trust](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)
+  (ECS does not support naming a specific cluster in `aws:SourceArn`). The
+  role's Lambda trust is unchanged. The task role is also
   granted read on the code asset (below) so the boot script can fetch it.
 - **Image & code delivery (no local Docker).** The task runs a **stock public
   Node image** — `public.ecr.aws/docker/library/node:24-slim` by default, or the
