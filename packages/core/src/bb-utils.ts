@@ -14,6 +14,7 @@ export { EventSourceMapping } from './lambda-handler.js';
 export { currentRequestId } from './request-context.js';
 export { constantTimeEquals } from './common/crypto.js';
 export { isLoopbackHost, isWildcardHost, isIpLiteral } from './common/loopback.js';
+export { getRequestBaseUrl } from './common/request-base-url.js';
 // Defined in the config module (it owns the config-key contract), re-exported
 // here so BB authors get it alongside the other BB utilities.
 export { sanitizeConfigKey } from './common/config.js';

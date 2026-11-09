@@ -21,6 +21,7 @@ import type {
 	RetrieveResult,
 	MetadataFilter,
 	WaitUntilSyncedOptions,
+	IngestionFailureCause,
 } from './types.js';
 import { blocksError, KnowledgeBaseErrors } from './errors.js';
 import { normalizeMaxResults } from './normalize.js';
@@ -37,6 +38,7 @@ export type {
 	RetrieveResult,
 	MetadataFilter,
 	WaitUntilSyncedOptions,
+	IngestionFailureCause,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
@@ -154,6 +156,28 @@ function mapSdkError(err: unknown): Error {
 	// `JSON.stringify(mapped)` cannot leak the SDK error's $metadata (requestId/cfId);
 	// the cause stays programmatically accessible (`mapped.cause === err`).
 	Object.defineProperty(mapped, 'cause', { value: err, enumerable: false, writable: true, configurable: true });
+	return mapped;
+}
+
+/**
+ * Build the `IngestionFailed` error for a FAILED ingestion job. The message is a
+ * STABLE, BB-authored string: `failureReasons` is raw Bedrock service text that
+ * can quote bucket names, object keys and ARNs, and a branded error's message
+ * crosses the RPC wire. When reasons were reported, they stay server-side on the
+ * standard, non-enumerable `Error.cause` (an {@link IngestionFailureCause}:
+ * `cause.message` joins them; `cause.failureReasons` keeps the array), so
+ * `JSON.stringify(err)` and the RPC response never carry them. With no reasons
+ * (none reported, or the `GetIngestionJob` lookup failed) there is no `cause`.
+ */
+function ingestionFailed(reasons: string[]): Error {
+	const mapped = blocksError(
+		KnowledgeBaseErrors.IngestionFailed,
+		'Knowledge base ingestion failed. See the ingestion job in the Bedrock console or the server logs for the failure reasons.',
+	);
+	if (reasons.length > 0) {
+		const cause: IngestionFailureCause = Object.assign(new Error(reasons.join('; ')), { failureReasons: [...reasons] });
+		Object.defineProperty(mapped, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
+	}
 	return mapped;
 }
 
@@ -384,7 +408,7 @@ export class KnowledgeBase extends Scope {
 	 *
 	 * @returns `true` when the latest ingestion job is `COMPLETE` (or there is
 	 *   no managed data source to track); `false` while ingestion is pending.
-	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
+	 * @throws {IngestionFailedException} If the most recent ingestion job failed. The message is a stable string. When Bedrock reported `failureReasons`, they are kept server-side on the non-enumerable `err.cause` (an {@link IngestionFailureCause}; read `err.cause?.failureReasons ?? []`) and in the server log.
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
 	 *   For mapped Bedrock control-plane errors. Two distinct conditions map to `NotReady`:
 	 *   the `KB_ID` env var being unset (a *config* error thrown directly, so it carries no
@@ -416,10 +440,7 @@ export class KnowledgeBase extends Scope {
 		if (job.status === 'COMPLETE') return true;
 		if (job.status === 'FAILED') {
 			const reasons = await this.fetchFailureReasons(knowledgeBaseId, dataSourceId, job.ingestionJobId);
-			throw blocksError(
-				KnowledgeBaseErrors.IngestionFailed,
-				`Knowledge base ingestion failed.${reasons.length ? ` Reasons: ${reasons.join('; ')}` : ''}`,
-			);
+			throw ingestionFailed(reasons);
 		}
 		// STARTING | IN_PROGRESS | STOPPING | STOPPED → not synced yet.
 		return false;
@@ -464,7 +485,7 @@ export class KnowledgeBase extends Scope {
 	 *   many consecutive transient control-plane errors are tolerated before
 	 *   giving up; `signal` (optional `AbortSignal`) cancels the wait.
 	 * @throws {KnowledgeBaseTimeoutException} If the KB does not sync within `timeoutMs`.
-	 * @throws {IngestionFailedException} If the most recent ingestion job failed (message includes `failureReasons`).
+	 * @throws {IngestionFailedException} If the most recent ingestion job failed. The message is a stable string. When Bedrock reported `failureReasons`, they are kept server-side on the non-enumerable `err.cause` (an {@link IngestionFailureCause}; read `err.cause?.failureReasons ?? []`) and in the server log.
 	 * @throws {KnowledgeBaseNotReadyException | KnowledgeBaseValidationError | InvalidFilterException | RetrievalFailedException}
 	 *   Propagated from {@link isSynced} for mapped Bedrock control-plane errors — see its docs
 	 *   for the full mapping (`ResourceNotFoundException`/unset `KB_ID` → `NotReady`,
@@ -626,7 +647,14 @@ export class KnowledgeBase extends Scope {
 				new GetIngestionJobCommand({ knowledgeBaseId, dataSourceId, ingestionJobId }),
 			);
 			const reasons = response.ingestionJob?.failureReasons ?? [];
-			if (reasons.length === 0) {
+			if (reasons.length > 0) {
+				// Server-side only: the reasons are raw service text, so the thrown
+				// IngestionFailedException carries a stable message and keeps them on
+				// its non-enumerable `cause` instead. `warn`, not `error`: isSynced() is
+				// meant for per-request gating, so this line repeats on every call while
+				// the latest job stays FAILED.
+				this.log.warn(`Ingestion job ${ingestionJobId} is FAILED: ${reasons.join('; ')}`);
+			} else {
 				// A FAILED job with no reported reasons is unusual — surface a hint so
 				// the otherwise reason-less IngestionFailedException is easier to diagnose.
 				this.log.warn(

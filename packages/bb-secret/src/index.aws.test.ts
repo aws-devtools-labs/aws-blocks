@@ -3,9 +3,10 @@
 
 import assert from 'node:assert';
 import { describe, mock, test } from 'node:test';
-import { Scope } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-blocks/core';
 import { ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { Secret } from './index.aws.js';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { Secret, SecretErrors } from './index.aws.js';
 
 const TEST_ARN = 'arn:aws:secretsmanager:us-east-1:111122223333:secret:test-AbCdEf';
 
@@ -172,6 +173,41 @@ describe('AWS runtime read cache — cacheTtlSeconds', () => {
 			assert.strictEqual(await secret.get(), 'sk-1');
 			assert.strictEqual(await secret.get(), 'sk-1');
 			assert.strictEqual(getCalls(commands).length, 3, 'ttl 0 must re-fetch on every read');
+		} finally {
+			restore();
+		}
+	});
+});
+
+describe('AWS runtime schema validation', () => {
+	test('get keeps the stored value out of a ValidationFailed error', async () => {
+		const echoing: StandardSchemaV1<{ apiKey: number }> = {
+			'~standard': {
+				version: 1,
+				vendor: 'test',
+				validate: (value) => {
+					const received = (value as { apiKey?: unknown }).apiKey;
+					return {
+						issues: [{ message: `Expected number, received '${String(received)}'`, path: ['apiKey'] }],
+					};
+				},
+			},
+		};
+		const { restore } = stubSend(() => ({ SecretString: JSON.stringify({ apiKey: 's3cr3t-value' }) }));
+		try {
+			const secret = new Secret(new Scope('app'), 'validated', {
+				secret: Secret.fromExisting(TEST_ARN),
+				schema: echoing,
+			});
+			const err = await secret.get().then(
+				() => assert.fail('expected get() to throw'),
+				(e: unknown) => e,
+			);
+			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
+			assert.ok(!err.message.includes('s3cr3t-value'), `message leaks the value: ${err.message}`);
+			assert.ok(!JSON.stringify(err).includes('s3cr3t-value'), 'serialized error leaks the value');
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			assert.strictEqual(Reflect.get(err.cause ?? {}, 'path'), 'apiKey');
 		} finally {
 			restore();
 		}

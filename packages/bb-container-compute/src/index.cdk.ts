@@ -817,6 +817,12 @@ export class ContainerCompute extends ComputeBase {
 	 * the second backend's tasks could not assume their role. `assumeRolePolicy`
 	 * exists only on a concrete `iam.Role`; core always creates BlocksRole
 	 * concretely, so narrow and fail loud if that ever changes.
+	 *
+	 * The statement is scoped with `aws:SourceAccount` + `aws:SourceArn` (an
+	 * `arn:<partition>:ecs:<region>:<account>:*` pattern), the ECS-recommended
+	 * task-role trust, so only ECS tasks in this account and region can assume the
+	 * role. ECS does not support a specific cluster in `aws:SourceArn`, hence the
+	 * wildcard. Same shape as the AgentCore Runtime trust in bb-agent.
 	 */
 	private appendEcsTrustOnce(role: cdk.aws_iam.IRole): void {
 		const KEY = Symbol.for('BLOCKS_CONTAINER_ECS_TRUST');
@@ -827,11 +833,16 @@ export class ContainerCompute extends ComputeBase {
 				'ContainerCompute requires the shared Blocks execution role to be a concrete iam.Role to add its ecs-tasks trust',
 			);
 		}
+		const stack = cdk.Stack.of(role);
 		role.assumeRolePolicy?.addStatements(
 			new cdk.aws_iam.PolicyStatement({
 				effect: cdk.aws_iam.Effect.ALLOW,
 				principals: [new ServicePrincipal('ecs-tasks.amazonaws.com')],
 				actions: ['sts:AssumeRole'],
+				conditions: {
+					StringEquals: { 'aws:SourceAccount': stack.account },
+					ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:ecs:${stack.region}:${stack.account}:*` },
+				},
 			}),
 		);
 		roleAny[KEY] = true;
