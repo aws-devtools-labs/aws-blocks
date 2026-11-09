@@ -137,6 +137,15 @@ describe('apiNamespaceFilterFromEnv', () => {
 		assert.strictEqual(serves('constructor'), true);
 	});
 
+	test('a compute id without a placement map fails loudly instead of serving every namespace', () => {
+		for (const raw of [undefined, '']) {
+			assert.throws(
+				() => apiNamespaceFilterFromEnv({ BLOCKS_API_COMPUTE_ID: 'app-reports', BLOCKS_API_NAMESPACE_COMPUTES: raw }),
+				/BLOCKS_API_COMPUTE_ID is set but BLOCKS_API_NAMESPACE_COMPUTES is missing/,
+			);
+		}
+	});
+
 	test('malformed placement config fails loudly', () => {
 		for (const raw of ['not json', '[]', '{"reports":1}', 'null']) {
 			assert.throws(

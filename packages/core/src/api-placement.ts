@@ -43,17 +43,29 @@ export type ServesApiNamespace = (exportName: string) => boolean;
  * `undefined` when no placement is configured (every namespace is served, the
  * behaviour without `strictNamespacePlacement`).
  *
+ * A compute id with no placement map means the compute's definition and the map
+ * disagree. That throws rather than serving every namespace: the Lambda handler
+ * retries initialization on the next request, and a container task that fails to
+ * start is replaced.
+ *
  * @param env - the process environment, after the backend config is loaded into it
- * @throws {Error} When the placement config is present but isn't a JSON object of strings.
+ * @throws {Error} When the placement config is present but isn't a JSON object of
+ * strings, or when this compute has an id but no placement config.
  * @internal
  */
 export function apiNamespaceFilterFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): ServesApiNamespace | undefined {
   const raw = env[API_NAMESPACE_COMPUTES_KEY];
-  if (raw === undefined || raw === '') return undefined;
-  const placement = parsePlacement(raw);
   const self = env[API_COMPUTE_ID_KEY] || undefined;
+  if (raw === undefined || raw === '') {
+    if (self === undefined) return undefined;
+    throw new Error(
+      `[Blocks] ${API_COMPUTE_ID_KEY} is set but ${API_NAMESPACE_COMPUTES_KEY} is missing: this compute can't tell ` +
+        'which API namespaces it serves, so it serves none until both are deployed',
+    );
+  }
+  const placement = parsePlacement(raw);
   return (exportName) => {
     const placedOn = Object.hasOwn(placement, exportName) ? placement[exportName] : undefined;
     return placedOn === self;
