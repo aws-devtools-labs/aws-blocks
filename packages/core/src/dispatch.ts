@@ -355,9 +355,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         const apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
           reportRpcError({ status: 404, namespace: apiNamespace, method });
-          const available = options.listApisWhenNotFound
-            ? `. Available: ${dispatchableExportNames(backend).filter((name) => !servesNamespace || servesNamespace(name)).join(', ')}`
-            : '';
+          const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
           return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found${available}`, rpcId));
         }
 
