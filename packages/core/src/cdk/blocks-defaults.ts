@@ -251,14 +251,21 @@ export interface BlocksDefaults {
 	 *
 	 * `false` in both {@link BlocksPresets}. While it is off and some
 	 * namespace runs on its own compute, synth emits the warning
-	 * `blocks:apigateway:bare-endpoint-serves-placed-namespaces`.
+	 * `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. If raw callers
+	 * still need the bare endpoint, acknowledge it by calling
+	 * `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
+	 * on the stack or backend returned by `create()`.
 	 *
-	 * @example Serve `reports` only on its own compute
+	 * @example Serve `reports` only on its own compute, keeping the preset the stack already picks
 	 * ```ts
+	 * const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
 	 * export const blocksStack = await BlocksStack.create(app, 'my-app', {
 	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
 	 *   backendCDKPath: join(__dirname, 'index.ts'),
-	 *   defaults: { ...BlocksPresets.production, strictNamespacePlacement: true },
+	 *   defaults: {
+	 *     ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
+	 *     strictNamespacePlacement: true,
+	 *   },
 	 * });
 	 * ```
 	 */

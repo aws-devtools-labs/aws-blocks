@@ -411,9 +411,12 @@ export function applyStrictNamespacePlacement(
 		cdk.Annotations.of(defaultCompute).addWarningV2(
 			'blocks:apigateway:bare-endpoint-serves-placed-namespaces',
 			`API namespaces on their own compute (${placed.join(', ')}) can also be called through the bare ` +
-				'/aws-blocks/api endpoint, which runs them on the default compute instead. Set ' +
-				'`defaults: { ...BlocksPresets.production, strictNamespacePlacement: true }` to serve each namespace only ' +
-				'on its own compute; the typed clients already call each namespace at its own path.',
+				'/aws-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
+				"only on its own compute, add `strictNamespacePlacement: true` to the stack's `defaults` (keep the " +
+				'preset you already use); the typed clients already call each namespace at its own path. If raw ' +
+				'callers still need the bare endpoint for these namespaces, acknowledge this warning by calling ' +
+				"`Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')` " +
+				'on the stack or backend returned by `create()`.',
 		);
 		return;
 	}

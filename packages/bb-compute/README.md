@@ -140,11 +140,15 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a native
   client released before per-namespace paths — still runs on the default
   compute, and synth warns (`blocks:apigateway:bare-endpoint-serves-placed-namespaces`).
-  Set `defaults: { ...BlocksPresets.production, strictNamespacePlacement: true }`
-  on the stack to refuse it instead: each compute then serves only the namespaces
-  placed on it, and a call to a namespace placed elsewhere gets the same
-  "method not found" error as an unknown namespace. The typed clients already call
-  each namespace at its own path, so they keep working.
+  Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the
+  preset you already spread there, to refuse it instead: each compute then serves
+  only the namespaces placed on it, and a call to a namespace placed elsewhere
+  gets the same "method not found" error as an unknown namespace. The typed
+  clients already call each namespace at its own path, so they keep working. If
+  raw callers still need the bare endpoint, leave the option off and acknowledge
+  the warning with
+  `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
+  on the stack or backend returned by `create()`.
 - **The gateway's limits still apply.** An API call is capped at ~29 seconds
   whatever the compute's `maxTimeoutSeconds` (except a container namespace that
   CloudFront reaches directly, below); run longer work in an `AsyncJob`.
