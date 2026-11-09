@@ -206,6 +206,45 @@ describe('Secret (mock)', () => {
 		});
 	});
 
+	describe('string schemas', () => {
+		for (const value of ['hello', '123', 'true', 'null', '"quoted"', '{"key":"value"}', '[1]', '']) {
+			test(`round-trips ${JSON.stringify(value)} without interpreting it as JSON`, async () => {
+				const secret = writable(freshScope(), 'validated-key', { schema: z.string() });
+				await secret.put(value);
+				assert.strictEqual(await secret.get(), value);
+				const reopened = new Secret(freshScope(), 'validated-key', { schema: z.string() });
+				assert.strictEqual(await reopened.get(), value);
+			});
+		}
+
+		test('reads string values through current, previous, and explicit version selectors', async () => {
+			const secret = writable(freshScope(), 'validated-key', { schema: z.string().min(1) });
+			await secret.put('first');
+			await secret.put('"second"');
+			assert.strictEqual(await secret.get({ version: 'current' }), '"second"');
+			assert.strictEqual(await secret.get({ version: 'previous' }), 'first');
+			const versions = await secret.listVersions();
+			assert.strictEqual(await secret.get({ version: versions[0] }), '"second"');
+			assert.strictEqual(await secret.get({ version: versions[1] }), 'first');
+		});
+
+		test('preserves asynchronous schema transformations on read', async () => {
+			const secret = writable(freshScope(), 'validated-key', {
+				schema: z.string().transform(async (value) => value.toUpperCase()),
+			});
+			await secret.put('hello');
+			assert.strictEqual(await secret.get(), 'HELLO');
+		});
+
+		test('still decodes a legacy JSON string when the schema expects an object', async () => {
+			await writable(freshScope(), 'legacy-json').put('{"host":"db.internal","port":5432}');
+			const secret = new Secret(freshScope(), 'legacy-json', {
+				schema: z.object({ host: z.string(), port: z.number() }),
+			});
+			assert.deepStrictEqual(await secret.get(), { host: 'db.internal', port: 5432 });
+		});
+	});
+
 	describe('fromExisting', () => {
 		test('returns a branded reference carrying the ARN', () => {
 			const ref = Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:my-secret-AbCdEf');
