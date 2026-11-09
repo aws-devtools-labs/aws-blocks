@@ -67,6 +67,37 @@ function setup(defaults: BlocksDefaults) {
 	return { stack, owner, defaultCompute, reportsCompute, routes };
 }
 
+/**
+ * A strict-placement backend whose namespaces (export name → compute id) are
+ * each placed on the named compute, plus `api` on the default compute.
+ */
+function setupPlacement(placement: Record<string, string>) {
+	const app = new cdk.App();
+	const stack = new cdk.Stack(app, 'Placement');
+	const owner = Object.assign(stack, {
+		defaults: { ...BlocksPresets.production, strictNamespacePlacement: true },
+	}) as unknown as SharedGatewayOwner;
+	const defaultCompute = new RecordingCompute(stack, 'DefaultCompute');
+	const computes = new Map<string, RecordingCompute>([['DefaultCompute', defaultCompute]]);
+	const apiScope = new Scope('api-scope', { parent: stack as never });
+	apiScope._compute = defaultCompute;
+	const backendModule: Record<string, unknown> = {
+		api: new ApiNamespace(apiScope, 'api', () => ({ async ping() {} })),
+	};
+	for (const [exportName, computeId] of Object.entries(placement)) {
+		let compute = computes.get(computeId);
+		if (!compute) {
+			compute = new RecordingCompute(stack, computeId);
+			computes.set(computeId, compute);
+		}
+		const nsScope = new Scope(`${exportName}-scope`, { parent: stack as never });
+		nsScope._compute = compute;
+		backendModule[exportName] = new ApiNamespace(nsScope, exportName, () => ({ async ping() {} }));
+	}
+	const routes = resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(stack));
+	return { stack, owner, defaultCompute, computes, routes };
+}
+
 describe('applyStrictNamespacePlacement', () => {
 	test('on: the default compute refuses a namespace placed on another compute; that compute serves only its own', () => {
 		const { stack, owner, defaultCompute, reportsCompute, routes } = setup({
@@ -75,26 +106,65 @@ describe('applyStrictNamespacePlacement', () => {
 		});
 		applyStrictNamespacePlacement(owner, defaultCompute, routes);
 
-		const placement = getRegisteredConfigValue(stack, 'BLOCKS_API_NAMESPACE_COMPUTES');
+		// The map is on every API compute's own definition, the default one included,
+		// so a change to it rolls them all. It is not in the backend config.
+		assert.strictEqual(getRegisteredConfigValue(stack, 'BLOCKS_API_NAMESPACE_COMPUTES'), undefined);
+		const placement = defaultCompute.env.BLOCKS_API_NAMESPACE_COMPUTES;
 		assert.strictEqual(typeof placement, 'string');
-		assert.deepStrictEqual(JSON.parse(placement as string), { reports: reportsCompute.fullId });
-		assert.deepStrictEqual(reportsCompute.env, { BLOCKS_API_COMPUTE_ID: reportsCompute.fullId });
-		assert.deepStrictEqual(defaultCompute.env, {}, 'the default compute carries no id');
+		assert.deepStrictEqual(JSON.parse(placement), { reports: reportsCompute.fullId });
+		assert.deepStrictEqual(defaultCompute.env, { BLOCKS_API_NAMESPACE_COMPUTES: placement }, 'the default compute carries no id');
+		assert.deepStrictEqual(reportsCompute.env, {
+			BLOCKS_API_NAMESPACE_COMPUTES: placement,
+			BLOCKS_API_COMPUTE_ID: reportsCompute.fullId,
+		});
 
-		// What each compute's dispatcher derives from that config and env.
-		const onDefault = apiNamespaceFilterFromEnv({ BLOCKS_API_NAMESPACE_COMPUTES: placement as string });
+		// What each compute's dispatcher derives from its env.
+		const onDefault = apiNamespaceFilterFromEnv(defaultCompute.env);
 		assert.ok(onDefault);
 		assert.strictEqual(onDefault('reports'), false, 'the bare endpoint on the default compute refuses reports');
 		assert.strictEqual(onDefault('api'), true);
-		const onReports = apiNamespaceFilterFromEnv({
-			BLOCKS_API_NAMESPACE_COMPUTES: placement as string,
-			...reportsCompute.env,
-		});
+		const onReports = apiNamespaceFilterFromEnv(reportsCompute.env);
 		assert.ok(onReports);
 		assert.strictEqual(onReports('reports'), true);
 		assert.strictEqual(onReports('api'), false);
 
 		Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp(WARNING_ID));
+	});
+
+	test('a placement change changes the env of every API compute, so each one rolls', () => {
+		// `reports` and `audit` each on their own compute, then `audit` moved onto
+		// the reports compute.
+		const before = setupPlacement({ reports: 'ReportsCompute', audit: 'AuditCompute' });
+		const after = setupPlacement({ reports: 'ReportsCompute', audit: 'ReportsCompute' });
+		for (const { owner, defaultCompute, routes } of [before, after]) {
+			applyStrictNamespacePlacement(owner, defaultCompute, routes);
+		}
+		const env = (s: ReturnType<typeof setupPlacement>, id: string) => s.computes.get(id)?.env;
+		assert.notDeepStrictEqual(env(before, 'DefaultCompute'), env(after, 'DefaultCompute'));
+		assert.notDeepStrictEqual(env(before, 'ReportsCompute'), env(after, 'ReportsCompute'));
+		assert.ok(env(before, 'AuditCompute')?.BLOCKS_API_NAMESPACE_COMPUTES, 'audit compute had the map');
+		const map = JSON.parse(env(after, 'DefaultCompute')?.BLOCKS_API_NAMESPACE_COMPUTES ?? '');
+		assert.deepStrictEqual(Object.keys(map).sort(), ['audit', 'reports']);
+		assert.strictEqual(map.audit, map.reports);
+	});
+
+	test('turning the option on changes the default compute\'s env', () => {
+		const off = setup(BlocksPresets.production);
+		applyStrictNamespacePlacement(off.owner, off.defaultCompute, off.routes);
+		const on = setup({ ...BlocksPresets.production, strictNamespacePlacement: true });
+		applyStrictNamespacePlacement(on.owner, on.defaultCompute, on.routes);
+		assert.deepStrictEqual(off.defaultCompute.env, {});
+		assert.ok(on.defaultCompute.env.BLOCKS_API_NAMESPACE_COMPUTES);
+	});
+
+	test('a placement map over the size guard fails synth with a clear error', () => {
+		const placement: Record<string, string> = {};
+		for (let i = 0; i < 100; i++) placement[`namespaceNumber${i}`] = `Compute${i}`;
+		const { owner, defaultCompute, routes } = setupPlacement(placement);
+		assert.throws(
+			() => applyStrictNamespacePlacement(owner, defaultCompute, routes),
+			/BLOCKS_API_NAMESPACE_COMPUTES.*bytes.*2048/,
+		);
 	});
 
 	test('off (the preset default): nothing is registered and synth warns', () => {
@@ -103,6 +173,7 @@ describe('applyStrictNamespacePlacement', () => {
 
 		assert.strictEqual(getRegisteredConfigValue(stack, 'BLOCKS_API_NAMESPACE_COMPUTES'), undefined);
 		assert.deepStrictEqual(reportsCompute.env, {});
+		assert.deepStrictEqual(defaultCompute.env, {});
 		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp(`reports.*${WARNING_ID}`));
 	});
 

@@ -7,7 +7,7 @@ import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
-import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY } from '../api-placement.js';
+import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY, MAX_API_NAMESPACE_COMPUTES_BYTES } from '../api-placement.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
@@ -377,15 +377,27 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
  * `defaults.strictNamespacePlacement` is on, or warn that the bare endpoint serves
  * every namespace when it is off.
  *
- * On: registers the placement map (namespace export name → compute `fullId`, for
- * every namespace on a non-default compute) as `BLOCKS_API_NAMESPACE_COMPUTES`,
- * and stamps each of those computes with its own id (`BLOCKS_API_COMPUTE_ID`).
- * The dispatcher (see `apiNamespaceFilterFromEnv`) then refuses, on the default
+ * On: sets the placement map (namespace export name → compute `fullId`, for
+ * every namespace on a non-default compute) as the `BLOCKS_API_NAMESPACE_COMPUTES`
+ * environment variable of every API compute, the default one included, and
+ * stamps each non-default one with its own id (`BLOCKS_API_COMPUTE_ID`). The
+ * dispatcher (see `apiNamespaceFilterFromEnv`) then refuses, on the default
  * compute, a namespace placed elsewhere — including on the bare
  * `/aws-blocks/api` endpoint — and, on a non-default compute, every namespace
- * that isn't its own. Nothing is registered when no namespace has its own
- * compute: the default compute serves them all either way.
+ * that isn't its own. Nothing is set when no namespace has its own compute: the
+ * default compute serves them all either way.
  *
+ * The map goes in each compute's environment, not through `registerConfig()`
+ * (AGENTS.md rule 3), on purpose. A compute reads `blocks-config.json` once, at
+ * Lambda init or container boot, and a config change doesn't change the
+ * compute's own definition, so warm Lambda environments and running tasks would
+ * keep the old map until they happen to recycle. An environment change is part
+ * of the function and task definition, so turning the option on or moving a
+ * namespace rolls every API compute. The map is small (a few bytes per placed
+ * namespace), and synth refuses one over {@link MAX_API_NAMESPACE_COMPUTES_BYTES},
+ * far under Lambda's 4 KB environment limit.
+ *
+ * @throws {Error} When the encoded map is larger than {@link MAX_API_NAMESPACE_COMPUTES_BYTES}.
  * @internal
  */
 export function applyStrictNamespacePlacement(
@@ -405,12 +417,27 @@ export function applyStrictNamespacePlacement(
 		);
 		return;
 	}
-	const placement: Record<string, string> = {};
+	const entries: Array<[string, string]> = [];
 	for (const [compute, exportNames] of namespaceRoutes) {
-		for (const name of exportNames) placement[name] = compute.fullId;
+		for (const name of exportNames) entries.push([name, compute.fullId]);
+	}
+	// Sorted, so reordering the backend's exports doesn't change (and roll) every compute.
+	entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+	const encoded = JSON.stringify(Object.fromEntries(entries));
+	const bytes = Buffer.byteLength(encoded, 'utf8');
+	if (bytes > MAX_API_NAMESPACE_COMPUTES_BYTES) {
+		throw new Error(
+			`[Blocks] strictNamespacePlacement: the ${API_NAMESPACE_COMPUTES_KEY} placement map for ${entries.length} ` +
+				`API namespaces is ${bytes} bytes, over the ${MAX_API_NAMESPACE_COMPUTES_BYTES}-byte limit for a value ` +
+				"in each compute's environment (Lambda allows 4 KB for all of them). Place fewer namespaces on their " +
+				'own compute, or give the namespaces and computes shorter ids.',
+		);
+	}
+	defaultCompute.setEnv(API_NAMESPACE_COMPUTES_KEY, encoded);
+	for (const compute of namespaceRoutes.keys()) {
+		compute.setEnv(API_NAMESPACE_COMPUTES_KEY, encoded);
 		compute.setEnv(API_COMPUTE_ID_KEY, compute.fullId);
 	}
-	registerConfig(owner, API_NAMESPACE_COMPUTES_KEY, JSON.stringify(placement));
 }
 
 /**

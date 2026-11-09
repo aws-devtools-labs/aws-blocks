@@ -3,25 +3,36 @@
 
 // Which compute serves which API namespace, as seen by a running compute.
 //
-// With `defaults.strictNamespacePlacement`, the CDK layer writes the placement of
-// every API namespace that runs on a non-default compute into the backend config
-// (`BLOCKS_API_NAMESPACE_COMPUTES`) and stamps each of those computes with its
-// own id (`BLOCKS_API_COMPUTE_ID`). Each compute's dispatcher then serves only
-// the namespaces placed on it: the default compute (no id) refuses a namespace
-// placed elsewhere, even on the bare `/aws-blocks/api` endpoint, and a
+// With `defaults.strictNamespacePlacement`, the CDK layer sets the placement of
+// every API namespace that runs on a non-default compute in the environment of
+// every API compute, the default one included (`BLOCKS_API_NAMESPACE_COMPUTES`),
+// and stamps each non-default one with its own id (`BLOCKS_API_COMPUTE_ID`). It
+// is environment rather than backend config so that a change rolls every
+// compute (see `applyStrictNamespacePlacement`). Each compute's dispatcher then
+// serves only the namespaces placed on it: the default compute (no id) refuses a
+// namespace placed elsewhere, even on the bare `/aws-blocks/api` endpoint, and a
 // non-default compute refuses every namespace that isn't its own.
 //
 // Kept free of Node and CDK imports: the CDK layer imports the key names, the
 // Lambda handler and the container HTTP server import the parser.
 
 /**
- * Config key holding the placement map: a JSON object from API namespace export
- * name to the id of the compute it runs on, for each namespace placed on a
- * compute other than the default one. Absent unless `strictNamespacePlacement` is on.
+ * Environment variable holding the placement map: a JSON object from API
+ * namespace export name to the id of the compute it runs on, for each namespace
+ * placed on a compute other than the default one. Set on every API compute when
+ * `strictNamespacePlacement` is on, absent otherwise.
  *
  * @internal
  */
 export const API_NAMESPACE_COMPUTES_KEY = 'BLOCKS_API_NAMESPACE_COMPUTES';
+
+/**
+ * The largest encoded placement map synth accepts, in bytes: well under Lambda's
+ * 4 KB limit for a function's whole environment.
+ *
+ * @internal
+ */
+export const MAX_API_NAMESPACE_COMPUTES_BYTES = 2048;
 
 /**
  * Environment variable naming the compute a process runs on, set on each
@@ -48,9 +59,9 @@ export type ServesApiNamespace = (exportName: string) => boolean;
  * retries initialization on the next request, and a container task that fails to
  * start is replaced.
  *
- * @param env - the process environment, after the backend config is loaded into it
- * @throws {Error} When the placement config is present but isn't a JSON object of
- * strings, or when this compute has an id but no placement config.
+ * @param env - the process environment
+ * @throws {Error} When the placement map is present but isn't a JSON object of
+ * strings, or when this compute has an id but no placement map.
  * @internal
  */
 export function apiNamespaceFilterFromEnv(

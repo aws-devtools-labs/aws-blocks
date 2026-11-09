@@ -460,7 +460,8 @@ function createHandler(backend: any) {
   // Each failed RPC call writes the `RpcErrors` metric: the response is an HTTP
   // 200 JSON-RPC error envelope, so Lambda's own `Errors` metric never counts it.
   // With `defaults.strictNamespacePlacement`, serve only the API namespaces placed on
-  // this compute (read from the config loaded into process.env before this runs).
+  // this compute (the placement map is in the function's environment). A missing or
+  // malformed map throws here, so initialization fails and is retried.
   const dispatch = createDispatcher(backend, {
     rpcErrorLabel: 'Lambda Error:',
     onRpcError: emitRpcErrorMetric,

@@ -120,7 +120,7 @@ export interface DispatcherOptions {
    * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
    * namespace placed on another compute. Default: every namespace is served.
    * The Lambda handler and the container HTTP server build it from the placement
-   * config (see `apiNamespaceFilterFromEnv`).
+   * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
    */
   servesNamespace?: ServesApiNamespace;
 }
