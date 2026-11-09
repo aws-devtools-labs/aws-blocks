@@ -919,8 +919,9 @@ export function providerNotConfigured(msg: string, cause?: unknown): Error {
  * branded error's own message (which crosses the RPC wire) stays BB-authored —
  * the raw IdP/SDK/resolver text (which can carry SSM ARNs, account ids, provider
  * detail) never reaches the wire. No-op when there is no underlying error.
+ * Shared with the Cognito federation engine.
  */
-function withCause(err: Error, cause: unknown): Error {
+export function withCause(err: Error, cause: unknown): Error {
 	if (cause !== undefined) {
 		Object.defineProperty(err, 'cause', { value: cause, enumerable: false, writable: true, configurable: true });
 	}

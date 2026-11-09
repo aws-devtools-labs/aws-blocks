@@ -27,6 +27,7 @@ export type {
 	RetrieveResult,
 	MetadataFilter,
 	WaitUntilSyncedOptions,
+	IngestionFailureCause,
 } from './types.js';
 export { KnowledgeBaseErrors } from './errors.js';
 
