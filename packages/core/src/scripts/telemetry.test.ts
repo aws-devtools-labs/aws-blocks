@@ -211,6 +211,20 @@ describe('telemetry CLI', () => {
       assert.ok(!existsSync(join(sub, '.blocks')), 'must not write a config into the subdirectory');
     });
 
+    it('--status from a subdirectory reports the project-root config that --disable wrote', () => {
+      const { root, sub } = createAppProject(tmpProject);
+      const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
+
+      assert.strictEqual(runCli(['--disable'], { cwd: sub, env }).exitCode, 0);
+      const result = runCli(['--status'], { cwd: sub, env });
+      assert.strictEqual(result.exitCode, 0, result.stdout + result.stderr);
+      assert.ok(result.stdout.includes('❌ Disabled'), result.stdout);
+      assert.ok(
+        result.stdout.includes(`Project config (${join(root, '.blocks', 'config.json')}): telemetry.enabled = false`),
+        result.stdout,
+      );
+    });
+
     it('falls back to the working directory when no project is found above it', () => {
       const cwd = join(realpathSync(tmpProject), 'loose', 'dir');
       mkdirSync(cwd, { recursive: true });

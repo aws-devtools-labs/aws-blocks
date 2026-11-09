@@ -166,14 +166,15 @@ function handleDisable(global: boolean): void {
 }
 
 function handleStatus(): void {
-  const status = getTelemetryStatus();
+  const projectRoot = resolveProjectRoot();
+  const status = getTelemetryStatus(projectRoot);
 
   console.log('');
   console.log(`  Telemetry: ${status.enabled ? '✅ Enabled' : '❌ Disabled'}`);
   console.log('');
 
   const globalConfigPath = getGlobalConfigPath();
-  const projectConfigPath = getProjectConfigPath();
+  const projectConfigPath = getProjectConfigPath(projectRoot);
 
   console.log('  Mechanisms:');
 
@@ -208,7 +209,7 @@ function handleStatus(): void {
  *   The project-level file is `.blocks/config.json` at the project root: the nearest directory at or
  *   above the working directory holding a `package.json` and an `aws-blocks/` directory, else the
  *   working directory. `--disable` reads the status back and exits non-zero if telemetry is still enabled.
- * - `--status` — display current telemetry status and mechanism values
+ * - `--status` — display current telemetry status and mechanism values (reading the same project root)
  * - bare invocation (no flags) — prints help/usage text
  *
  * @param options.argv - Custom argv array (defaults to process.argv)
