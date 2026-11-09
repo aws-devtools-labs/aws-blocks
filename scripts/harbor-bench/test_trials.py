@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 
 from accounting import summarize
@@ -517,6 +518,57 @@ class PublicResultTests(unittest.TestCase):
                 self.assertEqual(failure['kind'], 'timeout')
                 self.assertNotIn('private-title', json.dumps(value))
                 self.assertEqual(value['phases'][0]['usage']['cache_neutral_cost_usd'], None)
+
+
+class CredentialDeadlineTests(unittest.TestCase):
+    def run_harness(self, harbor_body, *args):
+        """Run run.py against a stand-in `harbor` executable; returns (exit code, result, seconds)."""
+        with tempfile.TemporaryDirectory() as temp:
+            temp = Path(temp)
+            bin_dir = temp / 'bin'
+            bin_dir.mkdir()
+            harbor = bin_dir / 'harbor'
+            harbor.write_text(f'#!{sys.executable}\n{harbor_body}\n')
+            harbor.chmod(0o755)
+            work = temp / 'work'
+            work.mkdir()
+            (work / 'identity.json').write_text(json.dumps({
+                'arm': 'candidate', 'commit': 'c' * 40, 'skill_revision': 's', 'packages': []}))
+            env = {'PATH': f'{bin_dir}{os.pathsep}{os.environ["PATH"]}', **SECRETS}
+            started = time.monotonic()
+            process = subprocess.run([sys.executable, str(ROOT / 'run.py'), str(work), *args], env=env,
+                                     capture_output=True, text=True, timeout=60)
+            elapsed = time.monotonic() - started
+            return process.returncode, json.loads((work / 'public' / 'result.json').read_text()), elapsed
+
+    def test_stops_harbor_at_the_credential_deadline_as_an_infrastructure_error(self):
+        deadline = str(int(time.time()) + 2)
+        code, result, elapsed = self.run_harness('import time; time.sleep(30)', '--credentials-expire-at', deadline)
+        self.assertEqual(code, 1)
+        self.assertEqual((result['status'], result['error']), ('infrastructure_error', 'outlived_credentials'))
+        self.assertLess(elapsed, 20)
+
+    def test_does_not_start_harbor_after_the_deadline(self):
+        deadline = str(int(time.time()) - 1)
+        code, result, _ = self.run_harness('raise SystemExit(0)', '--credentials-expire-at', deadline)
+        self.assertEqual(code, 1)
+        self.assertEqual((result['status'], result['error']), ('infrastructure_error', 'outlived_credentials'))
+        self.assertIsNone(result['harbor_exit_code'])
+
+    def test_finished_run_before_the_deadline_keeps_its_own_outcome(self):
+        deadline = str(int(time.time()) + 600)
+        _, result, _ = self.run_harness('raise SystemExit(0)', '--credentials-expire-at', deadline)
+        self.assertEqual((result['harbor_exit_code'], result['error']), (0, None))
+        _, result, _ = self.run_harness('raise SystemExit(0)')
+        self.assertEqual((result['harbor_exit_code'], result['error']), (0, None))
+
+
+class AgentBoundsTests(unittest.TestCase):
+    def test_agent_has_turn_and_spend_caps(self):
+        from prepare import AGENT_KWARGS
+        self.assertEqual(AGENT_KWARGS['max_turns'], 200)
+        # A runaway guard far above observed sessions (about 1.3 USD for all three phases), not a target.
+        self.assertEqual(AGENT_KWARGS['max_budget_usd'], '10')
 
 
 if __name__ == '__main__':
