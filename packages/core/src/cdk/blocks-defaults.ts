@@ -198,7 +198,22 @@ export interface BlocksDefaults {
 	 * The context applies a boundary to every role in every stack of the app.
 	 * When both are set, this option wins for the roles AWS Blocks creates (the
 	 * context still applies everywhere else), and synth emits a warning. Either
-	 * one alone bounds every Blocks role.
+	 * one alone bounds every Blocks role. Outside a sandbox deployment (CDK
+	 * context `sandboxMode` not set, see `isSandboxContext()`), setting both to
+	 * **different** policies fails synth instead, so a stricter account-wide
+	 * boundary can't be silently replaced for Blocks roles. Set them to the same
+	 * policy, in the same form (both a name, or both the same ARN), or set only
+	 * one of them.
+	 *
+	 * **Permissive AWS managed policies.** A boundary only limits a role if the
+	 * policy is narrower than what the role is granted. Outside a sandbox
+	 * deployment, synth fails when the boundary is one of the AWS managed
+	 * policies `AdministratorAccess`, `PowerUserAccess` or `IAMFullAccess`
+	 * (`arn:<partition>:iam::aws:policy/<name>`, as an ARN or through
+	 * `iam.ManagedPolicy.fromAwsManagedPolicyName()`): the first two allow
+	 * nearly every action, and `IAMFullAccess` lets a role create new roles
+	 * without the boundary. In a sandbox it is a warning. Set
+	 * {@link permissionsBoundaryAllowPermissive} to accept one deliberately.
 	 *
 	 * **One policy for many apps.** A platform can share a single boundary policy
 	 * across every app in an account by writing it with policy variables, e.g.
@@ -222,6 +237,27 @@ export interface BlocksDefaults {
 	 * ```
 	 */
 	permissionsBoundary?: string | IManagedPolicy;
+
+	/**
+	 * Accept a {@link permissionsBoundary} that is one of the permissive AWS
+	 * managed policies (`AdministratorAccess`, `PowerUserAccess`,
+	 * `IAMFullAccess`). Without it, such a boundary fails synth outside a
+	 * sandbox deployment and warns in a sandbox. Use it only when the boundary
+	 * is deliberately a placeholder, e.g. while a platform's real boundary
+	 * policy is being written.
+	 *
+	 * @default false
+	 *
+	 * @example
+	 * ```ts
+	 * defaults: {
+	 *   ...BlocksPresets.production,
+	 *   permissionsBoundary: 'arn:aws:iam::aws:policy/PowerUserAccess',
+	 *   permissionsBoundaryAllowPermissive: true,
+	 * }
+	 * ```
+	 */
+	permissionsBoundaryAllowPermissive?: boolean;
 
 	/**
 	 * Serve each API namespace only on the compute it is placed on.

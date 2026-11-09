@@ -7,6 +7,7 @@ import type { Construct } from 'constructs';
 import type { BlocksDefaults } from './blocks-defaults.js';
 import { forEachBlocksRole } from './blocks-roles.js';
 import { findBackendRoot } from './root-registry.js';
+import { isSandboxContext } from './stack-metadata.js';
 
 /** CDK's own stack-wide boundary context key (see the CDK guide "Permissions boundaries"). */
 const CDK_BOUNDARY_CONTEXT_KEY = '@aws-cdk/core:permissionsBoundary';
@@ -22,6 +23,14 @@ const POLICY_NAME = /^[\w+=,.@-]{1,128}$/;
 
 /** `arn:<partition>:iam::<account|aws>:policy/<optional path/>name`. */
 const POLICY_ARN = /^arn:aws[a-z-]*:iam::(\d{12}|aws):policy\/([\w+=,.@-]+\/)*[\w+=,.@-]{1,128}$/;
+
+/**
+ * AWS managed policies that don't meaningfully bound a role: `AdministratorAccess`
+ * (`*` on `*`), `PowerUserAccess` (everything except most of IAM/Organizations/
+ * Account) and `IAMFullAccess` (`iam:*`, so a role could create a new role
+ * without the boundary). Kept small and explicit on purpose.
+ */
+const PERMISSIVE_AWS_MANAGED = /^arn:aws[a-z-]*:iam::aws:policy\/(AdministratorAccess|PowerUserAccess|IAMFullAccess)$/;
 
 function invalid(detail: string): Error {
 	return new Error(
@@ -90,6 +99,36 @@ export function resolvePermissionsBoundary(scope: Construct): iam.IManagedPolicy
 }
 
 /**
+ * `value` resolved to a concrete string when it is one: a literal, or a
+ * `Fn::Join` of literals and `AWS::Partition` (which is how
+ * `ManagedPolicy.fromAwsManagedPolicyName()` renders). The partition is read as
+ * `aws` — enough to recognize an AWS managed policy name in any partition.
+ * `undefined` when any other intrinsic is involved.
+ */
+function concreteArn(resolved: unknown): string | undefined {
+	if (typeof resolved === 'string') return resolved;
+	const join = (resolved as { 'Fn::Join'?: unknown } | null)?.['Fn::Join'];
+	if (!Array.isArray(join) || join[0] !== '' || !Array.isArray(join[1])) return undefined;
+	let out = '';
+	for (const part of join[1] as unknown[]) {
+		if (typeof part === 'string') out += part;
+		else if ((part as { Ref?: unknown } | null)?.Ref === 'AWS::Partition') out += 'aws';
+		else return undefined;
+	}
+	return out;
+}
+
+/** The boundary CDK's `@aws-cdk/core:permissionsBoundary` context puts on the stack's roles, resolved. */
+function contextBoundary(stack: cdk.Stack, context: unknown): unknown {
+	const { arn, name } = (context ?? {}) as { arn?: unknown; name?: unknown };
+	if (typeof arn === 'string') return stack.resolve(arn);
+	if (typeof name === 'string') {
+		return stack.resolve(stack.formatArn({ service: 'iam', resource: 'policy', region: '', resourceName: name }));
+	}
+	return undefined;
+}
+
+/**
  * Apply the root's permissions boundary (see {@link resolvePermissionsBoundary})
  * to every IAM role AWS Blocks creates for it, through the shared role visitor
  * ({@link forEachBlocksRole}). No-op when unset.
@@ -97,21 +136,62 @@ export function resolvePermissionsBoundary(scope: Construct): iam.IManagedPolicy
  * Warns when CDK's `@aws-cdk/core:permissionsBoundary` context is also set: for
  * Blocks roles this option wins (its override runs after the context's).
  *
+ * Outside a sandbox deployment ({@link isSandboxContext}), two checks fail synth
+ * instead of warning: the context naming a **different** boundary (so a stricter
+ * account-wide boundary is never replaced for Blocks roles), and a boundary that
+ * is a permissive AWS managed policy (`AdministratorAccess`, `PowerUserAccess`,
+ * `IAMFullAccess`) unless `defaults.permissionsBoundaryAllowPermissive` is set.
+ * In a sandbox both stay warnings. A context equal to the option is not a
+ * conflict and isn't reported.
+ *
  * @internal
  */
 export function applyBlocksPermissionsBoundary(root: Construct): iam.IManagedPolicy | undefined {
 	const boundary = resolvePermissionsBoundary(root);
 	if (!boundary) return undefined;
-	forEachBlocksRole(root, (role) => role.addPropertyOverride('PermissionsBoundary', boundary.managedPolicyArn));
+	const stack = cdk.Stack.of(root);
+	const sandbox = isSandboxContext(root);
+	const defaults = (root as { defaults?: BlocksDefaults }).defaults;
+	const resolvedArn = stack.resolve(boundary.managedPolicyArn);
 
-	if (root.node.tryGetContext(CDK_BOUNDARY_CONTEXT_KEY) !== undefined) {
-		cdk.Annotations.of(root).addWarningV2(
-			'blocks:iam:permissionsBoundaryOverridesContext',
-			`defaults.permissionsBoundary is set while the CDK "${CDK_BOUNDARY_CONTEXT_KEY}" context is also set. ` +
-				'For roles AWS Blocks creates, defaults.permissionsBoundary wins; the context still applies to the ' +
-				'rest of the stack. Set only one of them unless that split is intended.',
-		);
+	const arn = concreteArn(resolvedArn);
+	if (
+		arn !== undefined &&
+		PERMISSIVE_AWS_MANAGED.test(arn) &&
+		defaults?.permissionsBoundaryAllowPermissive !== true
+	) {
+		const detail =
+			`defaults.permissionsBoundary is the AWS managed policy "${arn.replace(/^arn:aws[a-z-]*:/, 'arn:<partition>:')}", ` +
+			'which is too permissive to bound anything: it allows nearly every action, or lets a role create new ' +
+			'roles without the boundary. Use a boundary policy written for this app, or set ' +
+			'defaults.permissionsBoundaryAllowPermissive: true to accept it deliberately.';
+		if (!sandbox) throw invalid(detail);
+		cdk.Annotations.of(root).addWarningV2('blocks:iam:permissionsBoundaryPermissive', detail);
 	}
+
+	const context = root.node.tryGetContext(CDK_BOUNDARY_CONTEXT_KEY);
+	if (context !== undefined) {
+		const equal = JSON.stringify(contextBoundary(stack, context)) === JSON.stringify(resolvedArn);
+		if (!equal && !sandbox) {
+			throw new Error(
+				`defaults.permissionsBoundary differs from the CDK "${CDK_BOUNDARY_CONTEXT_KEY}" context ` +
+					`(${JSON.stringify(context)}). Outside a sandbox deployment this fails synth, so the context's ` +
+					'boundary is never replaced for the roles AWS Blocks creates. Set both to the same policy in the ' +
+					'same form (both a name, or both the same ARN), or set only one of them.',
+			);
+		}
+		if (!equal) {
+			cdk.Annotations.of(root).addWarningV2(
+				'blocks:iam:permissionsBoundaryOverridesContext',
+				`defaults.permissionsBoundary is set while the CDK "${CDK_BOUNDARY_CONTEXT_KEY}" context is also set. ` +
+					'For roles AWS Blocks creates, defaults.permissionsBoundary wins; the context still applies to the ' +
+					'rest of the stack. Set only one of them unless that split is intended. Outside a sandbox ' +
+					'deployment, this conflict fails synth.',
+			);
+		}
+	}
+
+	forEachBlocksRole(root, (role) => role.addPropertyOverride('PermissionsBoundary', boundary.managedPolicyArn));
 	return boundary;
 }
 

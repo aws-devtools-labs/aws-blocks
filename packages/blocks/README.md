@@ -380,7 +380,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 - **Report.** Every synth, with or without a boundary, writes the shared role's composed policy to `cdk.out/<stack>.blocks-iam.json` (`<stack>.<backendId>.blocks-iam.json` for an embedded `BlocksBackend`); it isn't deployed, so CI can diff it to catch permission growth.
 - **Scope.** On a `BlocksStack` the boundary covers every role in the stack; on an embedded `BlocksBackend` it covers the backend's subtree plus the stack-level CDK (Cloud Development Kit) singleton roles its blocks add.
-- **CDK context.** If CDK's `@aws-cdk/core:permissionsBoundary` context is also set, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns.
+- **CDK context.** If CDK's `@aws-cdk/core:permissionsBoundary` context is also set to a different policy, `defaults.permissionsBoundary` wins for the roles Blocks creates and synth warns in a sandbox deployment; any other deployment fails synth. Set both to the same policy, or only one.
+- **Permissive policies.** Outside a sandbox, a boundary that is the AWS managed `AdministratorAccess`, `PowerUserAccess` or `IAMFullAccess` policy fails synth (a warning in a sandbox) unless `permissionsBoundaryAllowPermissive: true` is also set.
 
 Details, including sharing one AWS account across many apps, are in the bundled `@aws-blocks/core` README (`docs/core/README.md`), sections "IAM: permissions boundary and the composed-policy report" and "Running many apps in one AWS account (a shared platform)".
 
