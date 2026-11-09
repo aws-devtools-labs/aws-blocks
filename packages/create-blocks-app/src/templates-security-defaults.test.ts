@@ -86,8 +86,8 @@ describe('create-blocks-app template .gitignore covers secrets', () => {
 describe('create-blocks-app adds secret patterns to an existing project .gitignore', () => {
   const CLI_PATH = join(__dirname, 'index.js');
 
-  /** Scaffold into a fresh existing project and return its directory. */
-  const addBlocks = (files: Record<string, string>): string => {
+  /** Scaffold into a fresh existing project; return its directory and the CLI's output. */
+  const runAddBlocks = (files: Record<string, string>): { dir: string; stdout: string } => {
     const dir = mkdtempSync(join(tmpdir(), 'cba-existing-'));
     for (const [path, content] of Object.entries(files)) {
       mkdirSync(dirname(join(dir, path)), { recursive: true });
@@ -102,8 +102,11 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
     assert.strictEqual(result.status, 0, `create-blocks-app failed: ${result.stderr}`);
     const init = spawnSync('git', ['init', '-q', dir]);
     assert.strictEqual(init.status, 0, `git init failed: ${init.stderr}`);
-    return dir;
+    return { dir, stdout: result.stdout };
   };
+
+  /** Scaffold into a fresh existing project and return its directory. */
+  const addBlocks = (files: Record<string, string>): string => runAddBlocks(files).dir;
 
   const assertIgnoresSecrets = (dir: string) => {
     const checkIgnore = (...paths: string[]) =>
@@ -168,6 +171,41 @@ describe('create-blocks-app adds secret patterns to an existing project .gitigno
       const lines = readFileSync(join(dir, '.gitignore'), 'utf-8').split('\n');
       assert.deepStrictEqual(lines.slice(0, 2), ['node_modules', '.env']);
       assert.strictEqual(lines.filter((l) => l === '.env').length, 1, '.env is listed twice');
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  // The new lines change the project's ignore policy (`.env.*` also covers
+  // `.env.development` / `.env.production`), so the plan and the result say so.
+  it('tells the user which .gitignore entries it adds', () => {
+    const { dir, stdout } = runAddBlocks({
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'node_modules\n.env\n',
+    });
+    try {
+      assert.match(stdout, /MODIFY {2}\.gitignore .*secret and key-material patterns/);
+      const modified = stdout.split('\n').find((line) => line.includes('Modified .gitignore'));
+      assert.ok(modified, `no "Modified .gitignore" line in:\n${stdout}`);
+      for (const entry of ['.blocks-sandbox', '.env.*', '*.pem', '.aws/', '!.env.example']) {
+        assert.ok(modified.includes(entry), `"${modified}" does not list ${entry}`);
+      }
+      assert.ok(!/[(,] ?\.env[,)]/.test(modified), `"${modified}" lists .env, which the project already ignores`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('appends with the line ending of a CRLF .gitignore', () => {
+    const dir = addBlocks({
+      'package.json': JSON.stringify({ name: 'app', version: '1.0.0' }),
+      '.gitignore': 'node_modules\r\n.env.local\r\n',
+    });
+    try {
+      const gitignore = readFileSync(join(dir, '.gitignore'), 'utf-8');
+      assert.ok(gitignore.includes('*.pem'), 'secret patterns were appended');
+      assert.doesNotMatch(gitignore, /(?<!\r)\n/, 'every line ends with CRLF');
+      assertIgnoresSecrets(dir);
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
     }

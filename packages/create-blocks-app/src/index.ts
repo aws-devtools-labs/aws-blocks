@@ -345,13 +345,17 @@ async function addBlocksWorkspace(targetDir: string, options: {
     return !patterns.some(pattern => mayIgnore(pattern, name));
   });
   if (toAdd.length > 0 || secretsToAdd.length > 0) {
-    if (toAdd.length > 0) gitignore += `\n# AWS Blocks\n${toAdd.join('\n')}\n`;
-    if (secretsToAdd.length > 0) {
-      const lines = [...secretsToAdd, ...exceptions];
-      gitignore += `\n# Secrets and key material — never commit\n${lines.join('\n')}\n`;
+    // Keep a CRLF file CRLF: appending LF-only lines would mix line endings.
+    const eol = gitignore.includes('\r\n') ? '\r\n' : '\n';
+    const secretLines = secretsToAdd.length > 0 ? [...secretsToAdd, ...exceptions] : [];
+    if (toAdd.length > 0) gitignore += `${eol}# AWS Blocks${eol}${toAdd.join(eol)}${eol}`;
+    if (secretLines.length > 0) {
+      gitignore += `${eol}# Secrets and key material — never commit${eol}${secretLines.join(eol)}${eol}`;
     }
     await writeFile(gitignorePath, gitignore);
-    console.log('  ✓ Modified .gitignore');
+    // These lines change what the project ignores (`.env.*` also covers
+    // `.env.development` / `.env.production`), so list them.
+    console.log(`  ✓ Modified .gitignore (+${[...toAdd, ...secretLines].join(', ')})`);
   }
 
   // Install dependencies
@@ -582,7 +586,7 @@ async function integrateWithAmplify(targetDir: string, skipConfirm = false, skip
   console.log('  CREATE  amplify/blocks.ts     (wires Blocks into Amplify backend)');
   console.log('  MODIFY  amplify/backend.ts    (adds import for blocks.ts)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
-  console.log('  MODIFY  .gitignore            (adds Blocks entries)');
+  console.log('  MODIFY  .gitignore            (adds Blocks entries and secret and key-material patterns)');
   console.log('  CREATE  amplify.yml           (or modify existing — adds CDK conditions)');
   console.log('');
   console.log('No changes will be committed. Review the diff before committing.');
@@ -790,7 +794,7 @@ async function integrateWithExistingProject(targetDir: string, templateName = 'd
   console.log('  CREATE  aws-blocks/           (Blocks backend workspace)');
   console.log('  CREATE  cdk.json              (CDK configuration)');
   console.log('  MODIFY  package.json          (adds workspace, deps, scripts)');
-  console.log('  MODIFY  .gitignore            (adds Blocks entries)');
+  console.log('  MODIFY  .gitignore            (adds Blocks entries and secret and key-material patterns)');
   console.log('');
 
   const proceed = skipConfirm || await confirm('Proceed?');
