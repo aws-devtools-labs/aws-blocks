@@ -2,7 +2,6 @@ package com.aws.blocks.kotlin
 
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
-import io.kotest.matchers.shouldNotBe
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.AfterTest
@@ -50,9 +49,11 @@ class DpapiKeyCustodyTest {
 
         custody().storeIfAbsent("cookies:com.example.app", key)
 
-        // The file holds a wrapped blob only this user account on this machine can unwrap.
-        val stored = File(root, ".key").readBytes()
-        String(stored) shouldNotBe java.util.Base64.getEncoder().encodeToString(key)
+        // The file holds a wrapped blob only this user account on this machine can unwrap. Asserting
+        // the whole file differs from the key would pass for any wrapping at all, including one that
+        // carried the key along unchanged, so look for the key's bytes anywhere inside the blob.
+        val blob = java.util.Base64.getDecoder().decode(File(root, ".key").readText())
+        blob.toList().windowed(key.size).contains(key.toList()) shouldBe false
     }
 
     @Test
