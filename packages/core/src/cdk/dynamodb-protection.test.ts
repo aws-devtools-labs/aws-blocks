@@ -65,22 +65,18 @@ describe('resolveDynamoDbProtection — encryption', () => {
 		assert.strictEqual(result.encryptionKey?.node.path, 'TestStack/scope/encryption-key');
 	});
 
-	test('an unrecognized string warns and falls back to AWS_MANAGED', () => {
-		const { stack, result } = resolve({ encryption: 'bogus' as unknown as 'aws-managed' });
-		assert.strictEqual(result.encryption, TableEncryption.AWS_MANAGED);
-		// Assert the annotation ID, not just the message — the "same warnings"
-		// guarantee rides on the exact `${warningPrefix}:UnknownEncryption` id,
-		// which addWarningV2 surfaces as a `[ack: <id>]` suffix.
-		Annotations.fromStack(stack).hasWarning(
-			'*',
-			Match.stringLikeRegexp(`Unrecognized encryption 'bogus'.*${HINT}.*ack: ${PREFIX}:UnknownEncryption`),
+	test('an unrecognized string fails the synth instead of falling back to AWS_MANAGED', () => {
+		assert.throws(
+			() => resolve({ encryption: 'bogus' as unknown as 'aws-managed' }),
+			new RegExp(`Unrecognized encryption 'bogus'.*${HINT}`),
 		);
 	});
 
-	test('a non-branded object warns (isKmsKeyRef discriminant rejects it)', () => {
-		const { stack, result } = resolve({ encryption: { keyArn: 'x' } as unknown as ExternalKmsKeyRef });
-		assert.strictEqual(result.encryption, TableEncryption.AWS_MANAGED);
-		Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp(`ack: ${PREFIX}:UnknownEncryption`));
+	test('a non-branded object fails the synth (isKmsKeyRef discriminant rejects it)', () => {
+		assert.throws(
+			() => resolve({ encryption: { keyArn: 'x' } as unknown as ExternalKmsKeyRef }),
+			/Unrecognized encryption/,
+		);
 	});
 });
 

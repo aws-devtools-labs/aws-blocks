@@ -33,12 +33,25 @@ test('resolveKmsEncryption: a fromKmsKey ref resolves to the imported key', () =
 	assert.strictEqual(result.kind === 'imported' && result.key.keyArn, KEY_ARN);
 });
 
-test('resolveKmsEncryption: an unrecognized value warns with the block identity and falls back', () => {
-	// Deliberately invalid input a JS caller could pass.
-	const { stack, result } = resolve('kms' as unknown as KmsEncryptionOption);
-	assert.deepStrictEqual(result, { kind: 'aws-managed' });
-	const [warning] = Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
-	assert.ok(warning);
-	assert.match(String(warning.entry.data), /Thing\.fromKmsKey\(arn\)/);
-	assert.match(String(warning.entry.data), /\[ack: @aws-blocks\/bb-test:UnknownEncryption\]/);
+test('resolveKmsEncryption: an unrecognized value fails the synth with the block identity and valid values', () => {
+	// Deliberately invalid input a JS caller could pass (e.g. a typo or a value
+	// loaded from JSON/env). It must not fall back to 'aws-managed'.
+	for (const option of ['kms', 'kms-managed', { keyArn: KEY_ARN }] as const) {
+		assert.throws(
+			() => resolve(option as unknown as KmsEncryptionOption),
+			(err: unknown) => {
+				assert.ok(err instanceof Error);
+				assert.match(err.message, /Unrecognized encryption/);
+				assert.match(err.message, /'aws-managed', 'customer-managed', or Thing\.fromKmsKey\(arn\)/);
+				assert.match(err.message, /@aws-blocks\/bb-test/);
+				return true;
+			},
+		);
+	}
+});
+
+test('resolveKmsEncryption: an unrecognized value no longer emits the UnknownEncryption warning', () => {
+	const stack = new cdk.Stack(new cdk.App(), 'stack');
+	assert.throws(() => resolveKmsEncryption(stack, 'kms' as unknown as KmsEncryptionOption, IDENTITY));
+	assert.strictEqual(Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('UnknownEncryption')).length, 0);
 });
