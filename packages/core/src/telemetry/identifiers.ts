@@ -4,10 +4,14 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 const FIRST_RUN_NOTICE = `
-AWS Blocks collects anonymous usage data to improve the product.
-No customer content or PII is collected.
-To disable: npx --no -- cdk-blocks telemetry disable (or export AWS_BLOCKS_DISABLE_TELEMETRY=1)
-The env var accepts 1, true, or yes (case-insensitive).
+AWS Blocks collects usage data to improve the product. Events can include:
+  random installation and project IDs; the command, its outcome, duration and error category;
+  your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent;
+  and the AWS Blocks, CDK, framework, template and Building Block versions the app uses.
+They never include your name, email address, AWS account ID, file contents or source code.
+As with any HTTPS request, the collection endpoint also receives your IP address and user agent.
+To disable: npx --no -- cdk-blocks telemetry disable, npx blocks-telemetry --disable,
+or export AWS_BLOCKS_DISABLE_TELEMETRY=1 (accepts 1, true, or yes, case-insensitive).
 `;
 
 interface BlocksConfig {

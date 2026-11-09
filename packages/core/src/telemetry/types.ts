@@ -29,6 +29,17 @@ export type ReportedFramework = (typeof REPORTED_FRAMEWORKS)[number];
  *
  * Matches the server schema exactly (additionalProperties: false).
  * All fields are anonymized — no PII, no customer content, no account IDs.
+ *
+ * Precisely: the identifiers are random UUIDs (not derived from the machine,
+ * user or AWS account), errors are reported as a fixed `code`/`phase` category
+ * (never the message or a stack), and `environment.packageManager` is the raw
+ * `npm_config_user_agent` string. The payload never carries names, email
+ * addresses, AWS account IDs, ARNs, file paths, file contents or source code.
+ * It is not the whole picture, though: as with any HTTPS request, the
+ * collection endpoint also receives the client's IP address and user agent, so
+ * "no PII" describes this payload only, not everything the endpoint sees.
+ * Keep the first-run notice (`FIRST_RUN_NOTICE` in `identifiers.ts` and in
+ * `create-blocks-app`'s `telemetry.ts`) in sync with this list.
  */
 export interface BlocksTelemetryEvent {
   telemetryVersion: string;

@@ -391,7 +391,7 @@ describe('telemetry/opt-out persists no identifiers even with --telemetry-file',
         assert.ok(!existsSync(join(project, '.blocks', 'config.json')), 'project config.json must not be written');
         assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
         assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
-        assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+        assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(project, { recursive: true, force: true });
@@ -435,7 +435,7 @@ describe('telemetry/trackCommand honors a mid-run opt-out', () => {
         'installation-id must not be written',
       );
       assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
-      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(project, { recursive: true, force: true });
@@ -1055,10 +1055,45 @@ describe('telemetry/identifiers first-run notice', () => {
       cwd: __dirname,
     });
 
-    assert.ok(result.stderr.includes('AWS Blocks collects anonymous usage data to improve the product.'));
-    assert.ok(result.stderr.includes('No customer content or PII is collected.'));
+    assert.ok(result.stderr.includes('AWS Blocks collects usage data to improve the product.'));
     assert.ok(result.stderr.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'));
     assert.ok(result.stdout.trim().length > 0, 'Should output an installation ID');
+
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('first-run notice states what is sent, does not claim "no PII", and gives every opt-out', () => {
+    const tmp = join(tmpdir(), `blocks-test-firstrun-wording-${Date.now()}`);
+    mkdirSync(tmp, { recursive: true });
+
+    const script = `
+      import { getInstallationId } from './identifiers.js';
+      getInstallationId();
+    `;
+
+    const result = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e', script,
+    ], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: tmp },
+      cwd: __dirname,
+    });
+    const notice = result.stderr;
+
+    // The endpoint sees the source IP and user agent of every request, so the
+    // notice must not promise that no personal data reaches it.
+    assert.doesNotMatch(notice, /\bPII\b/);
+    assert.doesNotMatch(notice, /anonymous/i);
+    assert.match(notice, /IP address/);
+    assert.match(notice, /user agent/);
+    // What the event itself carries, and what it never carries.
+    assert.match(notice, /random installation and project IDs/);
+    assert.match(notice, /never include your name, email address, AWS account ID, file contents or source code/);
+    // Every opt-out the CLI supports.
+    assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable'), notice);
+    assert.ok(notice.includes('npx blocks-telemetry --disable'), notice);
+    assert.ok(notice.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
 
     rmSync(tmp, { recursive: true, force: true });
   });

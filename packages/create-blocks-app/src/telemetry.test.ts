@@ -627,7 +627,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
         'installation-id must not be written',
       );
       assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
-      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
@@ -651,12 +651,40 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
         assert.ok(!existsSync(idFile), 'installation-id must not be written');
         assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
         assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
-        assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+        assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
       } finally {
         rmSync(home, { recursive: true, force: true });
       }
     });
   }
+});
+
+describe('create-blocks-app telemetry/first-run notice', () => {
+  it('states what is sent, does not claim "no PII", and gives every opt-out', () => {
+    const home = join(tmpdir(), `cba-notice-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(home, { recursive: true });
+
+    const result = spawnTelemetryChild(EMIT_CHILD, [moduleUrl], { home });
+
+    try {
+      assert.strictEqual(result.status, 0, result.stderr);
+      const notice = result.stderr;
+      assert.ok(notice.includes('AWS Blocks collects usage data to improve the product.'), notice);
+      // The endpoint sees the source IP and user agent of every request, so the
+      // notice must not promise that no personal data reaches it.
+      assert.doesNotMatch(notice, /\bPII\b/);
+      assert.doesNotMatch(notice, /anonymous/i);
+      assert.match(notice, /IP address/);
+      assert.match(notice, /user agent/);
+      assert.match(notice, /random installation and project IDs/);
+      assert.match(notice, /never include your name, email address, AWS account ID, file contents or source code/);
+      assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable'), notice);
+      assert.ok(notice.includes('npx blocks-telemetry --disable'), notice);
+      assert.ok(notice.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('create-blocks-app telemetry/global × project precedence (shared case table)', () => {
