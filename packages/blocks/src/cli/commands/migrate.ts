@@ -23,7 +23,9 @@
  * 1 when kept items remain for the user to finish by hand (a report, not a
  * crash: everything that could be migrated was migrated), or when migrate
  * refused and wrote nothing, which `--output json` tells apart by printing
- * `{"error": {"message", "hint"}}` instead of the result; 2 for a usage error.
+ * `{"error": {"message", "hint"}}` instead of the result (as it does when
+ * wrappers could not be deleted after the `package.json` rewrite, which the
+ * message says); 2 for a usage error.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -1019,7 +1021,13 @@ function checkGit(root: string, dryRun: boolean, force: boolean): GitView {
  * Another run (or the user) may have deleted a wrapper since the plan was
  * made: the result is the same.
  *
- * @throws {CliError} The refusal.
+ * The rewrite comes first because a wrapper left behind is harmless, while
+ * deleting the wrappers and then failing to write `package.json` would leave
+ * scripts that run deleted files. A wrapper that cannot be deleted (EACCES)
+ * does not stop the others; the error names every one, and a rerun, which
+ * plans them as unused, deletes them.
+ *
+ * @throws {CliError} The refusal, or the wrappers that could not be deleted.
  */
 export function applyMigration(root: string, plan: MigrationPlan): void {
 	const { result, pkg, pkgText } = plan;
@@ -1031,16 +1039,35 @@ export function applyMigration(root: string, plan: MigrationPlan): void {
 		});
 	}
 	if (result.changed.includes('package.json')) writePackageJson(root, pkg, pkgText, result.devConfig);
-	for (const file of result.removed) rmSync(join(root, file), { force: true });
-	if (result.removed.length > 0) removeIfEmpty(join(root, SCRIPTS_DIR));
+	const failed: string[] = [];
+	for (const file of result.removed) {
+		try {
+			rmSync(join(root, file), { force: true });
+		} catch (error) {
+			failed.push(`${file}: ${(error as NodeJS.ErrnoException).code ?? String(error)}`);
+		}
+	}
+	if (result.removed.length > failed.length) removeIfEmpty(join(root, SCRIPTS_DIR));
+	if (failed.length > 0) {
+		const wrappers = `${failed.length} wrapper${failed.length === 1 ? '' : 's'} could not be deleted`;
+		throw new CliError(
+			result.changed.includes('package.json') ? `package.json was rewritten, but ${wrappers}.` : `${wrappers}.`,
+			{
+				where: failed,
+				// The tree now holds this run's changes, which a run without --force refuses.
+				hint: 'fix the permissions, then "cdk-blocks migrate --force" to delete them',
+			},
+		);
+	}
 }
 
 /**
  * `error`, after printing it as `{"error": {"message", "hint"}}` under
  * `--output json` when it is a refusal: a JSON consumer tells a refusal
- * (nothing written) from kept items (also exit 1) by this document. `--query`
- * prints one field of the result, which a refusal does not have: the error
- * goes to stderr only.
+ * (nothing written; or, for wrappers that could not be deleted, `package.json`
+ * rewritten, as the message says) from kept items (also exit 1) by this
+ * document. `--query` prints one field of the result, which a refusal does not
+ * have: the error goes to stderr only.
  */
 function refusal(ctx: Context, error: unknown): unknown {
 	if (error instanceof CliError && ctx.globals.output === 'json' && ctx.globals.query === undefined) {

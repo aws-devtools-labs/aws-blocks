@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
+	chmodSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -1200,6 +1201,58 @@ describe('cdk-blocks migrate', () => {
 		});
 		rmSync(dir, { recursive: true, force: true });
 		removeIfEmpty(dir);
+	});
+
+	it('deletes every wrapper it can after the package.json rewrite, names the ones it cannot, and a rerun deletes them', {
+		skip:
+			(process.platform === 'win32' && 'POSIX permissions') ||
+			(process.getuid?.() === 0 && 'root deletes from a read-only directory'),
+	}, async (t) => {
+		const root = writeApp('default@0ab6b047');
+		git(root, 'init', '-q');
+		git(root, 'add', '-A');
+		git(root, 'commit', '-q', '-m', 'init');
+		const planned = JSON.parse((await runCli(['migrate', '--dry-run', '--output', 'json'], { cwd: root })).stdout);
+		assert.strictEqual(planned.removed.length, 10);
+		const dir = join(root, 'aws-blocks', 'scripts');
+		chmodSync(dir, 0o555);
+		t.after(() => existsSync(dir) && chmodSync(dir, 0o755));
+
+		const run = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(run.code, 1);
+		assert.strictEqual(
+			run.stderr,
+			[
+				'Error: package.json was rewritten, but 10 wrappers could not be deleted.',
+				...planned.removed.map((file: string) => `  ${file}: EACCES`),
+				'Try: fix the permissions, then "cdk-blocks migrate --force" to delete them',
+				'',
+			].join('\n'),
+		);
+		// The scripts no longer run the wrappers, so the ones left behind are harmless.
+		assert.strictEqual(readPkg(root).scripts.deploy, 'cdk-blocks deploy');
+		assert.deepStrictEqual(readPkg(root).blocks, { dev: { frontendPort: 3100 } });
+		assert.strictEqual(scriptsDir(root).length, 10);
+
+		// Run again with the directory still read-only: package.json is already migrated, and the error says so.
+		const json = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(json.code, 1);
+		assert.deepStrictEqual(JSON.parse(json.stdout), {
+			error: {
+				message: '10 wrappers could not be deleted.',
+				hint: 'fix the permissions, then "cdk-blocks migrate --force" to delete them',
+			},
+		});
+
+		chmodSync(dir, 0o755);
+		// The tree now holds the first run's changes, so a run without --force refuses, as the hint expects.
+		const plain = await runCli(['migrate'], { cwd: root });
+		assert.strictEqual(plain.code, 1);
+		assert.match(plain.stderr, /^Error: the git working tree has uncommitted changes/);
+		const rerun = await runCli(['migrate', '--force', '--output', 'json'], { cwd: root });
+		assert.strictEqual(rerun.code, 0, rerun.stderr);
+		assert.deepStrictEqual(JSON.parse(rerun.stdout).removed, planned.removed);
+		assert.ok(!existsSync(dir), 'the emptied scripts directory is removed');
 	});
 
 	it('refuses a repository that git does not read, quoting git, unless --force', async (t) => {
