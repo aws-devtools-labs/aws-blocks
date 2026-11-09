@@ -30,7 +30,11 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 - **Files** — `createUploadUrl` / `createDownloadUrl` mint presigned URLs on a
   `FileBucket`; the client PUTs/GETs the bytes directly. Both call
   `auth.requireAuth(context)` and scope the path to the caller, so a user can
-  only reach their own files.
+  only reach their own files. `createUploadUrl` signs only the content types in
+  `ALLOWED_UPLOAD_TYPES` (extend it for your app), and the bucket is versioned,
+  so an overwritten file can be restored. A presigned PUT carries no size limit;
+  if you need one, upload through the API with `files.put()` and check the size
+  first.
 - **Auth** — `AuthBasic`: callers sign up, then their items are scoped to them.
 
 There is no `src/`, `index.html`, or web bundle — nothing is served to a browser.

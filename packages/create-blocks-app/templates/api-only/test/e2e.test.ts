@@ -99,6 +99,16 @@ test('files: signed-out callers cannot mint presigned URLs', async () => {
   await assert.rejects(api.createDownloadUrl('reports/data.txt'), { status: 401 });
 });
 
+// Only the allowed content types get a presigned upload URL.
+test('files: an unsupported content type is declined', async () => {
+  await authApi.setAuthState({
+    action: 'signUp',
+    username: `ctype-${Date.now().toString(36)}`,
+    password: 'password123',
+  });
+  await assert.rejects(api.createUploadUrl('page.html', 'text/html'), { status: 400 });
+});
+
 // FileBucket via presigned URLs — the headless-client path. Ask the API for an
 // upload URL, PUT the bytes directly (no bytes through the API), then ask for a
 // download URL and GET them back. Backed by the dev server's local file server,

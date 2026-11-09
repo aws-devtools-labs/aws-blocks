@@ -43,8 +43,9 @@ const scope = new Scope('my-app');
 const store = new KVStore(scope, 'app-store', {});
 
 // FileBucket: object storage for binary files (uploads, reports, images).
-// Non-versioned here to keep the demo simple; versioning is on by default.
-const files = new FileBucket(scope, 'app-files', { versioned: false });
+// Versioning is on (the FileBucket default), so an overwritten or deleted file
+// can be restored from its previous version.
+const files = new FileBucket(scope, 'app-files');
 
 // AppSetting: a single runtime config value (feature flag, threshold, URL).
 const featureFlag = new AppSetting<string>(scope, 'feature-flag', { value: 'off' });

@@ -48,7 +48,16 @@ const items = new DistributedTable(scope, 'items', {
 // ─── Files ─────────────────────────────────────────────────────────────────
 // Object storage for binary files. A headless client uploads/downloads via
 // presigned URLs: ask the API for a URL, then PUT/GET the bytes directly.
-const files = new FileBucket(scope, 'files', { versioned: false });
+// Versioning is on (the FileBucket default), so an overwritten or deleted file
+// can be restored from its previous version.
+const files = new FileBucket(scope, 'files');
+
+/**
+ * Content types `createUploadUrl` will sign for. The presigned PUT only succeeds
+ * with the Content-Type it was signed with, so this list is what a client can
+ * store. Extend it for the file types your app accepts.
+ */
+const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'application/pdf', 'image/png', 'image/jpeg']);
 
 /** FileBucket path under the signed-in user's own prefix (`/` in a username is encoded). */
 const userPath = (username: string, path: string) => `users/${encodeURIComponent(username)}/${path}`;
@@ -70,6 +79,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    */
   async createUploadUrl(path: string, contentType: string) {
     const user = await auth.requireAuth(context);
+    if (!ALLOWED_UPLOAD_TYPES.has(contentType)) {
+      throw new ApiError(`Unsupported content type: ${contentType}`, 400, { name: 'UnsupportedContentTypeException' });
+    }
     return { url: await files.putUrl(userPath(user.username, path), { contentType }) };
   },
 

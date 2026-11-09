@@ -25,3 +25,7 @@ fix(create-blocks-app): gate the remaining public template methods and git-ignor
   whole lines, so an existing `.env.local` no longer stops `.env` being added.
   The `.env.example` / `credentials/` exceptions are left out when the project's
   own `.gitignore` could already ignore those names, so they never un-ignore them.
+- The `api-only` and `demo` templates keep FileBucket versioning on (the
+  default), so an overwritten or deleted file can be restored, and the
+  `api-only` template's `createUploadUrl` signs only an explicit list of
+  content types (`ALLOWED_UPLOAD_TYPES`).

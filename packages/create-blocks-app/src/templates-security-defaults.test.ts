@@ -408,6 +408,29 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
   }
 });
 
+// A template's FileBucket is the starting point for every scaffolded app's file
+// storage. Keep versioning on (the FileBucket default) so an overwritten or
+// deleted object can be restored, and sign presigned uploads only for an
+// explicit set of content types.
+describe('create-blocks-app template file buckets are versioned and uploads are typed', () => {
+  for (const name of templateNames) {
+    const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
+    if (!existsSync(backend)) continue;
+    const source = stripComments(readFileSync(backend, 'utf-8'));
+    if (!source.includes('new FileBucket(')) continue;
+
+    it(`${name}: no FileBucket turns versioning off`, () => {
+      assert.doesNotMatch(source, /versioned:\s*false/, `${name} must keep FileBucket versioning on`);
+    });
+
+    if (source.includes('.putUrl(')) {
+      it(`${name}: presigned uploads check the content type against an allowlist`, () => {
+        assert.match(source, /ALLOWED_UPLOAD_TYPES\.has\(contentType\)/, `${name} must check contentType before putUrl`);
+      });
+    }
+  }
+});
+
 describe('create-blocks-app demo template scopes per-user data', () => {
   const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'demo', 'aws-blocks', 'index.ts'), 'utf-8'));
 
