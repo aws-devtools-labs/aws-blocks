@@ -71,6 +71,17 @@ class KeyCustodySelectionTest {
     }
 
     @Test
+    fun fallsBackToTheFileTierWhenTheNativeLibraryCannotLoad() {
+        // A missing or unloadable native library arrives as an Error rather than an Exception, and
+        // it surfaces on the first call rather than at construction. An application packaged
+        // without the native-access declarations lands here, and the documented consequence of
+        // that omission is losing the protection, not failing to start.
+        val candidate = RecordingCustody(onStore = { throw UnsatisfiedLinkError("Security not found") })
+
+        selectKeyCustody(root.toPath()) { candidate }.tier shouldBe KeyTier.FILE
+    }
+
+    @Test
     fun probesUnderADifferentAliasEveryTime() {
         // These stores are machine-wide. A fixed probe alias lets two applications starting at the
         // same moment overwrite each other's probe and both conclude the store is broken.

@@ -91,6 +91,12 @@ internal fun selectKeyCustody(
  * The probe alias is random because these stores are machine-wide: with a fixed one, two
  * applications starting at the same moment overwrite each other's probe and both conclude the
  * store is broken. The probe is removed whether or not it succeeded.
+ *
+ * Every throwable is treated as a failed probe, not only every exception. Reaching an OS store
+ * means loading a native library, and a library that is missing or cannot be loaded is reported as
+ * an [Error] — on the first call rather than at construction, so it arrives here. An application
+ * packaged without the declarations native access needs is the ordinary way to reach that, and the
+ * documented consequence is losing the protection rather than failing to start.
  */
 private fun passesSelfTest(candidate: KeyCustody): Boolean {
     val alias = "self-test:" + UUID.randomUUID()
@@ -98,7 +104,7 @@ private fun passesSelfTest(candidate: KeyCustody): Boolean {
     return try {
         candidate.storeIfAbsent(alias, probe)
         candidate.load(alias)?.contentEquals(probe) == true
-    } catch (_: Exception) {
+    } catch (_: Throwable) {
         false
     } finally {
         runCatching { candidate.delete(alias) }
