@@ -65,12 +65,11 @@ const VERSION = '2.0' as const;
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
  *
- * Note: this value is the Lambda + API Gateway limit. It lives here (in the
- * compute-agnostic parser) because Lambda is the only compute path today. When
- * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
- * become compute-aware — sourced from / overridden by the compute layer (via
- * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
- * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ * Note: this value is the API Gateway limit, and every compute keeps it — one
+ * constant in the compute-agnostic parser, so a call accepted on one compute is
+ * accepted on every other. A Lambda compute is reached through the gateway,
+ * which rejects a larger body first; a container compute may be reached without
+ * it, so there this guard is the limit.
  *
  * The container HTTP server (`serveHttp`) keeps the same limit for JSON-RPC on
  * every path to it, and checks it while reading the body — before buffering past
@@ -106,9 +105,24 @@ export function encodeRpcRequest(apiNamespace: string, method: string, args: unk
  * Decode a JSON-RPC 2.0 response body.
  *
  * Returns the `result` on success, or throws an `ApiError` on error.
+ *
+ * A body that is not a JSON-RPC 2.0 envelope (`jsonrpc !== '2.0'`) — e.g. a
+ * gateway answering on its own with `{"message":"Too Many Requests"}` — also
+ * throws an `ApiError`. Its status is `httpStatus` when that is not a 2xx,
+ * else 502 (a success status with no envelope is an upstream fault); its
+ * message is the body's string `message` when present, else `HTTP <status>`.
+ * Pass `undefined` as `body` when the response text was not valid JSON.
+ *
+ * @param body The parsed response body.
+ * @param httpStatus The HTTP status of the response, if known.
  */
-export function decodeRpcResponse(body: unknown): unknown {
+export function decodeRpcResponse(body: unknown, httpStatus?: number): unknown {
   const rpc = body as any;
+  if (rpc === null || typeof rpc !== 'object' || rpc.jsonrpc !== VERSION) {
+    const status = httpStatus !== undefined && (httpStatus < 200 || httpStatus > 299) ? httpStatus : 502;
+    const message = typeof rpc?.message === 'string' && rpc.message ? rpc.message : `HTTP ${status}`;
+    throw new ApiError(message, status);
+  }
   if (rpc.error) {
     const { code, message, data } = rpc.error;
     // Application error codes use the HTTP status directly (e.g. 409).
@@ -175,6 +189,15 @@ export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {})
     parsed = JSON.parse(bodyText || '{}');
   } catch {
     return { ok: false, response: errorResponse(RpcErrorCode.ParseError, 'Parse error', null) };
+  }
+
+  // A literal `null` body parses to null; reading `.id` off it would throw.
+  // Other primitives and arrays already fall through to Invalid Request below.
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, 'Invalid Request: body must be a JSON-RPC 2.0 object', null, { name: 'InvalidRequest' }),
+    };
   }
 
   const id = parsed.id ?? null;

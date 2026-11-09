@@ -13,6 +13,7 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { installClientUserAgent } from './server/client-user-agent.js';
 import { ApiNamespace } from './api.js';
 import type { BlocksContext } from './api.js';
+import { getRequestBaseUrl } from './bb-utils.js';
 
 beforeEach(() => {
   clearRouteRegistry();
@@ -222,6 +223,20 @@ describe('createLambdaHandler — RPC body handling', () => {
     assert.strictEqual(body.jsonrpc, '2.0');
     assert.ok(body.error);
     assert.strictEqual(body.error.code, -32600);
+  });
+
+  it('returns Invalid Request for a literal JSON null body instead of throwing', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async noop() { return {}; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({ body: 'null' }));
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.id, null);
   });
 
   it('decodes base64-encoded body', async () => {
@@ -1838,7 +1853,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     assert.strictEqual(url.host, 'localhost:3000');
   });
 
-  it('keeps proto and stage prefix for the non-loopback (deploy) path', () => {
+  it('keeps proto and host, but not the stage prefix, for the non-loopback (deploy) path', () => {
     const url = buildEventUrl({
       path: '/auth/callback',
       headers: { 'x-forwarded-proto': 'https', Host: EXECUTE_API },
@@ -1846,7 +1861,29 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     });
     assert.strictEqual(url.protocol, 'https:');
     assert.strictEqual(url.host, EXECUTE_API);
-    assert.strictEqual(url.pathname, '/prod/auth/callback');
+    // The route path, as under the dev server: every front door adds the stage
+    // on the way to the gateway, so it is not part of the path the app routes on.
+    assert.strictEqual(url.pathname, '/auth/callback');
+  });
+
+  it('does not prepend the `$default` stage of a v2 event', () => {
+    const url = buildEventUrl({
+      version: '2.0',
+      rawPath: '/echo/a',
+      headers: { host: 'abc123.lambda-url.us-east-1.on.aws' },
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/echo/a' } },
+    });
+    assert.strictEqual(url.pathname, '/echo/a');
+  });
+
+  it('keeps the selected origin when the path starts with `//`', () => {
+    // `new URL('//evil.example/x', origin)` would resolve the path as a
+    // protocol-relative reference and swap the host.
+    for (const requestContext of [undefined, { stage: 'prod' }]) {
+      const url = buildEventUrl({ path: '//evil.example/echo/a', headers: { Host: EXECUTE_API }, requestContext });
+      assert.strictEqual(url.host, EXECUTE_API);
+      assert.strictEqual(url.pathname, '//evil.example/echo/a');
+    }
   });
 
   it('accepts 127.0.0.1 and [::1] as loopback forwarded hosts', () => {
@@ -1930,6 +1967,83 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     }));
 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
+  });
+});
+
+// ── RawRoute URL parity with the dev server (#1138) ─────────────────────────
+
+describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage', () => {
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+
+  function stageEvent(path: string, headers: Record<string, string> = {}) {
+    return makeEvent({
+      httpMethod: 'GET',
+      path,
+      body: null,
+      queryStringParameters: { q: 'a b' },
+      requestContext: { stage: 'prod' },
+      headers: { Host: EXECUTE_API, 'x-forwarded-proto': 'https', ...headers },
+    });
+  }
+
+  it('a RawRoute sees the route path, without the API Gateway stage', async () => {
+    let seen: { href: string; pathname: string; wildcard: string | undefined; q: string | null } | undefined;
+    registerRoute({
+      method: 'GET',
+      path: '/echo/*',
+      handler: async (ctx) => {
+        const { url, params } = ctx.request;
+        seen = { href: url.href, pathname: url.pathname, wildcard: params['*'], q: url.searchParams.get('q') };
+        ctx.response.send('');
+      },
+    });
+
+    const result = await invoke({}, stageEvent('/echo/a/b'));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(seen, {
+      href: `https://${EXECUTE_API}/echo/a/b?q=a+b`,
+      pathname: '/echo/a/b',
+      wildcard: 'a/b',
+      q: 'a b',
+    });
+  });
+
+  it('getRequestBaseUrl returns the gateway origin with its stage', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback'));
+
+    assert.strictEqual(base, `https://${EXECUTE_API}/prod`);
+  });
+
+  it('getRequestBaseUrl returns the loopback front door, without a stage, in sandbox', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback', { 'x-forwarded-host': 'localhost:3000' }));
+
+    assert.strictEqual(base, 'http://localhost:3000');
+  });
+
+  it('getRequestBaseUrl falls back to the request origin outside the Lambda handler (local dev)', () => {
+    const ctx = { request: { url: new URL('http://localhost:3000/aws-blocks/auth/callback?code=x') } };
+    assert.strictEqual(getRequestBaseUrl(ctx), 'http://localhost:3000');
   });
 });
 
@@ -2293,5 +2407,82 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
     const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
+});
+
+// ── request id in scope ─────────────────────────────────────────────────────
+// Each invocation runs with its Lambda awsRequestId in scope, so Building Blocks
+// (bb-logger) can tag their output with it. Overlapping invocations on one
+// container must each see their own id.
+
+describe('createLambdaHandler — request id in scope', () => {
+  const ctx = (awsRequestId: string): LambdaContext => ({ awsRequestId, getRemainingTimeInMillis: () => 30_000 });
+  const readStore = () =>
+    (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__?.getStore();
+
+  it('makes the invocation awsRequestId visible to the backend method', async () => {
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => backend);
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-111'));
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-111' });
+  });
+
+  it('keeps overlapping invocations apart', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const backend = {
+      api: (_c: BlocksContext) => ({
+        async slow() { await gate; return { id: readStore() ?? null }; },
+        async fast() { return { id: readStore() ?? null }; },
+      }),
+    };
+    const handler = createLambdaHandler(async () => backend);
+    const call = (method: string, id: string) =>
+      handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: [], id: 1 }) }), ctx(id)) as Promise<any>;
+    const slow = call('slow', 'req-slow');
+    const fast = await call('fast', 'req-fast');
+    release();
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(fast.body)), { id: 'req-fast' });
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse((await slow).body)), { id: 'req-slow' });
+  });
+
+  it('has no request id outside an invocation', () => {
+    assert.strictEqual(readStore(), undefined);
+  });
+
+  it('imports the backend outside the first invocation request id', async () => {
+    let idAtImport: unknown = 'not-imported';
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => {
+      idAtImport = readStore();
+      return backend;
+    });
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-first'));
+    assert.strictEqual(idAtImport, undefined);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-first' });
+  });
+});
+
+describe('request-context — request id store registration', () => {
+  const KEY = '__BLOCKS_REQUEST_ID_STORE__';
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  it('replaces a non-store value at the globalThis key instead of throwing on use', async () => {
+    const original = globals[KEY];
+    globals[KEY] = { not: 'a store' };
+    try {
+      const fresh = await import(`./request-context.js?non-store-${Date.now()}`);
+      assert.strictEqual(fresh.currentRequestId(), undefined);
+      assert.strictEqual(fresh.requestIdStore.run('req-x', () => fresh.currentRequestId()), 'req-x');
+      assert.strictEqual(globals[KEY], fresh.requestIdStore);
+    } finally {
+      globals[KEY] = original;
+    }
+  });
+
+  it('a second copy of core reuses the registered store', async () => {
+    const original = globals[KEY];
+    const fresh = await import(`./request-context.js?second-copy-${Date.now()}`);
+    assert.strictEqual(fresh.requestIdStore, original);
   });
 });
