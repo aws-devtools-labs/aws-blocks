@@ -15,6 +15,7 @@ import {
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
+import { validateSchema } from './validation.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors (canonical source)
@@ -28,15 +29,6 @@ export type {
 } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<T> {
-	const result = schema['~standard'].validate(value);
-	const resolved = result instanceof Promise ? await result : result;
-	if (resolved.issues) {
-		throw blocksError(SecretErrors.ValidationFailed, resolved.issues[0].message);
-	}
-	return (resolved as { value: T }).value;
-}
 
 /**
  * Map a {@link SecretReadOptions.version} selector to the SDK's GetSecretValue
@@ -179,6 +171,9 @@ class SecretImpl<T = string> extends Scope {
 	 *
 	 * @param value - The new secret value.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
+	 *   The error message never contains the value or the schema library's issue text
+	 *   or the failing path, which a record schema takes from the value's keys; the
+	 *   original issues and path are on the non-enumerable `cause` for server-side logs.
 	 * @throws {SecretErrors.SecretNotFound} If the underlying Secrets Manager secret does not exist.
 	 *
 	 * @example
@@ -261,6 +256,9 @@ class SecretImpl<T = string> extends Scope {
 	 * @param options - Optional read options; `version` selects which version.
 	 * @returns The secret value, or `null` if that version has not been set or does not exist.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the stored value is not valid JSON, or fails validation.
+	 *   The error message never contains the value or the schema library's issue text
+	 *   or the failing path, which a record schema takes from the value's keys; the
+	 *   original issues and path are on the non-enumerable `cause` for server-side logs.
 	 *
 	 * @example
 	 * ```typescript
