@@ -1,11 +1,25 @@
 # @aws-blocks/data-common
 
+## 0.1.7
+
+### Patch Changes
+
+- d366907: chore: manual dependency bump (2026-10-19)
+- 48c35f6: Scripts that use a local `Database` or `DistributedDatabase` now exit when they finish. Before, a short-lived script that imported your backend under local development (a seed script, a one-off CLI step, a test) kept running forever after its last query, because the local database engine held the process open. The local engine also now shuts down cleanly when the process exits, so the next start no longer logs `Removed stale postmaster.pid`. Your local data in `.bb-data/` persists as before, and `npm run dev` is unaffected: the dev server keeps running and serving queries until you stop it.
+- Updated dependencies [88747f5]
+- Updated dependencies [943d405]
+- Updated dependencies [a3969b5]
+- Updated dependencies [48c35f6]
+- Updated dependencies [d366907]
+- Updated dependencies [33e8d73]
+  - @aws-blocks/bb-logger@0.3.0
+
 ## 0.1.6
 
 ### Patch Changes
 
 - 03ce866: Keep the local dev server alive when a PGlite init trap aborts constructor-time migrations, and recover from it
-  
+
   A `Database` / `DistributedDatabase` configured with `migrationsPath` runs its
   migrations eagerly in the constructor, before any query awaits them. If PGlite's
   WASM `_pg_initdb` aborts (notably under memory pressure, where the WASM linear
@@ -15,10 +29,11 @@
   so the dev server survives; the same rejection still reaches callers via the
   ready-gate, so a query after a failed init surfaces a branded
   `QueryFailedException` rather than being swallowed.
-  
+
   A transient trap no longer wedges the data layer: on an init trap the cached
   rejected promise is cleared, so the next query re-runs the idempotent migrations
   once memory eases (matching the engine's own recover-on-retry behaviour).
+
 - @aws-blocks/bb-logger@0.2.2
 
 ## 0.1.5
@@ -26,12 +41,13 @@
 ### Patch Changes
 
 - 5eee114: Add npm keywords for discoverability via `npm search keywords:aws-blocks`
-  
+
   Every published package now carries an npm `keywords` array: the shared `aws-blocks`
   discovery tag plus 2–5 functional keywords describing the package's domain and the
   AWS services it uses (e.g. `realtime`, `websocket`, `pubsub` for `bb-realtime`;
   `ci-cd`, `pipelines`, `deployment` for `pipeline`). Metadata only — no runtime,
   API, or behavior change.
+
 - Updated dependencies [5eee114]
 - Updated dependencies [d7312f9]
   - @aws-blocks/bb-logger@0.2.0
@@ -41,15 +57,17 @@
 ### Patch Changes
 
 - bfb9a63: Polish the PGlite init-retry helper (`data-common`) following #205 review:
-  
+
   - Narrow the WASM-trap classifier to specific signatures (`RuntimeError: unreachable`, `wasm trap: unreachable`, Emscripten `Aborted(<reason>)`) instead of matching the bare word `unreachable`, so an unrelated probe failure whose text/stack merely contains "unreachable" (e.g. an `assertUnreachable` helper) is no longer misclassified as retryable. The `Aborted(` prefix (not just the empty `Aborted()`) is matched so memory-pressure aborts like `Aborted(Cannot enlarge memory arrays)` / `Aborted(OOM)` — the case this retry exists for — are caught. A `RuntimeError`-named error whose message contains `unreachable` is also treated as a trap, so the real V8/Node trap (message is literally `"unreachable"`, prefix only in the stack) is caught without depending on the stack surviving.
   - Classify retryability BEFORE consulting the attempt budget in `initializePgliteWithRetry`, so instance cleanup is uniform (a non-retryable error is always rethrown untouched) and `maxAttempts === 1` no longer closes the instance on a non-trap failure.
   - Guard `maxAttempts` against `NaN` (which `?? 3` does not default), preventing an unbounded close/recreate loop on a persistent trap.
   - Wrap a `recreate()` failure so the original init trap is preserved as the error `cause`, keeping debugging pointed at "PGlite kept trapping" rather than only the secondary recreate error.
   - Mark the four init-retry exports (`initializePgliteWithRetry`, `isPgliteUnreachableTrap`, `PgliteLike`, `PgliteInitRetryOptions`) `@internal` — they exist only so the engine packages can share the helper — and document the `PgliteLike` methods.
+
 - e4b1498: Retry PGlite's WASM initialization on the intermittent `_pg_initdb` `unreachable` trap.
-  
+
   PGlite defers `initdb` to the first query, which can trap with `unreachable` under memory pressure (notably on CI when several PGlite-backed dev servers boot concurrently) and kill the dev server mid-`runMigrations`. `PGliteEngine` (bb-data) and `DsqlMockEngine` (bb-distributed-data) now force initialization through a shared bounded retry (`initializePgliteWithRetry` in data-common) that closes the aborted WASM instance and boots a fresh one, so a transient init trap recovers instead of crashing the process.
+
 - @aws-blocks/bb-logger@0.1.4
 
 ## 0.1.3

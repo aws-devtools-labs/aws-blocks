@@ -378,6 +378,7 @@ describe('deployment target summary', () => {
 	for (const [name, error] of [
 		['network', Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' })],
 		['inconclusive', namedError('ThrottlingException')],
+		['denied', namedError('AccessDenied')],
 	] as const) {
 		it(`prints the target without metadata or billing guidance after a ${name} probe result`, async () => {
 			const { factory, state } = fakeClients(NAMED, FREE_ACTIVE);

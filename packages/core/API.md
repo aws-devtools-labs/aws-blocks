@@ -38,7 +38,7 @@ export const ApiNamespace: ApiNamespaceConstructor;
 export interface ApiNamespaceOptions {
     compute?: {
         resolve(): {
-            readonly type: 'serverless';
+            readonly type: 'serverless' | 'container';
         };
     };
 }
@@ -130,9 +130,7 @@ export type ContainerPollerStarter = () => ContainerPollerHandle;
 
 // @public
 export interface ContainerScaling {
-    // (undocumented)
     maxInstances: number;
-    // (undocumented)
     minInstances: number;
     // (undocumented)
     strategy?: ScalingSignal | ScalingSignal[];
@@ -341,7 +339,12 @@ export function _resetSdkRegistry(): void;
 export function resolvePerInstanceConcurrency(maxConcurrencyPerCPU: number, vcpu: number): number;
 
 // @public
-export function runContainer(): Promise<void>;
+export function runContainer(options?: RunContainerOptions): Promise<void>;
+
+// @public
+export interface RunContainerOptions {
+    backend?: unknown;
+}
 
 // @public
 export function runJobWorker(resolveJob: (fullId: string) => {
@@ -400,6 +403,11 @@ export interface ScopeOptions {
     bbName?: string;
     // (undocumented)
     bbVersion?: string;
+    compute?: {
+        resolve(): {
+            readonly type: 'serverless' | 'container';
+        };
+    };
     // (undocumented)
     parent?: ScopeParent;
 }

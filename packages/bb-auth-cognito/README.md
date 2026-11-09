@@ -439,6 +439,8 @@ if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
 
 Rule of thumb: **throw path → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Never match on the human-facing `error` string.
 
+`AuthState.error` carries the BB-authored message of an `ApiError` (every Cognito SDK error is mapped to one) or a branded Building Block error. Any other failure is logged server-side and returned as `error: 'Internal error'` with no `errorName`, so backend detail such as account ids and ARNs never reaches the client.
+
 Both `getAuthState()` and `setAuthState()` return an [`AuthState`](../auth-common/README.md#authstate). `AuthCognito` doesn't re-export the type; import it from `@aws-blocks/auth-common`, a direct dependency of this package:
 
 ```typescript
@@ -573,7 +575,7 @@ Set `crossDomain: true` only when the frontend and API are served from **differe
 const auth = new AuthCognito(app, 'auth', { crossDomain: true });
 ```
 
-On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS). The auto-sign-in bridge cookie follows the same policy.
+On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `Partitioned` for the cross-domain recipe (CHIPS requires HTTPS). This applies only to the local dev server (`npm run dev`). Deployed compute takes the attributes from deploy configuration, so a request header cannot drop them. That includes a sandbox (`npm run sandbox`): its dev server proxies the API to deployed compute, so sandbox sign-in on `http://localhost` gets `Secure` (and `Partitioned` with `crossDomain: true`). The auto-sign-in bridge cookie follows the same policy.
 
 
 

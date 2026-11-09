@@ -247,7 +247,7 @@ export function realtimeTransport(io: {
 						sub.unsubscribe();
 						return;
 					}
-					unsub = sub.unsubscribe;
+					unsub = () => sub.unsubscribe();
 					return sub.established;
 				})
 				.catch((err) => {

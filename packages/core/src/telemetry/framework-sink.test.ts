@@ -89,15 +89,31 @@ describe('telemetry framework-sink (synth child -> parent bridge)', () => {
   });
 
   it('creates nothing at all when the user opted out', () => {
-    process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
-    const before = readdirSync(tmpdir()).filter((e) => e.startsWith('blocks-framework-')).length;
+    // Observe a private tmpdir: the shared one also holds blocks-framework-* dirs that
+    // other tests (here and in files the runner runs concurrently) create and remove,
+    // so counting entries there races. os.tmpdir() reads these variables at call time.
+    const privateTmp = mkdtempSync(join(tmpdir(), 'fw-sink-tmpdir-'));
+    const tmpVars = ['TMPDIR', 'TMP', 'TEMP'] as const;
+    const prevTmp = tmpVars.map((name) => process.env[name]);
+    try {
+      for (const name of tmpVars) process.env[name] = privateTmp;
+      assert.strictEqual(tmpdir(), privateTmp, 'test setup: tmpdir() must resolve to the private directory');
+      process.env.AWS_BLOCKS_DISABLE_TELEMETRY = '1';
 
-    assert.strictEqual(createFrameworkSink(), undefined);
-    assert.strictEqual(
-      readdirSync(tmpdir()).filter((e) => e.startsWith('blocks-framework-')).length,
-      before,
-      'an opted-out run must not create even an empty directory',
-    );
+      assert.strictEqual(createFrameworkSink(), undefined);
+      assert.deepStrictEqual(
+        readdirSync(privateTmp),
+        [],
+        'an opted-out run must not create even an empty directory',
+      );
+    } finally {
+      tmpVars.forEach((name, i) => {
+        const value = prevTmp[i];
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      });
+      rmSync(privateTmp, { recursive: true, force: true });
+    }
   });
 
   it('removes the directory when the command exits without running its own cleanup', () => {
@@ -185,5 +201,38 @@ describe('telemetry framework-sink (synth child -> parent bridge)', () => {
     } finally {
       rmSync(outer, { recursive: true, force: true });
     }
+  });
+
+  it('drops the exit hook once a sink is registered, so repeated runs do not accumulate listeners', () => {
+    // A long-running process (a watch or sandbox loop) creates and registers one sink per
+    // deploy; each leftover hook would pin its closure until exit and eventually trip
+    // MaxListenersExceededWarning.
+    Scope._resetRegistry();
+    const baseline = process.listenerCount('exit');
+    for (let i = 0; i < 12; i++) {
+      const sink = createFrameworkSink();
+      assert.ok(sink, 'expected a sink path');
+      assert.strictEqual(process.listenerCount('exit'), baseline + 1, 'one exit hook per live sink');
+      registerFrameworkFromSink(sink);
+      assert.strictEqual(process.listenerCount('exit'), baseline, 'registering must remove the exit hook');
+    }
+    Scope._resetRegistry();
+  });
+
+  it('keeps the exit hook for a sink that was never registered', () => {
+    const before = new Set(process.listeners('exit'));
+    const registered = createFrameworkSink();
+    const unregistered = createFrameworkSink();
+    assert.ok(registered && unregistered, 'expected sink paths');
+    registerFrameworkFromSink(registered);
+
+    const remaining = process.listeners('exit').filter((listener) => !before.has(listener));
+    assert.strictEqual(remaining.length, 1, 'the unregistered sink keeps its exit hook');
+    assert.strictEqual(existsSync(dirname(unregistered)), true);
+    // Run the hook directly: emitting 'exit' would also fire the test runner's own listeners.
+    const [hook] = remaining;
+    process.removeListener('exit', hook);
+    hook(0);
+    assert.strictEqual(existsSync(dirname(unregistered)), false, 'exit hook must remove the unregistered sink');
   });
 });

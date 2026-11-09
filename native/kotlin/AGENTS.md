@@ -77,20 +77,27 @@ A Gradle plugin + runtime that generates type-safe Kotlin client code from OpenR
 # Run plugin tests only
 ./gradlew :plugin:test
 
-# Dump the intermediate model (useful for debugging spec interpretation)
-./gradlew awsBlocksDumpModel
-
-# Generate code for the Android example app (debug variant)
-./gradlew :example:android:app:awsBlocksCodegenDebug
-
-# Build the Android example app (triggers codegen automatically)
-./gradlew :example:android:app:assembleDebug
-
-# Build the KMP example app (desktop target)
-./gradlew :example:kmp:composeApp:desktopJar
-
 # Clean everything (useful after spec changes)
 ./gradlew clean
+```
+
+Each example app is its own Gradle build that composes this one in, so its tasks are not in the
+root build and are run from the app's own directory. Both read a `blocks.spec.json` emitted from
+`example/typescript`, which is gitignored, so a fresh checkout has no spec to generate from until
+one exists.
+
+```bash
+# Generate code for the Android example app (debug variant)
+cd example/android && ./gradlew :app:awsBlocksCodegenDebug
+
+# Build the Android example app (triggers codegen automatically)
+cd example/android && ./gradlew :app:assembleDebug
+
+# Build the KMP example app (desktop target)
+cd example/kmp && ./gradlew :composeApp:desktopJar
+
+# Dump the intermediate model (useful for debugging spec interpretation)
+cd example/android && ./gradlew :app:awsBlocksDumpModel
 
 # Check generated output location (Android)
 find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"
@@ -118,36 +125,36 @@ If you find yourself needing to break one of these rules, something is wrong wit
 ### After changing the parser (`OpenRpcParser`)
 
 1. Run `./gradlew :codegen:test` to verify parsing still works
-2. Run `./gradlew awsBlocksDumpModel` to verify the model looks correct
-3. Run `./gradlew :example:android:app:assembleDebug` to verify generated code compiles
+2. Run `cd example/android && ./gradlew :app:awsBlocksDumpModel` to verify the model looks correct
+3. Run `cd example/android && ./gradlew :app:assembleDebug` to verify generated code compiles
 
 ### After changing the model builder (`CodegenModelBuilder`)
 
 1. Run `./gradlew :codegen:test`
-2. Run `./gradlew awsBlocksDumpModel` — inspect type definitions, namespaces, relationships
-3. Run `./gradlew :example:android:app:assembleDebug` to verify end-to-end
+2. Run `cd example/android && ./gradlew :app:awsBlocksDumpModel` — inspect type definitions, namespaces, relationships
+3. Run `cd example/android && ./gradlew :app:assembleDebug` to verify end-to-end
 
 ### After changing the generator (`KotlinCodeGenerator`)
 
 1. Run `./gradlew :codegen:test`
-2. Run `./gradlew clean :example:android:app:assembleDebug` — clean build ensures no stale output
+2. Run `cd example/android && ./gradlew clean :app:assembleDebug` — clean build ensures no stale output
 3. Inspect generated files: `find example/android/app/build/generated/source/aws/blocks/debug -name "*.kt"`
 4. Verify the example app still compiles and the generated API surface matches expectations
 
 ### After changing the runtime
 
 1. Run `./gradlew :runtime:build`
-2. Run `./gradlew :example:android:app:assembleDebug` to verify the Android example app still links correctly
+2. Run `cd example/android && ./gradlew :app:assembleDebug` to verify the Android example app still links correctly
 3. If you changed `BlocksClient` or transferable hydration, verify the example app runs on an emulator
 
 ### After changing the plugin DSL
 
 1. Run `./gradlew :plugin:test`
 2. Verify the example app's `build.gradle.kts` still configures correctly
-3. Run `./gradlew :example:android:app:assembleDebug`
+3. Run `cd example/android && ./gradlew :app:assembleDebug`
 
 ### After updating the spec file
 
-1. Run `./gradlew awsBlocksDumpModel` to verify parsing
-2. Run `./gradlew clean :example:android:app:assembleDebug`
+1. Run `cd example/android && ./gradlew :app:awsBlocksDumpModel` to verify parsing
+2. Run `cd example/android && ./gradlew clean :app:assembleDebug`
 3. Fix any compilation errors in the example app from changed API signatures

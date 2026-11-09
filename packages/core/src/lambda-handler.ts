@@ -2,45 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // This will be bundled with the customer's backend code
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { emitRpcErrorMetric } from './rpc-error-metric.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
-import { matchRoute, lockRouteRegistry, getRegisteredRoutes, getLoadedCoreCopies } from './raw-route.js';
+import { lockRouteRegistry } from './raw-route.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
-import {
-  parseRpcRequest,
-  successResponse,
-  errorResponse,
-  errorResponseFromCatch,
-  methodNotFoundResponse,
-  rawRouteErrorFromCatch,
-} from './rpc.js';
-import { getCorsPatterns, isOriginAllowed, corsRejection, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
-import { validateClientUserAgentToken } from './server/client-user-agent.js';
-import { errorResponseSetCookies } from './set-cookie.js';
-import { resolveApiNamespace, resolveApiMethod } from './rpc-dispatch.js';
+import { errorResponse } from './rpc.js';
+import { buildCorsHeaders } from './cors.js';
+import { createDispatcher } from './dispatch.js';
+import type { DispatchRequest, DispatchResponse } from './dispatch.js';
+import { isLoopbackForwardedHost } from './request-context.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
+// The request base URL store (see `buildEventBaseUrl`, which the dispatcher puts
+// in it) lives with `getRequestBaseUrl()`, shared across copies of `@aws-blocks/core`.
+export { requestBaseUrl } from './common/request-base-url.js';
 
-/**
- * AsyncLocalStorage that carries the inbound HTTP request cookies through
- * the call stack. SSR frameworks (Next.js Server Components) can read this
- * via `requestCookies.getStore()` to forward auth cookies when calling the
- * Blocks API server-side.
- *
- * Also registered on `globalThis.__BLOCKS_REQUEST_COOKIES_STORE__` so the
- * client bundle can access it without importing node:async_hooks.
- */
-export const requestCookies = new AsyncLocalStorage<string>();
-(globalThis as any).__BLOCKS_REQUEST_COOKIES_STORE__ = requestCookies;
-
-/**
- * Per-request store for the validated native-client token. Also registered on
- * `globalThis.__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__` so the middleware can
- * read it without importing `node:async_hooks`.
- */
-export const requestClientUserAgent = new AsyncLocalStorage<string | undefined>();
-(globalThis as any).__BLOCKS_REQUEST_CLIENT_USER_AGENT_STORE__ = requestClientUserAgent;
+// The request-scoped stores and the forwarded-host gate live in request-context.ts
+// so the container HTTP server shares them; re-exported here for existing imports.
+export { requestCookies, requestClientUserAgent, isLoopbackForwardedHost } from './request-context.js';
+import { requestIdStore } from './request-context.js';
 
 /**
  * Event source mapping identifiers used by AWS when pushing records to Lambda.
@@ -83,60 +64,27 @@ function decodeEventBody(event: any): { bodyText: string; bodyStream: ReadableSt
   return { bodyText, bodyStream };
 }
 
-/**
- * Hostnames that count as loopback for the trusted-forwarded-host gate.
- *
- * `URL.hostname` keeps the brackets on IPv6 literals (`http://[::1]:3000` →
- * `[::1]`), so the set is keyed on the bracketed form.
- */
-const LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+/** The fields of an API Gateway Lambda event that its origin and stage are read from. */
+type EventOriginFields = {
+  headers?: Record<string, string | undefined> | null;
+  requestContext?: { stage?: string } | null;
+};
 
 /**
- * Whether an `X-Forwarded-Host` value points at the local loopback interface.
+ * The origin a Lambda event arrived at, and the API Gateway stage prefix of
+ * that origin's external URLs (`''` when there is none).
  *
- * The gate matters because the deployed Lambda sits directly behind API Gateway
- * with no trusted proxy to strip this attacker-controllable header — in sandbox
- * *and* production. Honoring it unconditionally would let any client spoof the
- * host the backend builds absolute URLs from (e.g. an OIDC `redirect_uri`). Only
- * loopback is trusted: it's the one case the sandbox dev-server needs, and a
- * forged non-loopback value is ignored.
- *
- * @internal Exported for testing only.
- */
-export function isLoopbackForwardedHost(forwardedHost: string | undefined): boolean {
-  if (!forwardedHost) return false;
-  // Parse via URL so a `host:port` (or bracketed IPv6) value yields a clean
-  // hostname with the port stripped. A bare hostname parses fine too.
-  let hostname: string;
-  try {
-    hostname = new URL(`http://${forwardedHost}`).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
-  return LOOPBACK_HOSTNAMES.has(hostname);
-}
-
-/**
- * Reconstruct the absolute request URL from an API Gateway Lambda event.
- *
- * - Path comes from `event.path` (API Gateway v1) or `event.requestContext.http.path` (v2).
- * - Query string from `event.multiValueQueryStringParameters` when present (preserves duplicates),
- *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
- *   front door), the URL is rebuilt as the browser-visible origin: that host,
- *   plain `http`, and **no** API Gateway stage prefix. Otherwise host comes from
- *   `Host`/`host`, protocol from `x-forwarded-proto` (default `https`), and the
- *   stage prefix is prepended. See {@link isLoopbackForwardedHost} for the gate.
- *
- * @internal Exported for testing only.
+ *   front door), the origin is the browser-visible one: that host, plain `http`,
+ *   and **no** stage prefix. See {@link isLoopbackForwardedHost} for the gate.
+ * - Otherwise host comes from `Host`/`host`, protocol from `x-forwarded-proto`
+ *   (default `https`), and the prefix is `/{stage}` for a REST API stage. An HTTP
+ *   API's `$default` stage has no path, so it gets none.
  */
-export function buildEventUrl(event: any): URL {
-  const path: string = event.path || event.requestContext?.http?.path || '/';
+function resolveEventOrigin(event: EventOriginFields): { origin: string; stagePrefix: string } {
   const forwardedHost: string | undefined =
     event.headers?.['x-forwarded-host'] || event.headers?.['X-Forwarded-Host'];
 
-  let origin: string;
-  let fullPath: string;
   if (isLoopbackForwardedHost(forwardedHost)) {
     // Trusted sandbox dev-server front door. The browser reached the backend at
     // `http://localhost:<port><path>` and the proxy forwarded it to execute-api.
@@ -153,21 +101,52 @@ export function buildEventUrl(event: any): URL {
     // A user-supplied TLS front door (`https://localhost`) is a known, unsupported
     // limitation; the proper fix is a config-derived front-door origin rather than
     // header inference.
-    origin = `http://${forwardedHost}`;
-    fullPath = path;
-  } else {
-    const host = event.headers?.Host || event.headers?.host || 'localhost';
-    const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || 'https';
-    origin = `${proto}://${host}`;
-    // API Gateway REST APIs have a stage prefix (e.g. /prod) that's part of the
-    // external URL but NOT included in event.path. Include it so ctx.request.url
-    // reflects the full external-facing URL — needed for callback URLs, stub IdP
-    // issuer URLs, etc.
-    const stage = event.requestContext?.stage;
-    fullPath = stage ? `/${stage}${path}` : path;
+    return { origin: `http://${forwardedHost}`, stagePrefix: '' };
   }
 
-  const url = new URL(fullPath, origin);
+  const host = event.headers?.Host || event.headers?.host || 'localhost';
+  const proto = event.headers?.['x-forwarded-proto'] || event.headers?.['X-Forwarded-Proto'] || 'https';
+  // API Gateway REST APIs have a stage prefix (e.g. /prod) that's part of the
+  // gateway's external URL but NOT included in event.path. It belongs to the
+  // base URL (callback URLs, stub IdP issuer URLs, etc.), not to the route path.
+  const stage = event.requestContext?.stage;
+  return { origin: `${proto}://${host}`, stagePrefix: stage && stage !== '$default' ? `/${stage}` : '' };
+}
+
+/**
+ * The externally reachable base URL of a Lambda event: its origin plus the API
+ * Gateway stage prefix, without a trailing slash. Exposed to handlers through
+ * {@link requestBaseUrl} / `getRequestBaseUrl()`.
+ */
+function buildEventBaseUrl(event: EventOriginFields): string {
+  const { origin, stagePrefix } = resolveEventOrigin(event);
+  return `${origin}${stagePrefix}`;
+}
+
+/**
+ * Reconstruct the absolute request URL from an API Gateway Lambda event.
+ *
+ * - Path comes from `event.path` (API Gateway v1) or `event.requestContext.http.path` (v2):
+ *   the route path, the same one the dev server sees. It never includes the API Gateway
+ *   stage — every front door adds the stage on its way to the gateway, so it is not part
+ *   of the path the app routes on. Use {@link buildEventBaseUrl} for the stage-bearing base.
+ * - Query string from `event.multiValueQueryStringParameters` when present (preserves duplicates),
+ *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
+ * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
+ *   front door), the URL is rebuilt as the browser-visible origin: that host and
+ *   plain `http`. Otherwise host comes from `Host`/`host` and protocol from
+ *   `x-forwarded-proto` (default `https`). See {@link isLoopbackForwardedHost} for the gate.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildEventUrl(event: any): URL {
+  const path: string = event.path || event.requestContext?.http?.path || '/';
+  const { origin } = resolveEventOrigin(event);
+
+  // Assign the path rather than resolving it against the origin: `new URL(path, origin)`
+  // reads a path starting with `//` as a protocol-relative reference and swaps the host.
+  const url = new URL(origin);
+  url.pathname = path;
 
   if (event.rawQueryString) {
     url.search = `?${event.rawQueryString}`;
@@ -283,6 +262,8 @@ export function computeHttpDeadlineMs(context?: LambdaContext): number {
  */
 export interface LambdaContext {
   getRemainingTimeInMillis(): number;
+  /** The invocation's request id; Building Blocks read it with `currentRequestId()` from `@aws-blocks/core/bb-utils`. */
+  awsRequestId?: string;
 }
 
 /**
@@ -349,7 +330,11 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
     lockRouteRegistry();
   }
 
-  return async (event: any, context?: LambdaContext) => {
+  // Each invocation runs with its request id in scope, so Building Blocks can
+  // tag their output with it (`currentRequestId()` in request-context.ts).
+  return (event: any, context?: LambdaContext) => requestIdStore.run(context?.awsRequestId, () => invoke(event, context));
+
+  async function invoke(event: any, context?: LambdaContext) {
     if (!handler) {
       // Retry init on failure instead of caching the rejection. If initialize() throws (most often
       // because loadConfigToProcessEnv() couldn't read blocks-config.json during the brief
@@ -358,7 +343,10 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Resetting initPromise lets the next invocation re-run initialize() (config.ts re-fetches,
       // since it doesn't cache failures), so the handler self-heals once config is available.
       if (!initPromise) {
-        initPromise = initialize().catch((err) => {
+        // Run init outside this invocation's request-id scope: the backend import and the
+        // Building Block constructors create long-lived state (timers, pool listeners) that
+        // must not keep the first request's id for the life of the container.
+        initPromise = requestIdStore.exit(() => initialize()).catch((err) => {
           initPromise = null;
           throw err;
         });
@@ -411,6 +399,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
         const body = isRpcPath(requestPath)
           ? errorResponse(504, 'Request timed out', null, { name: 'HandlerTimeoutError' })
           : JSON.stringify({ error: 'Request timed out', code: 'HANDLER_TIMEOUT' });
+        if (isRpcPath(requestPath)) emitRpcErrorMetric({ status: 504 });
         return {
           statusCode: 504,
           headers: {
@@ -423,7 +412,7 @@ export function createLambdaHandler(backendFactory: () => Promise<any>) {
       // Non-timeout errors (handler threw before deadline) propagate normally.
       throw err;
     }
-  };
+  }
 }
 
 class HandlerTimeoutError extends Error {
@@ -466,46 +455,10 @@ function getRequestPath(event: any): string {
   return event.path || event.requestContext?.http?.path || '/';
 }
 
-/**
- * The response field(s) that carry `Set-Cookie` values for the event's Lambda
- * proxy payload format.
- *
- * - v1 (API Gateway REST proxy — what `bb-lambda-compute` provisions): the
- *   `headers` map carries one value per name, so cookies go in
- *   `multiValueHeaders['Set-Cookie']`.
- * - v2 (`event.version === '2.0'` — HTTP API / Function URL): v2 has no
- *   `multiValueHeaders`; cookies go in the top-level `cookies` array.
- */
-function cookieResponseFields(
-  event: any,
-  cookies: string[],
-): { multiValueHeaders: { 'Set-Cookie': string[] } } | { cookies: string[] } {
-  if (event?.version === '2.0') return { cookies };
-  return { multiValueHeaders: { 'Set-Cookie': cookies } };
-}
-
-/**
- * Convert a handler's response `Headers` into Lambda proxy response header
- * fields for the event's payload format (see {@link cookieResponseFields}).
- *
- * `Set-Cookie` is the one header that must not be comma-joined, so every
- * cookie goes into the format's cookie field and is kept out of `headers`
- * (API Gateway merges the two). Other repeated headers stay comma-joined in
- * `headers`. Without this, a response setting several cookies keeps only one
- * on AWS.
- */
-function toProxyResponseHeaders(event: any, responseHeaders: Headers): {
-  headers: Record<string, string>;
-} & ReturnType<typeof cookieResponseFields> {
-  return {
-    headers: Object.fromEntries(
-      [...responseHeaders.entries()].filter(([k]) => k.toLowerCase() !== 'set-cookie')
-    ),
-    ...cookieResponseFields(event, responseHeaders.getSetCookie?.() ?? []),
-  };
-}
-
 function createHandler(backend: any) {
+  // Each failed RPC call writes the `RpcErrors` metric: the response is an HTTP
+  // 200 JSON-RPC error envelope, so Lambda's own `Errors` metric never counts it.
+  const dispatch = createDispatcher(backend, { rpcErrorLabel: 'Lambda Error:', onRpcError: emitRpcErrorMetric });
   return async (event: any, signal?: AbortSignal) => {
     const eventClass = classifyEvent(event);
 
@@ -551,225 +504,71 @@ function createHandler(backend: any) {
       return handleCognitoTrigger(event);
     }
 
-    const origin = event.headers?.origin || event.headers?.Origin || '';
-    const httpMethod = event.httpMethod || event.requestContext?.http?.method;
-    const corsHeaders = buildCorsHeaders(origin);
-
-    // Reject cross-origin requests from disallowed origins
-    const patterns = getCorsPatterns();
-    if (origin && patterns && !isOriginAllowed(origin)) {
-      return corsRejection();
-    }
-
-    // Handle OPTIONS preflight
-    if (httpMethod === 'OPTIONS') {
-      return {
-        statusCode: 200,
-        headers: {
-          ...corsHeaders,
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS',
-          'Access-Control-Allow-Headers': `Content-Type, Authorization, ${CLIENT_USER_AGENT_HEADER}`,
-          'Access-Control-Max-Age': CORS_MAX_AGE,
-        },
-        body: '',
-      };
-    }
-
-    // Extract cookies from the inbound request and store them in
-    // AsyncLocalStorage so downstream code (e.g. the Blocks client making
-    // server-side API calls during SSR) can forward them automatically.
-    // Wraps both RawRoute and RPC handling so any handler that calls Blocks
-    // APIs server-side gets forwarded cookies.
-    const inboundCookies = event.headers?.cookie || event.headers?.Cookie || '';
-
-    // Validate the attacker-controlled header before storing, so malformed
-    // input never reaches the AWS user agent.
-    const clientUserAgent = validateClientUserAgentToken(
-      event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
-    );
-
-    return requestCookies.run(inboundCookies, () =>
-      requestClientUserAgent.run(clientUserAgent, async () => {
-    // RawRoute dispatch — check path-based routes before falling through to RPC.
-    // The whole `/aws-blocks/api` subtree (the bare path and every per-namespace
-    // `/aws-blocks/api/{ns}` path) is RPC: dispatch takes the namespace from the
-    // JSON-RPC body, and a per-namespace path must name the same one (see
-    // parseRpcRequest), so skip RawRoute matching for it and fall through to RPC
-    // handling below.
-    const requestPath = getRequestPath(event);
-    if (!isRpcPath(requestPath)) {
-      const matched = matchRoute(httpMethod, requestPath);
-      if (matched) {
-        return handleRawRoute(event, matched.route, matched.params, corsHeaders, signal);
-      }
-      // No RawRoute matched and the path is not under the RPC endpoint — 404.
-      // Log it: an unmatched route used to be entirely silent, which is what
-      // made a split route registry (duplicate @aws-blocks/core copies)
-      // undiagnosable from CloudWatch alone. The path is already in the API
-      // Gateway access logs, so this adds no new category of data.
-      const copies = getLoadedCoreCopies();
-      const copiesNote = copies > 1 ? ` — ${copies} copies of @aws-blocks/core are loaded` : '';
-      console.error(
-        `No RawRoute matched ${httpMethod} ${requestPath} (${getRegisteredRoutes().length} routes registered)${copiesNote}`,
-      );
-      return {
-        statusCode: 404,
-        headers: {
-          'Content-Type': 'application/json',
-          ...corsHeaders,
-        },
-        body: JSON.stringify({ error: 'Not Found' }),
-      };
-    }
-
-    const rpcHeaders = {
-      'Content-Type': 'application/json',
-      ...corsHeaders,
-      'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0',
-    };
-
-    const { bodyText, bodyStream } = decodeEventBody(event);
-    // The path is validated against the body's namespace (see parseRpcRequest);
-    // dispatch always uses the body's `namespace.method`.
-    const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
-
-    if (!parsed.ok) {
-      return { statusCode: 200, headers: rpcHeaders, body: parsed.response };
-    }
-
-    const { apiNamespace, method, args, id: rpcId } = parsed.request;
-
-    // Declared outside the try so the error path can still deliver cookies the
-    // method set before throwing (e.g. clearing a dead session on a 401).
-    let responseHeaders: Headers | undefined;
-
-    try {
-      const headers = new Headers(event.headers || {});
-
-      let responseStatus = 200;
-      responseHeaders = new Headers(rpcHeaders);
-      let responseBody: any;
-
-      const context = {
-        request: {
-          headers,
-          body: bodyStream,
-          json: async () => JSON.parse(bodyText),
-          text: async () => bodyText,
-          url: buildEventUrl(event),
-          params: {},
-          signal,
-        },
-        response: {
-          headers: responseHeaders,
-          get status() { return responseStatus; },
-          set status(code: number) { responseStatus = code; },
-          send: (body: any) => { responseBody = body; },
-        },
-      };
-
-      // Get the API by export name. resolveApiNamespace refuses exported Building
-      // Block instances and `_`-private exports, so only an API surface is callable.
-      const apiHandler = resolveApiNamespace(backend, apiNamespace);
-      if (!apiHandler) {
-        return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId) };
-      }
-
-      // Call the handler to get methods
-      const apiMethods = typeof apiHandler === 'function'
-        ? apiHandler(context)
-        : apiHandler;
-
-      // Own/declared callable methods only — never an inherited Object.prototype member.
-      const apiMethod = resolveApiMethod(apiMethods, method);
-      if (!apiMethod) {
-        return { statusCode: 200, headers: rpcHeaders, body: methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId) };
-      }
-
-      const result = await apiMethod(...args);
-
-      return {
-        statusCode: responseStatus,
-        ...toProxyResponseHeaders(event, responseHeaders),
-        body: successResponse(responseBody ?? result, rpcId),
-      };
-    } catch (error: any) {
-      console.error('Lambda Error:', error);
-      // Only Set-Cookie values that DELETE a cookie survive into the error
-      // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
-      // session cookie, but a method that signs a user in and then throws can
-      // never hand out a live session. The method's other headers are dropped,
-      // as before, so the JSON-RPC error envelope keeps its standard headers.
-      // The body is unchanged (message/name only — never SDK metadata).
-      const cookies = errorResponseSetCookies(responseHeaders);
-      return {
-        statusCode: 200,
-        headers: rpcHeaders,
-        ...(cookies.length > 0 ? cookieResponseFields(event, cookies) : {}),
-        body: errorResponseFromCatch(error, rpcId),
-      };
-    }
-    }));
+    // ── HTTP (API Gateway REST / HTTP API) ──
+    return toApiGatewayResult(event, await dispatch(toDispatchRequest(event, signal)));
   };
 }
 
-async function handleRawRoute(
-  event: any,
-  route: import('./raw-route.js').RegisteredRoute,
-  params: Record<string, string>,
-  corsHeaders: Record<string, string>,
-  signal?: AbortSignal,
-) {
-  const headers = new Headers(event.headers || {});
-  const { bodyText, bodyStream } = decodeEventBody(event);
-
-  let responseStatus = 200;
-  const responseHeaders = new Headers({
-    'Content-Type': 'application/json',
-    ...corsHeaders,
-    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-    'Pragma': 'no-cache',
-    'Expires': '0',
-  });
-  let responseBody: any;
-
-  const context = {
-    request: {
-      headers,
-      body: bodyStream,
-      json: async () => JSON.parse(bodyText),
-      text: async () => bodyText,
-      url: buildEventUrl(event),
-      params,
-      signal,
+/**
+ * Translate an API Gateway proxy event, REST (payload v1) or HTTP API /
+ * Function URL (payload v2), into a transport-neutral {@link DispatchRequest}.
+ * `requestId` is left unset: Lambda log lines already carry the invocation
+ * request ID.
+ */
+function toDispatchRequest(event: any, signal?: AbortSignal): DispatchRequest {
+  return {
+    method: event.httpMethod || event.requestContext?.http?.method,
+    path: getRequestPath(event),
+    origin: event.headers?.origin || event.headers?.Origin || '',
+    // Extract cookies from the inbound request (both header casings occur).
+    cookie: event.headers?.cookie || event.headers?.Cookie || '',
+    clientUserAgent: event.headers?.[CLIENT_USER_AGENT_HEADER] || event.headers?.['X-Blocks-User-Agent'],
+    headers: () => new Headers(event.headers || {}),
+    url: () => buildEventUrl(event),
+    baseUrl: () => buildEventBaseUrl(event),
+    body: () => {
+      const { bodyText, bodyStream } = decodeEventBody(event);
+      return { text: bodyText, stream: bodyStream };
     },
-    response: {
-      headers: responseHeaders,
-      get status() { return responseStatus; },
-      set status(code: number) { responseStatus = code; },
-      send: (body: any) => { responseBody = body; },
-    },
+    signal,
   };
+}
 
-  try {
-    await route.handler(context);
+/**
+ * The response field(s) that carry `Set-Cookie` values for the event's Lambda
+ * proxy payload format.
+ *
+ * - v1 (API Gateway REST proxy — what `bb-lambda-compute` provisions): the
+ *   `headers` map carries one value per name, so cookies go in
+ *   `multiValueHeaders['Set-Cookie']`.
+ * - v2 (`event.version === '2.0'` — HTTP API / Function URL): v2 has no
+ *   `multiValueHeaders`; cookies go in the top-level `cookies` array.
+ */
+function cookieResponseFields(
+  event: any,
+  cookies: string[],
+): { multiValueHeaders: { 'Set-Cookie': string[] } } | { cookies: string[] } {
+  if (event?.version === '2.0') return { cookies };
+  return { multiValueHeaders: { 'Set-Cookie': cookies } };
+}
 
-    return {
-      statusCode: responseStatus,
-      ...toProxyResponseHeaders(event, responseHeaders),
-      body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
-    };
-  } catch (error: unknown) {
-    console.error('RawRoute Error:', error);
-    const { status, body } = rawRouteErrorFromCatch(error);
-    return {
-      statusCode: status,
-      ...toProxyResponseHeaders(event, responseHeaders),
-      body,
-    };
+/**
+ * Translate a {@link DispatchResponse} into a Lambda proxy result for the
+ * event's payload format.
+ *
+ * `Set-Cookie` is the one header that must not be comma-joined, so every cookie
+ * goes into the format's cookie field (see {@link cookieResponseFields}) and is
+ * kept out of `headers` (API Gateway merges the two). Without this, a response
+ * setting several cookies keeps only one on AWS. RawRoute responses and RPC
+ * method results always carry the cookie field; other responses only when there
+ * is a cookie to deliver (an RPC error clearing a session).
+ */
+function toApiGatewayResult(event: any, response: DispatchResponse) {
+  const { kind, status: statusCode, headers, cookies, body } = response;
+  if (kind === 'raw-route' || kind === 'rpc-result' || cookies.length > 0) {
+    return { statusCode, headers, ...cookieResponseFields(event, cookies), body };
   }
+  return { statusCode, headers, body };
 }
 
 /**

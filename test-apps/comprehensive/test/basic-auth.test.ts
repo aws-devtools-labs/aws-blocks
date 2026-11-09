@@ -458,6 +458,76 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(user.username, username);
         await api.authSignOut();
       });
+
+      // A password reset invalidates every outstanding session: the reset bumps
+      // the user's session epoch, so a cookie captured BEFORE the reset is
+      // rejected when replayed after. The shared `api` client's cookie jar can't
+      // hold a cookie across the reset, so this drives raw JSON-RPC with a manual
+      // Cookie header (the same bypass the sign-out revocation test uses) to prove
+      // the stale-epoch rejection travels over the wire — exercising the real
+      // epoch:<username> KVStore read and the branded SessionRevoked name through
+      // the JSON-RPC serializer, which a mock-only test cannot.
+      test('a cookie captured before a password reset is rejected when replayed after', async () => {
+        const baseUrl = getBaseUrl();
+        const username = uniqueUser();
+
+        // Confirm the user through the normal client first (needs the code poll).
+        const api = getApi();
+        await api.authSignUp(username, 'password123');
+        const signUpCode = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, signUpCode!.code);
+
+        // Sign in over raw RPC twice (two devices) and capture both Set-Cookies
+        // (jar-bypassed).
+        const signIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        const cookie = sessionCookieHeader(signIn.setCookies);
+        assert.ok(cookie, 'authSignIn issued a session cookie');
+        const secondSignIn = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        const secondCookie = sessionCookieHeader(secondSignIn.setCookies);
+        assert.ok(secondCookie, 'a second authSignIn issued another session cookie');
+
+        // The captured cookie authenticates before the reset.
+        const before = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(before.result, true, 'captured cookie authenticates before reset');
+
+        // Reset the password for that user (over the wire): request a code, poll
+        // for the reset code (not the sign-up one), and confirm the new password.
+        await rpcRaw(baseUrl, 'authResetPassword', [username]);
+        const resetCode = await pollForCode(api, username, { not: signUpCode!.code });
+        assert.ok(resetCode, 'reset issued a verification code');
+        await rpcRaw(baseUrl, 'authConfirmResetPassword', [username, resetCode!.code, 'newpass123']);
+
+        // Replaying the exact pre-reset cookie now fails: the token is unexpired
+        // and signature-valid, but its `ep` claim is older than the user's bumped
+        // epoch (read from the real epoch:<username> KVStore marker).
+        const after = await rpcRaw(baseUrl, 'authCheckAuth', [], cookie);
+        assert.strictEqual(after.result, false, 'replayed pre-reset cookie is rejected after reset');
+
+        // The stale-epoch session surfaces as SessionRevokedException (401)
+        // THROUGH the JSON-RPC serializer — error.data.name carries the branded
+        // name across the wire (AGENTS.md asks for an e2e when serialization
+        // changes).
+        const err = await rpcRawExpectError(baseUrl, 'authRequired', [], cookie);
+        assert.strictEqual(err.code, 401, 'requireAuth rejects the stale-epoch cookie with 401');
+        assert.strictEqual(
+          err.data?.name,
+          AuthBasicErrors.SessionRevoked,
+          'the invalidated session surfaces as SessionRevokedException over the wire',
+        );
+
+        // Every pre-reset session is gone, not just the first one.
+        const secondAfter = await rpcRaw(baseUrl, 'authCheckAuth', [], secondCookie);
+        assert.strictEqual(secondAfter.result, false, 'the second pre-reset cookie is rejected too');
+
+        // A session created after the reset works: the new token carries the
+        // bumped epoch, so a regression that rejects every post-reset token
+        // would fail here.
+        const postReset = await rpcRaw(baseUrl, 'authSignIn', [username, 'newpass123']);
+        const postResetCookie = sessionCookieHeader(postReset.setCookies);
+        assert.ok(postResetCookie, 'signing in with the new password issued a session cookie');
+        const postResetCheck = await rpcRaw(baseUrl, 'authCheckAuth', [], postResetCookie);
+        assert.strictEqual(postResetCheck.result, true, 'a post-reset session authenticates');
+      });
     });
 
     // ── Code read-back durability (regression, #172) ─────────────────────
@@ -577,6 +647,38 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         assert.strictEqual(await api.authGetLastCode(username), null, 'purged code should be gone');
         assert.strictEqual(await api.kvGet(bystander), 'keep me', 'purge must only touch __last-code: keys');
         await api.kvDelete(bystander);
+      });
+    });
+
+    // ── setAuthState error redaction ─────────────────────────────────────
+    //
+    // `auth-delivery-fails` has a codeDelivery hook that throws, so signUp
+    // fails after the user record is written. The state machine reports the
+    // failure in `AuthState.error`, which reaches unauthenticated clients.
+
+    describe('setAuthState error redaction', () => {
+      // Dynamic import, not static: `aws-blocks` resolves to the generated
+      // client.js, which only exists once e2e.test.ts has started the server
+      // (it imports the client the same way). Destructure the namespace from the
+      // module; awaiting the namespace proxy itself would probe it as a thenable.
+
+      test('an unbranded backend error reaches the client only as a generic message', async () => {
+        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `raw-${uniqueUser()}`, password: 'password123' });
+
+        assert.strictEqual(state.state, 'signedOut');
+        assert.strictEqual(state.error, 'Internal error');
+        assert.strictEqual(state.errorName, undefined);
+        assert.ok(!JSON.stringify(state).includes('111122223333'), `AuthState must not carry backend detail: ${JSON.stringify(state)}`);
+      });
+
+      test('an ApiError message and name reach the client unchanged', async () => {
+        const { authDeliveryFailsApi } = await import('aws-blocks');
+        const state = await authDeliveryFailsApi.setAuthState({ action: 'signUp', username: `api-${uniqueUser()}`, password: 'password123' });
+
+        assert.strictEqual(state.state, 'signedOut');
+        assert.strictEqual(state.error, 'That address cannot receive email');
+        assert.strictEqual(state.errorName, 'UndeliverableAddressException');
       });
     });
 

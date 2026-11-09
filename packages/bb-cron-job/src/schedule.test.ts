@@ -4,6 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { CronJob, CronJobErrors } from './index.mock.js';
+import type { CronFields, CronSchedule } from './schedule.js';
 
 /**
  * Minimal scope parent stub satisfying the Scope base class contract.
@@ -17,6 +18,12 @@ const fakeScope = {
 
 function opts(schedule: string) {
 	return { schedule, handler: async () => {} };
+}
+
+/** Parsed cron fields of a mock CronJob (`_schedule` is private, so reach it via a typed view). */
+function cronFields(id: string, schedule: string): CronFields {
+	const job = new CronJob(fakeScope, id, opts(schedule)) as unknown as { _schedule: CronSchedule };
+	return job._schedule.fields;
 }
 
 describe('parseSchedule – rate expressions', () => {
@@ -187,5 +194,63 @@ describe('parseSchedule – cron step expressions', () => {
 			() => new CronJob(fakeScope, 'oobMin', opts('cron(100 * * * ? *)')),
 			(err: Error) => err.name === CronJobErrors.InvalidSchedule
 		);
+	});
+});
+
+describe('parseSchedule – cron month names', () => {
+	// AWS cron month field accepts JAN-DEC (case-insensitive) as well as 1-12.
+	test('cron(0 9 1 JAN ? *) resolves to January and matches the numeric form', () => {
+		const named = cronFields('monJAN', 'cron(0 9 1 JAN ? *)');
+		assert.deepStrictEqual(named.month, [1]);
+		assert.deepStrictEqual(named, cronFields('mon1', 'cron(0 9 1 1 ? *)'));
+	});
+
+	test('cron(0 9 ? JAN-MAR MON *) resolves a named month range to 1-3', () => {
+		const named = cronFields('monJM', 'cron(0 9 ? JAN-MAR MON *)');
+		assert.deepStrictEqual(named.month, [1, 2, 3]);
+		assert.deepStrictEqual(named, cronFields('mon13', 'cron(0 9 ? 1-3 2 *)'));
+	});
+
+	test('cron(0 9 1 MAR,JUN,SEP,DEC ? *) resolves a named month list', () => {
+		assert.deepStrictEqual(cronFields('monList', 'cron(0 9 1 MAR,JUN,SEP,DEC ? *)').month, [3, 6, 9, 12]);
+	});
+
+	test('cron(0 9 1 JAN/3 ? *) steps from a named month', () => {
+		assert.deepStrictEqual(cronFields('monStep', 'cron(0 9 1 JAN/3 ? *)').month, [1, 4, 7, 10]);
+	});
+
+	test('month names are case-insensitive, like day names', () => {
+		assert.deepStrictEqual(cronFields('monLower', 'cron(0 9 1 jan-Mar ? *)').month, [1, 2, 3]);
+	});
+
+	test('cron(0 9 1 FOO ? *) throws — unknown month name', () => {
+		assert.throws(
+			() => new CronJob(fakeScope, 'monFoo', opts('cron(0 9 1 FOO ? *)')),
+			(err: Error) => err.name === CronJobErrors.InvalidSchedule,
+		);
+	});
+});
+
+describe('parseSchedule – cron values must be whole integers', () => {
+	for (const schedule of [
+		'cron(0 9am * * ? *)',
+		'cron(30m 9 * * ? *)',
+		'cron(0 9 1st * ? *)',
+		'cron(0/15x * * * ? *)',
+		'cron(5x/15 * * * ? *)',
+		'cron(1.5 * * * ? *)',
+		'cron(-5 * * * ? *)',
+	]) {
+		test(`${schedule} throws — value is not a whole number`, () => {
+			assert.throws(
+				() => new CronJob(fakeScope, 'junk', opts(schedule)),
+				(err: Error) => err.name === CronJobErrors.InvalidSchedule,
+			);
+		});
+	}
+
+	test('cron(05 09 01 01 ? *) still parses zero-padded values', () => {
+		const f = cronFields('padded', 'cron(05 09 01 01 ? *)');
+		assert.deepStrictEqual([f.minute, f.hour, f.dayOfMonth, f.month], [[5], [9], [1], [1]]);
 	});
 });
