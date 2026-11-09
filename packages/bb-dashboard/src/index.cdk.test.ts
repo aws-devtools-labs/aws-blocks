@@ -25,7 +25,8 @@
  */
 
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -180,5 +181,81 @@ describe('Dashboard synth ids', () => {
 			{ path: dash.node.path, logicalIds: Object.keys(resources), names: Object.values(resources).map((r: any) => r.Properties.DashboardName) },
 			{ path: 'DashboardIds/dashboard', logicalIds: ['dashboardE8F903B5'], names: ['DashboardIds-dashboard'] },
 		);
+	});
+});
+
+// ── defaults.permissionsBoundary guard ───────────────────────────────────────
+// Every AWS::IAM::Role in every synthesized template (custom-resource provider
+// roles and any other stack or helper stack's roles included) must carry the
+// configured boundary and be listed in the synth-time IAM report.
+
+const GUARD_BOUNDARY = 'blocks-guard-boundary';
+const GUARD_EXPECTED = {
+	'Fn::Join': [
+		'',
+		['arn:', { Ref: 'AWS::Partition' }, ':iam::', { Ref: 'AWS::AccountId' }, `:policy/${GUARD_BOUNDARY}`],
+	],
+};
+
+/**
+ * Read every template and the IAM report in `outdir`; fail on a role without the
+ * boundary or missing from the report. Returns the checked roles as
+ * `<artifact>/<logicalId>` (for asserting a block's own roles were reached).
+ */
+function assertEveryRoleBoundedAndReported(outdir: string, reportFile: string): string[] {
+	const report = JSON.parse(readFileSync(join(outdir, reportFile), 'utf8')) as {
+		roles: { stack: string; logicalId: string; permissionsBoundary: unknown }[];
+	};
+	const reported = new Set(report.roles.map((r) => `${r.stack}/${r.logicalId}`));
+	const checked: string[] = [];
+	const problems: string[] = [];
+	for (const file of readdirSync(outdir).filter((f) => f.endsWith('.template.json'))) {
+		const artifact = file.slice(0, -'.template.json'.length);
+		const { Resources = {} } = JSON.parse(readFileSync(join(outdir, file), 'utf8')) as {
+			Resources?: Record<string, { Type: string; Properties?: { PermissionsBoundary?: unknown } }>;
+		};
+		for (const [id, r] of Object.entries(Resources)) {
+			if (r.Type !== 'AWS::IAM::Role') continue;
+			const key = `${artifact}/${id}`;
+			checked.push(key);
+			if (JSON.stringify(r.Properties?.PermissionsBoundary) !== JSON.stringify(GUARD_EXPECTED)) {
+				problems.push(`${key}: boundary ${JSON.stringify(r.Properties?.PermissionsBoundary ?? 'NONE')}`);
+			}
+			if (!reported.has(key)) problems.push(`${key}: missing from ${reportFile}`);
+		}
+	}
+	assert.ok(checked.length > 0, 'synth should produce at least one role');
+	assert.deepStrictEqual(
+		problems,
+		[],
+		`roles not covered by defaults.permissionsBoundary:\n  ${problems.join('\n  ')}`,
+	);
+	return checked;
+}
+
+describe('Dashboard under defaults.permissionsBoundary', () => {
+	test('every role in the stack carries the boundary and is in blocks-iam.json', async () => {
+		const outdir = mkdtempSync(join(tmpdir(), 'dashboard-boundary-'));
+		try {
+			const app = new cdk.App({ outdir });
+			const stack = await BlocksStack.create(app, 'DashboardBoundary', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: backendPath,
+				defaults: { ...BlocksPresets.production, permissionsBoundary: GUARD_BOUNDARY },
+				defaultComputeFactory: lambdaFactory,
+			});
+			(stack._defaultCompute as LambdaCompute).enableTracing();
+			new Dashboard(stack, 'dashboard', { routePath: false });
+			finalizeDashboards(stack);
+			app.synth();
+
+			const checked = assertEveryRoleBoundedAndReported(outdir, `${stack.artifactId}.blocks-iam.json`);
+			assert.ok(
+				checked.some((r) => r.includes('BlocksRole')),
+				`the shared execution role was checked: ${checked}`,
+			);
+		} finally {
+			rmSync(outdir, { recursive: true, force: true });
+		}
 	});
 });
