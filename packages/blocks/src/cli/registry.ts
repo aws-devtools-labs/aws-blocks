@@ -9,6 +9,7 @@
  * is an edit here; the parser and the help read only this table.
  */
 
+import { migrate } from './commands/migrate.js';
 import * as commands from './commands.js';
 import type { Context } from './context.js';
 
@@ -45,7 +46,8 @@ export type FlagValues = Record<string, string | boolean | string[] | undefined>
 /**
  * The shape of a JSON result, so that a `--query` path is checked before the
  * command runs: `null` for a value, an object's fields, or a one-element
- * array for a list whose elements have that shape.
+ * array for a list whose elements have that shape. An object whose field
+ * names are data (script names) declares the shape of every field as `'*'`.
  */
 export type JsonShape = null | readonly [JsonShape] | JsonObjectShape;
 export interface JsonObjectShape {
@@ -521,6 +523,62 @@ export const COMMANDS: readonly CommandSpec[] = [
 		passthrough: true,
 		examples: [{ command: 'cdk-blocks vendorize @aws-blocks/bb-kv-store', description: 'Copy KVStore into the app' }],
 		handler: commands.vendorize,
+	},
+	{
+		path: ['migrate'],
+		group: 'Project',
+		summary: 'Move an app from aws-blocks/scripts wrappers to cdk-blocks commands',
+		description:
+			'Move an app that create-blocks-app scaffolded with aws-blocks/scripts/*.ts wrappers to the cdk-blocks\n' +
+			'CLI. Scripts whose value is exactly a generated command (for example "tsx aws-blocks/scripts/deploy.ts")\n' +
+			'become cdk-blocks aliases ("cdk-blocks deploy"); every other script stays as it is. The options of a\n' +
+			'generated server.ts move to package.json "blocks.dev". Generated wrappers that no script and no\n' +
+			'app file other than Markdown docs uses any more are deleted. Only the wrappers of public\n' +
+			'create-blocks-app releases are recognised; any other version is reported as unrecognised and is\n' +
+			'never deleted. In a git repository the app files are the tracked and not-ignored ones,\n' +
+			'and the files of a submodule or nested repository inside the app; outside git, or where git does\n' +
+			'not track the app, the files under the app directory other than node_modules and build output.\n' +
+			'In a monorepo, and in the superproject of a submodule, it also reads every tracked package.json\n' +
+			'and CI, shell, Make and Docker file outside the app (.github/workflows/*, scripts/*.sh,\n' +
+			'ci/Makefile); there a path counts only with the directory of this app\n' +
+			'(apps/web/aws-blocks/scripts/deploy.ts), or in a file that changes into the app\n' +
+			'(working-directory: apps/web, cd apps/web). In CI, shell and Docker files and in scripts, a bare\n' +
+			'scripts/deploy.ts or deploy.ts counts as a use too.\n' +
+			'Unless you pass --force, it refuses an app outside git (or without git installed), a git working\n' +
+			'tree with uncommitted changes, an app that git does not track (a parent repository ignores its\n' +
+			'directory), since git could not undo the changes, and a repository that git fails to read. Run\n' +
+			'--dry-run first to see the plan.\n' +
+			'Exit codes:\n' +
+			'  0  fully migrated, or nothing to do\n' +
+			'  1  kept items remain for you to finish by hand (a report, not a crash), or migrate refused and\n' +
+			'     wrote nothing; with --output json a refusal prints {"error": {"message", "hint"}} on stdout\n' +
+			'     instead of the result (with --query, only the error on stderr)\n' +
+			'  2  usage error',
+		flags: [
+			{ name: 'dry-run', type: 'boolean', description: 'Print the plan; write nothing' },
+			{
+				name: 'force',
+				type: 'boolean',
+				description:
+					'Run outside git, with uncommitted changes, or where git does not track the app or fails to read it',
+			},
+		],
+		json: {
+			changed: [null],
+			removed: [null],
+			kept: [{ file: null, reason: null }],
+			scriptsRewritten: { '*': { from: null, to: null } },
+			devConfig: { port: null, frontendCommand: null, frontendPort: null, frontend: null },
+		},
+		examples: [
+			{ command: 'cdk-blocks migrate --dry-run', description: 'Show what would change' },
+			{ command: 'cdk-blocks migrate', description: 'Rewrite the scripts and delete the generated wrappers' },
+			{
+				command: 'cdk-blocks migrate --output json',
+				description: 'Print {changed, removed, kept, scriptsRewritten, devConfig}',
+			},
+		],
+		handler: migrate,
 	},
 	{
 		path: ['help'],
