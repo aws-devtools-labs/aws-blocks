@@ -214,8 +214,11 @@ provider's raw \`sub\`, prefix it with the issuer in a migration:
 
 \`\`\`sql
 UPDATE public.todos SET user_id = 'https://accounts.google.com:' || user_id
-WHERE user_id NOT LIKE '%:%';
+WHERE user_id NOT LIKE 'https://accounts.google.com:%';
 \`\`\`
+
+Use your provider's exact \`iss\` value as the prefix (Auth0's issuer ends in \`/\`; see
+the User ID note below). Filtering on that prefix keeps the migration safe to re-run.
 
 If it holds Supabase \`auth.users\` ids, map each one to that user's new \`userId\` instead.
 A \`uuid\` column has to become \`text\` first; Postgres refuses to change the type of a column
@@ -236,7 +239,7 @@ policy at it with \`->> 'idp_sub'\`:
 \`\`\`
 
 Other claims pass through: \`supabaseCrud()\` forwards \`user.claims\` (for AuthOIDC, the
-verified ID-token claims), so non-reserved claims such as \`email\` are readable with
+verified token's claims), so non-reserved claims such as \`email\` are readable with
 \`current_setting('request.jwt.claims', true)::jsonb ->> 'email'\`.
 
 ## Verify It Works

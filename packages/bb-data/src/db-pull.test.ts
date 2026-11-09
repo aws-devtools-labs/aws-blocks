@@ -317,6 +317,9 @@ describe('generateMigrationGuide', () => {
     assert.ok(output.includes('**migration_test_todos**'));
     assert.ok(output.includes('`email`'));
     assert.ok(output.includes('`app_metadata`'));
+    // Same answer as Limitations: the token AuthOIDC verifies, not always the access token.
+    assert.ok(output.includes('include these claims in the token AuthOIDC verifies'));
+    assert.ok(!output.includes('include these claims in access tokens'));
   });
 
   test('includes userId-vs-sub note', () => {
@@ -331,9 +334,14 @@ describe('generateMigrationGuide', () => {
     assert.ok(!output.includes('is what reaches RLS'), 'guide must not say the raw sub reaches RLS');
     assert.ok(!output.includes('use `user.claims.sub`'), 'guide must not key new tables on the raw sub');
     assert.match(output, /`\$\{iss\}:\$\{sub\}`/);
-    assert.ok(output.includes('https://accounts.google.com:1234567890'));
+    assert.match(output, /https:\/\/accounts\.google\.com:1234567890/);
     assert.ok(output.includes("current_setting('request.jwt.claims', true)::jsonb ->> 'sub'"));
     assert.ok(output.includes("SET user_id = 'https://accounts.google.com:' || user_id"));
+    // The re-run guard filters on the exact issuer prefix, not on any ':' in the raw sub.
+    assert.ok(output.includes("WHERE user_id NOT LIKE 'https://accounts.google.com:%'"));
+    assert.ok(!output.includes("NOT LIKE '%:%'"));
+    // ID-token vs access-token wording: AuthOIDC verifies either, depending on the caller.
+    assert.ok(!output.includes('verified ID-token claims'));
     // Non-reserved claims such as email still pass through to the RLS context.
     assert.ok(output.includes("current_setting('request.jwt.claims', true)::jsonb ->> 'email'"));
   });
