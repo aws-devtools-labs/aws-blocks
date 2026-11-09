@@ -164,6 +164,11 @@ jobs:
         trial: ${{ fromJSON(needs.revisions.outputs.trials) }}
     env:
       WORK: run-${{ matrix.arm }}-${{ matrix.trial }}
+      # Lifetime of the Bedrock session the agent can read. The run step took at most 1,125 s
+      # (p95 882 s) over 284 trials; 2,700 s is three times the p95 and leaves room for Bedrock
+      # throttling at higher trial counts. run.py stops Harbor at the deadline and reports the
+      # trial as an infrastructure error. scripts/ci/harbor-credentials.test.mjs keeps it 900-3600.
+      HARBOR_SESSION_SECONDS: 2700
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -188,12 +193,16 @@ jobs:
           python scripts/harbor-bench/prepare.py --registry packed --output "$WORK" --arm "$ARM" --commit "$COMMIT" --harness-commit "$HARNESS_SHA"
           image=$(python -c 'import json, os; print(json.load(open(os.environ["WORK"] + "/identity.json"))["image"])')
           docker build --tag "$image" "$WORK/task/environment"
+      # Taken before the session starts, so the deadline is never later than the real expiry.
+      - name: Record credential deadline
+        id: deadline
+        run: echo "expire_at=$(( $(date +%s) + HARBOR_SESSION_SECONDS ))" >> "$GITHUB_OUTPUT"
       - name: Assume dedicated Bedrock-only role
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
-          role-duration-seconds: 10800
+          role-duration-seconds: ${{ env.HARBOR_SESSION_SECONDS }}
           role-session-name: harbor-${{ github.run_id }}-${{ matrix.arm }}-${{ matrix.trial }}
           mask-aws-account-id: true
           # Intersection with the role policy, never permission to deploy or publish.
@@ -201,7 +210,9 @@ jobs:
             {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-opus-5-5","arn:aws:bedrock:*::foundation-model/anthropic.claude-opus-5-5"]}]}
       - name: Run three phases in one Harbor container and Claude session
         id: run
-        run: python scripts/harbor-bench/run.py "$WORK"
+        env:
+          CREDENTIALS_EXPIRE_AT: ${{ steps.deadline.outputs.expire_at }}
+        run: python scripts/harbor-bench/run.py "$WORK" --credentials-expire-at "$CREDENTIALS_EXPIRE_AT"
       - name: Upload allowlisted results only
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
