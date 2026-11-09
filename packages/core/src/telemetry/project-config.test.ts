@@ -7,7 +7,7 @@
 
 import assert from 'node:assert';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -404,6 +404,29 @@ void describe('the config lock: stale and live holders', () => {
 		writeConfigTelemetry(configPath, false);
 		assert.deepStrictEqual(readJson(), { stackId: 'my-app-1', telemetry: { enabled: false } });
 		assert.deepStrictEqual(readdirSync(join(app, '.blocks')), ['config.json']);
+	});
+
+	void it('gives up on a lock path that is a dangling symlink instead of spinning forever', {
+		skip: process.platform === 'win32',
+	}, () => {
+		symlinkSync(join(app, 'no-such-target'), lockPath);
+		const before = readFileSync(configPath, 'utf-8');
+
+		// In a child process: a writer that never gives up would block this thread for good.
+		const projectId = runChild(printProjectId);
+		assert.strictEqual(projectId.status, 0, `stdout: ${projectId.stdout}\nstderr: ${projectId.stderr}`);
+		assert.match(projectId.stdout.trim(), /^[0-9a-f-]{36}$/);
+
+		const disable = runChild(disableCli);
+		assert.strictEqual(disable.status, 1, `stdout: ${disable.stdout}\nstderr: ${disable.stderr}`);
+		assert.match(
+			disable.stderr,
+			/Failed to write config: Timed out .* waiting for the lock .*not a Blocks lock record/s,
+		);
+		assert.doesNotMatch(disable.stdout, /Telemetry disabled/);
+
+		assert.strictEqual(readFileSync(configPath, 'utf-8'), before, 'nothing was written');
+		assert.deepStrictEqual(readdirSync(join(app, '.blocks')).sort(), ['config.json', 'config.json.lock']);
 	});
 
 	void it('never removes a live lock: projectId skips its write, --disable and writeConfigTelemetry fail', {

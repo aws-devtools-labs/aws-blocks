@@ -806,6 +806,29 @@ describe('create-blocks-app telemetry/global × project precedence (shared case 
     rmSync(project, { recursive: true, force: true });
   });
 
+  for (const side of ['project', 'global'] as const) {
+    it(`honors a ${side} opt-out saved with a UTF-8 BOM, as core does`, () => {
+      const home = makeTmpDir('cba-precedence-bom-home');
+      const project = makeTmpDir('cba-precedence-bom-proj');
+      const dir = side === 'project' ? project : home;
+      mkdirSync(join(dir, '.blocks'), { recursive: true });
+      writeFileSync(join(dir, '.blocks', 'config.json'), `\uFEFF${JSON.stringify({ telemetry: { enabled: false } })}`);
+
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', GATE_CHILD, moduleUrl], {
+        encoding: 'utf-8',
+        cwd: project,
+        timeout: 30_000,
+        env: { ...process.env, HOME: home, USERPROFILE: home, AWS_BLOCKS_DISABLE_TELEMETRY: '' },
+      });
+
+      assert.strictEqual(result.status, 0, result.stderr);
+      assert.strictEqual(result.stdout, 'false', `a ${side} opt-out with a BOM must disable telemetry`);
+
+      rmSync(home, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    });
+  }
+
   async function countHttpRequests(options: { global?: boolean; project?: boolean }): Promise<number> {
     const received: string[] = [];
     const server: Server = await new Promise((resolve) => {

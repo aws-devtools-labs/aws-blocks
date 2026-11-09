@@ -50,7 +50,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { linkSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { linkSync, lstatSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 
 /** How many nested reap files a contender will clear before backing off. */
@@ -115,13 +115,17 @@ function processStartTime(pid: number): string | null {
 
 let ownStartTime: string | null | undefined;
 
-/** Read a lock record; `missing` when the path doesn't exist, `unknown` when it isn't a record. */
+/**
+ * Read a lock record; `missing` when the path doesn't exist, `unknown` when it isn't a
+ * record (including a symlink whose target doesn't exist, which `link()` still sees).
+ */
 function readRecord(path: string): LockRecord | 'missing' | 'unknown' {
 	let text: string;
 	try {
 		text = readFileSync(path, 'utf-8');
 	} catch (error: unknown) {
-		return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unknown';
+		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'unknown';
+		return lstatSync(path, { throwIfNoEntry: false }) ? 'unknown' : 'missing';
 	}
 	try {
 		const value: unknown = JSON.parse(text);
@@ -253,8 +257,9 @@ export function acquireBlocksConfigLock(lockPath: string, timeoutMs: number): He
 				return { release };
 			}
 			const holder = readRecord(lockPath);
-			if (holder === 'missing') continue;
-			if (holder !== 'unknown' && !isOwnerAlive(holder, verified)) {
+			// `missing`: released between our link() and read; retry at once, within the deadline.
+			if (holder === 'missing' && Date.now() < deadline) continue;
+			if (holder !== 'missing' && holder !== 'unknown' && !isOwnerAlive(holder, verified)) {
 				if (reap(lockPath, holder, own, ownRecordPath, verified, 0)) continue;
 			}
 			if (Date.now() >= deadline)
