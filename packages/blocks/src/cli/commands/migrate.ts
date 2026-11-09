@@ -690,6 +690,8 @@ function gitRepoFiles(root: string): RepoFiles[] {
 	let [top = '', prefix = ''] = where.stdout.split('\n');
 	// At the top of its work tree, gitFiles lists the project's files already.
 	const repos: RepoFiles[] = prefix === '' ? [] : [{ top, prefix, files: filesAbove(top, prefix) }];
+	// Each superproject is a strict ancestor of the work tree before it, so `top` gets shorter on every hop
+	// and the loop ends at the filesystem root at the latest; it needs no depth cap.
 	for (;;) {
 		// Outside a submodule git prints nothing; a git too old for the option, or a superproject it does not read, ends the search too.
 		const sup = spawnSync('git', ['rev-parse', '--show-superproject-working-tree'], { cwd: top, encoding: 'utf-8' });
