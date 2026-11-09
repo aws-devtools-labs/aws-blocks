@@ -29,7 +29,7 @@ after(() => rmSync(root, { recursive: true, force: true }));
 const FAKE_NPM = `#!/usr/bin/env node
 const { appendFileSync, mkdirSync, readFileSync, rmSync, symlinkSync } = require('node:fs');
 const { execFileSync } = require('node:child_process');
-const { dirname, join, relative } = require('node:path');
+const { dirname, join, relative, resolve } = require('node:path');
 const [cmd, ...args] = process.argv.slice(2);
 appendFileSync(process.env.FAKE_NPM_LOG, [cmd, ...args].join(' ') + '\\n');
 if (cmd === 'install') {
@@ -43,7 +43,7 @@ if (cmd === 'install') {
   }
 } else if (cmd === 'pack') {
   if (process.env.FAKE_NPM_PACK_FAIL) { console.error('npm error 404 Not Found - ' + args[0]); process.exit(1); }
-  const dest = args[args.indexOf('--pack-destination') + 1];
+  const dest = resolve(args[args.indexOf('--pack-destination') + 1]);
   execFileSync('tar', ['-czf', join(dest, 'aws-blocks-bb-fake-1.2.3.tgz'), 'package'], { cwd: process.env.FAKE_NPM_PUBLISHED });
 }
 `;
@@ -152,7 +152,7 @@ describe('vendorize', () => {
 
     assert.strictEqual(status, 0, stderr);
     assert.match(stdout, /downloading the published @aws-blocks\/bb-fake@1\.2\.3/);
-    assert.match(read(app, '.npm-log'), /^pack @aws-blocks\/bb-fake@1\.2\.3 --pack-destination /m);
+    assert.match(read(app, '.npm-log'), /^pack @aws-blocks\/bb-fake@1\.2\.3 --pack-destination vendor[\\/]\.vendorize-download-\S+$/m);
     assert.strictEqual(read(app, 'vendor/bb-fake/src/index.ts'), 'export const SOURCE = "published";\n');
     assert.deepStrictEqual(JSON.parse(read(app, 'vendor/bb-fake/package.json')).bin, { 'bb-fake': './bin/bb-fake.js' });
     assert.deepStrictEqual(vendorEntries(app), ['bb-fake']);
@@ -183,6 +183,51 @@ describe('vendorize', () => {
     assert.match(read(app, 'vendor/bb-fake/src/index.ts'), /my customization/);
     assert.strictEqual(read(app, 'package.json'), appPkg);
     assert.deepStrictEqual(vendorEntries(app), ['bb-fake']);
+  });
+
+  test('--force reports nothing changed when building the new copy fails before the swap', () => {
+    const app = vendorizedApp();
+    const appPkg = read(app, 'package.json');
+    const publishedPkg = join(app, '.published', 'package', 'package.json');
+    writeFileSync(publishedPkg, JSON.stringify({ ...JSON.parse(readFileSync(publishedPkg, 'utf-8')), bin: { 'bb-fake': 42 } }));
+    const { status, stderr } = runVendorize(app, { force: true });
+
+    assert.strictEqual(status, 1);
+    assert.match(stderr, /Could not vendorize @aws-blocks\/bb-fake/);
+    assert.match(stderr, /Nothing was changed: vendor\/bb-fake\/ is untouched\./);
+    assert.doesNotMatch(stderr, /Removed the partial/);
+    assert.match(read(app, 'vendor/bb-fake/src/index.ts'), /my customization/);
+    assert.strictEqual(read(app, 'package.json'), appPkg);
+    assert.deepStrictEqual(vendorEntries(app), ['bb-fake']);
+  });
+
+  test('--force refuses a vendored version that is not a published version, without running npm', () => {
+    const app = vendorizedApp();
+    const marker = join(app, 'expanded');
+    const vendoredPkg = join(app, 'vendor', 'bb-fake', 'package.json');
+    const version = `$(touch ${marker})`;
+    writeFileSync(vendoredPkg, JSON.stringify({ ...JSON.parse(readFileSync(vendoredPkg, 'utf-8')), version }));
+    writeFileSync(join(app, '.npm-log'), '');
+    const { status, stderr } = runVendorize(app, { force: true });
+
+    assert.strictEqual(status, 1);
+    assert.match(stderr, /is not a published version/);
+    assert.match(stderr, /Nothing was changed/);
+    assert.strictEqual(existsSync(marker), false);
+    assert.strictEqual(read(app, '.npm-log'), '');
+    assert.match(read(app, 'vendor/bb-fake/src/index.ts'), /my customization/);
+  });
+
+  test('points out a previous copy that an interrupted run left in vendor/.vendorize-*/old/', () => {
+    const app = vendorizedApp();
+    const stranded = join(app, 'vendor', '.vendorize-abc123', 'old');
+    mkdirSync(stranded, { recursive: true });
+    writeFileSync(join(stranded, 'package.json'), JSON.stringify({ name: PKG, version: '1.2.3' }));
+    const { stderr } = runVendorize(app);
+
+    assert.match(stderr, /vendor\/\.vendorize-abc123\/old\/ holds the previous vendorized copy of @aws-blocks\/bb-fake/);
+    assert.match(stderr, /move it back to vendor\/bb-fake\/ \(replacing the copy there\)\. Otherwise delete vendor\/\.vendorize-abc123\//);
+    assert.ok(existsSync(stranded));
   });
 
   test('without --force refuses and changes nothing', () => {

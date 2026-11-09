@@ -5,7 +5,6 @@ import { execFileSync, execSync } from 'node:child_process';
 import {
   cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { resolveInput, findPackageJson } from './resolve.js';
 import { generateBinShim, generatePackageJson, generateTsconfig, vendorBins } from './generate.js';
@@ -14,6 +13,10 @@ import { writeMigrationInstructions } from './instructions.js';
 import { writeJson } from './fs.js';
 
 const VENDOR_DIR = 'vendor';
+/** Prefix of the working directories a run creates under vendor/ and removes when it ends. */
+const WORK_DIR_PREFIX = '.vendorize-';
+/** A published version: digits, dots and semver's prerelease/build characters only. */
+const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export interface VendorizeOptions {
   force?: boolean;
@@ -34,6 +37,7 @@ interface PackageSource {
 
 export function vendorize(input: string, options: VendorizeOptions = {}): void {
   const projectRoot = findProjectRoot();
+  reportStrandedCopies(projectRoot);
   const { packageName, packageJsonPath } = resolveInput(input);
   const shortName = packageName.replace(/^@[^/]+\//, '');
   const destDir = join(projectRoot, VENDOR_DIR, shortName);
@@ -89,20 +93,35 @@ function locateSource(projectRoot: string, packageName: string, packageJsonPath:
       `Nothing was changed. Set "version" in ${VENDOR_DIR}/${shortName}/package.json and run the command again.`,
     ]);
   }
+  if (!VERSION_PATTERN.test(version)) {
+    throw new VendorizeError([
+      `Error: ${VENDOR_DIR}/${shortName}/package.json has "version": ${JSON.stringify(version)}, which is not a published version.`,
+      `Nothing was changed. Set "version" in ${VENDOR_DIR}/${shortName}/package.json to the published version it came from and run the command again.`,
+    ]);
+  }
 
   console.log(`node_modules/${packageName} is the vendorized copy; downloading the published ${packageName}@${version}...`);
   return downloadPublished(projectRoot, packageName, version, shortName);
 }
 
-/** `npm pack` the published `<packageName>@<version>` into a temp dir and unpack it. */
+/**
+ * `npm pack` the published `<packageName>@<version>` into a working directory
+ * under vendor/ and unpack it. Called only when vendor/<pkg> exists, so vendor/ does.
+ */
 function downloadPublished(projectRoot: string, packageName: string, version: string, shortName: string): PackageSource {
-  const tempDir = mkdtempSync(join(tmpdir(), 'blocks-vendorize-'));
+  const tempDir = mkdtempSync(join(projectRoot, VENDOR_DIR, `${WORK_DIR_PREFIX}download-`));
   const cleanup = () => rmSync(tempDir, { recursive: true, force: true });
   try {
-    // Run from the app so its .npmrc (registry, auth) applies.
-    execSync(`npm pack ${JSON.stringify(`${packageName}@${version}`)} --pack-destination ${JSON.stringify(tempDir)}`, {
+    // Run from the app so its .npmrc (registry, auth) applies. Arguments go to
+    // npm as an argv array; Windows needs a shell to run the `npm.cmd` shim,
+    // which is safe because the package name resolved to an installed package,
+    // the version matched VERSION_PATTERN and the relative destination is
+    // `vendor/.vendorize-download-<random>`, so none holds a space or a
+    // shell-significant character.
+    execFileSync('npm', ['pack', `${packageName}@${version}`, '--pack-destination', relative(projectRoot, tempDir)], {
       cwd: projectRoot,
       stdio: 'pipe',
+      shell: process.platform === 'win32',
     });
     const tarball = readdirSync(tempDir).find(name => name.endsWith('.tgz'));
     if (!tarball) throw new Error(`npm pack ${packageName}@${version} produced no tarball`);
@@ -142,9 +161,10 @@ function copyIntoVendor(projectRoot: string, sourceDir: string, packageName: str
   console.log(`Vendorizing ${packageName} → ${VENDOR_DIR}/${shortName}/`);
 
   mkdirSync(vendorRoot, { recursive: true });
-  const workDir = mkdtempSync(join(vendorRoot, '.vendorize-'));
+  const workDir = mkdtempSync(join(vendorRoot, WORK_DIR_PREFIX));
   const stagingDir = join(workDir, 'new');
   const backupDir = join(workDir, 'old');
+  const hadOld = existsSync(destDir);
   let movedOld = false;
   let movedNew = false;
   let installing = false;
@@ -181,7 +201,9 @@ function copyIntoVendor(projectRoot: string, sourceDir: string, packageName: str
       ...errorDetail(err),
       movedOld
         ? `Restored the previous ${VENDOR_DIR}/${shortName}/ and package.json.`
-        : `Removed the partial ${VENDOR_DIR}/${shortName}/ and restored package.json.`,
+        : movedNew
+          ? `Removed the partial ${VENDOR_DIR}/${shortName}/ and restored package.json.`
+          : `Nothing was changed${hadOld ? `: ${VENDOR_DIR}/${shortName}/ is untouched` : ''}.`,
       ...(installing ? ['Run `npm install` to re-link node_modules.'] : []),
     ]);
   }
@@ -197,6 +219,33 @@ function orExit<T>(step: () => T, cleanup?: () => void): T {
     if (!(err instanceof VendorizeError)) throw err;
     for (const line of err.lines) console.error(line);
     process.exit(1);
+  }
+}
+
+/**
+ * Warn about previous copies that an interrupted run (a crash or kill during
+ * `npm install`) moved aside to `vendor/.vendorize-<id>/old/` and never put back.
+ */
+function reportStrandedCopies(projectRoot: string): void {
+  const vendorRoot = join(projectRoot, VENDOR_DIR);
+  if (!existsSync(vendorRoot)) return;
+  for (const entry of readdirSync(vendorRoot)) {
+    const oldDir = join(vendorRoot, entry, 'old');
+    if (!entry.startsWith(WORK_DIR_PREFIX) || !existsSync(oldDir)) continue;
+    const name = packageNameAt(oldDir);
+    const target = name ? `${VENDOR_DIR}/${name.replace(/^@[^/]+\//, '')}/` : `${VENDOR_DIR}/<package>/`;
+    console.warn(`Warning: ${VENDOR_DIR}/${entry}/old/ holds the previous vendorized copy${name ? ` of ${name}` : ''}, which an interrupted vendorize moved aside.`);
+    console.warn(`  To keep it, move it back to ${target} (replacing the copy there). Otherwise delete ${VENDOR_DIR}/${entry}/.`);
+  }
+}
+
+/** The `name` in `dir`/package.json, or undefined when it is missing or unreadable. */
+function packageNameAt(dir: string): string | undefined {
+  try {
+    const name: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8')).name;
+    return typeof name === 'string' && name !== '' ? name : undefined;
+  } catch {
+    return undefined;
   }
 }
 

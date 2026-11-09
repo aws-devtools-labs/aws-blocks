@@ -42,6 +42,12 @@ describe('vendorBins', () => {
     assert.deepStrictEqual(vendorBins({ name: 'x', bin: { x: './scripts/x.mjs' } }), []);
     assert.deepStrictEqual(vendorBins({ name: 'x' }), []);
   });
+
+  test('names each bin by the base name of its key, as npm links it', () => {
+    assert.deepStrictEqual(vendorBins({ name: 'x', bin: { '../../evil': './dist/cli.js', '..': './dist/cli.js' } }), [
+      { name: 'evil', shim: './bin/evil.js', entry: './src/cli.ts' },
+    ]);
+  });
 });
 
 describe('generatePackageJson', () => {
@@ -51,11 +57,24 @@ describe('generatePackageJson', () => {
     assert.deepStrictEqual(pkg.dependencies, { pg: '^8.23.1', tsx: '^4.23.15' });
   });
 
-  test('uses the default tsx range when none is given, and keeps a declared tsx', () => {
+  test('uses the default tsx range when none is given, and keeps a declared tsx of 4.9.0 or later', () => {
     const bins = vendorBins(bbData);
+    assert.strictEqual(DEFAULT_TSX_RANGE, '^4.9.0');
     assert.strictEqual(generate(bbData, bins).dependencies?.tsx, DEFAULT_TSX_RANGE);
-    const withTsx = { ...bbData, dependencies: { tsx: '^4.1.0' } };
-    assert.strictEqual(generate(withTsx, bins, '^4.23.15').dependencies?.tsx, '^4.1.0');
+    const withTsx = { ...bbData, dependencies: { tsx: '^4.10.0' } };
+    assert.strictEqual(generate(withTsx, bins, '^4.23.15').dependencies?.tsx, '^4.10.0');
+  });
+
+  test('raises a tsx range that allows a version without tsx/esm/api to the default', () => {
+    const bins = vendorBins(bbData);
+    for (const range of ['^4.7.0', '~4.8.1', '>=4.0.0', '4.8.0', '^3.14.0', '*', 'latest', '^4.7.0 || ^4.9.0']) {
+      assert.strictEqual(generate(bbData, bins, range).dependencies?.tsx, DEFAULT_TSX_RANGE, range);
+    }
+    const withOldTsx = { ...bbData, dependencies: { tsx: '^4.1.0' } };
+    assert.strictEqual(generate(withOldTsx, bins, '^4.23.15').dependencies?.tsx, DEFAULT_TSX_RANGE);
+    for (const range of ['^4.9.0', '~4.20.3', '>=4.9.0', '4.19.2', '^5.0.0']) {
+      assert.strictEqual(generate(bbData, bins, range).dependencies?.tsx, range, range);
+    }
   });
 
   test('keeps only the @types/* devDependencies', () => {
@@ -83,7 +102,12 @@ describe('generateBinShim', () => {
   test('registers tsx before importing the src/ entry', () => {
     const shim = generateBinShim({ name: 'bb-data', shim: './bin/bb-data.js', entry: './src/cli.ts' });
     assert.ok(shim.startsWith('#!/usr/bin/env node\n'));
-    assert.ok(shim.indexOf('register();') < shim.indexOf("await import('../src/cli.ts');"));
+    assert.ok(shim.indexOf('register();') < shim.indexOf('await import("../src/cli.ts");'));
     assert.match(shim, /import \{ register \} from 'tsx\/esm\/api';/);
+  });
+
+  test('quotes the entry as a JavaScript string', () => {
+    const shim = generateBinShim({ name: 'x', shim: './bin/x.js', entry: "./src/it's.ts" });
+    assert.ok(shim.includes(`await import("../src/it's.ts");`));
   });
 });

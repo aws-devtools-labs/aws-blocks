@@ -618,7 +618,7 @@ What this does:
 2. Generates a `vendor/bb-kv-store/package.json` with the same `name`, but with
    exports pointing at `./src/*.ts` instead of `./dist/*.js`. It keeps the
    package's `@types/*` devDependencies, and its `bin` commands (such as
-   `bb-data`), which then run the `src/` entry through `tsx`.
+   `bb-data`), which then run the `src/` entry through `tsx` 4.9.0 or later.
 3. Adds `vendor/bb-kv-store` to your root `workspaces` array.
 4. Runs `npm install` so the workspace symlink takes precedence over the
    registry copy in `node_modules`.
@@ -641,7 +641,10 @@ npx blocks-vendorize @aws-blocks/bb-kv-store --force
 
 This replaces `vendor/bb-kv-store/` (and your changes) with the published source
 of the version in `vendor/bb-kv-store/package.json`. If the download or the
-`npm install` fails, the previous copy stays in place.
+`npm install` fails, the previous copy stays in place. While the new copy
+installs, the previous one waits in `vendor/.vendorize-<id>/old/`. If the
+command is killed at that point, the next vendorize run prints where that copy
+is, so you can move it back or delete it.
 
 ### Reverting
 

@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { basename } from 'node:path';
+
 /** A `bin` command of the original package, rewired to run the vendorized source. */
 export interface VendorBin {
   /** Command name, e.g. `bb-data`. */
@@ -11,8 +13,12 @@ export interface VendorBin {
   entry: string;
 }
 
-/** `tsx` range for a vendorized package with `bin` commands, when the app itself doesn't declare tsx. */
-export const DEFAULT_TSX_RANGE = '^4.7.0';
+/**
+ * `tsx` range for a vendorized package with `bin` commands, when neither the
+ * package nor the app declares a tsx range the shims can run on. The shims
+ * import `tsx/esm/api`, which tsx added in 4.9.0.
+ */
+export const DEFAULT_TSX_RANGE = '^4.9.0';
 
 /**
  * Map the original package's `bin` commands onto the vendorized `src/`.
@@ -27,7 +33,10 @@ export function vendorBins(original: any): VendorBin[] {
       ? { [String(original.name).replace(/^@[^/]+\//, '')]: original.bin }
       : original.bin ?? {};
   const bins: VendorBin[] = [];
-  for (const [name, target] of Object.entries(bin)) {
+  for (const [key, target] of Object.entries(bin)) {
+    // npm links a bin under the base name of its key; a key such as `../x` must not place the shim outside bin/.
+    const name = basename(key);
+    if (name === '' || name === '.' || name === '..') continue;
     const entry = remapPath(target.startsWith('./') ? target : `./${target}`);
     if (entry.startsWith('./src/')) bins.push({ name, shim: `./bin/${name}.js`, entry });
   }
@@ -42,7 +51,7 @@ export function generateBinShim(bin: VendorBin): string {
 import { register } from 'tsx/esm/api';
 
 register();
-await import('.${bin.entry}');
+await import(${JSON.stringify(`.${bin.entry}`)});
 `;
 }
 
@@ -51,7 +60,8 @@ await import('.${bin.entry}');
  *
  * Keeps the `@types/*` devDependencies the source needs to type-check, and
  * points each of `bins` at its shim, adding the `tsx` dependency the shims
- * run on (at `tsxRange`).
+ * run on (at the package's own tsx range, else `tsxRange`, either one raised
+ * to {@link DEFAULT_TSX_RANGE} when it allows a tsx older than 4.9.0).
  */
 export function generatePackageJson(original: any, bins: VendorBin[] = [], tsxRange = DEFAULT_TSX_RANGE): object {
   const pkg: any = {
@@ -63,12 +73,25 @@ export function generatePackageJson(original: any, bins: VendorBin[] = [], tsxRa
   };
   if (bins.length > 0) pkg.bin = Object.fromEntries(bins.map(b => [b.name, b.shim]));
   const dependencies = { ...original.dependencies };
-  if (bins.length > 0 && !dependencies.tsx) dependencies.tsx = tsxRange;
+  if (bins.length > 0) dependencies.tsx = shimTsxRange(dependencies.tsx ?? tsxRange);
   if (Object.keys(dependencies).length > 0) pkg.dependencies = dependencies;
   if (original.peerDependencies) pkg.peerDependencies = original.peerDependencies;
   const typeDeps = Object.entries(original.devDependencies ?? {}).filter(([name]) => name.startsWith('@types/'));
   if (typeDeps.length > 0) pkg.devDependencies = Object.fromEntries(typeDeps);
   return pkg;
+}
+
+/**
+ * `range` when every version it allows has `tsx/esm/api` (tsx 4.9.0 or later),
+ * else {@link DEFAULT_TSX_RANGE}. Only a single `^`, `~`, `>=` or exact
+ * version is read; any other range falls back to the default.
+ */
+function shimTsxRange(range: string): string {
+  const match = /^\s*(?:\^|~|>=|=)?\s*v?(\d+)\.(\d+)(?:\.\d+)?(?:[-+][0-9A-Za-z.+-]*)?\s*$/.exec(range);
+  if (!match) return DEFAULT_TSX_RANGE;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 4 || (major === 4 && minor >= 9) ? range : DEFAULT_TSX_RANGE;
 }
 
 /** Generate a tsconfig for building the vendorized source. */
