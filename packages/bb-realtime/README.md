@@ -248,7 +248,7 @@ try {
 ```typescript
 import { RealtimeErrors } from '@aws-blocks/bb-realtime';
 
-RealtimeErrors.ValidationFailed  // data failed schema validation on publish
+RealtimeErrors.ValidationFailed  // data failed schema validation on publish, or an invalid channel name / getChannel() scope
 RealtimeErrors.PublishFailed     // Publish fan-out failed (AWS only)
 RealtimeErrors.ConnectionFailed  // WebSocket connection or subscribe rejected
 RealtimeErrors.UnsupportedCompute // default compute is not Lambda (thrown at synth time)
@@ -357,7 +357,7 @@ Channel names are scoped by the Realtime instance and namespace: `{fullId}/{name
 
 The previous AppSync Events implementation had a 5-segment × 50-character channel name limit. That restriction no longer applies.
 
-**Grammar:** `/` separates segments (`tenants/acme/billing`). `publish()`, `subscribe()` and `getChannel()` throw `ValidationFailedException` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment. Any other characters are allowed.
+**Grammar:** `/` separates segments (`tenants/acme/billing`). `publish()`, `subscribe()` and `getChannel()` throw `ValidationFailedException` for a channel name that is empty, starts or ends with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment, and for a `channel` that isn't a string (`undefined`, `null`, an object). Any other characters are allowed. A number is accepted and validated as its string form.
 
 ### Sub-channels and access
 
