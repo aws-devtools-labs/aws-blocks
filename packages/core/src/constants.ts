@@ -123,3 +123,28 @@ export const FORWARDED_HOST_HEADER = 'x-blocks-forwarded-host';
  * @internal Read by the container HTTP server, written by the front doors; not public API.
  */
 export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';
+
+/**
+ * Container port a container compute's HTTP server listens on: the backend's API
+ * when the compute serves API traffic, a health check otherwise.
+ *
+ * @internal Shared by the container runtime and the container compute's CDK; not public API.
+ */
+export const CONTAINER_HTTP_PORT = 8080;
+
+/**
+ * Container port the API server reports readiness on — the load balancer's health
+ * check — when the compute serves API traffic.
+ *
+ * @internal Shared by the container runtime and the container compute's CDK; not public API.
+ */
+export const CONTAINER_READINESS_PORT = 8081;
+
+/**
+ * Environment variable a container compute that serves API traffic sets (to
+ * `true`) on its tasks. The image entry serves the backend's API only then; a
+ * container that only runs jobs keeps a plain health check.
+ *
+ * @internal Shared by the container compute's CDK and its image entry; not public API.
+ */
+export const CONTAINER_SERVES_API_ENV = 'BLOCKS_CONTAINER_SERVES_API';
