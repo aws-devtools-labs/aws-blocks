@@ -587,6 +587,20 @@ into behaviors). A door served over plain HTTP with an API (an ALB without a
 certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
 cookies and every RPC then travel unencrypted.
 
+The session cookie can't be `Secure` behind such a door either: a browser
+discards a `Secure` cookie set by a plain-HTTP origin. `AuthBasic` therefore
+omits `Secure` from its same-origin session cookie behind a standalone
+`{ kind: 'alb' }` door with no certificate, so the cookie and the session it
+carries cross the network in clear text. `AuthCognito` and `AuthOIDC` keep
+`Secure`, so the browser drops their session cookie and sign-in doesn't persist.
+Use a plain-HTTP door for testing only: for anything else, give the ALB door a
+`certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
+or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
+`Secure`. Its edge → router hop is plain HTTP unless the router has a
+certificate, and to an internet-facing router that warns separately
+(`@aws-blocks/hosting:StackedRouterPlainHttp`, see
+[the edge → router hop](#the-stacked-door)).
+
 Only a CloudFront-backed door (the default, or the stacked door's edge) takes
 over the API's address. Under the backend's `apiFrontDoor: 'cloudfront'` it
 claims the API front-door role: the backend builds no distribution of its own,
