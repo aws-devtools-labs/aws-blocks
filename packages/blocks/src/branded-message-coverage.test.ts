@@ -19,8 +19,17 @@
  * `<identifier>.message` (including `a.b.message`, `a?.message` and
  * `(x as Error).message`) — interpolated, concatenated or passed directly — or a
  * local alias assigned from one on a single line (`const message = err.message`).
- * It deliberately does NOT match an indexed `issues[0].message`: that is a
- * Standard Schema issue describing the caller's own input, not a caught error.
+ * It also flags a `catch` binding stringified into the call (`${e}`, `String(e)`,
+ * `e.toString()`). It deliberately does NOT match an indexed `issues[0].message`:
+ * that is a Standard Schema issue describing the caller's own input, not a caught error.
+ *
+ * NOT covered (a backstop, not a proof; none of these are live in the repo today):
+ * - destructured aliases (`const { message } = err`), declarations split across
+ *   lines, and two-hop aliases (`const a = err.message; const b = a;`);
+ * - alias and catch-binding scope: a `const message = x.message` (or a `catch (e)`)
+ *   anywhere earlier in the file applies to every later call, even in another function;
+ * - `String(x)` / `${x}` / `x.toString()` of a non-`catch` variable;
+ * - regex literals (see {@link codeOnly}).
  *
  * Like `brand-coverage.test.ts`, this is a TEXT scan over `packages/<pkg>/src`
  * (tests, `.d.ts` and `dist` skipped), so it needs no runtime imports. Comments
@@ -36,31 +45,85 @@ import { fileURLToPath } from 'node:url';
 
 const packagesDir = join(fileURLToPath(import.meta.url), '..', '..', '..', '..', 'packages');
 
-/**
- * Known hits that are intentional or are being fixed elsewhere, keyed by
- * `<package>/<relative src path>:<substring of the whitespace-collapsed call>`,
- * each with a reason. Keep the list SHORT and prefer fixing the call site.
- */
-const EXCEPTIONS: Record<string, string> = {
-	// Re-throws an ApiError it caught with only `retriable` changed; that message was already client-facing.
-	'bb-auth-cognito/src/index.ts:new ApiError(e.message, e.status': 're-wraps an existing ApiError unchanged',
-	// `entry` is a row of the constant REQUEST_ERRORS table, so its message is a stable BB string.
-	'bb-data/src/errors.ts:new ApiError(entry.message': 'stable message from a constant table',
-	// mapSesError forwards the raw SES message; a separate open change replaces it with stable messages.
-	'bb-email-client/src/index.aws.ts:, message)': 'fix in flight in a separate change',
-	// Client-side: re-raises a subscription rejection the realtime server sent; those messages are fixed BB strings.
-	'bb-realtime/src/aws-middleware.ts:brandBlocksError(err)': 're-raises a fixed server rejection message',
-	// Local dev twin of the aws-middleware rejection path above.
-	'bb-realtime/src/mock-middleware.ts:brandBlocksError(err)': 're-raises a fixed server rejection message',
-	// Server-side subscribe: same fixed rejection messages from the realtime WebSocket handler.
-	'bb-realtime/src/server-subscribe.ts:brandBlocksError(err)': 're-raises a fixed server rejection message',
-	// Client-side RPC decoder: rebuilds the error the server already serialized for this caller.
-	'core/src/rpc.ts:message, status': 'client-side decode of an already-sent error',
-};
+/** A known, reviewed hit: `call` is the FULL whitespace-collapsed call text. */
+interface Exception {
+	/** `<package>/<relative src path>`. */
+	file: string;
+	/** The whole call, whitespace collapsed, exactly as {@link findRawMessageHits} reports it. */
+	call: string;
+	/** How many identical calls the file has (default 1). A new copy makes the count test fail. */
+	count?: number;
+	reason: string;
+}
 
-/** The EXCEPTIONS key that excuses `hit` in file `key`, if any. */
-function exceptionFor(key: string, hit: RawMessageHit): string | undefined {
-	return Object.keys(EXCEPTIONS).find((k) => k.startsWith(`${key}:`) && hit.call.includes(k.slice(key.length + 1)));
+/**
+ * Known hits that are intentional or are being fixed elsewhere. Each entry
+ * matches one exact call, so a NEW hit in an excepted file still fails.
+ * Keep the list SHORT and prefer fixing the call site.
+ */
+const EXCEPTIONS: Exception[] = [
+	{
+		file: 'bb-auth-cognito/src/index.ts',
+		call: 'new ApiError(e.message, e.status, { name: e.name, retriable: true, cause: e.cause })',
+		// Re-throws an ApiError it caught with only `retriable` changed; that message was already client-facing.
+		reason: 're-wraps an existing ApiError unchanged',
+	},
+	{
+		file: 'bb-data/src/errors.ts',
+		call: 'new ApiError(entry.message, entry.status, { name: entry.name, cause })',
+		// `entry` is a row of the constant REQUEST_ERRORS table, so its message is a stable BB string.
+		reason: 'stable message from a constant table',
+	},
+	// mapSesError forwards the raw SES message. Remove these entries when #885 lands (it replaces them with stable messages).
+	...(
+		[
+			['DomainNotVerified', 2],
+			['SendFailed', 2],
+			['AccountPaused', 1],
+			['RateLimited', 1],
+			['InvalidInput', 1],
+		] as const
+	).map(([name, count]) => ({
+		file: 'bb-email-client/src/index.aws.ts',
+		call: `blocksError(EmailErrors.${name}, message)`,
+		count,
+		reason: 'fixed by #885',
+	})),
+	{
+		file: 'bb-realtime/src/aws-middleware.ts',
+		call: 'brandBlocksError(err)',
+		// Client-side: re-raises a subscription rejection the realtime server sent; those messages are fixed BB strings.
+		reason: 're-raises a fixed server rejection message',
+	},
+	{
+		file: 'bb-realtime/src/mock-middleware.ts',
+		call: 'brandBlocksError(err)',
+		// Local dev twin of the aws-middleware rejection path above.
+		reason: 're-raises a fixed server rejection message',
+	},
+	{
+		file: 'bb-realtime/src/server-subscribe.ts',
+		call: 'brandBlocksError(err)',
+		// Server-side subscribe: same fixed rejection messages from the realtime WebSocket handler.
+		reason: 're-raises a fixed server rejection message',
+	},
+	{
+		file: 'core/src/rpc.ts',
+		call: 'new ApiError(message, status)',
+		// Client-side RPC decoder: rebuilds the error the server already serialized for this caller.
+		reason: 'client-side decode of an already-sent error',
+	},
+	{
+		file: 'core/src/rpc.ts',
+		call: 'new ApiError( message, status, { ...(data?.name ? { name: data.name } : {}), ...(data?.retriable === true ? { retriable: true } : {}), }, )',
+		// Same decoder; flagged only because aliases are not scoped (a `message` alias from another function).
+		reason: 'client-side decode of an already-sent error',
+	},
+];
+
+/** The EXCEPTIONS entry that excuses `hit` in file `key` (an exact call match), if any. */
+function exceptionFor(key: string, hit: RawMessageHit): Exception | undefined {
+	return EXCEPTIONS.find((e) => e.file === key && e.call === hit.call);
 }
 
 /** Recursively collect `*.ts` sources under `dir`, skipping tests, `.d.ts`, `dist`, `node_modules`. */
@@ -100,6 +163,10 @@ function discoverSrcDirs(): { pkg: string; srcDir: string }[] {
  * Return `src` with comment text and string/template literal text replaced by
  * spaces (newlines and quote characters kept, so offsets and line numbers are
  * unchanged). `${…}` expressions inside templates stay, since they are code.
+ *
+ * Regex literals are NOT recognized: a quote or backtick inside one (e.g. `/`/`)
+ * is read as opening a string or template and blanks code up to the next match,
+ * which can hide a later hit. Nothing under `packages/<pkg>/src` trips this today.
  */
 export function codeOnly(src: string): string {
 	const out = src.split('');
@@ -172,7 +239,8 @@ function matchParen(code: string, open: number): number {
 }
 
 /** A call that mints or brands a Blocks error (not its declaration: `function blocksError(` is skipped). */
-const BRANDED_CALL = /(?<![\w$.])(?<!function\s+)(?:new\s+ApiError|blocksError|coreBlocksError|brandBlocksError)\s*\(/g;
+const BRANDED_CALL =
+	/(?<![\w$.])(?<!function\s+)(?:new\s+ApiError|blocksError|coreBlocksError|brandBlocksError)\s*(?:<[^()]*>\s*)?\(/g;
 
 /** `<identifier>.message`, `a.b?.message`, or `(expr).message` — not `issues[0].message`. */
 const RAW_MESSAGE = /(?:(?<![\w$.])[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*|\))\??\.message\b/;
@@ -182,8 +250,23 @@ export interface RawMessageHit {
 	call: string;
 }
 
-/** A one-line local declaration `const x = <rhs>`; `x` aliases a raw message when `<rhs>` matches {@link RAW_MESSAGE}. */
-const DECLARATION = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=([^;\n]*)/g;
+/**
+ * A one-line local declaration `const x = <rhs>` (optionally typed, `const x: string = <rhs>`);
+ * `x` aliases a raw message when `<rhs>` matches {@link RAW_MESSAGE}.
+ */
+const DECLARATION = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?:\s*:[^=;\n]+)?\s*=(?!=)([^;\n]*)/g;
+
+/** A `catch (e)` binding: the caught value itself, whose string form is its raw message. */
+const CATCH_BINDING = /\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g;
+
+/** `${e}`, `String(e)` or `e.toString()` for one of `names`. */
+function stringifyOf(names: string[]): RegExp | undefined {
+	if (names.length === 0) return undefined;
+	const n = `(?:${names.join('|')})`;
+	return new RegExp(
+		`\\$\\{\\s*${n}\\s*\\}|(?<![\\w$.])String\\(\\s*${n}\\s*\\)|(?<![\\w$.])${n}\\s*\\.\\s*toString\\s*\\(`,
+	);
+}
 
 /**
  * Names whose most recent declaration before `offset` was assigned from a
@@ -205,6 +288,7 @@ export function findRawMessageHits(src: string): RawMessageHit[] {
 		index: m.index ?? 0,
 		raw: RAW_MESSAGE.test(m[2]),
 	}));
+	const catches = [...code.matchAll(CATCH_BINDING)].map((m) => ({ name: m[1], index: m.index ?? 0 }));
 	const hits: RawMessageHit[] = [];
 	for (const m of code.matchAll(BRANDED_CALL)) {
 		const open = (m.index ?? 0) + m[0].length - 1;
@@ -216,7 +300,8 @@ export function findRawMessageHits(src: string): RawMessageHit[] {
 		const aliasUse = aliases.length
 			? new RegExp(`(?<![\\w$.])(?:${aliases.join('|')})(?![\\w$]|\\s*:)`)
 			: undefined;
-		if (!RAW_MESSAGE.test(args) && !aliasUse?.test(args)) continue;
+		const caught = [...new Set(catches.filter((c) => c.index < (m.index ?? 0)).map((c) => c.name))];
+		if (!RAW_MESSAGE.test(args) && !aliasUse?.test(args) && !stringifyOf(caught)?.test(args)) continue;
 		const line = code.slice(0, m.index).split('\n').length;
 		hits.push({
 			line,
@@ -251,19 +336,25 @@ test('no branded Blocks error builds its message from a caught error .message', 
 	);
 });
 
-test('every EXCEPTIONS entry still matches a current hit', () => {
-	const used = new Set<string>();
+test('every EXCEPTIONS entry matches exactly its expected number of hits', () => {
+	const used = new Map<Exception, number>();
 	for (const { pkg, srcDir } of discoverSrcDirs()) {
 		for (const file of collectSources(srcDir)) {
 			const key = `${pkg}/${file.slice(join(packagesDir, pkg).length + 1)}`;
 			for (const hit of findRawMessageHits(readFileSync(file, 'utf-8'))) {
 				const k = exceptionFor(key, hit);
-				if (k) used.add(k);
+				if (k) used.set(k, (used.get(k) ?? 0) + 1);
 			}
 		}
 	}
-	const stale = Object.keys(EXCEPTIONS).filter((k) => !used.has(k));
-	assert.deepStrictEqual(stale, [], `Remove these stale EXCEPTIONS entries:\n  ${stale.join('\n  ')}`);
+	const mismatched = EXCEPTIONS.filter((e) => (used.get(e) ?? 0) !== (e.count ?? 1)).map(
+		(e) => `${e.file}: expected ${e.count ?? 1}, found ${used.get(e) ?? 0}  ${e.call}`,
+	);
+	assert.deepStrictEqual(
+		mismatched,
+		[],
+		`Update or remove these EXCEPTIONS entries (0 found = stale; more than expected = a new, unreviewed copy):\n  ${mismatched.join('\n  ')}`,
+	);
 });
 
 test('guard self-test: flags raw .message in branded calls', () => {
@@ -277,6 +368,11 @@ test('guard self-test: flags raw .message in branded calls', () => {
 		'return brandBlocksError(Object.assign(new Error(err.cause.message), { name: Errs.Failed }));',
 		'throw blocksError(Errs.Failed, `a ${`nested ${x.message}`}`);',
 		"const message = err.message ?? 'Unknown';\nreturn blocksError(Errs.Failed, message);",
+		'const message: string = err.message;\nthrow blocksError(Errs.Failed, message);',
+		'throw blocksError<string>(Errs.Failed, err.message);',
+		'try { x(); } catch (e) { throw blocksError(Errs.Failed, `Failed: ${e}`); }',
+		'try { x(); } catch (e) { throw blocksError(Errs.Failed, String(e)); }',
+		'try { x(); } catch (err) { throw new ApiError(err.toString(), 502); }',
 	];
 	for (const snippet of bad) {
 		assert.strictEqual(findRawMessageHits(snippet).length, 1, `expected a hit for: ${snippet}`);
@@ -299,6 +395,9 @@ test('guard self-test: passes stable messages, causes and non-call mentions', ()
 		'log.error(err.message); throw blocksError(Errs.Failed, "stable");',
 		"const message = err.message;\nlog.error(message);\nthrow blocksError(Errs.Failed, 'stable', { message: 1 });",
 		"const err = new Error(e.message);\nlog.error(err);\nconst err = new Error('stable');\nthrow brandBlocksError(err);",
+		"const message: string = 'stable';\nthrow blocksError(Errs.Failed, message);",
+		'try { x(); } catch (e) { throw blocksError(Errs.Failed, `Failed (${e.name})`); }',
+		'try { x(); } catch (e) { log.error(String(e)); throw blocksError(Errs.Failed, String(code)); }',
 	];
 	for (const snippet of good) {
 		assert.deepStrictEqual(findRawMessageHits(snippet), [], `expected no hit for: ${snippet}`);
