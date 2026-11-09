@@ -361,8 +361,8 @@ export const Realtime: {
 
 	async publish(namespace: string, channel: string, data: unknown): Promise<void> {
 		const ns = this._ns(namespace);
-		await validateSchema(ns.schema, data);
 		validateChannelName(channel);
+		await validateSchema(ns.schema, data);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
 		validatePublishSize(fullChannel, data);
