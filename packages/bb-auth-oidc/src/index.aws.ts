@@ -164,7 +164,7 @@ export class AuthOIDC<
 		registerSdkIdentifiers(this.fullId, {
 			sessionTableName: getSdkIdentifiers(sessions).tableName,
 		});
-		mountAuthRoutes(this);
+		mountAuthRoutes(this, this.log);
 
 		// Stub IdP routes are mounted only on sandbox deployments. The CDK entry
 		// rejects stub providers at synth for other deployments; this check
