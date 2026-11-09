@@ -6,6 +6,7 @@ import assert from 'node:assert';
 import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
 import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
@@ -1382,5 +1383,82 @@ describe('alg:none rejection', () => {
 
 		const user = await auth.getCurrentUser(ctx);
 		assert.strictEqual(user, null, 'alg:none with valid claims must still be rejected');
+	});
+});
+
+// Behind a Blocks CloudFront front door, ctx.request.url is the host the request came
+// in on. Authorize can come in on any of the door's hosts; the IdP sends the callback
+// to the one BLOCKS_PUBLIC_ORIGIN names. A same-origin relay accepted at authorize must
+// still be accepted at the callback's re-check.
+describe('relay — a same-origin relay survives the callback on another of the backend\'s hosts', () => {
+	const savedHosts = process.env.BLOCKS_PUBLIC_HOSTS;
+	let server: Server;
+	let issuer: string;
+
+	// A local OIDC discovery document, so authorize-params resolves the provider
+	// without the network (the door hosts below are not real).
+	beforeEach(async () => {
+		server = createServer((req, res) => {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				issuer,
+				authorization_endpoint: `${issuer}/authorize`,
+				token_endpoint: `${issuer}/token`,
+				jwks_uri: `${issuer}/jwks.json`,
+			}));
+		});
+		server.listen(0, '127.0.0.1');
+		await once(server, 'listening');
+		const address = server.address();
+		assert.ok(address && typeof address === 'object', 'a TCP address');
+		issuer = `http://127.0.0.1:${address.port}`;
+	});
+
+	afterEach(() => {
+		server?.close();
+		if (savedHosts === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+		else process.env.BLOCKS_PUBLIC_HOSTS = savedHosts;
+	});
+
+	/** The gateway's own host: the `Host` a callback through any door reaches the Lambda with. */
+	const GATEWAY_HOST = 'abc123.execute-api.us-east-1.amazonaws.com';
+
+	/** Authorize at `authorizeOrigin` with `relayTo`, then call back at `callbackOrigin` with the signed state. */
+	async function relayThrough(authorizeOrigin: string, relayTo: string, callbackOrigin: string) {
+		const auth = new AuthOIDC(ROOT, unique('relay-hosts'), {
+			providers: [customOidc({ name: 'p', issuerUrl: issuer, clientId: 'id', clientSecret: 'secret' })],
+		});
+		const params = await auth.getAuthorizeParams(freshContext(`${authorizeOrigin}/aws-blocks/auth/authorize-params/p`), 'p', {
+			csrf: 'csrf-1',
+			relayTo,
+		});
+		assert.ok(params.state, 'the relay flow returns a signed state');
+		const callback = new URL(`${callbackOrigin}/aws-blocks/auth/callback`);
+		callback.searchParams.set('code', 'auth-code');
+		callback.searchParams.set('state', params.state);
+		const ctx = freshContext(callback.href);
+		ctx.request.headers.set('host', GATEWAY_HOST);
+		return auth.handleCallbackDispatch(ctx);
+	}
+
+	test('authorized on the CloudFront domain, called back on the custom domain', async () => {
+		process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net,app.example.com';
+		const result = await relayThrough('https://d111.cloudfront.net', 'https://d111.cloudfront.net/signed-in', 'https://app.example.com');
+		assert.strictEqual(result.kind, 'relay', JSON.stringify(result));
+		assert.ok(result.kind === 'relay' && result.redirectTo.startsWith('https://d111.cloudfront.net/signed-in?'), JSON.stringify(result));
+	});
+
+	test('authorized on a subdomain of a wildcard alias', async () => {
+		process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net,*.tenant.example.com,app.example.com';
+		const result = await relayThrough('https://a.tenant.example.com', 'https://a.tenant.example.com/signed-in', 'https://app.example.com');
+		assert.strictEqual(result.kind, 'relay', JSON.stringify(result));
+	});
+
+	test("authorized on the gateway's execute-api URL, called back on a CloudFront door", async () => {
+		// No BLOCKS_API_URL: backend compute doesn't get one. The callback's Host is the gateway's.
+		process.env.BLOCKS_PUBLIC_HOSTS = 'app.example.com';
+		const gateway = `https://${GATEWAY_HOST}`;
+		const result = await relayThrough(`${gateway}/prod`, `${gateway}/prod/signed-in`, 'https://app.example.com');
+		assert.strictEqual(result.kind, 'relay', JSON.stringify(result));
 	});
 });

@@ -476,7 +476,7 @@ const auth = new AuthOIDC(app, 'auth', {
 **Implicit allowances** (no `relayOrigin()` entry needed):
 
 - **Loopback** — `http://127.0.0.1:<any-port>` and `http://[::1]:<any-port>`. Covers CLI tools using RFC 8252 §7.3 ephemeral-port pattern.
-- **Same-origin** — the backend's own URL.
+- **Same-origin** — the backend's own URL: the one the `authorize-params` request was made to. Behind a Blocks CloudFront front door (`apiFrontDoor: 'cloudfront'`, or `Hosting`'s CloudFront door) that's the host the client called, the distribution's domain or a custom domain; called directly, it's the gateway's `execute-api` URL. When the IdP calls back, a relay to any host the backend serves over HTTPS (each CloudFront door's hosts and the gateway's) still counts as same-origin, so a sign-in that started on one of them finishes even though the callback arrives on another.
 
 **Granularity.** Entries match on scheme + host + (port if pinned). Paths on the actual `relayTo` value are preserved through the 302 — the allowlist doesn't pattern-match paths.
 
