@@ -675,6 +675,18 @@ The report is CDK-only and doesn't change the CloudFormation template.
 
 The file is written on **every** synth, whether or not `permissionsBoundary` is set, so expect it in `cdk.out/` if you check that directory's contents. It's a side file only: it isn't part of any CloudFormation template and isn't listed as a cloud-assembly artifact in `cdk.out/manifest.json`, so it isn't deployed and `cdk diff` (which compares stack templates) doesn't see it. Producing it costs one walk over the stack's constructs per synth, which is small next to bundling.
 
+### When the role's grants outgrow its inline policy
+
+Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: Blocks first merges statements that share their actions or resources, then the overflow is packed into managed policies (`BlocksRoleOverflowPolicy1`, `2`, …, sized by CDK to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before. An app within the budget gets the same template as before.
+
+IAM also limits how many managed policies one role can carry: 10 by default, up to 20 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role. To fix it, check `<stack>.blocks-iam.json` for the Building Blocks that grant the most and consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
+
+```json
+{ "context": { "@aws-blocks/core:managedPoliciesPerRoleQuota": 20 } }
+```
+
+Overflow statements appear in `<stack>.blocks-iam.json` like any other, with `policy` naming the managed policy they were packed into.
+
 ### Cap every role: `defaults.permissionsBoundary`
 
 A [permissions boundary](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies_boundaries.html) is a ceiling: a role's effective permissions are the intersection of its policies and the boundary. Set `defaults.permissionsBoundary` to attach one to **every** IAM role AWS Blocks creates: the shared execution role, block-owned helper roles, the CDK custom-resource roles blocks cause, and `Hosting`'s roles (including the Lambda@Edge and CloudFront-monitoring roles in the separate `us-east-1` stacks).

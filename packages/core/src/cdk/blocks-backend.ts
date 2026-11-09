@@ -30,6 +30,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { enableRolePolicyPacking } from './role-policy-packing.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
@@ -232,6 +233,11 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+	// When the grants outgrow the inline policy budget, merge combinable statements
+	// before CDK packs the overflow into managed policies, and fail synth with a fix
+	// if the role would exceed the managed-policies-per-role quota. A role within
+	// budget is left as is (role-policy-packing.ts).
+	enableRolePolicyPacking(executionRole);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
 	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an
