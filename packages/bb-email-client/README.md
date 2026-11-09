@@ -65,7 +65,9 @@ directly via `TemplateContent`.
 Returns `{ results: Array<{ status, messageId?, error? }> }`.
 
 Never throws on send failures. Both partial and total failures are reported per-entry in the
-`results` array (with `status: 'failed'`).
+`results` array (with `status: 'failed'`). A failed entry's `error` is a stable message naming
+the error code or the SES entry status (e.g. `EmailSendFailedException: Email send failed (MESSAGE_REJECTED).`);
+the raw SES error text is logged server-side, not returned.
 
 A message without `html` is sent as plain text only, as with `send()`: its `body` is never used
 as an HTML part. Messages that fail validation (see below) are marked `failed` and not sent.
@@ -109,7 +111,7 @@ try {
   await emailClient.send({ to: 'user@example.com', subject: 'Hi', body: 'Hello' });
 } catch (e: unknown) {
   if (isBlocksError(e, EmailErrors.SendFailed)) {
-    // General send failure — check error message for details
+    // General send failure — the SES error is logged server-side and kept on `e.cause`
   }
   if (isBlocksError(e, EmailErrors.InvalidInput)) {
     // Malformed input (e.g. invalid email address)
@@ -125,6 +127,8 @@ try {
   }
 }
 ```
+
+Each error's message is a stable, Building Block-authored string, so it is safe to forward to a client. The raw SES error (which can name identities, regions, configuration sets and account state) is logged through the block's logger and kept on the error's non-enumerable `cause` for server-side diagnostics.
 
 ## Local Development
 

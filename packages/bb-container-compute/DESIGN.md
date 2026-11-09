@@ -14,7 +14,13 @@ self-starts the SQS pollers for the event handlers assigned to it.
   must be arm64-compatible.
 - **Task role.** The shared Blocks execution role, so every Building Block grant
   reaches the container exactly as it reaches the Lambda handler. The `ecs-tasks`
-  trust principal is appended to that role once per stack. The task role is also
+  trust principal is appended to that role once per role, scoped with
+  `aws:SourceAccount` (this account) and `aws:SourceArn`
+  (`arn:<partition>:ecs:<region>:<account>:*`) so only ECS tasks in this account
+  and region can assume it — the
+  [recommended task-role trust](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)
+  (ECS does not support naming a specific cluster in `aws:SourceArn`). The
+  role's Lambda trust is unchanged. The task role is also
   granted read on the code asset (below) so the boot script can fetch it.
 - **Image & code delivery (no local Docker).** The task runs a **stock public
   Node image** — `public.ecr.aws/docker/library/node:24-slim` by default, or the
@@ -112,8 +118,9 @@ with readiness on port **8081** (503 while draining).
   gets the gateway's `Host` and the stage in its API Gateway event. So the
   gateway stamps its public host and stage (`x-blocks-forwarded-host` /
   `x-blocks-forwarded-stage`, from its request context, overwriting any client
-  value), and the container builds `ctx.request.url` from them: the same URL
-  the Lambda handler reports. A request whose stamped headers aren't one
+  value), and the container builds `ctx.request.url` from the host and
+  `getRequestBaseUrl()` from the host and stage: the same values the Lambda
+  handler reports, so the stage is never in the path. A request whose stamped headers aren't one
   well-formed value each — a client copy under another letter case, say — is
   refused with a 400.
 - **CloudFront front doors.** On the `apiFrontDoor: 'cloudfront'` tier, the

@@ -217,3 +217,16 @@ export interface WaitUntilSyncedOptions {
 	 */
 	signal?: AbortSignal;
 }
+
+/**
+ * The server-side `cause` attached (non-enumerable) to an `IngestionFailedException`
+ * when Bedrock reported failure reasons for the failed ingestion job. `message`
+ * joins the reasons with `'; '`; `failureReasons` keeps the raw array. The reasons
+ * are raw Bedrock service text that can name buckets, object keys or ARNs, so they
+ * never appear in the error's own message or its RPC response.
+ *
+ * `cause` is absent when the job reported no reasons or the `GetIngestionJob`
+ * lookup failed, so treat it as optional (`cause?.failureReasons ?? []`). Read it
+ * in server code only, for logging or diagnostics.
+ */
+export type IngestionFailureCause = Error & { failureReasons: string[] };
