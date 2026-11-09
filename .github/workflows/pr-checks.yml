@@ -257,10 +257,10 @@ jobs:
 
       # The Harbor agent check and agent bench only run from main or with model credentials, so
       # their cache-scope hardening (the Harbor build container and output guard, agent bench's
-      # lockfile-pinned Playwright matching PW_VERSION) and the Harbor approval gate are checked
-      # here on every PR.
-      - name: Test the benchmark workflows' cache-scope hardening and approval gate
-        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/agent-bench-playwright.test.mjs
+      # lockfile-pinned Playwright matching PW_VERSION), the Harbor approval gate and the bounds on
+      # the Harbor model credentials are checked here on every PR.
+      - name: Test the benchmark workflows' cache-scope hardening, approval gate and credentials
+        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/harbor-credentials.test.mjs scripts/ci/agent-bench-playwright.test.mjs
 
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
@@ -326,6 +326,11 @@ jobs:
       # cleanup-stacks.yml needs to reclaim a stack it leaks.
       - name: Test the CI template driver helpers
         run: node --test scripts/ci/_proc.test.mjs scripts/ci/_scaffold-tag.test.mjs
+
+      # .puppeteerrc.cjs skips Puppeteer's browser download on GitHub Actions,
+      # but only for installs under the repo's own node_modules.
+      - name: Test the Puppeteer download gate
+        run: node --test scripts/ci/puppeteerrc.test.mjs
 
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.

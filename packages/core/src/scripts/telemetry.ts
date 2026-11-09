@@ -1,6 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { existsSync, statSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { getTelemetryStatus, getGlobalConfigPath, getProjectConfigPath, isDisableValue, type TelemetryStatus } from '../telemetry/consent.js';
 import { writeConfigTelemetry } from '../telemetry/config-writer.js';
 
@@ -23,7 +25,8 @@ Options:
   --disable          Disable telemetry collection
   --status           Show current telemetry status
   --global           Apply globally (~/.blocks/config.json)
-                     Without this flag, applies to current project (.blocks/config.json)
+                     Without this flag, applies to the project (.blocks/config.json at the
+                     nearest directory with package.json and aws-blocks/, else the current one)
   --help, -h         Show this help message
 
 Examples:
@@ -81,14 +84,33 @@ function parseFlags(argv: string[]): ParsedFlags {
  * when `status.enabled` is false, so one of the three always holds and the final
  * `return` needs no guard.
  */
-function describeDisable(status: TelemetryStatus): string {
+function describeDisable(status: TelemetryStatus, projectRoot?: string): string {
   if (isDisableValue(status.envVar)) return `AWS_BLOCKS_DISABLE_TELEMETRY="${status.envVar}"`;
-  if (status.projectConfig === false) return `the project config (${getProjectConfigPath()})`;
+  if (status.projectConfig === false) return `the project config (${getProjectConfigPath(projectRoot)})`;
   return `the global config (${getGlobalConfigPath()})`;
 }
 
+/**
+ * The project root: the nearest directory at or above `start` that holds both a
+ * `package.json` and an `aws-blocks/` directory, or `start` itself when none does.
+ *
+ * Mirrors `findProjectRoot` in `packages/blocks/src/cli/context.ts` (core cannot
+ * import from `@aws-blocks/blocks`); keep the two rules in step.
+ */
+function resolveProjectRoot(start: string = process.cwd()): string {
+  let dir = resolve(start);
+  for (;;) {
+    const appDir = join(dir, 'aws-blocks');
+    if (existsSync(join(dir, 'package.json')) && existsSync(appDir) && statSync(appDir).isDirectory()) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return resolve(start);
+    dir = parent;
+  }
+}
+
 function handleEnable(global: boolean): void {
-  const configPath = global ? getGlobalConfigPath() : getProjectConfigPath();
+  const projectRoot = resolveProjectRoot();
+  const configPath = global ? getGlobalConfigPath() : getProjectConfigPath(projectRoot);
 
   try {
     writeConfigTelemetry(configPath, true);
@@ -106,15 +128,16 @@ function handleEnable(global: boolean): void {
     console.log(`   Config: ${configPath}`);
   }
 
-  const status = getTelemetryStatus();
+  const status = getTelemetryStatus(projectRoot);
   if (!status.enabled) {
-    console.warn(`⚠️  Telemetry is still disabled by ${describeDisable(status)}.`);
+    console.warn(`⚠️  Telemetry is still disabled by ${describeDisable(status, projectRoot)}.`);
     console.warn('   Any disable wins, so this file cannot override it. Run --status to see every mechanism.');
   }
 }
 
 function handleDisable(global: boolean): void {
-  const configPath = global ? getGlobalConfigPath() : getProjectConfigPath();
+  const projectRoot = resolveProjectRoot();
+  const configPath = global ? getGlobalConfigPath() : getProjectConfigPath(projectRoot);
 
   try {
     writeConfigTelemetry(configPath, false);
@@ -131,17 +154,27 @@ function handleDisable(global: boolean): void {
     console.log('✅ Telemetry disabled for this project.');
     console.log(`   Config: ${configPath}`);
   }
+
+  // Read the result back the way the send gate does, so a write that did not take
+  // effect is reported instead of claimed.
+  const status = getTelemetryStatus(projectRoot);
+  if (status.enabled) {
+    console.error(`⚠️  Telemetry is still enabled after writing ${configPath}.`);
+    console.error('   Run --status to see every mechanism, or set AWS_BLOCKS_DISABLE_TELEMETRY=1.');
+    process.exit(1);
+  }
 }
 
 function handleStatus(): void {
-  const status = getTelemetryStatus();
+  const projectRoot = resolveProjectRoot();
+  const status = getTelemetryStatus(projectRoot);
 
   console.log('');
   console.log(`  Telemetry: ${status.enabled ? '✅ Enabled' : '❌ Disabled'}`);
   console.log('');
 
   const globalConfigPath = getGlobalConfigPath();
-  const projectConfigPath = getProjectConfigPath();
+  const projectConfigPath = getProjectConfigPath(projectRoot);
 
   console.log('  Mechanisms:');
 
@@ -173,7 +206,10 @@ function handleStatus(): void {
  * requested action:
  *
  * - `--enable` / `--disable` — write `telemetry.enabled` (project-level by default, `--global` for global)
- * - `--status` — display current telemetry status and mechanism values
+ *   The project-level file is `.blocks/config.json` at the project root: the nearest directory at or
+ *   above the working directory holding a `package.json` and an `aws-blocks/` directory, else the
+ *   working directory. `--disable` reads the status back and exits non-zero if telemetry is still enabled.
+ * - `--status` — display current telemetry status and mechanism values (reading the same project root)
  * - bare invocation (no flags) — prints help/usage text
  *
  * @param options.argv - Custom argv array (defaults to process.argv)
