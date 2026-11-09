@@ -660,7 +660,7 @@ describe('create-blocks-app telemetry/opt-out persists no identifiers even with 
 });
 
 describe('create-blocks-app telemetry/first-run notice', () => {
-  it('states what is sent, does not claim "no PII", and gives every opt-out', () => {
+  it('states what is sent, does not claim "no PII", and gives opt-outs that work everywhere', () => {
     const home = join(tmpdir(), `cba-notice-${Date.now()}-${Math.random().toString(36).slice(2)}`);
     mkdirSync(home, { recursive: true });
 
@@ -670,20 +670,41 @@ describe('create-blocks-app telemetry/first-run notice', () => {
       assert.strictEqual(result.status, 0, result.stderr);
       const notice = result.stderr;
       assert.ok(notice.includes('AWS Blocks collects usage data to improve the product.'), notice);
-      // The endpoint sees the source IP and user agent of every request, so the
-      // notice must not promise that no personal data reaches it.
+      // The endpoint sees the source IP of every request, so the notice must not
+      // promise that no personal data reaches it, and must say so in full.
       assert.doesNotMatch(notice, /\bPII\b/);
       assert.doesNotMatch(notice, /anonymous/i);
-      assert.match(notice, /IP address/);
-      assert.match(notice, /user agent/);
-      assert.match(notice, /random installation and project IDs/);
-      assert.match(notice, /never include your name, email address, AWS account ID, file contents or source code/);
-      assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable'), notice);
-      assert.ok(notice.includes('npx blocks-telemetry --disable'), notice);
-      assert.ok(notice.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
+      assert.ok(notice.includes('The collection endpoint also receives your IP address, as with any HTTPS request.'), notice);
+      // The sender sets no User-Agent header, so only the payload's package manager user agent is claimed.
+      assert.doesNotMatch(notice, /IP address and user agent/);
+      // What the event itself carries, and what it never carries.
+      assert.match(notice, /random installation and project IDs, and an event ID and timestamp/);
+      assert.match(notice, /the template name and version/);
+      assert.match(notice, /names and versions of the official Building Blocks the app uses, how many Building Blocks it uses/);
+      assert.match(notice, /custom Building Block names are never sent/);
+      assert.match(notice, /never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code/);
+      // Opt-outs that work from any directory, and the scope of the commands without --global.
+      assert.ok(notice.includes('export AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
+      assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable --global'), notice);
+      assert.ok(notice.includes('npx --no -- blocks-telemetry --disable --global'), notice);
+      assert.doesNotMatch(notice, /npx blocks-telemetry/, 'an unscoped npx name could resolve to a package from the registry');
+      assert.match(notice, /Without --global, these commands opt out the current app only\./);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('is identical to the core CLI notice', () => {
+    // The two packages print the same notice from separate literals, so compare the sources.
+    const extract = (url: URL): string => {
+      const match = /const FIRST_RUN_NOTICE = `([^`]*)`;/.exec(readFileSync(url, 'utf-8'));
+      assert.ok(match, `FIRST_RUN_NOTICE not found in ${url.pathname}`);
+      return match[1];
+    };
+    assert.strictEqual(
+      extract(new URL('../src/telemetry.ts', import.meta.url)),
+      extract(new URL('../../core/src/telemetry/identifiers.ts', import.meta.url)),
+    );
   });
 });
 

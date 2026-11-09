@@ -80,14 +80,20 @@ export function isTelemetryEnabled(): boolean {
 // ─── Identifiers ─────────────────────────────────────────────────────────────
 
 const FIRST_RUN_NOTICE = `
-AWS Blocks collects usage data to improve the product. Events can include:
-  random installation and project IDs; the command, its outcome, duration and error category;
+AWS Blocks collects usage data to improve the product. Each event can include:
+  random installation and project IDs, and an event ID and timestamp;
+  the command, its outcome, duration and error category (never the error message);
   your OS, Node.js version and package manager user agent; whether it ran in CI or under a coding agent;
-  and the AWS Blocks, CDK, framework, template and Building Block versions the app uses.
-They never include your name, email address, AWS account ID, file contents or source code.
-As with any HTTPS request, the collection endpoint also receives your IP address and user agent.
-To disable: npx --no -- cdk-blocks telemetry disable, npx blocks-telemetry --disable,
-or export AWS_BLOCKS_DISABLE_TELEMETRY=1 (accepts 1, true, or yes, case-insensitive).
+  the AWS Blocks and CDK versions, the framework, and the template name and version;
+  the names and versions of the official Building Blocks the app uses, how many Building Blocks it uses,
+  and how many of them are custom (custom Building Block names are never sent).
+Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code.
+The collection endpoint also receives your IP address, as with any HTTPS request.
+To opt out everywhere, export AWS_BLOCKS_DISABLE_TELEMETRY=1 (accepts 1, true, or yes, case-insensitive),
+or run one of these inside an AWS Blocks app:
+  npx --no -- cdk-blocks telemetry disable --global
+  npx --no -- blocks-telemetry --disable --global
+Without --global, these commands opt out the current app only.
 `;
 
 function getInstallationId(): string {
