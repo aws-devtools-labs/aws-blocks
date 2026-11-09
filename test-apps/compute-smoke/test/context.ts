@@ -6,9 +6,18 @@
 export const FRONT_DOORS = ['apigateway', 'cloudfront'] as const;
 export type FrontDoor = (typeof FRONT_DOORS)[number];
 
+/** JSON-RPC "method not found": what the bare endpoint answers for a placed namespace under strict placement. */
+export const METHOD_NOT_FOUND = -32601;
+
 export interface ComputeTestContext {
   /** The front door this leg deployed (`COMPUTE_API_FRONT_DOOR`). */
   readonly frontDoor: FrontDoor;
+  /**
+   * Whether this leg deployed with `defaults.strictNamespacePlacement`
+   * (`COMPUTE_STRICT_NAMESPACE_PLACEMENT=true`): the bare endpoint then refuses
+   * a namespace placed on its own compute.
+   */
+  readonly strictNamespacePlacement: boolean;
   /** The client endpoint, the stack's `ApiUrl` output. Set once the harness has deployed. */
   apiUrl(): string;
   /**
@@ -23,7 +32,8 @@ export type RpcReply = { result?: unknown; error?: { code?: number; message?: st
 
 /**
  * POST one JSON-RPC call. `path` is appended to the endpoint (e.g. `'reports'`);
- * without it the call goes to the bare endpoint, which serves every namespace.
+ * without it the call goes to the bare endpoint, which serves every namespace
+ * unless the leg turned on `strictNamespacePlacement`.
  */
 export async function rpcCall(apiUrl: string, method: string, params: unknown[] = [], path?: string): Promise<RpcReply> {
   const res = await fetch(path ? `${apiUrl}/${path}` : apiUrl, {
