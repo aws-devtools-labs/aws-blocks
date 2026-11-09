@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Prints the current multi-arch index digest of the ContainerCompute default
-// image tag on ECR Public and compares it with the digest pinned in
+// image tag (node:24-slim) on ECR Public and compares it with the digest pinned in
 // packages/bb-container-compute/src/default-image.ts. Dependabot doesn't track
 // that constant, so this is the bump path: run it, paste the printed reference
 // into DEFAULT_CONTAINER_IMAGE, run the package's tests and add a changeset.
@@ -28,7 +28,8 @@ const ACCEPT = [
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const source = readFileSync(join(root, 'packages/bb-container-compute/src/default-image.ts'), 'utf8');
-const pinned = /'([^']+)'/.exec(source.slice(source.indexOf('DEFAULT_CONTAINER_IMAGE')))?.[1];
+// Anchored to the assignment, so a mention of the name in a comment can't shift the match.
+const pinned = /DEFAULT_CONTAINER_IMAGE\s*=\s*'([^']+)'/.exec(source)?.[1];
 
 async function currentDigest() {
 	const tokenRes = await fetch(`https://${REGISTRY}/token/?scope=repository:${REPOSITORY}:pull`);
@@ -52,8 +53,9 @@ try {
 	process.exit(2);
 }
 
-const latest = `${REGISTRY}/${REPOSITORY}:${TAG}@${digest}`;
-console.log(`current: ${latest}`);
+// Digest-only reference (`repository@sha256:…`), the form ECS documents for `image`.
+const latest = `${REGISTRY}/${REPOSITORY}@${digest}`;
+console.log(`current: ${latest} (${TAG})`);
 console.log(`pinned:  ${pinned ?? '(not found)'}`);
 if (pinned === latest) {
 	console.log('The pinned default image is current.');
