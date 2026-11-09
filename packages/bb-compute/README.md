@@ -144,8 +144,11 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   preset you already spread there, to refuse it instead: each compute then serves
   only the namespaces placed on it, and a call to a namespace placed elsewhere
   gets the same "method not found" error as an unknown namespace. The typed
-  clients already call each namespace at its own path, so they keep working. If
-  raw callers still need the bare endpoint, leave the option off and acknowledge
+  clients already call each namespace at its own path, so they keep working. The
+  option applies only to deployed computes: the local dev server serves every
+  namespace on every path, so a raw bare-endpoint call that works under
+  `npm run dev` returns "method not found" once deployed. If raw callers still
+  need the bare endpoint, leave the option off and acknowledge
   the warning with
   `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
   on the stack or backend returned by `create()`.

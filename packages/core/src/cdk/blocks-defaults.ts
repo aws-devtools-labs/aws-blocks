@@ -239,6 +239,10 @@ export interface BlocksDefaults {
 	 * Namespaces without a placement keep running on the default compute, on the
 	 * bare endpoint and on their own path.
 	 *
+	 * It applies only to deployed computes: the local dev server (`npm run dev`)
+	 * serves every namespace on every RPC path, so a raw bare-endpoint call that
+	 * works there returns "method not found" once deployed.
+	 *
 	 * This keeps a namespace's code on the compute (and network) it was placed on.
 	 * It doesn't split IAM: every compute still runs under the app's one execution
 	 * role.
