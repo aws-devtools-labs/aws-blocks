@@ -249,7 +249,7 @@ export interface BlocksDefaults {
 	 * posts a placed namespace to the bare endpoint is refused: point it at the
 	 * namespace's own path before enabling this.
 	 *
-	 * Off (unset) in both {@link BlocksPresets}. While it is off and some
+	 * `false` in both {@link BlocksPresets}. While it is off and some
 	 * namespace runs on its own compute, synth emits the warning
 	 * `blocks:apigateway:bare-endpoint-serves-placed-namespaces`.
 	 *
@@ -283,6 +283,7 @@ export const BlocksPresets = {
 		logRetention: RetentionDays.ONE_WEEK,
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
+		strictNamespacePlacement: false,
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -302,5 +303,8 @@ export const BlocksPresets = {
 		// per stack once you've confirmed a single Blocks stack owns it in the
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
+		// Off so existing raw callers of the bare endpoint keep working — see the
+		// `strictNamespacePlacement` field doc.
+		strictNamespacePlacement: false,
 	},
 } satisfies Record<string, BlocksDefaults>;

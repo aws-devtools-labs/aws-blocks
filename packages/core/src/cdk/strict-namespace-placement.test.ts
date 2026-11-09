@@ -118,6 +118,13 @@ describe('applyStrictNamespacePlacement', () => {
 	});
 });
 
+describe('BlocksPresets', () => {
+	test('both presets list strictNamespacePlacement as false', () => {
+		assert.strictEqual(BlocksPresets.sandbox.strictNamespacePlacement, false);
+		assert.strictEqual(BlocksPresets.production.strictNamespacePlacement, false);
+	});
+});
+
 describe('apiNamespaceFilterFromEnv', () => {
 	test('no placement config: every namespace is served', () => {
 		assert.strictEqual(apiNamespaceFilterFromEnv({}), undefined);
