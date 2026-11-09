@@ -353,7 +353,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"sid=abc\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"sid=abc\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
   },
   "rpc success without origin": {
     "statusCode": 200,
@@ -367,7 +367,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc success with no origin while an allowlist is configured": {
     "statusCode": 200,
@@ -381,7 +381,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc success with an unvalidated client user agent": {
     "statusCode": 200,
@@ -395,7 +395,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc mixed-case valid client user agent header": {
     "statusCode": 200,
@@ -409,7 +409,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":\"client/swift/1.2.3\"},\"id\":1}"
   },
   "rpc mixed-case Cookie header": {
     "statusCode": 200,
@@ -423,7 +423,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"Mixed=1\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"Mixed=1\",\"userAgent\":null},\"id\":1}"
   },
   "rpc sets two cookies, a custom header and a status": {
     "statusCode": 201,
@@ -573,7 +573,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"named\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":\"req-7\"}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"named\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":\"req-7\"}"
   },
   "rpc per-namespace path": {
     "statusCode": 200,
@@ -587,7 +587,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "rpc per-namespace path that mismatches the body": {
     "statusCode": 200,
@@ -654,7 +654,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"http://abc123.execute-api.us-west-2.amazonaws.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "cross-origin request from a disallowed origin": {
     "statusCode": 403,
@@ -787,7 +787,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/prod/url?a=1\"}"
+    "body": "{\"url\":\"https://abc123.execute-api.us-west-2.amazonaws.com/url?a=1\"}"
   },
   "raw route url behind a loopback forwarded host": {
     "statusCode": 200,
@@ -966,7 +966,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://api.example.com/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://api.example.com/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   },
   "payload v2 rpc with cookies only in event.cookies": {
     "statusCode": 200,
@@ -992,7 +992,7 @@ const EXPECTED: Record<string, unknown> = {
     "multiValueHeaders": {
       "Set-Cookie": []
     },
-    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://localhost/prod/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
+    "body": "{\"jsonrpc\":\"2.0\",\"result\":{\"msg\":\"hi\",\"url\":\"https://localhost/aws-blocks/api\",\"cookie\":\"\",\"userAgent\":null},\"id\":1}"
   }
 };
 
