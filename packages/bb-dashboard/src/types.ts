@@ -101,7 +101,8 @@ export interface MetricsSource {
 	 * Because metrics are emitted at runtime (via EMF) while widgets are created
 	 * at build time (CDK synth), the construct can't auto-discover them — declare
 	 * them here so widgets are pre-created (they show "Insufficient data" until
-	 * the first emission). Omit for a single placeholder graph.
+	 * the first emission). Omit (or pass an empty array) and this source renders
+	 * no metrics section at all — there is no placeholder graph.
 	 */
 	metricConfigs?: MetricConfig[];
 }

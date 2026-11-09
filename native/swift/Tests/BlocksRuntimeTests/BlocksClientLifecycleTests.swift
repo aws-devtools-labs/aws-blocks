@@ -190,7 +190,7 @@ final class BlocksClientLifecycleTests: XCTestCase {
         await store.set("/auth/exchange#refresh_token", value: "rt")
         await store.set("/auth/exchange#expires_at", value: "0")
         let client = BlocksClient(url: url, tokenStore: store)
-        let oidc = OIDCClient(
+        let oidc = OIDCClient<String>(
             exchangePath: "/auth/exchange", refreshPath: "/auth/refresh", signOutPath: "/auth/signout",
             providers: ["google"], providerConfigs: [:], baseUrl: "http://127.0.0.1:9", client: client
         )

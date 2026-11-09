@@ -94,6 +94,7 @@ export const DatabaseErrors: {
 export interface DatabaseOptions {
     connection?: ExternalDatabaseRef;
     databaseName?: string;
+    extensions?: string[];
     logger?: ChildLogger;
     maxCapacity?: number;
     migrationsPath?: string;

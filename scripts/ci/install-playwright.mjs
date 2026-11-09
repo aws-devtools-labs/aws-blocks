@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Installs Playwright browsers and their OS packages
-// (`npx playwright install --with-deps <browser...>`) with a silence watchdog
+// (`npx playwright install --with-deps <browser...>`, or `<bin> install ...`
+// with --bin) with a silence watchdog
 // and a bounded retry, so a stalled apt mirror fails one attempt in minutes
 // instead of holding the job until its own timeout.
 //
@@ -21,13 +22,18 @@
 // cleans up and reports its own error before the step's `timeout-minutes`
 // (set it at least 2 minutes higher) cancels it.
 //
-// Run: node scripts/ci/install-playwright.mjs [--package <spec>] [--deadline-minutes <n>] <browser...>
+// Run: node scripts/ci/install-playwright.mjs [--package <spec> | --bin <path>] [--deadline-minutes <n>] <browser...>
 //   --package           the npx package to run (default `playwright`, the
-//                       workspace's own); e.g. `playwright@1.60.0` to pin one
+//                       workspace's own); e.g. `playwright@1.60.0` to pin one.
+//                       npx resolves a spec the local tree lacks from the npm
+//                       cache without an integrity check against any lockfile.
+//   --bin               a playwright executable to run instead of npx, e.g.
+//                       one `npm ci` installed from a lockfile
 //   --deadline-minutes  budget for all attempts (default 23)
 
 import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -51,7 +57,7 @@ const APT_PROCESSES = ['apt-get', 'dpkg'];
  * it prints nothing for `silenceMs` or is still running at `deadlineAt`.
  *
  * The child is spawned detached so `kill(-pid)` reaches its group: npx and
- * node. `--with-deps` also runs apt-get through sudo; sudo and everything
+ * node, or the node of a `--bin` playwright. `--with-deps` also runs apt-get through sudo; sudo and everything
  * under it run as root, out of this user's reach, and are left to
  * {@link cleanupApt}. The promise settles when the child has exited and its
  * stdio has closed, or {@link DRAIN_MS} after the exit if a survivor (such as
@@ -242,15 +248,25 @@ export async function withRetry(
 	return false;
 }
 
-/** Parse `[--package <spec>] [--deadline-minutes <n>] <browser...>`; throws on bad input. */
+const USAGE = 'usage: install-playwright.mjs [--package <spec> | --bin <path>] [--deadline-minutes <n>] <browser...>';
+
+/** Parse `[--package <spec> | --bin <path>] [--deadline-minutes <n>] <browser...>`; throws on bad input. */
 export function parseArgs(argv) {
 	let pkg = 'playwright';
+	let bin = null;
+	let pkgGiven = false;
 	let deadlineMinutes = DEADLINE_MINUTES;
 	const browsers = [];
 	for (let i = 0; i < argv.length; i++) {
-		if (argv[i] === '--package') {
+		if ((argv[i] === '--package' && pkgGiven) || (argv[i] === '--bin' && bin !== null)) {
+			throw new Error(`${argv[i]} given twice`);
+		} else if (argv[i] === '--package') {
 			pkg = argv[++i];
+			pkgGiven = true;
 			if (!pkg) throw new Error('--package needs a value');
+		} else if (argv[i] === '--bin') {
+			bin = argv[++i];
+			if (!bin) throw new Error('--bin needs a value');
 		} else if (argv[i] === '--deadline-minutes') {
 			deadlineMinutes = Number(argv[++i]);
 			if (!(deadlineMinutes > 0)) throw new Error('--deadline-minutes needs a positive number');
@@ -258,15 +274,25 @@ export function parseArgs(argv) {
 			throw new Error(`unknown option ${argv[i]}`);
 		} else browsers.push(argv[i]);
 	}
-	if (browsers.length === 0) {
-		throw new Error('usage: install-playwright.mjs [--package <spec>] [--deadline-minutes <n>] <browser...>');
-	}
-	return { pkg, deadlineMinutes, browsers };
+	if (bin && pkgGiven) throw new Error('--package and --bin are exclusive');
+	if (browsers.length === 0) throw new Error(USAGE);
+	return { pkg, bin, deadlineMinutes, browsers };
+}
+
+/**
+ * The command one attempt runs: `<bin> install --with-deps <browser...>` with `--bin` (resolved
+ * against the working directory, so spawn never searches PATH for it), else
+ * `npx <pkg> install --with-deps <browser...>`.
+ */
+export function installCommand({ pkg, bin, browsers }) {
+	const args = ['install', '--with-deps', ...browsers];
+	return bin ? { cmd: resolve(bin), args } : { cmd: 'npx', args: [pkg, ...args] };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-	const { pkg, deadlineMinutes, browsers } = parseArgs(process.argv.slice(2));
-	const args = [pkg, 'install', '--with-deps', ...browsers];
+	const parsed = parseArgs(process.argv.slice(2));
+	const { cmd, args } = installCommand(parsed);
+	const { deadlineMinutes } = parsed;
 	const deadlineAt = Date.now() + deadlineMinutes * 60_000;
 	let current;
 	// If the step is cancelled anyway, don't leave this attempt (or a root apt-get) running behind it.
@@ -279,8 +305,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 	}
 	const ok = await withRetry(
 		(i) => {
-			console.log(`\n$ npx ${args.join(' ')}  (attempt ${i}/${ATTEMPTS})`);
-			return runWatched('npx', args, { deadlineAt, onSpawn: (c) => (current = c) });
+			console.log(`\n$ ${cmd} ${args.join(' ')}  (attempt ${i}/${ATTEMPTS})`);
+			return runWatched(cmd, args, { deadlineAt, onSpawn: (c) => (current = c) });
 		},
 		{ deadlineAt, record: recordAttempt },
 	);

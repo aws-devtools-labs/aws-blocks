@@ -13,7 +13,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { Server } from 'node:http';
 import { EventEmitter } from 'events';
 import { setBroadcastBus, LOCAL_TOKEN_SECRET } from './local-dev.js';
-import { validateChannelToken } from './utils.js';
+import { isClientChannelPath, validateChannelToken } from './utils.js';
 import { isLoopbackHost, isWildcardHost, isIpLiteral } from '@aws-blocks/core/bb-utils';
 
 export const localRealtimeBus = new EventEmitter();
@@ -61,7 +61,8 @@ export function isAllowedUpgradeOrigin(
 	if (isLoopbackHost(hostname)) return true;
 	const optIn = devHost?.trim();
 	if (!optIn) return false;
-	if (!isWildcardHost(optIn)) return hostname.toLowerCase() === optIn.toLowerCase();
+	// URL hostnames keep IPv6 brackets (`[fd00::1]`); a BLOCKS_DEV_HOST may omit them.
+	if (!isWildcardHost(optIn)) return unbracket(hostname) === unbracket(optIn);
 	if (!requestHost || !isIpLiteral(hostname)) return false;
 	let connectedHost: string;
 	try {
@@ -70,6 +71,11 @@ export function isAllowedUpgradeOrigin(
 		return false;
 	}
 	return connectedHost === hostname;
+}
+
+/** Lowercase and strip IPv6 brackets (`[FD00::1]` → `fd00::1`). */
+function unbracket(host: string): string {
+	return host.replace(/^\[|\]$/g, '').toLowerCase();
 }
 
 let wss: WebSocketServer | null = null;
@@ -105,9 +111,14 @@ export function attach(httpServer: Server) {
 		ws.on('message', (data) => {
 			try {
 				const msg = JSON.parse(data.toString());
-				if (msg.action === 'subscribe' && msg.channel) {
+				// Same channel check as the deployed handler (index.aws.ts).
+				if ((msg.action === 'subscribe' || msg.action === 'unsubscribe') && !isClientChannelPath(msg.channel)) {
+					if (msg.action === 'subscribe') ws.send(JSON.stringify({ type: 'error', message: 'Invalid channel' }));
+					return;
+				}
+				if (msg.action === 'subscribe') {
 					// Local dev skips connect-time auth, so the channel token is the only gate — require it.
-					if (!msg.token) {
+					if (typeof msg.token !== 'string' || !msg.token) {
 						ws.send(JSON.stringify({ type: 'error', channel: msg.channel, message: 'Unauthorized: missing token' }));
 						return;
 					}
@@ -118,7 +129,7 @@ export function attach(httpServer: Server) {
 					}
 					subscription.channels.add(msg.channel);
 					ws.send(JSON.stringify({ type: 'subscribe_success', channel: msg.channel }));
-				} else if (msg.action === 'unsubscribe' && msg.channel) {
+				} else if (msg.action === 'unsubscribe') {
 					subscription.channels.delete(msg.channel);
 				} else if (msg.action === 'publish') {
 					// Parity with the deployed handler (index.aws.ts), which has no client

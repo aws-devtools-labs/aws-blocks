@@ -193,7 +193,7 @@ Stable per-human-per-IdP. Use this as a foreign key in your own tables. Signing 
 
 ### Lifecycle hooks
 
-- `onSignIn(user, ctx)` — fires on every successful sign-in. Throw to fail the sign-in (callback returns 500, no cookie).
+- `onSignIn(user, ctx)` — fires on every successful sign-in. Throw to fail the sign-in (no cookie is set). Throw an `ApiError` to choose the response: its status, `name` and message reach the client (e.g. `403 { "error": "Sign-in is disabled for this account", "name": "SignInBlockedException" }`). A branded Building Block error (thrown via `blocksError()` / `brandBlocksError()`) keeps its `name` and message and is answered with `400`. Any other error — a database or AWS SDK error — is logged server-side and answered with `500 { "error": "Internal error" }`, so its message and class name never reach the client.
 - `onSignOut(user, ctx)` — fires on explicit sign-out. Throwing is logged but does not block the cookie clear.
 
 ### Session management
@@ -333,6 +333,8 @@ catch (e) {
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
+The auth routes (`callback`, `signin`, `exchange`, `authorize-params`, `refresh`) apply the same rule to every error they catch: an `ApiError` keeps its status, `name` and message; a branded Building Block error (e.g. `InvalidState`, `IdpError`) is a `400` with its `name` and message; anything else is logged server-side and answered with a nameless `500 { "error": "Internal error" }`.
+
 Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
 
 ## Cognito-mediated federation
@@ -341,7 +343,7 @@ Delegate the OIDC flow to a Cognito User Pool. Cognito handles PKCE, token verif
 
 `cognitoFederated()` takes `AppSetting` instances (not closures) for the IdP credentials. The IdP is registered on the User Pool by a **deploy-time custom resource**: a Lambda reads and decrypts those SecureString parameters via the SDK at deploy time and calls Cognito's `CreateIdentityProvider`. (A native `AWS::Cognito::UserPoolIdentityProvider` resource can't be used — CloudFormation rejects the `{{resolve:ssm-secure}}` dynamic references it would need in `ProviderDetails`.) The credential values therefore never appear in the CloudFormation template.
 
-**Setting the credential values.** A `secret: true` `AppSetting` is an SSM SecureString at `/<appSetting.fullId>` — **not** an AWS Secrets Manager entry, so the `blocks secret` CLI (which manages Secrets Manager) does not apply here. Set the value by writing the SecureString directly, or via the `AppSetting`'s runtime `put()`:
+**Setting the credential values.** A `secret: true` `AppSetting` is an SSM SecureString at `/<appSetting.fullId>` — **not** an AWS Secrets Manager entry, so the `cdk-blocks secret` CLI (which manages Secrets Manager) does not apply here. Set the value by writing the SecureString directly, or via the `AppSetting`'s runtime `put()`:
 
 ```bash
 aws ssm put-parameter --name /<fullId> --type SecureString --value '<google-client-secret>' --overwrite

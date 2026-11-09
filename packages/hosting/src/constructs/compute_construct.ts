@@ -17,6 +17,7 @@ import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { HostingError } from '../hosting_error.js';
 import type { ComputeResource } from '../manifest/types.js';
 import { SSR_DEFAULT_PORT } from '../defaults.js';
+import { LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS } from '../adapters/shared/web_adapter_regions.js';
 
 // ---- Constants ----
 
@@ -42,31 +43,6 @@ const DEFAULT_LAMBDA_MEMORY_MB = 1024;
 /** Default Lambda timeout in seconds */
 const DEFAULT_LAMBDA_TIMEOUT_SECONDS = 30;
 
-/**
- * Regions known to host the Lambda Web Adapter public layer.
- */
-const LAMBDA_WEB_ADAPTER_SUPPORTED_REGIONS = new Set([
-  'us-east-1',
-  'us-east-2',
-  'us-west-1',
-  'us-west-2',
-  'eu-west-1',
-  'eu-west-2',
-  'eu-west-3',
-  'eu-central-1',
-  'eu-north-1',
-  'ap-southeast-1',
-  'ap-southeast-2',
-  'ap-northeast-1',
-  'ap-northeast-2',
-  'ap-northeast-3',
-  'ap-south-1',
-  'sa-east-1',
-  'ca-central-1',
-  'me-south-1',
-  'af-south-1',
-  'eu-south-1',
-]);
 
 // ---- Public types ----
 

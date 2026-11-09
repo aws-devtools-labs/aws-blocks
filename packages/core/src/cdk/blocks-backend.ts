@@ -13,15 +13,18 @@ import type { BlocksDefaults } from './blocks-defaults.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
-import type { ApiFrontDoorTier } from '../common/index.js';
+import type { ApiFrontDoorTier, ApiWafOptions } from '../common/index.js';
+import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import {
 	type ApiFrontDoorOwner,
+	apiFrontDoorMarker,
 	claimApiFrontDoor,
 	publishPublicOrigin,
 	publicApiUrl,
 	resolveApiFrontDoor,
 	scheduleApiFrontDoor,
 } from './api-front-door.js';
+import { type ApiDirectRoute, admitCloudFront, cloudFrontReachableRoutes } from './api-direct-routes.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
@@ -89,6 +92,15 @@ export interface BlocksBackendProps {
 	 * @see BlocksStackProps.apiFrontDoor for the full description of each tier.
 	 */
 	apiFrontDoor?: ApiFrontDoorTier;
+	/**
+	 * Put AWS WAF in front of the backend API: a `REGIONAL` web ACL on the API
+	 * Gateway stage under `apiFrontDoor: 'apigateway'`, a `CLOUDFRONT` one on the
+	 * managed distribution under `'cloudfront'`. Default: off.
+	 *
+	 * @see BlocksStackProps.apiWaf for the full description, including the
+	 * us-east-1 requirement and what happens when `Hosting` fronts the API.
+	 */
+	apiWaf?: ApiWafOptions;
 }
 
 /**
@@ -159,17 +171,35 @@ function warnIfDurableWithoutAccessLogging(scope: Construct, defaults: BlocksDef
  * by a compute: the shared execution role, resource groups, and console-redirect
  * routes.
  */
+/** Guide for apps scaffolded from older templates; linked from the missing-`defaults` error. */
+export const UPGRADE_GUIDE_URL =
+	'https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/upgrading-older-apps.md';
+
+/**
+ * Fail fast with an actionable message if `defaults` is missing. TypeScript
+ * callers get a compile error, but `cdk` runs `aws-blocks/index.cdk.ts` through a
+ * loader that doesn't type-check, so an app scaffolded before `defaults` became
+ * required (or a plain-JS caller, `as any`, or a dynamically built props object)
+ * reaches the constructors without it, which then throw a cryptic
+ * `Cannot read properties of undefined (reading 'vpc')`. Called at the top of
+ * `BlocksStack.create()` and `BlocksBackend.create()`, before either constructs.
+ *
+ * @internal
+ */
+export function assertBlocksDefaults(props: { defaults?: unknown }, kind: 'BlocksStack' | 'BlocksBackend'): void {
+	if (props.defaults) return;
+	throw new Error(
+		`${kind}.create() requires a \`defaults\` field. Pass a posture from the presets, typically:\n\n` +
+			"  import { BlocksPresets } from '@aws-blocks/blocks/cdk';\n" +
+			'  defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production,\n\n' +
+			'Apps scaffolded from an older create-blocks-app template need this and a few other changes to ' +
+			`aws-blocks/index.cdk.ts; see ${UPGRADE_GUIDE_URL}`,
+	);
+}
+
 export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id?: string) {
-	// Fail fast with an actionable message at the create() call site if `defaults`
-	// is missing (e.g. a plain-JS caller, `as any`, or a dynamically-built props
-	// object) — otherwise the first Building Block to read `scope.defaults` throws
-	// a cryptic `Cannot read properties of undefined (reading 'removalPolicy')`.
-	if (!props.defaults) {
-		throw new Error(
-			'BlocksStack/BlocksBackend requires a `defaults` field. Pass a posture from ' +
-				'`@aws-blocks/core/cdk` — typically `defaults: sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.',
-		);
-	}
+	// Belt and braces for callers that reach here without create().
+	assertBlocksDefaults(props, 'BlocksBackend');
 
 	// Surface the audit-trail tradeoff at synth when running a durable posture
 	// with access logging off. Non-fatal: warning only.
@@ -296,7 +326,7 @@ export interface SharedGatewayOwner extends Construct, ApiFrontDoorOwner {
  * Call once, after the backend module has imported and every compute exists.
  * The gateway's catch-all resources front the default compute's function (its
  * `apiHandler()`), and every other compute's namespaces are routed to that
- * compute's function — by export name, read from `backendModule` (see
+ * compute — its function, or a container's load balancer — by export name, read from `backendModule` (see
  * `resolveNamespaceRoutes`). It is built in the default compute's construct scope, so
  * its logical IDs match the per-compute gateway it replaced — existing
  * deployments keep their REST API and `execute-api` URL. The default compute is always a Lambda compute today, so
@@ -328,7 +358,14 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 		regionalEndpoint: cloudfront,
 	});
 	owner._sharedGateway = sharedGateway;
-	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl);
+	// Container namespaces skip the gateway only where CloudFront is the API's front
+	// door. On the `apigateway` tier a CloudFront Hosting forwards them to the gateway
+	// like every other path, so its stage — WAF, throttling, access logs — sees them.
+	// A namespace whose VPC CloudFront can't reach (no public subnets) stays on the
+	// gateway's VPC link, which serves every container namespace on both tiers.
+	owner._apiDirectRoutes = cloudfront ? cloudFrontReachableRoutes(owner, sharedGateway.directRoutes) : [];
+	for (const { ingress } of owner._apiDirectRoutes) admitCloudFront(ingress.loadBalancer);
+	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
 }
 
@@ -436,6 +473,12 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	_publicOriginPublishedByHosting?: boolean;
 	/** The resolved `apiFrontDoor` tier; set in the constructor, before the backend module is imported. @internal */
 	_apiFrontDoorTier?: ApiFrontDoorTier;
+	/** The validated `apiWaf` setting; set in the constructor. @internal */
+	_apiWaf?: ResolvedApiWaf;
+	/** Set when a claiming `Hosting` distribution forwards the `apiWaf` marker header. @internal */
+	_apiFrontDoorMarked?: boolean;
+	/** The API paths a CloudFront front door routes straight to a container's load balancer; set with the gateway. @internal */
+	_apiDirectRoutes?: readonly ApiDirectRoute[];
 
 	/**
 	 * Claim the API front-door role for a `Hosting` distribution fronting this
@@ -445,6 +488,15 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 	 */
 	claimApiFrontDoor(distributionUrl: string): void {
 		claimApiFrontDoor(this, distributionUrl);
+	}
+
+	/**
+	 * The header a claiming CloudFront `Hosting` distribution adds to its API
+	 * origin so this backend's `apiWaf` rate rule exempts its edge-IP requests.
+	 * @internal Framework-only.
+	 */
+	apiFrontDoorMarker(): Record<string, string> | undefined {
+		return apiFrontDoorMarker(this);
 	}
 
 	/**
@@ -543,6 +595,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		// Validate and record the tier before the backend module is imported, so an
 		// invalid value fails before any app code runs.
 		this._apiFrontDoorTier = resolveApiFrontDoor(props.apiFrontDoor);
+		this._apiWaf = resolveApiWaf(props.apiWaf);
 
 		// Brand as a backend root so getBlocksRoot() finds this by walking the
 		// construct tree — the key that keeps two BlocksBackends in one cdk.Stack
@@ -580,6 +633,7 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 
 	static async create(scope: Construct, id: string, props: CoreBlocksBackendProps) {
 		assertCdkConditionActive();
+		assertBlocksDefaults(props, 'BlocksBackend');
 		// Stack-level children before this backend exists, so the boundary can also
 		// cap the per-stack CDK singletons its blocks add (see the end of create()).
 		const stackChildrenBefore = snapshotChildren(cdk.Stack.of(scope));

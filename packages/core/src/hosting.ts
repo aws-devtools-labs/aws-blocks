@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { execSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join, relative, resolve } from 'node:path';
 import type { DeployManifest, FrameworkType, KindStoreOptions, RouteBehavior } from '@aws-blocks/hosting/constructs';
 import {
   detectFramework,
   type FrameworkAdapterFn,
   getAdapter,
+  lambdaWebAdapterAvailableIn,
   normalizeBasePath,
+  withBuildProfile,
   withComputeTarget,
 } from '@aws-blocks/hosting/adapters';
 import {
@@ -29,6 +32,7 @@ import {
   type HostingFrontDoor,
   pickKnownSettingKeys,
   resolveFrontDoorFeatures,
+  removeUnusedAwsCliLayers,
   type StackedDoorFeatures,
   type HostingWafConfig,
   type SkewProtectionConfig,
@@ -40,6 +44,7 @@ import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfron
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
 import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
+import { type ApiDirectRoute, addDirectApiBehaviors } from './cdk/api-direct-routes.js';
 import { registerSharedConfig } from './cdk/config-registry.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
 import { findBackendRoot, getBlocksRoot, isBlocksBackendRoot } from './cdk/root-registry.js';
@@ -58,6 +63,7 @@ import {
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
 import { writeFrameworkSink } from './telemetry/framework-sink.js';
+import { REUSE_FRONTEND_BUILD_CONTEXT, SKIP_FRONTEND_BUILD_ENV, frontendBuildReuse } from './common/frontend-build.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -183,11 +189,27 @@ export interface BlocksStackApi {
    */
   publishPublicOrigin?(): void;
   /**
+   * The header (name → value) a claiming CloudFront distribution adds to its API
+   * origin so the backend's `apiWaf` rate rule can exempt its edge-IP requests;
+   * `undefined` when the backend has no Blocks-managed web ACL.
+   * `BlocksStack`/`BlocksBackend` implement it.
+   * @internal Framework-only.
+   */
+  apiFrontDoorMarker?(): Record<string, string> | undefined;
+  /**
    * The RPC URL clients call: the managed `cloudfront` distribution's when it
    * fronts the API, else `apiUrl`. `BlocksStack`/`BlocksBackend` implement it.
    * @internal Framework-only.
    */
   readonly publicApiUrl?: string;
+  /**
+   * The API paths served by a container compute, which this distribution routes
+   * straight to the container's load balancer. Set on `BlocksStack`/`BlocksBackend`
+   * once `create()` resolves — on the `cloudfront` tier only; on `apigateway`
+   * they reach the gateway like every other path.
+   * @internal Framework-only.
+   */
+  readonly _apiDirectRoutes?: readonly ApiDirectRoute[];
 }
 
 /**
@@ -211,6 +233,11 @@ export interface HostingProps {
    * When provided, it is executed during CDK synth with `BLOCKS_API_URL`
    * injected into the environment.
    * Omit if the app is already pre-built.
+   *
+   * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
+   * build output already exists, or on a deploy with
+   * `BLOCKS_SKIP_FRONTEND_BUILD=1`, which deploys the existing build output
+   * as is (a destroy ignores the variable). The framework adapter's own build is skipped the same way.
    */
   buildCommand?: string;
 
@@ -592,7 +619,198 @@ export interface HostingProps {
    * ```
    */
   frontDoor?: HostingFrontDoor<HostingDomain> | CloudFrontOverRouterFrontDoor;
+
+  /**
+   * On-the-fly image optimization: an image function behind the door for the
+   * framework image endpoints (`/_next/image`, Nuxt `/_ipx/*`, Astro `/_image`).
+   *
+   * `false` builds no image function (and skips the Next.js `sharp` install at
+   * synth). The endpoints then serve the source image, unoptimized: a remote
+   * source is redirected (302) to itself when its host is in the app's image
+   * allowlist (`images.remotePatterns` / `domains`), else 404; the proxy never
+   * fetches a remote URL. Needs the API Gateway HTTP API door
+   * (`frontDoor: { kind: 'apiGateway' }`), whose asset proxy answers the
+   * endpoints; another door fails synth (`UnsupportedHostingSettingError`).
+   *
+   * Set by {@link HostingPresets}`.preview`.
+   * @default true
+   */
+  imageOptimization?: boolean;
+
+  /**
+   * Incremental regeneration (Next.js ISR, incremental static regeneration):
+   * the DynamoDB tag table, the SQS revalidation queue and the revalidation
+   * function.
+   *
+   * `false` builds Next.js without the tag cache and with OpenNext's no-op
+   * queue, so none of that infrastructure is deployed. The incremental cache
+   * and its seed stay, so prerendered pages (SSG and ISR) are served from the
+   * build's snapshot and never regenerate. Works behind every door; other
+   * frameworks ignore it.
+   *
+   * Set by {@link HostingPresets}`.preview`.
+   * @default true
+   */
+  incrementalRegeneration?: boolean;
+
+  /**
+   * Where Next.js `runtime: 'edge'` routes run: `'edge'` as Lambda@Edge
+   * functions (a us-east-1 edge stack, replicated to CloudFront), or
+   * `'regional'` as regional Lambda functions in the stack's region, each
+   * routed straight to its function. `'regional'` needs the API Gateway HTTP
+   * API door; another door fails synth (`UnsupportedHostingSettingError`).
+   * Other frameworks ignore it.
+   *
+   * Behind the API Gateway HTTP API door it defaults to `'regional'`, because
+   * that door can't invoke Lambda@Edge. `'edge'` set there explicitly fails
+   * synth when the app has edge routes (`EdgeRouteNeedsCloudFrontDoorError`).
+   *
+   * Set to `'regional'` by {@link HostingPresets}`.preview`.
+   * @default `'regional'` behind the API Gateway HTTP API door, `'edge'` otherwise
+   */
+  edgeRoutes?: 'edge' | 'regional';
+
+  /**
+   * How each deploy names its build. `'per-deploy'` gives every deploy a new
+   * random build id: assets go to a new `builds/<id>/` prefix and the site
+   * switches over atomically, so open pages keep loading their own build.
+   *
+   * `'fixed'` keeps the build id stable while the build output is unchanged:
+   * the id is a hash of the uploaded content (the static assets and the ISR
+   * cache seed), and Next.js builds with a pinned `generateBuildId`. An
+   * unchanged build produces byte-identical assets and template, so a
+   * re-deploy skips the asset upload and a server-only change can be
+   * hotswapped (`startSandbox({ preview: true })`). A changed build gets a new
+   * `builds/<id>/` prefix, so deleted files stop being served and the ISR tag
+   * seed re-runs; Next.js's `_buildManifest.js` and `_ssgManifest.js`, whose
+   * URL no longer changes, are served with a revalidating Cache-Control.
+   *
+   * The door's asset proxy is not held back until the uploads finish:
+   * CloudFormation creates it alongside them, which shortens a first deploy.
+   * During a deploy that changes the build, the proxy can briefly point at
+   * the new prefix before its files are uploaded (or still at the old one),
+   * so there is no atomic switch-over; use it only for throwaway
+   * environments.
+   *
+   * Not available behind a door with an edge cache (CloudFront, the stacked
+   * door), which would keep serving the overwritten files; those fail synth
+   * (`UnsupportedHostingSettingError`).
+   *
+   * Set to `'fixed'` by {@link HostingPresets}`.preview`.
+   * @default 'per-deploy'
+   */
+  buildId?: 'per-deploy' | 'fixed';
 }
+
+/** The settings a {@link HostingPresets} entry may set. */
+export type HostingPreset = Pick<
+  HostingProps,
+  'frontDoor' | 'imageOptimization' | 'incrementalRegeneration' | 'edgeRoutes' | 'buildId'
+>;
+
+/**
+ * Prepared hosting shapes, the hosting counterpart of `BlocksPresets`. Spread
+ * one into the `Hosting` props, **first**, and override individual settings
+ * after it:
+ *
+ * ```ts
+ * new Hosting(stack, 'Web', {
+ *   ...(previewMode ? HostingPresets.preview : HostingPresets.production),
+ *   root, api: blocksStack,
+ * });
+ *
+ * // a preview that keeps image optimization
+ * new Hosting(stack, 'Web', { ...HostingPresets.preview, imageOptimization: true, root, api: blocksStack });
+ * ```
+ *
+ * A preset is plain data: every field is an ordinary `Hosting` prop, so
+ * hovering it shows exactly what it sets, and copying it pins it.
+ */
+export const HostingPresets: { readonly production: HostingPreset; readonly preview: HostingPreset } = {
+  /** The full shape: today's defaults (CloudFront, image optimization, ISR, Lambda@Edge, per-deploy builds). */
+  production: {},
+  /**
+   * A fast, cheap, disposable deploy for ephemeral environments (pull-request
+   * previews, per-branch sandboxes, demos): served by the API Gateway HTTP API
+   * door (no CloudFront; buffered server responses, about 6 MB each), no image
+   * optimization, no incremental regeneration, Next.js edge routes as regional
+   * functions, and a fixed build id so re-deploys can hotswap. Routing, server
+   * rendering, prerendered pages, same-origin cookie sign-in and the API keep
+   * working.
+   */
+  preview: {
+    frontDoor: { kind: 'apiGateway' },
+    imageOptimization: false,
+    incrementalRegeneration: false,
+    edgeRoutes: 'regional',
+    buildId: 'fixed',
+  },
+};
+
+/** Whether `frontDoor` is the API Gateway HTTP API door. */
+function isHttpApiDoor(frontDoor: HostingProps['frontDoor']): boolean {
+  return (
+    typeof frontDoor === 'object' &&
+    frontDoor !== null &&
+    'kind' in frontDoor &&
+    frontDoor.kind === 'apiGateway' &&
+    (frontDoor.api ?? 'http') === 'http'
+  );
+}
+
+/**
+ * Fail synth for the settings the chosen door can't serve, naming all of them
+ * at once (a preset spread can bring several).
+ *
+ * @param props the app's props.
+ * @throws HostingError('UnsupportedHostingSettingError') naming each setting and the door.
+ */
+function assertDoorSupportsSettings(props: HostingProps): void {
+  // `frontDoor: null` is the default door, as when it is omitted.
+  const door = props.frontDoor ?? undefined;
+  const doorName =
+    door === undefined
+      ? "'cloudfront' (the default)"
+      : typeof door === 'string'
+        ? `'${door}'`
+        : `{ kind: '${('kind' in door && door.kind) || 'cloudfront'}'${'api' in door && door.api ? `, api: '${door.api}'` : ''} }`;
+  const unsupported: Array<{ setting: string; needs: string; override: string }> = [];
+  const fail = (setting: string, needs: string, override: string) => unsupported.push({ setting, needs, override });
+  const httpApi = isHttpApiDoor(door);
+  if (props.imageOptimization === false && !httpApi) {
+    fail(
+      'imageOptimization: false',
+      "only the API Gateway HTTP API door's asset proxy answers the image endpoints without an image function",
+      'imageOptimization: true',
+    );
+  }
+  if (props.edgeRoutes === 'regional' && !httpApi) {
+    fail(
+      "edgeRoutes: 'regional'",
+      'only the API Gateway HTTP API door routes a regional edge function straight to it',
+      "edgeRoutes: 'edge'",
+    );
+  }
+  const edgeCached =
+    door === undefined ||
+    door === 'cloudfront' ||
+    (typeof door === 'object' && (!('kind' in door) || door.kind === undefined || door.kind === 'cloudfront' || door.kind === 'stacked'));
+  if (props.buildId === 'fixed' && edgeCached) {
+    fail("buildId: 'fixed'", 'an edge cache would keep serving the files each deploy overwrites', "buildId: 'per-deploy'");
+  }
+  if (unsupported.length === 0) return;
+  const settings = unsupported.map((u) => `\`${u.setting}\``).join(', ');
+  throw new HostingError('UnsupportedHostingSettingError', {
+    message:
+      `Hosting ${settings} ${unsupported.length === 1 ? 'is' : 'are'} not available behind frontDoor ${doorName}: ` +
+      `${unsupported.map((u) => `${u.setting}: ${u.needs}`).join('; ')}.`,
+    resolution:
+      "Use the API Gateway HTTP API door (`frontDoor: { kind: 'apiGateway' }`, as `HostingPresets.preview` does), " +
+      `or remove ${unsupported.length === 1 ? 'the setting' : 'the settings'} — or, when ${unsupported.length === 1 ? 'it comes' : 'they come'} from a preset, ` +
+      `override after the preset spread (${unsupported.map((u) => `\`${u.override}\``).join(', ')}).`,
+  });
+}
+
 
 /**
  * A COMPOSED front door: a CloudFront edge stacked over a regional router layer
@@ -646,13 +864,122 @@ export interface CloudFrontOverRouterFrontDoor {
   features?: StackedDoorFeatures;
 }
 
+/**
+ * The framework build id pinned with `buildId: 'fixed'` (Next.js
+ * `generateBuildId`), so an unchanged build produces byte-identical assets.
+ */
+const FIXED_BUILD_ID = 'fixed';
+
+/**
+ * Static files a framework rewrites on every build, with a fresh id or
+ * timestamp, even when nothing else changed: Nuxt's app manifest
+ * (`<buildAssetsDir>/builds/latest.json`, `builds/meta/<id>.json`) and
+ * SvelteKit's `_app/version.json`. They are left out of the content build id,
+ * so a server-only change keeps the id and can hotswap; they are still
+ * uploaded, overwriting the previous ones in place.
+ */
+const VOLATILE_STATIC_FILE = /(^|\/)(builds\/latest\.json|builds\/meta\/[^/]+\.json|_app\/version\.json)$/;
+
+/**
+ * The deploy build id for `buildId: 'fixed'`: a hash of what the build
+ * uploads (the static assets, the ISR cache seed and the custom error pages).
+ * An unchanged build keeps its id, so a re-deploy skips the upload and can
+ * hotswap; a changed build gets a new `builds/<id>/` prefix, so a deleted file
+ * stops being served, the ISR tag seed re-runs and the asset proxy's cached
+ * error pages are dropped. Files every build rewrites are left out (see
+ * {@link VOLATILE_STATIC_FILE}).
+ *
+ * @param manifest the adapter's manifest.
+ * @param errorPageFiles the app's custom error page files (`errorPages`).
+ * @returns `fixed-` and 16 hex characters.
+ */
+function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly string[] = []): string {
+  const hash = createHash('sha256');
+  const addFile = (name: string, file: string) => hash.update(name).update('\0').update(readFileSync(file)).update('\0');
+  // Each section is labelled with a constant and each file named relative to
+  // its section, so the same build in another checkout keeps the id.
+  const add = (label: string, root: string | undefined, skip?: RegExp) => {
+    if (!root || !existsSync(root)) return;
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+        const file = join(dir, entry.name);
+        const name = relative(root, file).split('\\').join('/');
+        if (entry.isDirectory()) walk(file);
+        else if (entry.isFile() && !skip?.test(name)) addFile(name, file);
+      }
+    };
+    hash.update(`${label}\0`);
+    walk(root);
+  };
+  add('static', manifest.staticAssets.directory, VOLATILE_STATIC_FILE);
+  add('cache', manifest.cache?.seedDirectory);
+  add('init', manifest.cache?.initFunction?.bundle);
+  for (const file of errorPageFiles) {
+    hash.update('errorPage\0');
+    if (existsSync(file)) addFile(basename(file), file);
+  }
+  return `${FIXED_BUILD_ID}-${hash.digest('hex').slice(0, 16)}`;
+}
+
 // ─── Default build output directories per framework ──────────────
+
+/**
+ * The path whose existence means a reusable build exists, for a destroy's
+ * `if-present` reuse. It must be the marker the framework adapter itself checks
+ * (see `shouldSkipBuild` in `@aws-blocks/hosting`), or `Hosting` could skip
+ * `buildCommand` while the adapter still runs its full build. The built-in
+ * Next.js adapter deploys the OpenNext output, not `.next`; every other
+ * framework (and a custom adapter) is keyed on the build output dir.
+ *
+ * @internal
+ */
+export function frontendReuseMarker(
+  framework: string,
+  root: string,
+  expectedOutputDir: string,
+  hasCustomAdapter: boolean,
+): string {
+  if (framework === 'nextjs' && !hasCustomAdapter) return join(root, '.open-next', 'open-next.output.json');
+  return expectedOutputDir;
+}
 
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
   spa: 'dist',
   static: 'dist',
+};
+
+/**
+ * A framework adapter error for a build output that isn't there: the
+ * SPA/static output dir, OpenNext's `.open-next/`, Nitro's `.output/`, the
+ * SvelteKit and Astro build dirs.
+ */
+const MISSING_BUILD_OUTPUT_ERROR = /^[A-Za-z]*(?:OutputNotFound|OutputMissing)Error$/;
+
+/**
+ * Run the adapter. Under `BLOCKS_SKIP_FRONTEND_BUILD=1` the adapter doesn't
+ * build either, and the output it deploys can differ from the dir checked
+ * above (Next.js deploys `.open-next/`, not `.next/`). So a missing-output
+ * error from the adapter also says the variable skipped the build.
+ */
+const runAdapterNamingSkippedBuild = (
+  run: () => DeployManifest,
+  reuseBuild: ReturnType<typeof frontendBuildReuse>,
+): DeployManifest => {
+  try {
+    return run();
+  } catch (error) {
+    if (reuseBuild !== 'required' || !(error instanceof Error) || !MISSING_BUILD_OUTPUT_ERROR.test(error.name)) {
+      throw error;
+    }
+    const message = `${error.message}\n${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`;
+    // Keep the adapter's structured error (code, name, resolution) for callers that key on it.
+    if (error instanceof HostingError) {
+      throw new HostingError(error.code, { message, resolution: error.resolution }, error);
+    }
+    throw new Error(message, { cause: error });
+  }
 };
 
 // ─── Construct ───────────────────────────────────────────────────
@@ -790,6 +1117,10 @@ export class Hosting extends Construct {
     // adds (step 12).
     const childrenBefore = snapshotForHosting(this);
 
+    // A setting the chosen door can't serve fails before anything is built.
+    assertDoorSupportsSettings(props);
+    const fixedBuildId = props.buildId === 'fixed';
+
     const root = resolve(props.root);
 
     // The composed CF → ALB door: a CloudFront edge that forwards the API subtree
@@ -817,7 +1148,26 @@ export class Hosting extends Construct {
     writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
-    if (props.buildCommand) {
+    // A destroy reuses an existing build, and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+    // makes a deploy reuse it (see common/frontend-build.ts). The adapter gets
+    // the same decision through the build profile below.
+    const reuseBuild = frontendBuildReuse(this.node.tryGetContext(REUSE_FRONTEND_BUILD_CONTEXT));
+    const expectedOutputDir = props.buildOutputDir
+      ? resolve(root, props.buildOutputDir)
+      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
+    // A destroy reuses a build only when the adapter will too, so it checks the
+    // adapter's own marker (OpenNext's output for Next.js), not just the dir.
+    const reuseMarker = frontendReuseMarker(framework, root, expectedOutputDir, Boolean(props.customAdapter));
+    const skipBuildCommand =
+      reuseBuild === 'required' || (reuseBuild === 'if-present' && existsSync(reuseMarker));
+    if (props.buildCommand && skipBuildCommand) {
+      console.log(
+        reuseBuild === 'required'
+          ? `⏭️  Skipping frontend build (${SKIP_FRONTEND_BUILD_ENV} is set): using ${relative(root, expectedOutputDir) || '.'}`
+          : `⏭️  Skipping frontend build: this synth doesn't deploy the frontend, reusing ${relative(root, reuseMarker) || '.'}`,
+      );
+    }
+    if (props.buildCommand && !skipBuildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
       // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
@@ -844,17 +1194,15 @@ export class Hosting extends Construct {
       }
     }
 
-    // ── 3. Resolve build output dir (for validation only) ────────
+    // ── 3. Validate the build output dir ─────────────────────────
     const buildOutputDir = props.buildOutputDir;
-
-    const expectedOutputDir = buildOutputDir
-      ? resolve(root, buildOutputDir)
-      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
 
     if (!existsSync(expectedOutputDir)) {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
-          `Provide a buildCommand or ensure the directory exists before synthesis.`,
+          (reuseBuild === 'required'
+            ? `${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`
+            : `Provide a buildCommand or ensure the directory exists before synthesis.`),
       );
     }
 
@@ -869,11 +1217,43 @@ export class Hosting extends Construct {
     const adapter = props.customAdapter ?? getAdapter(framework, buildOutputDir);
     // Adapters build for the selected compute: Web Functions need a plain
     // Node.js HTTP server (OpenNext `node` wrapper, Nitro `node-server`) and
-    // Arm64 native modules (Astro's sharp).
-    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () => adapter(root));
+    // Arm64 native modules (Astro's sharp). They also build for the door that
+    // invokes the server (an API Gateway HTTP API: payload 2.0, buffered) and
+    // for the settings that trim the build.
+    // A region with no Lambda Web Adapter layer can't run a Nitro
+    // `node-server` behind the HTTP API. An unresolved region (a stack with no
+    // `env`, as in the templates) may be one of them, so it counts as one too.
+    const region = cdk.Stack.of(this).region;
+    const noWebAdapter = cdk.Token.isUnresolved(region) || !lambdaWebAdapterAvailableIn(region);
+    const manifest: DeployManifest = withComputeTarget(props.compute?.type ?? 'lambda', () =>
+      withBuildProfile(
+        {
+          serverInvoke: isHttpApiDoor(props.frontDoor) ? 'http-api' : 'default',
+          ...(noWebAdapter ? { lambdaWebAdapter: false } : {}),
+          ...((props.edgeRoutes ?? (isHttpApiDoor(props.frontDoor) ? 'regional' : 'edge')) === 'regional'
+            ? { edgeToRegional: true }
+            : {}),
+          ...(props.incrementalRegeneration === false ? { skipIsr: true } : {}),
+          ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
+          ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),
+          ...(reuseBuild ? { reuseBuild } : {}),
+        },
+        () => runAdapterNamingSkippedBuild(() => adapter(root), reuseBuild),
+      ),
+    );
 
     // ── 4b. Ensure buildId is set on the manifest ────────────────
-    if (!manifest.buildId) {
+    // `buildId: 'fixed'`: the per-deploy random id drives the atomic
+    // `builds/<id>/` cutover a long-lived site needs, but it changes the asset
+    // prefix, the function code and the API name on every deploy, so no
+    // re-deploy could skip the upload or hotswap. A throwaway environment
+    // keys the build on its content instead (see `contentBuildId`).
+    if (fixedBuildId) {
+      manifest.buildId = contentBuildId(
+        manifest,
+        [props.errorPages?.notFound, props.errorPages?.serverError].filter((f): f is string => !!f),
+      );
+    } else if (!manifest.buildId) {
       manifest.buildId = generateBuildId();
     }
 
@@ -988,6 +1368,10 @@ export class Hosting extends Construct {
     const hostingProps: HostingConstructProps = {
       manifest,
       compute: normalizedCompute,
+      ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
+      // `buildId: 'fixed'`: the build is overwritten in place, so there is no
+      // switch-over for the door's asset proxy to wait for.
+      ...(fixedBuildId ? { inPlaceBuild: true } : {}),
       // Plain env + deploy-time literals go straight to the L3 (which stays
       // secret-agnostic: it only ever sees plain strings). Runtime secrets are
       // wired separately below so we can attach IAM grants per function.
@@ -1074,7 +1458,7 @@ export class Hosting extends Construct {
       // (`new Hosting(stack, 'Hosting', { api: stack })`); when it's a branded
       // BlocksStack/BlocksBackend use its node.path directly, else walk up from
       // this Hosting construct to the owning root.
-      this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api));
+      this.addApiBehaviors(hosting, props.api, this.ownerRootIdFor(props.api), doorSettings.quotas?.cacheBehaviors);
     } else if (props.api && cfOverRouter) {
       // The stacked door's CloudFront edge routes the API through its router:
       // a CloudFront distribution fronts the API, so it claims the role and the
@@ -1186,6 +1570,11 @@ export class Hosting extends Construct {
 
       // Delay route cutover until resolved config replaces the static placeholder.
       hosting.addBuildAssetDependency(configDeployment);
+
+      // `buildId: 'fixed'` (an in-place build): drop the AWS CLI layers no
+      // upload handler uses, the runtime config upload's included. Every other
+      // build keeps them.
+      if (fixedBuildId) removeUnusedAwsCliLayers(this);
 
       if (stackedEdge) {
         stackedInvalidationId = this.gateStackedEdge(hosting, manifest, stackedEdge, configDeployment, buildId);
@@ -1439,8 +1828,16 @@ export class Hosting extends Construct {
    * The managed `cloudfront` front door and these behaviors forward to the same origin
    * via the same `httpOriginFromEndpoint` + `API_BEHAVIOR_OPTIONS`, so the two
    * paths cannot drift.
+   *
+   * @param cacheBehaviorLimit the door's `quotas.cacheBehaviors` (CloudFront's
+   *   default when unset), checked at synth once the direct routes are added
    */
-  private addApiBehaviors(hosting: HostingConstruct, api: BlocksStackApi, ownerRootId: string): void {
+  private addApiBehaviors(
+    hosting: HostingConstruct,
+    api: BlocksStackApi,
+    ownerRootId: string,
+    cacheBehaviorLimit: number | undefined,
+  ): void {
     // Only called for the CloudFront front door (the caller checks
     // `hosting.frontDoor.service`), so the distribution exists.
     const distribution = hosting.distribution;
@@ -1455,7 +1852,9 @@ export class Hosting extends Construct {
 
     // The REST API URL embeds its `/{stage}` prefix, which the origin carries as
     // `originPath` (see httpOriginFromEndpoint).
-    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl);
+    // When the backend has `apiWaf`, mark these requests so its rate rule doesn't
+    // count every browser user behind one CloudFront edge as a single client.
+    const apiGatewayOrigin = httpOriginFromEndpoint(apiUrl, api.apiFrontDoorMarker?.());
 
     // Attach the same security-headers / CSP policy the distribution's static,
     // SSR and image behaviors carry. Without it the API and auth responses go
@@ -1466,6 +1865,16 @@ export class Hosting extends Construct {
       ...API_BEHAVIOR_OPTIONS,
       responseHeadersPolicy: hosting.securityHeadersPolicy,
     };
+
+    // On the `cloudfront` tier, a namespace on a container compute skips the
+    // gateway: its exact path goes straight to the container's load balancer.
+    // Added before `/aws-blocks/api/*`, which would otherwise match first. Synth
+    // checks the distribution's final behavior count against the door's
+    // `quotas.cacheBehaviors` (the construction-time check can't see these).
+    addDirectApiBehaviors(distribution, api._apiDirectRoutes ?? [], apiBehaviorOptions, {
+      limit: cacheBehaviorLimit,
+      source: 'hosting',
+    });
 
     distribution.addBehavior(BLOCKS_RPC_PREFIX, apiGatewayOrigin, apiBehaviorOptions);
     distribution.addBehavior(`${BLOCKS_RPC_PREFIX}/*`, apiGatewayOrigin, apiBehaviorOptions);

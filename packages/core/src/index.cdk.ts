@@ -73,6 +73,7 @@ export {
 } from './common/config.js';
 export { type DeploymentType, getDeploymentType } from './common/runtime-guard.js';
 export {
+	type ApiWafOptions,
 	type BlocksStackProps,
 	type BuildingBlockMeta,
 	buildingBlockParent,
@@ -98,6 +99,7 @@ export {
 	isContainerRuntime,
 	isJobWorker,
 	registerContainerPoller,
+	type RunContainerOptions,
 	runContainer,
 	runJobWorker,
 } from './container-runtime.js';
@@ -111,6 +113,8 @@ export {
 	type HostingDomainConfig,
 	type HostingProps,
 	type HostingWafConfig,
+	type HostingPreset,
+	HostingPresets,
 } from './hosting.js';
 export { EventSourceMapping } from './lambda-handler.js';
 export {

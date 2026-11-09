@@ -60,7 +60,9 @@ This also applies to a secret wrapped via `fromExisting` — it is read-only unl
 
 ```typescript
 import { isBlocksError } from '@aws-blocks/core';
-import { SecretErrors } from '@aws-blocks/bb-secret';
+import { Secret, SecretErrors } from '@aws-blocks/bb-secret';
+
+const secret = new Secret(scope, 'api-key', { allowRuntimeWrite: true });
 
 try {
   await secret.put(value);
@@ -74,6 +76,8 @@ try {
   throw e;
 }
 ```
+
+A `ValidationFailed` error's message is fixed and never contains the secret value or the schema library's issue text, because schema libraries often quote the received value and the message reaches the client. It doesn't name the failing field either, because a record or map schema reports the value's own keys as the path: the message is always `ValidationFailedException: The secret value did not match the schema`. The original issues and the first failing path stay on the error's non-enumerable `cause` (`cause.issues`, `cause.path`) for server-side logging.
 
 `get()` returns `null` for a missing value rather than throwing, so a missing secret is normal control flow, not an exception:
 
@@ -185,13 +189,13 @@ printf '%s' "$STRIPE_KEY" \
 aws secretsmanager describe-secret --secret-id my-app/stripe-key
 ```
 
-The Blocks app **creates** the secret (empty/random) when you deploy, so the value is set against a secret that already exists — run the CLI once the secret exists. The exact sequencing in your pipeline is up to you. Re-running `put-secret-value` overwrites (rotation); the next cold start reads the new value. Write to the **same region** the app deploys to, or reads see an unset secret.
+The Blocks app **creates** the secret (empty/random) when you deploy, so the value is set against a secret that already exists — run the CLI once the secret exists. The exact sequencing in your pipeline is up to you. Re-running `put-secret-value` overwrites (rotation); running instances pick up the new value once their cached copy expires (`cacheTtlSeconds`, default 300 s). Write to the **same region** the app deploys to, or reads see an unset secret.
 
 Without an explicit `name`, the secret name is derived from the scope tree; find it in the settings resource group, the console, or `aws secretsmanager list-secrets`.
 
 ### Rotating & removing
 
-- **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change on its next cold start — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
+- **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change once its cache entry expires (`cacheTtlSeconds`, default 300 s) — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
 - **Remove:** `aws secretsmanager delete-secret --secret-id <name>` (recoverable by default; `--force-delete-without-recovery` to skip the recovery window).
 
 ### Which approach, when

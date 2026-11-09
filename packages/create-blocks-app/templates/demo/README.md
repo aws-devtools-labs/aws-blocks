@@ -35,15 +35,18 @@ Open http://localhost:3000 after `npm run dev`.
 - **Cookies** — a public round-trip demo (`setCookie` / `getCookie` /
   `deleteCookie`) on a single fixed-name `HttpOnly; SameSite=Lax` cookie. It is
   also `Secure` except on plain-HTTP localhost, the same rule as the auth cookie.
-- **FileBucket, AppSetting, Secret, EmailClient, AsyncJob** — upload/download
-  (paths scoped per user), `setFlag`, the API-key rotation methods,
-  `sendWelcome` and `runGreetingJob` all call `requireAuth`; `getFlag` and
-  `jobRan` stay public.
+- **FileBucket, AppSetting, Secret, EmailClient, AsyncJob, KnowledgeBase** —
+  upload/download (paths scoped per user; `getUploadSlot` signs only the
+  content types in `ALLOWED_UPLOAD_TYPES`), `setFlag`, the API-key rotation
+  methods, `sendWelcome`, `runGreetingJob` and `searchDocs` all call
+  `requireAuth`; `getFlag` and `jobRan` stay public.
 - **DistributedTable** — per-user todos; `listTodos(sortBy)` sorts the list in
   the API (an in-memory sort, no secondary indexes to provision). Every todo
   method calls `auth.requireAuth(context)`, so data is isolated per user.
 - **DistributedDatabase** — an atomic SQL money `transfer` between accounts; both
   balance updates commit together or roll back together inside one transaction.
+  Accounts belong to the signed-in user (an `owner` column every query filters
+  on), so a caller can only move money between their own accounts.
 
 The API mixes **public** methods (no auth) and **protected** methods (gated by
 `requireAuth`) in one namespace, showing where the auth boundary sits.
@@ -53,13 +56,23 @@ The API mixes **public** methods (no auth) and **protected** methods (gated by
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Local dev with mock storage |
+| `npm run dev:stop` | Stop the local dev server this app started |
 | `npm run test:e2e` | Test the API via direct imports |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
-| `npm run sandbox:destroy` | Tear down sandbox resources |
-| `npm run destroy` | Tear down the production stack |
+| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
+| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 ## Stack naming
 
