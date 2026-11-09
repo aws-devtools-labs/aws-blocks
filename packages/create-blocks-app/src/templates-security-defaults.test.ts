@@ -283,7 +283,7 @@ const UNGATED: Record<string, Record<string, string>> = {
 interface TemplateMethod {
   /** `<namespace>.<method>` */
   name: string;
-  /** Names of the method's identifier parameters (the caller's arguments). */
+  /** Names the method's parameters bind (the caller's arguments), including destructured ones. */
   parameters: string[];
   body: ts.Block;
 }
@@ -307,7 +307,7 @@ function apiMethods(file: string): TemplateMethod[] {
         );
         methods.push({
           name: `${nsArg.text}.${property.name.getText(sourceFile)}`,
-          parameters: property.parameters.flatMap((p) => (ts.isIdentifier(p.name) ? [p.name.text] : [])),
+          parameters: property.parameters.flatMap((p) => boundNames(p.name)),
           body: property.body,
         });
       }
@@ -316,6 +316,50 @@ function apiMethods(file: string): TemplateMethod[] {
   };
   visit(sourceFile);
   return methods;
+}
+
+/** Every name a parameter binds, including destructured and rest elements (`{ id, ...rest }`). */
+function boundNames(name: ts.BindingName): string[] {
+  if (ts.isIdentifier(name)) return [name.text];
+  return name.elements.flatMap((element) => (ts.isOmittedExpression(element) ? [] : boundNames(element.name)));
+}
+
+/** The identifier an expression is read from: `updates` for `updates`, `updates.fields` or `updates['x']`. */
+function rootIdentifier(expression: ts.Expression): ts.Identifier | undefined {
+  let node = expression;
+  while (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node) || ts.isParenthesizedExpression(node)) {
+    node = node.expression;
+  }
+  return ts.isIdentifier(node) ? node : undefined;
+}
+
+/**
+ * Where `method` copies one of its arguments wholesale into an object: an
+ * object spread (`...updates`, `...updates.fields`) or an `Object.assign(…)`
+ * argument read from a parameter, including a destructured or rest one.
+ */
+function argumentSpreads(method: TemplateMethod): string[] {
+  const spreads: string[] = [];
+  const fromParameter = (expression: ts.Expression) => {
+    const root = rootIdentifier(expression);
+    return !!root && method.parameters.includes(root.text);
+  };
+  const visit = (node: ts.Node) => {
+    if (ts.isSpreadAssignment(node) && fromParameter(node.expression)) {
+      spreads.push(`${method.name} (...${node.expression.getText()})`);
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.getText() === 'Object.assign'
+    ) {
+      for (const argument of node.arguments) {
+        if (fromParameter(argument)) spreads.push(`${method.name} (Object.assign(…, ${argument.getText()}))`);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(method.body);
+  return spreads;
 }
 
 /** `node` is `auth.<method>(context, …)`. */
@@ -388,24 +432,40 @@ describe('create-blocks-app template RPC methods require auth unless listed as p
 
     // RPC arguments are not checked at runtime, so `{ ...existing, ...updates }`
     // lets a caller set any field, including the owner key that scopes the row.
-    it(`template "${name}" never spreads a caller's argument into an object`, () => {
-      const spreads: string[] = [];
-      for (const method of apiMethods(backend)) {
-        const visit = (node: ts.Node) => {
-          if (
-            ts.isSpreadAssignment(node) &&
-            ts.isIdentifier(node.expression) &&
-            method.parameters.includes(node.expression.text)
-          ) {
-            spreads.push(`${method.name} (...${node.expression.text})`);
-          }
-          ts.forEachChild(node, visit);
-        };
-        visit(method.body);
-      }
+    it(`template "${name}" never spreads or Object.assigns a caller's argument into an object`, () => {
+      const spreads = apiMethods(backend).flatMap(argumentSpreads);
       assert.deepStrictEqual(spreads, [], `${name}: copy the fields a caller may set instead of spreading the argument`);
     });
   }
+});
+
+describe('argumentSpreads', () => {
+  it('flags every way a method copies a caller argument wholesale into an object', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cba-spreads-'));
+    const file = join(dir, 'index.ts');
+    writeFileSync(
+      file,
+      `export const api = new ApiNamespace(scope, 'api', (context) => ({
+        async bare(updates: object) { return { ...existing, ...updates }; },
+        async assign(updates: object) { return Object.assign(existing, updates); },
+        async member(updates: { fields: object }) { return { ...updates.fields }; },
+        async rest({ id, ...rest }: { id: string }) { return { id, ...rest }; },
+        async nested([{ ...inner }]: object[]) { return { ...inner }; },
+        async picked(updates: { title?: string }) { return { ...existing, title: updates.title }; },
+      }));`,
+    );
+    try {
+      assert.deepStrictEqual(apiMethods(file).flatMap(argumentSpreads), [
+        'api.bare (...updates)',
+        'api.assign (Object.assign(…, updates))',
+        'api.member (...updates.fields)',
+        'api.rest (...rest)',
+        'api.nested (...inner)',
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // A template's FileBucket is the starting point for every scaffolded app's file
