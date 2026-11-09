@@ -57,7 +57,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, agent, cron, amplify, demo/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
@@ -243,8 +243,10 @@ describe('create-blocks-app template metadata', () => {
       'api-only': { port: 3001, frontend: false },
       backend: { port: 3001, frontend: false },
       sql: { port: 3001, frontend: false },
+      cron: { port: 3001, frontend: false },
       nextjs: frontend,
       'auth-cognito': frontend,
+      agent: frontend,
       bare: frontend,
       default: frontend,
       demo: frontend,
@@ -268,7 +270,7 @@ describe('create-blocks-app template metadata', () => {
     const vite = (port: number) => `npx vite --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, 'auth-cognito': vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, 'auth-cognito': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {

@@ -173,9 +173,22 @@ import { CronJobErrors } from '@aws-blocks/bb-cron-job';
 
 CronJobErrors.InvalidSchedule  // schedule expression is not a valid cron or rate format
 CronJobErrors.InvalidTimezone  // timezone string is not a valid IANA timezone
+CronJobErrors.UnsupportedCompute // unsupported compute or compute from another backend (synth time)
 ```
 
-Both errors are thrown at construction time (fail-fast validation).
+`InvalidSchedule` and `InvalidTimezone` are thrown at construction time (fail-fast validation).
+
+## Compute Compatibility
+
+CronJob targets its own `compute`, or inherits its scope's compute:
+
+- **Lambda:** EventBridge Scheduler invokes the resolved compute's function directly.
+- **Container:** Scheduler sends each tick to an internal AsyncJob's queue, which
+  the container drains. See [Running on a container compute](#running-on-a-container-compute).
+
+Other compute types, and computes from another backend, fail at synth time with
+`UnsupportedComputeException`. Locally, handlers run in the dev server regardless
+of compute selection; this does not reproduce container worker isolation or timeouts.
 
 ## Examples
 
@@ -280,10 +293,10 @@ In local dev mode, CronJob runs schedules in-process:
 Automatically provisions:
 
 - **EventBridge Schedule:** One `AWS::Scheduler::Schedule` per CronJob instance
-- **Shared Lambda:** Targets the shared Lambda (same as API handlers and AsyncJob). No dedicated Lambda per job.
-- **IAM role:** Per-stack EventBridge Scheduler role with `lambda:InvokeFunction` permission. Its trust policy is limited to schedules in the stack's account and region (`aws:SourceAccount` + `aws:SourceArn` matching `schedule-group/*`).
+- **Lambda compute (serverless jobs):** Each schedule targets its resolved function. No dedicated Lambda is created per job.
+- **IAM role:** Per-backend EventBridge Scheduler role with access to each job's target: `lambda:InvokeFunction` for Lambda jobs or `sqs:SendMessage` for container jobs. Its trust policy is limited to schedules in the stack's account and region (`aws:SourceAccount` + `aws:SourceArn` matching `schedule-group/*`).
 - **Schedule name:** Derived from the CronJob's `fullId` (truncated to 64 chars)
-- **On a container compute:** The schedule targets an SQS queue and dead-letter queue owned by an internal `AsyncJob` instead of a Lambda function. The scheduler role gets `sqs:SendMessage` on that queue in place of `lambda:InvokeFunction`.
+- **On a container compute:** The schedule targets the main SQS queue of an internal `AsyncJob` instead of a Lambda function. The runner also owns a dead-letter queue, but the schedule does not target it. The scheduler role gets `sqs:SendMessage` on the main queue in place of `lambda:InvokeFunction`.
 
 ## Key Distinction from AsyncJob
 
@@ -294,4 +307,4 @@ CronJob is a **pure infrastructure declaration** — the constructor defines the
 | Trigger | Time-based (cron/rate) | Programmatic (`submit()`) |
 | Runtime methods | None | `submit()`, `submitBatch()` |
 | Use case | Periodic recurring tasks | One-off event-driven work |
-| AWS service | EventBridge Scheduler | SQS + Lambda |
+| AWS service | EventBridge Scheduler | SQS with Lambda or container compute |
