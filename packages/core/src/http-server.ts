@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
+import { apiNamespaceFilterFromEnv } from './api-placement.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import {
   CLIENT_USER_AGENT_HEADER,
@@ -168,7 +169,11 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
   }
   const env: RequestEnv = {
-    dispatch: createDispatcher(backend, { rpcErrorLabel: 'HTTP Server RPC Error:' }),
+    // With `defaults.strictNamespacePlacement`, serve only the API namespaces placed on this compute.
+    dispatch: createDispatcher(backend, {
+      rpcErrorLabel: 'HTTP Server RPC Error:',
+      servesNamespace: apiNamespaceFilterFromEnv(),
+    }),
     maxBodyBytes,
     publicOrigin,
     trustForwardedHeaders: options.trustForwardedHeaders ?? false,

@@ -222,6 +222,47 @@ export interface BlocksDefaults {
 	 * ```
 	 */
 	permissionsBoundary?: string | IManagedPolicy;
+
+	/**
+	 * Serve each API namespace only on the compute it is placed on.
+	 *
+	 * An `ApiNamespace` given its own `compute` (directly or through its scope) is
+	 * routed to that compute at `/aws-blocks/api/{namespace}`. The bare
+	 * `/aws-blocks/api` endpoint is served by the default compute and dispatches on
+	 * the JSON-RPC body, so without this option a raw `POST /aws-blocks/api` with
+	 * `{ "method": "reports.build" }` runs `reports` on the **default** compute —
+	 * outside the VPC, container or sizing its placement was meant to give it.
+	 *
+	 * With `strictNamespacePlacement: true`, every compute's dispatcher serves only
+	 * the namespaces placed on it, on any RPC path. A call to a namespace placed
+	 * elsewhere gets the same "method not found" error as an unknown namespace.
+	 * Namespaces without a placement keep running on the default compute, on the
+	 * bare endpoint and on their own path.
+	 *
+	 * This keeps a namespace's code on the compute (and network) it was placed on.
+	 * It doesn't split IAM: every compute still runs under the app's one execution
+	 * role.
+	 *
+	 * The typed TypeScript client and the Kotlin, Swift and Dart clients always
+	 * call `/aws-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
+	 * or a native client generated before clients called per-namespace paths, that
+	 * posts a placed namespace to the bare endpoint is refused: point it at the
+	 * namespace's own path before enabling this.
+	 *
+	 * Off (unset) in both {@link BlocksPresets}. While it is off and some
+	 * namespace runs on its own compute, synth emits the warning
+	 * `blocks:apigateway:bare-endpoint-serves-placed-namespaces`.
+	 *
+	 * @example Serve `reports` only on its own compute
+	 * ```ts
+	 * export const blocksStack = await BlocksStack.create(app, 'my-app', {
+	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
+	 *   backendCDKPath: join(__dirname, 'index.ts'),
+	 *   defaults: { ...BlocksPresets.production, strictNamespacePlacement: true },
+	 * });
+	 * ```
+	 */
+	strictNamespacePlacement?: boolean;
 }
 
 /**

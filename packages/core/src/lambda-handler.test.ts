@@ -282,6 +282,81 @@ describe('createLambdaHandler — RPC body handling', () => {
   });
 });
 
+describe('createLambdaHandler — strict API namespace placement (defaults.strictNamespacePlacement)', () => {
+  // What the CDK layer writes when `reports` is placed on compute `app-reports`:
+  // the placement map in the backend config, and the compute's own id only on
+  // that compute.
+  const PLACEMENT = JSON.stringify({ reports: 'app-reports' });
+
+  function withEnv(vars: Record<string, string>, fn: () => Promise<void>): () => Promise<void> {
+    return async () => {
+      const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+      Object.assign(process.env, vars);
+      try {
+        await fn();
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    };
+  }
+
+  function placedBackend(calls: string[]) {
+    return {
+      api: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('api'); return 'api'; } }),
+      reports: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('reports'); return 'reports'; } }),
+    };
+  }
+
+  function rpc(namespace: string, path = '/aws-blocks/api') {
+    return makeEvent({ path, body: JSON.stringify({ jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 }) });
+  }
+
+  it('the default compute refuses a namespace placed on another compute, on the bare endpoint', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      const result = await invoke(placedBackend(calls), rpc('reports'));
+      const body = JSON.parse(result.body);
+      assert.strictEqual(body.error?.code, -32601, 'refused like an unknown namespace');
+      assert.match(body.error?.message, /API 'reports' not found/);
+      assert.deepStrictEqual(calls, [], "the placed namespace's code never ran on the default compute");
+    },
+  ));
+
+  it('the default compute still serves its own namespaces on the bare endpoint and their own path', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+        const body = JSON.parse((await invoke(placedBackend(calls), rpc('api', path))).body);
+        assert.strictEqual(body.result, 'api', path);
+      }
+      assert.deepStrictEqual(calls, ['api', 'api']);
+    },
+  ));
+
+  it('the placed compute serves its namespace and refuses every other one', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, BLOCKS_API_COMPUTE_ID: 'app-reports' },
+    async () => {
+      const calls: string[] = [];
+      const served = JSON.parse((await invoke(placedBackend(calls), rpc('reports', '/aws-blocks/api/reports'))).body);
+      assert.strictEqual(served.result, 'reports');
+      const refused = JSON.parse((await invoke(placedBackend(calls), rpc('api'))).body);
+      assert.strictEqual(refused.error?.code, -32601);
+      assert.deepStrictEqual(calls, ['reports']);
+    },
+  ));
+
+  it('serves every namespace on the bare endpoint when no placement is configured', async () => {
+    const calls: string[] = [];
+    const body = JSON.parse((await invoke(placedBackend(calls), rpc('reports'))).body);
+    assert.strictEqual(body.result, 'reports');
+  });
+});
+
 // ── RawRoute body tests ─────────────────────────────────────────────────────
 
 describe('createLambdaHandler — named params (JSON-RPC 2.0 §4.2)', () => {
