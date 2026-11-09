@@ -19,6 +19,7 @@ import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavail
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
+import { createHash } from 'node:crypto';
 
 /**
  * A single agent turn to dispatch (initial message or HITL resume). Passed to
@@ -234,6 +235,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		this.config = config;
 		validateCap('maxLlmCalls', config.maxLlmCalls);
 		validateCap('maxToolIterations', config.maxToolIterations);
+		if (config.sessionScope !== undefined && config.sessionScope !== 'shared' && config.sessionScope !== 'user') {
+			throw blocksAgentError(AgentErrors.InvalidModelConfig, `sessionScope must be 'shared' or 'user', got ${JSON.stringify(config.sessionScope)}.`);
+		}
 		this.toolMap = resolveTools<TContext>(config.tools);
 		this.modelConfig = modelConfig;
 
@@ -399,7 +403,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 */
 	private async runAgent(message: string, conversationId: string | undefined, channelId: string, userId: string, interruptResponses?: Array<{ interruptId: string; response: string }>, context?: TContext): Promise<void> {
 		const { InterruptResponseContent, ModelStreamUpdateEvent, BeforeModelCallEvent, BeforeToolCallEvent, AfterToolCallEvent, AgentResultEvent } = await loadStrands();
-		const strandsAgent = await this.createStrandsAgent(conversationId, context);
+		const strandsAgent = await this.createStrandsAgent(conversationId ? this.sessionIdFor(conversationId, userId) : undefined, context);
 		const startTime = Date.now();
 
 		// Runaway-protection caps (see AgentConfig.maxLlmCalls / maxToolIterations).
@@ -593,7 +597,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		await this.rt.publish('chunks', channelId, { type: 'done', text: fullText, usage });
 	}
 
-	private async createStrandsAgent(conversationId?: string, fallbackContext?: TContext): Promise<StrandsAgent> {
+	private async createStrandsAgent(sessionId?: string, fallbackContext?: TContext): Promise<StrandsAgent> {
 		const { Agent: StrandsAgent, tool, SessionManager, BeforeToolCallEvent } = await loadStrands();
 		const toolDefs = [...this.toolMap.values()];
 		// Validate mutual exclusivity of needsApproval/trustable and interrupt
@@ -652,8 +656,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 		// SessionManager restores/saves agent state across invocations.
 		// undefined when no conversationId (inference-only calls — no state to persist).
-		const sessionManager = conversationId
-			? new SessionManager({ sessionId: conversationId, storage: { snapshot: this.snapshotStorage } })
+		// The session id is the conversationId, or an owner-scoped key (see sessionIdFor).
+		const sessionManager = sessionId
+			? new SessionManager({ sessionId, storage: { snapshot: this.snapshotStorage } })
 			: undefined;
 
 		const agent = new StrandsAgent({
@@ -733,12 +738,14 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
 	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` and `options.userId` is missing.
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
 		const conversationId = options?.conversationId;
 		const channelId = options?.channelId || conversationId || crypto.randomUUID();
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
+		this.assertUserIdForUserScope(options?.userId, 'stream');
 		const userId = options?.userId ?? 'anonymous';
 		const rtChannel = this.chunksChannel(channelId, userId);
 		if (conversationId) await this.assertOwnsConversation(conversationId, userId);
@@ -787,6 +794,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
 	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
 	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
+	 * @throws InvalidUsage when the agent is `inferenceOnly` with `sessionScope: 'user'` and `options.userId` is missing.
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
@@ -808,6 +816,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			throw blocksAgentError(AgentErrors.InterruptRequired, `resume() requires a conversationId to restore the interrupted session. ${reason}`);
 		}
 		if (!options?.userId && !this.config.inferenceOnly) throw blocksAgentError(AgentErrors.PersistenceRequired, 'userId is required when persistence is enabled. Pass it via options.userId.');
+		this.assertUserIdForUserScope(options?.userId, 'resume');
 		const userId = options?.userId ?? 'anonymous';
 		// Every validation and ownership check runs before any approval is persisted, so a
 		// resume rejected by one of them leaves no approval behind. (A failure to dispatch,
@@ -842,7 +851,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * `encodeURIComponent` keeps the user segment free of `/`, so one user's channels
 	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
 	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
-	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId.
+	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId,
+	 * unless they set `sessionScope: 'user'`, which scopes their channels the same way.
 	 *
 	 * The result must also be a valid Realtime channel name (no empty, `.` or `..` segment,
 	 * no leading or trailing `/`). Realtime rejects any other name on publish and getChannel(),
@@ -851,7 +861,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 */
 	private chunksChannel(channelId: string, userId: string): string {
 		let channel = channelId;
-		if (this.conversations) {
+		if (this.isUserScoped) {
 			let user: string;
 			try {
 				user = encodeURIComponent(userId);
@@ -864,6 +874,46 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			throw blocksAgentError(AgentErrors.InvalidUsage, 'channelId and userId must form a valid Realtime channel name: no empty, "." or ".." segment, and no leading or trailing "/".');
 		}
 		return channel;
+	}
+
+	/**
+	 * Whether turns, sessions and channels are scoped to the caller's userId: always with
+	 * persistence (ownership is checked against the conversation record), and for an
+	 * `inferenceOnly` agent only with `sessionScope: 'user'` (the session key and channel
+	 * carry the userId, since there is no record to check against).
+	 */
+	private get isUserScoped(): boolean {
+		return !!this.conversations || this.scopesSessionsToUser;
+	}
+
+	/** An `inferenceOnly` agent with `sessionScope: 'user'`. */
+	private get scopesSessionsToUser(): boolean {
+		return !this.conversations && this.config.sessionScope === 'user';
+	}
+
+	/**
+	 * The Strands session id a conversation's state is stored under. It is the bare
+	 * conversationId, except for an `inferenceOnly` agent with `sessionScope: 'user'`, which
+	 * has no conversation record to prove ownership: there it is a hash of the userId and
+	 * the conversationId, so another user who passes the same conversationId selects a
+	 * different, empty session. The hash keeps the key a fixed-length, path-safe string
+	 * (`u-` + 64 hex characters) whatever the two ids contain.
+	 *
+	 * @internal Also used by the deployed subclass to key the AgentCore runtime session.
+	 */
+	protected sessionIdFor(conversationId: string, userId: string): string {
+		if (!this.scopesSessionsToUser) return conversationId;
+		return `u-${createHash('sha256').update(JSON.stringify([userId, conversationId])).digest('hex')}`;
+	}
+
+	/**
+	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` is called
+	 * without a userId: the default 'anonymous' would put every such caller in one shared scope.
+	 */
+	private assertUserIdForUserScope(userId: string | undefined, method: string): void {
+		if (this.scopesSessionsToUser && !userId) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires options.userId when sessionScope is 'user'. Take it from the authenticated session.`);
+		}
 	}
 
 	/**
@@ -896,7 +946,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 
 	/**
 	 * Throws ConversationNotFound unless `userId` owns `conversationId`. A no-op for
-	 * inferenceOnly agents, which keep no conversation records to check against.
+	 * inferenceOnly agents, which keep no conversation records to check against
+	 * (`sessionScope: 'user'` isolates their sessions by keying them with the userId instead).
 	 * "Not found" covers both a missing and a foreign conversation so the error
 	 * doesn't confirm that another user's conversation exists.
 	 */
@@ -937,12 +988,13 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * carries that user's turns, so a caller who knows another user's conversation
 	 * id can't listen to it. Throws InvalidUsage without a `userId`. An `inferenceOnly`
 	 * agent has no owner to scope by, so its channels are not user-scoped and the
-	 * `userId` is not used.
+	 * `userId` is not used, unless it sets `sessionScope: 'user'`: then its channels are
+	 * scoped to the `userId` like a persistent agent's, and a `userId` is required.
 	 *
 	 * @param options.userId - The caller's user id (the same one passed to stream()/resume()).
 	 */
 	async getChannel(channelId: string, options: { userId: string }) {
-		if (!this.conversations) return this.rt.getChannel('chunks', channelId);
+		if (!this.isUserScoped) return this.rt.getChannel('chunks', channelId);
 		const userId = this.requireUserId(options, 'getChannel', 'getChannel(channelId, { userId })');
 		return this.rt.getChannel('chunks', this.chunksChannel(channelId, userId));
 	}

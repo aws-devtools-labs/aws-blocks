@@ -79,6 +79,24 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 
 **`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
 
+To isolate `inferenceOnly` sessions per user, set `sessionScope: 'user'`. The session is then keyed by the `userId` together with the `conversationId`, and the Realtime channel is scoped to the `userId`, so a caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. `stream()`, `resume()` and `getChannel()` then require `options.userId` and throw `AgentErrors.InvalidUsage` without it. Sessions stored before you switch an existing agent to `'user'` are keyed by the bare `conversationId` and are not resumed.
+
+```typescript
+const assistant = new Agent(scope, 'assistant', {
+  inferenceOnly: true,
+  sessionScope: 'user',
+  systemPrompt: 'You are a helpful assistant.',
+});
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async ask(message: string, conversationId: string) {
+    const user = await auth.requireAuth(context);
+    const result = await assistant.stream(message, { conversationId, userId: user.userId });
+    return result.channel;
+  },
+}));
+```
+
 These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
 
 ```typescript
@@ -191,6 +209,7 @@ interface Conversation {
 | `tools` | `(tool) => Record<string, AgentTool>` | Tools the agent can call during reasoning. |
 | `toolContextSchema` | `z.ZodType` | Optional schema for per-call tool context. When set, `context` is required and typed. |
 | `inferenceOnly` | `boolean` | Skip persistence infra. Default: `false`. |
+| `sessionScope` | `'shared' \| 'user'` | How an `inferenceOnly` agent keys the session a `conversationId` selects: by the id alone (`'shared'`), or by the `userId` plus the id, with user-scoped channels (`'user'`). Ignored with persistence. Default: `'shared'`. See [Authorization](#authorization). |
 | `conversation` | `ConversationManagerConfig` | How the agent trims message history (sliding-window or summarizing). |
 | `streamingMode` | `'token' \| 'block'` | How text chunks are published to the client. Default: `'block'`. |
 | `maxLlmCalls` | `number \| false` | Max model invocations per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |

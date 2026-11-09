@@ -433,6 +433,80 @@ describe('inferenceOnly error handling', () => {
 	});
 });
 
+// ── inferenceOnly sessionScope: 'user' ──────────────────────────────────────
+
+describe("inferenceOnly sessionScope: 'user'", () => {
+	/** Snapshot storage that records every snapshot a turn loads, by sessionId. */
+	class RecordingSnapshotStorage extends FileBucketSnapshotStorage {
+		loads: Array<{ sessionId: string; snapshot: unknown }> = [];
+		override async loadSnapshot(params: Parameters<FileBucketSnapshotStorage['loadSnapshot']>[0]) {
+			const snapshot = await super.loadSnapshot(params);
+			this.loads.push({ sessionId: params.location.sessionId, snapshot });
+			return snapshot;
+		}
+	}
+
+	function makeAgent(id: string, sessionScope?: 'shared' | 'user') {
+		let storage: RecordingSnapshotStorage | undefined;
+		const agent = new AgentBase(new Scope(`test-io-scope-${id}`), id, { systemPrompt: 'test', inferenceOnly: true, ...(sessionScope && { sessionScope }) }, [{ provider: 'canned' }], (bucket) => {
+			storage = new RecordingSnapshotStorage(bucket);
+			return storage;
+		});
+		if (!storage) throw new Error('snapshot storage was not created');
+		return { agent, storage };
+	}
+
+	const secret = 'alice-private-note-7f3a';
+
+	test("user B who passes user A's conversationId does not load A's session state", async () => {
+		const { agent, storage } = makeAgent('iosu1', 'user');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+
+		storage.loads = [];
+		await (await agent.stream('what did I tell you?', { conversationId, userId: 'bob' })).complete();
+		assert.ok(storage.loads.length > 0, "bob's turn should load (or try to load) a session");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+
+		// Alice still resumes her own session.
+		storage.loads = [];
+		await (await agent.stream('and again?', { conversationId, userId: 'alice' })).complete();
+		assert.ok(storage.loads.some(({ snapshot }) => JSON.stringify(snapshot ?? null).includes(secret)), "alice's turn should restore her session");
+	});
+
+	test("user B can't receive user A's chunks on the shared conversationId channel", async () => {
+		const { agent } = makeAgent('iosu2', 'user');
+		const conversationId = crypto.randomUUID();
+		const bobChannel = await agent.getChannel(conversationId, { userId: 'bob' });
+		const received: unknown[] = [];
+		const sub = bobChannel.subscribe((chunk) => { received.push(chunk); });
+		await (await agent.stream('hello', { conversationId, userId: 'alice' })).complete();
+		sub.unsubscribe();
+		assert.strictEqual(received.length, 0, "bob's channel must not carry alice's chunks");
+	});
+
+	test('stream(), resume() and getChannel() require a userId', async () => {
+		const { agent } = makeAgent('iosu3', 'user');
+		const isInvalidUsage = (err: any) => err.name === AgentErrors.InvalidUsage && /userId/.test(err.message);
+		await assert.rejects(() => agent.stream('hello', { conversationId: crypto.randomUUID() }), isInvalidUsage);
+		await assert.rejects(() => agent.resume('chan', [{ interruptId: 'i-1', approved: true }], { conversationId: crypto.randomUUID() }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for a caller on an older signature
+		await assert.rejects(() => agent.getChannel('chan'), isInvalidUsage);
+	});
+
+	// The default keeps the documented shared-key behaviour, so existing sessions keep resolving.
+	test("the default ('shared') keys the session by the conversationId alone", async () => {
+		const { agent, storage } = makeAgent('iosu4');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		storage.loads = [];
+		await (await agent.stream('again', { conversationId, userId: 'bob' })).complete();
+		assert.ok(storage.loads.some(({ sessionId }) => sessionId === conversationId));
+	});
+});
+
 // ── deleteConversation ownership scoping ─────────────────────────────────────
 
 describe('deleteConversation ownership scoping', () => {
@@ -4848,6 +4922,26 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		}
 		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^turn-[0-9a-f-]{36}$/);
 		assert.strictEqual(new Set(sent.map(s => s.runtimeSessionId)).size, 3, 'no two conversation-less turns share a session');
+	});
+
+	test("with sessionScope: 'user', two users on one conversationId route to different runtime sessions", async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session-user'), 'acsu', { systemPrompt: 'test', inferenceOnly: true, sessionScope: 'user' });
+		const sent: Array<{ runtimeSessionId?: string; payload?: Uint8Array }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		const conv = crypto.randomUUID();
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'alice' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'bob' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'alice' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		assert.match(sent[0].runtimeSessionId ?? '', /^u-[0-9a-f]{64}$/);
+		assert.notStrictEqual(sent[0].runtimeSessionId, sent[1].runtimeSessionId, 'different users must not share a runtime session');
+		assert.strictEqual(sent[0].runtimeSessionId, sent[2].runtimeSessionId, "a user's turns keep routing to one session");
+		assert.strictEqual(JSON.parse(new TextDecoder().decode(sent[1].payload)).conversationId, conv, 'the payload still carries the plain conversationId');
 	});
 
 	test('the AgentCore entry does not turn the session id into a conversationId', async () => {
