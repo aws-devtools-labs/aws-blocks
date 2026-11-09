@@ -20,6 +20,20 @@ export function cookieSecretEnvVar(fullId: string): string {
 	return `BLOCKS_AUTH_OIDC_COOKIE_SECRET_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 }
 
+/**
+ * Env-var name prefix for the Cognito-federated provider's deployed settings.
+ *
+ * Shared with the CDK synth path for the same reason as `cookieSecretEnvVar`:
+ * the synth side writes these names and the runtime reads them, so a second
+ * copy of the expression would let the two drift apart silently.
+ *
+ * @param fullId - The fully-qualified scope ID (e.g. `"myApp-auth"`)
+ * @returns Prefix like `BLOCKS_AUTH_OIDC_COGNITO_MYAPP_AUTH`, without a trailing `_`
+ */
+export function cognitoEnvPrefix(fullId: string): string {
+	return `BLOCKS_AUTH_OIDC_COGNITO_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
+}
+
 /** Shared by both runtimes so the stub-vs-real issuer rule stays identical. */
 export function resolveProviderIssuerUrl(provider: ProviderConfig, ctx: BlocksContext): string {
 	switch (provider.kind) {

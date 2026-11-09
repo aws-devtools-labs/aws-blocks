@@ -7,7 +7,7 @@
 
 import Foundation
 
-public struct BlocksServer {
+public struct BlocksServer: Sendable, Equatable {
     public let name: String
     public let url: String
 

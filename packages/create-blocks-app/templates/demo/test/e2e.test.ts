@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
-import type { api as apiType, hello as helloType } from 'aws-blocks';
+import type { api as apiType, authApi as authApiType, hello as helloType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
 const isWin = process.platform === 'win32';
@@ -12,8 +13,10 @@ installCookieJar();
 
 let server: ChildProcess | null = null;
 let api: typeof apiType;
+let authApi: typeof authApiType;
 let hello: typeof helloType;
-const serverPort = 3000;
+// The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
+const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
 test.before(async () => {
@@ -31,6 +34,7 @@ test.before(async () => {
 
   const mod = await import('aws-blocks');
   api = mod.api;
+  authApi = mod.authApi;
   hello = mod.hello;
 
   // Wait for the Blocks server to be ready without depending on the sample API.
@@ -46,13 +50,42 @@ test.before(async () => {
   throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
-test.after(() => {
-  if (server?.pid) {
-    try {
-      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
-      else process.kill(-server.pid, 'SIGTERM');
-    } catch {}
+// The installed cookie jar carries the session cookie across calls, so after
+// this resolves every API call runs as the new user.
+const signUp = async (username: string) => {
+  const result = await authApi.setAuthState({ action: 'signUp', username, password: 'Password1!' });
+  assert.strictEqual(result.state, 'signedIn', `signUp: ${result.error ?? ''}`);
+};
+const uniqueSuffix = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+// Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
+function signalServer(pid: number, signal: NodeJS.Signals | 0) {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+async function waitForServerExit(pid: number, ms: number) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+    if (Date.now() >= deadline) return false;
+  }
+  return true;
+}
+
+// The dev server shuts down gracefully, so wait for it to exit: it can still be
+// writing to the app's directory when this file ends and the caller removes it.
+test.after(async () => {
+  if (!server?.pid) return;
+  if (isWin) {
+    spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  if (!signalServer(server.pid, 'SIGTERM') || await waitForServerExit(server.pid, 15_000)) return;
+  signalServer(server.pid, 'SIGKILL');
+  await waitForServerExit(server.pid, 2_000);
 });
 
 // App-level readiness — independent of the sample API, so it keeps passing
@@ -71,10 +104,287 @@ test('greet returns message and timestamp', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('KV Store - set and get', async () => {
+test('Protected methods reject signed-out callers', async () => {
+  await authApi.setAuthState({ action: 'signOut' });
+  await assert.rejects(api.getValue('test-key'), { status: 401 });
+  await assert.rejects(api.setValue('test-key', 'test-value'), { status: 401 });
+  await assert.rejects(api.getUploadSlot('uploads/x.txt', 'text/plain'), { status: 401 });
+  await assert.rejects(api.getFileHandle('uploads/x.txt'), { status: 401 });
+  await assert.rejects(api.setFlag('on'), { status: 401 });
+  await assert.rejects(api.rotateApiKey('key-x'), { status: 401 });
+  await assert.rejects(api.getApiKey(), { status: 401 });
+  await assert.rejects(api.getPreviousApiKey(), { status: 401 });
+  await assert.rejects(api.apiKeyVersionCount(), { status: 401 });
+  await assert.rejects(api.sendWelcome('user@example.com'), { status: 401 });
+  await assert.rejects(api.runGreetingJob('signed-out'), { status: 401 });
+  await assert.rejects(api.searchDocs('refund'), { status: 401 });
+  await assert.rejects(api.openAccount('signed-out', 100), { status: 401 });
+  await assert.rejects(api.balanceOf('signed-out'), { status: 401 });
+  await assert.rejects(api.transfer('signed-out', 'other', 1), { status: 401 });
+});
+
+test('KV Store - set and get (signed in, keys isolated per user)', async () => {
+  const suffix = uniqueSuffix();
+
+  await signUp(`alice-${suffix}`);
   const setResult = await api.setValue('test-key', 'test-value');
   assert.strictEqual(setResult.success, true);
+  assert.strictEqual(await api.getValue('test-key'), 'test-value');
 
-  const value = await api.getValue('test-key');
-  assert.strictEqual(value, 'test-value');
+  // A different user sees their own namespace, not alice's value.
+  await signUp(`bob-${suffix}`);
+  assert.strictEqual(await api.getValue('test-key'), null);
+
+  await authApi.setAuthState({ action: 'signOut' });
+});
+
+test('KV Store - a ":" in the username cannot reach another user\'s keys', async () => {
+  const alice = `alice-${uniqueSuffix()}`;
+
+  await signUp(alice);
+  await api.setValue('notes:secret', 'alice-value');
+
+  // `${alice}:notes` + `secret` must not map onto `${alice}` + `notes:secret`.
+  await signUp(`${alice}:notes`);
+  assert.strictEqual(await api.getValue('secret'), null);
+
+  await authApi.setAuthState({ action: 'signOut' });
+});
+
+// ─── Cookies ────────────────────────────────────────────────────────────────
+// Runs the real setCookie/getCookie/deleteCookie: a value with `;` or CR/LF
+// must be encoded, so it round-trips instead of adding cookie attributes.
+test('Cookie - a hostile value round-trips without adding attributes', async () => {
+  const value = 'x; Domain=evil.example\r\nSet-Cookie: admin=1';
+  await api.setCookie(value);
+  assert.strictEqual(await api.getCookie(), value);
+  await api.deleteCookie();
+  assert.strictEqual(await api.getCookie(), null);
+});
+
+// ─── FileBucket ─────────────────────────────────────────────────────────────
+// `getUploadSlot()` / `getFileHandle()` return descriptors the client hydrates
+// into live upload/download handles backed by the dev server's local file
+// server (no AWS). We upload bytes, then download them back and assert they
+// round-trip unchanged.
+test('FileBucket - upload then download round-trips', async (t) => {
+  await signUp(`files-${uniqueSuffix()}`);
+  const path = 'uploads/greeting.txt';
+  const contentType = 'text/plain';
+  const payload = 'hello from the file bucket';
+
+  const slot = await api.getUploadSlot(path, contentType);
+  if (typeof slot.upload !== 'function') {
+    t.skip('FileBucket middleware not hydrated (no local file server — expected on Windows)');
+    return;
+  }
+  await slot.upload(new Blob([payload], { type: contentType }));
+
+  const handle = await api.getFileHandle(path);
+  // The upload skip-gate above already confirmed the middleware hydrates in this
+  // environment, so a bare assertion here is intentional: a non-function download
+  // at this point is a genuine regression, not the no-local-file-server case.
+  assert.strictEqual(typeof handle.download, 'function', 'download handle should hydrate');
+  const blob = await handle.download();
+  const text = await blob.text();
+  assert.strictEqual(text, payload);
+});
+
+// Only the allowed content types get an upload handle: a presigned PUT stores
+// whatever Content-Type it was signed with.
+test('FileBucket - an unsupported content type is declined', async () => {
+  await signUp(`ctype-${uniqueSuffix()}`);
+  await assert.rejects(api.getUploadSlot('uploads/page.html', 'text/html'), { status: 400 });
+});
+
+// ─── AppSetting ───────────────────────────────────────────────────────────────
+// A runtime config value backed by SSM Parameter Store (local file in dev).
+test('AppSetting - set and get a flag', async () => {
+  await signUp(`flag-${uniqueSuffix()}`);
+  const setResult = await api.setFlag('on');
+  assert.strictEqual(setResult.success, true);
+
+  const value = await api.getFlag();
+  assert.strictEqual(value, 'on');
+});
+
+// ─── Secret ─────────────────────────────────────────────────────────────────
+// A credential backed by Secrets Manager (local file in dev). Unlike AppSetting
+// it keeps version history: after a rotation the previous value stays readable
+// until the next rotation (history is capped at current + previous, not time-aged).
+// We set, rotate, then assert current + previous + that two versions are labeled.
+test('Secret - rotate keeps the previous value readable', async () => {
+  await signUp(`secret-${uniqueSuffix()}`);
+  await api.rotateApiKey('key-v1');
+  await api.rotateApiKey('key-v2');
+
+  assert.strictEqual(await api.getApiKey(), 'key-v2');
+  assert.strictEqual(await api.getPreviousApiKey(), 'key-v1');
+  assert.strictEqual(await api.apiKeyVersionCount(), 2);
+});
+
+// ─── KnowledgeBase ────────────────────────────────────────────────────────
+// Semantic search over the ./knowledge corpus. Backed by Bedrock KB on deploy;
+// locally the mock builds a TF-IDF index over the committed docs (no AWS). We
+// query a billing question and assert the top hit comes from billing.md, not
+// the unrelated shipping doc, with a positive relevance score.
+test('KnowledgeBase - retrieves the relevant doc for a query', async () => {
+  await signUp(`docs-${uniqueSuffix()}`);
+  const results = await api.searchDocs('how do I get a refund for a payment');
+  assert.ok(results.length > 0, 'expected at least one retrieval result');
+  // endsWith (not strictEqual): the mock returns `source` relative to the corpus
+  // root (billing.md), while the Bedrock layer returns an s3://<bucket>/billing.md
+  // URI — endsWith matches the filename across both.
+  assert.ok(
+    results[0].source.endsWith('billing.md'),
+    'top hit should be the billing doc',
+  );
+  assert.ok(results[0].score > 0, 'top hit should have a positive relevance score');
+});
+
+// ─── AsyncJob ─────────────────────────────────────────────────────────────────
+// Background processing. The handler runs locally (no SQS/Lambda); we submit a
+// job, wait for completion, and confirm the handler's side effect landed.
+test('AsyncJob - submit, complete, and observe the effect', async () => {
+  await signUp(`job-${uniqueSuffix()}`);
+  const name = `e2e-${Date.now().toString(36)}`;
+
+  const result = await api.runGreetingJob(name);
+  assert.strictEqual(result.state, 'complete');
+
+  const ran = await api.jobRan(name);
+  assert.strictEqual(ran, true, 'the job handler should have run and written its marker');
+});
+
+// ─── EmailClient ────────────────────────────────────────────────────────────
+// Transactional email (no SES in local dev). This is a send-succeeds smoke
+// check: it asserts send() resolves with a message id. It does not assert the
+// mock recorded the mail — EmailClient's public API is send/sendBatch only (no
+// read-back method, matching the AWS runtime), so asserting capture would mean
+// reaching into mock-internal storage and breaking mock/AWS parity.
+test('EmailClient - send returns a message id', async () => {
+  await signUp(`email-${uniqueSuffix()}`);
+  const { messageId } = await api.sendWelcome('user@example.com');
+  assert.ok(typeof messageId === 'string' && messageId.length > 0, 'send should return a message id');
+});
+
+// ─── DistributedDatabase (SQL) ───────────────────────────────────────────
+// A money transfer runs both UPDATEs inside one transaction: the balances move
+// together or not at all. We assert the post-transfer balances AND that the
+// total is conserved — the atomic-multi-row-write capability DistributedTable
+// cannot express. Runs on the PGlite mock locally (no AWS). OCC-conflict retry
+// (SerializationFailureException / retryOnConflict) is covered by the
+// bb-distributed-data unit suite; forcing a real 40001 race here would be
+// non-deterministic, so the canary asserts the atomic-commit behavior instead.
+test('DistributedDatabase - a transfer moves both balances atomically', async () => {
+  await signUp(`ledger-${uniqueSuffix()}`);
+  await api.openAccount('alice', 100);
+  await api.openAccount('bob', 0);
+
+  await api.transfer('alice', 'bob', 30);
+
+  const alice = await api.balanceOf('alice');
+  const bob = await api.balanceOf('bob');
+  assert.strictEqual(alice.balance, 70, 'alice debited');
+  assert.strictEqual(bob.balance, 30, 'bob credited');
+  assert.strictEqual(
+    (alice.balance ?? 0) + (bob.balance ?? 0),
+    100,
+    'the transaction conserves the total — both updates committed',
+  );
+});
+
+// The guard makes the atomic-abort path observable: an overdraft matches zero
+// rows on the debit, so transfer throws and the credit is rolled back with it.
+// transfer throws an ApiError (wire-safe), so the 'TransferDeclined' name crosses
+// the RPC boundary and the client can match it; the decisive proof is behavioral:
+// the call rejects with that branded error AND neither balance moved.
+test('DistributedDatabase - a declined transfer rolls back atomically', async () => {
+  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+
+  await signUp(`ledger-${uniqueSuffix()}`);
+  await api.openAccount('carol', 50);
+  await api.openAccount('dave', 0);
+
+  await assert.rejects(
+    () => api.transfer('carol', 'dave', 999),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    'an overdraft transfer should raise a branded TransferDeclined error',
+  );
+
+  const carol = await api.balanceOf('carol');
+  const dave = await api.balanceOf('dave');
+  assert.strictEqual(carol.balance, 50, 'carol not debited — transaction aborted');
+  assert.strictEqual(dave.balance, 0, 'dave not credited — the whole transfer rolled back');
+
+  // A negative amount would pass the overdraft guard and pull money from dave.
+  await assert.rejects(
+    () => api.transfer('carol', 'dave', -10),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    'a negative transfer should be declined',
+  );
+  assert.strictEqual((await api.balanceOf('dave')).balance, 0, 'dave not debited by a negative transfer');
+
+  // RPC arguments aren't checked at runtime: a numeric string passes `> 0`, so
+  // it must be declined up front rather than reach the SQL.
+  const stringAmount: number = JSON.parse('"5"');
+  await assert.rejects(
+    () => api.transfer('carol', 'dave', stringAmount),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    'a non-number amount should be declined',
+  );
+  assert.strictEqual((await api.balanceOf('carol')).balance, 50, 'carol not debited by a non-number amount');
+  assert.strictEqual((await api.balanceOf('dave')).balance, 0, 'dave not credited by a non-number amount');
+});
+
+// Accounts belong to the user who opened them: another user neither sees them
+// nor can move money into or out of them, even using the same account names.
+test("DistributedDatabase - a user cannot read, debit or credit another user's accounts", async () => {
+  const { isBlocksError } = await import('@aws-blocks/blocks/client');
+
+  const owner = `ledger-owner-${uniqueSuffix()}`;
+  await signUp(owner);
+  await api.openAccount('savings', 100);
+  await api.openAccount('checking', 0);
+
+  await signUp(`ledger-other-${uniqueSuffix()}`);
+  assert.strictEqual((await api.balanceOf('savings')).balance, null, "another user's account is not visible");
+  await api.openAccount('checking', 0);
+  await assert.rejects(
+    () => api.transfer('savings', 'checking', 50),
+    (e: unknown) => isBlocksError(e, 'TransferDeclined'),
+    "debiting another user's account should be declined",
+  );
+  assert.strictEqual((await api.balanceOf('checking')).balance, 0, 'nothing was credited');
+
+  // The credit leg is scoped too: a transfer into the caller's own `checking`
+  // must not also credit the owner's account of the same name.
+  await api.openAccount('savings', 10);
+  await api.transfer('savings', 'checking', 5);
+  assert.strictEqual((await api.balanceOf('checking')).balance, 5, "the caller's own account is credited");
+
+  const signIn = await authApi.setAuthState({ action: 'signIn', username: owner, password: 'Password1!' });
+  assert.strictEqual(signIn.state, 'signedIn', `signIn: ${signIn.error ?? ''}`);
+  assert.strictEqual((await api.balanceOf('checking')).balance, 0, "the owner's checking was not credited");
+  assert.strictEqual((await api.balanceOf('savings')).balance, 100, "the owner's savings did not move");
+  await authApi.setAuthState({ action: 'signOut' });
+});
+
+// Todos are keyed by the owner's username. `updates` is typed, but RPC arguments
+// aren't checked at runtime, so a caller can send fields the type doesn't allow.
+test("DistributedTable - an update cannot move a todo into another user's list", async () => {
+  const suffix = uniqueSuffix();
+  const victim = `todo-victim-${suffix}`;
+  await signUp(victim);
+  await signUp(`todo-attacker-${suffix}`);
+
+  const todo = await api.createTodo('mine');
+  const forged: Parameters<typeof api.updateTodo>[1] = Object.assign({ title: 'planted' }, { userId: victim });
+  await api.updateTodo(todo.todoId, forged);
+  assert.deepStrictEqual((await api.listTodos()).map((t) => t.title), ['planted'], 'the update applies to the caller');
+
+  const signIn = await authApi.setAuthState({ action: 'signIn', username: victim, password: 'Password1!' });
+  assert.strictEqual(signIn.state, 'signedIn', `signIn: ${signIn.error ?? ''}`);
+  assert.deepStrictEqual(await api.listTodos(), [], "nothing was written into the other user's list");
+  await authApi.setAuthState({ action: 'signOut' });
 });

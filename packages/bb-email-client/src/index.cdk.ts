@@ -5,7 +5,7 @@ import { CfnConfigurationSet } from 'aws-cdk-lib/aws-ses';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Effect, PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Stack } from 'aws-cdk-lib';
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 
 // Re-export public types and errors (no runtime dependencies)
@@ -13,10 +13,11 @@ export { EmailErrors } from './errors.js';
 export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 
 import type { EmailOptions } from './types.js';
+import { BB_NAME } from './version.js';
 
 export class EmailClient extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +
@@ -32,14 +33,14 @@ export class EmailClient extends BuildingBlockScope {
 
 		// Grant the Lambda handler permission to send emails
 		// Scoped to this account's SES identities rather than '*'
+		// Only the two SESv2 actions the runtime calls: send() uses SendEmail and
+		// sendBatch() uses SendBulkEmail with an inline template. No raw-MIME or
+		// stored-template sends are made, so those actions are not granted.
 		this.executionRole.addToPrincipalPolicy(new PolicyStatement({
 			effect: Effect.ALLOW,
 			actions: [
 				'ses:SendEmail',
 				'ses:SendBulkEmail',
-				'ses:SendRawEmail',
-				'ses:SendTemplatedEmail',
-				'ses:SendBulkTemplatedEmail',
 			],
 			resources: [
 				`arn:aws:ses:*:${Stack.of(this).account}:identity/*`,
@@ -47,4 +48,8 @@ export class EmailClient extends BuildingBlockScope {
 			],
 		}));
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	send(..._args: unknown[]): never { return synthGuard('EmailClient', 'send'); }
+	sendBatch(..._args: unknown[]): never { return synthGuard('EmailClient', 'sendBatch'); }
 }

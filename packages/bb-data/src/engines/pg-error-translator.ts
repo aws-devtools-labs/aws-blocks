@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DatabaseErrors, wrapError, reTagged, serializationConflict, uniqueConstraintConflict } from '../errors.js';
+import { DatabaseErrors, wrapError, reTagged, requestError, serializationConflict, uniqueConstraintConflict } from '../errors.js';
 
 /** PostgreSQL error code for unique constraint violations. */
 const PG_UNIQUE_VIOLATION = '23505';
@@ -19,6 +19,9 @@ const PG_CONNECTION_EXCEPTION_CLASS = '08';
  * @example
  * // PostgreSQL error code 23505 → UniqueConstraintViolation
  * // PostgreSQL error code 40001 → SerializationFailure (ApiError, HTTP 409)
+ * // PostgreSQL error code 42501 → PermissionDenied (ApiError, HTTP 403)
+ * // PostgreSQL error codes 23514 / 23502 → CheckViolation / NotNullViolation (ApiError, HTTP 400)
+ * // PostgreSQL error code 23503 → ForeignKeyViolation (ApiError, HTTP 409)
  * // PostgreSQL error code 08xxx → ConnectionFailed
  * // All other errors → QueryFailed
  */
@@ -34,6 +37,8 @@ export function translatePgError(e: unknown, engineName: string): never {
       // retriable — a blind retry of the same insert fails identically.
       throw uniqueConstraintConflict(e);
     }
+    const request = code ? requestError(code, e) : undefined;
+    if (request) throw request;
     const name = code && code.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
       ? DatabaseErrors.ConnectionFailed
       : DatabaseErrors.QueryFailed;

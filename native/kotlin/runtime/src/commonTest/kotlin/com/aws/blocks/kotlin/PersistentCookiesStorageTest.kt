@@ -47,6 +47,20 @@ class PersistentCookiesStorageTest {
     private val cookiesStorage = PersistentCookiesStorage(store) { now }
 
     @Test
+    fun `closing one client leaves the shared jar usable by the others`() = runTest {
+        val url = Url("https://example.com/path")
+        cookiesStorage.addCookie(url, Cookie(name = "session", value = "abc123"))
+
+        // Ktor's HttpCookies closes its storage when its client closes, and every client in the
+        // process shares this jar, so a close must not take the session away from the rest.
+        cookiesStorage.close()
+
+        cookiesStorage.get(url).single().value shouldBe "abc123"
+        cookiesStorage.addCookie(url, Cookie(name = "second", value = "def456"))
+        cookiesStorage.get(url) shouldHaveSize 2
+    }
+
+    @Test
     fun addAndRetrieveCookie() = runTest {
         val url = Url("https://example.com/path")
         val cookie = Cookie(name = "session", value = "abc123")

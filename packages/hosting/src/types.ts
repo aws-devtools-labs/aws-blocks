@@ -13,6 +13,7 @@ import type {
 } from 'aws-cdk-lib/aws-sns-subscriptions';
 import type { Bucket, IBucket } from 'aws-cdk-lib/aws-s3';
 import type { FrameworkAdapterFn } from './adapters/index.js';
+import type { WebFunctionOptions } from './constructs/web_function_construct.js';
 
 /**
  * Alarm subscription types supported by Hosting monitoring.
@@ -165,6 +166,36 @@ export type HostingProps = {
    * Ignored for SPA and static site deployments.
    */
   compute?: {
+    /**
+     * Where the SSR server runs. Default: `'lambda'`.
+     *
+     * - `'lambda'` — a Lambda function behind API Gateway (Lambda Web Adapter
+     *   for HTTP-server frameworks). Available in every Region.
+     * - `'web-function'` — **AWS Lambda Web Functions**: the framework's own
+     *   Node.js server runs directly on Lambda, fronted by CloudFront with
+     *   origin access control. Each execution environment serves many
+     *   concurrent requests and is billed for active CPU, so I/O-bound SSR
+     *   gets fewer cold starts and lower cost. Requires an HTTP-server build
+     *   (Astro, SvelteKit, Nitro `node-server`, OpenNext `node` wrapper /
+     *   `docker` origin — the built-in adapters produce these automatically
+     *   when the run targets Web Functions, see `withComputeTarget`) and a
+     *   Region where Web Functions are available (us-east-1, us-east-2,
+     *   us-west-2, ap-northeast-1, eu-west-1). Runs on Node.js 24, Arm64, with
+     *   2 GB per environment — `memorySize`, `reservedConcurrency`,
+     *   `provisionedConcurrency` and `warmup` don't apply (tune with
+     *   {@link webFunction} instead).
+     *
+     * @example
+     * ```typescript
+     * defineHosting({
+     *   framework: 'astro',
+     *   compute: { type: 'web-function', webFunction: { maxEnvironments: 20 } },
+     * });
+     * ```
+     */
+    type?: 'lambda' | 'web-function';
+    /** Lambda Web Functions tuning. Only used when `type` is `'web-function'`. */
+    webFunction?: WebFunctionOptions;
     /** Lambda memory size in MB. Default: 1024 */
     memorySize?: number;
     /**
@@ -400,6 +431,52 @@ export type HostingProps = {
     enabled: boolean;
     /** Days to retain access logs. Default: 90. */
     retentionDays?: number;
+    /**
+     * CloudFront logging pipeline to use.
+     *
+     * - `'v1'` (**default**) — legacy CloudFront standard logging. The
+     *   distribution writes logs directly to S3 through the `awslogsdelivery`
+     *   canonical user, so the log bucket must keep ACLs enabled
+     *   (`BUCKET_OWNER_PREFERRED`). No CloudFront charge; you pay only S3
+     *   storage.
+     * - `'v2'` — CloudFront **standard logging v2** via the CloudWatch Logs
+     *   vended-logs delivery pipeline. Delivers through the
+     *   `delivery.logs.amazonaws.com` service principal (authorized by a bucket
+     *   policy), so the log bucket uses the modern, ACL-disabled
+     *   `BUCKET_OWNER_ENFORCED`. Adds a **partitioned S3 key layout** (see
+     *   {@link logging.partitioning}) and a **selectable record format** (see
+     *   {@link logging.format}) with no post-processing Lambda.
+     *
+     * @remarks
+     * v2 delivery bills through CloudWatch vended-logs delivery (per-GB), and
+     * the delivery source for the global CloudFront service must be created in
+     * **us-east-1** — synth throws `LoggingV2RegionError` in any other Region.
+     * Default stays `'v1'` to preserve existing (free, ACL-based) behavior;
+     * opt in explicitly.
+     *
+     * @default 'v1'
+     */
+    version?: 'v1' | 'v2';
+    /**
+     * (v2 only) S3 key layout for delivered logs.
+     *
+     * - `'date'` (default) — `{DistributionId}/{yyyy}/{MM}/{dd}/{HH}/…`.
+     * - `'hive'` — Hive-compatible `year=…/month=…/day=…/hour=…` segments so
+     *   Athena/Glue partition projection works without a crawler.
+     *
+     * Ignored when `version` is `'v1'`.
+     *
+     * @default 'date'
+     */
+    partitioning?: 'date' | 'hive';
+    /**
+     * (v2 only) Delivered log record format: `'w3c'` (legacy-compatible
+     * tab-separated), `'plain'`, `'json'`, or `'parquet'` (columnar, queryable
+     * directly by Athena). Ignored when `version` is `'v1'`.
+     *
+     * @default 'w3c'
+     */
+    format?: 'plain' | 'w3c' | 'json' | 'parquet';
   };
 
   /**
@@ -459,7 +536,9 @@ export type HostingResources = {
   bucket: Bucket;
 
   /**
-   * The CloudFront distribution serving the site.
+   * The CloudFront distribution serving the site. Available for the default
+   * `cloudfront` front door; reading it for any other front door throws
+   * (`FrontDoorNotCloudFrontError`).
    */
   distribution: Distribution;
 

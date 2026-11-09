@@ -23,6 +23,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import type { IConstruct } from 'constructs';
 import type { ISecret } from 'aws-cdk-lib/aws-secretsmanager';
 import type { IParameter } from 'aws-cdk-lib/aws-ssm';
 import { HostingError } from './hosting_error.js';
@@ -307,6 +308,17 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
 }
 
 /**
+ * A compute that takes environment variables and role statements — a Lambda
+ * function or a Lambda Web Function (`WebFunctionConstruct`).
+ * @internal
+ */
+export type EnvGrantTarget = iam.IGrantable &
+	IConstruct & {
+		addEnvironment(key: string, value: string): unknown;
+		addToRolePolicy(statement: iam.PolicyStatement): void;
+	};
+
+/**
  * Inject the store LOCATOR (not the value) for a runtime managed marker and grant
  * the compute role read+decrypt scoped to that one parameter/secret. Store, env
  * prefix, namespace, and cache TTL are all derived from the marker's kind.
@@ -320,7 +332,7 @@ export function resolveDomainNames(domainName: DomainNameInput, resolved: Map<st
  * shares this prefix and put stage-private values under the stage locator only.
  * @internal
  */
-export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedValue, cfg: StoreConfig = {}): void {
+export function wireManagedValue(fn: EnvGrantTarget, marker: ManagedValue, cfg: StoreConfig = {}): void {
 	const { key, kind } = marker;
 	const store = storeForKind(kind);
 	const { prefix, stage, cacheTtlSeconds } = optsForKind(kind, cfg);
@@ -350,7 +362,7 @@ export function wireManagedValue(fn: cdk.aws_lambda.Function, marker: ManagedVal
  * kind-appropriate env prefix, so `getSecret`/`getConfig` resolve it identically.
  * @internal
  */
-export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, cfg: StoreConfig = {}): void {
+export function wireByo(fn: EnvGrantTarget, binding: ByoBinding, cfg: StoreConfig = {}): void {
 	const { key, kind, handle } = binding;
 	handle.grantRead(fn);
 	if (kind === 'secret') {
@@ -364,7 +376,7 @@ export function wireByo(fn: cdk.aws_lambda.Function, binding: ByoBinding, cfg: S
 	}
 }
 
-function grantStoreRead(fn: cdk.aws_lambda.Function, locator: string, store: SecretStore): void {
+function grantStoreRead(fn: EnvGrantTarget, locator: string, store: SecretStore): void {
 	if (store === 'secrets-manager') {
 		const secretArn = cdk.Stack.of(fn).formatArn({
 			service: 'secretsmanager',
@@ -385,7 +397,7 @@ function grantStoreRead(fn: cdk.aws_lambda.Function, locator: string, store: Sec
 	fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['ssm:GetParameter'], resources: [parameterArn] }));
 }
 
-function grantKmsDecrypt(fn: cdk.aws_lambda.Function, store: SecretStore): void {
+function grantKmsDecrypt(fn: EnvGrantTarget, store: SecretStore): void {
 	const region = cdk.Stack.of(fn).region;
 	const viaService =
 		store === 'secrets-manager' ? `secretsmanager.${region}.amazonaws.com` : `ssm.${region}.amazonaws.com`;
@@ -402,7 +414,7 @@ function grantKmsDecrypt(fn: cdk.aws_lambda.Function, store: SecretStore): void 
 	);
 }
 
-const kmsDecryptGranted = new WeakMap<cdk.aws_lambda.Function, Set<string>>();
+const kmsDecryptGranted = new WeakMap<EnvGrantTarget, Set<string>>();
 
 // ── SDK seam (store-aware; overridable for tests) ───────────────────────────
 

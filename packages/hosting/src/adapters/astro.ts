@@ -33,10 +33,13 @@ import * as path from 'path';
 import fg from 'fast-glob';
 import semver from 'semver';
 import { createJiti } from 'jiti';
-import { getPackageInfoSync, isPackageExists } from 'local-pkg';
+import { getProjectPackageInfo, projectHasPackage } from './shared/package_info.js';
 import { HostingError } from '../hosting_error.js';
 import { FRAMEWORK_COMPUTE_RUNTIME } from '../framework_runtime.js';
-import type { DeployManifest, Redirect, RouteBehavior } from '../manifest/types.js';
+import { type ComputeArch, targetComputeArch } from './shared/compute_target.js';
+import { SHARP_VERSION_RANGE, hasPatchedLinuxSharp } from './shared/sharp.js';
+import type { DeployManifest, Redirect, RemotePattern, RouteBehavior } from '../manifest/types.js';
+import { buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 
 export type AstroAdapterOptions = {
   /** Project root directory (absolute). */
@@ -79,8 +82,10 @@ const ASTROJS_NODE_PIN = '@astrojs/node@^9';
  * `sharp` version installed into the SSR bundle for Astro's default image
  * service (`/_image`). Matches the range the IPX image-opt bundle uses so
  * both image paths ship the same native libvips. See installSharpForAstroSsr.
+ * Both read the shared {@link SHARP_VERSION_RANGE}, which also carries the
+ * security floor (GHSA-wq5f-xc86-pv6w).
  */
-const ASTRO_SHARP_VERSION = '^0.34.0';
+const ASTRO_SHARP_VERSION = SHARP_VERSION_RANGE;
 
 /**
  * Verified Astro version range. Exported for the X.1 cross-adapter
@@ -101,7 +106,7 @@ const ASTRO_SHARP_VERSION = '^0.34.0';
  * consumed by the X.1 cross-adapter version-pin test, which asserts it
  * stays a parseable range with an explicit upper bound.
  */
-export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <6.0.0';
+export const VERIFIED_ASTRO_RANGE = '>=4.0.0 <8.0.0';
 
 /**
  * Lambda Web Adapter exec wrapper. The LWA's `/opt/bootstrap` runs
@@ -123,7 +128,9 @@ exec node entry.mjs
  * @returns the generated DeployManifest
  */
 export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
-  const { projectDir, skipBuild, buildCommand } = options;
+  const { projectDir, buildCommand } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () => fs.existsSync(path.join(projectDir, 'dist')));
   const bodySizeLimit = options.bodySizeLimit ?? DEFAULT_BODY_SIZE_LIMIT_BYTES;
 
   assertAstroVersion(projectDir);
@@ -294,6 +301,13 @@ export const astroAdapter = (options: AstroAdapterOptions): DeployManifest => {
 
   warnIfImageOptUnreachable(manifest, staticDir);
 
+  // No image function (`skipImageOptimization`): the door answers `/_image`
+  // itself, so record the allowlist it redirects remote sources to.
+  if (buildProfile().skipImageOptimization) {
+    const sources = astroImageRemoteSources(config);
+    if (sources) manifest.imageRemoteSources = sources;
+  }
+
   return manifest;
 };
 
@@ -330,6 +344,36 @@ type AstroConfigShape = {
   };
 };
 
+/**
+ * Astro's remote image allowlist (`image.domains`, `image.remotePatterns`),
+ * keeping only well-formed entries. A pattern with no `hostname` allows any
+ * host in Astro, so it is recorded as hostname `'**'` (any host).
+ *
+ * @param config the loaded astro.config.
+ * @returns the allowlist, or `undefined` when it is empty.
+ */
+/** The allowlist hostname that matches any host. */
+const ANY_IMAGE_HOST = '**';
+
+const astroImageRemoteSources = (config: AstroConfigShape): DeployManifest['imageRemoteSources'] => {
+  const domains = (config.image?.domains ?? []).filter((d): d is string => typeof d === 'string' && d.length > 0);
+  const patterns: RemotePattern[] = [];
+  const raw: unknown = config.image?.remotePatterns;
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { protocol, hostname, port, pathname }: Record<string, unknown> = { ...entry };
+    if (hostname !== undefined && (typeof hostname !== 'string' || !hostname)) continue;
+    patterns.push({
+      hostname: hostname ?? ANY_IMAGE_HOST,
+      ...(protocol === 'http' || protocol === 'https' ? { protocol } : {}),
+      ...(typeof port === 'string' ? { port } : {}),
+      ...(typeof pathname === 'string' ? { pathname } : {}),
+    });
+  }
+  if (domains.length === 0 && patterns.length === 0) return undefined;
+  return { ...(domains.length ? { domains } : {}), ...(patterns.length ? { remotePatterns: patterns } : {}) };
+};
+
 // ---- pipeline steps ----
 
 const assertAstroVersion = (projectDir: string): void => {
@@ -342,7 +386,7 @@ const assertAstroVersion = (projectDir: string): void => {
   //     legitimate users),
   //   - the installed version drifted from the spec range and the
   //     user is on an older Astro than the declaration claims.
-  const info = getPackageInfoSync('astro', { paths: [projectDir] });
+  const info = getProjectPackageInfo('astro', projectDir);
   const version = info?.version;
   if (!version || !semver.gte(version, '4.0.0')) {
     throw new HostingError('UnsupportedAstroVersionError', {
@@ -357,7 +401,7 @@ const assertAstroVersion = (projectDir: string): void => {
 };
 
 const userHasAstroJsNode = (projectDir: string): boolean =>
-  isPackageExists('@astrojs/node', { paths: [projectDir] });
+  projectHasPackage('@astrojs/node', projectDir);
 
 const installAstroBridge = (
   projectDir: string,
@@ -630,7 +674,14 @@ const loadAstroConfig = (projectDir: string): AstroConfigShape => {
   const configPath = findAstroConfigPath(projectDir);
   if (!configPath) return {};
   try {
-    const jiti = createJiti(projectDir, { interopDefault: true });
+    // `tryNative`: import the config natively first. Astro 7's `astro/config`
+    // pulls in a Vite build that uses `import.meta.require`, which jiti's
+    // CJS transform rejects, silently dropping the whole config (redirects,
+    // trailingSlash, image settings).
+    const jiti = createJiti(projectDir, {
+      interopDefault: true,
+      tryNative: true,
+    });
     const mod = jiti(configPath) as
       | AstroConfigShape
       | { default?: AstroConfigShape };
@@ -807,17 +858,22 @@ export const astroUsesSharpService = (config: AstroConfigShape): boolean => {
  * then prunes the `@img/sharp-wasm32` fallback (~8.7 MB, never used on
  * linux-x64) and other dead weight. Net add ≈ 19.5 MB unzipped — ~8% of
  * Lambda's 250 MB unzipped limit. Mirrors the Nitro adapter's IPX bundle.
+ *
+ * `arch` defaults to the adapter run's target ({@link targetComputeArch}):
+ * `x64` for Lambda, `arm64` for Lambda Web Functions (`compute.type:
+ * 'web-function'`), which installs `@img/sharp-linux-arm64` instead.
+ *
+ * Idempotent only for a sharp already within {@link SHARP_VERSION_RANGE}: a
+ * bundled sharp below that floor is vulnerable (GHSA-wq5f-xc86-pv6w) and is
+ * reinstalled.
  * @internal
  */
-export const installSharpForAstroSsr = (serverDir: string): void => {
-  // Idempotent: skip if a linux-x64 sharp is already present.
-  const existing = path.join(
-    serverDir,
-    'node_modules',
-    '@img',
-    'sharp-linux-x64',
-  );
-  if (fs.existsSync(existing)) return;
+export const installSharpForAstroSsr = (
+  serverDir: string,
+  arch: ComputeArch = targetComputeArch(),
+): void => {
+  // Idempotent: skip if a patched linux-<arch> sharp is already present.
+  if (hasPatchedLinuxSharp(serverDir, arch)) return;
 
   fs.mkdirSync(serverDir, { recursive: true });
   // A minimal package.json so `npm install <pkg>` writes into THIS dir's
@@ -837,7 +893,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
   }
 
   process.stderr.write(
-    '\u{1F4F8} Installing sharp (linux-x64) into the Astro SSR bundle for /_image optimization\n',
+    `\u{1F4F8} Installing sharp (linux-${arch}) into the Astro SSR bundle for /_image optimization\n`,
   );
   try {
     // `spawn.sync` here is the local ./spawn.js wrapper, which THROWS on a
@@ -856,7 +912,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
         '--include=optional',
         '--omit=dev',
         '--os=linux',
-        '--cpu=x64',
+        `--cpu=${arch}`,
         '--libc=glibc',
       ],
       { cwd: serverDir, stdio: 'inherit' },
@@ -876,7 +932,7 @@ export const installSharpForAstroSsr = (serverDir: string): void => {
       'AstroSharpInstallError',
       {
         message:
-          'Failed to install a linux-x64 `sharp` into the Astro SSR bundle for `/_image` optimization.',
+          `Failed to install a linux-${arch} \`sharp\` into the Astro SSR bundle for \`/_image\` optimization.`,
         resolution:
           'Ensure `npm` is on PATH and the build host can reach the npm registry. ' +
           'To ship without native image optimization, set `image.service` to ' +
@@ -1023,6 +1079,7 @@ const buildSsrManifest = (input: {
         type: 'http-server',
         bundle: distDir,
         entrypoint: path.posix.join(path.basename(serverDir), RUN_SH_FILENAME),
+        serverEntry: path.posix.join(path.basename(serverDir), 'entry.mjs'),
         port: ASTRO_SERVER_PORT,
         placement: 'regional',
         runtime: FRAMEWORK_COMPUTE_RUNTIME,

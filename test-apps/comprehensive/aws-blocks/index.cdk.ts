@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import * as cdk from 'aws-cdk-lib';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, registerConfig } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { getSandboxId } from './scripts/sandbox-id.js';
@@ -16,6 +16,11 @@ const projectRoot = app.node.tryGetContext('projectRoot') || process.cwd();
 
 const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
+// Optional IAM permissions boundary on every role AWS Blocks creates
+// (`-c blocksPermissionsBoundary=<policy name>`). test/iam-boundary-synth.test.ts
+// synthesizes with it set to prove every Building Block's roles are covered.
+const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
+
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
 // checkout, giving each run a unique stack name so a stuck
@@ -24,10 +29,16 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 // non-empty S3 buckets — its async delete-stack fails again on the
 // same buckets — so each push needs its own name.)
 const id = getSandboxId(projectRoot);
+// The production name keeps only the random half of `<user>-<random>`:
+// the stack name prefixes every derived resource name, and with CI's
+// `pr-<number>-<attempt>` suffix the user half (`runner` in CI) pushed
+// the longest FileBucket name (the `preset-balanced` agent's session
+// bucket) past S3's 63 characters at four-digit PR numbers.
+const salt = id.slice(id.lastIndexOf('-') + 1);
 
 const stackName = sandboxMode
   ? `bb-test-${id}${suffix ? `-${suffix}` : ''}`
-  : `bb-test-prod-${suffix || 'default'}-${id}`;
+  : `bb-test-prod-${suffix || 'default'}-${salt}`;
 
 export const blocksStack = await BlocksStack.create(app, stackName, {
   backendHandlerPath: join(__dirname, 'index.handler.ts'),
@@ -37,13 +48,13 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: BlocksPresets.sandbox,
+  defaults: { ...BlocksPresets.sandbox, permissionsBoundary },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB
 // resolves the verified SES sender address in deployed environments.
 if (process.env.E2E_FROM_EMAIL) {
-  blocksStack.handler.addEnvironment('E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
+  registerConfig(blocksStack, 'E2E_FROM_EMAIL', process.env.E2E_FROM_EMAIL);
 }
 
 // Tag every taggable resource in the stack for easy identification and cleanup

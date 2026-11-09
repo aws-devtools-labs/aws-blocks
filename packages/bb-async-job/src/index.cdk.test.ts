@@ -30,7 +30,7 @@ import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { isBlocksError } from '@aws-blocks/core';
 import { BlocksPresets, BlocksStack, Scope } from '@aws-blocks/core/cdk';
 import type { DefaultComputeFactory } from '@aws-blocks/core/cdk/internal';
-import { Compute } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Template } from 'aws-cdk-lib/assertions';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -39,7 +39,7 @@ import { AsyncJob, AsyncJobErrors } from './index.cdk.js';
 const lambdaFactory: DefaultComputeFactory = (root) => new LambdaCompute(root as never, 'DefaultCompute');
 
 /** A non-Lambda compute, to exercise the "unsupported compute" synth guard. */
-class FakeCompute extends Compute {
+class FakeCompute extends ComputeBase {
 	setEnv(_key: string, _value: string): void {}
 	// Observability hooks are irrelevant here — stub them to satisfy Compute.
 	protected applyTracing(): void {}
@@ -380,5 +380,63 @@ describe('AsyncJob visibility timeout', () => {
 			trackStatus: false,
 		});
 		assert.strictEqual(jobQueueVisibilityTimeout(Template.fromStack(stack)), 900);
+	});
+});
+
+describe('AsyncJob one handler per event key, at synth', () => {
+	// The Lambda runtime keys a job's SQS handler by queue name — the `fullId`
+	// capped at 80 characters. Two jobs whose `fullId`s share the first 80
+	// characters map to one key; synth must refuse that instead of the second
+	// registration throwing on every cold start.
+	test('two AsyncJobs whose queue names collide fail synth, naming the key', async () => {
+		const stack = await makeStack('AsyncCollide');
+		const long = 'q'.repeat(90);
+		new AsyncJob(stack, `${long}1`, { handler: async () => {}, trackStatus: false });
+		assert.throws(
+			() => new AsyncJob(stack, `${long}2`, { handler: async () => {}, trackStatus: false }),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				const queueName = `AsyncCollide-${long}`.substring(0, 80);
+				assert.ok(e.message.includes(`"aws:sqs:${queueName}"`), e.message);
+				assert.match(e.message, /already registered by Building Block 'AsyncCollide-q+1'/);
+				return true;
+			},
+		);
+	});
+
+	test('distinct AsyncJobs in one stack synthesize', async () => {
+		const stack = await makeStack('AsyncDistinct');
+		new AsyncJob(stack, 'emails', { handler: async () => {}, trackStatus: false });
+		new AsyncJob(stack, 'reports', { handler: async () => {}, trackStatus: false });
+		Template.fromStack(stack).resourceCountIs('AWS::Lambda::EventSourceMapping', 2);
+	});
+});
+
+describe('AsyncJob ids that fold to one config key fail synth', () => {
+	// `orders-a` and `orders_a` get distinct queues (and distinct SQS handler
+	// keys), but `sanitizeConfigKey` folds both ids to `…_ORDERS_A`, so they
+	// registered one BLOCKS_QUEUE_URL entry: at runtime both jobs read the same
+	// queue and the second handler registration threw on every cold start.
+	test('orders-a + orders_a: synth fails naming the shared queue-URL key', async () => {
+		const stack = await makeStack('AliasJobs');
+		new AsyncJob(stack, 'orders-a', { handler: async () => {}, trackStatus: false });
+		assert.throws(
+			() => new AsyncJob(stack, 'orders_a', { handler: async () => {}, trackStatus: false }),
+			(e: unknown) => {
+				assert.ok(e instanceof Error);
+				assert.match(e.message, /config key "BLOCKS_QUEUE_URL_ALIASJOBS_ORDERS_A" is already registered by 'AliasJobs-orders-a'/);
+				assert.match(e.message, /'AliasJobs-orders_a' registered it again/);
+				return true;
+			},
+		);
+	});
+
+	test('Orders + orders (case only) also collide', async () => {
+		const stack = await makeStack('AliasCase');
+		new AsyncJob(stack, 'Orders', { handler: async () => {}, trackStatus: false });
+		assert.throws(
+			() => new AsyncJob(stack, 'orders', { handler: async () => {}, trackStatus: false }),
+			/already registered/,
+		);
 	});
 });

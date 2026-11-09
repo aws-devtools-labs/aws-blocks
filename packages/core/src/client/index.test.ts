@@ -116,3 +116,148 @@ try {
     assert.ok(result.includes('PASS'), `Expected PASS, got: ${result}`);
   });
 });
+
+describe('ApiNamespaceClient — per-namespace request path', () => {
+  // The typed client POSTs to `/aws-blocks/api/{namespace}` so a gateway can
+  // route each namespace to the compute that hosts it. These spy on `fetch`
+  // (test plumbing — not customer code) to assert the request URL.
+  it('appends /{namespace} to the API base URL', async () => {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ hello(): Promise<string> }>('reports', {
+        url: 'https://d123.cloudfront.net/aws-blocks/api',
+      });
+      const result = await api.hello();
+      assert.strictEqual(result, 'ok');
+      assert.deepStrictEqual(calls, ['https://d123.cloudfront.net/aws-blocks/api/reports']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('tolerates a trailing slash on the API base URL', async () => {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
+      calls.push(String(input));
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: 1, id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ ping(): Promise<number> }>('auth', { url: '/aws-blocks/api/' });
+      await api.ping();
+      assert.deepStrictEqual(calls, ['/aws-blocks/api/auth']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('builds the path from the namespace after middleware, so path and body stay in step', async () => {
+    // A middleware may rewrite `apiNamespace`; the server rejects a path that
+    // names a different namespace than the body, so both must carry the new one.
+    const { ApiNamespaceClient, registerMiddleware } = await import('./index.js');
+    // The middleware registry is process-global: rewrite only this test's namespace.
+    registerMiddleware({
+      onRequest: (request) =>
+        request.apiNamespace === 'rewriteMe' ? { ...request, apiNamespace: 'rewritten' } : request,
+    });
+    const calls: Array<{ url: string; method: string }> = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      calls.push({ url: String(input), method: JSON.parse(String(init?.body)).method });
+      return new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ ping(): Promise<string> }>('rewriteMe', { url: '/aws-blocks/api' });
+      await api.ping();
+      assert.deepStrictEqual(calls, [{ url: '/aws-blocks/api/rewritten', method: 'rewritten.ping' }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('ApiNamespaceClient — non-JSON-RPC response bodies', () => {
+  // A gateway or proxy in front of the handler can answer on its own (throttling,
+  // auth, timeouts, a crashed integration). Those bodies carry no JSON-RPC
+  // envelope; the client must reject with the HTTP status rather than resolve
+  // `undefined`. These stub `fetch` (test plumbing — not customer code).
+  async function callWith(body: string, status: number, contentType = 'application/json'): Promise<unknown> {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(body, {
+      status,
+      headers: { 'Content-Type': contentType },
+    })) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ hello(): Promise<unknown> }>('reports', {
+        url: 'https://d123.cloudfront.net/aws-blocks/api',
+      });
+      return await api.hello();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  const gatewayResponses: Array<[number, string]> = [
+    [502, 'Internal server error'],
+    [429, 'Too Many Requests'],
+    [403, 'Forbidden'],
+    [504, 'Endpoint request timed out'],
+  ];
+  for (const [status, message] of gatewayResponses) {
+    it(`rejects with ApiError ${status} for a gateway body {"message":"${message}"}`, async () => {
+      const { ApiError } = await import('./index.js');
+      await assert.rejects(callWith(JSON.stringify({ message }), status), (err: unknown) => {
+        assert.ok(err instanceof ApiError, `expected ApiError, got ${String(err)}`);
+        assert.strictEqual(err.status, status);
+        assert.strictEqual(err.message, message);
+        return true;
+      });
+    });
+  }
+
+  it('rejects with ApiError carrying the status for a non-JSON body', async () => {
+    const { ApiError } = await import('./index.js');
+    await assert.rejects(callWith('<html><body>502 Bad Gateway</body></html>', 502, 'text/html'), (err: unknown) => {
+      assert.ok(err instanceof ApiError, `expected ApiError, got ${String(err)}`);
+      assert.strictEqual(err.status, 502);
+      assert.strictEqual(err.message, 'HTTP 502');
+      return true;
+    });
+  });
+
+  it('rejects with status 502 when a 200 response carries no envelope', async () => {
+    const { ApiError } = await import('./index.js');
+    await assert.rejects(callWith(JSON.stringify({ hello: 'world' }), 200), (err: unknown) => {
+      assert.ok(err instanceof ApiError, `expected ApiError, got ${String(err)}`);
+      assert.strictEqual(err.status, 502);
+      assert.strictEqual(err.message, 'HTTP 502');
+      return true;
+    });
+  });
+
+  it('resolves a valid void result (no `result` member)', async () => {
+    assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', id: 1 }), 200), undefined);
+  });
+
+  it('resolves a valid result envelope sent with a custom non-200 status', async () => {
+    assert.deepStrictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: { queued: true }, id: 1 }), 202), { queued: true });
+    assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: 'teapot', id: 1 }), 418), 'teapot');
+  });
+});

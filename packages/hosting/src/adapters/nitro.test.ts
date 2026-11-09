@@ -5,6 +5,13 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawn } from './spawn.js';
 import { nitroAdapter } from './nitro.js';
+import { withComputeTarget } from './shared/compute_target.js';
+import { withBuildProfile } from './shared/build_profile.js';
+import {
+  buildKvsEntries,
+  generateKvsRouterRequestCode,
+  ORIGIN_ID,
+} from '../constructs/kvs_router.js';
 
 /**
  * Build a minimal `.output/` layout that nitroAdapter accepts. Caller
@@ -225,6 +232,44 @@ void describe('nitroAdapter — IPX provisioning', () => {
     assert.strictEqual(ipxRoute.pattern, '/_ipx/*');
   });
 
+  void it('`skipImageOptimization` builds no IPX bundle but keeps a custom IPX endpoint route', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    fs.writeFileSync(
+      path.join(tmpDir, 'nuxt.config.ts'),
+      "export default defineNuxtConfig({ runtimeConfig: { ipx: { baseURL: '/img' } } });\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.imageOptimization, undefined, 'no image function is built');
+    const ipxRoute = manifest.routes.find((r) => r.target === 'image-optimization');
+    assert.strictEqual(ipxRoute?.pattern, '/img/*', 'the custom endpoint stays in the route table');
+  });
+
+  void it('`skipImageOptimization` records @nuxt/image domains for the remote-image allowlist', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    fs.writeFileSync(
+      path.join(tmpDir, 'nuxt.config.ts'),
+      "export default defineNuxtConfig({ image: { domains: ['images.example.com'] } });\n",
+    );
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.imageOptimization, undefined);
+    assert.deepStrictEqual(manifest.imageRemoteSources, { domains: ['images.example.com'] });
+  });
+
+  void it('`skipImageOptimization` without @nuxt/image emits no image route', () => {
+    writeMinimalNitroOutput(tmpDir);
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    const manifest = withBuildProfile({ skipImageOptimization: true }, () =>
+      nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
+    );
+    assert.strictEqual(manifest.routes.find((r) => r.target === 'image-optimization'), undefined);
+  });
+
   void it('does NOT provision IPX Lambda when @nuxt/image is missing', () => {
     writeMinimalNitroOutput(tmpDir);
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });
@@ -363,6 +408,14 @@ void describe('nitroAdapter — IPX baseURL plumbing', () => {
     mock.restoreAll();
   });
 
+  void it("passes the app's base path to the IPX Lambda (the regional doors route the full path to it)", () => {
+    writeMinimalNitroOutput(tmpDir, { baseURL: '/myapp/' });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0', '@nuxt/image': '^2.0.0' });
+    const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+    assert.ok(manifest.imageOptimization);
+    assert.deepStrictEqual(manifest.imageOptimization.environment, { IPX_APP_BASE_URL: '/myapp' });
+  });
+
   void it('respects user-configured runtimeConfig.ipx.baseURL', () => {
     writeMinimalNitroOutput(tmpDir);
     writePackageJson(tmpDir, {
@@ -492,6 +545,70 @@ void describe('nitroAdapter — preset + feature validation', () => {
     assert.doesNotThrow(() =>
       nitroAdapter({ projectDir: tmpDir, skipBuild: true }),
     );
+  });
+
+  void it('builds with the node-server preset when targeting Lambda Web Functions', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    // The build step runs through spawn; emit the build output from the mock
+    // (the adapter clears stale output before building).
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withComputeTarget('web-function', () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(presetSeen, 'node-server');
+    assert.strictEqual(manifest.compute.default?.type, 'http-server');
+  });
+
+  void it('builds node-server behind an API Gateway HTTP API, started by a run.sh on Lambda', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withBuildProfile({ serverInvoke: 'http-api' }, () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(presetSeen, 'node-server');
+    const server = manifest.compute.default;
+    assert.strictEqual(server?.type, 'http-server');
+    // The Lambda Web Adapter execs the entrypoint; Nitro's index.mjs has no shebang.
+    assert.strictEqual(server?.entrypoint, 'run.sh');
+    const runSh = fs.readFileSync(path.join(server.bundle, 'run.sh'), 'utf-8');
+    assert.match(runSh, /exec \/var\/lang\/bin\/node index\.mjs/);
+    assert.ok((fs.statSync(path.join(server.bundle, 'run.sh')).mode & 0o111) !== 0, 'run.sh is executable');
+  });
+
+  void it('stays aws-lambda behind an HTTP API in a region with no Lambda Web Adapter layer', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    const manifest = withBuildProfile({ serverInvoke: 'http-api', lambdaWebAdapter: false }, () =>
+      nitroAdapter({ projectDir: tmpDir }),
+    );
+    assert.strictEqual(presetSeen, 'aws-lambda');
+    assert.strictEqual(manifest.compute.default?.type, 'handler');
+  });
+
+  void it('an explicit preset wins behind an HTTP API', () => {
+    writePackageJson(tmpDir);
+    let presetSeen: string | undefined;
+    mock.method(spawn, 'sync', (_cmd: string, _args: string[], opts: { env?: Record<string, string> }) => {
+      presetSeen = opts?.env?.NITRO_PRESET;
+      writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: presetSeen } });
+    });
+    withBuildProfile({ serverInvoke: 'http-api' }, () => nitroAdapter({ projectDir: tmpDir, preset: 'aws-lambda' }));
+    assert.strictEqual(presetSeen, 'aws-lambda');
+  });
+
+  void it('Web Functions start node-server from index.mjs (no run.sh)', () => {
+    writeMinimalNitroOutput(tmpDir, { nitroJson: { preset: 'node-server' } });
+    writePackageJson(tmpDir);
+    const manifest = withComputeTarget('web-function', () => nitroAdapter({ projectDir: tmpDir, skipBuild: true }));
+    assert.strictEqual(manifest.compute.default?.entrypoint, 'index.mjs');
   });
 
   void it('accepts node-server', () => {
@@ -976,5 +1093,172 @@ void describe('nitroAdapter — app.baseURL → manifest.basePath (P0.1)', () =>
     writePackageJson(tmpDir, { nuxt: '^4.0.0' });
     const manifest = nitroAdapter({ projectDir: tmpDir, skipBuild: true });
     assert.strictEqual(manifest.basePath, undefined);
+  });
+});
+
+/**
+ * Route a request through the real CloudFront router function, using the KVS
+ * entries built from `manifest`, and return the origin it picks.
+ */
+const originFor = async (
+  manifest: ReturnType<typeof nitroAdapter>,
+  uri: string,
+): Promise<string | null> => {
+  const entries = buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: false });
+  let selected: string | null = null;
+  const cf = {
+    kvs: () => ({
+      get: async (key: string) => {
+        if (!(key in entries)) throw new Error('NoSuchKey');
+        return entries[key];
+      },
+    }),
+    selectRequestOriginById: (id: string) => {
+      selected = id;
+    },
+  };
+  // The source is the repo's own generated router function, not external input.
+  const body = generateKvsRouterRequestCode().replace(/^import cf from 'cloudfront';\n?/, '');
+  const handler = new Function('cf', `${body}\nreturn handler;`)(cf);
+  await handler({
+    request: { uri, method: 'GET', headers: { host: { value: 'example.com' } }, cookies: {}, querystring: {} },
+  });
+  return selected;
+};
+
+void describe('nitroAdapter — a public folder under an ISR/SWR rule', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-isr-dir-'));
+    mock.method(spawn, 'sync', () => undefined);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+  });
+
+  const build = (
+    bundledRouteRules: Record<string, unknown>,
+    publicFiles: Record<string, string>,
+  ): ReturnType<typeof nitroAdapter> => {
+    writeMinimalNitroOutput(tmpDir, { bundledRouteRules, publicFiles });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+    return nitroAdapter({ projectDir: tmpDir, skipBuild: true });
+  };
+
+  void it('flat: on-demand pages reach the server; files and the frozen page stay on S3', async () => {
+    const manifest = build(
+      { '/blog/**': { isr: 60 }, '/blog/featured': { prerender: true } },
+      {
+        'blog/featured/index.html': '<html></html>',
+        'blog/featured/_payload.json': '{}',
+        'blog/hero.png': 'png',
+        'blog/img/a.png': 'png',
+        '_nuxt/app.js': 'js',
+      },
+    );
+    assert.ok(
+      !manifest.routes.some((r) => r.pattern === '/blog/*' && r.target === 'static'),
+      'no blanket /blog/* static row',
+    );
+    assert.strictEqual(await originFor(manifest, '/blog/any-other-post'), ORIGIN_ID.server);
+    assert.strictEqual(await originFor(manifest, '/blog/featured'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/featured/_payload.json'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/hero.png'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/img/a.png'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/_nuxt/app.js'), ORIGIN_ID.s3);
+  });
+
+  void it('nested: a frozen page one folder deeper does not shadow its siblings', async () => {
+    const manifest = build(
+      { '/blog/**': { isr: 60 }, '/blog/2024/featured': { prerender: true } },
+      {
+        'blog/2024/featured/index.html': '<html></html>',
+        'blog/hero.png': 'png',
+      },
+    );
+    assert.strictEqual(await originFor(manifest, '/blog/any-other-post'), ORIGIN_ID.server);
+    assert.strictEqual(await originFor(manifest, '/blog/2024/other'), ORIGIN_ID.server);
+    assert.strictEqual(await originFor(manifest, '/blog/2024/featured'), ORIGIN_ID.s3);
+    assert.strictEqual(await originFor(manifest, '/blog/hero.png'), ORIGIN_ID.s3);
+  });
+
+  void it('crawl-prerendered pages under ISR stay mergeable (one server wildcard, bounded table)', async () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < 30; i++) files[`blog/post-${i}/index.html`] = '<html></html>';
+    const manifest = build({ '/blog/**': { isr: 60 } }, files);
+    assert.ok(
+      manifest.routes.every((r) => r.exact !== true),
+      'no exact rows: nothing was frozen by an explicit prerender rule',
+    );
+    const rows = JSON.parse(
+      buildKvsEntries({ manifest, buildId: 'b1', hasServer: true, hasImage: false }).r0,
+    ) as [string, string][];
+    assert.deepStrictEqual(
+      rows.filter(([p]) => p.startsWith('/blog')),
+      [['/blog/*', 'c']],
+    );
+    assert.strictEqual(await originFor(manifest, '/blog/post-3'), ORIGIN_ID.server);
+  });
+
+  void it('a site-wide ISR rule (/**) keeps the blanket folder rows', () => {
+    const manifest = build({ '/**': { isr: 60 } }, { 'blog/hero.png': 'png', '_nuxt/app.js': 'js' });
+    assert.ok(manifest.routes.some((r) => r.pattern === '/blog/*' && r.target === 'static'));
+    assert.ok(manifest.routes.some((r) => r.pattern === '/_nuxt/*' && r.target === 'static'));
+  });
+
+  void it('without an ISR rule the folder keeps its blanket static row', async () => {
+    const manifest = build(
+      { '/blog/featured': { prerender: true } },
+      { 'blog/featured/index.html': '<html></html>', 'blog/hero.png': 'png' },
+    );
+    assert.ok(manifest.routes.some((r) => r.pattern === '/blog/*' && r.target === 'static'));
+    assert.ok(manifest.routes.every((r) => r.exact !== true));
+    assert.strictEqual(await originFor(manifest, '/blog/hero.png'), ORIGIN_ID.s3);
+  });
+});
+
+
+// The deploy profile's `reuseBuild` (set by core Hosting on a destroy, or by
+// BLOCKS_SKIP_FRONTEND_BUILD=1) skips the Nitro build without an explicit
+// `skipBuild` option. `spawn.sync` is the build call.
+void describe('nitroAdapter — reuseBuild from the build profile', () => {
+  let tmpDir: string;
+  let builds: number;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-reuse-'));
+    builds = 0;
+    mock.method(spawn, 'sync', () => {
+      builds++;
+      return undefined;
+    });
+    writeMinimalNitroOutput(tmpDir, { bundledRouteRules: {} });
+    writePackageJson(tmpDir, { nuxt: '^4.0.0' });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    mock.restoreAll();
+  });
+
+  void it('builds when the profile asks for nothing', () => {
+    // A real build clears .output first; the stubbed build doesn't recreate it,
+    // so the adapter then reports it missing. The build ran, which is the point.
+    assert.throws(() => withBuildProfile({}, () => nitroAdapter({ projectDir: tmpDir })), /\.output\/ not found/);
+    assert.ok(builds > 0, 'expected the Nitro build to run');
+  });
+
+  void it("reuses an existing .output under reuseBuild: 'if-present'", () => {
+    const manifest = withBuildProfile({ reuseBuild: 'if-present' }, () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(builds, 0, 'expected no build');
+    assert.ok(manifest.routes.length > 0, 'the manifest comes from the existing output');
+  });
+
+  void it("skips the build under reuseBuild: 'required'", () => {
+    withBuildProfile({ reuseBuild: 'required' }, () => nitroAdapter({ projectDir: tmpDir }));
+    assert.strictEqual(builds, 0, 'expected no build');
   });
 });

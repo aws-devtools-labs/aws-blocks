@@ -44,7 +44,12 @@ export interface BlocksAuth {
 	 *
 	 * @param context - The BlocksContext from the API handler.
 	 * @returns The authenticated user.
-	 * @throws {ApiError} 401 with name `SessionExpiredException` if not authenticated.
+	 * @throws {ApiError} 401 when not authenticated. The error `name` is
+	 * `SessionExpiredException` for an absent or aged-out session; an
+	 * implementation that supports server-side revocation may instead throw
+	 * `SessionRevokedException` for a signed-out/revoked session (AuthBasic
+	 * does). Branch on `status === 401` to send users to sign-in regardless;
+	 * branch on the name only to message the two cases differently.
 	 */
 	requireAuth(context: BlocksContext): Promise<AuthUser>;
 

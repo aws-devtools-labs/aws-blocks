@@ -278,7 +278,7 @@ Database Settings so the server also rejects any non-TLS connection.
 
 ## Deploy to Production
 
-\`db pull\` generated \`.env.local\` for local dev. Promote in stages: **local → AWS sandbox → production**.
+\`db pull\` set \`SUPABASE_DB_URL\` in \`.env.local\` for local dev (any other settings in that file are left as they were). Promote in stages: **local → AWS sandbox → production**.
 
 ### 1. (Recommended) Test on an AWS sandbox
 

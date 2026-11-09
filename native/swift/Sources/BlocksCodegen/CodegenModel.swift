@@ -18,6 +18,328 @@ let knownTransferableBindings: [String: (base: String, isGeneric: Bool)] = [
 
 let knownTransferableTags: Set<String> = Set(knownTransferableBindings.keys)
 
+let transferableFactoriesByABI: [String: String] = [
+    "blocks-transferable-v1": "fromBlocksDescriptor"
+]
+
+let nativeCatalogSchemaVersion = 1
+
+let transferableBindingKind = "transferable"
+
+let maxGenericArity = 1
+
+/// Illegal in a qualified type position: `M.Type` and `M.Protocol` parse as metatype
+/// syntax whatever their arity, and `Any` cannot name a declaration at all.
+let typeNamesIllegalWhenQualified: Set<String> = ["Type", "Protocol", "Any"]
+
+/// `EXPORT_GRAMMAR` in `validate-native-catalogs.ts` verbatim; the alphabet is the producer's.
+/// `upperCamelCase` must split on exactly this set and no wider; D-021 records why.
+let exportGrammar = #"^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$"#
+
+struct DeclaredTransferableBinding {
+    let module: String
+    /// Module-qualified, as `BlocksRuntime.UnknownTransferable` already is.
+    let base: String
+    let factory: String
+    let genericArity: Int
+
+    var isGeneric: Bool { genericArity > 0 }
+}
+
+/// Two tags may share one export; a different export or arity cannot share its type.
+/// Keyed by module, so two catalog keys naming one package agree here and a differing
+/// identity or product does not: no dependency set provides one module twice.
+struct SwiftPackageRef: Equatable {
+    let identity: String?
+    let product: String?
+}
+
+struct TypeNameClaim: Equatable {
+    let package: String
+    let export: String
+    let arity: Int
+}
+
+struct ResolvedDeclaredBindings {
+    var bindings: [String: DeclaredTransferableBinding] = [:]
+    var unboundCauses: [String: String] = [:]
+    var warnings: [String] = []
+}
+
+/// A built-in tag is dropped rather than rejected: it keeps the hard-coded path in
+/// `SwiftCodeGenerator`'s `switch blocksType`.
+///
+/// Seven of the rules below coincide with producer checks because Swift needs them
+/// for its own emission, not to re-validate; D-020 records six, D-021 the export
+/// grammar it added.
+func resolveDeclaredTransferableBindings(
+    packages: NativePackagesCatalog?,
+    bindings: NativeBindingsCatalog?,
+    optOutPackages: Set<String>
+) throws -> ResolvedDeclaredBindings {
+    if let packages, packages.schemaVersion != nativeCatalogSchemaVersion {
+        throw CodegenError.invalidNativeCatalog(
+            "x-blocks-native-packages declares schemaVersion \(packages.schemaVersion), expected \(nativeCatalogSchemaVersion)"
+        )
+    }
+    try validateDeclaredSwiftModules(packages)
+    let optOutWarnings = validateOptOutPackages(optOutPackages, packages: packages)
+    guard let bindings else { return ResolvedDeclaredBindings(warnings: optOutWarnings) }
+    if bindings.schemaVersion != nativeCatalogSchemaVersion {
+        throw CodegenError.invalidNativeCatalog(
+            "x-blocks-native-bindings declares schemaVersion \(bindings.schemaVersion), expected \(nativeCatalogSchemaVersion)"
+        )
+    }
+
+    // Swift holds AWSBLOCKS-NATIVE-001 and 003 through 006; 002 is a Dart diagnostic.
+    var resolved: [String: DeclaredTransferableBinding] = [:]
+    var boundTags: Set<String> = []
+    var typeNameClaimants: [String: TypeNameClaim] = [:]
+    var moduleOwners: [String: (key: String, ref: SwiftPackageRef)] = [:]
+    var unboundCauses: [String: String] = [:]
+    var warnings: [String] = optOutWarnings
+    for binding in bindings.bindings ?? [] {
+        guard let entry = packages?.packages?[binding.package] else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' names package "
+                    + "'\(escapedForDiagnostic(binding.package))', which x-blocks-native-packages does not declare"
+            )
+        }
+        guard !binding.tag.isEmpty else {
+            // `validateTransferableDescriptor` rejects an empty received tag before
+            // comparing, so an empty expected tag can never be satisfied.
+            throw CodegenError.invalidNativeCatalog("binding '\(escapedForDiagnostic(binding.id))' declares an empty tag")
+        }
+        guard boundTags.insert(binding.tag).inserted else {
+            throw CodegenError.invalidNativeCatalog("tag '\(escapedForDiagnostic(binding.tag))' is bound by more than one binding")
+        }
+        guard binding.kind == transferableBindingKind else {
+            // `kind` is an open enumeration, so an unrecognised one still generates.
+            warnings.append(
+                "AWSBLOCKS-NATIVE-004: binding '\(escapedForDiagnostic(binding.id))' "
+                    + "declares kind '\(escapedForDiagnostic(binding.kind))', "
+                    + "which schema \(nativeCatalogSchemaVersion) does not define; ignored on swift."
+            )
+            continue
+        }
+        guard let factory = transferableFactoriesByABI[binding.abi] else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' declares unknown factory ABI '\(escapedForDiagnostic(binding.abi))'"
+            )
+        }
+        guard let arity = binding.genericArity else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' requires a genericArity in 0...\(maxGenericArity) in schema \(nativeCatalogSchemaVersion)"
+            )
+        }
+        guard arity >= 0, arity <= maxGenericArity else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' declares genericArity \(arity), "
+                    + "outside 0...\(maxGenericArity) in schema \(nativeCatalogSchemaVersion)"
+            )
+        }
+        guard binding.export.range(of: exportGrammar, options: .regularExpression) != nil else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' declares export '\(escapedForDiagnostic(binding.export))', "
+                    + "which is not a -, _ or . joined run of alphanumeric segments starting with a letter"
+            )
+        }
+        let typeName = upperCamelCase(binding.export)
+        guard !swiftKeywords.contains(typeName),
+              !typeNamesIllegalWhenQualified.contains(typeName)
+        else {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' declares export '\(escapedForDiagnostic(binding.export))', which does not name a Swift type"
+            )
+        }
+        guard !knownTransferableTags.contains(binding.tag) else {
+            warnings.append(
+                "AWSBLOCKS-NATIVE-005: binding '\(escapedForDiagnostic(binding.id))' "
+                    + "declares built-in tag '\(escapedForDiagnostic(binding.tag))', "
+                    + "which cannot be re-bound; ignored on swift."
+            )
+            continue
+        }
+        if optOutPackages.contains(binding.package) {
+            unboundCauses[binding.tag] = "package '\(escapedForDiagnostic(binding.package))' is opted out"
+            continue
+        }
+        guard let swiftPackage = entry.platforms?.swift?.package else {
+            unboundCauses[binding.tag] = "package '\(escapedForDiagnostic(binding.package))' declares no swift platform"
+            continue
+        }
+        // Reached only by an emitted binding, which is why the drops precede it: a
+        // dropped binding contributes no import and no factory call, so nothing collides.
+        let packageRef = SwiftPackageRef(identity: swiftPackage.identity, product: swiftPackage.product)
+        if let owner = moduleOwners[swiftPackage.module], owner.ref != packageRef {
+            throw CodegenError.invalidNativeCatalog(
+                "packages '\(escapedForDiagnostic(owner.key))' and '\(escapedForDiagnostic(binding.package))' declare Swift module "
+                    + "'\(escapedForDiagnostic(swiftPackage.module))' with different package metadata; "
+                    + "no dependency set can satisfy both"
+            )
+        }
+        moduleOwners[swiftPackage.module] = (key: binding.package, ref: packageRef)
+        let resolvedName = "\(swiftPackage.module).\(typeName)"
+        let claimant = TypeNameClaim(package: binding.package, export: binding.export, arity: arity)
+        if let prior = typeNameClaimants[resolvedName], prior != claimant {
+            throw CodegenError.invalidNativeCatalog(
+                "binding '\(escapedForDiagnostic(binding.id))' resolves to \(escapedForDiagnostic(resolvedName)), already resolved by export "
+                    + "'\(escapedForDiagnostic(prior.export))' in package '\(escapedForDiagnostic(prior.package))' at generic arity \(prior.arity)"
+            )
+        }
+        typeNameClaimants[resolvedName] = claimant
+        resolved[binding.tag] = DeclaredTransferableBinding(
+            module: swiftPackage.module,
+            base: "\(swiftPackage.module).\(typeName)",
+            factory: factory,
+            genericArity: arity
+        )
+    }
+    return ResolvedDeclaredBindings(bindings: resolved, unboundCauses: unboundCauses, warnings: warnings)
+}
+
+func unreferencedPackageWarnings(packages: NativePackagesCatalog?, bindings: NativeBindingsCatalog?) -> [String] {
+    guard let packages else { return [] }
+    let referenced = Set((bindings?.bindings ?? []).map(\.package))
+    return (packages.packages ?? [:]).keys.sorted()
+        .filter { !referenced.contains($0) }
+        .map {
+            "AWSBLOCKS-NATIVE-003: native package '\(escapedForDiagnostic($0))' "
+                + "is declared but no binding references it; not imported on swift."
+        }
+}
+
+func declaredModuleImports(_ model: CodegenModel) -> [String] {
+    var modules: [String] = []
+    for namespace in model.apiNamespaces {
+        for operation in namespace.operations {
+            var result = operation.result.type
+            if case .nullable(let inner) = result { result = inner }
+            guard case .transferable(let blocksType, _) = result,
+                  let declared = model.declaredTransferableBindings[blocksType],
+                  !modules.contains(declared.module) else { continue }
+            modules.append(declared.module)
+        }
+    }
+    return modules.sorted()
+}
+
+/// Sorted by key so a spec with two malformed modules always names the same one.
+func validateDeclaredSwiftModules(_ packages: NativePackagesCatalog?) throws {
+    guard let declared = packages?.packages else { return }
+    for key in declared.keys.sorted() {
+        guard let module = declared[key]?.platforms?.swift?.package.module else { continue }
+        guard isValidSwiftIdentifier(module),
+              !swiftKeywords.contains(module),
+              !typeNamesIllegalWhenQualified.contains(module)
+        else {
+            throw CodegenError.invalidNativeCatalog(
+                "package '\(escapedForDiagnostic(key))' declares Swift module '\(escapedForDiagnostic(module))', which is not usable as `import <module>`"
+            )
+        }
+        // The generated source imports these unconditionally, so a package claiming one
+        // emits no import of its own and leaves every runtime name unqualified.
+        guard !alwaysEmittedImports.contains(module) else {
+            throw CodegenError.invalidNativeCatalog(
+                "package '\(escapedForDiagnostic(key))' declares Swift module '\(escapedForDiagnostic(module))', which the generated source already imports"
+            )
+        }
+    }
+}
+
+/// An opt-out is build configuration, not spec metadata, so one that matches nothing is
+/// the author's own typo rather than a malformed catalog.
+func validateOptOutPackages(_ optOutPackages: Set<String>, packages: NativePackagesCatalog?) -> [String] {
+    let declared = packages?.packages ?? [:]
+    return optOutPackages.sorted().filter { declared[$0] == nil }.map {
+        let identity = escapedForDiagnostic($0)
+        return declared.isEmpty
+            ? "AWSBLOCKS-NATIVE-006: opted-out package '\(identity)' has nothing to opt out of; "
+            + "the spec declares no native packages."
+            : "AWSBLOCKS-NATIVE-006: opted-out package '\(identity)' has nothing to opt out of; "
+            + "it is not declared in x-blocks-native-packages."
+    }
+}
+
+let alwaysEmittedImports: Set<String> = ["Foundation", "BlocksRuntime"]
+
+func validateDeclaredBindingArity(
+    methods: [RPCMethod],
+    declared: [String: DeclaredTransferableBinding]
+) throws {
+    for method in methods {
+        guard var schema = method.result?.schema else { continue }
+        if case .nullable(let wrapped) = schema { schema = wrapped }
+        guard case .transferable(let blocksType, let typeArgs) = schema,
+              let binding = declared[blocksType] else { continue }
+        guard typeArgs.count == binding.genericArity else {
+            throw CodegenError.invalidNativeCatalog(
+                "\(escapedForDiagnostic(method.name)) returns '\(escapedForDiagnostic(blocksType))', bound at generic arity "
+                    + "\(binding.genericArity), but its result carries \(typeArgs.count) "
+                    + "x-blocks-type-args entries"
+            )
+        }
+    }
+}
+
+func declaredResultTypeName(
+    _ type: ResolvedType,
+    declared: [String: DeclaredTransferableBinding],
+    renderArg: (ResolvedType) -> String
+) -> String? {
+    var inner = type
+    var optional = false
+    if case .nullable(let wrapped) = type {
+        inner = wrapped
+        optional = true
+    }
+    guard case .transferable(let blocksType, let typeArgs) = inner,
+          let binding = declared[blocksType] else { return nil }
+    let name = declaredTypeName(binding, messageType: typeArgs.first.map(renderArg))
+    return optional ? "\(name)?" : name
+}
+
+func upperCamelCase(_ export: String) -> String {
+    export.split(whereSeparator: { $0 == "_" || $0 == "-" || $0 == "." })
+        .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        .joined()
+}
+
+func declaredTypeName(_ declared: DeclaredTransferableBinding, messageType: String?) -> String {
+    guard declared.isGeneric, let messageType else { return declared.base }
+    return "\(declared.base)<\(messageType)>"
+}
+
+/// Called only for a tag with no built-in binding. The generic belongs to the TYPE, not the
+/// method: `Module.Type<Payload>.fromBlocksDescriptor(…)`, since a `static func
+/// fromBlocksDescriptor<T>` on a non-generic type fails with `cannot specialize non-generic type`.
+func transferableHydrationLines(
+    declared: DeclaredTransferableBinding?,
+    tagLiteral: String,
+    messageType: String,
+    runtimePrefix: String
+) -> [String] {
+    guard let declared else {
+        return ["        return try BlocksRuntime.UnknownTransferable.fromJSON(descriptor, expectedTag: \(tagLiteral))"]
+    }
+    let validated = "\(runtimePrefix)validateTransferableDescriptor(descriptor, expectedTag: \(tagLiteral))"
+    let typeName = declaredTypeName(declared, messageType: messageType)
+    guard declared.isGeneric else {
+        return [
+            "        return try \(typeName).\(declared.factory)(",
+            "            \(validated)",
+            "        )"
+        ]
+    }
+    return [
+        "        return try \(typeName).\(declared.factory)(",
+        "            \(validated)",
+        "        ) { data in",
+        "            try JSONDecoder().decode(\(messageType).self, from: data)",
+        "        }"
+    ]
+}
+
 // MARK: - Resolved Codegen Model
 
 /// A fully resolved, language-independent type ready for translation to Swift.
@@ -235,4 +557,7 @@ public struct CodegenModel {
     let apiNamespaces: [APINamespace]
     let typeDefinitions: [TypeDefinition]
     let servers: [ServerDefinition]
+    let declaredTransferableBindings: [String: DeclaredTransferableBinding]
+    let unboundTransferableCauses: [String: String]
+    let nativeCatalogWarnings: [String]
 }

@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "plugins": [{ "name": "next" }],
     "incremental": true,
     "isolatedModules": true,
@@ -19,6 +19,6 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "aws-blocks", "test", ".blocks/**/*.d.ts", "next-env.d.ts", ".next/types/**/*.ts"],
+  "include": ["src", "aws-blocks", "test", ".blocks/**/*.d.ts", "next-env.d.ts", ".next/types/**/*.ts", ".next/dev/types/**/*.ts"],
   "exclude": ["node_modules"]
 }

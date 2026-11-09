@@ -10,6 +10,7 @@
  * @see https://www.jsonrpc.org/specification
  */
 
+import { BLOCKS_RPC_PREFIX, rpcNamespaceFromPath } from './constants.js';
 import { ApiError, DEFAULT_API_ERROR_NAME, isApiErrorLike, isWireSafeError } from './errors.js';
 
 /**
@@ -36,6 +37,17 @@ export type RpcParseResult =
   | { ok: true; request: RpcParsedRequest }
   | { ok: false; response: string };
 
+/** Options for `parseRpcRequest`. */
+export interface RpcParseOptions {
+  /**
+   * The request path, without query string. When it is a per-namespace RPC path
+   * it must be exactly `/aws-blocks/api/{namespace}` (an optional trailing slash
+   * aside), and the namespace it names must match the body's `namespace.method`
+   * prefix, or the request is rejected as invalid.
+   */
+  pathname?: string;
+}
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const VERSION = '2.0' as const;
@@ -53,12 +65,16 @@ const VERSION = '2.0' as const;
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
  *
- * Note: this value is the Lambda + API Gateway limit. It lives here (in the
- * compute-agnostic parser) because Lambda is the only compute path today. When
- * a non-API-Gateway compute (e.g. container/ALB) is introduced, this should
- * become compute-aware — sourced from / overridden by the compute layer (via
- * the Compute `setEnv` config hook) rather than a fixed constant in `core` —
- * since an ALB has a different payload limit. Tracked with the multi-compute work.
+ * Note: this value is the API Gateway limit, and every compute keeps it — one
+ * constant in the compute-agnostic parser, so a call accepted on one compute is
+ * accepted on every other. A Lambda compute is reached through the gateway,
+ * which rejects a larger body first; a container compute may be reached without
+ * it, so there this guard is the limit.
+ *
+ * The container HTTP server (`serveHttp`) keeps the same limit for JSON-RPC on
+ * every path to it, and checks it while reading the body — before buffering past
+ * it — rather than only in `parseRpcRequest`: a front door that streams the body
+ * (a load balancer, a CloudFront VPC origin) enforces no limit of its own.
  */
 export const MAX_RPC_BODY_BYTES = 10 * 1024 * 1024;
 
@@ -89,9 +105,24 @@ export function encodeRpcRequest(apiNamespace: string, method: string, args: unk
  * Decode a JSON-RPC 2.0 response body.
  *
  * Returns the `result` on success, or throws an `ApiError` on error.
+ *
+ * A body that is not a JSON-RPC 2.0 envelope (`jsonrpc !== '2.0'`) — e.g. a
+ * gateway answering on its own with `{"message":"Too Many Requests"}` — also
+ * throws an `ApiError`. Its status is `httpStatus` when that is not a 2xx,
+ * else 502 (a success status with no envelope is an upstream fault); its
+ * message is the body's string `message` when present, else `HTTP <status>`.
+ * Pass `undefined` as `body` when the response text was not valid JSON.
+ *
+ * @param body The parsed response body.
+ * @param httpStatus The HTTP status of the response, if known.
  */
-export function decodeRpcResponse(body: unknown): unknown {
+export function decodeRpcResponse(body: unknown, httpStatus?: number): unknown {
   const rpc = body as any;
+  if (rpc === null || typeof rpc !== 'object' || rpc.jsonrpc !== VERSION) {
+    const status = httpStatus !== undefined && (httpStatus < 200 || httpStatus > 299) ? httpStatus : 502;
+    const message = typeof rpc?.message === 'string' && rpc.message ? rpc.message : `HTTP ${status}`;
+    throw new ApiError(message, status);
+  }
   if (rpc.error) {
     const { code, message, data } = rpc.error;
     // Application error codes use the HTTP status directly (e.g. 409).
@@ -112,13 +143,36 @@ export function decodeRpcResponse(body: unknown): unknown {
 // ── Server helpers (parse request, encode response) ─────────────────────────
 
 /**
+ * The JSON-RPC error envelope for a request body over `limitBytes` (default
+ * {@link MAX_RPC_BODY_BYTES}). Shared by {@link parseRpcRequest} and transports
+ * that reject an oversized RPC body before reading all of it.
+ *
+ * @internal
+ */
+export function payloadTooLargeResponse(limitBytes: number = MAX_RPC_BODY_BYTES): string {
+  return errorResponse(
+    413,
+    `Request body exceeds the ${limitBytes} byte (${+(limitBytes / (1024 * 1024)).toFixed(2)} MiB) limit`,
+    null,
+    { name: 'PayloadTooLarge' },
+  );
+}
+
+/**
  * Parse a raw body string into a validated `RpcParsedRequest`.
  *
  * Returns `{ ok: false, response }` with a ready-to-send JSON string when
  * the request is malformed, so callers can short-circuit without knowing
  * anything about the JSON-RPC spec.
+ *
+ * The body's `namespace.method` prefix is always the namespace dispatched. A
+ * per-namespace path (`options.pathname`) only addresses the request — a gateway
+ * routes on it, since it can't read the body — so a path that names a different
+ * namespace than the body is rejected rather than silently preferring either.
+ * The typed client never sends a mismatch; this only surfaces hand-written
+ * requests that would otherwise run on a different namespace than intended.
  */
-export function parseRpcRequest(bodyText: string): RpcParseResult {
+export function parseRpcRequest(bodyText: string, options: RpcParseOptions = {}): RpcParseResult {
   // Reject oversized bodies before parsing or dispatch. See MAX_RPC_BODY_BYTES
   // for the limit and its rationale.
   if (Buffer.byteLength(bodyText, 'utf8') > MAX_RPC_BODY_BYTES) {
@@ -127,15 +181,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     // (reserved codes collapse to 500), mirroring the 504 handler-timeout path,
     // so a caller's `e.status === 413` works. `name` (which crosses the wire,
     // not the code) lets callers match with `isBlocksError(e, 'PayloadTooLarge')`.
-    return {
-      ok: false,
-      response: errorResponse(
-        413,
-        `Request body exceeds the ${MAX_RPC_BODY_BYTES} byte (${MAX_RPC_BODY_BYTES / (1024 * 1024)} MiB) limit`,
-        null,
-        { name: 'PayloadTooLarge' },
-      ),
-    };
+    return { ok: false, response: payloadTooLargeResponse() };
   }
 
   let parsed: any;
@@ -143,6 +189,15 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     parsed = JSON.parse(bodyText || '{}');
   } catch {
     return { ok: false, response: errorResponse(RpcErrorCode.ParseError, 'Parse error', null) };
+  }
+
+  // A literal `null` body parses to null; reading `.id` off it would throw.
+  // Other primitives and arrays already fall through to Invalid Request below.
+  if (parsed === null) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, 'Invalid Request: body must be a JSON-RPC 2.0 object', null, { name: 'InvalidRequest' }),
+    };
   }
 
   const id = parsed.id ?? null;
@@ -167,6 +222,15 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
     };
   }
 
+  const apiNamespace = parsed.method.substring(0, dotIndex);
+  const pathProblem = options.pathname === undefined ? undefined : rpcPathProblem(options.pathname, apiNamespace);
+  if (pathProblem) {
+    return {
+      ok: false,
+      response: errorResponse(RpcErrorCode.InvalidRequest, `Invalid Request: ${pathProblem}`, id, { name: 'InvalidRequest' }),
+    };
+  }
+
   const hasParams = Object.hasOwn(parsed, 'params');
   if (hasParams && (parsed.params === null || typeof parsed.params !== 'object')) {
     return {
@@ -188,7 +252,7 @@ export function parseRpcRequest(bodyText: string): RpcParseResult {
   return {
     ok: true,
     request: {
-      apiNamespace: parsed.method.substring(0, dotIndex),
+      apiNamespace,
       method: parsed.method.substring(dotIndex + 1),
       // JSON-RPC 2.0 §4.2: params may be an array (positional) or object (named).
       args,
@@ -305,6 +369,34 @@ export function methodNotFoundResponse(detail: string, id: string | number | nul
 }
 
 // ── Internal ────────────────────────────────────────────────────────────────
+
+/** Longest caller-supplied name echoed back in an error message. */
+const MAX_ECHOED_NAME_LENGTH = 64;
+
+function clipName(name: string): string {
+  return name.length > MAX_ECHOED_NAME_LENGTH ? `${name.slice(0, MAX_ECHOED_NAME_LENGTH)}…` : name;
+}
+
+/**
+ * Why `pathname` can't carry a call into `bodyNamespace`, or `undefined` when it
+ * can. The bare endpoint carries any namespace. A per-namespace path must be
+ * exactly `/aws-blocks/api/{namespace}` — one segment, so a deeper path is
+ * rejected the same way whichever compute serves it — and must name the body's
+ * namespace exactly (export names are case-sensitive). Names are clipped before
+ * they are echoed, so the error stays small whatever the caller sent.
+ */
+function rpcPathProblem(pathname: string, bodyNamespace: string): string | undefined {
+  if (!pathname.startsWith(`${BLOCKS_RPC_PREFIX}/`)) return undefined;
+  const rest = pathname.slice(BLOCKS_RPC_PREFIX.length + 1).replace(/\/$/, '');
+  if (rest.includes('/')) {
+    return `an RPC call goes to ${BLOCKS_RPC_PREFIX} or ${BLOCKS_RPC_PREFIX}/<namespace>, not a deeper path`;
+  }
+  const pathNamespace = rpcNamespaceFromPath(pathname);
+  if (pathNamespace !== undefined && pathNamespace !== bodyNamespace) {
+    return `the path addresses namespace "${clipName(pathNamespace)}" but the method is in namespace "${clipName(bodyNamespace)}"`;
+  }
+  return undefined;
+}
 
 export function errorResponse(
   code: number,

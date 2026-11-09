@@ -15,10 +15,20 @@ import Foundation
 // and tuple-form arrays.
 
 public struct OpenRPCParser {
-    public init() {}
+    private let optOutNativePackages: Set<String>
+
+    public init(optOutNativePackages: Set<String> = []) {
+        self.optOutNativePackages = optOutNativePackages
+    }
 
     public func parse(data: Data) throws -> RPCModel {
         let spec = try JSONDecoder().decode(OpenRPCSpec.self, from: data)
+
+        let declared = try resolveDeclaredTransferableBindings(
+            packages: spec.nativePackages,
+            bindings: spec.nativeBindings,
+            optOutPackages: optOutNativePackages
+        )
 
         // Resolve component schemas
         var componentSchemas: [String: TypeRef] = [:]
@@ -47,9 +57,19 @@ public struct OpenRPCParser {
             return RPCMethod(name: method.name, params: params, result: result)
         }
 
+        try validateDeclaredBindingArity(methods: methods, declared: declared.bindings)
+
         let servers = (spec.servers ?? []).map { ServerDefinition(name: $0.name, url: $0.url) }
 
-        return RPCModel(methods: methods, servers: servers, componentSchemas: componentSchemas)
+        return RPCModel(
+            methods: methods,
+            servers: servers,
+            componentSchemas: componentSchemas,
+            declaredTransferableBindings: declared.bindings,
+            unboundTransferableCauses: declared.unboundCauses,
+            nativeCatalogWarnings: declared.warnings
+                + unreferencedPackageWarnings(packages: spec.nativePackages, bindings: spec.nativeBindings)
+        )
     }
 
     // MARK: - TypeRef Mapping

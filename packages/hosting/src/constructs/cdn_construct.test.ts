@@ -10,7 +10,7 @@ import { Bucket } from 'aws-cdk-lib/aws-s3';
 import {
   Code,
   FunctionUrlAuthType,
-  IVersion,
+  type IVersion,
   InvokeMode,
   Function as LambdaFunction,
   Runtime,
@@ -20,7 +20,7 @@ import { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import { CdnConstruct } from './cdn_construct.js';
 import { createSecurityHeadersPolicy } from './security_headers.js';
 import { HostingError } from '../hosting_error.js';
-import { DeployManifest } from '../manifest/types.js';
+import type { DeployManifest } from '../manifest/types.js';
 import { ORIGIN_ID, buildKvsEntries } from './kvs_router.js';
 
 // ---- KVS edge-router helpers ----
@@ -90,7 +90,7 @@ const createEnvStack = (
 const spaManifest: DeployManifest = {
   version: 1,
   compute: {},
-  staticAssets: { directory: '/tmp/assets' },
+  staticAssets: { directory: '/tmp/assets', spaFallback: true },
   routes: [{ pattern: '/*', target: 'static' }],
   buildId: 'test-spa-1',
 };

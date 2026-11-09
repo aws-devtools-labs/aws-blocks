@@ -191,7 +191,8 @@ describe('Next.js template E2E assertions', () => {
           configRequests++;
           res.writeHead(scenario.configStatus, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ apiUrl: scenario.relativeApiUrl ? '/aws-blocks/api' : `http://${req.headers.host}/aws-blocks/api` }));
-        } else if (req.url === '/aws-blocks/api' && req.method === 'POST') {
+        } else if ((req.url === '/aws-blocks/api' || req.url?.startsWith('/aws-blocks/api/')) && req.method === 'POST') {
+          // The typed client POSTs to the per-namespace path (/aws-blocks/api/{namespace}).
           let body = '';
           for await (const chunk of req) body += chunk;
           const request = JSON.parse(body);

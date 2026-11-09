@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { OFFICIAL_BB_NAMES, Scope } from './index.js';
+import { buildingBlockParent, computeScopeFullId, OFFICIAL_BB_NAMES, Scope } from './index.js';
 import type { ScopeParent } from './index.js';
 import { CORE_VERSION } from '../version.js';
 
@@ -407,5 +407,111 @@ describe('formatUserAgentString', () => {
 				`byte 0x${byte.toString(16)} is not printable ASCII, in "${s}"`,
 			);
 		}
+	});
+});
+
+// ── buildingBlockParent: a hand-built parent for the pre-super() window ─────
+
+describe('buildingBlockParent', () => {
+	const root = { id: 'my-app' };
+
+	test('a child of the synthetic parent is attributed to it', () => {
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'AuthOidc',
+			bbVersion: '0.2.1',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'AuthOidc/0.2.1'],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	test('a name outside OFFICIAL_BB_NAMES is withheld from the chain', () => {
+		assert.strictEqual(OFFICIAL_BB_NAMES.has('MyCustomBlock'), false);
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'MyCustomBlock',
+			bbVersion: '9.9.9',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	test('ancestors above the synthetic parent survive the hop', () => {
+		const grandparent = new TestBB('db', {
+			parent: root,
+			bbName: 'Database',
+			bbVersion: '3.0.0',
+		});
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: grandparent,
+			bbName: 'AuthOidc',
+			bbVersion: '0.2.1',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'Database/3.0.0'],
+			['bb', 'AuthOidc/0.2.1'],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	test('an empty bbVersion is withheld rather than rendered as a bare name', () => {
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'AuthOidc',
+			bbVersion: '',
+		});
+		const child = new TestBB('sessions', {
+			parent: self,
+			bbName: 'KVStore',
+			bbVersion: '0.4.0',
+		});
+
+		assert.deepStrictEqual(child.testBuildUserAgentChain(), [
+			['aws-blocks', CORE_VERSION],
+			['bb', 'KVStore/0.4.0'],
+		]);
+	});
+
+	// The child's resource names come from this ID, so a real parent and a
+	// synthetic one must produce the same string.
+	test('the derived fullId is the literal a real parent would produce', () => {
+		const self = buildingBlockParent({
+			id: 'auth',
+			parent: root,
+			bbName: 'AuthOidc',
+			bbVersion: '0.2.1',
+		});
+
+		assert.strictEqual(self.fullId, 'my-app-auth');
+		assert.strictEqual(new TestBB('sessions', { parent: self }).fullId, 'my-app-auth-sessions');
+		assert.strictEqual(computeScopeFullId({ id: 'sessions', parent: self }), 'my-app-auth-sessions');
 	});
 });

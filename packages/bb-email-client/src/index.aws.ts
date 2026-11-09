@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { SESv2Client, SendEmailCommand, SendBulkEmailCommand } from '@aws-sdk/client-sesv2';
-import { Scope, installClientUserAgent, brandBlocksError } from '@aws-blocks/core';
+import { Scope, installClientUserAgent, blocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { BB_NAME, BB_VERSION } from './version.js';
 
@@ -12,45 +12,45 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 import { EmailErrors } from './errors.js';
+import { validateMessage } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
 const BATCH_CHUNK_SIZE = 50;
 
-function blocksError(name: string, message: string): Error {
-	const err = new Error(`${name}: ${message}`);
-	err.name = name;
-	return brandBlocksError(err);
-}
+/**
+ * Map an SES SDK error to a branded `EmailErrors` error.
+ *
+ * Every branch uses a STABLE, BB-authored message — never the raw SES
+ * `err.message`. A branded message crosses the RPC wire to the caller, and SES
+ * text names identities, regions, configuration sets and account state. The SES
+ * error is kept on the non-enumerable `cause` (so `JSON.stringify` cannot leak
+ * its `$metadata`) and is logged by the caller.
+ */
+function mapSesError(err: unknown): Error {
+	const name = err instanceof Error ? err.name : '';
+	const rawMessage = err instanceof Error ? err.message : String(err);
 
-function mapSesError(err: any): Error {
-	const message = err.message ?? 'Unknown SES error';
-
-	if (err.name === 'MailFromDomainNotVerifiedException') {
-		return blocksError(EmailErrors.DomainNotVerified, message);
+	let mapped: Error;
+	if (name === 'MailFromDomainNotVerifiedException') {
+		mapped = blocksError(EmailErrors.DomainNotVerified, 'The sending domain or address is not verified in SES.');
+	} else if (name === 'MessageRejected') {
+		// The raw text is only inspected to pick the code; it never reaches the message.
+		const lower = rawMessage.toLowerCase();
+		mapped = lower.includes('not verified') || lower.includes('identity')
+			? blocksError(EmailErrors.DomainNotVerified, 'The sending domain or address is not verified in SES.')
+			: blocksError(EmailErrors.SendFailed, 'SES rejected the message.');
+	} else if (name === 'AccountSuspendedException' || name === 'SendingPausedException') {
+		mapped = blocksError(EmailErrors.AccountPaused, 'Email sending is paused for this account.');
+	} else if (name === 'TooManyRequestsException' || name === 'ThrottlingException') {
+		mapped = blocksError(EmailErrors.RateLimited, 'SES rate limit exceeded. Retry after a backoff.');
+	} else if (name === 'BadRequestException') {
+		mapped = blocksError(EmailErrors.InvalidInput, 'SES rejected the request as invalid.');
+	} else {
+		mapped = blocksError(EmailErrors.SendFailed, 'Email send failed.');
 	}
-
-	if (err.name === 'MessageRejected') {
-		const lower = message.toLowerCase();
-		if (lower.includes('not verified') || lower.includes('identity')) {
-			return blocksError(EmailErrors.DomainNotVerified, message);
-		}
-		return blocksError(EmailErrors.SendFailed, message);
-	}
-
-	if (err.name === 'AccountSuspendedException' || err.name === 'SendingPausedException') {
-		return blocksError(EmailErrors.AccountPaused, message);
-	}
-
-	if (err.name === 'TooManyRequestsException' || err.name === 'ThrottlingException') {
-		return blocksError(EmailErrors.RateLimited, message);
-	}
-
-	if (err.name === 'BadRequestException') {
-		return blocksError(EmailErrors.InvalidInput, message);
-	}
-
-	return blocksError(EmailErrors.SendFailed, message);
+	Object.defineProperty(mapped, 'cause', { value: err, enumerable: false, writable: true, configurable: true });
+	return mapped;
 }
 
 /**
@@ -98,6 +98,9 @@ export class EmailClient extends Scope {
 	 *
 	 * Uses the SDK's built-in adaptive retry with maxAttempts: 3.
 	 *
+	 * Thrown errors carry a stable, BB-authored message (the caller may forward it to a client);
+	 * the raw SES error is logged and kept on the non-enumerable `cause`.
+	 *
 	 * @param message - The email message to send (to, subject, body, optional html/cc/bcc).
 	 * @returns The SES message ID for the sent email.
 	 * @throws {EmailErrors.SendFailed} General send failure.
@@ -108,6 +111,8 @@ export class EmailClient extends Scope {
 	 */
 	async send(message: EmailMessage): Promise<SendResult> {
 		const { to, subject, body, html, cc, bcc } = message;
+		// Same checks as the mock, so local and deployed accept the same input.
+		validateMessage(message, this.fromAddress, this.replyTo);
 		const recipients = Array.isArray(to) ? to : [to];
 
 		const command = new SendEmailCommand({
@@ -133,8 +138,8 @@ export class EmailClient extends Scope {
 		try {
 			const response = await this.client.send(command);
 			return { messageId: response.MessageId ?? '' };
-		} catch (err: any) {
-			if (err.name && err.name in EmailErrors) throw err;
+		} catch (err) {
+			this.log.error('SES SendEmail failed', { error: err });
 			throw mapSesError(err);
 		}
 	}
@@ -147,34 +152,66 @@ export class EmailClient extends Scope {
 	 * TODO: Add retry logic for transient failures (throttling, 5xx).
 	 *
 	 * @param messages - Array of email messages to send.
-	 * @returns Result with per-message status in the same order as the input array.
+	 * @returns Result with per-message status in the same order as the input array. A failed
+	 *   entry's `error` is a stable message naming the `EmailErrors` code or SES entry status;
+	 *   the raw SES error text is logged server-side, not returned.
 	 */
 	async sendBatch(messages: EmailMessage[]): Promise<SendBatchResult> {
 		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> =
 			new Array(messages.length);
 
-		// Process in chunks of BATCH_CHUNK_SIZE
-		for (let chunkStart = 0; chunkStart < messages.length; chunkStart += BATCH_CHUNK_SIZE) {
-			const chunkIndices = messages
-				.slice(chunkStart, chunkStart + BATCH_CHUNK_SIZE)
-				.map((_, i) => chunkStart + i);
-			const chunk = chunkIndices.map(idx => messages[idx]);
+		// Validate each entry the way send() and the mock do. An invalid entry is
+		// marked failed and never reaches SES, matching the mock's per-entry status.
+		const withHtml: number[] = [];
+		const textOnly: number[] = [];
+		for (let i = 0; i < messages.length; i++) {
+			try {
+				validateMessage(messages[i], this.fromAddress, this.replyTo);
+			} catch (err: any) {
+				results[i] = { status: 'failed', error: err.message ?? 'Invalid message' };
+				continue;
+			}
+			(messages[i].html ? withHtml : textOnly).push(i);
+		}
 
-			const command = new SendBulkEmailCommand({
-				FromEmailAddress: this.fromAddress,
-				...(this.replyTo && { ReplyToAddresses: this.replyTo }),
-				...(this.configurationSet ? { ConfigurationSetName: this.configurationSet } : {}),
-				DefaultContent: {
-					Template: {
-						TemplateContent: {
-							Subject: '{{subject}}',
-							Html: '{{html}}',
-							Text: '{{body}}',
-						},
-						TemplateData: JSON.stringify({ subject: '', body: '', html: '' }),
+		// A SendBulkEmail call shares one template across its entries. Messages
+		// without `html` go through a text-only template, so their plain-text body
+		// is never placed in an HTML part where a mail client would render it as
+		// markup. This matches send(), which adds an HTML part only when `html` is set.
+		for (const [indices, withHtmlPart] of [[withHtml, true], [textOnly, false]] as const) {
+			for (let chunkStart = 0; chunkStart < indices.length; chunkStart += BATCH_CHUNK_SIZE) {
+				const chunkIndices = indices.slice(chunkStart, chunkStart + BATCH_CHUNK_SIZE);
+				await this.sendBulkChunk(messages, chunkIndices, withHtmlPart, results);
+			}
+		}
+
+		return { results };
+	}
+
+	/** Send one SendBulkEmail call (at most 50 entries) and record each entry's result by input index. */
+	private async sendBulkChunk(
+		messages: EmailMessage[],
+		chunkIndices: number[],
+		withHtmlPart: boolean,
+		results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }>,
+	): Promise<void> {
+		const command = new SendBulkEmailCommand({
+			FromEmailAddress: this.fromAddress,
+			...(this.replyTo && { ReplyToAddresses: this.replyTo }),
+			...(this.configurationSet ? { ConfigurationSetName: this.configurationSet } : {}),
+			DefaultContent: {
+				Template: {
+					TemplateContent: {
+						Subject: '{{subject}}',
+						Text: '{{body}}',
+						...(withHtmlPart ? { Html: '{{html}}' } : {}),
 					},
+					TemplateData: JSON.stringify(withHtmlPart ? { subject: '', body: '', html: '' } : { subject: '', body: '' }),
 				},
-				BulkEmailEntries: chunk.map(msg => ({
+			},
+			BulkEmailEntries: chunkIndices.map((idx) => {
+				const msg = messages[idx];
+				return {
 					Destination: {
 						ToAddresses: Array.isArray(msg.to) ? msg.to : [msg.to],
 						CcAddresses: msg.cc || [],
@@ -185,37 +222,38 @@ export class EmailClient extends Scope {
 							ReplacementTemplateData: JSON.stringify({
 								subject: msg.subject,
 								body: msg.body,
-								...(msg.html ? { html: msg.html } : { html: msg.body }),
+								...(withHtmlPart ? { html: msg.html } : {}),
 							}),
 						},
 					},
-				})),
-			});
+				};
+			}),
+		});
 
-			try {
-				const response = await this.client.send(command);
-				const bulkResults = response.BulkEmailEntryResults ?? [];
+		try {
+			const response = await this.client.send(command);
+			const bulkResults = response.BulkEmailEntryResults ?? [];
 
-				for (let i = 0; i < chunkIndices.length; i++) {
-					const globalIdx = chunkIndices[i];
-					const entry = bulkResults[i];
+			for (let i = 0; i < chunkIndices.length; i++) {
+				const globalIdx = chunkIndices[i];
+				const entry = bulkResults[i];
 
-					if (entry?.Status === 'SUCCESS') {
-						results[globalIdx] = { status: 'success', messageId: entry.MessageId ?? '' };
-					} else {
-						const errorMsg = entry?.Error ?? 'Unknown bulk send error';
-						results[globalIdx] = { status: 'failed', error: errorMsg };
-					}
-				}
-			} catch (err: any) {
-				// Entire chunk failed — mark all as failed
-				for (const globalIdx of chunkIndices) {
-					const mapped = mapSesError(err);
-					results[globalIdx] = { status: 'failed', error: mapped.message };
+				if (entry?.Status === 'SUCCESS') {
+					results[globalIdx] = { status: 'success', messageId: entry.MessageId ?? '' };
+				} else {
+					// SES entry `Error` text can name configuration sets and identities: log it,
+					// return only the SES status enum.
+					this.log.error('SES bulk entry failed', { index: globalIdx, status: entry?.Status, error: entry?.Error });
+					results[globalIdx] = { status: 'failed', error: `${EmailErrors.SendFailed}: Email send failed (${entry?.Status ?? 'no result'}).` };
 				}
 			}
+		} catch (err: any) {
+			// Entire chunk failed — mark all as failed
+			this.log.error('SES SendBulkEmail failed', { error: err });
+			const mapped = mapSesError(err);
+			for (const globalIdx of chunkIndices) {
+				results[globalIdx] = { status: 'failed', error: mapped.message };
+			}
 		}
-
-		return { results };
 	}
 }

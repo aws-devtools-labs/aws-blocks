@@ -1,18 +1,24 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { BuildingBlockScope } from '@aws-blocks/core/cdk';
+import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
+import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
+import { mintedMantleRegion } from './mantle.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
+import { BB_NAME } from './version.js';
 
-export { AgentErrors } from './errors.js';
+export { AgentErrors, InterruptError } from './errors.js';
 export { BedrockModels, OllamaModels } from './models.js';
+export type { AgentTurnPayload } from './agent.js';
+export type { AgentConfig, AgentResult, AgentStreamChunk, AgentStreamResult, ToolDefinition, AgentTool, ToolFactory, ToolsConfig, ToolHandlerArgs, DefaultToolContext, InterruptResponse, ToolCallRecord, ModelConfig, BedrockGuardrail, StreamOptions, Message, Conversation, JSONValue, TokenUsage } from './types.js';
 
 export class Agent extends BuildingBlockScope {
 	/**
@@ -28,12 +34,13 @@ export class Agent extends BuildingBlockScope {
 	 * handler no longer needs Bedrock access — the runtime's own role gets it (see AgentCoreRuntime).
 	 */
 	constructor(scope: ScopeParent, id: string, config?: AgentConfig) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
 
 		// Session-snapshot bucket. Provisioned here (and granted to the shared execution role that the
 		// AgentCore Runtime runs as); the deployed loop re-derives its name from this bucket's `fullId`
-		// in-process — the same `'sn'` id → same fullId → same physical bucket — so no name needs to be
-		// injected into the container. Propagate `removalPolicy` so customers can opt sandbox stacks into
+		// in-process — the same `'sn'` id → same fullId → same physical bucket (FileBucket's
+		// `deriveBucketName`, which shortens a `fullId` over 63 characters; the runtime reads it back via
+		// `getSdkIdentifiers`, never the raw `fullId`) — so no name needs to be injected into the container. Propagate `removalPolicy` so customers can opt sandbox stacks into
 		// clean teardown (without it, CDK's RETAIN default applies). ID shortened to keep the S3 bucket
 		// name within the 63-char limit.
 		new FileBucket(this, 'sn', { removalPolicy: config?.removalPolicy });
@@ -67,5 +74,59 @@ export class Agent extends BuildingBlockScope {
 			agentFullId: this.fullId,
 			agentcoreAssetPath: config?.agentcoreAssetPath,
 		});
+
+		// Bedrock evaluates `ModelConfig.guardrail` on each model call, which needs ApplyGuardrail on
+		// that guardrail. Granted per guardrail (never a wildcard) to the role the loop runs as.
+		const deployed = config?.model?.deployed;
+		const deployedModels = Array.isArray(deployed) ? deployed : deployed ? [deployed] : [];
+		const guardrailArns = [...new Set(
+			deployedModels
+				.flatMap((m) => (m.provider === 'bedrock' && m.guardrail ? [m.guardrail.identifier] : []))
+				.map((id) => (id.startsWith('arn:') ? id : cdk.Stack.of(this).formatArn({ service: 'bedrock', resource: 'guardrail', resourceName: id }))),
+		)];
+		if (guardrailArns.length > 0) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({ actions: ['bedrock:ApplyGuardrail'], resources: guardrailArns }),
+			);
+		}
+
+		// An `openai-api` model on a Bedrock Mantle endpoint without an explicit `apiKey` (an empty
+		// string counts as omitted) calls Mantle with short-term Bedrock API keys minted from the role
+		// the loop runs as, so that role needs
+		// the Mantle inference actions (scoped to the endpoint's region) and CallWithBearerToken
+		// (a permission-only action that supports only Resource "*"). An explicit `apiKey` carries
+		// its own identity and needs no grant on the role.
+		const mantleRegions = [...new Set(
+			deployedModels.flatMap((m) => {
+				const region = mintedMantleRegion(m);
+				return region ? [region] : [];
+			}),
+		)];
+		if (mantleRegions.length > 0) {
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['bedrock-mantle:CreateInference', 'bedrock-mantle:ListModels', 'bedrock-mantle:GetModel'],
+					resources: mantleRegions.map((region) => cdk.Stack.of(this).formatArn({ service: 'bedrock-mantle', region, resource: 'project', resourceName: '*' })),
+				}),
+			);
+			this.executionRole.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: ['bedrock-mantle:CallWithBearerToken'],
+					resources: ['*'],
+					// The agent only mints short-term keys.
+					conditions: { StringEquals: { 'bedrock-mantle:BearerTokenType': 'SHORT_TERM' } },
+				}),
+			);
+		}
 	}
+
+	// Runtime-only methods throw during synth (see `synthGuard` in `@aws-blocks/core/cdk`).
+	stream(..._args: unknown[]): never { return synthGuard('Agent', 'stream'); }
+	resume(..._args: unknown[]): never { return synthGuard('Agent', 'resume'); }
+	createConversationId(..._args: unknown[]): never { return synthGuard('Agent', 'createConversationId'); }
+	getChannel(..._args: unknown[]): never { return synthGuard('Agent', 'getChannel'); }
+	getPendingInterrupts(..._args: unknown[]): never { return synthGuard('Agent', 'getPendingInterrupts'); }
+	listConversations(..._args: unknown[]): never { return synthGuard('Agent', 'listConversations'); }
+	getConversation(..._args: unknown[]): never { return synthGuard('Agent', 'getConversation'); }
+	deleteConversation(..._args: unknown[]): never { return synthGuard('Agent', 'deleteConversation'); }
 }

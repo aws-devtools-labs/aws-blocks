@@ -4,6 +4,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { setTimeout } from 'node:timers/promises';
+import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
 
 type Cursor = Parameters<typeof apiType.realtimePublishCursor>[0];
@@ -52,6 +53,20 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				// Lambda A should receive the message via WebSocket
 				const msg = await msgPromise;
 				assert.deepStrictEqual(msg, cursor);
+			});
+		});
+
+		describe('Delivery count', () => {
+			// One publish must run a server-side subscriber's handler once, including
+			// when the publish comes from the subscriber's own invocation.
+			test('one publish runs a getChannel().subscribe() handler once', { timeout: 30_000 }, async () => {
+				const { calls } = await getApi().realtimeChannelSubscribeOnePublishCount(`once-ch-${Date.now()}`);
+				assert.strictEqual(calls, 1);
+			});
+
+			test('one publish runs a realtime.subscribe() handler once', { timeout: 30_000 }, async () => {
+				const { calls } = await getApi().realtimeSubscribeOnePublishCount(`once-rt-${Date.now()}`);
+				assert.strictEqual(calls, 1);
 			});
 		});
 
@@ -162,11 +177,9 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const api = getApi();
 				await assert.rejects(
 					() => api.realtimePublishBadData(),
-					(err: unknown) => {
-						const e = err as Error & { name: string };
-						return e.name === 'ValidationFailedException'
-							|| (e.message && e.message.includes('Validation'));
-					},
+					// Assert the error round-trips as a *branded* BB error
+					// (survives the wire sanitizer), not merely a name match.
+					(err: unknown) => isBlocksError(err, 'ValidationFailedException'),
 					'Should reject data that does not match the cursor schema',
 				);
 			});
@@ -187,7 +200,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const sub = badChannel.subscribe(() => {});
 				await assert.rejects(
 					sub.established,
-					(err: unknown) => (err as Error & { name: string }).name === 'ConnectionFailedException',
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
 					'Tampered token should reject the subscription',
 				);
 			});
@@ -206,7 +219,7 @@ export function realtimeTests(getApi: () => typeof apiType) {
 				const badSub = badChannel.subscribe(() => {});
 				await assert.rejects(
 					badSub.established,
-					(err: unknown) => (err as Error & { name: string }).name === 'ConnectionFailedException',
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
 					'Tampered token should be rejected even on an established connection',
 				);
 

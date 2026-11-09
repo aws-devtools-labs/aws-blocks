@@ -12,6 +12,7 @@ import type {
 	ExternalMetricsRef,
 	MetricsEmitter,
 } from './types.js';
+import { externalMetricsRef } from './from-existing.js';
 import { MetricsErrors } from './errors.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import {
@@ -215,7 +216,7 @@ export class Metrics extends Scope implements MetricsEmitter {
 	 * ```
 	 */
 	static fromExisting(namespace: string): ExternalMetricsRef {
-		return { __brand: 'ExternalMetricsRef' as const, namespace };
+		return externalMetricsRef(namespace);
 	}
 }
 

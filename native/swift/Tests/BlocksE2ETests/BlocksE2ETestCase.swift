@@ -11,18 +11,26 @@ import Foundation
 
 /// Base class for E2E tests against test-apps/native-bindings.
 /// Reads BLOCKS_URL from the environment (defaults to localhost dev server).
-/// Uses the generated typed `Api` client.
+/// Each test runs on its own generated `Blocks`, closed in `tearDown`.
 class BlocksE2ETestCase: XCTestCase {
     static let blocksUrl: String = ProcessInfo.processInfo.environment["BLOCKS_URL"]
             ?? "http://localhost:3001/aws-blocks/api"
 
     static let server: BlocksServer = .init(name: "e2e", url: blocksUrl)
 
+    var blocks: Blocks!
     var api: Api!
 
     override func setUp() {
         super.setUp()
         BlocksClient.clearCookies()
-        api = Api(server: Self.server)
+        blocks = Blocks(server: Self.server)
+        api = blocks.api
+    }
+
+    override func tearDown() {
+        // Releases the session once in-flight requests finish; later calls throw ClientClosedError.
+        blocks.close()
+        super.tearDown()
     }
 }

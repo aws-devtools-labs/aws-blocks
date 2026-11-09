@@ -5,7 +5,8 @@
  * are building a backend for a mobile app, a CLI, or a third-party client.
  *
  * It ships a public health check plus an auth-gated CRUD resource (items) over a
- * DistributedTable, with per-user isolation and optimistic locking. Point any
+ * DistributedTable, with per-user isolation and optimistic locking, and
+ * auth-gated presigned file URLs scoped to each user's own files. Point any
  * client at the RPC endpoint; there is no web UI to serve.
  *
  * ─── IMPORTANT ───────────────────────────────────────────────────────────────
@@ -17,7 +18,7 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, AuthBasic, DistributedTable, FileBucket } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -25,7 +26,6 @@ const scope = new Scope('my-app');
 // ─── Auth ────────────────────────────────────────────────────────────────────
 const auth = new AuthBasic(scope, 'auth', {
   passwordPolicy: { minLength: 8 },
-  crossDomain: process.env.BLOCKS_SANDBOX === 'true',
 });
 export const authApi = auth.createApi();
 
@@ -45,12 +45,50 @@ const items = new DistributedTable(scope, 'items', {
   key: { partitionKey: 'owner', sortKey: 'itemId' },
 });
 
+// ─── Files ─────────────────────────────────────────────────────────────────
+// Object storage for binary files. A headless client uploads/downloads via
+// presigned URLs: ask the API for a URL, then PUT/GET the bytes directly.
+// Versioning is on (the FileBucket default), so an overwritten or deleted file
+// can be restored from its previous version.
+const files = new FileBucket(scope, 'files');
+
+/**
+ * Content types `createUploadUrl` will sign for. The presigned PUT only succeeds
+ * with the Content-Type it was signed with, so this list is what a client can
+ * store. Extend it for the file types your app accepts.
+ */
+const ALLOWED_UPLOAD_TYPES = new Set(['text/plain', 'application/json', 'application/pdf', 'image/png', 'image/jpeg']);
+
+/** FileBucket path under the signed-in user's own prefix (`/` in a username is encoded). */
+const userPath = (username: string, path: string) => `users/${encodeURIComponent(username)}/${path}`;
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   /** Public — no auth. A liveness probe for load balancers and uptime checks. */
   async health() {
     return { status: 'ok' as const, timestamp: Date.now() };
+  },
+
+  /**
+   * Mint a presigned URL to upload a file under the caller's own prefix. The
+   * client PUTs the bytes directly to the returned URL with the same
+   * Content-Type. No bytes pass through the API itself. A presigned URL is a
+   * bearer credential for that one object, so only a signed-in caller gets one,
+   * and only for their own files.
+   */
+  async createUploadUrl(path: string, contentType: string) {
+    const user = await auth.requireAuth(context);
+    if (!ALLOWED_UPLOAD_TYPES.has(contentType)) {
+      throw new ApiError(`Unsupported content type: ${contentType}`, 400, { name: 'UnsupportedContentTypeException' });
+    }
+    return { url: await files.putUrl(userPath(user.username, path), { contentType }) };
+  },
+
+  /** Mint a presigned URL to download one of the caller's files. The client GETs the bytes directly. */
+  async createDownloadUrl(path: string) {
+    const user = await auth.requireAuth(context);
+    return { url: await files.getUrl(userPath(user.username, path)) };
   },
 
   /** Create an item owned by the caller. */

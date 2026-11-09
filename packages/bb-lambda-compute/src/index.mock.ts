@@ -10,5 +10,11 @@
  * also backs the package's public `types`, so the customer-facing type is the
  * CDK-free `Compute` handle.
  */
+
+import { assertNotMockInDeployedEnv } from '@aws-blocks/core/bb-utils';
+
+// Fail closed if this mock entry loads in a deployed env — see assertNotMockInDeployedEnv.
+assertNotMockInDeployedEnv('bb-lambda-compute');
+
 export { LambdaCompute } from './index.aws.js';
 export type { LambdaComputeProps } from './types.js';

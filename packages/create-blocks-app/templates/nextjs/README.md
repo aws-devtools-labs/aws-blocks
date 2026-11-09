@@ -12,6 +12,7 @@ the server, and a **Client Component** that calls the API from the browser.
 npm run dev          # Start the Next.js dev server (mocks, no AWS needed)
 npm run test:e2e     # Run the e2e test against the dev server
 npm run sandbox      # Deploy to AWS sandbox
+npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 ```
 
 Open http://localhost:3000 after `npm run dev`.
@@ -24,7 +25,8 @@ Open http://localhost:3000 after `npm run dev`.
 | `src/app/page.tsx` | Server Component — fetches on the server |
 | `src/app/client.tsx` | Client Component — calls the API from the browser |
 | `src/app/layout.tsx` | Root layout |
-| `src/app/error.tsx` | Error boundary |
+| `src/app/error.tsx` | Route-level error boundary (catches what a section boundary doesn't) |
+| `src/app/section-boundary.tsx` | Per-section error boundary, so one failing section doesn't take down the page |
 | `test/e2e.test.ts` | Boots the dev server and checks the home page, Blocks config, and sample API |
 
 ## What's Included
@@ -41,14 +43,25 @@ Open http://localhost:3000 after `npm run dev`.
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Next.js dev server with mock storage |
+| `npm run dev:stop` | Stop the local dev server this app started |
 | `npm run test:e2e` | Boot the dev server and check the home page, Blocks config, and sample API |
 | `npm run typecheck` | TypeScript type checking |
 | `npm run build` | `next build` (standalone output) |
 | `npm run start` | Serve the production build locally |
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
+| `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
+| `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
 | `npm run deploy` | Full production deploy |
-| `npm run sandbox:destroy` | Tear down sandbox resources |
-| `npm run destroy` | Tear down the production stack |
+| `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
+| `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
+| `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
+| `npm run config -- set KEY value` | Set a non-secret config value (also `list`, `remove KEY`) |
+| `npm run typegen` | Regenerate secret/config key types; run it once and commit `.blocks/hosting-values.d.ts` before gating CI on `npm run typegen -- --check` |
+
+Each script is an alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks` (for example
+`"deploy": "cdk-blocks deploy"`); run `npx --no -- cdk-blocks --help` to see every command and its options.
+The dev server settings are in `package.json` under `"blocks": { "dev": … }`; `npm run dev -- --port 4000 --frontend-port 4100` overrides them.
+`npm run destroy` asks before it deletes anything; in CI or a script, run `npm run destroy -- --yes`.
 
 The home-page and Blocks config checks do not depend on the sample page title or API methods.
 A separate `greet` test validates the sample API in a freshly scaffolded app.

@@ -4,10 +4,13 @@
 // (Bedrock Opus 4.8) and BEST-EFFORT — callers wrap everything so a failure never fails a cell/job or
 // touches the score. Bedrock via `aws bedrock-runtime converse` (CLI, no SDK) so both run under bare
 // `node`. Everything except bedrockConverse/sleepSync is pure and unit-tested in analysis.test.mjs.
+// Every prompt builder scrubs credential material (lib/secrets.mjs redactSecrets) from the trace,
+// logs and judge text it quotes, before truncating, so nothing secret reaches the model prompt.
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { redactDeep, redactSecrets } from './secrets.mjs';
 
 // Judge model, reused for analysis (Opus 4.8 for both per-cell + synthesis). Same id as 4-judge.ts.
 // FALLBACK ONLY: in the workflow, BENCH_JUDGE_MODEL is always injected (job-level env in
@@ -141,7 +144,9 @@ const ERROR_LINE_RE =
 /**
  * Trim a trace into a small, model-friendly slice: distinct tool/span names,
  * error-like lines, and the tail — never the whole tree. Works on the normalized
- * (2-space) JSON string so it is line-oriented regardless of trace schema.
+ * (2-space) JSON string so it is line-oriented regardless of trace schema. Every value is
+ * redacted BEFORE serialization (an exact secret no longer matches once JSON-escaped), so every
+ * returned field is credential-free.
  * @param {unknown} trace parsed trace.json (any shape) or null
  * @returns {{toolNames: string[], errorLines: string[], tail: string}}
  */
@@ -149,7 +154,8 @@ export function trimTrace(trace) {
 	if (trace === null || trace === undefined) return { toolNames: [], errorLines: [], tail: '' };
 	let str;
 	try {
-		str = JSON.stringify(trace, null, 2);
+		// Plain JSON round-trip first (any class instance → its toJSON form), then deep-redact.
+		str = JSON.stringify(redactDeep(JSON.parse(JSON.stringify(trace))), null, 2);
 	} catch {
 		return { toolNames: [], errorLines: [], tail: '' };
 	}
@@ -227,12 +233,12 @@ export function buildCellUserText(input) {
 	]
 		.filter(Boolean)
 		.join(', ');
-	const explanation = oneLine(input.judgeExplanation).slice(0, MAX_JUDGE_EXPLANATION_CHARS);
+	const explanation = oneLine(redactSecrets(input.judgeExplanation)).slice(0, MAX_JUDGE_EXPLANATION_CHARS);
 	return [
 		`Cell: ${task}/${template}`,
 		`Score context: ${scoreCtx || '(none)'}`,
 		explanation ? `Judge notes (what was built): ${explanation}` : 'Judge notes: (none)',
-		`Metrics: ${summarizeMetrics(input.metrics)}`,
+		`Metrics: ${redactSecrets(summarizeMetrics(input.metrics))}`,
 		`Tool/span names seen: ${toolNames.length ? toolNames.join(', ') : '(none captured)'}`,
 		'Error-like lines from trace:',
 		errorLines.length ? errorLines.join('\n') : '(none)',
@@ -266,7 +272,8 @@ export function buildRollupUserText(input) {
 	});
 	const low = (input.cells ?? []).filter((c) => c.low).map((c) => `${c.task}/${c.template}`);
 	const regressed = (input.cells ?? []).filter((c) => c.regressed).map((c) => `${c.task}/${c.template}`);
-	return [
+	// The roll-up quotes per-cell text (task names, analyses) into a model prompt: scrub it whole.
+	return redactSecrets([
 		`Run: mean composite ${fmt(input.meanComposite)}/100 over ${input.scoredCount ?? 0} scored cell(s). Verdicts: ${verdictLine}.`,
 		'',
 		'Per-cell analyses (already diagnosed bottom-up — synthesize across them):',
@@ -274,7 +281,7 @@ export function buildRollupUserText(input) {
 		'',
 		`Cells flagged low (< ${LOW_THRESHOLD}): ${low.length ? low.join(', ') : '(none)'}`,
 		`Cells flagged regressed (Δ < ${REGRESSION_DELTA} vs baseline): ${regressed.length ? regressed.join(', ') : '(none)'}`,
-	].join('\n');
+	].join('\n'));
 }
 
 // ---------------------------------------------------------------------------
@@ -324,22 +331,6 @@ export function isFailureCell(result) {
 	return false;
 }
 
-/**
- * Scrub AWS / GitHub credential material from free-form log text before it is placed into a model
- * prompt. Defense-in-depth: dev/build log tails can accidentally echo exported env vars or printed
- * tokens. Non-string input → ''. Pure, best-effort — pattern-based, not a completeness guarantee.
- * @param {unknown} text
- * @returns {string}
- */
-export function redactSecrets(text) {
-	if (typeof text !== 'string') return '';
-	return text
-		.replace(/\b(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|GITHUB_TOKEN)\s*[:=]\s*\S+/gi, '$1=***REDACTED***')
-		.replace(/\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g, '***REDACTED-AWS-KEY-ID***')
-		.replace(/\bgh[oprsu]_[A-Za-z0-9]{20,}\b/g, '***REDACTED-GH-TOKEN***')
-		.replace(/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, '***REDACTED-GH-TOKEN***');
-}
-
 // Strip ANSI color codes Playwright embeds in error messages (they wreck dedup + waste chars).
 function stripAnsi(s) {
 	// eslint-disable-next-line no-control-regex
@@ -348,7 +339,7 @@ function stripAnsi(s) {
 
 // Collapse an error message to a single trimmed line, capped — the dedup key.
 function normalizeError(msg) {
-	return oneLine(stripAnsi(msg)).slice(0, MAX_FAILURE_ERR_LEN);
+	return oneLine(redactSecrets(stripAnsi(msg))).slice(0, MAX_FAILURE_ERR_LEN);
 }
 
 /**
@@ -385,7 +376,7 @@ export function extractFailingTests(pwResults) {
 			// A spec is failing when ok===false OR any of its tests has a non-passed result.
 			const anyBad = spec?.ok === false || (spec?.tests ?? []).some((t) => (t?.results ?? []).some((r) => r?.status && r.status !== 'passed' && r.status !== 'skipped'));
 			if (anyBad) {
-				failing.push({ title: (oneLine(spec?.title) || '(untitled spec)').slice(0, MAX_FAILURE_TITLE_LEN), error: firstError(spec) || '(no error message captured)' });
+				failing.push({ title: (oneLine(redactSecrets(spec?.title)) || '(untitled spec)').slice(0, MAX_FAILURE_TITLE_LEN), error: firstError(spec) || '(no error message captured)' });
 			}
 		}
 		for (const child of suite.suites ?? []) walk(child, title);
@@ -452,14 +443,16 @@ export function buildFailureUserText(input) {
 	]
 		.filter(Boolean)
 		.join(', ');
-	const judge = oneLine(input.judgeExplanation).slice(0, MAX_FAILURE_JUDGE_CHARS);
-	const devTail = (input.devLogTail ?? '').slice(-MAX_LOG_TAIL_CHARS);
-	const buildTail = (input.buildLogTail ?? '').slice(-MAX_LOG_TAIL_CHARS);
+	const judge = oneLine(redactSecrets(input.judgeExplanation)).slice(0, MAX_FAILURE_JUDGE_CHARS);
+	const devTail = redactSecrets(input.devLogTail ?? '').slice(-MAX_LOG_TAIL_CHARS);
+	const buildTail = redactSecrets(input.buildLogTail ?? '').slice(-MAX_LOG_TAIL_CHARS);
+	// Failing-test errors come from the Playwright report, which can quote app output.
+	const quotedTests = testLines.map((l) => redactSecrets(l));
 	return [
 		`Cell: ${input.task ?? '—'}/${input.template ?? '—'}`,
 		`Signals: ${signals || '(none)'}`,
 		`Failing tests (${ft.totalFailing} total, deduped by error):`,
-		...testLines,
+		...quotedTests,
 		'',
 		'Dev-server log tail:',
 		devTail || '(none)',
@@ -468,7 +461,7 @@ export function buildFailureUserText(input) {
 		judge ? `Judge notes (what was built): ${judge}` : 'Judge notes: (none)',
 		'',
 		'Trace tail:',
-		(input.traceTail ?? '').slice(-MAX_TAIL_CHARS) || '(no trace tail)',
+		redactSecrets(input.traceTail ?? '').slice(-MAX_TAIL_CHARS) || '(no trace tail)',
 	].join('\n');
 }
 

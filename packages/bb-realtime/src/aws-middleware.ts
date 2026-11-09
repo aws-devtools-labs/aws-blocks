@@ -14,7 +14,7 @@
  */
 
 import { registerMiddleware } from '@aws-blocks/core/client';
-import { brandBlocksError } from '@aws-blocks/core';
+import { blocksError, brandBlocksError } from '@aws-blocks/core';
 import type { RealtimeChannelDescriptor, RealtimeSubscription, SubscribeOptions, DisconnectReason } from './types.js';
 
 /** Callback for receiving realtime messages. */
@@ -218,9 +218,7 @@ function withRefreshTimeout(refreshing: Promise<RealtimeChannelDescriptor>): Pro
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const timeout = new Promise<RealtimeChannelDescriptor>((_resolve, reject) => {
 		timer = setTimeout(() => {
-			const err = new Error(`channel refresh timed out after ${REFRESH_TIMEOUT_MS}ms`);
-			err.name = 'ConnectionFailedException';
-			reject(err);
+			reject(blocksError('ConnectionFailedException', `channel refresh timed out after ${REFRESH_TIMEOUT_MS}ms`));
 		}, REFRESH_TIMEOUT_MS);
 	});
 	return Promise.race([refreshing, timeout]).finally(() => { if (timer) { clearTimeout(timer); } });

@@ -9,8 +9,9 @@ Shared interfaces and UI components for all AWS Blocks auth Building Blocks. Use
 | Export Path | What it provides |
 |---|---|
 | `@aws-blocks/auth-common` | Types: `BlocksAuth`, `AuthUser`, `AuthState`, `AuthAction`, `AuthField` |
-| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange` |
-| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLoopbackRequest` |
+| `@aws-blocks/auth-common/ui` | Components: `AccountMenuBar`, `Authenticator`, `AuthenticatedContent`, `StatusMessage`, `onAuthChange`, `broadcastAuthChange`, `submitAuthAction`; theme: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-blocks/auth-common/theme` | Design-token layer: `injectTheme`, `THEME_CSS`, `THEME_STYLE_ID` |
+| `@aws-blocks/auth-common/cookies` | Shared session-cookie security policy: `resolveCookieSecurity`, `buildCookieSecurityAttrs`, `isLocalDevRequest`, `isLoopbackRequest`, `isInsecurePublicOrigin` |
 
 ## Session-cookie security policy (`/cookies`)
 
@@ -23,7 +24,9 @@ All AWS Blocks auth BBs route their session-cookie `SameSite` / `Secure` / `Part
 | `true` | `false` | `SameSite=None; Secure; Partitioned` |
 | `true` | `true` | `SameSite=None; Secure` |
 
-`buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLoopbackRequest(ctx)` detects loopback origins (`localhost`, `127.0.0.1`, `[::1]`) for per-request `isLocalhost` decisions.
+`buildCookieSecurityAttrs(input)` returns the string form for BBs that assemble `Set-Cookie` by hand; `resolveCookieSecurity(input)` returns the attribute object for BBs that pass a structured cookie config. `isLocalDevRequest(ctx)` is the per-request `isLocalhost` input: it is `true` only when the process is local (`getDeploymentType()` from `@aws-blocks/core` is `'local'`) and the request comes from a loopback origin. On deployed compute it is always `false`, so a request header such as `Origin: http://localhost` cannot drop `Secure` or `Partitioned`. `isLoopbackRequest(ctx)` is the header check on its own (`localhost`, `127.0.0.1`, `[::1]`).
+
+The optional `plainHttpOrigin` input marks a deployed front door served over plain HTTP (an ALB with no certificate): it drops `Secure` from the same-origin `Lax` cookie, which a browser would otherwise discard over HTTP. It doesn't change the cross-domain cookie, which the API's own HTTPS response sets. `isInsecurePublicOrigin()` derives it from the door's own scheme (`BLOCKS_PUBLIC_ORIGIN` starting with `http://`), never from a request header. Today `bb-auth-basic` passes it; the other auth BBs keep `Secure`, so behind a plain-HTTP door their sessions don't persist.
 
 
 ## Server-Side Interface (`BlocksAuth`)
@@ -134,6 +137,35 @@ document.body.appendChild(
 
 When no fallback is provided the container renders nothing while signed out (backward-compatible).
 
+## StatusMessage
+
+A themed, accessible status line for the "loading / success / error" affordance apps otherwise hand-roll with inline styles. It returns a handle: mount `handle.element`, then drive it with `handle.set(kind, text)` as an async operation progresses.
+
+```typescript
+import { StatusMessage } from '@aws-blocks/auth-common/ui';
+
+const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+document.querySelector('#app-status')!.replaceWith(status.element);
+
+try {
+  await saveSettings(); // your own async work
+  status.set('success', 'Done.');
+} catch (e) {
+  status.set('error', `Failed: ${(e as Error).message}`);
+}
+```
+
+The element is a polite ARIA live region (`role="status"`, `aria-live="polite"`), so a screen reader announces each transition without stealing focus. The `loading` state renders a spinner that honors `prefers-reduced-motion`. All colors come from the shared `--bb-*` tokens, so it matches the active light/dark theme automatically.
+
+| `kind` | Appearance |
+|---|---|
+| `idle` | muted text (`--bb-color-text-muted`) |
+| `loading` | muted text + animated spinner |
+| `success` | green (`--bb-color-success`) |
+| `error` | red (`--bb-color-danger`) |
+
+Pass `testId` to scope the root (and its `-text` child) when a page renders more than one status region.
+
 ## Auth State Change Subscription
 
 Subscribe to auth state changes from any source (same window + other tabs):
@@ -157,7 +189,28 @@ const unsubscribe = onAuthChange(authApi, (user) => {
 
 ## Broadcasting Auth Changes
 
-If you build custom auth UI instead of using the `Authenticator`, broadcast changes so other components and tabs react:
+If you build custom auth UI instead of using the `Authenticator`, the app still needs to know when auth changed so other components and tabs react. Use `submitAuthAction` as the single notifier: it submits the action, advances the cached state, and broadcasts on any signed-in / signed-out transition, so both sign-in **and** sign-out keep the UI reactive.
+
+```typescript
+import { submitAuthAction } from '@aws-blocks/auth-common/ui';
+import { authApi } from 'aws-blocks';
+
+// Sign-in: submits, updates the cache, and broadcasts the transition.
+const next = await submitAuthAction(authApi, { action: 'signIn', username: 'alice', password: 'secret' });
+if (next.retriable) showError(next.error); // wrong password / MFA code: re-prompt, nothing broadcast
+
+// Sign-out is the SAME call. The broadcast fires on the transition, so
+// AccountMenuBar, AuthenticatedContent, and other tabs update immediately.
+await submitAuthAction(authApi, { action: 'signOut' });
+```
+
+`submitAuthAction(api, input)` returns the resulting `AuthState`. A bare `setAuthState` call flips the server session but notifies **nothing** on the client, which is why custom UI that calls it directly goes stale (notably on sign-out; issue #185). The `Authenticator` uses `submitAuthAction` internally, so you get this for free when you use it.
+
+Both calls are fully typed, so a custom form needs no `as any`. A literal `action` narrows the input (wrong fields are a compile error), and the result is an `AuthState`.
+
+### `broadcastAuthChange` (lower-level primitive)
+
+`broadcastAuthChange` is the underlying broadcast primitive that `submitAuthAction` calls. Reach for it directly only when auth state changed through a path `submitAuthAction` doesn't cover and you need to fan the change out yourself:
 
 ```typescript
 import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
@@ -185,25 +238,53 @@ The root `@aws-blocks/blocks` entry point does not export it, because the UI exp
 
 The `Authenticator` component does this automatically. You only need `broadcastAuthChange` if you're building custom UI. For a full walkthrough of custom UI, including the `setAuthState` loop and the `AuthActionInput` contract, see [Customizing Auth UI](./CUSTOMIZING-AUTH-UI.md).
 
-A custom form needs no `as any`. Pass a literal `action` and `setAuthState` narrows the payload (wrong fields are a compile error), and the returned `AuthState` is already typed:
+## Theming (`injectTheme` + `--bb-*` tokens)
+
+The UI components ship a framework-neutral design-token layer. Each
+component (`Authenticator`, `AccountMenuBar`, `AuthenticatedContent`)
+injects a small stylesheet into `document.head` the first time it
+renders, so the themed look travels with the component into any host —
+lit-html, vanilla DOM, React, Next.js — with no stylesheet to import.
+
+The stylesheet is CSS custom properties on `:root` (`--bb-color-*`,
+`--bb-space-*`, `--bb-radius-*`, `--bb-font-*`, `--bb-shadow-*`) plus the
+base `.bb-*` component classes the components render against. A light and
+a dark palette are provided; dark is selected automatically by
+`prefers-color-scheme`.
+
+Because the tokens are on `:root`, your own markup can consume them for a
+consistent look without importing anything:
+
+```css
+.my-button {
+  background: var(--bb-color-accent);
+  color: var(--bb-color-accent-text);
+  border-radius: var(--bb-radius-sm);
+  padding: var(--bb-space-2) var(--bb-space-4);
+}
+```
+
+Force a specific palette by setting `data-bb-theme` on any ancestor
+(it wins over the media query):
+
+```html
+<body data-bb-theme="dark"> ... </body>
+```
+
+Call `injectTheme()` yourself to make the tokens available before any
+component mounts (for example, to theme your page chrome at startup). It
+is idempotent and SSR-safe — a second call is a no-op, and it returns
+silently when there is no `document`:
 
 ```typescript
-import { AuthBasicErrors, hasAuthError } from '@aws-blocks/blocks';
-import { broadcastAuthChange } from '@aws-blocks/blocks/ui';
-import { authApi } from 'aws-blocks';
+import { injectTheme } from '@aws-blocks/blocks/ui';
 
-async function submit(action: 'signIn' | 'signUp', username: string, password: string) {
-  const next = action === 'signIn'
-    ? await authApi.setAuthState({ action: 'signIn', username, password })
-    : await authApi.setAuthState({ action: 'signUp', username, password });
-  if (next.state === 'signedIn') broadcastAuthChange(next.user ?? null);
-  else if (hasAuthError(next, AuthBasicErrors.InvalidCredentials)) { /* show next.error inline */ }
-  return next;
-}
-
-await authApi.setAuthState({ action: 'signOut' });
-broadcastAuthChange(null);
+injectTheme();
 ```
+
+`THEME_CSS` (the stylesheet as a string) and `THEME_STYLE_ID` (the
+`<style>` element's id) are also exported for hosts that bundle the CSS
+through a build step or assert against it in tests.
 
 ## Types Reference
 

@@ -112,12 +112,9 @@ function stripUndefined<T extends object>(value: T): T {
 }
 
 function base64UrlEncode(buf: Buffer): string {
-	return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+	return buf.toString('base64url');
 }
 
 function base64UrlDecode(value: string): Buffer {
-	const padLen = (4 - (value.length % 4)) % 4;
-	const padded = value + '='.repeat(padLen);
-	const b64 = padded.replace(/-/g, '+').replace(/_/g, '/');
-	return Buffer.from(b64, 'base64');
+	return Buffer.from(value, 'base64url');
 }

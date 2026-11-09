@@ -11,7 +11,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import { mintChannelToken, mintConnectToken, validateChannelToken } from './utils.js';
+import { isClientChannelPath, mintChannelToken, mintConnectToken, validateChannelToken } from './utils.js';
 
 const SECRET = 'test-secret-key';
 const INSTANCE_PREFIX = 'myapp-rt';
@@ -89,5 +89,33 @@ describe('Token scope isolation: connect tokens cannot subscribe to channels', (
 		// But it still validates for connection establishment
 		const connResult = validateChannelToken(connectToken, SECRET);
 		assert.ok(connResult, 'connect token should still validate for connection');
+	});
+
+	it('connect token does not authorize channels under its own $connect scope', () => {
+		const connectToken = mintConnectToken(INSTANCE_PREFIX, SECRET);
+		for (const ch of [`${INSTANCE_PREFIX}$connect/chat/room-1`, `${INSTANCE_PREFIX}$connect/x`]) {
+			assert.strictEqual(validateChannelToken(connectToken, SECRET, ch), null, `connect token must NOT authorize ${ch}`);
+		}
+	});
+});
+
+describe('isClientChannelPath', () => {
+	it('accepts the <instance>/<namespace>/<channel> paths getChannel() mints', () => {
+		for (const ch of [CHANNEL, `${INSTANCE_PREFIX}/chat/`, `${INSTANCE_PREFIX}/chat/a/b`, `${INSTANCE_PREFIX}/chat/${'x'.repeat(1024 - INSTANCE_PREFIX.length - 6)}`]) {
+			assert.strictEqual(isClientChannelPath(ch), true, ch);
+		}
+	});
+
+	it('rejects non-strings, empty and oversized paths, and paths without an instance and namespace', () => {
+		for (const ch of [undefined, null, 42, {}, ['a/b/c'], '', 'room-1', `${INSTANCE_PREFIX}/chat`, '/chat/room-1', '__connection__', `${INSTANCE_PREFIX}/chat/${'x'.repeat(1024)}`]) {
+			assert.strictEqual(isClientChannelPath(ch), false, JSON.stringify(ch)?.slice(0, 40));
+		}
+	});
+
+	it('counts the limit in UTF-8 bytes', () => {
+		const prefix = `${INSTANCE_PREFIX}/chat/`;
+		const fits = prefix + 'é'.repeat((1024 - prefix.length) / 2);
+		assert.strictEqual(isClientChannelPath(fits), true);
+		assert.strictEqual(isClientChannelPath(fits + 'é'), false);
 	});
 });

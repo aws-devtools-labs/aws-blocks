@@ -4,7 +4,7 @@
 import { describe, test, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { Window } from 'happy-dom';
-import type { AuthState, AuthAction } from './index.js';
+import type { AuthState, AuthAction, AuthUser } from './index.js';
 import type { AuthStateApi } from './ui.js';
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ Object.assign(globalThis, {
 });
 
 // Import after globals are set
-const { Authenticator, AuthenticatedContent, AccountMenuBar, onAuthChange, broadcastAuthChange } = await import('./ui.js');
+const { Authenticator, AuthenticatedContent, AccountMenuBar, StatusMessage, onAuthChange, broadcastAuthChange, submitAuthAction } = await import('./ui.js');
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -773,6 +773,136 @@ describe('onAuthChange', () => {
 });
 
 // ---------------------------------------------------------------------------
+// submitAuthAction — the single client-side notifier that closes the
+// setAuthState → onAuthChange gap (issue #185).
+// ---------------------------------------------------------------------------
+
+describe('submitAuthAction (issue #185)', () => {
+
+	test('sign-in fires onAuthChange exactly once with the new user', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = signedInState();
+		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+		await flush();
+
+		assert.strictEqual(result.state, 'signedIn');
+		assert.strictEqual(users.length - before, 1, 'onAuthChange should fire exactly once');
+		assert.strictEqual(users[users.length - 1]?.username, 'alice', 'should carry the new user');
+	});
+
+	test('sign-out notifies onAuthChange with null', async () => {
+		const api = mockApi(signedInState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'signedOut', actions: [] };
+		const result = await submitAuthAction(api, { action: 'signOut' });
+		await flush();
+
+		assert.strictEqual(result.state, 'signedOut');
+		assert.strictEqual(users.length - before, 1, 'sign-out should notify once');
+		assert.strictEqual(users[users.length - 1], null, 'should carry a null user on sign-out');
+	});
+
+	test('retriable failure does not broadcast and returns the state for inline errors', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'confirmingSignIn', retriable: true, error: 'Wrong code', actions: [] };
+		const result = await submitAuthAction(api, { action: 'confirmSignIn', challenge: 'code', session: 's', code: '000000' });
+		await flush();
+
+		assert.strictEqual(result.retriable, true, 'should return the retriable state');
+		assert.strictEqual(result.error, 'Wrong code', 'should preserve the error for inline feedback');
+		assert.strictEqual(users.length - before, 0, 'a retriable failure must not broadcast');
+	});
+
+	test('mid-flow challenge state does not broadcast', async () => {
+		const api = mockApi(signedOutState());
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = { state: 'confirmingSignIn', actions: [{ name: 'confirmSignIn', label: 'Confirm', fields: [] }] };
+		const result = await submitAuthAction(api, { action: 'signIn', username: 'alice', password: 'secret' });
+		await flush();
+
+		assert.strictEqual(result.state, 'confirmingSignIn');
+		assert.strictEqual(users.length - before, 0, 'a mid-flow challenge state must not broadcast');
+	});
+
+	test('Authenticator advances to the challenge form (updateState) without broadcasting', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		const users: (AuthUser | null)[] = [];
+		onAuthChange(api, (u) => { users.push(u); });
+		await flush();
+
+		const before = users.length;
+		api.nextState = {
+			state: 'confirmingSignIn',
+			actions: [{
+				name: 'confirmSignIn',
+				label: 'Confirm Code',
+				fields: [
+					{ name: 'code', label: 'Code', type: 'text', required: true },
+					{ name: 'session', label: '', type: 'hidden', required: true, defaultValue: 'sess-123' },
+				],
+			}],
+		};
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		assert.ok(signInBtn, 'should find the Sign In button');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+		signInBtn!.click();
+		await flush();
+
+		// updateState drove the Authenticator's own subscriber, so the form advanced.
+		const confirmBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Code');
+		assert.ok(confirmBtn, 'Authenticator should advance to the confirm-code form');
+		// ...but a mid-flow challenge is not a sign-in/out transition — no broadcast.
+		assert.strictEqual(users.length - before, 0, 'the challenge advance must not broadcast');
+	});
+
+	test('Authenticator sign-in fires exactly one broadcast (no double-fire)', async () => {
+		const api = mockApi(signedOutState());
+		const el = Authenticator(api);
+		let broadcasts = 0;
+		onAuthChange(api, () => { broadcasts++; });
+		await flush();
+
+		const before = broadcasts;
+		api.nextState = signedInState();
+
+		const signInBtn = Array.from(el.querySelectorAll('button')).find((b) => b.textContent === 'Sign In');
+		assert.ok(signInBtn, 'should find the Sign In button');
+		const actionDiv = signInBtn!.parentElement!;
+		const inputs = actionDiv.querySelectorAll('input') as NodeListOf<HTMLInputElement>;
+		inputs[0].value = 'alice';
+		inputs[1].value = 'secret';
+		signInBtn!.click();
+		await flush();
+
+		assert.strictEqual(api.calls.length, 1, 'exactly one setAuthState call');
+		assert.strictEqual(broadcasts - before, 1, 'exactly one broadcast — no double-fire');
+		assert.ok(el.textContent?.includes('alice'), 'Authenticator advanced to the signed-in view');
+	});
+});
+
 // data-testid contract
 //
 // These hooks are documented in CUSTOMIZING-AUTH-UI.md and e2e suites depend
@@ -945,5 +1075,83 @@ describe('test hooks', () => {
 		await flush();
 		assert.strictEqual(testId(signedInBar, 'account-menu-username')?.textContent, '👤 alice');
 		assert.ok(testId(signedInBar, 'account-menu-signout'), 'sign-out hook present when signed in');
+	});
+});
+
+describe('StatusMessage', () => {
+	function testId(root: ParentNode, id: string) {
+		return root.querySelector(`[data-testid="${id}"]`);
+	}
+
+	test('defaults to an empty idle polite live region', () => {
+		const status = StatusMessage();
+		assert.strictEqual(status.element.getAttribute('data-testid'), 'status-message');
+		assert.strictEqual(status.element.getAttribute('role'), 'status');
+		assert.strictEqual(status.element.getAttribute('aria-live'), 'polite');
+		assert.ok(status.element.className.includes('bb-status-idle'), 'idle modifier applied');
+		assert.strictEqual(status.element.textContent, '', 'no text by default');
+	});
+
+	test('renders initial kind + text from options', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+		assert.ok(status.element.className.includes('bb-status-loading'));
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Loading…');
+	});
+
+	test('loading state renders a decorative spinner', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Working' });
+		const spinner = status.element.querySelector('.bb-spinner');
+		assert.ok(spinner, 'spinner present in loading state');
+		assert.strictEqual(spinner?.getAttribute('aria-hidden'), 'true', 'spinner hidden from AT');
+	});
+
+	test('set transitions kind, swaps the modifier class, and drops the spinner', () => {
+		const status = StatusMessage({ kind: 'loading', text: 'Working' });
+		status.set('success', 'Done.');
+		assert.ok(status.element.className.includes('bb-status-success'));
+		assert.ok(!status.element.className.includes('bb-status-loading'), 'old modifier removed');
+		assert.strictEqual(status.element.querySelector('.bb-spinner'), null, 'spinner gone');
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Done.');
+
+		status.set('error', 'Boom');
+		assert.ok(status.element.className.includes('bb-status-error'));
+		assert.strictEqual(testId(status.element, 'status-message-text')?.textContent, 'Boom');
+	});
+
+	test('empty text leaves the message blank', () => {
+		const status = StatusMessage({ kind: 'success', text: 'ok' });
+		status.set('idle', '');
+		assert.strictEqual(status.element.textContent, '');
+		assert.strictEqual(testId(status.element, 'status-message-text'), null, 'no text node when blank');
+	});
+
+	test('custom testId scopes both the root and its text node', () => {
+		const status = StatusMessage({ testId: 'app-status', kind: 'error', text: 'Nope' });
+		assert.strictEqual(status.element.getAttribute('data-testid'), 'app-status');
+		assert.strictEqual(testId(status.element, 'app-status-text')?.textContent, 'Nope');
+	});
+
+	test('set text is optional: a bare spinner and a reset need no text', () => {
+		const status = StatusMessage({ kind: 'success', text: 'ok' });
+		status.set('loading');
+		assert.ok(status.element.className.includes('bb-status-loading'));
+		assert.ok(status.element.querySelector('.bb-spinner'), 'bare spinner rendered');
+		assert.strictEqual(testId(status.element, 'status-message-text'), null, 'no text node');
+		status.set('idle');
+		assert.strictEqual(status.element.textContent, '', 'cleared');
+	});
+
+	test('set mutates the text node in place rather than replacing it', () => {
+		const status = StatusMessage({ kind: 'success', text: 'Saved' });
+		const first = testId(status.element, 'status-message-text');
+		assert.ok(first, 'text node present');
+		status.set('error', 'Boom');
+		const second = testId(status.element, 'status-message-text');
+		// assert.ok(identity) rather than assert.strictEqual(second, first): on a
+		// mismatch, strictEqual tries to inspect and diff the two happy-dom nodes,
+		// which hangs the whole test file until the suite timeout instead of
+		// reporting a clean failure.
+		assert.ok(second === first, 'same text node reused across a text change');
+		assert.strictEqual(second?.textContent, 'Boom', 'text updated in place');
 	});
 });

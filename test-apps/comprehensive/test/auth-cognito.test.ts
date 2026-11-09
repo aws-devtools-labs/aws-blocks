@@ -4,15 +4,9 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
+import { AuthCognitoErrors } from '@aws-blocks/bb-auth-cognito';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
-
-const NotAuthorized = 'NotAuthorizedException';
-const NotAuthenticated = 'NotAuthenticatedException';
-const UserAlreadyExists = 'UsernameExistsException';
-const InvalidPassword = 'InvalidPasswordException';
-const ExpiredCode = 'ExpiredCodeException';
-const UserNotFound = 'UserNotFoundException';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isLocal = ENV === 'local';
@@ -90,7 +84,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignUp(username, 'Password1!', `${username}@example.com`);
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, UserAlreadyExists), `Expected ${UserAlreadyExists}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.UserAlreadyExists), `Expected ${AuthCognitoErrors.UserAlreadyExists}, got ${e}`);
 				}
 			});
 
@@ -101,7 +95,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignUp(username, 'short', `${username}@example.com`);
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, InvalidPassword), `Expected ${InvalidPassword}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.InvalidPassword), `Expected ${AuthCognitoErrors.InvalidPassword}, got ${e}`);
 				}
 			});
 		});
@@ -121,7 +115,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'WrongPassword!1');
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthorized), `Expected ${NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
 				}
 			});
 
@@ -167,7 +161,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCRequireAuth();
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthenticated), `Expected ${NotAuthenticated}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthenticated), `Expected ${AuthCognitoErrors.NotAuthenticated}, got ${e}`);
 				}
 			});
 		});
@@ -198,7 +192,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCUpdatePassword('Wrong!1234', 'New!Password1');
 					assert.fail('Expected error');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthorized), `Expected ${NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
 				}
 				await api.authCSignOut();
 			});
@@ -242,7 +236,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'Password1!');
 					assert.fail('Expected old password to be rejected');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthorized), `Expected ${NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
 				}
 
 				// New password works.
@@ -263,7 +257,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCRequireRole('admins');
 					assert.fail('Expected NotAuthenticated');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthenticated), `Expected ${NotAuthenticated}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthenticated), `Expected ${AuthCognitoErrors.NotAuthenticated}, got ${e}`);
 				}
 			});
 
@@ -280,7 +274,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCRequireRole('admins');
 					assert.fail('Expected NotAuthorized');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthorized), `Expected ${NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
 				}
 				await api.authCSignOut();
 			});
@@ -335,7 +329,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					await api.authCSignIn(username, 'Password1!');
 					assert.fail('Old password should no longer work');
 				} catch (e) {
-					assert.ok(isBlocksError(e, NotAuthorized), `Expected ${NotAuthorized}, got ${e}`);
+					assert.ok(isBlocksError(e, AuthCognitoErrors.NotAuthorized), `Expected ${AuthCognitoErrors.NotAuthorized}, got ${e}`);
 				}
 			});
 		});
@@ -386,8 +380,8 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					assert.fail('Expected ExpiredCode');
 				} catch (e) {
 					assert.ok(
-						isBlocksError(e, ExpiredCode),
-						`Expected ${ExpiredCode}, got ${e}`,
+						isBlocksError(e, AuthCognitoErrors.ExpiredCode),
+						`Expected ${AuthCognitoErrors.ExpiredCode}, got ${e}`,
 					);
 				}
 			});
@@ -419,7 +413,7 @@ export function authCognitoTests(getApi: () => typeof apiType) {
 					// Mock raises UserNotFound; a real Cognito pool raises
 					// NotAuthorized to avoid user enumeration. Accept either.
 					assert.ok(
-						isBlocksError(e, UserNotFound) || isBlocksError(e, NotAuthorized),
+						isBlocksError(e, AuthCognitoErrors.UserNotFound) || isBlocksError(e, AuthCognitoErrors.NotAuthorized),
 						`Expected UserNotFound or NotAuthorized, got ${e}`,
 					);
 				}

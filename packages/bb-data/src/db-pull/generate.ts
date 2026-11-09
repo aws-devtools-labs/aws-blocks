@@ -263,15 +263,75 @@ export function generateMigrationGuide(
 
 // ── Eligibility + (re)generation helpers ───────────────────────────────
 
+/** Why a table is not eligible for Blocks generation (see {@link ineligibleReason}). */
+export type IneligibleReason = 'supabase-auth' | 'no-primary-key' | 'rls-disabled';
+
 /**
- * Select the tables eligible for Blocks generation: those with a primary key that
- * do not use Supabase Auth (auth.uid()-based RLS). Shared by the full `db pull`
- * and the dev-loop type-refresh path so both agree on what gets generated.
+ * Why `t` is not eligible for Blocks generation, or `null` when it is. When a
+ * table fails several checks, the first reason in this order wins:
+ *
+ * - `'supabase-auth'` — it uses Supabase Auth (`auth.uid()`-based RLS), not yet supported.
+ * - `'no-primary-key'` — CRUD needs a primary key to address rows.
+ * - `'rls-disabled'` — row-level security is off. Generated CRUD runs as the
+ *   `authenticated` role through `withRLS()`, which relies on RLS policies to
+ *   decide which rows each user can access; Postgres applies no row filtering
+ *   to a table without RLS. Such tables are never generated.
+ */
+export function ineligibleReason(
+  t: TableInfo,
+  intro: Pick<IntrospectionResult, 'tablesUsingSupabaseAuth'>,
+): IneligibleReason | null {
+  if (intro.tablesUsingSupabaseAuth.has(t.name)) return 'supabase-auth';
+  if (Array.isArray(t.primaryKey) && t.primaryKey.length === 0) return 'no-primary-key';
+  if (!t.hasRls) return 'rls-disabled';
+  return null;
+}
+
+/**
+ * Select the tables eligible for Blocks generation: those with a primary key and
+ * row-level security enabled that do not use Supabase Auth (auth.uid()-based RLS).
+ * See {@link ineligibleReason}. Shared by the full `db pull` and the dev-loop
+ * type-refresh path so both agree on what gets generated.
  */
 export function selectEligibleTables(intro: IntrospectionResult): TableInfo[] {
-  const hasNoPk = (t: TableInfo) => Array.isArray(t.primaryKey) && t.primaryKey.length === 0;
-  const isEligible = (t: TableInfo) => !intro.tablesUsingSupabaseAuth.has(t.name) && !hasNoPk(t);
-  return intro.tables.filter(isEligible);
+  return intro.tables.filter(t => ineligibleReason(t, intro) === null);
+}
+
+/**
+ * Names of the tables skipped because row-level security is disabled (see
+ * {@link ineligibleReason}). Shared by `db pull` and the dev-loop type refresh so
+ * both warn about the same tables.
+ */
+export function tablesWithoutRls(intro: Pick<IntrospectionResult, 'tables' | 'tablesUsingSupabaseAuth'>): string[] {
+  return intro.tables.filter(t => ineligibleReason(t, intro) === 'rls-disabled').map(t => t.name);
+}
+
+/**
+ * `public.<name>` for SQL a user copies from the CLI output. The name is quoted
+ * unless it is a plain lowercase identifier, so mixed-case names (which the
+ * Supabase table editor creates) resolve to the right table.
+ */
+export function publicTableSql(name: string): string {
+  return `public.${/^[a-z_][a-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`}`;
+}
+
+/**
+ * Warning lines for tables skipped because row-level security is disabled, with
+ * the SQL to enable it. Empty when `tableNames` is empty. Shared by `db pull` and
+ * the dev-loop type refresh so a table that silently drops out of the generated
+ * files is always explained.
+ */
+export function rlsDisabledWarning(tableNames: string[]): string[] {
+  if (tableNames.length === 0) return [];
+  return [
+    `⚠ Skipped ${tableNames.length} table(s) with row-level security disabled: ${tableNames.join(', ')}`,
+    `    Blocks generates CRUD only for tables with RLS enabled: generated CRUD relies`,
+    `    on RLS policies to decide which rows each user can access. To include a table,`,
+    `    enable RLS and add policies for it in a migration, then re-run:`,
+    ...tableNames.map(name => `      ALTER TABLE ${publicTableSql(name)} ENABLE ROW LEVEL SECURITY;`),
+    `    To share a table with every signed-in user on purpose, say so in a policy:`,
+    `      CREATE POLICY "shared" ON ${publicTableSql(tableNames[0])} FOR ALL TO authenticated USING (true) WITH CHECK (true);`,
+  ];
 }
 
 /**
@@ -313,6 +373,8 @@ export function writeTypesAndMeta(
 export interface RegenerateTypesResult {
   /** Number of eligible tables written into the generated files. */
   tablesGenerated: number;
+  /** Tables left out because row-level security is disabled (see {@link rlsDisabledWarning}). */
+  tablesWithoutRls: string[];
   outputDir: string;
 }
 
@@ -342,5 +404,5 @@ export async function regenerateTypesAndMeta(opts: {
   const intro = await introspect(toSessionPortUrl(opts.connectionString));
   const tables = selectEligibleTables(intro);
   writeTypesAndMeta(opts.outputDir, tables, readExistingSingulars(opts.outputDir));
-  return { tablesGenerated: tables.length, outputDir: opts.outputDir };
+  return { tablesGenerated: tables.length, tablesWithoutRls: tablesWithoutRls(intro), outputDir: opts.outputDir };
 }

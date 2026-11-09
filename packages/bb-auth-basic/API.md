@@ -12,6 +12,7 @@ import { AuthUser } from '@aws-blocks/auth-common';
 import { BlocksAuth } from '@aws-blocks/auth-common';
 import { BlocksContext } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
 
@@ -63,14 +64,19 @@ export const AuthBasicErrors: {
     readonly UserAlreadyExists: "UserAlreadyExistsException";
     readonly InvalidCode: "InvalidCodeException";
     readonly SessionExpired: "SessionExpiredException";
+    readonly SessionRevoked: "SessionRevokedException";
+    readonly SignOutIncomplete: "SignOutIncompleteException";
     readonly InvalidPassword: "InvalidPasswordException";
+    readonly AccountLocked: "AccountLockedException";
 };
 
 // @public
 export interface AuthBasicOptions {
     codeDelivery?: CodeDeliveryFn;
     crossDomain?: boolean;
+    lockout?: LockoutPolicy;
     logger?: ChildLogger;
+    metrics?: MetricsEmitter;
     passwordPolicy?: PasswordPolicy;
     sessionDuration?: number;
 }
@@ -90,6 +96,13 @@ export { BlocksAuth }
 
 // @public
 export type CodeDeliveryFn = (username: string, code: string) => Promise<void>;
+
+// @public
+export interface LockoutPolicy {
+    lockoutSeconds?: number;
+    maxAttempts?: number;
+    windowSeconds?: number;
+}
 
 // @public
 export interface PasswordPolicy {

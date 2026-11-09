@@ -150,6 +150,13 @@ const results = await kb.retrieve('pricing', {
 
 Subfolder paths automatically populate the `folder` metadata key. For example, a file at `./knowledge/faq/billing.md` gets `metadata.folder = 'faq'`.
 
+## Trust Boundary
+
+A knowledge base is one index, not one per user or tenant, and `retrieve()` returns whatever matches. Two consequences:
+
+- **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: user.tenantId } }`). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
+- **Indexed text is untrusted.** If a source can receive content you don't write yourself, for example an `s3://` source that is a `FileBucket` your users upload to, that content reaches anyone who retrieves it. When results go to an agent, they can carry instructions that try to make it misuse its tools (indirect prompt injection). Mark the agent tool that calls `retrieve()` with `untrustedOutput: true`, and see [Retrieved content is untrusted](../bb-agent/README.md#retrieved-content-is-untrusted) in the Agent docs.
+
 ## Error Handling
 
 ```typescript
@@ -173,7 +180,7 @@ try {
 |---|---|---|
 | `KnowledgeBaseErrors.RetrievalFailed` | `RetrievalFailedException` | Bedrock retrieval call failed |
 | `KnowledgeBaseErrors.NotReady` | `KnowledgeBaseNotReadyException` | KB not deployed or env vars missing |
-| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed (message includes `failureReasons`) — thrown by `isSynced()` / `waitUntilSynced()` |
+| `KnowledgeBaseErrors.IngestionFailed` | `IngestionFailedException` | The most recent ingestion job failed — thrown by `isSynced()` / `waitUntilSynced()`. The message is stable and safe to return to clients; when Bedrock reported `failureReasons` (raw text that can name buckets, object keys or ARNs), they stay server-side on the non-enumerable `err.cause` (type `IngestionFailureCause`; absent when none were reported, so read `cause?.failureReasons ?? []`) and in the server log |
 | `KnowledgeBaseErrors.Timeout` | `KnowledgeBaseTimeoutException` | `waitUntilSynced()` exceeded its timeout before ingestion completed |
 | `KnowledgeBaseErrors.InvalidSource` | `InvalidSourceConfigException` | Source folder not found or invalid config |
 | `KnowledgeBaseErrors.InvalidFilter` | `InvalidFilterException` | Invalid filter keys in Bedrock query |

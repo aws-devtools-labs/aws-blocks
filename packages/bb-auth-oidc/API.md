@@ -73,6 +73,29 @@ export interface MappedClaims {
 }
 
 // @public
+export interface OIDCClient<Provider extends string = string> {
+    // (undocumented)
+    handleRedirectCallback(): Promise<{
+        userId: string;
+        username: string;
+    } | null>;
+    // (undocumented)
+    onAuthStateChange(handler: (user: OIDCUser | null, meta: {
+        state?: string;
+    } | null) => void): () => void;
+    signIn(provider: Provider, opts?: {
+        state?: string;
+        redirectPath?: string;
+    }): Promise<void>;
+    // (undocumented)
+    signOut(): Promise<void>;
+    // Warning: (ae-forgotten-export) The symbol "OIDCClientDescriptor" needs to be exported by the entry point index.aws.d.ts
+    //
+    // @internal
+    toJSON(): OIDCClientDescriptor;
+}
+
+// @public
 export interface OIDCUser {
     claims: Readonly<Record<string, unknown>>;
     email: string | null;

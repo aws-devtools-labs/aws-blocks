@@ -85,13 +85,38 @@ export interface NativeBindingRegistration {
 }
 
 /**
- * Declarations collected from one block. `sourcePackage` is never emitted; it
- * names the declaring block in every validation error.
+ * `orderBindingFields` rebuilds exactly these, so a field absent from this list
+ * is dropped rather than emitted; `validateNativeCatalogs` rejects one instead.
+ */
+export const NATIVE_BINDING_FIELDS = [
+	'id',
+	'kind',
+	'tag',
+	'package',
+	'export',
+	'abi',
+	'genericArity',
+] as const satisfies readonly (keyof NativeBindingRegistration)[];
+
+/**
+ * One block's declarations, typed. `sourcePackage` is never emitted; it names
+ * the declaring block in every validation error.
  */
 export interface NativeDeclarationSource {
 	sourcePackage: string;
 	packages?: NativePackageRegistration[];
 	bindings?: NativeBindingRegistration[];
+}
+
+/**
+ * The same declarations before anything has checked their shape, which is what
+ * a block's `package.json` yields. The validator accepts this and narrows it for
+ * the builder; a `NativeDeclarationSource` built in code still assigns.
+ */
+export interface NativeDeclarationInput {
+	sourcePackage: string;
+	packages?: unknown;
+	bindings?: unknown;
 }
 
 export interface NativePackagesCatalog {

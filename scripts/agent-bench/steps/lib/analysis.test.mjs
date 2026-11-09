@@ -28,7 +28,6 @@ import {
 	oneLine,
 	parseCellAnalysis,
 	parseFailureAnalysis,
-	redactSecrets,
 	renderFailureAnalyses,
 	summarizeFailures,
 	summarizeMetrics,
@@ -287,41 +286,47 @@ describe('truthy(v)', () => {
 	});
 });
 
-describe('redactSecrets(text)', () => {
-	it('scrubs KEY=value credential pairs, keeping the key name', () => {
-		const t = [
-			'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
-			'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
-			'AWS_SESSION_TOKEN=FwoGZXIvYXdzEabcDEF1234567890',
-			'GITHUB_TOKEN=ghp_0123456789abcdefABCDEF0123456789',
-		].join('\n');
-		const out = redactSecrets(t);
-		assert.match(out, /AWS_ACCESS_KEY_ID=\*\*\*REDACTED\*\*\*/);
-		assert.match(out, /AWS_SECRET_ACCESS_KEY=\*\*\*REDACTED\*\*\*/);
-		assert.match(out, /AWS_SESSION_TOKEN=\*\*\*REDACTED\*\*\*/);
-		assert.match(out, /GITHUB_TOKEN=\*\*\*REDACTED\*\*\*/);
-		assert.doesNotMatch(out, /AKIAIOSFODNN7EXAMPLE/);
-		assert.doesNotMatch(out, /wJalrXUtnFEMI/);
-		assert.doesNotMatch(out, /ghp_0123456789/);
+// The prompt builders quote trace/log/judge text into a Bedrock prompt; each must scrub credential
+// material first (redactSecrets itself is covered in secrets.test.mjs).
+describe('prompt builders redact credential material', () => {
+	// Fakes assembled at runtime so no credential-shaped literal sits in the source.
+	const keyId = `ASIA${'Q'.repeat(16)}`;
+	const secret = `fakeSecret/${'s'.repeat(29)}`;
+	const ghToken = `ghs_${'g'.repeat(36)}`;
+	const leaky = `error: denied AWS_SECRET_ACCESS_KEY=${secret} for ${keyId} with ${ghToken}`;
+	const assertClean = (text) => {
+		for (const v of [keyId, secret, ghToken]) assert.equal(text.includes(v), false, `leaked ${v} in: ${text}`);
+	};
+
+	it('trimTrace: error lines and tail', () => {
+		const { errorLines, tail } = trimTrace([{ name: 'bash', result: leaky }]);
+		assert.ok(errorLines.length > 0, 'the leaky line is error-like and must still be lifted');
+		assertClean(errorLines.join('\n'));
+		assertClean(tail);
+		assert.match(tail, /REDACTED/);
 	});
-	it('scrubs a bare AWS access-key id', () => {
-		const out = redactSecrets('token is AKIAIOSFODNN7EXAMPLE here');
-		assert.match(out, /\*\*\*REDACTED-AWS-KEY-ID\*\*\*/);
-		assert.doesNotMatch(out, /AKIAIOSFODNN7EXAMPLE/);
+
+	it('buildCellUserText: trace, judge notes and metrics', () => {
+		const text = buildCellUserText({
+			task: 't',
+			template: 'x',
+			judgeExplanation: leaky,
+			metrics: { toolUsage: { [ghToken]: { callCount: 1 } } },
+			trace: [{ name: 'bash', result: leaky }],
+		});
+		assertClean(text);
 	});
-	it('scrubs a bare GitHub token', () => {
-		const out = redactSecrets('using ghp_0123456789abcdefABCDEF0123456789 now');
-		assert.match(out, /\*\*\*REDACTED-GH-TOKEN\*\*\*/);
-		assert.doesNotMatch(out, /ghp_0123456789/);
-	});
-	it('leaves ordinary text untouched', () => {
-		const clean = 'build failed: cannot find module ./foo at line 42';
-		assert.equal(redactSecrets(clean), clean);
-	});
-	it('is non-string-safe (returns empty string)', () => {
-		assert.equal(redactSecrets(null), '');
-		assert.equal(redactSecrets(undefined), '');
-		assert.equal(redactSecrets(42), '');
+
+	it('buildFailureUserText: logs, failing-test errors, judge notes and trace tail', () => {
+		const text = buildFailureUserText({
+			buildSucceeded: false,
+			judgeExplanation: leaky,
+			failingTests: { totalFailing: 1, groups: [{ error: leaky, count: 1, titles: ['spec'] }] },
+			devLogTail: leaky,
+			buildLogTail: leaky,
+			traceTail: leaky,
+		});
+		assertClean(text);
 	});
 });
 

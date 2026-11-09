@@ -200,6 +200,10 @@ export class PgClientEngine implements DatabaseEngine {
     const client = handle as pg.PoolClient;
     try {
       await client.query('COMMIT');
+    } catch (e) {
+      // A deferred constraint (e.g. a DEFERRABLE INITIALLY DEFERRED foreign key)
+      // fails here, at COMMIT: translate it like any statement error.
+      translatePgError(e, 'PgClientEngine');
     } finally {
       client.release();
     }

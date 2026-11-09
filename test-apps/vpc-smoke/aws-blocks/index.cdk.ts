@@ -36,7 +36,7 @@ const vpcId = app.node.tryGetContext('vpcId') || process.env.VPC_TEST_VPC_ID;
 if (!vpcId) {
   throw new Error(
     'Missing VPC ID. Set the VPC_TEST_VPC_ID env var or pass -c vpcId=vpc-xxx.\n' +
-    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy',
+    'Deploy the persistent test VPC first: cd test-infra && npx cdk deploy BlocksTestVpc',
   );
 }
 
@@ -72,5 +72,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 // The vpc-ref stack is a pure context-lookup container with no stateful
 // resources — no removal policy or defaults needed.
 
-cdk.Tags.of(blocksStack).add('blocks:purpose', 'vpc-smoke-e2e');
+// Tag the whole app, so the vpc-ref stack carries the purpose tag too:
+// cleanup-stacks.yml skips any stack without an e2e blocks:purpose tag.
+cdk.Tags.of(app).add('blocks:purpose', 'vpc-smoke-e2e');
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

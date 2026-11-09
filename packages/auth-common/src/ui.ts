@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { AuthState, AuthAction, AuthUser } from './index.js';
+import { injectTheme } from './theme.js';
+
+export { injectTheme, THEME_CSS, THEME_STYLE_ID } from './theme.js';
 
 /**
  * Typed payload map for `setAuthState` — discriminated on the action
@@ -197,6 +200,64 @@ export function broadcastAuthChange(user: AuthUser | null): void {
 }
 
 /**
+ * Submit an auth action and drive the SAME local notifications the framework's
+ * own `Authenticator` uses, so custom auth UIs built on {@link onAuthChange} /
+ * {@link AuthenticatedContent} re-render without hand-rolling the plumbing.
+ *
+ * `api.setAuthState()` is a plain RPC: it flips the server-side session (and
+ * the auth cookie) but notifies **nothing** on the client. A hand-rolled UI
+ * that calls it directly and relies on `onAuthChange` therefore goes dead —
+ * the footgun behind issue #185. `submitAuthAction` closes that gap by being
+ * the single client-side notifier for an action:
+ *
+ * 1. calls `setAuthState(input)`;
+ * 2. on a retriable failure, returns early — the caller keeps the current form
+ *    on screen (hidden fields like the challenge `session` token intact) and
+ *    overlays `error` as inline feedback; nothing is cached or broadcast;
+ * 3. otherwise advances the shared state cache, so the `Authenticator`'s own
+ *    subscriber re-renders (covers mid-flow challenge states too, e.g.
+ *    sign-in form → confirm-sign-in form);
+ * 4. and, only on a real signed-in / signed-out transition, broadcasts the
+ *    change so `onAuthChange` / `AuthenticatedContent` subscribers (this
+ *    window and other tabs) react. Mid-flow challenge states (`confirming*`)
+ *    advance the form but are deliberately NOT broadcast.
+ *
+ * Browser-only: it reaches `BroadcastChannel` / `window` via
+ * {@link broadcastAuthChange}, so it must not run in Node. `setAuthState`
+ * itself is intentionally left a pure RPC (it also runs server-side) — this
+ * helper, not `setAuthState`, owns client notification.
+ *
+ * @param api - The state machine API from `auth.createApi()`.
+ * @param input - The discriminated auth action to submit.
+ * @returns The resulting {@link AuthState}; inspect `.retriable` to render
+ *   inline errors without leaving the current form.
+ *
+ * @example
+ * ```typescript
+ * const next = await submitAuthAction(authApi, { action: 'signIn', username, password });
+ * if (next.retriable) showError(next.error);   // wrong password, bad MFA code, …
+ * // on success, onAuthChange / AuthenticatedContent have already re-rendered.
+ * ```
+ */
+export async function submitAuthAction(
+	api: AuthStateApi,
+	input: AuthActionInput,
+): Promise<AuthState> {
+	const newState = await api.setAuthState(input);
+	// Retriable failures keep the current form on screen so the user can
+	// resubmit — don't touch the shared cache or broadcast a change.
+	if (newState.retriable === true) return newState;
+	// Advance the local cache so the Authenticator's own subscriber re-renders.
+	updateState(api, newState);
+	// Only a real signed-in / signed-out transition should wake onAuthChange /
+	// AuthenticatedContent subscribers; challenge states are still mid-flow.
+	if (newState.state === 'signedIn' || newState.state === 'signedOut') {
+		broadcastAuthChange(newState.user ?? null);
+	}
+	return newState;
+}
+
+/**
  * Shallow structural equality for cached auth users. Used to suppress a
  * redundant repaint when the async hydration resolves to the same user that
  * was already emitted synchronously. Returns true for two `null`s and for the
@@ -319,6 +380,7 @@ export function AuthenticatedContent(
 	fallback?: Node,
 ): HTMLElement {
 	const container = document.createElement('div');
+	injectTheme();
 	container.setAttribute('data-testid', 'authenticated-content');
 	onAuthChange(api, (user) => {
 		if (user) {
@@ -497,7 +559,8 @@ export interface AuthenticatorOptions {
 export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions): HTMLElement {
 	const container = document.createElement('div');
 	container.setAttribute('data-testid', 'authenticator');
-	container.style.cssText = 'max-width: 400px; font-family: system-ui, sans-serif;';
+	injectTheme();
+	container.className = 'bb-authenticator';
 
 	const opts: AuthenticatorOptions = options ?? {};
 
@@ -519,10 +582,7 @@ export function Authenticator(api: AuthStateApi, options?: AuthenticatorOptions)
 			for (const f of action.fields) {
 				if (f.defaultValue !== undefined) autoFields[f.name] = f.defaultValue;
 			}
-			void api.setAuthState({ action: 'autoSignIn', ...autoFields } as AuthActionInput).then((next) => {
-				updateState(api, next);
-				broadcastAuthChange(next.user ?? null);
-			}).catch((e: any) => {
+			void submitAuthAction(api, { action: 'autoSignIn', ...autoFields } as AuthActionInput).catch((e: any) => {
 				// autoSignIn failed (cookie expired, network blip, etc.) —
 				// surface the error and leave the user at the manual fallback.
 				rerender({
@@ -581,7 +641,7 @@ function renderState(
 	options: AuthenticatorOptions,
 ): Node {
 	const div = document.createElement('div');
-	div.style.cssText = 'border: 1px solid #ddd; padding: 20px; border-radius: 8px;';
+	div.className = 'bb-card';
 
 	// Apply hideActions before any per-action heading lookup so we don't
 	// render a heading whose only action got filtered out.
@@ -591,7 +651,7 @@ function renderState(
 	if (state.state === 'signedIn') {
 		const heading = document.createElement('h3');
 		heading.setAttribute('data-testid', 'authenticator-signed-in');
-		heading.style.cssText = 'margin-top: 0;';
+		heading.className = 'bb-heading';
 		heading.textContent = `Signed in as: ${state.user!.username}`;
 		div.appendChild(heading);
 	} else {
@@ -607,7 +667,7 @@ function renderState(
 		const stateHeading = options.headings?.[state.state];
 		const heading = document.createElement('h3');
 		heading.setAttribute('data-testid', 'authenticator-heading');
-		heading.style.cssText = 'margin-top: 0;';
+		heading.className = 'bb-heading';
 		heading.textContent = actionHeading ?? stateHeading ?? 'Authentication';
 		div.appendChild(heading);
 	}
@@ -615,7 +675,7 @@ function renderState(
 	if (state.error) {
 		const err = document.createElement('div');
 		err.setAttribute('data-testid', 'authenticator-error');
-		err.style.cssText = 'color: red; font-size: 14px; margin-bottom: 12px;';
+		err.className = 'bb-error';
 		err.textContent = state.error;
 		div.appendChild(err);
 	}
@@ -628,15 +688,13 @@ function renderState(
 		if (actionOverride?.render) {
 			const submit = async (values: Record<string, string>) => {
 				try {
-					const newState = await api.setAuthState(
+					const newState = await submitAuthAction(
+						api,
 						{ action: action.name, ...values } as AuthActionInput,
 					);
 					if (newState.retriable === true) {
 						onNewState({ ...state, error: newState.error || 'An error occurred' });
-						return;
 					}
-					updateState(api, newState);
-					broadcastAuthChange(newState.user ?? null);
 				} catch (e: any) {
 					onNewState({
 						state: 'signedOut',
@@ -667,7 +725,7 @@ function renderInternalAction(
 ): Node {
 	const wrapper = document.createElement('div');
 	wrapper.setAttribute('data-testid', `authenticator-action-${action.name}`);
-	wrapper.style.cssText = 'margin-bottom: 16px;';
+	wrapper.className = 'bb-field';
 
 	const inputs: Record<string, HTMLInputElement> = {};
 	const fieldOverrides = override?.fields ?? {};
@@ -757,7 +815,7 @@ function renderInternalAction(
 		// but the override accepts an arbitrary string for forward-compat
 		// with future hint values. Cast at the assignment boundary.
 		if (fOverride?.autocomplete) input.autocomplete = fOverride.autocomplete as AutoFill;
-		input.style.cssText = 'width: 100%; padding: 8px; margin-bottom: 4px; box-sizing: border-box;';
+		input.className = 'bb-input';
 		if (field.defaultValue) input.value = field.defaultValue;
 		inputs[field.name] = input;
 		wrapper.appendChild(input);
@@ -765,7 +823,7 @@ function renderInternalAction(
 		if (fOverride?.hint) {
 			const hint = document.createElement('div');
 			hint.textContent = fOverride.hint;
-			hint.style.cssText = 'font-size: 12px; color: #666; margin: 0 0 8px 2px;';
+			hint.className = 'bb-hint';
 			wrapper.appendChild(hint);
 		}
 	}
@@ -773,7 +831,7 @@ function renderInternalAction(
 	const btn = document.createElement('button');
 	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.textContent = override?.submitLabel ?? action.label;
-	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; margin-right: 8px;';
+	btn.className = 'bb-button bb-button-primary';
 
 	const submit = async () => {
 		const values: Record<string, string> = {};
@@ -811,8 +869,10 @@ function renderInternalAction(
 			// The renderer can't statically know which action the user is
 			// submitting, so we widen at this one call site. Direct callers
 			// who know their action name get full discrimination via
-			// `AuthActionInput`'s per-variant shape.
-			const newState = await api.setAuthState(
+			// `AuthActionInput`'s per-variant shape. submitAuthAction owns the
+			// cache update + broadcast, guarded to real sign-in/out transitions.
+			const newState = await submitAuthAction(
+				api,
 				{ action: action.name, ...values } as AuthActionInput,
 			);
 			// Retriable errors surface as a signedOut state with `retriable: true`
@@ -823,12 +883,7 @@ function renderInternalAction(
 			// stay intact) and overlay the error as inline feedback.
 			if (newState.retriable === true) {
 				onNewState({ ...currentState, error: newState.error || 'An error occurred' });
-				return;
 			}
-			// Update shared cache + notify Authenticator's subscriber
-			updateState(api, newState);
-			// Broadcast to other components (AuthenticatedContent, other tabs)
-			broadcastAuthChange(newState.user ?? null);
 		} catch (e: any) {
 			// HTTP/network/parse errors — the server-side handler catches
 			// BB errors and surfaces them through the AuthState shape, so
@@ -1002,7 +1057,7 @@ function renderExternalAction(action: AuthAction): Node {
 	form.setAttribute('data-testid', `authenticator-action-${action.name}`);
 	form.method = action.method ?? 'GET';
 	form.action = action.url!;
-	form.style.cssText = 'margin-bottom: 8px;';
+	form.className = 'bb-field';
 
 	for (const field of action.fields) {
 		const input = document.createElement('input');
@@ -1017,7 +1072,7 @@ function renderExternalAction(action: AuthAction): Node {
 	btn.setAttribute('data-testid', 'authenticator-submit');
 	btn.type = 'submit';
 	btn.textContent = action.label;
-	btn.style.cssText = 'padding: 8px 16px; cursor: pointer; width: 100%;';
+	btn.className = 'bb-button bb-button-primary bb-button-block';
 	form.appendChild(btn);
 
 	return form;
@@ -1048,26 +1103,25 @@ function renderExternalAction(action: AuthAction): Node {
  */
 export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 	const container = document.createElement('div');
+	injectTheme();
 	container.setAttribute('data-testid', 'account-menu');
 
 	function render(user: AuthUser | null) {
 		const bar = document.createElement('div');
-		bar.style.cssText = 'display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 12px 20px; background: #f5f5f5; border-bottom: 1px solid #ddd; font-family: system-ui, sans-serif;';
+		bar.className = 'bb-menubar';
 
 		if (user) {
 			const username = document.createElement('span');
 			username.setAttribute('data-testid', 'account-menu-username');
 			username.textContent = `👤 ${user.username}`;
-			username.style.cssText = 'font-size: 14px;';
+			username.className = 'bb-menubar-username';
 
 			const signOutBtn = document.createElement('button');
 			signOutBtn.setAttribute('data-testid', 'account-menu-signout');
 			signOutBtn.textContent = 'Sign Out';
-			signOutBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
+			signOutBtn.className = 'bb-button bb-button-secondary';
 			signOutBtn.addEventListener('click', async () => {
-				const newState = await api.setAuthState({ action: 'signOut' });
-				updateState(api, newState);
-				broadcastAuthChange(newState.user ?? null);
+				await submitAuthAction(api, { action: 'signOut' });
 			});
 
 			bar.appendChild(username);
@@ -1076,20 +1130,20 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 			const signInBtn = document.createElement('button');
 			signInBtn.setAttribute('data-testid', 'account-menu-signin');
 			signInBtn.textContent = 'Sign In';
-			signInBtn.style.cssText = 'padding: 8px 16px; cursor: pointer;';
+			signInBtn.className = 'bb-button bb-button-primary';
 
 			signInBtn.addEventListener('click', () => {
 				const modal = document.createElement('div');
 				modal.setAttribute('data-testid', 'account-menu-modal');
-				modal.style.cssText = 'position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000;';
+				modal.className = 'bb-modal-backdrop';
 
 				const content = document.createElement('div');
-				content.style.cssText = 'background: white; border-radius: 8px; padding: 20px; max-width: 400px; position: relative;';
+				content.className = 'bb-modal-content';
 
 				const closeBtn = document.createElement('button');
 				closeBtn.setAttribute('data-testid', 'account-menu-modal-close');
 				closeBtn.textContent = '✕';
-				closeBtn.style.cssText = 'position: absolute; top: 8px; right: 8px; border: none; background: none; font-size: 20px; cursor: pointer; padding: 0; width: 24px; height: 24px;';
+				closeBtn.className = 'bb-modal-close';
 				closeBtn.addEventListener('click', () => modal.remove());
 
 				content.appendChild(closeBtn);
@@ -1120,4 +1174,134 @@ export function AccountMenuBar(api: AuthStateApi): HTMLElement {
 
 	onAuthChange(api, render);
 	return container;
+}
+
+// ---------------------------------------------------------------------------
+// StatusMessage
+// ---------------------------------------------------------------------------
+
+/**
+ * The lifecycle state a {@link StatusMessage} renders. Each maps to a
+ * `.bb-status-*` modifier class and the matching semantic token:
+ *
+ * - `idle` — muted text (`--bb-color-text-muted`); the resting state.
+ * - `loading` — muted text preceded by an animated `.bb-spinner`; the
+ *   spinner holds still under `prefers-reduced-motion`.
+ * - `success` — green (`--bb-color-success`).
+ * - `error` — red (`--bb-color-danger`).
+ */
+export type StatusKind = 'idle' | 'loading' | 'success' | 'error';
+
+/**
+ * The live handle {@link StatusMessage} returns: the rendered `element`
+ * to mount, plus a `set` function to drive it between states.
+ */
+export interface StatusMessageHandle {
+	/**
+	 * The element to append to the DOM. A single `<div class="bb-status bb-status-<kind>">`
+	 * that is a polite live region (`role="status"`, `aria-live="polite"`), so
+	 * screen readers announce each `set()` transition — the ARIA wiring is the
+	 * whole point of the primitive.
+	 */
+	readonly element: HTMLElement;
+	/**
+	 * Transition the message to `kind` with the given `text`. The
+	 * `role="status"` region stays mounted and its label node is reused
+	 * across transitions (only the children list is re-attached), so a
+	 * screen reader announces each change reliably rather than seeing a new
+	 * region appear. `text` defaults to `''`, so `set('loading')` renders a
+	 * bare spinner and `set('idle')` clears the message. Safe to call
+	 * repeatedly.
+	 */
+	set(kind: StatusKind, text?: string): void;
+}
+
+/** Options for {@link StatusMessage}. */
+export interface StatusMessageOptions {
+	/** Initial lifecycle state. Defaults to `'idle'`. */
+	kind?: StatusKind;
+	/** Initial message text. Defaults to `''` (empty). */
+	text?: string;
+	/**
+	 * `data-testid` for the root element. Defaults to `'status-message'`.
+	 * Override when a template renders more than one status region so each
+	 * is addressable in a test.
+	 */
+	testId?: string;
+}
+
+/**
+ * A themed, accessible status line for the "loading / success / error"
+ * affordance every starter template otherwise hand-rolls with inline
+ * styles.
+ *
+ * Returns a {@link StatusMessageHandle}: mount `handle.element`, then
+ * drive it with `handle.set(kind, text)` as an async operation progresses.
+ * The element is a polite ARIA live region (`role="status"`,
+ * `aria-live="polite"`), so a screen reader announces each transition
+ * without stealing focus. The `loading` state renders a spinner that
+ * honors `prefers-reduced-motion`.
+ *
+ * All colors come from the shared design tokens, so the message matches
+ * the active light/dark theme automatically.
+ *
+ * @example
+ * ```ts
+ * import { StatusMessage } from '@aws-blocks/auth-common/ui';
+ *
+ * const status = StatusMessage({ kind: 'loading', text: 'Loading…' });
+ * document.querySelector('#app-status')!.replaceWith(status.element);
+ *
+ * try {
+ *   await saveSettings(); // your own async work
+ *   status.set('success', 'Done.');
+ * } catch (e) {
+ *   status.set('error', `Failed: ${(e as Error).message}`);
+ * }
+ * ```
+ *
+ * @param options - initial state, text, and test id. See
+ *   {@link StatusMessageOptions}.
+ * @returns a {@link StatusMessageHandle} with the element and a `set` driver.
+ */
+export function StatusMessage(options?: StatusMessageOptions): StatusMessageHandle {
+	injectTheme();
+	const testId = options?.testId ?? 'status-message';
+	const element = document.createElement('div');
+	element.setAttribute('data-testid', testId);
+	// Polite live region: announce transitions to assistive tech without
+	// yanking focus away from the user's current task.
+	element.setAttribute('role', 'status');
+	element.setAttribute('aria-live', 'polite');
+
+	// Stable children, created once and reused: set() updates the label's text
+	// and re-attaches the children list rather than recreating the nodes. The
+	// role="status" region itself stays mounted across every transition (and
+	// the label node is reused, not respawned), which is what makes a screen
+	// reader announce each change reliably — the point of a persistent live
+	// region.
+	const spinner = document.createElement('span');
+	spinner.className = 'bb-spinner';
+	// Decorative: the adjacent text carries the meaning for AT.
+	spinner.setAttribute('aria-hidden', 'true');
+	const label = document.createElement('span');
+	label.setAttribute('data-testid', `${testId}-text`);
+
+	function set(kind: StatusKind, text = ''): void {
+		element.className = `bb-status bb-status-${kind}`;
+		// Update the text node in place; attach the label only when there is
+		// text, so a blank state leaves the region genuinely empty.
+		label.textContent = text;
+		const children: Node[] = [];
+		if (kind === 'loading') {
+			children.push(spinner);
+		}
+		if (text) {
+			children.push(label);
+		}
+		element.replaceChildren(...children);
+	}
+
+	set(options?.kind ?? 'idle', options?.text ?? '');
+	return { element, set };
 }

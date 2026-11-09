@@ -37,7 +37,11 @@ export type {
 	RealtimeSubscription,
 	RealtimeServer,
 	RealtimeOptions,
+	SubscribeOptions,
+	DisconnectReason,
+	RealtimeChannelDescriptor,
 } from './types.js';
+import { BB_NAME } from './version.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────
 
@@ -172,7 +176,7 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
  */
 export class Realtime extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
-		super(id, { parent: scope, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
+		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.APIGATEWAY] } });
 		// The WebSocket routes are a stack-level singleton (one WS API per stack)
 		// that integrates to a single Lambda target, so bind them to the stack's
 		// DEFAULT compute deterministically — not this block's resolved compute.
@@ -190,6 +194,9 @@ export class Realtime extends BuildingBlockScope {
 			);
 		}
 		getOrCreateSharedInfra(compute.fn, this);
+		// Claim the key the Lambda runtime registers this block's WebSocket handler
+		// under, so two blocks with the same `fullId` fail synth instead of on cold start.
+		this.registerLambdaEventHandler('blocks.websocket', this.fullId);
 	}
 
 	static namespace<M>(schema: StandardSchemaV1<M>): NamespaceConfig<M> {

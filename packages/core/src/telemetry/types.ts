@@ -18,10 +18,28 @@ export type CommandName =
 export type CommandState = 'SUCCESS' | 'FAIL' | 'ABORTED';
 
 /**
+ * The server validates `product.framework` against this enum with
+ * `additionalProperties: false`, so an out-of-enum value costs the whole event.
+ */
+export const REPORTED_FRAMEWORKS = ['nextjs', 'nitro', 'nuxt', 'astro', 'sveltekit', 'spa', 'static'] as const;
+export type ReportedFramework = (typeof REPORTED_FRAMEWORKS)[number];
+
+/**
  * The telemetry event payload sent to the endpoint.
  *
  * Matches the server schema exactly (additionalProperties: false).
- * All fields are anonymized — no PII, no customer content, no account IDs.
+ *
+ * The identifiers are random UUIDs (not derived from the machine, user or AWS
+ * account), errors are reported as a fixed `code`/`phase` category (never the
+ * message or a stack), `environment.packageManager` is the raw
+ * `npm_config_user_agent` string, and only official Building Block names are
+ * sent (custom ones are only counted). The payload never carries names, email
+ * addresses, AWS account IDs, ARNs, file paths, file contents or source code.
+ * As with any HTTPS request, the collection endpoint also receives the
+ * client's IP address.
+ * Keep the first-run notice (`FIRST_RUN_NOTICE` in `identifiers.ts` and in
+ * `create-blocks-app`'s `telemetry.ts`) and the `@aws-blocks/blocks` README in
+ * sync with this list.
  */
 export interface BlocksTelemetryEvent {
   telemetryVersion: string;
@@ -50,7 +68,7 @@ export interface BlocksTelemetryEvent {
   product?: {
     blocksVersion: string;
     cdkVersion?: string;
-    framework?: 'nextjs' | 'spa' | 'static';
+    framework?: ReportedFramework;
     template?: { name: string; version?: string };
     buildingBlocks?: Array<{ name: string; version: string }>;
   };
@@ -66,7 +84,7 @@ export interface BlocksTelemetryEvent {
 export interface TrackCommandOptions {
   template?: string;
   templateVersion?: string;
-  framework?: 'nextjs' | 'spa' | 'static';
+  framework?: ReportedFramework;
   cdkVersion?: string;
   blocksCount?: number;
 }
@@ -84,7 +102,7 @@ export interface BuildAndSendEventOptions {
   error?: { code: string; phase: string };
   product?: {
     cdkVersion?: string;
-    framework?: 'nextjs' | 'spa' | 'static';
+    framework?: ReportedFramework;
     template?: string;
     templateVersion?: string;
   };

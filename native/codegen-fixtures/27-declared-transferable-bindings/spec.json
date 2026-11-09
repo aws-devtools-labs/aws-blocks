@@ -75,6 +75,17 @@
       }
     }
   ],
+  "components": {
+    "schemas": {
+      "DeviceLabel": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "minLength": 1 }
+        },
+        "required": ["name"]
+      }
+    }
+  },
   "x-blocks-native-packages": {
     "schemaVersion": 1,
     "packages": {
@@ -173,7 +184,7 @@
         "kind": "transferable",
         "tag": "example-iot/device-link",
         "package": "example-iot-native",
-        "export": "deviceLink",
+        "export": "API_link",
         "abi": "blocks-transferable-v1",
         "genericArity": 1
       },

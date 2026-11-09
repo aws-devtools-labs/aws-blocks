@@ -18,9 +18,10 @@ function getSsrCookies(): string | undefined {
 /**
  * Get or lazily create the request cookie AsyncLocalStorage.
  *
- * In the API Lambda, `lambda-handler.ts` creates the store and registers it
- * on `globalThis.__BLOCKS_REQUEST_COOKIES_STORE__`. In the SSR Lambda (a separate
- * process), the store may not exist yet — this function creates it on demand.
+ * In the API Lambda (and the container HTTP server), `request-context.ts` creates
+ * the store and registers it on `globalThis.__BLOCKS_REQUEST_COOKIES_STORE__`. In
+ * the SSR Lambda (a separate process), the store may not exist yet — this function
+ * creates it on demand.
  *
  * This module is server-only (never bundled for the browser), so direct
  * `node:async_hooks` import is safe — no `webpackIgnore` needed.

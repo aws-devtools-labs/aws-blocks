@@ -1,0 +1,38 @@
+name: E2E account slot
+description: >-
+  Picks which E2E account a run uses. A PR always maps to the same account
+  (PR number mod the number of accounts), so re-runs and new commits update or
+  delete their own stacks. Runs without a PR (push, schedule, manual) use
+  account 1.
+outputs:
+  index:
+    description: 0-based index into the AWS_ROLE_ARNS secret (a JSON array, account 1 first)
+    value: ${{ steps.pick.outputs.index }}
+  account:
+    description: 1-based account number, for names and logs
+    value: ${{ steps.pick.outputs.account }}
+  accounts:
+    description: Number of E2E accounts in the pool
+    value: ${{ steps.pick.outputs.accounts }}
+runs:
+  using: composite
+  steps:
+    - id: pick
+      shell: bash
+      env:
+        # Number of E2E accounts, the one place the pool size is set. The
+        # cleanup-stacks.yml matrix is built from it, and cleanup runs fail if
+        # AWS_ROLE_ARNS (e2e environment and Dependabot secrets) has a
+        # different length.
+        E2E_ACCOUNTS: '3'
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        if [ -n "$PR_NUMBER" ]; then
+          index=$(( PR_NUMBER % E2E_ACCOUNTS ))
+        else
+          index=0
+        fi
+        echo "E2E account $((index + 1)) of $E2E_ACCOUNTS"
+        echo "index=$index" >> "$GITHUB_OUTPUT"
+        echo "account=$((index + 1))" >> "$GITHUB_OUTPUT"
+        echo "accounts=$E2E_ACCOUNTS" >> "$GITHUB_OUTPUT"

@@ -33,6 +33,8 @@ object ClassNames {
     val uuid = ClassName("kotlin.uuid", "Uuid")
 
     // Runtime classes
+    val blocks = ClassName("com.aws.blocks.kotlin", "Blocks")
+    val blocksCompanion = blocks.nestedClass("Companion")
     val blocksClient = ClassName("com.aws.blocks.kotlin", "BlocksClient")
     val blocksJson = ClassName("com.aws.blocks.kotlin.json", "BlocksJson")
     val blocksRequest = ClassName("com.aws.blocks.kotlin", "BlocksRequest")
@@ -40,6 +42,8 @@ object ClassNames {
     val fileDownloadHandle = ClassName("com.aws.blocks.kotlin.filebucket", "FileDownloadHandle")
     val fileUploadHandle = ClassName("com.aws.blocks.kotlin.filebucket", "FileUploadHandle")
     val oidcClient = ClassName("com.aws.blocks.kotlin.oidc", "OidcClient")
+    val oidcProvider = ClassName("com.aws.blocks.kotlin.oidc", "OidcProvider")
+    val anyProvider = ClassName("com.aws.blocks.kotlin.oidc", "AnyProvider")
     val realtimeChannel = ClassName("com.aws.blocks.kotlin.realtime", "RealtimeChannel")
     val unknownTransferable = ClassName("com.aws.blocks.kotlin", "UnknownTransferable")
 }
@@ -56,4 +60,6 @@ object MemberNames {
 
     // kotlinx.serialization.descriptors
     val buildClassSerialDescriptor = MemberName("kotlinx.serialization.descriptors", "buildClassSerialDescriptor")
+
+    val validateTransferableDescriptor = MemberName("com.aws.blocks.kotlin", "validateTransferableDescriptor")
 }

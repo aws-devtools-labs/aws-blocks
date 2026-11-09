@@ -113,6 +113,7 @@ data class CodegenModel(
     val typeDefinitions: List<TypeDefinition>,
     val servers: List<ServerDefinition>,
     val endpoint: String?,
+    val nativeCatalogs: NativeCatalogs = NativeCatalogs.EMPTY,
 )
 
 data class ApiNamespace(

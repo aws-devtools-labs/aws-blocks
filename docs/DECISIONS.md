@@ -190,7 +190,7 @@ Extend `getMockDataDir` with an optional `options` parameter: `getMockDataDir(sc
 
 ### References
 - D-001: original mock data convention
-- PR #769: AWS Resource Groups and console shortcut routes
+- AWS Resource Groups and console shortcut routes: `packages/core/src/cdk/blocks-backend.ts`
 
 ## D-007: Auth cookies default to `SameSite=Lax`; cross-domain is opt-in
 
@@ -208,7 +208,7 @@ The three auth Building Blocks disagreed on the session cookie's `SameSite` attr
 
 `bb-auth-basic` and `bb-auth-cognito` chose `SameSite=None` to make the session cookie work in the legacy cross-port dev setup (frontend `:3000`, backend `:3001`). That choice rested on a misdiagnosis: cross-port is cross-*origin* but **same-site** — `SameSite` is defined by registrable domain + scheme, and the port is not part of "site" (RFC 6265bis). A `SameSite=Lax` cookie is therefore sent on a same-site cross-port request, so `None` was never required for it. The actual requirement for a credentialed cross-origin `fetch` is CORS (`Access-Control-Allow-Credentials: true` + a specific `Origin`), which the dev server already set. `bb-auth-oidc` had already chosen `Lax` and worked fine cross-port, which corroborates this. Each BB hand-rolled its own attribute selection, which is how they drifted. No prior decision record resolved this.
 
-The single-origin dev proxy ([#769](https://github.com/aws-devtools-labs/aws-blocks/pull/769)) makes local dev same-origin, so the question is moot either way: `Lax` is correct, and `None`'s extra CSRF surface buys nothing.
+The single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`) makes local dev same-origin, so the question is moot either way: `Lax` is correct, and `None`'s extra CSRF surface buys nothing.
 
 ### Decision
 All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `crossDomain` (default `false`), switches a BB to the cross-domain recipe:
@@ -218,7 +218,7 @@ All three auth BBs default session cookies to `SameSite=Lax`. A single opt-in, `
 
 The attribute selection lives in one shared helper, `@aws-blocks/auth-common/cookies` (`resolveCookieSecurity` / `buildCookieSecurityAttrs`), which every BB calls. A cross-BB parity test asserts identical output for identical inputs so the family converges structurally, not by coincidence of matching strings.
 
-This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on #769: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
+This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It depends on the single-origin dev proxy: the `Lax` flip must not ship while the legacy two-port templates are still the default dev path.
 
 ### Rationale
 - **Same-origin by default.** With the dev proxy, both dev and a standard (same-domain) production deploy are same-origin, where `Lax` cookies are never dropped. `Lax` is the correct default for the common case.
@@ -234,8 +234,7 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 
 ### References
 - Helper: `packages/auth-common/src/cookies.ts`
-- Enabler: #769 (single-origin dev proxy)
-- Related: #704 (docs), #748 (cross-port behavior, obsoleted by the proxy)
+- Enabler: the single-origin dev proxy (`packages/core/src/scripts/dev-server.ts`)
 
 ## D-008: BB documentation follows a progressive-disclosure model (README entry point + task-scoped references)
 
@@ -244,7 +243,7 @@ This supersedes the `bb-auth-basic` and `bb-auth-cognito` `None` defaults. It de
 **Amends**: [D-002](#d-002-bb-documentation-ships-as-readmemd--designmd)
 
 ### Context
-D-002 established a fixed two-file rule: each BB ships `README.md` + `DESIGN.md`. PR #834 (custom auth UI guide, #700) needed a third doc, `packages/auth-common/CUSTOMIZING-AUTH-UI.md`, for a reader goal that fits neither file — it's not quick-start usage (README) and not internal design (DESIGN), but a substantial customization contract. The two-file rule had no clean home for it: the content either bloats the README or is mis-filed in DESIGN.
+D-002 established a fixed two-file rule: each BB ships `README.md` + `DESIGN.md`. The custom auth UI guide needed a third doc, `packages/auth-common/CUSTOMIZING-AUTH-UI.md`, for a reader goal that fits neither file — it's not quick-start usage (README) and not internal design (DESIGN), but a substantial customization contract. The two-file rule had no clean home for it: the content either bloats the README or is mis-filed in DESIGN.
 
 ### Decision
 Generalize D-002 from a fixed two-file rule to a **progressive-disclosure model**: one always-read entry point plus as many task-scoped reference docs as the package's surface area warrants.
@@ -272,7 +271,7 @@ Every reference doc MUST ship via `"files"` in package.json (so it reaches `node
 ### References
 - Amends: D-002 (original two-file rule)
 - Skill convention this mirrors: `.skills/blocks-pr-review/` (`SKILL.md` + `references/`)
-- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md` (PR #834, issue #700)
+- First third-file instance: `packages/auth-common/CUSTOMIZING-AUTH-UI.md`
 
 ## D-009: External databases — Blocks-applied, version-controlled schema migrations
 
@@ -304,7 +303,7 @@ Blocks applies version-controlled `./migrations` to the external connection-stri
 - **Aurora DSQL support.** Out of scope — needs a separate runner (no advisory locks, one-DDL-per-transaction with no DDL/DML mixing, IAM-token auth).
 
 ### References
-- #793 (this PR); connection/port resolution shipped separately in #861
+- Connection/port resolution: `findConnectionString` (`packages/core/src/scripts/ensure-secrets.ts`), `toSessionPortUrl` (`packages/bb-data/src/migrations/external-migrations.ts`)
 - Code: `packages/bb-data/src/migrations/external-migrations.ts`, `packages/bb-data/src/migrations/baseline.ts`, `packages/core/src/scripts/external-migrations-step.ts`
 - Supersedes the prior "external databases must manage their own schema" error in `bb-data/src/index.{cdk,mock}.ts`
 
@@ -334,6 +333,7 @@ it is absent — the operational paths read the CA from the environment only.
 **Date:** 2026-06-10
 **Authors:** sarayev
 **Status**: Amended by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file) (2026-10-05, varshpam) — clause 4 ("One event per file") and Alternative 4 ("Append to existing files") are superseded; a run now appends every event to the file it created. Clause 3 is narrowed: a path this run did not create is still skipped. The decision below is preserved as originally written.
+**Status**: Amended by [D-018](#d-018---telemetry-file-is-gated-by-consent) (2026-10-08, varshpam) — point 1 ("Writes regardless of opt-out status"), Alternative 2 ("File gated by consent (same as HTTP)"), the capture-without-sending note and Rationale bullets 1-3 are superseded; the file sink is now gated by consent. Point 2, and point 3 as narrowed by D-017, still hold. The decision below is preserved as originally written.
 
 ### Context
 
@@ -370,7 +370,7 @@ To capture events without sending to the server: combine `--telemetry-file` with
 
 ### References
 
-- PR #880: implementation
+- Code: `packages/core/src/telemetry/client.ts`, `packages/create-blocks-app/src/telemetry.ts`
 
 ## D-011: `db pull` is interactive-only; dev/prod intent routes the connection string (R1)
 
@@ -419,7 +419,7 @@ earlier planning decisions and removed a released behavior:
   (`--prod` / `--provider`) — non-interactive mode is removed, so those flags are unnecessary.
 
 ### References
-- PR #922 (this change); follows #895 (db-pull modularization), #793 (external-DB migrations).
+- Follows [D-009](#d-009-external-databases--blocks-applied-version-controlled-schema-migrations) (external-DB migrations); the db-pull modules live in `packages/bb-data/src/db-pull/`.
 - Code: `packages/bb-data/src/db-pull/pull.ts` (`dbPullInteractive`, `dbPullDevInteractive`,
   `dbPullProdInteractive`, `hasDevConnection`, `writeProductionEnv`, `ensureGitignored`,
   `runDbPullCli`).
@@ -738,3 +738,170 @@ Two asymmetries are left standing on purpose. As of this decision `create-blocks
 ### References
 - D-010 (clauses 1–2 unchanged; clause 3 narrowed to paths this run did not create)
 - `aws/aws-cdk-cli`, `packages/aws-cdk/lib/cli/telemetry/sink/file-sink.ts` — create-then-append file sink
+
+## D-018: `--telemetry-file` is gated by consent
+
+**Date**: 2026-10-08
+**Authors:** varshpam
+
+### Context
+D-010 let the `--telemetry-file` sink fire regardless of consent. Building the event is itself a side effect: `getInstallationId()` creates `~/.blocks/telemetry/installation-id` and prints the first-run notice to stderr, and `getProjectId()` persists a project ID into `.blocks/config.json` under the working directory. An opted-out user who passed the flag therefore still got identifier files on disk and the notice printed, which is what the flag was never meant to buy.
+
+### Decision
+Consent is checked before any event is built, and in `create-blocks-app` again before the event is emitted, because `trackCommand` wraps a command that can run for minutes and an opt-out landing inside that window must still be honored (`core` gets the second check for free, because its `finally` re-enters `buildAndSendEvent`). When telemetry is disabled there is no event, no identifiers persisted, no first-run notice, no file and no HTTP request — `--telemetry-file` does not override opt-out. D-010's remaining points stand as D-017 leaves them: with telemetry enabled the flag is additive to the HTTP send, and a path this run did not create is still skipped.
+
+This adopts D-010's rejected Alternative 2, "File gated by consent (same as HTTP)". That rejection was argued from the flag's usefulness for inspecting a disabled run; that capability is deliberately removed — opting out means no event exists. To capture events without sending them, run `BLOCKS_TELEMETRY_ENDPOINT=http://127.0.0.1:1 <cmd> --telemetry-file=<path>`, which is a consented run.
+
+### Rationale
+- For `core` this is less a new contract than two of its entry points being made to agree. `trackCommand` already returned on `!isTelemetryEnabled()` with no `--telemetry-file` escape, while `dev` and `sandbox`, which call `buildAndSendEvent` directly, did not. The inconsistency was live on `main`, not hypothetical. `create-blocks-app` has a single entry point, so there the escape is simply removed.
+- Opting out must mean nothing is written. A debugging flag must not re-enable disk writes and a consent notice for a user who has opted out.
+- The identifier writes, not the capture file, are the privacy-relevant part, and they happen while the event is built — so the gate has to sit before `buildEvent`, not around the file sink.
+- The capture-without-sending workflow D-010 protected survives via the endpoint redirect, which needs no listener. It is not free: a redirected run is a consented run, so it still writes both identifiers and prints the first-run notice.
+
+### Alternatives Considered
+1. **Keep D-010 unchanged:** rejected; it persisted identifiers and printed the notice for a user who had opted out. D-010 clause 4 is addressed separately by [D-017](#d-017---telemetry-file-appends-every-event-from-the-run-that-created-the-file), which this decision does not touch: consent decides whether a file is written at all, ownership decides what goes into it.
+2. **Gate only the writes, still build the event from ephemeral IDs:** rejected on cost, not capability. It is the only option that captures *without* persisting the identifiers or printing the notice, but it splits one consent check into two contracts and `getInstallationId`/`getProjectId` would each need a non-persisting read whose only caller is the opted-out branch. Revisit if a caller needs capture with no identifier writes.
+3. **Follow the CDK CLI exactly:** rejected. Its `FileTelemetrySink` constructor and its `getOrCreateInstallationId` helper each run no consent check of their own — consent is the separate `canCollectTelemetry` predicate — and its telemetry module has no first-run notice and no project-scoped ID at all. Ours has both, so an ungated sink here keeps the two side effects this decision removes.
+
+### Supersedes
+- D-010 point 1 ("Writes regardless of opt-out status — even when telemetry is disabled ... the file still captures events") — the file sink is now gated by consent, like the HTTP sink.
+- D-010's capture-without-sending note ("combine `--telemetry-file` with `AWS_BLOCKS_DISABLE_TELEMETRY`") — that combination now writes nothing. Redirect `BLOCKS_TELEMETRY_ENDPOINT` instead.
+- D-010 Rationale bullets 1-3 (integration testing, local debugging, the privacy trade-off) — all three now need a consented run, which writes the identifiers anyway. Bullet 4 is D-017's subject; bullet 5 still holds.
+- D-010 Alternative 2 ("File gated by consent (same as HTTP)") — that rejection no longer stands; an opted-out run builds no event.
+
+### References
+- Task 7 in Task-Phase-1; PR #607 (closed unmerged, the first attempt at this change)
+- `packages/core/src/telemetry/client.ts` (`buildAndSendEvent`), `packages/core/src/telemetry/identifiers.ts`
+- `packages/create-blocks-app/src/telemetry.ts` (`trackCommand`)
+
+## D-019: Native declarations are read from every resolvable manifest, not only declared dependencies
+
+**Date**: 2026-10-08
+**Authors:** varshpam
+
+### Context
+A Building Block declares its native packages and transferable bindings under an `aws-blocks.native` key in its own `package.json`. `blocks-generate-spec` finds those declarations by walking every `node_modules` level from the spec project to the filesystem root. From this repo's own test app that is 1804 installed manifests, nearly all of them hoisted transitive dependencies rather than packages the app declares. Any one of them can claim a custom tag, and once a generator consumes the catalogs the client it emits will import the declared package and hand it a descriptor that may carry a signed URL or a short-lived credential.
+
+### Decision
+The scan reads every manifest the spec project can resolve. It is not restricted to the project's own `dependencies`. Generation-time rules bound what a declaration can do, and the authoring guide below specifies them. Publisher trust is bounded by none of them.
+
+Reading every manifest costs one open per installed package — 1804 files from this repo's test app. Only a narrower scan would reduce that, which is the deferred alternative below. A manifest that will not parse is fatal only when its text carries `aws-blocks` as a JSON key, decoding `\uXXXX` first, so a corrupt unrelated dependency cannot stop generation — matching the namespace anywhere in the text would make every `@aws-blocks/*` dependency string and the `aws-blocks` keyword that `create-block` scaffolds fatal when corrupt. A manifest that cannot be read at all is warned and skipped, because that test cannot be run on bytes the walk never obtained, and D-016 already settled that a hard throw is too blunt for a condition the project cannot fix.
+
+### Rationale
+The decision that moved declarations out of a `Scope` call and into `package.json` did so on the grounds that they *are* dependencies: build-related configuration belongs where a node or web app already declares its dependencies. Reading them with Node's own resolution follows from that framing. A direct-dependency filter would treat a declaration as something narrower than a dependency, which is the one thing the carrier decision ruled out.
+
+Resolution parity is also the property that makes the feature predictable: a block contributes its declarations by being installed where the app can import it, and nothing else. A filter would introduce a second, different notion of which packages count, so a block reachable by `import` could still be ignored by the generator — the silent-omission failure shape, which is worse than a visible one.
+
+Publisher trust is out of scope by design, not by omission. The native-client design doc states that digests establish byte identity rather than publisher trust, and places signing, attestation, revocation, SBOM, license and vulnerability policy with release controls. A dependency that can declare a binding is already a dependency whose code the app executes.
+
+The carrier decision settled where declarations live and how they are shaped; it did not discuss scan breadth directly. The breadth recorded here is the reading consistent with it.
+
+### Alternatives Considered
+- **Restrict the scan to the spec project's own `dependencies`:** deferred, not rejected. It narrows the surface to packages the app named, and is the natural follow-up if the trust posture tightens. It is a breaking change for any block that reaches an app transitively, so it wants its own decision rather than riding along here.
+- **Require an allowlist of declaring packages in the app's own `package.json`:** rejected for v1. It puts a second declaration of the same fact in a second place, and an app that forgets to update it sees a tag silently degrade to `UnknownTransferable`.
+- **Treat a cross-block package reference as an error** (a binding naming a native package another block registered): rejected. The design doc makes it an error only when no catalog declares the package, and sharing one native package across blocks is a legitimate shape.
+
+### References
+- The native client codegen design — digests establish byte identity, not publisher trust
+- The carrier decision that put declarations in `package.json` because they are build-time dependencies. Its authoring API discussion questioned the API's platform-awareness; the carrier itself is recorded only here
+- `docs/native-clients/schema-generation-guide-for-devs.md` — the authoring surface and the three bounding rules
+- `packages/core/src/scripts/read-native-declarations.ts` — the walk
+- `packages/core/src/scripts/validate-native-catalogs.ts` — tag uniqueness, built-in tag protection, ABI allowlist
+
+## D-020: A native generator validates only what its own emission depends on
+
+**Date**: 2026-10-15
+**Authors:** varshpam
+
+### Context
+`validateNativeCatalogs` runs inside `generateSpec` and rejects a malformed catalog before `blocks.spec.json` is written. The Swift generator validates the catalogs again when it resolves bindings, which raised the question of how much of that second pass is re-validation that has to be kept in lockstep with the producer by hand.
+
+Auditing the overlap found one check that was: binding-`id` uniqueness. `binding.id` is read nowhere in the Swift generator except its own guard and error-message interpolation, so two bindings sharing an id but carrying different tags produced a named error even though the emitted client was correct and compiled. The producer already owns that rule, with cross-block reporting the generator cannot do.
+
+### Decision
+A native generator validates a catalog rule only when its own emission depends on it. The binding-`id` check is removed from the Swift generator; the producer's `seenIds` remains the single enforcement point.
+
+Six rules still coincide with producer checks, and each is load-bearing for Swift rather than a second opinion. A duplicate `tag` would make `resolved[binding.tag]` silently last-write-wins. A negative `genericArity` clears `isGeneric` and drops the trailing decoder; an arity above one cannot be expressed, since `isGeneric` is a flag and only the first type argument is emitted. A blank `tag` becomes the `expectedTag` literal, which `validateTransferableDescriptor` can never satisfy. A binding naming an undeclared package cannot reach `platforms.swift.package` to resolve a module. A built-in `tag` is routed to the hard-coded path rather than rejected. An unknown `abi` has no entry in `transferableFactoriesByABI`, so there is no factory name to emit. Removing most of them produces wrong or non-compiling generated source. The package and ABI references are the exceptions: dropping either degrades silently to `UnknownTransferable`, which the design doc requires be a generation error before any mutation instead.
+
+### Rationale
+The distinction that matters is not "does the producer also check this" but "does this generator need the answer". A check of the first kind is duplication, and duplication across two languages drifts silently. A check of the second kind is the generator doing its own job, and it stays correct whether or not a producer ran — which matters because `swift-code-generator` is a standalone executable that reads whatever JSON path it is given, and nothing in a spec records which producer wrote it.
+
+Applying that test shrank the overlap rather than documenting it, and it gives the next generator a rule to apply instead of a precedent to copy.
+
+### Alternatives Considered
+**Keep the binding-`id` check and document the lockstep.** Rejected: it records a maintenance cost instead of removing one, and the check earns nothing — the emitted client is correct with or without it.
+
+**Drop the remaining six and trust the producer.** Rejected: each one guards an emission decision, so dropping them converts a named configuration error into generated source that does not compile, or compiles and misbehaves. Before the iteration-0 fallback an unbound tag failed differently in each language: a `Data?` that did not type-check on Swift, `dynamic` on Dart, and a code-generation failure on Kotlin.
+
+**A cross-language drift guard over the overlap.** Rejected: drift guards in this repo are per-language, and a guard spanning TypeScript and Swift would have to parse one language from the other. With the overlap reduced to checks Swift needs anyway, there is nothing left for such a guard to protect.
+
+### References
+- `packages/core/src/scripts/validate-native-catalogs.ts` — `seenIds`, now the single enforcement point for binding-`id` uniqueness, with cross-block reporting
+- `native/swift/Sources/BlocksCodegen/CodegenModel.swift` — `resolveDeclaredTransferableBindings`, the six rules Swift keeps because its emission reads them
+
+## D-021: An export's type name raises each segment's first character and nothing else
+
+**Date**: 2026-10-29
+**Authors:** varshpam
+
+### Context
+A transferable binding declares an `export`, and each native generator derives a type name from it that must resolve to a symbol the declared package exports. The design doc states the constraint — the type must be public in the declared Dart library, Swift module or Kotlin package — and describes the derivation only as upper camel case, without settling whether an acronym's tail is lowered; its `export` examples are all separator-free lower-camel, so none discriminates either.
+
+The three generators had diverged:
+
+- `API_link` resolved to `APILink` on Dart and Kotlin, and `ApiLink` on Swift.
+- `DEVICE_LINK` resolved to `DEVICELINK` and `DeviceLink`.
+- `device.link` was accepted by Dart and Swift, and rejected by Kotlin.
+- `device:link` was accepted by Swift alone.
+- Swift had no export grammar at all: `device__link`, `device.`, `.link` and `device-.link` all derived a name and passed its post-hoc identifier check.
+
+### Decision
+An export resolves to a type name by splitting on `-`, `_` and `.`, raising each segment's first character, and leaving the rest of every segment as declared.
+
+- **Alphabet.** Exactly `-`, `_` and `.`, each joining two non-empty segments. A doubled or dangling separator, or any other separator, is a generation error. `:` is refused.
+- **Collision.** Two bindings whose exports resolve to the same type name in one generated client are a generation error, unless both make the identical claim — so two distinct tags declaring one export in one package at one arity generate fine.
+- **Scope.** Only the bindings a generator emits are checked: a built-in-tag or opted-out binding is dropped beforehand and collides with nothing.
+- **Length.** An export is bounded at 64 characters, in the producer and in the Kotlin parser only; Swift and Dart derive a name from whatever length reaches them.
+
+### Rationale
+The rest of a segment is left as declared because the derived name is not invented: it must match a symbol a third party exported. A package exporting `APILink` must be imported as `APILink`; lowering the tail names `ApiLink`, which it does not export, so the failure surfaces in the consumer's compiler, not at generation.
+
+The alphabet is the producer's: `EXPORT_GRAMMAR` gates every spec derived from native declarations, so a narrower generator alphabet is a defect and a wider one is dead permissiveness. That grammar rejects `:` upstream, so no `blocks.spec.json` can carry one and the derivation never receives it — that unreachability decides removing `:` from the separator set.
+
+Kotlin had keyed uniqueness on `tag` alone, and accepting `.` enlarged the surface, so its guard was required by this change rather than added alongside it.
+
+The rule exists as four independent implementations with no cross-language guard, the posture D-020 settled, pinned by per-language unit tests and fixture 27's goldens. The export grammar is a seventh rule coinciding with the producer, after D-020's six: no generator's derivation specifies a result for a dangling or doubled separator.
+
+This is a behavior change for an all-caps Swift export: `API_link` now resolves to `APILink`, not `ApiLink`. It is latent: no shipped block declares a native binding, so no generated client changes.
+
+### Collision-rule divergence
+The collision rule is not one convention across the four implementations, and this change narrows the divergence. The producer has none, and the three generators diverge on two axes.
+
+**What is compared.** All three compare package, export and `genericArity`, so one export declared at two generic arities is an error on each. Dart had omitted arity, generating `Future<APILink>` and `Future<APILink<…>>` side by side from one import.
+
+**How it is qualified.** Dart keys the resolved name bare, Swift keys `module.Type` and Kotlin the `canonicalName`, so two packages resolving to one type name is a Dart generation error, reported as already declaring `DeviceLink`, and generates cleanly on Swift and Kotlin, which emit `PkgOne.DeviceLink` and `PkgTwo.DeviceLink` from two imports. Dart's bare keying predates this change; Kotlin's guard was added here to match Swift, making the split two generators against one.
+
+The package term discriminates because Kotlin keys on `kotlinPackage` and Swift on the Swift module, which two catalog identities may share; Swift's `moduleOwners` guard compares declared `identity` and `product` rather than the catalog's `package` key, so byte-identical Swift package metadata passes it and is rejected on the package term alone.
+
+**Reserved names.** Dart refuses a resolved name `dart:core`, `dart:async` or `blocks_runtime` owns; Swift refuses one in `swiftKeywords` or `typeNamesIllegalWhenQualified`. The sets differ rather than one side lacking a guard. Kotlin has no equivalent, and this divergence predates this change too.
+
+Reconciling them changes behavior on whichever side moves, so it is left to its own decision.
+
+### Length bound
+No generator's emission depends on how long an export is — a long name derives and compiles — so by D-020's test none needs a bound of its own, and the producer's covers all three because `packages/core/src/scripts/validate-native-catalogs.ts` is the only path that derives a spec from native declarations. Kotlin's parser carries one anyway because it is the only one whose grammar can be defeated by length: Kotlin's `Regex` is `java.util.regex`, which keeps its backtrack state on the program stack, and the export grammar's nested quantifier overflows it.
+
+The overflow threshold is not a stable figure worth quoting. It tracks thread stack size and moves with calling context, so it is a property of the running JVM rather than of the grammar, and above the smallest stack sizes it is not even deterministic: at the 2 MB default and at `-Xss8m`, inputs near the boundary split match and overflow across fresh JVMs at one configuration, and a smaller input can overflow where a larger one matches. One point is sharp, and it is the only one the bound needs: at `-Xss256k` 196 single-character segments (391 characters) match and 197 (393 characters) overflow, ten fresh JVMs per side with no split, and identically on Corretto 11, 17 and 21 and OpenJDK 24. Swift's `range(of:options:.regularExpression)` and Dart's `RegExp` both matched 200,001 characters without fault.
+
+What the bound needs is an ordering rather than a margin: 64 characters sits below every threshold measured at every stack size — narrowest at `-Xss256k`, where the shortest overflowing input is still about 6× the cap — and it still admits every export a package is likely to name, so Swift and Dart gain nothing from repeating it.
+
+### Alternatives Considered
+- **Apply each language's house style** — Effective Dart and the Kotlin conventions both lower an acronym's tail, while Swift's own API Design Guidelines require `APILink`, so the three styles cannot produce the one name the binding needs; and each guide binds the author who declares a type, not a tool deriving a name for someone else's symbol.
+
+- **Normalize the name and ship a mapping escape hatch**, as `openapi-generator` does with `--model-name-mappings` — deferred rather than rejected: normalization is only safe with an override, and the manifest that would carry one is a later iteration.
+
+- **A cross-language guard over the four implementations** — per D-020's own rejected alternative.
+
+### References
+- D-020 — what a native generator validates
+- `packages/core/src/scripts/validate-native-catalogs.ts` — `EXPORT_GRAMMAR`, the alphabet the generators follow; `MAX_EXPORT_LENGTH`, the 64-character bound shared with `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/parser/NativeCatalogParser.kt` alone; and `seenTags`, which a derived type name is distinct from
+- `native/swift/Sources/BlocksCodegen/CodegenModel.swift`, `native/kotlin/codegen/src/main/java/com/aws/blocks/kotlin/NamingUtils.kt`, `native/dart/packages/blocks_codegen/lib/src/builder.dart` — the three derivations

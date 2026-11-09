@@ -18,6 +18,39 @@ String _spec(
 void main() {
   const parser = OpenRpcParser();
 
+  group('spec root', () {
+    Matcher throwsFormat(String needle) => throwsA(
+      isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains(needle),
+      ),
+    );
+
+    test('a missing or non-object info is rejected', () {
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2","methods":[]}'),
+        throwsFormat("Expected 'info' object"),
+      );
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2","info":[],"methods":[]}'),
+        throwsFormat("Expected 'info' object"),
+      );
+    });
+
+    test('a missing or non-array methods is rejected', () {
+      const info = '"info":{"title":"t","version":"1"}';
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2",$info}'),
+        throwsFormat("Expected 'methods' array"),
+      );
+      expect(
+        () => parser.parse('{"openrpc":"1.3.2",$info,"methods":{}}'),
+        throwsFormat("Expected 'methods' array"),
+      );
+    });
+  });
+
   group('result name', () {
     test('captures declared result content-descriptor name', () {
       final model = parser.parse(

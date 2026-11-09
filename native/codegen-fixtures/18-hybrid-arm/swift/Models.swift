@@ -1,12 +1,12 @@
 import Foundation
 
 
-public enum AuthActionMethod: String, Codable {
+public nonisolated enum AuthActionMethod: String, Codable {
     case get = "GET"
     case post = "POST"
 }
 
-public struct AuthAction: Codable {
+public nonisolated struct AuthAction: Codable {
     public let fields: [AuthField]
     public let label: String
     public let method: AuthActionMethod?
@@ -31,7 +31,7 @@ public struct AuthAction: Codable {
     }
 }
 
-public enum AuthFieldType: String, Codable {
+public nonisolated enum AuthFieldType: String, Codable {
     case number
     case email
     case text
@@ -40,7 +40,7 @@ public enum AuthFieldType: String, Codable {
     case hidden
 }
 
-public struct AuthField: Codable {
+public nonisolated struct AuthField: Codable {
     public let defaultValue: String?
     public let label: String
     public let name: String
@@ -65,7 +65,7 @@ public struct AuthField: Codable {
     }
 }
 
-public enum AuthStateState: String, Codable {
+public nonisolated enum AuthStateState: String, Codable {
     case signedOut
     case signedIn
     case confirmingSignUp
@@ -74,7 +74,7 @@ public enum AuthStateState: String, Codable {
     case confirmingPasswordReset
 }
 
-public struct AuthState: Codable {
+public nonisolated struct AuthState: Codable {
     public let actions: [AuthAction]
     public let error: String?
     public let retriable: Bool?
@@ -99,12 +99,12 @@ public struct AuthState: Codable {
     }
 }
 
-public struct AuthUser: Codable {
+public nonisolated struct AuthUser: Codable {
     public let userId: String
     public let username: String
 }
 
-public struct Todo: Codable {
+public nonisolated struct Todo: Codable {
     public let completed: Bool
     public let createdAt: Double
     public let priority: Double

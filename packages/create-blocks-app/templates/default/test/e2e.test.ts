@@ -16,6 +16,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
 import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
@@ -31,8 +32,11 @@ let server: ChildProcess | null = null;
 let api: typeof ApiType;
 let authApi: typeof AuthApiType;
 
-const serverPort = 3000;
+// The dev server's port: package.json "blocks.dev.port", which `npm run dev` also uses.
+const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
+// A new user per run: the local auth store in .bb-data persists, so a fixed name is already taken on the next run.
+const username = `testuser-${Date.now()}@example.com`;
 
 // ─── Setup (don't touch) ─────────────────────────────────────────────────────
 
@@ -67,13 +71,34 @@ test.before(async () => {
   throw new Error(`Server not ready at ${readinessUrl}`);
 });
 
-test.after(() => {
-  if (server?.pid) {
-    try {
-      if (isWin) spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
-      else process.kill(-server.pid, 'SIGTERM');
-    } catch {}
+// Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
+function signalServer(pid: number, signal: NodeJS.Signals | 0) {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch {
+    return false;
   }
+}
+
+async function waitForServerExit(pid: number, ms: number) {
+  for (const deadline = Date.now() + ms; signalServer(pid, 0); await setTimeout(100)) {
+    if (Date.now() >= deadline) return false;
+  }
+  return true;
+}
+
+// The dev server shuts down gracefully, so wait for it to exit: it can still be
+// writing to the app's directory when this file ends and the caller removes it.
+test.after(async () => {
+  if (!server?.pid) return;
+  if (isWin) {
+    spawnSync('taskkill', ['/pid', String(server.pid), '/T', '/F'], { stdio: 'ignore' });
+    return;
+  }
+  if (!signalServer(server.pid, 'SIGTERM') || await waitForServerExit(server.pid, 15_000)) return;
+  signalServer(server.pid, 'SIGKILL');
+  await waitForServerExit(server.pid, 2_000);
 });
 
 // ─── App readiness (independent of the sample API) ────────────────────────────
@@ -93,11 +118,11 @@ test('auth: starts signed out', async () => {
 test('auth: sign up creates account and signs in', async () => {
   const state = await authApi.setAuthState({
     action: 'signUp',
-    username: 'testuser@example.com',
+    username,
     password: 'TestPass123!',
   });
   assert.strictEqual(state.state, 'signedIn');
-  assert.strictEqual(state.user?.username, 'testuser@example.com');
+  assert.strictEqual(state.user?.username, username);
 });
 
 test('auth: unauthenticated access is rejected', async () => {
@@ -112,7 +137,7 @@ test('auth: unauthenticated access is rejected', async () => {
   // Sign back in for remaining tests
   await authApi.setAuthState({
     action: 'signIn',
-    username: 'testuser@example.com',
+    username,
     password: 'TestPass123!',
   });
 });
@@ -131,7 +156,7 @@ test('todos: create with priority', async () => {
 test('todos: list (only own)', async () => {
   const list = await api.listTodos();
   assert.ok(list.length >= 1);
-  assert.ok(list.every(t => t.userId === 'testuser@example.com'));
+  assert.ok(list.every(t => t.userId === username));
 });
 
 test('todos: list sorted by priority (client-side sort)', async () => {
@@ -200,7 +225,75 @@ test('todos: concurrent toggle → conflict → retry succeeds', async () => {
 });
 
 // ─── Realtime ─────────────────────────────────────────────────────────────────
-// Note: Realtime subscription tests require the middleware to be loaded,
-// which happens automatically when the dev server regenerates client.js.
-// For a manual test: run `npm run dev`, open two browser tabs, and create
-// a todo in one — it should appear in the other immediately.
+// `subscribeTodos()` returns a channel the client hydrates into a live
+// WebSocket subscription (dev server runs a local WS server — no AWS). We
+// subscribe, mutate over the API, and assert the broadcast arrives.
+
+/**
+ * Subscribe to `channel` and return a promise for the NEXT message, plus an
+ * `established` promise that resolves once the server confirms the subscription.
+ * Awaiting `established` before triggering a mutation closes the race where a
+ * publish could fire before the subscribe is confirmed. Rejects after
+ * `timeoutMs` so a dropped broadcast fails loudly instead of hanging.
+ */
+function nextMessage<T>(
+  channel: {
+    subscribe(handler: (message: T) => void): { unsubscribe(): void; established: Promise<void> };
+  },
+  timeoutMs = 5000,
+): { received: Promise<T>; established: Promise<void>; unsubscribe(): void } {
+  let unsubscribe = () => {};
+  let established: Promise<void> = Promise.resolve();
+  const received = new Promise<T>((resolve, reject) => {
+    // Use globalThis to avoid the timers/promises setTimeout shadow (the
+    // template imports { setTimeout } from 'node:timers/promises' at the top).
+    const timer = globalThis.setTimeout(() => reject(new Error('timed out waiting for Realtime message')), timeoutMs);
+    const sub = channel.subscribe((message: T) => {
+      globalThis.clearTimeout(timer);
+      resolve(message);
+    });
+    established = sub.established;
+    unsubscribe = () => { globalThis.clearTimeout(timer); sub.unsubscribe(); };
+  });
+  return { received, established, unsubscribe };
+}
+
+test('realtime: a created todo broadcasts to a subscriber', async (t) => {
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<{ action: string; todoId: string }>(channel);
+  try {
+    await established;
+    const todo = await api.createTodo('Realtime create');
+    const message = await received;
+    assert.strictEqual(message.action, 'created');
+    assert.strictEqual(message.todoId, todo.todoId);
+    await api.deleteTodo(todo.todoId);
+  } finally {
+    unsubscribe();
+  }
+});
+
+test('realtime: an updated todo broadcasts an updated event', async (t) => {
+  const todo = await api.createTodo('Realtime update');
+  const channel = await api.subscribeTodos();
+  if (typeof channel.subscribe !== 'function') {
+    t.skip('Realtime middleware not hydrated (no local WS server — expected on Windows)');
+    await api.deleteTodo(todo.todoId);
+    return;
+  }
+  const { received, established, unsubscribe } = nextMessage<{ action: string; todoId: string }>(channel);
+  try {
+    await established;
+    await api.toggleTodo(todo.todoId);
+    const message = await received;
+    assert.strictEqual(message.action, 'updated');
+    assert.strictEqual(message.todoId, todo.todoId);
+  } finally {
+    unsubscribe();
+    await api.deleteTodo(todo.todoId);
+  }
+});

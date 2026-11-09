@@ -4,9 +4,11 @@
 /**
  * Unit tests for LambdaCompute.
  *
- * LambdaCompute is not yet instantiated by the default app and is not reachable
- * by customers. These tests exercise it directly to pin its shape: function +
- * gateway, shared role, distinct construct paths, and owner-derived identity.
+ * LambdaCompute is the app's default compute and backs `Compute` with
+ * `type: 'serverless'`. These tests construct it directly to pin its shape: the
+ * function it owns (fronted by the stack's shared REST API gateway, not a
+ * per-compute one), shared role, distinct construct paths, owner-derived
+ * identity, sizing options, and stack-derived VPC / CORS configuration.
  */
 
 import assert from 'node:assert';
@@ -15,9 +17,10 @@ import { dirname, join } from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type BlocksDefaults, BlocksPresets, Scope } from '@aws-blocks/core/cdk';
-import { Compute } from '@aws-blocks/core/cdk/internal';
+import { ComputeBase, initializeVpc } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import { Architecture } from 'aws-cdk-lib/aws-lambda';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { Construct } from 'constructs';
@@ -73,17 +76,23 @@ function setup(stackId: string, defaults?: BlocksDefaults): { stack: StubBlocksS
 }
 
 describe('LambdaCompute', () => {
-	test('provisions a Lambda function and its own API Gateway', () => {
+	test('provisions a Lambda function and owns no gateway (the stack owns the shared one)', () => {
 		const { stack, parent } = setup('LambdaComputeShape');
 
 		const compute = new LambdaCompute(parent, 'extra');
 
 		assert.ok(compute.fn, 'LambdaCompute should expose .fn');
-		assert.ok(compute.apiGateway, 'LambdaCompute should expose .apiGateway');
-		assert.ok(compute instanceof Compute, 'LambdaCompute should be a Compute');
+		assert.strictEqual(
+			compute.apiHandler(),
+			compute.fn,
+			'apiHandler() returns the function the shared gateway integrates',
+		);
+		assert.ok(compute instanceof ComputeBase, 'LambdaCompute should be a ComputeBase');
 
 		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+		// The compute itself provisions NO gateway — HTTP ingress is the stack's
+		// single shared REST API, built by BlocksStack/BlocksBackend.create().
+		template.resourceCountIs('AWS::ApiGateway::RestApi', 0);
 
 		const roles = template.findResources('AWS::IAM::Role');
 		const blocksRoleId = Object.keys(roles).find((k) => k.includes('BlocksRole'));
@@ -133,7 +142,7 @@ describe('LambdaCompute', () => {
 		// ...and it's a brand check, not an `instanceof` — so a plausible duck
 		// (a Compute-shaped object without the Symbol.for brand) is rejected,
 		// which is exactly how it survives a duplicate bb-lambda-compute copy.
-		assert.ok(!LambdaCompute.isLambdaCompute({ fn: {}, apiGateway: {} }));
+		assert.ok(!LambdaCompute.isLambdaCompute({ fn: {}, logGroup: {} }));
 		assert.ok(!LambdaCompute.isLambdaCompute({}));
 		assert.ok(!LambdaCompute.isLambdaCompute(null));
 		assert.ok(!LambdaCompute.isLambdaCompute(undefined));
@@ -233,8 +242,80 @@ describe('LambdaCompute architecture (Graviton default)', () => {
 	});
 });
 
-// The compute owns the handler log group + the API Gateway stage, so the
-// stack-wide logRetention / throttling / accessLogging defaults are adopted here.
+describe('LambdaCompute sizing (memory / maxTimeoutSeconds)', () => {
+	test('defaults to 2048 MB and the 900s platform maximum timeout', () => {
+		const { stack, parent } = setup('LambdaComputeSizingDefault');
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			MemorySize: 2048,
+			Timeout: 900,
+		});
+	});
+
+	test('respects memory and maxTimeoutSeconds overrides', () => {
+		const { stack, parent } = setup('LambdaComputeSizingOverride');
+
+		new LambdaCompute(parent, 'extra', { memory: 512, maxTimeoutSeconds: 120 });
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			MemorySize: 512,
+			Timeout: 120,
+		});
+	});
+});
+
+describe('LambdaCompute VPC placement (stack VPC context)', () => {
+	test('places the function in the shared VPC compute subnets and security group', () => {
+		const { stack, parent } = setup('LambdaComputeVpc');
+		// Two private tiers so the asserted placement (isolated) differs from
+		// CDK's own default for a Lambda in a VPC (private-with-egress): a
+		// regression that drops `vpcSubnets` would land in the egress tier.
+		const vpc = new ec2.Vpc(stack, 'TestVpc', {
+			maxAzs: 2,
+			natGateways: 1,
+			subnetConfiguration: [
+				{ name: 'Public', subnetType: ec2.SubnetType.PUBLIC },
+				{ name: 'Egress', subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+				{ name: 'Isolated', subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
+			],
+		});
+		initializeVpc(stack, { network: vpc, subnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED } });
+
+		new LambdaCompute(parent, 'extra');
+
+		const template = Template.fromStack(stack);
+		const fn = Object.values(template.findResources('AWS::Lambda::Function'))[0] as any;
+		const subnetRefs: string[] = fn.Properties.VpcConfig.SubnetIds.map((s: any) => s.Ref);
+		assert.strictEqual(subnetRefs.length, 2, 'one compute subnet per AZ');
+		assert.ok(
+			subnetRefs.every((r) => r.startsWith('TestVpcIsolatedSubnet')),
+			`function placed only in the isolated tier, got ${subnetRefs.join(', ')}`,
+		);
+		// The shared compute security group (created by initializeVpc), not one
+		// CDK would otherwise mint per function.
+		const sharedSgId = Object.keys(template.findResources('AWS::EC2::SecurityGroup')).find((k) =>
+			k.startsWith('BlocksLambdaSg'),
+		);
+		assert.ok(sharedSgId, 'initializeVpc created the shared compute security group');
+		assert.deepStrictEqual(fn.Properties.VpcConfig.SecurityGroupIds, [{ 'Fn::GetAtt': [sharedSgId, 'GroupId'] }]);
+	});
+
+	test('leaves VPC config unset when the stack has no VPC', () => {
+		const { stack, parent } = setup('LambdaComputeNoVpc');
+
+		new LambdaCompute(parent, 'extra');
+
+		Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+			VpcConfig: Match.absent(),
+		});
+	});
+});
+
+// The compute owns the handler log group, so the stack-wide logRetention
+// default is adopted here (throttling / access logging now live on the shared
+// REST API gateway at the stack level).
 describe('LambdaCompute handler log-group retention (defaults.logRetention)', () => {
 	test('production keeps handler logs for a year (365 days)', () => {
 		const { stack, parent } = setup('LambdaComputeLogProd', BlocksPresets.production);
@@ -281,103 +362,9 @@ describe('LambdaCompute logRetention prop', () => {
 	});
 });
 
-describe('LambdaCompute stage throttling (defaults.throttling)', () => {
-	test('production carries the 1000/2000 rate + burst default', () => {
-		const { stack, parent } = setup('LambdaComputeThrottleProd', BlocksPresets.production);
-		new LambdaCompute(parent, 'extra');
-		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
-			MethodSettings: Match.arrayWith([
-				Match.objectLike({
-					HttpMethod: '*',
-					ResourcePath: '/*',
-					ThrottlingRateLimit: 1000,
-					ThrottlingBurstLimit: 2000,
-				}),
-			]),
-		});
-	});
-
-	test('sandbox caps the stage tighter (200/400)', () => {
-		const { stack, parent } = setup('LambdaComputeThrottleSandbox', BlocksPresets.sandbox);
-		new LambdaCompute(parent, 'extra');
-		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
-			MethodSettings: Match.arrayWith([
-				Match.objectLike({ ThrottlingRateLimit: 200, ThrottlingBurstLimit: 400 }),
-			]),
-		});
-	});
-
-	test('a per-stack throttling override wins over the preset', () => {
-		const { stack, parent } = setup('LambdaComputeThrottleOverride', {
-			...BlocksPresets.production,
-			throttling: { rateLimit: 50, burstLimit: 75 },
-		});
-		new LambdaCompute(parent, 'extra');
-		Template.fromStack(stack).hasResourceProperties('AWS::ApiGateway::Stage', {
-			MethodSettings: Match.arrayWith([Match.objectLike({ ThrottlingRateLimit: 50, ThrottlingBurstLimit: 75 })]),
-		});
-	});
-});
-
-describe('LambdaCompute stage access logging (defaults.accessLogging)', () => {
-	// Access logging is opt-in (off in both presets), so enable it explicitly.
-	const withAccessLogging = { ...BlocksPresets.production, accessLogging: true };
-
-	test('opt-in enables JSON access logging + the account CloudWatch role', () => {
-		const { stack, parent } = setup('LambdaComputeAccessLogProd', withAccessLogging);
-		new LambdaCompute(parent, 'extra');
-		const template = Template.fromStack(stack);
-		// The account-level CloudWatch role is provisioned exactly once.
-		template.resourceCountIs('AWS::ApiGateway::Account', 1);
-		template.hasResourceProperties('AWS::ApiGateway::Stage', {
-			AccessLogSetting: Match.objectLike({ DestinationArn: Match.anyValue(), Format: Match.anyValue() }),
-		});
-	});
-
-	test('the production access-log group is RETAINed (audit trail survives teardown)', () => {
-		const { stack, parent } = setup('LambdaComputeAccessLogRetain', withAccessLogging);
-		new LambdaCompute(parent, 'extra');
-		// The access-log group follows defaults.removalPolicy (RETAIN in prod).
-		Template.fromStack(stack).hasResource('AWS::Logs::LogGroup', {
-			DeletionPolicy: 'Retain',
-		});
-	});
-
-	test('off by default (production preset) — no stage AccessLogSetting, no account role', () => {
-		const { stack, parent } = setup('LambdaComputeAccessLogDefaultOff', BlocksPresets.production);
-		new LambdaCompute(parent, 'extra');
-		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGateway::Account', 0);
-		template.hasResourceProperties('AWS::ApiGateway::Stage', {
-			AccessLogSetting: Match.absent(),
-		});
-	});
-
-	test('sandbox disables access logging (no stage AccessLogSetting, no account role)', () => {
-		const { stack, parent } = setup('LambdaComputeAccessLogSandbox', BlocksPresets.sandbox);
-		new LambdaCompute(parent, 'extra');
-		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGateway::Account', 0);
-		template.hasResourceProperties('AWS::ApiGateway::Stage', {
-			AccessLogSetting: Match.absent(),
-		});
-	});
-
-	test('two access-logging stages in one stack share a single ApiGateway::Account', () => {
-		// The `ensureApiGatewayAccount` Symbol.for sharing exists so multiple
-		// access-logging stages in one stack (e.g. the default compute + a
-		// bb-realtime WebSocket stage, both calling the same helper) emit exactly
-		// one account-level role rather than colliding. Two computes exercise the
-		// identical shared-account path.
-		const { stack, parent } = setup('LambdaComputeSharedAccount', withAccessLogging);
-		new LambdaCompute(parent, 'a');
-		new LambdaCompute(parent, 'b');
-		const template = Template.fromStack(stack);
-		template.resourceCountIs('AWS::ApiGateway::Account', 1);
-		// Both stages still get access logging.
-		template.resourceCountIs('AWS::ApiGateway::Stage', 2);
-	});
-});
+// Stage throttling and access logging moved from the per-compute REST stage to
+// the stack-level shared REST API gateway — covered in
+// packages/core/src/cdk/shared-gateway.test.ts.
 
 // Observability surface the Dashboard reads off the compute. Logging is always
 // on: the compute owns one handler log group (created in its constructor with

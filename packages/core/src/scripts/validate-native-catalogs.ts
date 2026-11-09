@@ -13,10 +13,12 @@ import {
 	isPlainObject,
 	KNOWN_TRANSFERABLE_ABIS,
 	MAX_GENERIC_ARITY,
+	NATIVE_BINDING_FIELDS,
 	NATIVE_BINDINGS_EXTENSION,
 	NATIVE_CATALOG_SCHEMA_VERSION,
 	NATIVE_PACKAGES_EXTENSION,
 	NATIVE_PLATFORMS,
+	type NativeDeclarationInput,
 	type NativeDeclarationSource,
 	type NativePlatform,
 } from './native-catalogs.js';
@@ -26,6 +28,8 @@ export interface ValidatableMethod {
 	name?: unknown;
 	result?: { schema?: unknown } | null;
 }
+
+const UNNAMED_SOURCE = '<unknown block>';
 
 const TRANSFERABLE_FIELD = 'x-blocks-transferable';
 const TYPE_ARGS_FIELD = 'x-blocks-type-args';
@@ -47,16 +51,95 @@ function isNonBlankString(v: unknown): v is string {
 	return typeof v === 'string' && v.trim().length > 0;
 }
 
+/**
+ * The checked declarations live on the success arm alone, so a caller reaches
+ * them only by handling the errors first and never asserts the narrowing.
+ */
+export type NativeValidation =
+	| { ok: true; sources: readonly NativeDeclarationSource[] }
+	| { ok: false; errors: SpecValidationError[] };
+
+/** `matches`, not a pattern: a Swift module reads by grapheme, not code point. */
+interface FieldGrammar {
+	matches: (value: string) => boolean;
+	shape: string;
+}
+
+/** Maven admits a group or artifact id by character class alone. */
+const MAVEN_ID = /^[A-Za-z0-9._-]+$/;
+
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * One grapheme at a time, as `isValidSwiftIdentifier` reads a Swift `Character`:
+ * a code-point class would reject the decomposed spelling of `CaféNative` and
+ * accept `_\u0301Native`, which Swift treats as one non-letter character. Not
+ * parity — `\p{L}` and `\p{N}` approximate Swift's `isLetter` and `isNumber`,
+ * which are defined over a `Character` rather than its leading scalar.
+ */
+function isSwiftModuleName(value: string): boolean {
+	const graphemes = [...GRAPHEMES.segment(value)].map((s) => s.segment);
+	return (
+		graphemes.length > 0 && graphemes.every((g, i) => g === '_' || (i === 0 ? /^\p{L}/u : /^[\p{L}\p{N}]/u).test(g))
+	);
+}
+
+/**
+ * Platform package fields a generator interpolates into generated source, so a
+ * value outside the grammar is a compile failure in the customer's app rather
+ * than a problem the generator can report against the block that declared it.
+ * A field absent from this map is constrained to non-blank only, as
+ * `swift.identity` and `swift.product` are: SwiftPM derives an identity from
+ * the dependency's location and imposes no grammar on either.
+ */
+const PLATFORM_FIELD_GRAMMARS: Record<NativePlatform, Readonly<Record<string, FieldGrammar>>> = {
+	dart: {
+		name: { matches: (v) => /^[a-z_][a-z0-9_]*$/.test(v), shape: 'a pub package name' },
+		library: {
+			matches: (v) => /^(?!lib\/)[a-z_][a-z0-9_.]*(\/[a-z_][a-z0-9_.]*)*\.dart$/.test(v),
+			shape: 'a .dart file path inside lib/, without the leading "lib/"',
+		},
+	},
+	swift: {
+		module: { matches: isSwiftModuleName, shape: 'a Swift module name' },
+	},
+	android: {
+		group: { matches: (v) => MAVEN_ID.test(v), shape: 'a Maven group id' },
+		artifact: { matches: (v) => MAVEN_ID.test(v), shape: 'a Maven artifact id' },
+		kotlinPackage: {
+			matches: (v) => /^[\p{L}_][\p{L}\p{N}_]*(\.[\p{L}_][\p{L}\p{N}_]*)*$/u.test(v),
+			shape: 'a Kotlin package name',
+		},
+	},
+};
+
+/** An export must name a public type once each segment's first character is raised. */
+const EXPORT_GRAMMAR = /^[A-Za-z][A-Za-z0-9]*([-_.][A-Za-z0-9]+)*$/;
+
+/** Bounds an export before it is interpolated into generated source and diagnostics. */
+const MAX_EXPORT_LENGTH = 64;
+
+/** Keep a diagnostic on one log line even if a spec-supplied value carries a newline. */
+const escapeForDiagnostic = (value: string): string => value.replaceAll('\n', '\\n').replaceAll('\r', '\\r');
+
+/**
+ * Every generated Dart client imports this library, so a declared package of
+ * the same name would emit a second directive for it.
+ */
+const DART_RESERVED_PACKAGE_NAMES: readonly string[] = ['blocks_runtime'];
+
 export function validateNativeCatalogs(
-	sources: readonly NativeDeclarationSource[],
+	sources: readonly NativeDeclarationInput[],
 	methods: readonly ValidatableMethod[] = [],
-): SpecValidationError[] {
+): NativeValidation {
 	const errors: SpecValidationError[] = [];
+	const progress: ValidationProgress = { source: '<unknown block>' };
 	try {
 		const safeSources = Array.isArray(sources) ? sources : [];
 		const safeMethods = Array.isArray(methods) ? methods : [];
-		const registered = collectPackages(safeSources, errors);
-		collectBindings(safeSources, registered, safeMethods, errors);
+		const registered = collectPackages(safeSources, errors, progress);
+		progress.source = UNNAMED_SOURCE;
+		collectBindings(safeSources, registered, safeMethods, errors, progress);
 	} catch (cause) {
 		// A declaration can carry a throwing accessor or nest deeply enough to
 		// exhaust the stack, so `cause` is read as little as possible: `String(cause)`
@@ -72,14 +155,21 @@ export function validateNativeCatalogs(
 		}
 		errors.push({
 			path: NATIVE_PACKAGES_EXTENSION,
-			message: `Native declarations could not be read (${label})`,
+			message: `Native declarations could not be read (${label}) while reading ${progress.source}`,
 		});
 	}
-	return errors;
+	if (errors.length > 0) return { ok: false, errors };
+	return { ok: true, sources: (Array.isArray(sources) ? sources : []) as readonly NativeDeclarationSource[] };
+}
+
+/** The position the pass had reached, so an aborted pass can say where. */
+interface ValidationProgress {
+	source: string;
 }
 
 interface RegisteredPackage {
 	canonical: string;
+	sourceOrdinal: number;
 	sourcePackage: string;
 }
 
@@ -89,18 +179,24 @@ interface RegisteredPackage {
  * it correctly.
  */
 function collectPackages(
-	sources: readonly NativeDeclarationSource[],
+	sources: readonly NativeDeclarationInput[],
 	errors: SpecValidationError[],
+	progress: ValidationProgress,
 ): Map<string, RegisteredPackage> {
 	const registered = new Map<string, RegisteredPackage>();
-	let index = 0;
 
-	for (const source of sources) {
+	for (let sourceOrdinal = 0; sourceOrdinal < sources.length; sourceOrdinal += 1) {
+		// Set before the element is touched, so reading it is what the catch-all names.
+		const positional = `declaration source ${sourceOrdinal + 1}`;
+		progress.source = positional;
+		const source = sources[sourceOrdinal];
+		let index = 0;
+		progress.source = describeSourceForProgress(source, positional);
 		const declaredBy = `declared by ${describeSource(source)}`;
 		if (!isPlainObject(source)) {
 			errors.push({
 				path: NATIVE_PACKAGES_EXTENSION,
-				message: `Declaration source must be an object (${declaredBy})`,
+				message: `Declaration source must be an object (${positional})`,
 			});
 			continue;
 		}
@@ -133,8 +229,12 @@ function collectPackages(
 
 			// `canonicalJson` below compares `platforms` only, so an unrecognized
 			// sibling would be neither compared nor emitted. Rejecting it keeps
-			// "byte-identical" a statement about the whole registration.
-			for (const key of Object.keys(declaration)) {
+			// "byte-identical" a statement about the whole registration. Every
+			// allowlist here walks own string names rather than `Object.keys`,
+			// because a non-enumerable one is dropped just the same and no manifest
+			// can produce it. A symbol key is dropped too and stays unreported, for
+			// the same reason: it cannot come from JSON.
+			for (const key of Object.getOwnPropertyNames(declaration)) {
 				if (key !== 'identity' && key !== 'platforms') {
 					errors.push({
 						path: `${path}.${key}`,
@@ -152,14 +252,17 @@ function collectPackages(
 					errors.push({
 						path,
 						message:
-							`Package identity "${identity}" is registered with different contents by ` +
-							`${existing.sourcePackage} and ${describeSource(source)}. ` +
-							'A duplicate identity must be byte-identical.',
+							existing.sourceOrdinal === sourceOrdinal
+								? `Package identity "${identity}" is registered twice with different contents ` +
+									`within this block (${declaredBy}). A duplicate identity must be byte-identical.`
+								: `Package identity "${identity}" is registered with different contents by ` +
+									`${existing.sourcePackage} and ${progress.source}. ` +
+									'A duplicate identity must be byte-identical.',
 					});
 				}
 				continue;
 			}
-			registered.set(identity, { canonical, sourcePackage: describeSource(source) });
+			registered.set(identity, { canonical, sourceOrdinal, sourcePackage: progress.source });
 		}
 	}
 
@@ -167,8 +270,18 @@ function collectPackages(
 }
 
 function describeSource(source: unknown): string {
-	const name = isPlainObject(source) ? source.sourcePackage : undefined;
-	return isNonBlankString(name) ? name.trim() : '<unknown block>';
+	try {
+		const name = isPlainObject(source) ? source.sourcePackage : undefined;
+		return isNonBlankString(name) ? name.trim() : UNNAMED_SOURCE;
+	} catch {
+		return UNNAMED_SOURCE;
+	}
+}
+
+/** Keeps the caller's positional label, which locates better than a name the source lacks. */
+function describeSourceForProgress(source: unknown, positional: string): string {
+	const described = describeSource(source);
+	return described === UNNAMED_SOURCE ? positional : described;
 }
 
 function asDeclarationArray(
@@ -177,7 +290,7 @@ function asDeclarationArray(
 	declaredBy: string,
 	errors: SpecValidationError[],
 ): readonly unknown[] {
-	if (value === undefined || value === null) return [];
+	if (value === undefined) return [];
 	if (!Array.isArray(value)) {
 		errors.push({ path, message: `Expected an array (${declaredBy})` });
 		return [];
@@ -220,7 +333,7 @@ function validatePlatformEntry(
 		return;
 	}
 
-	for (const key of Object.keys(entry)) {
+	for (const key of Object.getOwnPropertyNames(entry)) {
 		if (key !== 'package') {
 			errors.push({
 				path: `${path}.${key}`,
@@ -238,15 +351,34 @@ function validatePlatformEntry(
 	}
 
 	const fields = PLATFORM_PACKAGE_FIELDS[platform];
+	const grammars = PLATFORM_FIELD_GRAMMARS[platform];
 	for (const field of fields) {
-		if (!isNonBlankString(entry.package[field])) {
+		const value = entry.package[field];
+		if (!isNonBlankString(value)) {
 			errors.push({
 				path: `${pkgPath}.${field}`,
 				message: `${platform} "package" requires "${field}" as a non-blank string (${declaredBy})`,
 			});
+			continue;
+		}
+		const grammar = grammars[field];
+		if (grammar && !grammar.matches(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message: `${platform} "package" requires "${field}" to be ${grammar.shape}, got "${value}" (${declaredBy})`,
+			});
+			continue;
+		}
+		if (platform === 'dart' && field === 'name' && DART_RESERVED_PACKAGE_NAMES.includes(value)) {
+			errors.push({
+				path: `${pkgPath}.${field}`,
+				message:
+					`${platform} "package" requires "${field}" to name a package other than ` +
+					`"${value}", which every generated client already imports (${declaredBy})`,
+			});
 		}
 	}
-	for (const key of Object.keys(entry.package)) {
+	for (const key of Object.getOwnPropertyNames(entry.package)) {
 		if (fields.includes(key)) continue;
 		const message =
 			key === 'version'
@@ -257,17 +389,23 @@ function validatePlatformEntry(
 }
 
 function collectBindings(
-	sources: readonly NativeDeclarationSource[],
+	sources: readonly NativeDeclarationInput[],
 	registered: Map<string, RegisteredPackage>,
 	methods: readonly ValidatableMethod[],
 	errors: SpecValidationError[],
+	progress: ValidationProgress,
 ): void {
 	const seenTags = new Map<string, { id: string; sourcePackage: string }>();
-	const seenIds = new Map<string, string>();
-	let index = 0;
+	const seenIds = new Map<string, { position: number; sourceOrdinal: number; sourcePackage: string }>();
 
-	for (const source of sources) {
+	for (let sourceOrdinal = 0; sourceOrdinal < sources.length; sourceOrdinal += 1) {
+		// Set before the element is touched, so reading it is what the catch-all names.
+		const positional = `declaration source ${sourceOrdinal + 1}`;
+		progress.source = positional;
+		const source = sources[sourceOrdinal];
+		let index = 0;
 		const sourceName = describeSource(source);
+		progress.source = describeSourceForProgress(source, positional);
 		const declaredBy = `declared by ${sourceName}`;
 		// Silent, unlike every other guard here: `collectPackages` already reported it.
 		if (!isPlainObject(source)) continue;
@@ -292,17 +430,32 @@ function collectBindings(
 				errors.push({ path: `${path}.id`, message: `Binding "id" must be a non-blank string (${declaredBy})` });
 				continue;
 			}
-			const priorId = seenIds.get(id);
-			if (priorId) {
+
+			// Rejected rather than ignored, so the author learns it would be dropped.
+			for (const key of Object.getOwnPropertyNames(declaration)) {
+				if ((NATIVE_BINDING_FIELDS as readonly string[]).includes(key)) continue;
+				errors.push({
+					path: `${path}.${key}`,
+					message:
+						`Unexpected field "${key}" — a binding holds only ` +
+						`${NATIVE_BINDING_FIELDS.join(', ')} (${declaredBy})`,
+				});
+			}
+
+			const prior = seenIds.get(id);
+			if (prior) {
 				errors.push({
 					path: `${path}.id`,
 					message:
-						`Binding id "${id}" is already declared by ${priorId}. ` +
-						'A binding id must be unique across all blocks.',
+						prior.sourceOrdinal === sourceOrdinal
+							? `Binding id "${id}" is already declared by binding ${prior.position + 1} of this block (${declaredBy}). ` +
+								'A binding id must be unique across all blocks.'
+							: `Binding id "${id}" is already declared by ${prior.sourcePackage}. ` +
+								'A binding id must be unique across all blocks.',
 				});
 				continue;
 			}
-			seenIds.set(id, sourceName);
+			seenIds.set(id, { position, sourceOrdinal, sourcePackage: sourceName });
 
 			if (!isNonBlankString(declaration.kind)) {
 				errors.push({
@@ -318,8 +471,10 @@ function collectBindings(
 			// runs for every kind. Only the ABI allowlist is transferable-specific.
 			const tag = validateBindingTag(declaration.tag, id, path, declaredBy, sourceName, seenTags, errors);
 			const arity = validateBindingShape(declaration, path, declaredBy, errors);
+			// A built-in tag reaches no arity check: it cannot be bound by a block, so
+			// `validateBindingTag` rejects it and returns `undefined`.
 			if (arity !== undefined && tag !== undefined) {
-				validateArityAgainstMethods(tag, arity, methods, errors);
+				validateArityAgainstMethods(tag, arity, id, declaredBy, methods, errors);
 			}
 
 			if (declaration.kind !== TRANSFERABLE_BINDING_KIND) continue;
@@ -340,6 +495,24 @@ function validateBindingShape(
 			errors.push({
 				path: `${path}.${field}`,
 				message: `Binding "${field}" must be a non-blank string (${declaredBy})`,
+			});
+		}
+	}
+	const exportName = binding.export;
+	if (isNonBlankString(exportName)) {
+		if (exportName.length > MAX_EXPORT_LENGTH) {
+			errors.push({
+				path: `${path}.export`,
+				message:
+					`Binding "export" must be at most ${MAX_EXPORT_LENGTH} characters, ` +
+					`got ${exportName.length} (${declaredBy})`,
+			});
+		} else if (!EXPORT_GRAMMAR.test(exportName)) {
+			errors.push({
+				path: `${path}.export`,
+				message:
+					`Binding "export" must be a -, _ or . joined run of alphanumeric segments ` +
+					`starting with a letter, got "${escapeForDiagnostic(exportName)}" (${declaredBy})`,
 			});
 		}
 	}
@@ -453,12 +626,15 @@ function validateArity(
 
 /**
  * An unbound tag on a method result is deliberately not an error here; the
- * native generators degrade it to `UnknownTransferable`.
+ * native generators degrade it to `UnknownTransferable`. The path names the
+ * result the app must fix; the message names the binding, because with several
+ * blocks installed the result alone does not say whose arity it violated.
  */
-/** Tag-driven and kind-agnostic: a result is matched on `tag` alone. */
 function validateArityAgainstMethods(
 	tag: string,
 	arity: number,
+	id: string,
+	declaredBy: string,
 	methods: readonly ValidatableMethod[],
 	errors: SpecValidationError[],
 ): void {
@@ -471,7 +647,12 @@ function validateArityAgainstMethods(
 		const typeArgs = schema[TYPE_ARGS_FIELD];
 
 		if (typeArgs !== undefined && !Array.isArray(typeArgs)) {
-			errors.push({ path, message: `${TYPE_ARGS_FIELD} must be an array of JSON Schema objects` });
+			errors.push({
+				path,
+				message:
+					`${TYPE_ARGS_FIELD} must be an array of JSON Schema objects, ` +
+					`for tag "${tag}" bound by binding "${id}" (${declaredBy})`,
+			});
 			continue;
 		}
 
@@ -482,8 +663,9 @@ function validateArityAgainstMethods(
 			errors.push({
 				path,
 				message:
-					`Tag "${tag}" is bound with genericArity ${arity}, so this result needs exactly ${arity} ` +
-					`${TYPE_ARGS_FIELD} ${arity === 1 ? 'entry' : 'entries'}, found ${count}`,
+					`Tag "${tag}" is bound with genericArity ${arity} by binding "${id}", so this result ` +
+					`needs exactly ${arity} ${TYPE_ARGS_FIELD} ${arity === 1 ? 'entry' : 'entries'}, ` +
+					`found ${count} (${declaredBy})`,
 			});
 		}
 	}

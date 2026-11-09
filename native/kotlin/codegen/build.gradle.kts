@@ -29,6 +29,9 @@ tasks.withType<Test> {
     // The fixtures reach the test as a system property, so Gradle cannot infer them:
     // without this the golden guard is UP-TO-DATE after a fixture-only change.
     inputs.dir(fixturesDir).withPropertyName("codegenFixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+    val authoringGuide = project.file("../../../docs/native-clients/schema-generation-guide-for-devs.md")
+    systemProperty("AUTHORING_GUIDE", authoringGuide.absolutePath)
+    inputs.file(authoringGuide).withPropertyName("authoringGuide").withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 tasks.register<Test>("regenerateFixtures") {

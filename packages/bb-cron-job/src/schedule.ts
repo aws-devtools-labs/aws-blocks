@@ -7,7 +7,7 @@
  * so an invalid `rate()`/`cron()` fails fast instead of being rejected by
  * EventBridge minutes into a deploy).
  */
-import { brandBlocksError } from '@aws-blocks/core';
+import { blocksError } from '@aws-blocks/core';
 import { CronJobErrors } from './errors.js';
 
 /** Parsed rate expression. */
@@ -39,9 +39,7 @@ function scheduleError(expr: string): Error {
 	const detail = /^rate\s*\(/.test(expr)
 		? 'a rate must be "rate(<n> minute|minutes|hour|hours|day|days)" with n ≥ 1 (EventBridge’s minimum is 1 minute; seconds are not supported)'
 		: 'expected "rate(<n> minutes|hours|days)" or a 6-field "cron(...)" expression';
-	const err = new Error(`${CronJobErrors.InvalidSchedule}: "${expr}" is not a valid schedule — ${detail}`);
-	err.name = CronJobErrors.InvalidSchedule;
-	return brandBlocksError(err);
+	return blocksError(CronJobErrors.InvalidSchedule, `"${expr}" is not a valid schedule — ${detail}`);
 }
 
 /**
@@ -91,13 +89,12 @@ export function parseScheduleForMock(expr: string): ParsedSchedule {
 		} catch {
 			throw err; // a non-marker field is also invalid → keep InvalidSchedule
 		}
-		const e = new Error(
-			`${CronJobErrors.ScheduleNotSupported}: "${expr}" is valid for EventBridge and will deploy, ` +
+		throw blocksError(
+			CronJobErrors.ScheduleNotSupported,
+			`"${expr}" is valid for EventBridge and will deploy, ` +
 				'but the local mock cannot simulate it (advanced cron forms like L/W/#, or a year field). ' +
 				'Deploy to a sandbox to exercise it.',
 		);
-		e.name = CronJobErrors.ScheduleNotSupported;
-		throw brandBlocksError(e);
 	}
 }
 
@@ -174,9 +171,7 @@ export function validateTimezone(tz: string): void {
 	try {
 		Intl.DateTimeFormat('en-US', { timeZone: tz });
 	} catch {
-		const err = new Error(`${CronJobErrors.InvalidTimezone}: "${tz}" is not a valid IANA timezone`);
-		err.name = CronJobErrors.InvalidTimezone;
-		throw brandBlocksError(err);
+		throw blocksError(CronJobErrors.InvalidTimezone, `"${tz}" is not a valid IANA timezone`);
 	}
 }
 
@@ -189,7 +184,7 @@ function parseCronFields(body: string, original: string): CronFields {
 		minute: expandField(parts[0], 0, 59, original),
 		hour: expandField(parts[1], 0, 23, original),
 		dayOfMonth: parts[2] === '?' ? [] : expandField(parts[2], 1, 31, original),
-		month: expandField(parts[3], 1, 12, original),
+		month: expandMonth(parts[3], original),
 		dayOfWeek: parts[4] === '?' ? [] : expandDow(parts[4], original),
 	};
 	// parts[5] is year — ignored in mock
@@ -201,7 +196,7 @@ function expandField(field: string, min: number, max: number, original: string):
 	for (const part of field.split(',')) {
 		if (part.includes('/')) {
 			const [base, stepStr] = part.split('/');
-			const step = parseInt(stepStr, 10);
+			const step = toInt(stepStr);
 			// `base` may be `*` (whole field), a single value (`15` → from 15 to
 			// max), or a range (`0-30` → bounded by the range's upper end). A
 			// stepped range must stop at the range's `hi`, not run to `max`.
@@ -211,20 +206,20 @@ function expandField(field: string, min: number, max: number, original: string):
 				lo = min;
 			} else if (base.includes('-')) {
 				const [loStr, hiStr] = base.split('-');
-				lo = Number(loStr);
-				hi = Number(hiStr);
+				lo = toInt(loStr);
+				hi = toInt(hiStr);
 			} else {
-				lo = parseInt(base, 10);
+				lo = toInt(base);
 			}
 			if (isNaN(step) || step <= 0) throw scheduleError(original);
 			assertBounds(lo, hi, min, max, original);
 			for (let i = lo; i <= hi; i += step) values.push(i);
 		} else if (part.includes('-')) {
-			const [lo, hi] = part.split('-').map(Number);
+			const [lo, hi] = part.split('-').map(toInt);
 			assertBounds(lo, hi, min, max, original);
 			for (let i = lo; i <= hi; i++) values.push(i);
 		} else {
-			const n = parseInt(part, 10);
+			const n = toInt(part);
 			assertBounds(n, n, min, max, original);
 			values.push(n);
 		}
@@ -238,6 +233,35 @@ function expandDow(field: string, original: string): number[] {
 	const dayMap: Record<string, number> = { SUN: 1, MON: 2, TUE: 3, WED: 4, THU: 5, FRI: 6, SAT: 7 };
 	const replaced = field.replace(/SUN|MON|TUE|WED|THU|FRI|SAT/gi, (m) => String(dayMap[m.toUpperCase()]));
 	return expandField(replaced, 1, 7, original).map((d) => (d - 1) % 7);
+}
+
+function expandMonth(field: string, original: string): number[] {
+	// AWS cron accepts JAN-DEC as well as 1-12. Convert named months to numbers, then expand.
+	const monthMap: Record<string, number> = {
+		JAN: 1,
+		FEB: 2,
+		MAR: 3,
+		APR: 4,
+		MAY: 5,
+		JUN: 6,
+		JUL: 7,
+		AUG: 8,
+		SEP: 9,
+		OCT: 10,
+		NOV: 11,
+		DEC: 12,
+	};
+	const replaced = field.replace(/JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC/gi, (m) =>
+		String(monthMap[m.toUpperCase()]),
+	);
+	return expandField(replaced, 1, 12, original);
+}
+
+// Parse a cron field value as a whole non-negative integer, or NaN so the caller's
+// bounds check rejects it. Unlike `parseInt`, trailing junk (`9am`, `1st`) is not
+// ignored; unlike `Number`, an empty string (`-5`'s missing low end) is not 0.
+function toInt(value: string): number {
+	return /^\d+$/.test(value) ? Number(value) : NaN;
 }
 
 // Reject ranges that are non-numeric, inverted (`30-10`), or fall outside the

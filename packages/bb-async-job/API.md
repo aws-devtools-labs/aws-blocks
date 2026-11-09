@@ -5,6 +5,7 @@
 ```ts
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ComputeProvider } from '@aws-blocks/core/cdk/internal';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
@@ -22,6 +23,18 @@ export class AsyncJob<T = unknown> extends Scope {
     // (undocumented)
     submitBatch(payloads: T[], options?: SubmitOptions): Promise<BatchSubmitResult>;
     waitUntilComplete(jobId: string, options?: WaitUntilCompleteOptions): Promise<AsyncJobStatus>;
+}
+
+// @public
+export interface AsyncJobBaseOptions<T> {
+    batchSize?: number;
+    handler: (payload: T, context: AsyncJobContext) => Promise<void>;
+    logger?: ChildLogger;
+    maxBatchingWindowSeconds?: number;
+    maxRetries?: number;
+    schema?: StandardSchemaV1<T>;
+    timeoutSeconds?: number;
+    trackStatus?: boolean;
 }
 
 // @public
@@ -45,15 +58,13 @@ export const AsyncJobErrors: {
 };
 
 // @public
-export interface AsyncJobOptions<T> {
-    batchSize?: number;
-    handler: (payload: T, context: AsyncJobContext) => Promise<void>;
-    logger?: ChildLogger;
-    maxBatchingWindowSeconds?: number;
-    maxRetries?: number;
-    schema?: StandardSchemaV1<T>;
-    trackStatus?: boolean;
-}
+export type AsyncJobOptions<T> = AsyncJobBaseOptions<T> & ({
+    compute: ComputeProvider<'container'>;
+    maxConcurrencyPerCPU?: number;
+} | {
+    compute?: ComputeProvider<'serverless'>;
+    maxConcurrencyPerCPU?: never;
+});
 
 // @public
 export type AsyncJobState = 'queued' | 'processing' | 'complete' | 'failed';

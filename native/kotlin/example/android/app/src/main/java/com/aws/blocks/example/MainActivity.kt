@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,24 +35,41 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
 import blocks.testapp.Api
 import blocks.testapp.Api.ListTodos
 import blocks.testapp.Api.UpdateTodo
 import blocks.testapp.AuthApi
 import blocks.testapp.AuthState
 import blocks.testapp.Todo
+import blocks.testapp.api
+import blocks.testapp.authApi
+import blocks.testapp.invoke
+import com.aws.blocks.kotlin.Blocks
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.example.ui.theme.BlocksKotlinExampleTheme
 import kotlinx.coroutines.launch
 
+/**
+ * Owns the entry point so that it outlives the configuration changes that destroy the Activity.
+ * `addCloseable` closes it when the ViewModel is cleared, which keeps the HTTP engine and its
+ * pooled connections alive across a rotation.
+ */
+class MainViewModel : ViewModel() {
+    // The zero-argument form reaches the server the spec declares, so switching backends is a
+    // regeneration rather than an edit here.
+    val blocks = Blocks().also(::addCloseable)
+}
+
 class MainActivity : ComponentActivity() {
-    val auth = AuthApi()
-    val api = Api()
+    private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        val auth = viewModel.blocks.authApi
+        val api = viewModel.blocks.api
         setContent {
             BlocksKotlinExampleTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
@@ -81,7 +99,9 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun OidcAuth(auth: AuthApi) {
-    var oidcClient by remember { mutableStateOf<OidcClient?>(null) }
+    // The spec names the backend's providers, so the client is typed by the enum generated for
+    // them and sign-in takes one of its constants rather than a string.
+    var oidcClient by remember { mutableStateOf<OidcClient<AuthApi.GetClient.Provider>?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     // A client that has not signed in this launch reports no user, so the starting point comes
@@ -133,19 +153,23 @@ fun OidcAuth(auth: AuthApi) {
                 Text("Sign Out")
             }
         } else {
-            client.providers.forEach { provider ->
-                Button(
-                    onClick = {
-                        scope.launch {
-                            error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Sign in with $provider")
+            // `entries` is what the spec named when it was generated; `client.providers` is what
+            // the deployed backend reports now, so show the ones both agree on.
+            AuthApi.GetClient.Provider.entries
+                .filter { it.providerName in client.providers }
+                .forEach { provider ->
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                error = runCatching { client.signIn(provider) }.exceptionOrNull()?.message
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Sign in with ${provider.providerName}")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-                Spacer(modifier = Modifier.height(8.dp))
-            }
         }
 
         if (error != null) {

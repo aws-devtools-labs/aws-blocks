@@ -46,28 +46,15 @@ public struct UnknownTransferable: Sendable, Codable, Equatable {
 
     /// Throws unless `descriptor`'s `__blocks` is a non-empty string equal to `expectedTag` and every value is JSON-representable.
     public static func fromJSON(_ descriptor: [String: Any], expectedTag: String) throws -> UnknownTransferable {
-        guard let tag = descriptor["__blocks"] as? String else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [],
-                debugDescription: "UnknownTransferable for '\(expectedTag)' expected a string '__blocks' tag"
-            ))
-        }
-        guard !tag.isEmpty else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [],
-                debugDescription: "UnknownTransferable for '\(expectedTag)' expected a non-empty '__blocks' tag"
-            ))
-        }
-        guard tag == expectedTag else {
-            throw DecodingError.dataCorrupted(.init(
-                codingPath: [],
-                debugDescription: "UnknownTransferable expected tag '\(expectedTag)', got '\(tag)'"
-            ))
-        }
+        let validated = try validateTransferableDescriptor(
+            descriptor,
+            expectedTag: expectedTag,
+            subject: "UnknownTransferable"
+        )
         // Convert directly to JSONValue (needed for Sendable), preserving each
         // JSON number's type instead of collapsing it through a Codable re-decode.
         var value: [String: JSONValue] = [:]
-        for (key, element) in descriptor {
+        for (key, element) in validated {
             value[key] = try jsonValue(from: element, expectedTag: expectedTag)
         }
         return UnknownTransferable(descriptor: value)
