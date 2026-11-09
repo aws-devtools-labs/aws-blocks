@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { blocksError } from '@aws-blocks/core';
 import type { CorsRule, FileBucketOptions } from './types.js';
 
 /**
@@ -29,16 +30,14 @@ export const MAX_OBJECT_LOCK_RETENTION_DAYS = 36500;
 const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
 /**
- * Build a `ValidationFailed`-named error the same way `mock-utils.ts`'s local
- * `blocksError` helper does, so a rejected key surfaces the same `.name` and
- * name-prefixed `.message` regardless of which layer rejected it. Kept as a
- * small local helper (rather than importing core's `blocksError`) to keep this
- * module dependency-light — it has no other runtime imports.
+ * Build a `ValidationFailed` error with core's branded `blocksError`, the same
+ * helper `mock-utils.ts` uses, so a rejected key surfaces the same `.name` and
+ * name-prefixed `.message` regardless of which layer rejected it. The brand
+ * makes the error wire-safe: the RPC sanitizer forwards its name and message
+ * to the client instead of collapsing it to a generic internal error.
  */
 function validationError(message: string): Error {
-	const err = new Error(`ValidationFailed: ${message}`);
-	err.name = 'ValidationFailed';
-	return err;
+	return blocksError('ValidationFailed', message);
 }
 
 /**

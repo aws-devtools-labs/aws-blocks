@@ -275,7 +275,7 @@ How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC m
 }}
 ```
 
-The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`.
+The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`. A response that is not a JSON-RPC envelope, such as a gateway's own `429 {"message":"Too Many Requests"}` or an HTML error page, also rejects with an `ApiError`: `status` is the HTTP status (`502` if that status was 2xx) and `message` is the body's `message` when present, else `HTTP <status>`.
 
 #### `hasAuthError(state, name)`
 
@@ -363,7 +363,7 @@ And what you read from `ctx.request`:
 | On `ctx.request` | Notes |
 |---|---|
 | `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
-| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. |
+| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. `url.pathname` is the route path, the same under `npm run dev` and deployed: it never includes the API Gateway stage (`/prod`). Behind a front door such as `Hosting`, `url.origin` is the API Gateway host the backend received, not the browser's, so don't build public links from it. |
 | `headers` | Request `Headers`, including `cookie`. |
 | `json()` / `text()` / `body` | Body as parsed JSON, raw text, or a `ReadableStream`. |
 | `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
@@ -383,6 +383,8 @@ new RawRoute(scope, 'user', {
 ```
 
 Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+
+To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
 `path` can be omitted, in which case it is derived from the scope-chain IDs, so `Scope('app') → Scope('v1') → RawRoute('health')` gives `/v1/health`. That means restructuring your construct tree silently changes URLs, so pass an explicit `path` for anything a client depends on.
 
