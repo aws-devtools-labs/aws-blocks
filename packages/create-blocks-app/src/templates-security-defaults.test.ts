@@ -284,6 +284,7 @@ const PUBLIC_GREETING = 'public: static hello-world, touches no data';
  * security decision — say why it is safe to call signed out.
  */
 const UNGATED: Record<string, Record<string, string>> = {
+  agent: { 'api.ping': 'public: liveness probe, touches no data' },
   amplify: { 'api.greet': PUBLIC_GREETING },
   'api-only': { 'api.health': 'public: liveness probe, touches no data' },
   'auth-cognito': {
