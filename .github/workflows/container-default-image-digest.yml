@@ -1,0 +1,61 @@
+name: Container default image digest
+# The ContainerCompute default image is pinned by digest
+# (packages/bb-container-compute/src/default-image.ts), so it no longer picks up
+# node:24-slim security patches on its own, and Dependabot doesn't track it.
+# This checks weekly whether the pin is behind the tag and opens (or comments on)
+# one tracking issue when it is, so the bump happens deliberately.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays 06:17 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: container-default-image-digest
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            scripts/container-default-image-digest.mjs
+            packages/bb-container-compute/src/default-image.ts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Compare the pin with the tag's current digest
+        id: digest
+        # Exit 0 = current, 1 = behind, 2 = registry/network error (fails the job).
+        run: |
+          set +e
+          node scripts/container-default-image-digest.mjs > digest.txt 2>&1
+          code=$?
+          set -e
+          cat digest.txt
+          if [ "$code" = 2 ]; then exit 1; fi
+          echo "behind=$([ "$code" = 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update the tracking issue
+        if: steps.digest.outputs.behind == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          title='ContainerCompute default image digest is behind node:24-slim'
+          body="$(printf 'The pinned default image in `packages/bb-container-compute/src/default-image.ts` is behind the `node:24-slim` tag on ECR Public:\n\n```\n%s\n```\n\nTo bump: replace the digest in `DEFAULT_CONTAINER_IMAGE` with the `current` reference above, run the `@aws-blocks/bb-container-compute` tests, and add a changeset. Found by the scheduled `Container default image digest` workflow.' "$(cat digest.txt)")"
+          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
