@@ -398,6 +398,11 @@ const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), 
 const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
 const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
 const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
+// `dbxc` runs on an Aurora PostgreSQL cluster created with the express configuration (`type: 'aurora'`):
+// full PostgreSQL, so its migration uses SERIAL, a plain CREATE INDEX and a trigger in PL/pgSQL, and a
+// transaction may change any number of rows. Scales to zero between requests.
+const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
+const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -1784,7 +1789,42 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
       dbxa: { cluster: dbxa.cluster, schemaName: dbxa.schemaName },
       dbxb: { cluster: dbxb.cluster, schemaName: dbxb.schemaName },
+      dbxc: { cluster: dbxc.cluster, schemaName: dbxc.schemaName },
     };
+  },
+
+  // dbxc: PostgreSQL features on an `aurora` cluster.
+  async dbxcAdd(title: string) {
+    return await dbxc.queryOne<{ id: number; title: string; done: boolean }>(
+      sql`INSERT INTO tasks (title) VALUES (${title}) RETURNING id, title, done`,
+    );
+  },
+
+  async dbxcComplete(id: number) {
+    const before = await dbxc.queryOne<{ updated_at: string }>(sql`SELECT updated_at::text FROM tasks WHERE id = ${id}`);
+    await dbxc.execute(sql`UPDATE tasks SET done = true WHERE id = ${id}`);
+    const after = await dbxc.queryOne<{ done: boolean; updated_at: string }>(
+      sql`SELECT done, updated_at::text FROM tasks WHERE id = ${id}`,
+    );
+    return { done: after?.done ?? false, touched: before !== null && after !== null && before.updated_at !== after.updated_at };
+  },
+
+  // More rows in one transaction than a DSQL cluster allows; an `aurora` cluster has no such limit.
+  async dbxcBulk(count: number) {
+    const prefix = `bulk-${Date.now().toString(36)}-`;
+    const inserted = await dbxc.transaction(async (tx) => {
+      const { rowCount } = await tx.execute(
+        sql`INSERT INTO tasks (title) SELECT ${prefix} || g FROM generate_series(1, ${count}) g`,
+      );
+      return rowCount;
+    });
+    const { rowCount: deleted } = await dbxc.execute(sql`DELETE FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { inserted, deleted };
+  },
+
+  async dbxcDelete(id: number) {
+    const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE id = ${id}`);
+    return { rowCount };
   },
 
   async dbxInsert(id: string, name: string, value: number) {

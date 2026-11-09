@@ -8,7 +8,7 @@ import { afterEach, describe, test } from 'node:test';
 import { ApiError, blocksError, isBlocksError, Scope } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
-import { DSQL_MIGRATION_VALIDATION_ERROR_NAME, DSQL_PERMISSION_ERROR_NAME } from './errors.js';
+import { DSQL_MIGRATION_VALIDATION_ERROR_NAME, PERMISSION_ERROR_NAME } from './errors.js';
 import { Database, DatabaseCluster, DatabaseErrors, sql } from './index.mock.js';
 import { resolveMigrationsPath } from './migrations/runner.js';
 import { internalAccess } from './runtime/internal.js';
@@ -486,7 +486,7 @@ describe('DatabaseCluster (shared DSQL)', () => {
 		const { scope, shared } = sharedCluster();
 		const db = new Database(scope, 'checks', { cluster: shared });
 		await assert.rejects(db.execute(sql`CREATE TABLE t (id TEXT)`), {
-			name: DSQL_PERMISSION_ERROR_NAME,
+			name: PERMISSION_ERROR_NAME,
 			message: /DDL statements .* not allowed/,
 		});
 	});
@@ -593,3 +593,99 @@ describe('construction-time rules', () => {
 
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
+
+describe('DatabaseCluster (shared Aurora, express configuration)', () => {
+	const auroraCluster = () => {
+		const scope = new Scope(scopeId('bbdb', 'aurora'));
+		return { scope, shared: new DatabaseCluster(scope, 'main', { type: 'aurora' }) };
+	};
+	let current: Database | undefined;
+	afterEach(async () => {
+		if (current) await resetMockSchema(current, current.schemaName);
+		current = undefined;
+	});
+
+	test('PostgreSQL migrations run as written: SERIAL, a plain index, a trigger in PL/pgSQL, one transaction per file', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'pg', {
+			cluster: shared,
+			migrationsPath: migrations({
+				'001_notes.sql': [
+					'CREATE TABLE notes (id SERIAL PRIMARY KEY, body TEXT NOT NULL, updated_at TIMESTAMPTZ);',
+					'CREATE INDEX notes_body ON notes (body);',
+					'CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.updated_at := now(); RETURN NEW; END $$;',
+					'CREATE TRIGGER notes_touch BEFORE INSERT OR UPDATE ON notes FOR EACH ROW EXECUTE FUNCTION touch();',
+				].join('\n'),
+			}),
+		});
+		const db = current;
+		assert.deepStrictEqual(db.cluster, { kind: 'aurora', id: shared.fullId });
+		assert.strictEqual((await db.execute(sql`INSERT INTO notes (body) VALUES ('a')`)).rowCount, 1);
+		const row = await db.queryOne<{ id: number; updated_at: Date | null }>(sql`SELECT id, updated_at FROM notes`);
+		assert.strictEqual(row?.id, 1, 'SERIAL assigned the id');
+		assert.ok(row?.updated_at, 'the trigger ran');
+		assert.ok(await db.queryOne(sql`SELECT 1 FROM pg_indexes WHERE indexname = 'notes_body'`), 'the index exists');
+		assert.deepStrictEqual(
+			(await db.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			['001_notes.sql'],
+		);
+		assert.strictEqual(
+			await db.queryOne(sql`SELECT 1 FROM _migration_progress`),
+			null,
+			'nothing is left to resume',
+		);
+	});
+
+	test('no DSQL limits: a transaction may change more than 3,000 rows, and no lint runs on handler SQL', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'big', {
+			cluster: shared,
+			migrationsPath: migrations({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);' }),
+		});
+		const db = current;
+		const { rowCount } = await db.execute(sql`INSERT INTO t (n) SELECT g FROM generate_series(1, 3001) g`);
+		assert.strictEqual(rowCount, 3001);
+		await db.transaction(async (tx) => {
+			assert.strictEqual((await tx.execute(sql`UPDATE t SET n = n + 1`)).rowCount, 3001);
+		});
+		assert.strictEqual((await db.queryOne<{ c: number }>(sql`SELECT count(*)::int AS c FROM t`))?.c, 3001);
+	});
+
+	test('DDL in a handler is refused, as the deployed app role has DML only; simulateConflict works', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'ddl', {
+			cluster: shared,
+			migrationsPath: migrations({ '001.sql': 'CREATE TABLE t (id INT PRIMARY KEY);' }),
+		});
+		const db = current;
+		await assert.rejects(db.execute(sql`CREATE TABLE u (id INT)`), {
+			name: PERMISSION_ERROR_NAME,
+			message: /not allowed in the app runtime of a aurora cluster/,
+		});
+		simulateConflict(db);
+		await assert.rejects(
+			db.transaction(async (tx) => {
+				await tx.execute(sql`INSERT INTO t VALUES (1)`);
+			}),
+			(e: unknown) => isBlocksError(e, DatabaseErrors.SerializationFailure),
+		);
+		assert.strictEqual(await db.queryOne(sql`SELECT 1 FROM t`), null, 'the conflicting transaction rolled back');
+	});
+
+	test('an aurora and a dsql cluster can coexist in one app; a made-up type is rejected', () => {
+		const scope = app();
+		const aurora = new DatabaseCluster(scope, 'aurora', { type: 'aurora', minCapacity: 0.5, maxCapacity: 4 });
+		const dsql = new DatabaseCluster(scope, 'dsql', { type: 'dsql' });
+		assert.strictEqual(new Database(scope, 'a', { cluster: aurora }).cluster.kind, 'aurora');
+		assert.strictEqual(new Database(scope, 'd', { cluster: dsql }).cluster.kind, 'dsql');
+		assert.throws(
+			() => new Database(scope, 'x', { cluster: { type: 'provisioned', fullId: 'nope' } as never }),
+			/'cluster' must be a DatabaseCluster/,
+		);
+		// The same checks as at synth, so a bad value stops `npm run dev` too.
+		assert.throws(
+			() => new DatabaseCluster(scope, 'bad', { type: 'aurora', minCapacity: 0.3 }),
+			/minCapacity must be a multiple of 0\.5/,
+		);
+	});
+});

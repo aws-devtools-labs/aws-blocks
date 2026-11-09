@@ -12,7 +12,7 @@ import { _closeAllPgliteClusters, sharedPgliteCluster } from './pglite-cluster.j
 
 const DATA_DIR = join(process.cwd(), '.bb-data', `pglite-cluster-test-${process.pid}`);
 let counter = 0;
-const cluster = () => sharedPgliteCluster(join(DATA_DIR, `c${++counter}`, 'pglite'));
+const cluster = () => sharedPgliteCluster(join(DATA_DIR, `c${++counter}`, 'pglite'), 'dsql');
 
 installLocalTestHooks({ mockDataPrefix: 'pglite-cluster-test' });
 

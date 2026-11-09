@@ -22,7 +22,7 @@ class GrantEngine extends RecordingEngine {
 describe('provisionAppRole', () => {
 	test('does not grant on schema public (DSQL rejects it as a system entity)', async () => {
 		const engine = new GrantEngine(['notes']);
-		await provisionAppRole(engine, 'blocks_app_x', 'arn:aws:iam::123:role/app', 'public');
+		await provisionAppRole(engine, 'dsql', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'public');
 		assert.ok(!engine.statements.some((s) => s.includes('ON SCHEMA')), engine.statements.join('\n'));
 		assert.ok(engine.statements.some((s) => s.startsWith('CREATE ROLE')));
 		assert.ok(engine.statements.some((s) => s.startsWith('AWS IAM GRANT')));
@@ -33,8 +33,19 @@ describe('provisionAppRole', () => {
 
 	test('grants usage on a block-owned schema', async () => {
 		const engine = new GrantEngine();
-		await provisionAppRole(engine, 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
+		await provisionAppRole(engine, 'dsql', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
 		assert.ok(engine.statements.includes('GRANT USAGE ON SCHEMA "app_dbxa" TO "blocks_app_x"'));
+	});
+
+	test('on an aurora cluster the role joins rds_iam instead of an AWS IAM GRANT', async () => {
+		const engine = new GrantEngine(['notes']);
+		await provisionAppRole(engine, 'aurora', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
+		assert.ok(engine.statements.includes('GRANT rds_iam TO "blocks_app_x"'), engine.statements.join('\n'));
+		assert.ok(!engine.statements.some((s) => s.startsWith('AWS IAM GRANT')));
+		assert.ok(engine.statements.includes('GRANT USAGE ON SCHEMA "app_dbxa" TO "blocks_app_x"'));
+		assert.ok(
+			engine.statements.some((s) => s.includes('GRANT SELECT, INSERT, UPDATE, DELETE ON "app_dbxa"."notes"')),
+		);
 	});
 });
 

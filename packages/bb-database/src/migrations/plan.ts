@@ -7,6 +7,7 @@ import { splitStatements } from '@aws-blocks/data-common';
 import { type AsyncDdlTarget, asyncDdlTarget } from '../dialect/async-ddl.js';
 import { ASYNC_DDL, findStatementIssues, inspectStatement } from '../dialect/validation.js';
 import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
+import type { ClusterType } from '../types.js';
 
 export interface StatementStep {
 	kind: 'statement';
@@ -57,8 +58,12 @@ function sequenceStatement(statement: string): PlanStep[] {
 	return ASYNC_DDL.test(cleaned) ? [step, waitJob(step, cleaned)] : [step];
 }
 
-/** Checks every file with dsql-lint; one error lists every finding across every file. */
-export function lintMigrationFiles(migrations: Record<string, string>): void {
+/**
+ * Checks every file of a `dsql` cluster with dsql-lint; one error lists every finding across every file. An
+ * `aurora` cluster runs PostgreSQL, so its files are not checked: what PostgreSQL accepts, the cluster accepts.
+ */
+export function lintMigrationFiles(migrations: Record<string, string>, kind: ClusterType): void {
+	if (kind !== 'dsql') return;
 	const errors: string[] = [];
 	for (const file of Object.keys(migrations).sort()) {
 		for (const issue of findStatementIssues(migrations[file])) {
@@ -73,13 +78,22 @@ export function lintMigrationFiles(migrations: Record<string, string>): void {
 	}
 }
 
-export function buildMigrationPlan(migrations: Record<string, string>): MigrationPlan {
+// PostgreSQL runs DDL inside a transaction, so a whole file is one transaction: it applies entirely or not at all,
+// and a failure leaves nothing to resume.
+const transactionalStatement = (sql: string): PlanStep[] => [{ kind: 'statement', sql, transactional: true }];
+
+/**
+ * The steps of each file for a cluster of `kind`: on `dsql`, DDL alone per transaction with a wait after each
+ * `ASYNC` statement; on `aurora`, every statement of a file in one transaction.
+ */
+export function buildMigrationPlan(migrations: Record<string, string>, kind: ClusterType): MigrationPlan {
+	const sequence = kind === 'dsql' ? sequenceStatement : transactionalStatement;
 	const files: FilePlan[] = Object.keys(migrations)
 		.sort()
 		.map((file) => ({
 			file,
 			hash: createHash('sha256').update(migrations[file]).digest('hex'),
-			steps: splitStatements(migrations[file]).flatMap(sequenceStatement),
+			steps: splitStatements(migrations[file]).flatMap(sequence),
 		}));
 	return { files };
 }

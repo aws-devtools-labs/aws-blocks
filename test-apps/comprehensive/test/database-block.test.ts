@@ -4,17 +4,18 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { ApiError, isBlocksError } from '@aws-blocks/core';
-import { DatabaseErrors } from '@aws-blocks/bb-database';
+import { type ClusterType, DatabaseErrors } from '@aws-blocks/bb-database';
 import type { api as apiType } from 'aws-blocks';
 
 // Compile-time assertions (same pattern as database.test.ts). The cluster
-// descriptor's `kind` must survive the RPC boundary as the literal the backend
-// inferred from the constructor.
+// descriptor's `kind` must survive the RPC boundary as the block's `ClusterType`.
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
 type Info = Awaited<ReturnType<typeof apiType.dbxInfo>>;
-type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], 'dsql'>>;
-type _DbxaKind = Expect<Equal<Info['dbxa']['cluster']['kind'], 'dsql'>>;
+type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], ClusterType>>;
+type _DbxcKind = Expect<Equal<Info['dbxc']['cluster']['kind'], ClusterType>>;
+type Task = NonNullable<Awaited<ReturnType<typeof apiType.dbxcAdd>>>;
+type _Task = Expect<Equal<Task, { id: number; title: string; done: boolean }>>;
 // A result schema, not a type argument, is what types these two: the inferred
 // type must be the schema's output, and `id` must be a number on both environments.
 type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>>;
@@ -24,8 +25,11 @@ type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 
 export function databaseBlockTests(getApi: () => typeof apiType) {
   describe('bb-database (Database + DatabaseCluster)', () => {
-    test('descriptors: dbx owns its DSQL cluster, dbxa/dbxb share one', async () => {
+    test('descriptors: dbx owns its DSQL cluster, dbxa/dbxb share one, dbxc runs on an aurora cluster', async () => {
       const info = await getApi().dbxInfo();
+      assert.strictEqual(info.dbxc.cluster.kind, 'aurora');
+      assert.notStrictEqual(info.dbxc.cluster.id, info.dbxa.cluster.id);
+      assert.strictEqual(info.dbxc.schemaName, 'dbxc');
       assert.deepStrictEqual(info.dbx.cluster, { kind: 'dsql', id: 'default' });
       assert.strictEqual(info.dbx.schemaName, 'public');
       assert.strictEqual(info.dbxa.cluster.kind, 'dsql');
@@ -131,7 +135,7 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       const api = getApi();
       const ddl = await api.dbxRejectDdl();
       assert.ok(
-        ddl.error === 'DsqlPermissionException' || ddl.error === DatabaseErrors.QueryFailed,
+        ddl.error === 'DatabasePermissionException' || ddl.error === DatabaseErrors.QueryFailed,
         `expected the mock's DDL guard or DSQL's rejection, got ${ddl.error}`,
       );
       const truncate = await api.dbxRejectTruncate();
@@ -169,6 +173,18 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.strictEqual(after.dbxb, before.dbxb + 2);
       await api.dbxaDelete(sku);
       assert.deepStrictEqual(await api.dbxbDeleteAccount(account), { remainingItems: 0 });
+    });
+
+    test('aurora cluster - SERIAL ids, a PL/pgSQL trigger and a transaction over 3,000 rows', async () => {
+      const api = getApi();
+      const task = await api.dbxcAdd(`task-${Date.now().toString(36)}`);
+      assert.ok(task && typeof task.id === 'number' && task.done === false, 'SERIAL assigned a numeric id');
+      // The trigger bumps updated_at; the second query runs at least a tick later than the insert.
+      await new Promise((r) => setTimeout(r, 5));
+      const completed = await api.dbxcComplete(task.id);
+      assert.deepStrictEqual(completed, { done: true, touched: true });
+      assert.deepStrictEqual(await api.dbxcBulk(3001), { inserted: 3001, deleted: 3001 });
+      assert.deepStrictEqual(await api.dbxcDelete(task.id), { rowCount: 1 });
     });
 
     test('shared cluster - the validated foreign key and check constraint are enforced on DSQL', async () => {

@@ -7,7 +7,7 @@ import { isBlocksError } from '@aws-blocks/core';
 import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
 import { buildMigrationPlan, lintMigrationFiles } from './plan.js';
 
-const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }).files[0].steps;
+const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }, 'dsql').files[0].steps;
 
 describe('migration plan (dsql): sequencing', () => {
 	test('DDL runs outside the transaction, DML inside', () => {
@@ -104,10 +104,13 @@ describe('migration plan (dsql): sequencing', () => {
 	});
 
 	test('files are planned in name order', () => {
-		const p = buildMigrationPlan({
-			'002_seed.sql': "INSERT INTO t VALUES ('a');",
-			'001_init.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);',
-		});
+		const p = buildMigrationPlan(
+			{
+				'002_seed.sql': "INSERT INTO t VALUES ('a');",
+				'001_init.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);',
+			},
+			'dsql',
+		);
 		assert.deepStrictEqual(
 			p.files.map((f) => f.file),
 			['001_init.sql', '002_seed.sql'],
@@ -121,10 +124,13 @@ describe('migration lint (dsql): what stops it', () => {
 	test('every finding across every file is listed, with its file, rule and doc page', () => {
 		assert.throws(
 			() =>
-				lintMigrationFiles({
-					'001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nCREATE INDEX t_id ON t (id);',
-					'002.sql': 'TRUNCATE t;',
-				}),
+				lintMigrationFiles(
+					{
+						'001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nCREATE INDEX t_id ON t (id);',
+						'002.sql': 'TRUNCATE t;',
+					},
+					'dsql',
+				),
 			(e: unknown) => {
 				assert.ok(isBlocksError(e, DSQL_MIGRATION_VALIDATION_ERROR_NAME));
 				const lines = e.message.split('\n').slice(1);
@@ -139,9 +145,30 @@ describe('migration lint (dsql): what stops it', () => {
 	});
 
 	test('a clean file lints without error; the plan itself never lints', () => {
-		lintMigrationFiles({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' });
+		lintMigrationFiles({ '001.sql': 'CREATE TABLE t (id TEXT PRIMARY KEY);' }, 'dsql');
 		// The migration Lambda plans files checked at synth, without the linter.
-		const p = buildMigrationPlan({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' });
+		const p = buildMigrationPlan({ '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' }, 'dsql');
 		assert.strictEqual(p.files[0].steps[0].sql, 'CREATE TABLE t (id SERIAL PRIMARY KEY)');
+	});
+});
+
+describe('migration plan (aurora): one transaction per file', () => {
+	test('every statement is transactional and no job wait is added', () => {
+		const plan = buildMigrationPlan(
+			{
+				'001.sql':
+					'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);\nINSERT INTO t (n) VALUES (1);',
+			},
+			'aurora',
+		);
+		const steps = plan.files[0].steps;
+		assert.strictEqual(steps.length, 3);
+		assert.ok(steps.every((s) => s.kind === 'statement' && s.transactional));
+	});
+
+	test('an aurora file is never linted; a dsql file is', () => {
+		const files = { '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' };
+		lintMigrationFiles(files, 'aurora');
+		assert.throws(() => lintMigrationFiles(files, 'dsql'), { name: DSQL_MIGRATION_VALIDATION_ERROR_NAME });
 	});
 });

@@ -22,9 +22,9 @@ export const DatabaseErrors = {
 	ResultValidationFailed: 'ResultValidationFailedException',
 } as const;
 
-// Local mock only: deployed DSQL raises SQLSTATE 42501 (→ QueryFailed) for DDL on the app role, so this
+// Local mock only: a deployed cluster raises SQLSTATE 42501 (→ QueryFailed) for DDL on the app role, so this
 // name is not on the public DatabaseErrors.
-export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
+export const PERMISSION_ERROR_NAME = 'DatabasePermissionException';
 
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 

@@ -6,7 +6,6 @@ function serverOnly(name: string): never {
 }
 
 export class Database {
-	constructor(..._args: unknown[]) {}
 	query(): never {
 		return serverOnly('Database.query()');
 	}
@@ -21,9 +20,7 @@ export class Database {
 	}
 }
 
-export class DatabaseCluster {
-	constructor(..._args: unknown[]) {}
-}
+export class DatabaseCluster {}
 
 export function sql(): never {
 	return serverOnly('sql');
@@ -31,6 +28,7 @@ export function sql(): never {
 
 export { DatabaseErrors } from './errors.js';
 export type {
+	AuroraClusterOptions,
 	ClusterRef,
 	ClusterType,
 	DatabaseBlockOptions,
@@ -41,6 +39,7 @@ export type {
 	DsqlDatabaseOptions,
 	OwnedDatabaseOptions,
 	QueryOptions,
+	SharedDatabaseOptions,
 	Transaction,
 	TransactionOptions,
 } from './types.js';

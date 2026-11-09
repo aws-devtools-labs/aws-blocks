@@ -7,6 +7,7 @@ export type { SqlQuery } from '@aws-blocks/data-common';
 export { sql } from '@aws-blocks/data-common';
 export { DatabaseErrors } from './errors.js';
 export type {
+	AuroraClusterOptions,
 	ClusterRef,
 	ClusterType,
 	DatabaseBlockOptions,
@@ -17,6 +18,7 @@ export type {
 	DsqlDatabaseOptions,
 	OwnedDatabaseOptions,
 	QueryOptions,
+	SharedDatabaseOptions,
 	Transaction,
 	TransactionOptions,
 } from './types.js';

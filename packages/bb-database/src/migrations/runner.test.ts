@@ -104,7 +104,7 @@ const constraintFiles = {
 };
 const lostConnection = () => new Error('Connection terminated unexpectedly');
 
-const run = (engine: ScriptedEngine, plan: MigrationPlan = buildMigrationPlan(files)) =>
+const run = (engine: ScriptedEngine, plan: MigrationPlan = buildMigrationPlan(files, 'dsql')) =>
 	runMigrationPlan(engine, plan, { schemaName: 'public', log: () => {} });
 
 // The DSQL facts these tests pin, which only a live cluster verifies: `sys.jobs` drops a finished job after
@@ -113,7 +113,7 @@ const run = (engine: ScriptedEngine, plan: MigrationPlan = buildMigrationPlan(fi
 describe('migration runner', () => {
 	test('stops at a running job, records it, and resumes once the job completes', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 
 		const first = await run(engine, plan);
 		assert.deepStrictEqual(first.applied, []);
@@ -152,7 +152,7 @@ describe('migration runner', () => {
 
 	test('the job id is on disk before the first poll, so a dropped connection does not reissue the DDL', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		engine.failOn.set(/^SELECT status, details FROM sys\.jobs/, lostConnection());
 		await assert.rejects(run(engine, plan), /Connection terminated unexpectedly/);
 		assert.deepStrictEqual(engine.progress.get('001_t.sql'), {
@@ -170,14 +170,14 @@ describe('migration runner', () => {
 
 	test('a file edited after a partial run is refused, by name, with the way forward', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		await run(engine, plan);
 		const saved = { step: 2, jobId: 'job1', fileHash: plan.files[0].hash };
 		assert.deepStrictEqual(engine.progress.get('001_t.sql'), saved);
 
 		const edited = { ...files, '001_t.sql': files['001_t.sql'].replace('n INT', 'n INT, extra TEXT') };
 		const before = engine.statements.length;
-		await assert.rejects(run(engine, buildMigrationPlan(edited)), {
+		await assert.rejects(run(engine, buildMigrationPlan(edited, 'dsql')), {
 			name: MIGRATION_FAILED_ERROR_NAME,
 			message: /001_t\.sql was edited after a partial run[\s\S]*[Rr]estore[\s\S]*new migration file/,
 		});
@@ -195,7 +195,7 @@ describe('migration runner', () => {
 
 	test('a failed job rewinds to the ASYNC statement, drops the invalid index, and the next run reissues it', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		await run(engine, plan);
 		engine.jobs.set('job1', { status: 'failed', details: 'Found duplicate key while validating index' });
 		await assert.rejects(run(engine, plan), {
@@ -222,7 +222,7 @@ describe('migration runner', () => {
 
 	test('a job purged from sys.jobs counts as completed only when the catalog shows a valid index', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		await run(engine, plan);
 		engine.jobs.delete('job1');
 		engine.indexes.set('public.t_n', true);
@@ -232,7 +232,7 @@ describe('migration runner', () => {
 
 	test('a purged job whose index is INVALID is a failure', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		await run(engine, plan);
 		engine.jobs.delete('job1');
 		assert.strictEqual(engine.indexes.get('public.t_n'), false);
@@ -251,7 +251,7 @@ describe('migration runner', () => {
 
 	test('a purged job whose index is missing rewinds without a drop', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		await run(engine, plan);
 		engine.jobs.delete('job1');
 		engine.indexes.delete('public.t_n');
@@ -265,7 +265,7 @@ describe('migration runner', () => {
 	});
 
 	test('a purged validation job is checked against pg_constraint.convalidated', async () => {
-		const plan = buildMigrationPlan(constraintFiles);
+		const plan = buildMigrationPlan(constraintFiles, 'dsql');
 
 		const notValidated = new ScriptedEngine();
 		await run(notValidated, plan);
@@ -324,11 +324,11 @@ describe('migration runner', () => {
 			'002_idx.sql': 'CREATE INDEX ASYNC t_n ON t (n);',
 		};
 		const engine = new ScriptedEngine();
-		const first = await run(engine, buildMigrationPlan(split));
+		const first = await run(engine, buildMigrationPlan(split, 'dsql'));
 		assert.deepStrictEqual(first.waitingOn, { file: '002_idx.sql', step: 1, jobId: 'job1' });
 		engine.jobs.set('job1', { status: 'failed', details: 'Found duplicate key while validating index' });
 		await assert.rejects(
-			run(engine, buildMigrationPlan(split)),
+			run(engine, buildMigrationPlan(split, 'dsql')),
 			/002_idx\.sql failed at statement 1 of 1: CREATE INDEX ASYNC t_n/,
 		);
 		assert.ok(!engine.progress.has('002_idx.sql'), 'nothing of the file persisted, so no row is kept');
@@ -336,14 +336,14 @@ describe('migration runner', () => {
 
 		// The author changes the index (a different column set) in place: nothing ran from the old text.
 		const edited = { ...split, '002_idx.sql': 'CREATE INDEX ASYNC t_n ON t (n, id);' };
-		const retry = await run(engine, buildMigrationPlan(edited));
+		const retry = await run(engine, buildMigrationPlan(edited, 'dsql'));
 		assert.deepStrictEqual(retry.waitingOn, { file: '002_idx.sql', step: 1, jobId: 'job2' });
 		assert.ok(engine.statements.includes('CREATE INDEX ASYNC t_n ON t (n, id)'));
 	});
 
 	test('a resume at an ASYNC statement whose index is already valid skips the statement and its wait', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		// The progress save after a successful CREATE INDEX ASYNC failed: the row still names the statement.
 		engine.progress.set('001_t.sql', { step: 1, jobId: null, fileHash: plan.files[0].hash });
 		engine.indexes.set('public.t_n', true);
@@ -357,7 +357,7 @@ describe('migration runner', () => {
 
 	test('a resume at an ASYNC statement whose index is INVALID drops it and re-issues the statement', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		engine.progress.set('001_t.sql', { step: 1, jobId: null, fileHash: plan.files[0].hash });
 		engine.indexes.set('public.t_n', false);
 		const result = await run(engine, plan);
@@ -369,7 +369,7 @@ describe('migration runner', () => {
 
 	test('a resume at an ASYNC statement whose index is INVALID with a running job adopts the job instead of dropping', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		// The statement ran and its job is still building the index when the progress save failed.
 		engine.progress.set('001_t.sql', { step: 1, jobId: null, fileHash: plan.files[0].hash });
 		engine.indexes.set('public.t_n', false);
@@ -393,7 +393,7 @@ describe('migration runner', () => {
 
 	test('a resume at a VALIDATE CONSTRAINT statement whose validation job is running adopts the job', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(constraintFiles);
+		const plan = buildMigrationPlan(constraintFiles, 'dsql');
 		engine.progress.set('001_c.sql', { step: 2, jobId: null, fileHash: plan.files[0].hash });
 		engine.constraints.set('public.t.t_n_pos', false);
 		engine.jobs.set('job9', { status: 'processing', objectName: 't_n_pos' });
@@ -404,7 +404,7 @@ describe('migration runner', () => {
 
 	test('a resume at an ASYNC statement whose index is missing re-issues the statement', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		engine.progress.set('001_t.sql', { step: 1, jobId: null, fileHash: plan.files[0].hash });
 		const result = await run(engine, plan);
 		assert.deepStrictEqual(result.waitingOn, { file: '001_t.sql', step: 2, jobId: 'job1' });
@@ -413,7 +413,7 @@ describe('migration runner', () => {
 
 	test('the resume log counts statements, like the failure messages', async () => {
 		const engine = new ScriptedEngine();
-		const plan = buildMigrationPlan(files);
+		const plan = buildMigrationPlan(files, 'dsql');
 		await run(engine, plan);
 		const lines: string[] = [];
 		await runMigrationPlan(engine, plan, { schemaName: 'public', log: (m) => lines.push(m) });
