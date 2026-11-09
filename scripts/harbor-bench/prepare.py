@@ -10,6 +10,11 @@ import urllib.request
 from pins import CLAUDE_VERSION, MODEL, SKILL_REVISION, SKILL_SHA256, SKILL_URL
 
 ROOT = Path(__file__).resolve().parent
+# Claude Code options for every phase. max_turns and max_budget_usd stop a runaway session; each is
+# far above what a passing session uses (under 40 turns and about 0.70 USD list price per phase,
+# about 1.30 USD for all three). The budget is the CLI's list-price estimate, not AWS billing.
+AGENT_KWARGS = {'version': CLAUDE_VERSION, 'max_turns': 200, 'max_budget_usd': '10',
+                'disallowed_tools': 'Agent,Task', 'disable_web_search': True}
 
 
 def prepare(registry, output, arm, commit, harness_commit=None):
@@ -48,8 +53,7 @@ def prepare(registry, output, arm, commit, harness_commit=None):
             'import_path': 'agent:HarborBlocksClaude',
             'model_name': MODEL, 'resume_trajectory': True,
             'override_setup_timeout_sec': 120, 'skills': [str(skills)],
-            'kwargs': {'version': CLAUDE_VERSION, 'max_turns': 200,
-                       'disallowed_tools': 'Agent,Task', 'disable_web_search': True},
+            'kwargs': AGENT_KWARGS,
         }],
     }
     (output / 'hardening.yaml').write_text(

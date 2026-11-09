@@ -18,16 +18,27 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
-    EncryptedFileKeyValueStore(name)
+/**
+ * Falls back to an in-memory store when no application id was configured. Writing to `~/.blocks`
+ * itself would put every Blocks application the user runs in one directory — the defect this
+ * fallback exists instead of.
+ */
+internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore =
+    applicationStorageDirectoryOrNull(applicationId)
+        ?.let { EncryptedFileKeyValueStore(name, it) }
+        ?: InMemoryKeyValueStore()
 
 /**
- * Stores each entry as an AES-GCM encrypted file under `<[root]>/.blocks/<[name]>`, with the key
- * in `.key` in the same directory.
+ * Stores each entry as an AES-GCM encrypted file under `<[directory]>/<[name]>`, with the key in
+ * `.key` in the same directory.
+ *
+ * [directory] is already private to the application that supplied it, so the store names its
+ * entries directly within it rather than inserting a directory of its own. It is resolved on
+ * first use, off the calling thread, so creating it is not the caller's concern.
  */
 internal class EncryptedFileKeyValueStore(
     private val name: String,
-    private val root: File = File(System.getProperty("user.home")),
+    private val directory: File,
 ) : KeyValueStore {
 
     private companion object {
@@ -42,7 +53,7 @@ internal class EncryptedFileKeyValueStore(
     }
 
     private val storageDir: Path by lazy {
-        val dir = File(root, ".blocks/$name").toPath()
+        val dir = File(directory, name).toPath()
         Files.createDirectories(dir)
         restrictToOwner(dir, directory = true)
         dir
