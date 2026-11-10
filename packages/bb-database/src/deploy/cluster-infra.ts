@@ -143,9 +143,9 @@ function auroraCluster(
 			DBClusterIdentifier: auroraClusterIdentifier(fullId),
 			Engine: 'aurora-postgresql',
 			WithExpressConfiguration: true,
+			// No EnableIAMDatabaseAuthentication or MasterUserAuthenticationType: express sets both, and naming them
+			// makes the CloudFormation handler modify the cluster after the create, which takes minutes.
 			MasterUsername: AURORA_MASTER_USER,
-			MasterUserAuthenticationType: 'iam-db-auth',
-			EnableIAMDatabaseAuthentication: true,
 			ServerlessV2ScalingConfiguration: { MinCapacity: options.minCapacity, MaxCapacity: options.maxCapacity },
 			DeletionProtection: owner.defaults.deletionProtection,
 			BackupRetentionPeriod: backupRetentionDays(owner, options),

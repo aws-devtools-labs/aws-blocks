@@ -240,8 +240,6 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 				Engine: 'aurora-postgresql',
 				WithExpressConfiguration: true,
 				MasterUsername: 'postgres',
-				MasterUserAuthenticationType: 'iam-db-auth',
-				EnableIAMDatabaseAuthentication: true,
 				ServerlessV2ScalingConfiguration: { MinCapacity: 0, MaxCapacity: 2 },
 				DeletionProtection: false,
 				BackupRetentionPeriod: 1,
@@ -250,6 +248,12 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 		const cluster = Object.values(template.findResources('AWS::RDS::DBCluster'))[0];
 		assert.strictEqual(cluster.Properties.StorageEncrypted, undefined, 'the express configuration rejects it');
 		assert.strictEqual(cluster.Properties.MasterUserPassword, undefined);
+		assert.strictEqual(
+			cluster.Properties.EnableIAMDatabaseAuthentication,
+			undefined,
+			'express sets it; naming it costs a post-create modify',
+		);
+		assert.strictEqual(cluster.Properties.MasterUserAuthenticationType, undefined);
 		assert.strictEqual(cluster.Properties.ManageMasterUserPassword, undefined);
 		const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
 		assert.match(policies, /rds-db:connect/);
