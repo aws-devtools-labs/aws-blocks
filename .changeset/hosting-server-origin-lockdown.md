@@ -13,7 +13,9 @@ can't be derived from the stack name. A Nuxt IPX image optimizer gets its own
 REST API with its own secret.
 
 With `waf: { enabled: true }`, each server-origin stage also gets a REGIONAL
-web ACL with the distribution's rules and rate limit, logged to CloudWatch Logs.
+web ACL with the distribution's rules and rate limit, logged to CloudWatch Logs
+(with the `Referer`, `Cookie` and `Authorization` headers redacted, and no
+sampled requests kept).
 This adds a second web ACL to the stack's monthly cost.
 
 New `frontDoor.features.serverOrigin` settings:

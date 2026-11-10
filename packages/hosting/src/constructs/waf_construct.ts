@@ -41,6 +41,13 @@ export type WafConstructProps = {
    * viewer header of the same name.
    */
   rateLimitExemptHeader?: { name: string; value: string };
+  /**
+   * Keep sampled requests for the web ACL and every rule. Sampled requests
+   * carry the full request headers, and the logging `RedactedFields` don't
+   * apply to them, so turn this off on a web ACL that sees a secret header.
+   * @default true
+   */
+  sampledRequests?: boolean;
 };
 
 // ---- Construct ----
@@ -98,6 +105,7 @@ export class WafConstruct extends Construct {
 
     const rateLimit = props.rateLimit ?? DEFAULT_WAF_RATE_LIMIT;
     const metricPrefix = props.metricName ?? 'hosting';
+    const sampled = props.sampledRequests ?? true;
 
     this.webAcl = new CfnWebACL(this, 'WebAcl', {
       defaultAction: { allow: {} },
@@ -105,7 +113,7 @@ export class WafConstruct extends Construct {
       visibilityConfig: {
         cloudWatchMetricsEnabled: true,
         metricName: `${metricPrefix}WebAcl`,
-        sampledRequestsEnabled: true,
+        sampledRequestsEnabled: sampled,
       },
       rules: [
         {
@@ -121,7 +129,7 @@ export class WafConstruct extends Construct {
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: 'AWSManagedRulesCommonRuleSet',
-            sampledRequestsEnabled: true,
+            sampledRequestsEnabled: sampled,
           },
         },
         {
@@ -137,7 +145,7 @@ export class WafConstruct extends Construct {
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: 'AWSManagedRulesKnownBadInputsRuleSet',
-            sampledRequestsEnabled: true,
+            sampledRequestsEnabled: sampled,
           },
         },
         {
@@ -169,7 +177,7 @@ export class WafConstruct extends Construct {
           visibilityConfig: {
             cloudWatchMetricsEnabled: true,
             metricName: 'RateLimitRule',
-            sampledRequestsEnabled: true,
+            sampledRequestsEnabled: sampled,
           },
         },
       ],

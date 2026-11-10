@@ -213,6 +213,38 @@ void describe('server origin lock-down', () => {
         RetentionInDays: Match.anyValue(),
       });
     });
+
+    void it('redacts the origin-verify secret and the viewer credentials from the web ACL logs', () => {
+      const { template } = synth({ props: { originWafRateLimit: 500 } });
+      template.hasResourceProperties('AWS::WAFv2::LoggingConfiguration', {
+        RedactedFields: [
+          { SingleHeader: { Name: 'referer' } },
+          { SingleHeader: { Name: 'cookie' } },
+          { SingleHeader: { Name: 'authorization' } },
+        ],
+      });
+    });
+
+    void it('keeps no sampled requests on the REGIONAL web ACL (they would carry the secret unredacted)', () => {
+      const { resources } = synth({ props: { originWafRateLimit: 500 } });
+      const acl = Object.values(resources).find((r) => r.Type === 'AWS::WAFv2::WebACL');
+      assert.ok(acl, 'web ACL exists');
+      const props = acl.Properties as {
+        VisibilityConfig: { SampledRequestsEnabled: boolean };
+        Rules: { VisibilityConfig: { SampledRequestsEnabled: boolean } }[];
+      };
+      assert.strictEqual(props.VisibilityConfig.SampledRequestsEnabled, false);
+      for (const rule of props.Rules) assert.strictEqual(rule.VisibilityConfig.SampledRequestsEnabled, false);
+    });
+
+    void it('names each stage association after its REST API, so it does not depend on which stages exist', () => {
+      const withIpx = synth({ ipx: true, props: { originWafRateLimit: 500 } }).resources;
+      const ids = Object.entries(withIpx)
+        .filter(([, r]) => r.Type === 'AWS::WAFv2::WebACLAssociation')
+        .map(([id]) => id);
+      assert.ok(ids.some((id) => id.includes('AssociationSsrRestApi')), `SSR association in ${ids.join(', ')}`);
+      assert.ok(ids.some((id) => id.includes('AssociationImageRestApi')), `image association in ${ids.join(', ')}`);
+    });
   });
 
   void describe('through HostingConstruct frontDoor.features', () => {

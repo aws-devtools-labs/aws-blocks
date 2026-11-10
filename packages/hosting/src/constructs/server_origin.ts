@@ -139,6 +139,13 @@ export const ensureApiGatewayAccount = (stack: Stack): CfnAccount => {
 };
 
 /**
+ * Headers the server-origin web ACL's logs redact: the origin-verify secret
+ * (`referer`) and the viewer's credentials (`cookie`, `authorization`), which
+ * CloudFront forwards to the server origin.
+ */
+export const SERVER_ORIGIN_WAF_REDACTED_HEADERS = ['referer', 'cookie', 'authorization'] as const;
+
+/**
  * A REGIONAL web ACL with the distribution's rules (AWS managed common and
  * known-bad-inputs rule groups, then the per-IP rate limit), associated with
  * each server-origin stage, with its logs in a CloudWatch log group
@@ -146,7 +153,6 @@ export const ensureApiGatewayAccount = (stack: Stack): CfnAccount => {
  */
 export class ServerOriginWaf extends Construct {
   private readonly webAclArn: string;
-  private associations = 0;
 
   constructor(scope: Construct, id: string, props: { rateLimit: number; logRetention: RetentionDays }) {
     super(scope, id);
@@ -156,6 +162,9 @@ export class ServerOriginWaf extends Construct {
       rateLimit: props.rateLimit,
       metricName: 'hostingServerOrigin',
       rateLimitExemptHeader: { name: SERVER_ORIGIN_MARKER_HEADER, value: serverOriginMarkerValue(this) },
+      // Sampled requests carry every header unredacted, including the
+      // origin-verify secret in `Referer`; the logs below cover visibility.
+      sampledRequests: false,
     });
     const webAcl = waf.webAcl;
     if (!webAcl) throw new Error('ServerOriginWaf: the web ACL was not created.');
@@ -180,15 +189,20 @@ export class ServerOriginWaf extends Construct {
           arnFormat: ArnFormat.COLON_RESOURCE_NAME,
         }),
       ],
-      // The origin-verify secret travels in `Referer`; keep it out of the logs.
-      redactedFields: [{ singleHeader: { Name: 'referer' } }],
+      // The origin-verify secret travels in `Referer`, and the server origin
+      // gets the viewer's cookies and `Authorization`; keep them out of the logs.
+      redactedFields: SERVER_ORIGIN_WAF_REDACTED_HEADERS.map((Name) => ({ singleHeader: { Name } })),
     });
     logging.node.addDependency(logGroup);
   }
 
-  /** Associate the web ACL with a REST API stage. */
+  /**
+   * Associate the web ACL with a REST API stage. The association's id comes
+   * from the REST API's id, so it stays the same whichever other stages exist
+   * (switching compute types never repoints one association at another stage).
+   */
   associate(stage: Stage): void {
-    const assoc = new CfnWebACLAssociation(this, `Association${this.associations++}`, {
+    const assoc = new CfnWebACLAssociation(this, `Association${stage.restApi.node.id}`, {
       resourceArn: stage.stageArn,
       webAclArn: this.webAclArn,
     });

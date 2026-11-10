@@ -481,7 +481,10 @@ CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
   `{{resolve:secretsmanager:…}}` dynamic reference, so it is in no template or
   source. It is visible in plain text to anyone who can read the
   distribution's config (`cloudfront:GetDistributionConfig`) or the API's
-  policy (`apigateway:GET`), and in the Secrets Manager secret.
+  policy (`apigateway:GET`), and in the Secrets Manager secret. Your SSR app
+  also receives it as the request's `Referer` header, so don't log that
+  header (for example a `combined`-format request logger) or redirect back to
+  it.
 - **A separate image origin.** A Nuxt IPX image optimizer (`imageOptimization.baseURL`)
   gets its own REST API with its own secret, so neither value reaches the other
   Lambda.
@@ -489,7 +492,9 @@ CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
   (`waf: { enabled: true }`), each server-origin stage also gets a REGIONAL web
   ACL with the same rules (AWS managed common and known-bad-inputs rule groups,
   and the per-IP rate limit at the same `rateLimit`), logged to a CloudWatch log
-  group named `aws-waf-logs-…` (the `Referer` header is redacted). Requests
+  group named `aws-waf-logs-…` (the `Referer`, `Cookie` and `Authorization`
+  headers are redacted, and the ACL keeps no sampled requests, which AWS WAF
+  doesn't redact). Requests
   from CloudFront carry an `x-blocks-front-door` marker (the stack's id) that
   exempts them from the stage's rate rule, since they all come from edge IPs
   and the distribution's own web ACL already rate-limits viewers. It follows
