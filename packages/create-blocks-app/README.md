@@ -153,7 +153,7 @@ Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `aws-blocks/scripts/*.
 
 ## Templates
 
-Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `agent`, `cron`, `amplify`, `demo`.
+Available templates: `default`, `bare`, `react`, `backend`, `nextjs`, `auth-cognito`, `agent`, `cron`, `observability`, `amplify`, `demo`.
 
 Every folder under `templates/` is a self-registering template. Each `package.json` in that folder sets a `blocksTemplateDescription` field, which the CLI reads to build the `--help` catalog. To see the current list of templates and their one-line descriptions:
 
