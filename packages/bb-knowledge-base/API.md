@@ -20,6 +20,11 @@ export interface ChunkingConfig {
 export type ChunkingStrategy = 'semantic' | 'fixed' | 'hierarchical' | 'none';
 
 // @public
+export type IngestionFailureCause = Error & {
+    failureReasons: string[];
+};
+
+// @public
 export class KnowledgeBase extends Scope {
     constructor(scope: ScopeParent, id: string, _options: KnowledgeBaseOptions);
     // (undocumented)

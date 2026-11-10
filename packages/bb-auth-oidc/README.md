@@ -193,7 +193,7 @@ Stable per-human-per-IdP. Use this as a foreign key in your own tables. Signing 
 
 ### Lifecycle hooks
 
-- `onSignIn(user, ctx)` — fires on every successful sign-in. Throw to fail the sign-in (callback returns 500, no cookie).
+- `onSignIn(user, ctx)` — fires on every successful sign-in. Throw to fail the sign-in (no cookie is set). Throw an `ApiError` to choose the response: its status, `name` and message reach the client (e.g. `403 { "error": "Sign-in is disabled for this account", "name": "SignInBlockedException" }`). A branded Building Block error (thrown via `blocksError()` / `brandBlocksError()`) keeps its `name` and message and is answered with `400`. Any other error — a database or AWS SDK error — is logged server-side and answered with `500 { "error": "Internal error" }`, so its message and class name never reach the client.
 - `onSignOut(user, ctx)` — fires on explicit sign-out. Throwing is logged but does not block the cookie clear.
 
 ### Session management
@@ -332,6 +332,8 @@ catch (e) {
 `NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
+
+The auth routes (`callback`, `signin`, `exchange`, `authorize-params`, `refresh`) apply the same rule to every error they catch: an `ApiError` keeps its status, `name` and message; a branded Building Block error (e.g. `InvalidState`, `IdpError`) is a `400` with its `name` and message; anything else is logged server-side and answered with a nameless `500 { "error": "Internal error" }`.
 
 Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
 
@@ -476,7 +478,7 @@ const auth = new AuthOIDC(app, 'auth', {
 **Implicit allowances** (no `relayOrigin()` entry needed):
 
 - **Loopback** — `http://127.0.0.1:<any-port>` and `http://[::1]:<any-port>`. Covers CLI tools using RFC 8252 §7.3 ephemeral-port pattern.
-- **Same-origin** — the backend's own URL.
+- **Same-origin** — the backend's own URL: the one the `authorize-params` request was made to. Behind a Blocks CloudFront front door (`apiFrontDoor: 'cloudfront'`, or `Hosting`'s CloudFront door) that's the host the client called, the distribution's domain or a custom domain; called directly, it's the gateway's `execute-api` URL. When the IdP calls back, a relay to any host the backend serves over HTTPS (each CloudFront door's hosts and the gateway's) still counts as same-origin, so a sign-in that started on one of them finishes even though the callback arrives on another.
 
 **Granularity.** Entries match on scheme + host + (port if pinned). Paths on the actual `relayTo` value are preserved through the 302 — the allowlist doesn't pattern-match paths.
 

@@ -196,19 +196,51 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 AuthOIDC supports Google, Auth0, Clerk, Cognito, and any custom OIDC provider.
 See the @aws-blocks/bb-auth-oidc package README for provider setup.
 
-**Migration-specific note:** ensure the \`userId\` your OIDC provider returns matches
-the format already stored in your Supabase database (e.g. the \`sub\` claim in your
-existing RLS policies). If the format differs, existing users will see zero rows
-because RLS policies won't match. Check your \`auth.users\` table to confirm.
+**Migration-specific note: RLS sees the issuer-prefixed \`userId\`.** \`supabaseCrud()\`
+passes the \`userId\` your auth BB returns (\`user.userId\`) to \`withRLS()\`, which sets it
+as the \`sub\` claim of \`request.jwt.claims\` in Postgres. For AuthOIDC that value is
+\`\${iss}:\${sub}\`: the token issuer, a colon, then the provider's own subject, for example
+\`https://accounts.google.com:1234567890\`. The provider's raw \`sub\` never reaches RLS:
+\`sub\` and \`role\` are reserved, so a \`sub\` or \`role\` key in \`claims\` is ignored.
 
-The \`userId\` from your auth BB is passed to \`withRLS()\`, which sets
-\`request.jwt.claims.sub\` in Postgres. RLS policies using
-\`current_setting('request.jwt.claims', true)::jsonb->>'sub'\` work
-with any auth provider that returns a stable userId.
+A policy such as
+\`USING (user_id = current_setting('request.jwt.claims', true)::jsonb ->> 'sub')\`
+(or \`auth.jwt() ->> 'sub'\`) therefore compares \`user_id\` with the issuer-prefixed
+\`userId\`. Rows still keyed on a raw provider \`sub\` (or on Supabase \`auth.users\` ids)
+match nothing, and existing users see zero rows.
 
-**Key rule:** when your auth callback returns \`claims\` (e.g. from Clerk or Auth0),
-\`claims.sub\` (the raw provider sub) is what reaches RLS — not the iss-prefixed
-\`userId\`. This means existing rows keyed on the raw sub keep matching automatically.
+Keep the policy and migrate the stored ids to the same format. If a column holds the
+provider's raw \`sub\`, prefix it with the issuer in a migration:
+
+\`\`\`sql
+UPDATE public.todos SET user_id = 'https://accounts.google.com:' || user_id
+WHERE user_id NOT LIKE 'https://accounts.google.com:%';
+\`\`\`
+
+Use your provider's exact \`iss\` value as the prefix (Auth0's issuer ends in \`/\`; see
+the User ID note below). Filtering on that prefix keeps the migration safe to re-run.
+
+If it holds Supabase \`auth.users\` ids, map each one to that user's new \`userId\` instead.
+A \`uuid\` column has to become \`text\` first; Postgres refuses to change the type of a column
+that a policy (or a foreign key to \`auth.users\`) uses, so drop those, run
+\`ALTER TABLE public.todos ALTER COLUMN user_id TYPE text;\`, then recreate the policy.
+
+To keep raw ids instead (only with a single identity provider, because raw subjects from
+two providers can collide), forward the subject under a key of its own and point the
+policy at it with \`->> 'idp_sub'\`:
+
+\`\`\`ts
+...supabaseCrud(context, {
+  requireAuth: async (ctx) => {
+    const user = await auth.requireAuth(ctx);
+    return { userId: user.userId, claims: { ...user.claims, idp_sub: user.sub } };
+  },
+}),
+\`\`\`
+
+Other claims pass through: \`supabaseCrud()\` forwards \`user.claims\` (for AuthOIDC, the
+verified token's claims), so non-reserved claims such as \`email\` are readable with
+\`current_setting('request.jwt.claims', true)::jsonb ->> 'email'\`.
 
 ## Verify It Works
 
@@ -446,19 +478,22 @@ require \`pg_dump\`.
   concurrency cap below the pooler limit during coexistence.
 
 - **Non-standard JWT claims.** RLS policies that reference JWT claims beyond \`sub\` and \`role\` require your OIDC
-  provider to include those claims in the access token. If your policies return zero
+  provider to include those claims in the token AuthOIDC verifies: the ID token for
+  browser sessions, or the access token for \`Authorization: Bearer\` API callers. If your policies return zero
   rows after migration, check which claims your RLS policies read and ensure your
   OIDC provider emits them.
 `;
 
-/** Fixed trailer (Finding 8 — userId-vs-sub note), appended after the claims block. */
+/** Fixed trailer (userId-vs-sub note), appended after the claims block. */
 export const GUIDE_USERID_NOTE = `
 ## Note: User ID Formats
 
-Your migrated tables store the raw provider \`sub\` as the user identifier
-(e.g., \`auth0|abc123\`). New tables created with Blocks use \`user.userId\`
-by default, which is iss-prefixed (e.g., \`https://tenant.auth0.com/:auth0|abc123\`).
+RLS matches on \`user.userId\`, which is iss-prefixed: \`\${iss}:\${sub}\`
+(e.g., \`https://tenant.auth0.com/:auth0|abc123\`; Auth0's issuer ends in \`/\`).
+It never sees the raw provider \`sub\` (e.g., \`auth0|abc123\`) that your migrated
+tables may still store.
 
-When JOINing migrated tables with new tables, use \`user.claims.sub\` (raw sub)
-as the foreign key in new tables for consistency.
+Use \`user.userId\` as the user identifier in new tables, and rewrite user-id columns
+in migrated tables to the same format (see the migration note under Auth), so that
+RLS policies match and JOINs between migrated and new tables line up.
 `;

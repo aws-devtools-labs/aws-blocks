@@ -13,9 +13,10 @@ import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inspect } from 'node:util';
 import jwt from 'jsonwebtoken';
 import type { BlocksContext } from '@aws-blocks/core';
-import { Scope, hasAuthError } from '@aws-blocks/core';
+import { ApiError, Scope, blocksError, hasAuthError } from '@aws-blocks/core';
 import type { AuthStateApi } from '@aws-blocks/auth-common';
 import type { EmitOptions, MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { AuthBasic, AuthBasicErrors, type AuthBasicOptions } from './index.js';
@@ -97,7 +98,7 @@ describe('AuthBasic setAuthState errorName', () => {
 		try {
 			const api = apiFor(auth, ctx());
 			const next = await api.setAuthState({ action: 'signIn', username: 'alice', password: 'password123' });
-			assert.strictEqual(next.error, 'An unexpected error occurred');
+			assert.strictEqual(next.error, 'Internal error');
 			assert.strictEqual(next.errorName, undefined);
 		} finally {
 			store.get = realGet;
@@ -131,6 +132,84 @@ describe('AuthBasic confirm forms echo the username (no blank retype)', () => {
 		assert.ok(field, 'confirmResetPassword exposes a username field');
 		assert.strictEqual(field!.type, 'hidden');
 		assert.strictEqual(field!.defaultValue, 'bob@example.com');
+	});
+});
+
+describe('AuthBasic setAuthState never returns raw backend error text', () => {
+	// What an SES / DynamoDB / SSM failure looks like: the message embeds the
+	// account id and resource ARN. It must stay in the server log.
+	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: ses:SendEmail on arn:aws:ses:us-east-1:123456789012:identity/internal@example.com';
+
+	function recordingLogger(): { logger: NonNullable<AuthBasicOptions['logger']>; errors: unknown[] } {
+		const errors: unknown[] = [];
+		const logger: NonNullable<AuthBasicOptions['logger']> = {
+			debug() {},
+			info() {},
+			warn() {},
+			error(message, context) {
+				// inspect() renders an Error's message, as the real logger does; JSON.stringify drops it.
+				errors.push(inspect({ message, context }));
+			},
+			child: () => logger,
+		};
+		return { logger, errors };
+	}
+
+	test('an unbranded error is returned as a generic message and logged server-side', async () => {
+		const { logger, errors } = recordingLogger();
+		const auth = makeAuth({
+			logger,
+			codeDelivery: async () => {
+				throw new Error(RAW_DETAIL);
+			},
+		});
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'carol@example.com', password: 'password123' });
+
+		assert.strictEqual(next.state, 'signedOut');
+		assert.strictEqual(next.error, 'Internal error');
+		assert.strictEqual(next.errorName, undefined, 'a raw error carries no structured name');
+		assert.ok(!JSON.stringify(next).includes('123456789012'), 'no account id in the returned AuthState');
+		assert.ok(JSON.stringify(errors).includes(RAW_DETAIL), 'the original error is logged server-side');
+	});
+
+	test('an ApiError thrown by the app keeps its message and name', async () => {
+		const auth = makeAuth({
+			codeDelivery: async () => {
+				throw new ApiError('That address cannot receive email', 400, { name: 'UndeliverableAddressException' });
+			},
+		});
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'dave@example.com', password: 'password123' });
+
+		assert.strictEqual(next.error, 'That address cannot receive email');
+		assert.strictEqual(next.errorName, 'UndeliverableAddressException');
+	});
+
+	test('a branded Building Block error keeps its message', async () => {
+		const branded = blocksError('DeliveryQuotaExceededException', 'Too many codes requested, try again later');
+		const auth = makeAuth({
+			codeDelivery: async () => {
+				throw branded;
+			},
+		});
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signUp', username: 'erin@example.com', password: 'password123' });
+
+		assert.strictEqual(next.error, branded.message);
+	});
+
+	test('the built-in ApiError messages still reach the client unchanged', async () => {
+		const auth = makeAuth();
+		const api = apiFor(auth, ctx());
+
+		const next = await api.setAuthState({ action: 'signIn', username: 'nobody', password: 'whatever1' });
+
+		assert.strictEqual(next.error, 'Invalid username or password');
+		assert.strictEqual(next.errorName, AuthBasicErrors.InvalidCredentials);
 	});
 });
 
@@ -767,13 +846,15 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 	});
 
 	test('a failure older than windowSeconds resets the running count', async () => {
-		const auth = makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 1, lockoutSeconds: 1 } });
+		// The counter row expires after max(windowSeconds, lockoutSeconds), counted in whole seconds.
+		// At 1 it could lapse at the next second boundary before this test read it back, so use 60.
+		const auth = makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 60, lockoutSeconds: 60 } });
 		await auth.signUp('frank', 'password123');
 
 		// Seed a near-threshold counter whose firstFailAt is older than the
 		// window — the next failure must start a FRESH window at count=1, not
 		// increment to the lock threshold.
-		const staleFirstFailAt = Date.now() - 5000; // older than windowSeconds=1
+		const staleFirstFailAt = Date.now() - 300_000; // older than windowSeconds=60
 		await codesStore(auth).put('lockout:frank', JSON.stringify({ count: 2, firstFailAt: staleFirstFailAt }));
 
 		await assert.rejects(

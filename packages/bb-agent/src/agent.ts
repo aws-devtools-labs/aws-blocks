@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Scope, registerSdkIdentifiers, getSdkIdentifiers } from '@aws-blocks/core';
+import { Scope, registerSdkIdentifiers, getSdkIdentifiers, isWireSafeError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { Realtime } from '@aws-blocks/bb-realtime';
@@ -287,6 +287,13 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
 	 * itself fails to publish (e.g. a channel path over Realtime's size limit).
 	 *
+	 * The `error` chunk and the persisted `metadata.error` are client-visible, so they carry the
+	 * error's message only when it is a branded Building Block error (`blocksError()` /
+	 * `brandBlocksError()`, or an `ApiError`), or wraps one as its `cause` (as Strands does for a
+	 * provider error). Any other failure — a Bedrock, DynamoDB or S3 SDK
+	 * error, whose text can name the account, role and resource ARNs — is reported as
+	 * `'Internal error'`; the original is logged server-side.
+	 *
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
@@ -297,10 +304,19 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
+			// Same rule as core's RPC serializer: only a branded error's message is client-safe.
+			// Strands can wrap a provider error and keep the original as `cause`, which drops the
+			// brand from the outer error, so look down the cause chain for a branded one.
+			const causeChain = walkCauseChain(err);
+			const wireSafe = causeChain.find(isWireSafeError);
+			let clientMessage = wireSafe ? wireSafe.message : 'Internal error';
 			// Log the deepest cause's name/status/requestId alongside the message: the thrown
 			// error is often an opaque wrapper (e.g. SessionError over a raw AWS error on a
 			// non-enumerable .cause), so err.message alone cannot identify what actually failed.
-			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err) });
+			// Also log the deepest cause's message: a branded error keeps raw detail (e.g. a
+			// canned-dictionary SyntaxError) only on its non-enumerable cause, which the logger drops.
+			const deepest = causeChain[causeChain.length - 1];
+			this.log.error('runAgent error', { error: errorMessage, ...errorCauseShape(err), ...(deepest !== err && deepest instanceof Error ? { cause: deepest.message } : {}) });
 			// An account-level model-access refusal (e.g. Anthropic first-time-use not submitted, or a
 			// model not entitled for the account) passes the health check and only fails at invoke. Replace
 			// the raw provider message with an actionable one and tag the chunk so the client rejects with
@@ -310,7 +326,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// the client adds back.
 			const modelAccessMessage = brandedModelUnavailableMessage(err) ?? classifyModelAccessError(err, this.singleModelId());
 			const errorName = modelAccessMessage ? AgentErrors.ModelUnavailable : undefined;
-			const clientMessage = modelAccessMessage ?? errorMessage;
+			if (modelAccessMessage) clientMessage = modelAccessMessage;
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
@@ -707,11 +723,16 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * error) — rejects this `stream()` call itself rather than reaching the channel. Always `await`
 	 * `stream()` so a dispatch failure isn't lost.
 	 *
+	 * The `error` chunk (and the `StreamFailed` error `complete()` rejects with) carries the message
+	 * of a branded Building Block error, or `'Internal error'` for any other failure, so raw
+	 * Bedrock/AWS SDK text never reaches the client. The original error is logged server-side.
+	 *
 	 * @throws ConversationNotFound when `options.conversationId` was not created by
 	 *   createConversationId(options.userId) (a missing and a foreign conversation look the same).
 	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
-	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
+	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
@@ -764,7 +785,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *   before any approval is persisted or the turn is dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws InterruptRequired when `responses` is empty or `options.conversationId` is missing.
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
-	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
+	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
@@ -821,16 +843,27 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
 	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
 	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId.
+	 *
+	 * The result must also be a valid Realtime channel name (no empty, `.` or `..` segment,
+	 * no leading or trailing `/`). Realtime rejects any other name on publish and getChannel(),
+	 * so a channelId like `a//b` or a userId of `..` throws InvalidUsage here, before dispatch,
+	 * instead of a turn whose every chunk publish fails.
 	 */
 	private chunksChannel(channelId: string, userId: string): string {
-		if (!this.conversations) return channelId;
-		let user: string;
-		try {
-			user = encodeURIComponent(userId);
-		} catch {
-			throw blocksAgentError(AgentErrors.InvalidUsage, 'userId is not a well-formed string (it contains an unpaired surrogate), so its Realtime channel cannot be derived.');
+		let channel = channelId;
+		if (this.conversations) {
+			let user: string;
+			try {
+				user = encodeURIComponent(userId);
+			} catch {
+				throw blocksAgentError(AgentErrors.InvalidUsage, 'userId is not a well-formed string (it contains an unpaired surrogate), so its Realtime channel cannot be derived.');
+			}
+			channel = `u/${user}/${channelId}`;
 		}
-		return `u/${user}/${channelId}`;
+		if (channel.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, 'channelId and userId must form a valid Realtime channel name: no empty, "." or ".." segment, and no leading or trailing "/".');
+		}
+		return channel;
 	}
 
 	/**
