@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 /**
  * Verifies `ContainerCompute` provisions a Fargate service in the framework's
@@ -793,5 +794,92 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 	test('several container computes on one role add the ecs-tasks trust once', async () => {
 		const { ecs } = await synthTrust('EcsTrustOnce', ['a', 'b', 'c']);
 		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement across three computes');
+	});
+});
+
+// ── defaults.permissionsBoundary guard ───────────────────────────────────────
+// Every AWS::IAM::Role in every synthesized template (custom-resource provider
+// roles and any other stack or helper stack's roles included) must carry the
+// configured boundary and be listed in the synth-time IAM report.
+//
+// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
+// cdk test files, and mirrors core's `assertEveryRoleBounded` in
+// `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
+// belongs in all of them.
+
+const GUARD_BOUNDARY = 'blocks-guard-boundary';
+const GUARD_EXPECTED = {
+	'Fn::Join': [
+		'',
+		['arn:', { Ref: 'AWS::Partition' }, ':iam::', { Ref: 'AWS::AccountId' }, `:policy/${GUARD_BOUNDARY}`],
+	],
+};
+
+/**
+ * Read every top-level template and the IAM report in `outdir`; fail on a role
+ * without the boundary or missing from the report. Returns the checked roles as
+ * `<artifact>/<logicalId>` (for asserting a block's own roles were reached).
+ *
+ * Only the top level of the cloud assembly is read: templates from a CDK `Stage`
+ * (written under `assembly-*` folders) are not. No block tested here creates a Stage.
+ */
+function assertEveryRoleBoundedAndReported(outdir: string, reportFile: string): string[] {
+	const report = JSON.parse(readFileSync(join(outdir, reportFile), 'utf8')) as {
+		roles: { stack: string; logicalId: string; permissionsBoundary: unknown }[];
+	};
+	const reported = new Set(report.roles.map((r) => `${r.stack}/${r.logicalId}`));
+	const checked: string[] = [];
+	const problems: string[] = [];
+	for (const file of readdirSync(outdir).filter((f) => f.endsWith('.template.json'))) {
+		const artifact = file.slice(0, -'.template.json'.length);
+		const { Resources = {} } = JSON.parse(readFileSync(join(outdir, file), 'utf8')) as {
+			Resources?: Record<string, { Type: string; Properties?: { PermissionsBoundary?: unknown } }>;
+		};
+		for (const [id, r] of Object.entries(Resources)) {
+			if (r.Type !== 'AWS::IAM::Role') continue;
+			const key = `${artifact}/${id}`;
+			checked.push(key);
+			if (JSON.stringify(r.Properties?.PermissionsBoundary) !== JSON.stringify(GUARD_EXPECTED)) {
+				problems.push(`${key}: boundary ${JSON.stringify(r.Properties?.PermissionsBoundary ?? 'NONE')}`);
+			}
+			if (!reported.has(key)) problems.push(`${key}: missing from ${reportFile}`);
+		}
+	}
+	assert.ok(checked.length > 0, 'synth should produce at least one role');
+	assert.deepStrictEqual(
+		problems,
+		[],
+		`roles not covered by defaults.permissionsBoundary:\n  ${problems.join('\n  ')}`,
+	);
+	return checked;
+}
+
+describe('ContainerCompute under defaults.permissionsBoundary', () => {
+	test('every role it creates (the task execution role) carries the boundary and is in blocks-iam.json', async () => {
+		const outdir = mkdtempSync(join(tmpdir(), 'container-boundary-'));
+		try {
+			const app = new cdk.App({ outdir });
+			const stack = await BlocksStack.create(app, 'ContainerBoundary', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: backendPath,
+				defaults: { ...BlocksPresets.production, permissionsBoundary: GUARD_BOUNDARY },
+				defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+			} as never);
+			const compute = new ContainerCompute(stack as never, 'worker', {
+				size: { vcpu: 0.5, memory: 1024 },
+				scaling: { minInstances: 1, maxInstances: 2, strategy: { on: 'cpu', targetPercent: 65 } },
+			});
+			compute.finalize();
+			app.synth();
+
+			const blocksStack = stack as unknown as cdk.Stack;
+			const checked = assertEveryRoleBoundedAndReported(outdir, `${blocksStack.artifactId}.blocks-iam.json`);
+			assert.ok(
+				checked.some((r) => r.includes('worker')),
+				`the container's own roles were checked: ${checked}`,
+			);
+		} finally {
+			rmSync(outdir, { recursive: true, force: true });
+		}
 	});
 });
