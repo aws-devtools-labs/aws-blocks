@@ -8,7 +8,7 @@ import * as net from 'node:net';
 import { serveHttp, buildRequestBaseUrl, buildRequestUrl } from './http-server.js';
 import type { HttpServerHandle, ServeHttpOptions } from './http-server.js';
 import { FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from './constants.js';
-import { createLambdaHandler, _resetCorsPatterns, requestClientUserAgent, requestCookies } from './lambda-handler.js';
+import { buildEventUrl, createLambdaHandler, _resetCorsPatterns, requestClientUserAgent, requestCookies } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry } from './raw-route.js';
 import { MAX_RPC_BODY_BYTES, decodeRpcResponse } from './rpc.js';
 import type { BlocksContext } from './api.js';
@@ -1176,6 +1176,13 @@ describe('buildRequestUrl', () => {
     assert.strictEqual(url.href, `https://${API_HOST}/x`);
   });
 
+  it('takes only the host from a loopback X-Forwarded-Host, never a query, fragment or userinfo', () => {
+    for (const forwarded of ['localhost:3000?role=admin#injected', 'user:pw@localhost:3000/evil']) {
+      const url = buildRequestUrl(incoming('/x?a=1', { 'x-forwarded-host': forwarded }));
+      assert.strictEqual(url.href, 'http://localhost:3000/x?a=1', forwarded);
+    }
+  });
+
   it('falls back to the configured public origin', () => {
     const url = buildRequestUrl(incoming('/x?y=2', { host: 'alb.internal' }), 'https://app.example.com');
     assert.strictEqual(url.href, 'https://app.example.com/x?y=2');
@@ -1220,6 +1227,85 @@ describe('buildRequestUrl', () => {
   it('falls back to localhost for an empty Host header', () => {
     const url = buildRequestUrl(incoming('/x', { host: '' }));
     assert.strictEqual(url.href, 'http://localhost/x');
+  });
+});
+
+describe('buildRequestUrl — behind a Blocks CloudFront front door', () => {
+  // The door stamps the viewer's host as x-blocks-public-host; the backend's config
+  // lists the hosts its doors serve.
+  const VIEWER = 'd111.cloudfront.net';
+  const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+  beforeEach(() => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},app.example.com`;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+    else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+  });
+  /** A request the gateway proxied to the container: it stamps its own host and stage too. */
+  const viaGateway = (publicHost: string) =>
+    incoming('/aws-blocks/api/containerApi?a=1', { host: 'alb.internal:10000', 'x-blocks-public-host': publicHost, ...stamped(API_HOST, 'prod') });
+
+  it('reports the URL the viewer called when the gateway proxied the request: its host, no stage', () => {
+    assert.strictEqual(buildRequestUrl(viaGateway(VIEWER), undefined, true).href, `https://${VIEWER}/aws-blocks/api/containerApi?a=1`);
+  });
+
+  it("ignores a host that isn't one of the backend's front doors, and a repeated header", () => {
+    for (const value of ['attacker.example', `${VIEWER}, app.example.com`]) {
+      const url = buildRequestUrl(viaGateway(value), undefined, true);
+      assert.strictEqual(url.href, `https://${API_HOST}/aws-blocks/api/containerApi?a=1`, value);
+    }
+  });
+
+  it("keeps the base URL the gateway's, stage included, while the URL is the viewer's", () => {
+    assert.strictEqual(buildRequestBaseUrl(viaGateway(VIEWER), undefined, true), `https://${API_HOST}/prod`);
+  });
+
+  it('reports what a Lambda handler reports for the same request, through the gateway and straight from CloudFront', () => {
+    const lambda = buildEventUrl({
+      path: '/aws-blocks/api/x',
+      headers: { Host: API_HOST, 'X-Forwarded-Proto': 'https', 'x-blocks-public-host': VIEWER },
+      requestContext: { stage: 'prod' },
+    });
+    const throughGateway = buildRequestUrl(
+      incoming('/aws-blocks/api/x', { host: 'alb.internal:10000', 'x-blocks-public-host': VIEWER, ...stamped(API_HOST, 'prod') }),
+      undefined,
+      true,
+    );
+    // Straight to the load balancer: CloudFront forwards `<host>:<origin port>` and the door stamps the bare host.
+    const direct = buildRequestUrl(
+      incoming('/aws-blocks/api/x', { host: `${VIEWER}:10000`, 'x-blocks-public-host': VIEWER, ...stamped(VIEWER) }),
+      undefined,
+      true,
+    );
+    assert.strictEqual(lambda.href, `https://${VIEWER}/aws-blocks/api/x`);
+    assert.strictEqual(throughGateway.href, lambda.href);
+    assert.strictEqual(direct.href, lambda.href);
+  });
+
+  it('keeps the host and the path the Lambda handler keeps on a //- or /\\-prefixed path', () => {
+    for (const path of ['//evil.example/x', '/\\evil.example/x']) {
+      const lambda = buildEventUrl({ path, headers: { Host: API_HOST, 'x-blocks-public-host': VIEWER }, requestContext: { stage: 'prod' } });
+      const container = buildRequestUrl(incoming(path, { host: 'alb.internal:10000', 'x-blocks-public-host': VIEWER, ...stamped(API_HOST, 'prod') }), undefined, true);
+      assert.strictEqual(lambda.host, VIEWER, path);
+      assert.strictEqual(container.host, VIEWER, path);
+      assert.strictEqual(lambda.pathname, container.pathname, path);
+    }
+  });
+
+  it('reports a subdomain of a wildcard custom domain as the Lambda handler does, through the gateway and straight from CloudFront', () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    const host = 'a.tenant.example.com';
+    const lambda = buildEventUrl({ path: '/aws-blocks/api/x', headers: { Host: API_HOST, 'x-blocks-public-host': host }, requestContext: { stage: 'prod' } });
+    const throughGateway = buildRequestUrl(
+      incoming('/aws-blocks/api/x', { host: 'alb.internal:10000', 'x-blocks-public-host': host, ...stamped(API_HOST, 'prod') }),
+      undefined,
+      true,
+    );
+    const direct = buildRequestUrl(incoming('/aws-blocks/api/x', { host: `${host}:10000`, 'x-blocks-public-host': host, ...stamped(host) }), undefined, true);
+    assert.strictEqual(lambda.href, `https://${host}/aws-blocks/api/x`);
+    assert.strictEqual(throughGateway.href, lambda.href);
+    assert.strictEqual(direct.href, lambda.href);
   });
 });
 

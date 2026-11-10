@@ -36,9 +36,16 @@ export type BlocksContext = {
      * of the path the app routes on. To sub-route under a wildcard, use
      * `params['*']`.
      *
-     * Behind a front door (e.g. `Hosting`'s CloudFront distribution), `url.origin`
-     * is the API Gateway host the backend received, not the browser's. Build public
-     * links from the app's own configured origin, not from this URL.
+     * Behind a Blocks CloudFront front door (the `apiFrontDoor: 'cloudfront'`
+     * distribution, or `Hosting`'s CloudFront door), Lambda and container handlers
+     * alike see the URL the client called: the distribution's domain or the custom
+     * domain it was called at (`https://app.example.com/aws-blocks/api/orders`).
+     * The door stamps the viewer's host, and a handler takes it only when it is one
+     * of the backend's own front-door hosts. Behind `Hosting`'s other doors (ALB,
+     * API Gateway, stacked, bring-your-own), and for a request sent to the
+     * `execute-api` URL directly, `url.origin` is the API Gateway host the backend
+     * received, not the browser's: build public links from the app's own
+     * configured origin there, not from this URL.
      */
     url: URL;
     /**

@@ -158,10 +158,15 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', '[::1]']);
 /**
  * Validate a candidate relay URI against the configured allowlist.
  * Returns `{ allowed: true }` or a tagged failure with a `reason`.
+ *
+ * `backendHosts` widens the same-origin allowance to every host the backend
+ * serves over HTTPS on the default port (exact hosts, or `*.example.com`
+ * wildcard aliases covering subdomains at any depth but not the apex); see
+ * {@link backendHostsFor}.
  */
 export function validateRelay(
 	uri: string,
-	opts: { allowList: readonly RelayOrigin[]; sameOrigin: URL | null },
+	opts: { allowList: readonly RelayOrigin[]; sameOrigin: URL | null; backendHosts?: readonly string[] },
 ): RelayValidation {
 	const candidate = parseOrigin(uri);
 	if (!candidate) return { allowed: false, reason: 'malformed' };
@@ -182,6 +187,14 @@ export function validateRelay(
 		const so = parseOrigin(opts.sameOrigin.toString());
 		if (so && originsEqual(so, candidate)) return { allowed: true };
 	}
+	// ...or any other host the backend serves over HTTPS (the callback's re-check).
+	if (opts.backendHosts && candidate.scheme === 'https' && !candidate.hasPort) {
+		const { host } = candidate;
+		const served = opts.backendHosts.some((entry) =>
+			entry.startsWith('*.') ? host.length > entry.length - 1 && host.endsWith(entry.slice(1)) : host === entry,
+		);
+		if (served) return { allowed: true };
+	}
 
 	// Plain HTTP non-loopback: reject before allowlist lookup so the
 	// failure reason is the security one ("plaintext-non-loopback"), not
@@ -198,6 +211,41 @@ export function validateRelay(
 		if (originsEqual(entry, candidate)) return { allowed: true };
 	}
 	return { allowed: false, reason: 'unknown-origin' };
+}
+
+/** An API Gateway default endpoint hostname (`{api-id}.execute-api.{region}.amazonaws.com`, or `.com.cn`). */
+const EXECUTE_API_HOST_PATTERN = /^[a-z0-9]+\.execute-api\.[a-z0-9-]+\.amazonaws\.com(?:\.cn)?$/;
+
+/**
+ * Every host the backend serves over HTTPS, for the callback `request`: each
+ * Blocks CloudFront front door's hosts (`BLOCKS_PUBLIC_HOSTS`, core-owned config
+ * read by its literal key like `BLOCKS_PUBLIC_ORIGIN`: a door's CloudFront domain
+ * and custom domains, wildcard aliases included), and the gateway's own
+ * `execute-api` host when the request reached the backend through it over HTTPS.
+ *
+ * The callback's relay re-check passes these to {@link validateRelay}: the
+ * authorize request may have come in on any of them (each reports its own host
+ * as `ctx.request.url`), while the IdP calls back on the one the callback URL
+ * names, so comparing against the callback's URL alone would reject a
+ * same-origin relay that authorize accepted.
+ *
+ * The gateway host comes from the `Host` header — what the callback's same-origin
+ * check used before CloudFront doors stamped the viewer host, and what a door
+ * forwards (the gateway's own). It counts only when it is an `execute-api`
+ * endpoint name with no port and the request URL is HTTPS: elsewhere (the local
+ * dev server) the client picks `Host`, and the scheme-aware `sameOrigin` check
+ * already covers that request's own origin.
+ */
+export function backendHostsFor(request: { url: URL; headers: Headers }): string[] {
+	const hosts = (process.env.BLOCKS_PUBLIC_HOSTS ?? '')
+		.split(',')
+		.map((host) => host.trim().toLowerCase())
+		.filter((host) => host !== '');
+	const gatewayHost = request.headers.get('host')?.toLowerCase();
+	if (request.url.protocol === 'https:' && gatewayHost && EXECUTE_API_HOST_PATTERN.test(gatewayHost)) {
+		hosts.push(gatewayHost);
+	}
+	return hosts;
 }
 
 /** Structural origin equality: scheme + host required, port only when the entry pins one. */
