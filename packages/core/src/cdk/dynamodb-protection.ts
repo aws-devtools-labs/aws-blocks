@@ -66,7 +66,7 @@ export function resolveDynamoDbProtection(
 	const { warningPrefix } = identity;
 	// `encryption` accepts two string literals or an ExternalKmsKeyRef
 	// (a `{ __brand: 'ExternalKmsKeyRef', keyArn }` from `fromKmsKey`). The
-	// shared resolver warns on anything else and falls back to 'aws-managed'.
+	// shared resolver fails the synth on anything else (it never falls back to 'aws-managed').
 	const kms = resolveKmsEncryption(scope, options?.encryption, identity);
 
 	// PITR is one knob (`boolean | { retentionDays }`) resolved from the

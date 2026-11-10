@@ -518,16 +518,16 @@ test('CDK: an unrecognized protection value warns at synth', () => {
 	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized protection'));
 });
 
-test('CDK: an unrecognized encryption value warns at synth', () => {
-	const { stack, parent } = setup();
-	new DistributedTable(parent, 'users', {
-		schema: userSchema,
-		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-		encryption: 'kms', // intentional typo — exercise the synth guard
-	});
-	Annotations.fromStack(stack).hasWarning(
-		'*',
-		Match.stringLikeRegexp('Unrecognized encryption.*ack: @aws-blocks/bb-distributed-table:UnknownEncryption'),
+test('CDK: an unrecognized encryption value fails the synth', () => {
+	const { parent } = setup();
+	assert.throws(
+		() =>
+			new DistributedTable(parent, 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+				encryption: 'kms', // intentional typo — exercise the synth guard
+			}),
+		/Unrecognized encryption 'kms'.*'aws-managed', 'customer-managed', or DistributedTable\.fromKmsKey\(arn\)/,
 	);
 });
 
