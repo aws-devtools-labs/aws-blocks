@@ -87,7 +87,13 @@ describe('every service-principal trust in the comprehensive app is scoped to th
     // The app exercises every BB, so a near-empty count means synth went wrong (e.g. mocks loaded).
     assert.ok(checked >= 10, `expected the full app's roles, found only ${checked}`);
     // The roles this guard exists for are present, so a pass is not vacuous.
-    for (const svc of ['apigateway.amazonaws.com', 'bedrock.amazonaws.com', 'scheduler.amazonaws.com']) {
+    for (const svc of [
+      'apigateway.amazonaws.com',
+      'bedrock.amazonaws.com',
+      'bedrock-agentcore.amazonaws.com',
+      'scheduler.amazonaws.com',
+      'states.amazonaws.com',
+    ]) {
       assert.ok(services.has(svc), `expected a role trusted by ${svc}; found ${[...services].sort().join(', ')}`);
     }
     assert.deepStrictEqual(
