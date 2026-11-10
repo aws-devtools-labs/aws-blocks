@@ -116,6 +116,7 @@ import { FileBucketOptions } from '@aws-blocks/bb-file-bucket';
 import { FileContent } from '@aws-blocks/bb-file-bucket';
 import { FileInfo } from '@aws-blocks/bb-file-bucket';
 import { fromExisting } from '@aws-blocks/bb-data';
+import { GetChannelOptions } from '@aws-blocks/bb-realtime';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { github } from '@aws-blocks/bb-auth-oidc';
 import { google } from '@aws-blocks/bb-auth-oidc';
@@ -426,6 +427,8 @@ export { FileContent }
 export { FileInfo }
 
 export { fromExisting }
+
+export { GetChannelOptions }
 
 // @public
 export function getSdkIdentifiers(bb: KVStore<any>): {

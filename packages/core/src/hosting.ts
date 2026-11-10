@@ -43,7 +43,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
-import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
+import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint, publicHostStamp, registerPublicHosts } from './cdk/api-front-door.js';
 import { type ApiDirectRoute, addDirectApiBehaviors } from './cdk/api-direct-routes.js';
 import { registerSharedConfig } from './cdk/config-registry.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
@@ -1861,10 +1861,16 @@ export class Hosting extends Construct {
     // to the viewer with no security headers, while the static root has them —
     // the gap reported for the proxied `/aws-blocks/api` and `/aws-blocks/auth/*`
     // behaviors.
+    // The viewer-request function stamps the viewer's host for the handlers behind
+    // the gateway (CloudFront forwards the gateway's own `Host`): they take it when
+    // it is one of this distribution's hosts, registered on the backend it fronts —
+    // the same owner the origin config below resolves to.
     const apiBehaviorOptions: AddBehaviorOptions = {
       ...API_BEHAVIOR_OPTIONS,
       responseHeadersPolicy: hosting.securityHeadersPolicy,
+      functionAssociations: publicHostStamp(distribution, 'ApiPublicHost'),
     };
+    registerPublicHosts(isBlocksBackendRoot(api) ? api : this, distribution);
 
     // On the `cloudfront` tier, a namespace on a container compute skips the
     // gateway: its exact path goes straight to the container's load balancer.

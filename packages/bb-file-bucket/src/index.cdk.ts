@@ -121,7 +121,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		}
 
 		// Encryption at rest: SSE-S3 by default; SSE-KMS with a dedicated or an
-		// imported CMK on request. The `encryption` values (and the warning on an
+		// imported CMK on request. The `encryption` values (and the synth error on an
 		// unrecognized one) are shared with the DynamoDB-backed blocks.
 		const encryptionChoice = resolveKmsEncryption(this, options?.encryption, {
 			warningPrefix: WARNING_PREFIX,

@@ -21,7 +21,7 @@ import type {
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { decodeState } from './state.js';
-import { validateRelay } from './relay.js';
+import { backendHostsFor, validateRelay } from './relay.js';
 /** Default paths for the routes `AuthOIDC` owns. All live under the reserved
  * `/aws-blocks/auth` subtree so Hosting proxies the whole flow through one
  * CloudFront behavior (and so they never collide with a customer's `/auth/*`). */
@@ -121,9 +121,11 @@ export class AuthOIDC<
 	/**
 	 * Derive the absolute callback URL the IdP redirects back to.
 	 *
-	 * On a full CloudFront deploy the Lambda never sees the public host — the
-	 * distribution strips the viewer `Host` header (`ALL_VIEWER_EXCEPT_HOST_HEADER`),
-	 * so a request-derived URL would resolve to the raw execute-api host and the
+	 * On a full CloudFront deploy the distribution strips the viewer `Host` header
+	 * (`ALL_VIEWER_EXCEPT_HOST_HEADER`). A Blocks CloudFront door stamps it back for
+	 * the request URL, but other doors don't, and the callback must be one stable
+	 * origin (the one authorize registered), not whichever host this request came
+	 * in on; a request-derived URL could resolve to the raw execute-api host and the
 	 * CloudFront-scoped session cookie wouldn't be sent back. So we prefer the
 	 * deploy-time-trusted `BLOCKS_PUBLIC_ORIGIN` (the CloudFront / custom-domain
 	 * origin, injected by the Hosting construct). It's the public origin only —
@@ -299,9 +301,13 @@ export class AuthOIDC<
 
 		// Defense in depth: re-validate the relay target against the current
 		// allowlist. Config could have changed between authorize and callback.
+		// Same-origin covers every host the backend serves, not only this
+		// callback's: authorize may have come in on another of them (see
+		// `backendHostsFor`).
 		const validation = validateRelay(payload.relay, {
 			allowList: this.options.allowedRelayOrigins ?? [],
 			sameOrigin: ctx.request.url,
+			backendHosts: backendHostsFor(ctx.request),
 		});
 		if (!validation.allowed) {
 			return {
