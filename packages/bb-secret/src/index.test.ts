@@ -6,6 +6,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, test } from 'node:test';
 import { isBlocksError, Scope } from '@aws-blocks/core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { Secret, SecretErrors, type SecretOptions, type WritableSecret } from './index.mock.js';
 
@@ -203,6 +204,57 @@ describe('Secret (mock)', () => {
 				() => typed.get(),
 				(e: unknown) => isBlocksError(e, SecretErrors.ValidationFailed),
 			);
+		});
+
+		test('get keeps the stored value out of a ValidationFailed error', async () => {
+			// Schema libraries often quote the received value in their issue
+			// messages. A branded error's message reaches the RPC caller, so the
+			// stored secret must not appear in it.
+			const echoing: StandardSchemaV1<{ apiKey: number }> = {
+				'~standard': {
+					version: 1,
+					vendor: 'test',
+					validate: (value) => {
+						const received = (value as { apiKey?: unknown }).apiKey;
+						return {
+							issues: [{ message: `Expected number, received '${String(received)}'`, path: ['apiKey'] }],
+						};
+					},
+				},
+			};
+			const scope = freshScope();
+			await writable(scope, 'api-config').put(JSON.stringify({ apiKey: 's3cr3t-value' }));
+			const typed = new Secret(freshScope(), 'api-config', { schema: echoing });
+			const err = await typed.get().then(
+				() => assert.fail('expected get() to throw'),
+				(e: unknown) => e,
+			);
+			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
+			assert.ok(!err.message.includes('s3cr3t-value'), `message leaks the value: ${err.message}`);
+			assert.ok(!JSON.stringify(err).includes('s3cr3t-value'), 'serialized error leaks the value');
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			// The library's issues and the failing path stay available server-side, off the enumerable surface.
+			const { cause } = err;
+			assert.ok(cause instanceof Error && cause.message.includes('s3cr3t-value'));
+			assert.strictEqual(Reflect.get(cause, 'path'), 'apiKey');
+			assert.ok(!Object.keys(err).includes('cause'));
+		});
+
+		test('get keeps record keys from the stored value out of a ValidationFailed error', async () => {
+			// A record schema reports the input's own keys as the issue path, so
+			// for a JSON secret whose keys are themselves secret, the path is data.
+			const scope = freshScope();
+			await writable(scope, 'keyed-config').put(JSON.stringify({ 's3cr3t-key': 'not-a-number' }));
+			const typed = new Secret(freshScope(), 'keyed-config', { schema: z.record(z.string(), z.number()) });
+			const err = await typed.get().then(
+				() => assert.fail('expected get() to throw'),
+				(e: unknown) => e,
+			);
+			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
+			assert.ok(!err.message.includes('s3cr3t-key'), `message leaks a record key: ${err.message}`);
+			assert.ok(!JSON.stringify(err).includes('s3cr3t-key'), 'serialized error leaks a record key');
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			assert.strictEqual(Reflect.get(err.cause ?? {}, 'path'), 's3cr3t-key');
 		});
 	});
 

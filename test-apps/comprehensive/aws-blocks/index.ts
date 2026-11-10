@@ -151,6 +151,22 @@ const authCrossDomain = new AuthBasic(scope, 'auth-cross-domain', {
   crossDomain: true,
 });
 
+// AuthBasic whose `codeDelivery` fails, to pin what a client sees when a
+// sign-up hits a backend fault. A `raw-` username throws the kind of error an
+// email provider SDK raises (message embeds an account id and ARN), which must
+// reach the client only as a generic message. An `api-` username throws an
+// ApiError, whose message is intentional and must reach the client unchanged.
+const RAW_BACKEND_ERROR = 'User: arn:aws:sts::111122223333:assumed-role/e2e-role/x is not authorized to perform: ses:SendEmail';
+const authDeliveryFails = new AuthBasic(scope, 'auth-delivery-fails', {
+  passwordPolicy: { minLength: 6 },
+  codeDelivery: async (username) => {
+    if (username.startsWith('api-')) {
+      throw new ApiError('That address cannot receive email', 400, { name: 'UndeliverableAddressException' });
+    }
+    throw new Error(RAW_BACKEND_ERROR);
+  },
+});
+
 // AuthBasic sign-in throttling (#766). A dedicated pool with a tight lockout
 // policy so the e2e trips the lock in a couple of attempts and self-expires
 // fast — kept separate from the shared `auth` pool so the lock never bleeds
@@ -298,6 +314,28 @@ const oidcAuthRelay = new AuthOIDC(scope, 'oidc-auth-relay', {
   allowedRelayOrigins: [
     relayOrigin('testapp://auth'),
   ],
+});
+
+// AuthOIDC (fourth instance) — an `onSignIn` hook that fails. Signing in with
+// `hookfail-raw` throws an SDK-shaped error (account id + ARN in its message),
+// which the callback must answer with a generic 500. Signing in with
+// `hookfail-api` throws an ApiError, whose status, name and message must reach
+// the client unchanged.
+new AuthOIDC(scope, 'oidc-auth-hookfail', {
+  providers: stubsAllowed
+    ? [
+        stubIdp({ name: 'hookfail-raw', onAuthorize: (req) => req.users[0] }),
+        stubIdp({ name: 'hookfail-api', onAuthorize: (req) => req.users[0] }),
+      ]
+    : [placeholderGoogle()],
+  callbackPath: '/aws-blocks/auth/hookfail/callback',
+  signOutPath: '/aws-blocks/auth/hookfail/signout',
+  onSignIn: async (user) => {
+    if (user.provider === 'hookfail-api') {
+      throw new ApiError('Sign-in is disabled for this account', 403, { name: 'SignInBlockedException' });
+    }
+    throw new Error(RAW_BACKEND_ERROR);
+  },
 });
 
 // DistributedTable - Structured data with indexes
@@ -903,12 +941,13 @@ new RawRoute(scope, 'GreetRoute', {
   },
 });
 
-// Wildcard — captures everything after /files/ as context.request.params['*']
+// Wildcard — captures everything after /files/ as context.request.params['*'].
+// Also echoes the URL's pathname, which must be the route path on every stage.
 new RawRoute(scope, 'FilesRoute', {
   method: 'GET',
   path: '/files/*',
   handler: async (context) => {
-    context.response.send({ path: context.request.params['*'] });
+    context.response.send({ path: context.request.params['*'], pathname: context.request.url.pathname });
   },
 });
 
@@ -1708,6 +1747,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // so a `refresh` callback can spread this cast-free without overriding channel.
     const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
     return descriptor;
+  },
+
+  async realtimeGetExactChannel(subChannel: string) {
+    return realtime.getChannel('cursors', subChannel, { scope: 'exact' });
+  },
+
+  async realtimeGetChildOfChannel(subChannel: string, scope: 'exact' | 'subtree') {
+    // A handle for `<subChannel>/child` that carries the token minted for
+    // `<subChannel>`: what a client holding the parent handle could send.
+    const ch = await realtime.getChannel('cursors', subChannel, { scope });
+    const descriptor = ch.toJSON() as Record<string, unknown>;
+    descriptor.channel = `${String(descriptor.channel)}/child`;
+    return descriptor as unknown as typeof ch;
   },
 
   async realtimeGetPoisonedChannel(subChannel: string) {
@@ -3182,6 +3234,7 @@ export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
 
 // Export auth state machine API
 export const authApi = auth.createApi();
+export const authDeliveryFailsApi = authDeliveryFails.createApi();
 export const authCApi = authC.createApi();
 
 // Export OIDC auth state machine API

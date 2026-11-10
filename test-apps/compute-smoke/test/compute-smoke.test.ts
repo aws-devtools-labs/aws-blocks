@@ -5,7 +5,8 @@
  * Compute E2E — one deployment of the compute app, every compute scenario.
  *
  * The harness deploys the app behind this leg's front door
- * (`COMPUTE_API_FRONT_DOOR`, see aws-blocks/index.cdk.ts), waits until the API
+ * (`COMPUTE_API_FRONT_DOOR`, see aws-blocks/index.cdk.ts), with or without
+ * `defaults.strictNamespacePlacement` (`COMPUTE_STRICT_NAMESPACE_PLACEMENT`), waits until the API
  * answers through it, and runs each scenario module against the same stack, the
  * way `comprehensive`'s e2e.test.ts does:
  * - container-jobs.test.ts — container-backed AsyncJobs in the VPC
@@ -54,10 +55,18 @@ const outputsPath = join(__dirname, '..', '.blocks-sandbox', 'outputs.json');
 const frontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as FrontDoor;
 if (!FRONT_DOORS.includes(frontDoor)) throw new Error(`Unknown COMPUTE_API_FRONT_DOOR '${frontDoor}'`);
 
+// Same default and values as index.cdk.ts, which reads the same variable at synth.
+const strictFlag = process.env.COMPUTE_STRICT_NAMESPACE_PLACEMENT ?? 'false';
+if (strictFlag !== 'true' && strictFlag !== 'false') {
+  throw new Error(`COMPUTE_STRICT_NAMESPACE_PLACEMENT must be 'true' or 'false', got '${strictFlag}'`);
+}
+const strictNamespacePlacement = strictFlag === 'true';
+
 let apiUrl: string | undefined;
 let hostingUrl: string | undefined;
 const ctx: ComputeTestContext = {
   frontDoor,
+  strictNamespacePlacement,
   apiUrl() {
     if (!apiUrl) throw new Error('The stack is not deployed yet');
     return apiUrl;
@@ -104,9 +113,9 @@ async function waitForFrontDoor(budgetMs = 300_000): Promise<void> {
   throw new Error(`Front door not reachable within ${budgetMs / 1000}s: ${String(lastError)}`);
 }
 
-describe(`Compute (${frontDoor} front door)`, { skip: !isDeployed && 'Compute tests require deployment — skipping in local mode.' }, () => {
+describe(`Compute (${frontDoor} front door${strictNamespacePlacement ? ', strict namespace placement' : ''})`, { skip: !isDeployed && 'Compute tests require deployment — skipping in local mode.' }, () => {
   before(async () => {
-    console.log(`🚀 Deploying ${ENV} (apiFrontDoor: ${frontDoor})...\n`);
+    console.log(`🚀 Deploying ${ENV} (apiFrontDoor: ${frontDoor}, strictNamespacePlacement: ${strictNamespacePlacement})...\n`);
     execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
       cwd: join(__dirname, '..'),
       stdio: 'inherit',

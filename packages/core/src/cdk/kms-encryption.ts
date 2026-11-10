@@ -1,7 +1,6 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { Annotations } from 'aws-cdk-lib';
 import { Key, type IKey } from 'aws-cdk-lib/aws-kms';
 import type { Construct } from 'constructs';
 
@@ -20,14 +19,14 @@ export interface ExternalKmsKeyRef {
 export type KmsEncryptionOption = 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
 
 /**
- * The block's own identity, used only to word its synth warnings. The two
- * fields travel together so a caller cannot pair one block's prefix with
- * another's factory hint.
+ * The block's own identity, used only to word its synth warnings and errors.
+ * The two fields travel together so a caller cannot pair one block's prefix
+ * with another's factory hint.
  */
 export interface KmsBlockIdentity {
 	/** The block's npm name, used as the annotation ID prefix (e.g. `@aws-blocks/bb-kv-store`). */
 	readonly warningPrefix: string;
-	/** The block's factory name shown in the unrecognized-encryption warning (e.g. `KVStore.fromKmsKey`). */
+	/** The block's factory name shown in the unrecognized-encryption error (e.g. `KVStore.fromKmsKey`). */
 	readonly fromKmsKeyHint: string;
 }
 
@@ -46,15 +45,21 @@ export type ResolvedKmsEncryption =
  * Resolve a block's `encryption` option into a service-agnostic choice. Shared
  * by every Blocks storage resource that exposes `encryption`
  * (`bb-kv-store`, `bb-distributed-table`, `bb-file-bucket`) so the accepted
- * values and the unrecognized-value warning cannot drift between them. Each
+ * values and the unrecognized-value error cannot drift between them. Each
  * caller maps the result onto its own service's encryption props.
  *
  * An unrecognized value (a typo, or a hand-built object without the brand)
- * warns and falls back to `'aws-managed'` rather than failing the synth.
+ * fails the synth with an error listing the valid values. It never falls back
+ * to `'aws-managed'`: the option is a typed union, so this only triggers for
+ * untyped callers (plain JavaScript, a cast, or config loaded from JSON/env),
+ * and silently using the AWS-managed key there would downgrade a request for a
+ * customer-managed key.
  *
- * @param scope - the construct the warning and imported key attach to.
+ * @param scope - the construct the imported key attaches to (its path is named in the error).
  * @param option - the per-block `encryption` option.
- * @param identity - the block's {@link KmsBlockIdentity} for wording the warning.
+ * @param identity - the block's {@link KmsBlockIdentity} for wording the error.
+ * @throws Error when `option` is not `undefined`, `'aws-managed'`,
+ *   `'customer-managed'`, or a branded {@link ExternalKmsKeyRef}.
  */
 export function resolveKmsEncryption(
 	scope: Construct,
@@ -69,11 +74,23 @@ export function resolveKmsEncryption(
 	}
 	if (option === 'customer-managed') return { kind: 'customer-managed' };
 	if (option !== undefined && option !== 'aws-managed') {
-		Annotations.of(scope).addWarningV2(
-			`${identity.warningPrefix}:UnknownEncryption`,
-			`Unrecognized encryption '${String(option)}' (expected 'aws-managed', ` +
-				`'customer-managed', or ${identity.fromKmsKeyHint}(arn)) — falling back to 'aws-managed'.`,
+		throw new Error(
+			`${identity.warningPrefix}: Unrecognized encryption '${describeOption(option)}' on "${scope.node.path}" ` +
+				`(expected 'aws-managed', 'customer-managed', or ${identity.fromKmsKeyHint}(arn)). ` +
+				`Fix the value; it is not replaced with 'aws-managed', so a customer-managed key request is never silently downgraded.`,
 		);
 	}
 	return { kind: 'aws-managed' };
+}
+
+/** Render an unrecognized option for the error message (objects as JSON, not `[object Object]`). */
+function describeOption(option: unknown): string {
+	if (typeof option === 'object' && option !== null) {
+		try {
+			return JSON.stringify(option);
+		} catch {
+			return String(option);
+		}
+	}
+	return String(option);
 }

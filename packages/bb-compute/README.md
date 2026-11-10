@@ -114,9 +114,11 @@ type is a compile error.
   and fetched at boot. So a custom image only supplies the runtime environment —
   it must provide a **Node 24** runtime on `PATH`, plus any system libraries your
   handlers need (e.g. media tooling). Defaults to
-  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible). At boot, a
-  small bootstrap script uses the task's role to download your code from S3 and
-  starts it.
+  `public.ecr.aws/docker/library/node:24-slim` (arm64-compatible), pinned by
+  digest. At boot, a small bootstrap script uses the task's role to download
+  your code from S3 and starts it. ECS pulls the image at every task start, so
+  pin a custom image by digest (`my-image@sha256:<digest>`) rather than a
+  tag.
 
 ## API namespaces
 
@@ -139,13 +141,26 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. A call
   to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a native
   client released before per-namespace paths — still runs on the default
-  compute.
+  compute, and synth warns (`blocks:apigateway:bare-endpoint-serves-placed-namespaces`).
+  Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the
+  preset you already spread there, to refuse it instead: each compute then serves
+  only the namespaces placed on it, and a call to a namespace placed elsewhere
+  gets the same "method not found" error as an unknown namespace. The typed
+  clients already call each namespace at its own path, so they keep working. The
+  option applies only to deployed computes: the local dev server serves every
+  namespace on every path, so a raw bare-endpoint call that works under
+  `npm run dev` returns "method not found" once deployed. If raw callers still
+  need the bare endpoint, leave the option off and acknowledge
+  the warning with
+  `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
+  on the stack or backend returned by `create()`.
 - **The gateway's limits still apply.** An API call is capped at ~29 seconds
   whatever the compute's `maxTimeoutSeconds` (except a container namespace that
   CloudFront reaches directly, below); run longer work in an `AsyncJob`.
 - **It's placement, not isolation.** Every compute runs the same backend bundle
   under the app's one execution role, so a separate compute is not a security
-  boundary.
+  boundary. `strictNamespacePlacement` keeps a namespace's code off the default
+  compute (and its network); it doesn't split IAM.
 - **Routing follows the export name** — the name your frontend imports
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
   argument.
@@ -180,10 +195,10 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
     (the load balancer's 128-character rule path limit, minus the 16-character
     `/aws-blocks/api/` prefix).
 
-  Through CloudFront, `ctx.request.url` in a container namespace is the
-  CloudFront (or custom-domain) URL, while a namespace on a Lambda compute
-  reports the gateway's `execute-api` URL, since CloudFront reaches it through
-  the gateway.
+  Through a Blocks CloudFront front door, `ctx.request.url` is the CloudFront
+  (or custom-domain) URL in a container namespace and in a namespace on a
+  Lambda compute alike. Called at the gateway's `execute-api` URL directly,
+  both report the gateway's host.
 - **Everything else stays on the default compute:** namespaces with no
   `compute` of their own or from their scope, `RawRoute`s, and the auth HTTP
   routes (`/aws-blocks/auth/*`).

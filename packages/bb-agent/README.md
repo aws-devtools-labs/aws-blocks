@@ -46,7 +46,7 @@ const agent = new Agent(scope, id, config)
 | `listConversations(userId)` | `Promise<Conversation[]>` | List all conversations for a user. |
 | `deleteConversation(id, userId)` | `Promise<void>` | Delete a conversation and its session data. |
 | `getPendingInterrupts(conversationId, { userId })` | `Promise<Array<...>>` | Get unanswered interrupts (for reload support). Empty unless `userId` owns the conversation. |
-| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `inferenceOnly` agents ignore the `userId` (their channels are not user-scoped), but pass the session's `userId` anyway, not a placeholder. |
+| `getChannel(channelId, { userId })` | `Promise<RealtimeChannel>` | Get a Realtime channel for subscribing to chunks. Carries only `userId`'s turns. `inferenceOnly` agents ignore the `userId` (their channels are not user-scoped) unless they set `sessionScope: 'user'`, but pass the session's `userId` anyway, not a placeholder. |
 
 `stream()` invokes the AgentCore Runtime (`InvokeAgentRuntime`) and returns immediately — no API Gateway timeout risk. The loop runs on the runtime (sessions up to 8h) and publishes chunks to Realtime as it goes. The channel ID is resolved as `options.channelId || options.conversationId || crypto.randomUUID()` — empty strings are treated as unset and fall through to the next value.
 
@@ -73,11 +73,35 @@ Every method that takes a `userId` treats it as the caller's identity and checks
 - `stream()` and `resume()` throw `AgentErrors.ConversationNotFound` when `options.conversationId` doesn't belong to `options.userId`. A non-owner can't add turns to someone else's conversation or approve their pending tool calls.
 - `getConversation(id, { userId })` and `getPendingInterrupts(conversationId, { userId })` return `[]` for a conversation the user doesn't own.
 - `deleteConversation(id, userId)` is a no-op for a conversation the user doesn't own.
-- `getChannel(channelId, { userId })` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled; an `inferenceOnly` agent has no owner, so its channels are not user-scoped.
+- `getChannel(channelId, { userId })` returns a channel that carries only that user's turns. The chunks of `stream()` and `resume()` are published on the caller's own channel, so a non-owner who knows a conversation ID (which is also the default `channelId`) can't listen to the owner's turn or push chunks onto it, whatever `channelId` they pick. This applies when persistence is enabled, and to an `inferenceOnly` agent with `sessionScope: 'user'`; any other `inferenceOnly` agent has no owner, so its channels are not user-scoped.
 - With persistence enabled, `getConversation()`, `getPendingInterrupts()` and `getChannel()` throw `AgentErrors.InvalidUsage` unless the second argument is an options object with a `userId` (`{ userId }`), so a call written for the older signatures, such as `getConversation(id)` or `getConversation(id, { limit })`, fails loudly instead of returning data.
 - A turn without a `conversationId` never runs in a conversation's session, on AWS as well as locally, whatever `channelId` it uses.
 
 **`inferenceOnly` agents have no owner.** They keep no conversation records, so none of these checks apply to them. If you pass a `conversationId` to an `inferenceOnly` agent, it is a shared session key: anyone who passes the same id continues (or `resume()`s) that session and receives its channel. Don't let callers choose it.
+
+To isolate `inferenceOnly` sessions per user, set `sessionScope: 'user'`. The session is then keyed by the `userId` together with the `conversationId`, and the Realtime channel is scoped to the `userId`, so a caller who passes another user's `conversationId` gets a separate, empty session and never receives the other user's chunks. `stream()`, `resume()` and `getChannel()` then require `options.userId` and throw `AgentErrors.InvalidUsage` without it. Sessions stored before you switch an existing agent to `'user'` are keyed by the bare `conversationId` and are not resumed.
+
+```typescript
+const assistant = new Agent(scope, 'assistant', {
+  inferenceOnly: true,
+  sessionScope: 'user',
+  systemPrompt: 'You are a helpful assistant.',
+});
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  // Subscribe first: the client calls getChannel(), awaits `established`, then calls ask().
+  async getChannel(channelId: string) {
+    const user = await auth.requireAuth(context);
+    // Scoped to the caller: another user who passes the same channelId gets a different channel.
+    return assistant.getChannel(channelId, { userId: user.userId });
+  },
+  async ask(message: string, conversationId: string) {
+    const user = await auth.requireAuth(context);
+    const result = await assistant.stream(message, { conversationId, userId: user.userId });
+    return { channelId: result.channelId };
+  },
+}));
+```
 
 These checks are only as good as the `userId` you pass. **Derive it from the authenticated session on the server, never from a request parameter**, or any caller can claim to be any user. Build the options object from the session's `userId` and don't spread a caller-supplied object into it (`{ userId: user.userId, ...body }` lets a request body replace `userId`; write `{ ...opts, userId: user.userId }` or pick only `limit`). `listConversations(userId)` returns only the conversations a user owns:
 
@@ -191,6 +215,7 @@ interface Conversation {
 | `tools` | `(tool) => Record<string, AgentTool>` | Tools the agent can call during reasoning. |
 | `toolContextSchema` | `z.ZodType` | Optional schema for per-call tool context. When set, `context` is required and typed. |
 | `inferenceOnly` | `boolean` | Skip persistence infra. Default: `false`. |
+| `sessionScope` | `'shared' \| 'user'` | How an `inferenceOnly` agent keys the session a `conversationId` selects: by the id alone (`'shared'`), or by the `userId` plus the id, with user-scoped channels (`'user'`). Ignored with persistence. Default: `'shared'`. See [Authorization](#authorization). |
 | `conversation` | `ConversationManagerConfig` | How the agent trims message history (sliding-window or summarizing). |
 | `streamingMode` | `'token' \| 'block'` | How text chunks are published to the client. Default: `'block'`. |
 | `maxLlmCalls` | `number \| false` | Max model invocations per turn before the turn is stopped; `false` disables. Default: `20`. See [Limiting runaway cost](#limiting-runaway-cost). |
@@ -435,11 +460,11 @@ try {
 | `AgentErrors.PersistenceRequired` | Conversation CRUD called on an inferenceOnly agent. |
 | `AgentErrors.InvalidModelConfig` | Missing modelId, apiKey, unknown provider, or `needsApproval` + `interrupt` both specified. |
 | `AgentErrors.ModelUnavailable` | All model candidates failed health checks, or Bedrock refused to invoke the model for account-level reasons (Anthropic use case details not submitted, one-time AWS Marketplace subscription not activated, model not available for the account). The message says what to do; check logs for details. |
-| `AgentErrors.StreamFailed` | Agent encountered an error during execution. |
+| `AgentErrors.StreamFailed` | Agent encountered an error during execution. The `error` chunk, the persisted `metadata.error`, and this error's message carry a branded Building Block error's message, or `Internal error` for any other failure (e.g. a Bedrock or AWS SDK error); the original error is logged server-side. |
 | `AgentErrors.InterruptRequired` | Agent paused for approval. Use `InterruptError` for typed access to pending interrupts. |
 | `AgentErrors.BrowserNotSupported` | Agent instantiated in the browser (server-side only). |
 | `AgentErrors.ConversationNotFound` | `stream()`/`resume()` with a `conversationId` the `userId` doesn't own (or that was never created). See [Authorization](#authorization). |
-| `AgentErrors.InvalidUsage` | With persistence enabled: `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without an options object containing the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key. |
+| `AgentErrors.InvalidUsage` | With persistence enabled: `getConversation()`, `getPendingInterrupts()` or `getChannel()` called without an options object containing the caller's `userId`, or `stream()`/`resume()` with a `userId` that can't be encoded into a channel key. On an `inferenceOnly` agent with `sessionScope: 'user'`: `stream()`, `resume()` or `getChannel()` called without a `userId`. |
 
 ### Streaming Mode
 

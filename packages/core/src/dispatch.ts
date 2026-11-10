@@ -9,6 +9,8 @@
 // guard and how its payload format carries `Set-Cookie`, the container's
 // body-size limit.
 
+import type { ServesApiNamespace } from './api-placement.js';
+import { requestBaseUrl } from './common/request-base-url.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { buildCorsHeaders, CORS_MAX_AGE, corsRejection, getCorsPatterns, isOriginAllowed } from './cors.js';
 import { getLoadedCoreCopies, getRegisteredRoutes, matchRoute } from './raw-route.js';
@@ -51,6 +53,14 @@ export interface DispatchRequest {
   headers: () => Headers;
   /** Builds the absolute, externally visible request URL (`ctx.request.url`). */
   url: () => URL;
+  /**
+   * Builds the externally reachable base URL the request arrived under: its
+   * origin plus any API Gateway stage prefix (`https://<api-host>/prod`), with no
+   * trailing slash. `url().pathname` never carries the stage, so this is the only
+   * place a handler can read it from, through `getRequestBaseUrl()`. Required, so
+   * that a transport cannot leave the stage out by omission.
+   */
+  baseUrl: () => string;
   /** The decoded body (`text` is `''` and `stream` is `null` when absent). Called at most once. */
   body: () => DispatchRequestBody;
   /** Fires when the transport gives up on the request (timeout, client gone). */
@@ -104,6 +114,15 @@ export interface DispatcherOptions {
    * Default `false`.
    */
   listApisWhenNotFound?: boolean;
+  /**
+   * Which API namespaces (by export name) this compute serves. A call to any
+   * other namespace gets the same "not found" error as an unknown one, whichever
+   * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
+   * namespace placed on another compute. Default: every namespace is served.
+   * The Lambda handler and the container HTTP server build it from the placement
+   * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
+   */
+  servesNamespace?: ServesApiNamespace;
 }
 
 /**
@@ -200,7 +219,8 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
  * dispatch for any path outside `/aws-blocks/api`, and JSON-RPC for the
  * `/aws-blocks/api` subtree. Request cookies and the validated client user agent
  * are available to handlers through {@link requestCookies} /
- * {@link requestClientUserAgent} for the duration of the call.
+ * {@link requestClientUserAgent} for the duration of the call, and the request's
+ * {@link DispatchRequest.baseUrl} through `getRequestBaseUrl()` ({@link requestBaseUrl}).
  *
  * @internal
  */
@@ -215,6 +235,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
   const trace = options.rpcTrace;
+  const servesNamespace = options.servesNamespace;
   const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
     if (options.logHandlerError) options.logHandlerError(failure);
     else logRequestError(request, label, failure.error);
@@ -330,7 +351,8 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
 
         // Get the API by export name. resolveApiNamespace refuses exported Building
         // Block instances and `_`-private exports, so only an API surface is callable.
-        const apiHandler = resolveApiNamespace(backend, apiNamespace);
+        // A namespace placed on another compute is refused exactly like an unknown one.
+        const apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
           reportRpcError({ status: 404, namespace: apiNamespace, method });
           const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
@@ -387,8 +409,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     // malformed input never reaches the AWS user agent.
     const clientUserAgent = validateClientUserAgentToken(request.clientUserAgent);
 
+    // The stage-bearing base URL goes in a store as well: `ctx.request.url` has no
+    // stage, and Building Blocks that address the gateway itself (an OIDC callback
+    // or stub issuer URL) read it through `getRequestBaseUrl()`.
     return requestCookies.run(request.cookie, () =>
-      requestClientUserAgent.run(clientUserAgent, dispatchWithinStores),
+      requestClientUserAgent.run(clientUserAgent, () => requestBaseUrl.run(request.baseUrl(), dispatchWithinStores)),
     );
   };
 }

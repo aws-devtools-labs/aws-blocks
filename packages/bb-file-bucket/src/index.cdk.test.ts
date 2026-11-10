@@ -521,15 +521,13 @@ test('CDK: the access-log bucket stays SSE-S3 when the data bucket uses SSE-KMS'
   });
 });
 
-test('CDK: an unrecognized encryption value warns and falls back to SSE-S3', () => {
-  const { stack, parent } = setup();
+test('CDK: an unrecognized encryption value fails the synth instead of falling back to SSE-S3', () => {
+  const { parent } = setup();
   // Deliberately invalid input (a typo a JS caller could pass).
-  new FileBucket(parent, 'uploads', { encryption: 'kms' as unknown as 'aws-managed' });
-  const template = Template.fromStack(stack);
-  template.resourceCountIs('AWS::KMS::Key', 0);
-  const warnings = cdk.assertions.Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('Unrecognized encryption'));
-  assert.strictEqual(warnings.length, 1);
-  assert.match(String(warnings[0].entry.data), /\[ack: @aws-blocks\/bb-file-bucket:UnknownEncryption\]/);
+  assert.throws(
+    () => new FileBucket(parent, 'uploads', { encryption: 'kms' as unknown as 'aws-managed' }),
+    /Unrecognized encryption 'kms'.*'aws-managed', 'customer-managed', or FileBucket\.fromKmsKey\(arn\)/,
+  );
 });
 
 test('CDK: fromExisting ignores encryption (no key minted for a wrapped bucket)', () => {

@@ -3,9 +3,10 @@
 
 import assert from 'node:assert';
 import { describe, mock, test } from 'node:test';
-import { Scope } from '@aws-blocks/core';
+import { isBlocksError, Scope } from '@aws-blocks/core';
 import { ResourceNotFoundException, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
-import { Secret } from './index.aws.js';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { Secret, SecretErrors } from './index.aws.js';
 
 const TEST_ARN = 'arn:aws:secretsmanager:us-east-1:111122223333:secret:test-AbCdEf';
 
@@ -100,6 +101,79 @@ describe('AWS runtime read cache', () => {
 	});
 });
 
+/**
+ * Stub a secret that holds a current + previous value, where GetSecretValue
+ * reads can be held in flight: while `state.hold` is set, a read snapshots the
+ * stored value when it is sent but resolves only on `release()`. A
+ * PutSecretValue commits immediately and moves current → previous, like
+ * Secrets Manager's AWSCURRENT/AWSPREVIOUS labels.
+ */
+function stubHeldReads(initial: { current: string; previous: string }) {
+	const state = { ...initial, hold: false };
+	const held: Array<() => void> = [];
+	const stub = stubSend((cmd) => {
+		if (cmd.constructor.name === 'PutSecretValueCommand') {
+			state.previous = state.current;
+			state.current = cmd.input.SecretString;
+			return {};
+		}
+		const response = { SecretString: cmd.input.VersionStage === 'AWSPREVIOUS' ? state.previous : state.current };
+		if (!state.hold) return response;
+		return new Promise((resolve) => held.push(() => resolve(response)));
+	});
+	const release = () => {
+		for (const resolve of held.splice(0)) resolve();
+	};
+	return { ...stub, state, release };
+}
+
+describe('AWS runtime read cache — reads in flight across put()', () => {
+	test('a read started before put() does not re-cache the pre-put value', async () => {
+		const { commands, state, release, restore } = stubHeldReads({ current: 'sk-old', previous: 'sk-older' });
+		try {
+			const secret = new Secret(new Scope('app'), 'race-recache', {
+				secret: Secret.fromExisting(TEST_ARN),
+				allowRuntimeWrite: true,
+			});
+			state.hold = true;
+			const current = secret.get(); // cache miss: fetch sent, snapshots 'sk-old'
+			const previous = secret.get({ version: 'previous' }); // snapshots 'sk-older'
+			state.hold = false;
+			await secret.put('sk-new'); // commits and clears the cache
+			release();
+			await Promise.all([current, previous]); // the pre-put reads land after the clear
+
+			assert.strictEqual(await secret.get(), 'sk-new');
+			assert.strictEqual(await secret.get({ version: 'previous' }), 'sk-old');
+			assert.strictEqual(getCalls(commands).length, 4, 'both post-put reads must re-fetch');
+		} finally {
+			restore();
+		}
+	});
+
+	test('a slow pre-put read does not overwrite the entry a post-put read cached', async () => {
+		const { commands, state, release, restore } = stubHeldReads({ current: 'sk-old', previous: 'sk-older' });
+		try {
+			const secret = new Secret(new Scope('app'), 'race-overwrite', {
+				secret: Secret.fromExisting(TEST_ARN),
+				allowRuntimeWrite: true,
+			});
+			state.hold = true;
+			const slow = secret.get(); // snapshots 'sk-old', held in flight
+			state.hold = false;
+			await secret.put('sk-new');
+			assert.strictEqual(await secret.get(), 'sk-new'); // fresh fetch, cached
+			release();
+			await slow; // the stale response lands last
+
+			assert.strictEqual(await secret.get(), 'sk-new');
+			assert.strictEqual(getCalls(commands).length, 2, 'the post-put entry must still serve reads from cache');
+		} finally {
+			restore();
+		}
+	});
+});
+
 describe('AWS runtime read cache — cacheTtlSeconds', () => {
 	test('within the TTL the cache is reused (no second call)', async () => {
 		mock.timers.enable({ apis: ['Date'] });
@@ -172,6 +246,41 @@ describe('AWS runtime read cache — cacheTtlSeconds', () => {
 			assert.strictEqual(await secret.get(), 'sk-1');
 			assert.strictEqual(await secret.get(), 'sk-1');
 			assert.strictEqual(getCalls(commands).length, 3, 'ttl 0 must re-fetch on every read');
+		} finally {
+			restore();
+		}
+	});
+});
+
+describe('AWS runtime schema validation', () => {
+	test('get keeps the stored value out of a ValidationFailed error', async () => {
+		const echoing: StandardSchemaV1<{ apiKey: number }> = {
+			'~standard': {
+				version: 1,
+				vendor: 'test',
+				validate: (value) => {
+					const received = (value as { apiKey?: unknown }).apiKey;
+					return {
+						issues: [{ message: `Expected number, received '${String(received)}'`, path: ['apiKey'] }],
+					};
+				},
+			},
+		};
+		const { restore } = stubSend(() => ({ SecretString: JSON.stringify({ apiKey: 's3cr3t-value' }) }));
+		try {
+			const secret = new Secret(new Scope('app'), 'validated', {
+				secret: Secret.fromExisting(TEST_ARN),
+				schema: echoing,
+			});
+			const err = await secret.get().then(
+				() => assert.fail('expected get() to throw'),
+				(e: unknown) => e,
+			);
+			assert.ok(isBlocksError(err, SecretErrors.ValidationFailed));
+			assert.ok(!err.message.includes('s3cr3t-value'), `message leaks the value: ${err.message}`);
+			assert.ok(!JSON.stringify(err).includes('s3cr3t-value'), 'serialized error leaks the value');
+			assert.strictEqual(err.message, 'ValidationFailedException: The secret value did not match the schema');
+			assert.strictEqual(Reflect.get(err.cause ?? {}, 'path'), 'apiKey');
 		} finally {
 			restore();
 		}

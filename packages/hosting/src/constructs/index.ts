@@ -110,6 +110,7 @@ export {
 	type HostingGeoRestriction,
 	type HostingLoggingConfig,
 	type HostingMonitoringConfig,
+	type HostingServerOriginConfig,
 	type ResolvedFrontDoor,
 	pickKnownSettingKeys,
 	resolveFrontDoorFeatures,
