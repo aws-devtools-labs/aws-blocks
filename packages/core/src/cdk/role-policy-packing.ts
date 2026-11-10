@@ -109,7 +109,8 @@ function cdkSplitPriority(scope: IConstruct): number {
 		: cdk.AspectPriority.DEFAULT;
 }
 
-const ENABLED = Symbol.for('blocks:RolePolicyPacking');
+/** Roles packing has already been enabled for, so a second call adds nothing. */
+const enabledRoles = new WeakMap<iam.Role, true>();
 
 /**
  * What the consolidation aspect decided for a role, read back by the validation
@@ -146,9 +147,8 @@ function annotateOnce(role: iam.Role, key: string, add: () => void): void {
  * @internal
  */
 export function enableRolePolicyPacking(role: iam.Role): void {
-	const marker = role as unknown as Record<symbol, boolean | undefined>;
-	if (marker[ENABLED]) return;
-	marker[ENABLED] = true;
+	if (enabledRoles.has(role)) return;
+	enabledRoles.set(role, true);
 
 	cdk.Aspects.of(role).add(
 		{
@@ -304,6 +304,8 @@ function checkPackingOutcome(role: iam.Role): void {
 
 	const after = defaultPolicy.document.statementCount + overflow.reduce((n, p) => n + p.document.statementCount, 0);
 	// `>=`: AWS Blocks' de-duplication never drops more than CDK's, so a merge always shows as fewer statements.
+	// `preSplitStatements` is already de-duplicated while `statementCount` is not, so `>=` (not `!==`) keeps
+	// this conservative: it can miss an ignored merge but never reports one that happened.
 	if (state.hasCombinablePair && after >= state.preSplitStatements) addMergeNotAppliedInfo(role);
 }
 
