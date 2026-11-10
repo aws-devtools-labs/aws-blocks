@@ -8,10 +8,9 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 
 /**
- * Only meaningful on Linux, and only where a session keyring is running. Every test returns early
- * elsewhere rather than failing, so the suite stays green on the Windows and macOS runners — which
- * also means these count as passing while verifying nothing there. The keyring CI job is what gives
- * them meaning.
+ * Only meaningful where a session keyring is actually running. Every test returns early elsewhere
+ * rather than failing, so the suite stays green on every other runner — which also means these
+ * count as passing while verifying nothing there. The keyring CI job is what gives them meaning.
  *
  * They touch the real Secret Service under a schema prefix of their own and delete what they create,
  * so they cannot disturb a stored session.
@@ -28,22 +27,38 @@ class SecretServiceKeyCustodyTest {
 
     private val key = ByteArray(32) { it.toByte() }
 
+    /**
+     * Whether a keyring can actually be reached, which the operating system's name cannot answer.
+     *
+     * A Linux CI runner or container has the OS and no libsecret, and constructing the custody there
+     * raises an [Error] out of the native library loader rather than failing a call — so guarding on
+     * the OS alone turns these into seven hard failures anywhere the library is absent.
+     *
+     * [selectKeyCustody] answers it properly, because its self-test both loads the library and
+     * round-trips a probe, and reports the file tier when either step fails. The `onLinux` check has
+     * to come first and must stay first: short-circuiting is what keeps this from probing a
+     * developer's own keychain on macOS, where the host store is present and asking would prompt.
+     */
+    private val keyringAvailable: Boolean by lazy {
+        onLinux && selectKeyCustody(root.toPath()).tier == KeyTier.OS
+    }
+
     @AfterTest
     fun cleanUp() {
-        if (onLinux) runCatching { custody().delete(alias) }
+        if (keyringAvailable) runCatching { custody().delete(alias) }
         root.deleteRecursively()
     }
 
     @Test
     fun loadsNothingBeforeAnythingIsStored() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         custody().load(alias).shouldBeNull()
     }
 
     @Test
     fun storesThenLoadsTheSameKey() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         custody().storeIfAbsent(alias, key).toList() shouldBe key.toList()
 
@@ -52,7 +67,7 @@ class SecretServiceKeyCustodyTest {
 
     @Test
     fun returnsTheKeyAlreadyHeldRatherThanTheOneOffered() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         custody().storeIfAbsent(alias, key)
 
@@ -63,7 +78,7 @@ class SecretServiceKeyCustodyTest {
 
     @Test
     fun deleteRemovesTheStoredKey() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         custody().storeIfAbsent(alias, key)
 
@@ -74,14 +89,14 @@ class SecretServiceKeyCustodyTest {
 
     @Test
     fun reportsTheOsTier() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         custody().tier shouldBe KeyTier.OS
     }
 
     @Test
     fun keepsKeysUnderDifferentAliasesApart() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         val other = "other-${System.nanoTime()}:com.example.app"
         try {
@@ -95,7 +110,7 @@ class SecretServiceKeyCustodyTest {
 
     @Test
     fun storesAKeyWhoseBytesIncludeAZero() {
-        if (!onLinux) return
+        if (!keyringAvailable) return
 
         // The native API takes a NUL-terminated C string, so a raw key containing a zero byte would
         // be truncated. About one AES key in eight contains one, which is why the key is base64'd.
