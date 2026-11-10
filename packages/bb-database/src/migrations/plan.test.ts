@@ -4,7 +4,7 @@
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
-import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
+import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
 import { buildMigrationPlan, lintMigrationFiles } from './plan.js';
 
 const steps = (sql: string) => buildMigrationPlan({ '001.sql': sql }, 'dsql').files[0].steps;
@@ -132,7 +132,7 @@ describe('migration lint (dsql): what stops it', () => {
 					'dsql',
 				),
 			(e: unknown) => {
-				assert.ok(isBlocksError(e, DSQL_MIGRATION_VALIDATION_ERROR_NAME));
+				assert.ok(isBlocksError(e, MIGRATION_VALIDATION_ERROR_NAME));
 				const lines = e.message.split('\n').slice(1);
 				assert.strictEqual(lines.length, 3, e.message);
 				assert.match(lines[0], /^ {2}001\.sql: serial_type: /);
@@ -166,9 +166,24 @@ describe('migration plan (aurora): one transaction per file', () => {
 		assert.ok(steps.every((s) => s.kind === 'statement' && s.transactional));
 	});
 
-	test('an aurora file is never linted; a dsql file is', () => {
+	test('an aurora file is PostgreSQL: SERIAL passes, and only the DSQL-only forms are named', () => {
 		const files = { '001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);' };
 		lintMigrationFiles(files, 'aurora');
-		assert.throws(() => lintMigrationFiles(files, 'dsql'), { name: DSQL_MIGRATION_VALIDATION_ERROR_NAME });
+		assert.throws(() => lintMigrationFiles(files, 'dsql'), { name: MIGRATION_VALIDATION_ERROR_NAME });
+		assert.throws(
+			() =>
+				lintMigrationFiles(
+					{
+						'002.sql':
+							"CREATE INDEX ASYNC t_n ON t (n);\nSELECT sys.wait_for_job('x');\nINSERT INTO t (n) VALUES ('ASYNC');",
+					},
+					'aurora',
+				),
+			{
+				name: MIGRATION_VALIDATION_ERROR_NAME,
+				message:
+					/cluster kind 'aurora'[\s\S]*002\.sql: `ASYNC` is Aurora DSQL syntax[\s\S]*002\.sql: `sys\.wait_for_job\(\)` is Aurora DSQL syntax/,
+			},
+		);
 	});
 });

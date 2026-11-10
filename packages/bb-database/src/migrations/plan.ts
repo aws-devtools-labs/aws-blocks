@@ -5,8 +5,8 @@ import { createHash } from 'node:crypto';
 import { blocksError } from '@aws-blocks/core';
 import { splitStatements } from '@aws-blocks/data-common';
 import { type AsyncDdlTarget, asyncDdlTarget } from '../dialect/async-ddl.js';
-import { ASYNC_DDL, findStatementIssues, inspectStatement } from '../dialect/validation.js';
-import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
+import { ASYNC_DDL, findStatementIssues, inspectStatement, stripLiteralsAndComments } from '../dialect/validation.js';
+import { MIGRATION_VALIDATION_ERROR_NAME } from '../errors.js';
 import type { ClusterType } from '../types.js';
 
 export interface StatementStep {
@@ -58,22 +58,51 @@ function sequenceStatement(statement: string): PlanStep[] {
 	return ASYNC_DDL.test(cleaned) ? [step, waitJob(step, cleaned)] : [step];
 }
 
+// The DSQL-only forms a file written for the other cluster kind carries. PostgreSQL would reject them with a
+// bare syntax error; naming them here says what to change.
+const DSQL_ONLY_FORMS: ReadonlyArray<{ test: RegExp; message: string }> = [
+	{
+		test: ASYNC_DDL,
+		message:
+			"`ASYNC` is Aurora DSQL syntax. This cluster is PostgreSQL: drop `ASYNC` (the index build or validation runs in the file's transaction).",
+	},
+	{
+		test: /\bsys\.wait_for_job\s*\(/i,
+		message:
+			'`sys.wait_for_job()` is Aurora DSQL syntax. This cluster is PostgreSQL: remove the wait; there is no job to wait for.',
+	},
+];
+
+function auroraIssues(sql: string): string[] {
+	const issues: string[] = [];
+	for (const statement of splitStatements(sql)) {
+		const cleaned = stripLiteralsAndComments(statement);
+		for (const form of DSQL_ONLY_FORMS) if (form.test.test(cleaned)) issues.push(form.message);
+	}
+	return issues;
+}
+
 /**
- * Checks every file of a `dsql` cluster with dsql-lint; one error lists every finding across every file. An
- * `aurora` cluster runs PostgreSQL, so its files are not checked: what PostgreSQL accepts, the cluster accepts.
+ * Checks every file against its cluster kind before anything runs; one error lists every finding across every
+ * file. A `dsql` file goes through dsql-lint. An `aurora` file is PostgreSQL and is checked only for the DSQL-only
+ * forms (`ASYNC`, `sys.wait_for_job`), which PostgreSQL would otherwise reject with a bare syntax error.
  */
 export function lintMigrationFiles(migrations: Record<string, string>, kind: ClusterType): void {
-	if (kind !== 'dsql') return;
 	const errors: string[] = [];
 	for (const file of Object.keys(migrations).sort()) {
-		for (const issue of findStatementIssues(migrations[file])) {
-			errors.push(`${file}: ${issue.message} Checked against ${issue.doc}`);
+		if (kind === 'dsql') {
+			for (const issue of findStatementIssues(migrations[file])) {
+				errors.push(`${file}: ${issue.message} Checked against ${issue.doc}`);
+			}
+		} else {
+			for (const message of auroraIssues(migrations[file])) errors.push(`${file}: ${message}`);
 		}
 	}
 	if (errors.length > 0) {
+		const engine = kind === 'dsql' ? 'Aurora DSQL' : 'Aurora PostgreSQL';
 		throw blocksError(
-			DSQL_MIGRATION_VALIDATION_ERROR_NAME,
-			`Migration validation failed for Aurora DSQL (cluster kind 'dsql'):\n  ${errors.join('\n  ')}`,
+			MIGRATION_VALIDATION_ERROR_NAME,
+			`Migration validation failed for ${engine} (cluster kind '${kind}'):\n  ${errors.join('\n  ')}`,
 		);
 	}
 }

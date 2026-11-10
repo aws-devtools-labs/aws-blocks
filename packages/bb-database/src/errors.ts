@@ -28,8 +28,9 @@ export const PERMISSION_ERROR_NAME = 'DatabasePermissionException';
 
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 
-// A migration file dsql-lint rejects; thrown at construction (local) and at synth (CDK), before anything runs.
-export const DSQL_MIGRATION_VALIDATION_ERROR_NAME = 'DsqlMigrationValidationError';
+// A migration file the cluster cannot run (dsql-lint on dsql; a DSQL-only form on aurora); thrown at construction
+// (local) and at synth (CDK), before anything runs.
+export const MIGRATION_VALIDATION_ERROR_NAME = 'MigrationValidationError';
 
 // A migration step that failed on the cluster; the runner resumes at it on the next deploy.
 export const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';

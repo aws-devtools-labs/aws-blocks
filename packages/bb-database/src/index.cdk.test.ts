@@ -10,7 +10,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { MIGRATION_SERVICE_TIMEOUT_SECONDS, MIGRATION_TOTAL_TIMEOUT_MINUTES } from './constants.js';
-import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
+import { MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
 import { Database, DatabaseCluster } from './index.cdk.js';
 import { migrations } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks } from './test-support/lifecycle.js';
@@ -198,7 +198,7 @@ describe('Database (CDK)', () => {
 			'001_init.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);',
 		});
 		assert.throws(() => new Database(parent, 'db', { migrationsPath: dir }), {
-			name: DSQL_MIGRATION_VALIDATION_ERROR_NAME,
+			name: MIGRATION_VALIDATION_ERROR_NAME,
 			message: /001_init\.sql: serial_type: [\s\S]*001_init\.sql: index_async: /,
 		});
 	});

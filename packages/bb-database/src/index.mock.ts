@@ -133,7 +133,16 @@ export class Database extends Scope {
 					const files = loadMigrationFiles(this.migrationsPath);
 					lintMigrationFiles(files, kind);
 					const plan = buildMigrationPlan(files, kind);
-					await runMigrationPlan(mock, plan, { schemaName: this.schemaName, log: (m) => this.log.info(m) });
+					const { applied } = await runMigrationPlan(mock, plan, {
+						schemaName: this.schemaName,
+						log: (m) => this.log.info(m),
+					});
+					// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
+					if (applied.length > 0) {
+						console.log(
+							`[bb-database] ${this.fullId}: applied ${applied.join(', ')} to schema "${this.schemaName}" (${dataDir})`,
+						);
+					}
 				} else if (this.schemaName !== DEFAULT_SCHEMA) {
 					await mock.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(this.schemaName)}`);
 				}

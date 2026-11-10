@@ -124,7 +124,6 @@ export interface SharedDatabaseOptions extends DatabaseBlockOptions {
 	cluster: DatabaseClusterLike;
 }
 
-
 /** Every options shape a `Database` constructor accepts. */
 export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions;
 
