@@ -33,6 +33,7 @@ import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './b
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
+import { warnOnUnscopedServiceTrust } from './service-trust.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
 import { finalizeTracing } from './tracer-registry.js';
 import { anyRequirementNeedsVpc, finalizeVpc, getOrCreateVpc, initializeVpc, isVpcInitialized } from './vpc.js';
@@ -242,6 +243,9 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	// written at synth (after every block has granted) beside the template.
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
+	// Warn (never fail) on a role an AWS service could assume on behalf of any
+	// account: a service trust without aws:SourceAccount and aws:SourceArn.
+	warnOnUnscopedServiceTrust(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,

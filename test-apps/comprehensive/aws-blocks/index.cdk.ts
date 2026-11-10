@@ -21,6 +21,11 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 // synthesizes with it set to prove every Building Block's roles are covered.
 const permissionsBoundary: string | undefined = app.node.tryGetContext('blocksPermissionsBoundary');
 
+// Optional API Gateway access logging (`-c blocksAccessLogging=true`), which adds
+// the account-level CloudWatch Logs role. test/service-trust-synth.test.ts
+// synthesizes with it on so that role's trust policy is checked too.
+const accessLogging = app.node.tryGetContext('blocksAccessLogging') === 'true';
+
 // Reuse the sandbox-id helper for the production stack salt too.
 // `.blocks-sandbox/sandbox-id.txt` is regenerated on every fresh CI
 // checkout, giving each run a unique stack name so a stuck
@@ -48,7 +53,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   // replaces the previous `RemovalPolicies.of(...).destroy()` +
   // `SandboxDisableDeletionProtection` mixin. A production app would use
   // `sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production`.
-  defaults: { ...BlocksPresets.sandbox, permissionsBoundary },
+  defaults: { ...BlocksPresets.sandbox, permissionsBoundary, ...(accessLogging ? { accessLogging } : {}) },
 });
 
 // Propagate E2E_FROM_EMAIL to the Lambda runtime so the EmailClient BB

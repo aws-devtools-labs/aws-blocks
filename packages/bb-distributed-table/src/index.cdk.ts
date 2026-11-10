@@ -11,7 +11,7 @@ import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME, isSandboxContext } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
+import { deployTimeLambdaCode, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
 import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
@@ -328,6 +328,8 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 		queryInterval: Duration.seconds(10),
 		totalTimeout: Duration.hours(2),
 	});
+	// The provider's Step Functions waiter role: trusted by this account's state machines only.
+	scopeProviderWaiterTrust(provider);
 
 	const shared: SharedGsiProvider = {
 		serviceToken: provider.serviceToken,

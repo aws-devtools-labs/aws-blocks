@@ -102,7 +102,7 @@ Creates the following resources:
 
 2. **S3 Vectors VectorBucket + Index** — Serverless vector store for embeddings. Index configured with `float32` data type, cosine distance metric, and configurable dimensions (default 1024). `AMAZON_BEDROCK_TEXT` and `AMAZON_BEDROCK_METADATA` marked as non-filterable metadata keys. On teardown these two L1 resources now mirror the data bucket's removal policy — `DeletionPolicy: Delete` when `removalPolicy: 'destroy'` (or sandbox mode), `Retain` otherwise — so they are dropped alongside the data bucket instead of being left behind (see D-KB-10).
 
-3. **IAM Role** — Assumed by `bedrock.amazonaws.com` (scoped via `aws:SourceAccount`). Grants: S3 read on data bucket, S3 Vectors CRUD on vector bucket/index, `bedrock:InvokeModel` on Titan V2 (both inference profile and foundation model ARNs).
+3. **IAM Role** — Assumed by `bedrock.amazonaws.com`, scoped via `aws:SourceAccount` (this account) and `aws:SourceArn` (`arn:<partition>:bedrock:<region>:<account>:knowledge-base/*`, Bedrock's documented knowledge-base trust policy; the exact KB ARN would make the role and the KB depend on each other). Grants: S3 read on data bucket, S3 Vectors CRUD on vector bucket/index, `bedrock:InvokeModel` on Titan V2 (both inference profile and foundation model ARNs).
 
 4. **CfnKnowledgeBase** — Bedrock Knowledge Base with `VECTOR` type, Titan V2 embedding model, S3 Vectors storage configuration (referencing the index ARN).
 

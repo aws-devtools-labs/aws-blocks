@@ -34,6 +34,7 @@ import { API_FRONT_DOOR_MARKER_HEADER, apiFrontDoorMarkerValue } from './cdk/api
 import { BlocksPresets } from './cdk/blocks-defaults.js';
 import { coverBlocksRoot, forEachBlocksRole } from './cdk/blocks-roles.js';
 import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
+import { describeUnscopedServiceTrust, findUnscopedServiceTrust } from './cdk/service-trust.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
@@ -2626,6 +2627,24 @@ describe('Hosting', () => {
         ),
         'the cross-region export writer role is among the checked roles',
       );
+    });
+
+    it('every service-principal trust on these roles carries aws:SourceAccount and aws:SourceArn, or is a documented exclusion', () => {
+      const app = new App();
+      const stack = new Stack(app, 'EdgeTrustStack', { env: { account: '123456789012', region: 'eu-west-1' } });
+      const backend = makeBackend(stack, 'Blocks');
+      const stacks = buildOffRegionEdgeHosting(app, stack, backend);
+      const problems: string[] = [];
+      let checked = 0;
+      for (const s of stacks) {
+        for (const [id, r] of Object.entries(Template.fromStack(s).findResources('AWS::IAM::Role'))) {
+          checked++;
+          const findings = findUnscopedServiceTrust(r.Properties?.AssumeRolePolicyDocument, [id]);
+          if (findings.length > 0) problems.push(describeUnscopedServiceTrust(`${s.node.id}/${id}`, findings));
+        }
+      }
+      assert.ok(checked > 0, 'Hosting should create roles');
+      assert.deepStrictEqual(problems, [], problems.join('\n'));
     });
 
     it('a second role visitor (e.g. tenant tagging) reaches exactly the same roles, prepare-time ones included', () => {

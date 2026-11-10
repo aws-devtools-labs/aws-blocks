@@ -280,16 +280,21 @@ export class KnowledgeBase extends BuildingBlockScope {
 		vectorIndex.applyRemovalPolicy(vectorRemovalPolicy);
 
 		// ── 3. IAM Role for Bedrock ────────────────────────────────────────
-		// Scoped to this account via aws:SourceAccount to prevent confused-deputy.
-		// Ideally we'd also add aws:SourceArn scoped to the KB ARN, but that
-		// creates a circular dependency (Role ↔ KB). aws:SourceAccount is sufficient
-		// since it limits the role to this account's Bedrock service principal.
-
+		// Scoped against the cross-service confused deputy with both keys from
+		// Bedrock's documented knowledge-base trust policy: aws:SourceAccount =
+		// this account, and aws:SourceArn like this account's knowledge bases in
+		// this Region. The exact KB ARN would create a circular dependency
+		// (Role ↔ KB), so the ARN ends in `knowledge-base/*`.
+		// https://docs.aws.amazon.com/bedrock/latest/userguide/kb-permissions.html#kb-permissions-trust
+		const kbStack = cdk.Stack.of(this);
 		const bedrockRole = new iam.Role(this, 'BedrockRole', {
 			assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
 				conditions: {
 					StringEquals: {
-						'aws:SourceAccount': cdk.Stack.of(this).account,
+						'aws:SourceAccount': kbStack.account,
+					},
+					ArnLike: {
+						'aws:SourceArn': `arn:${kbStack.partition}:bedrock:${kbStack.region}:${kbStack.account}:knowledge-base/*`,
 					},
 				},
 			}),

@@ -101,3 +101,16 @@ export {
 	type ResolvedKmsEncryption,
 	resolveKmsEncryption,
 } from './kms-encryption.js';
+// Cross-service confused-deputy check for the trust policies of Blocks roles:
+// a repo test runs it over every Building Block's synthesized roles, and
+// BlocksStack / BlocksBackend warn with it at synth.
+export {
+	describeUnscopedServiceTrust,
+	findUnscopedServiceTrust,
+	SERVICE_TRUST_EXCLUSIONS,
+	SERVICE_TRUST_KEYS,
+	scopeProviderWaiterTrust,
+	type ServiceTrustExclusion,
+	UNSCOPED_SERVICE_TRUST_WARNING,
+	type UnscopedServiceTrust,
+} from './service-trust.js';

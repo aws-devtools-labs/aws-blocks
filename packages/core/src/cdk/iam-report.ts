@@ -55,8 +55,12 @@ interface ReportRole {
  * path, the internal method, and the installed aws-cdk-lib version (with the
  * original error, if any, as a non-enumerable `cause`) — so synth fails loudly
  * instead of writing a report with missing boundaries or tags.
+ *
+ * Also read by the service-trust check (`service-trust.ts`) for each role's trust policy.
+ *
+ * @internal
  */
-function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
+export function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
 	const toCloudFormation = (role as unknown as { _toCloudFormation?: unknown })._toCloudFormation;
 	if (typeof toCloudFormation !== 'function') throw cdkCouplingError(role, 'the method no longer exists');
 	let resolved: { Resources?: Record<string, { Properties?: Record<string, unknown> }> } | undefined;
