@@ -22,6 +22,15 @@ export interface ComputeTestContext {
 export type RpcReply = { result?: unknown; error?: { code?: number; message?: string; data?: { name?: string } } };
 
 /**
+ * The `ctx.request.url` a handler reports for a call to `namespace` through the
+ * front door: the door's origin and the route path. The path never carries the API
+ * Gateway stage, so on the `apigateway` leg this is `ApiUrl` without its `/prod`.
+ */
+export function requestUrlFor(apiUrl: string, namespace: string): string {
+  return `${new URL(apiUrl).origin}/aws-blocks/api/${namespace}`;
+}
+
+/**
  * POST one JSON-RPC call. `path` is appended to the endpoint (e.g. `'reports'`);
  * without it the call goes to the bare endpoint, which serves every namespace.
  */
