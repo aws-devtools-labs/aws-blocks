@@ -301,6 +301,7 @@ const UNGATED: Record<string, Record<string, string>> = {
     'api.signOutEverywhere': "public: signs out the caller's own session, a no-op without one",
     'api.getLastCode': 'public: local mock only, returns null when BLOCKS_STACK_NAME is set (every deployed Lambda)',
   },
+  'auth-oidc': { 'api.ping': 'public: liveness probe, touches no data' },
   backend: { 'api.greet': PUBLIC_GREETING },
   bare: { 'api.greet': PUBLIC_GREETING },
   // The template has no auth block. Its store only holds what the two cron handlers write.
