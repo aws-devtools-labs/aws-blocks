@@ -17,10 +17,13 @@
 //   returns before the load balancer accepts connections, so the first request
 //   has failed with `ECONNREFUSED`.
 //
-// Edge servers get the route table at different times, so one HTML answer
-// isn't enough: a suite's next request has come back XML 1.5 s after this
-// wait saw HTML. The wait returns after READY_STREAK HTML answers in a row,
-// each on a new connection; any other answer starts the count again.
+// Edge servers get the route table at different times, so a few HTML answers
+// aren't enough: a suite's next request has come back XML 1.5 s after this
+// wait saw HTML, and a 404 1 s after it saw HTML three times in a row (each
+// request reaches only one of many edge servers). The wait returns once every
+// answer has been HTML for READY_SPAN_MS, requesting every POLL_INTERVAL_MS on
+// a new connection; any other answer (XML, a 503, an error) starts the span
+// again.
 //
 // The wait only gates the start: it checks `200 text/html` for the site root
 // and nothing else. The suites still assert the document, and a site that
@@ -38,8 +41,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 export const READY_TIMEOUT_MS = 180_000;
 /** Delay between two requests. */
 export const POLL_INTERVAL_MS = 2_000;
-/** HTML answers in a row that count as ready. */
-export const READY_STREAK = 3;
+/** How long every answer must have been HTML before the site counts as ready. */
+export const READY_SPAN_MS = 15_000;
 /**
  * Default per-request timeout; it covers reading the body too. Not cut to
  * what is left of the budget: a request cut short would report a timeout as
@@ -62,7 +65,7 @@ export interface ReadyOptions {
 	timeoutMs?: number;
 	intervalMs?: number;
 	requestTimeoutMs?: number;
-	streak?: number;
+	spanMs?: number;
 	fetch?: ReadyFetch;
 	now?: () => number;
 	sleep?: (ms: number) => Promise<unknown>;
@@ -126,10 +129,10 @@ function describeError(error: unknown): string {
 }
 
 /**
- * Request `url` until it answers `200` with a `text/html` content type
- * `streak` times in a row, or throw once `timeoutMs` has passed. Logs each new
- * kind of not-ready answer once (again after an HTML answer), and the wait's
- * length when it ends.
+ * Request `url` until every answer, for at least `spanMs` from the first of
+ * them, has been `200` with a `text/html` content type, or throw once
+ * `timeoutMs` has passed. Logs each new kind of not-ready answer once (again
+ * after an HTML answer), and the wait's length when it ends.
  *
  * @param url the site root, e.g. `https://d123.cloudfront.net`
  */
@@ -141,7 +144,7 @@ export async function waitForHostingReady(
 		timeoutMs = READY_TIMEOUT_MS,
 		intervalMs = POLL_INTERVAL_MS,
 		requestTimeoutMs = REQUEST_TIMEOUT_MS,
-		streak = READY_STREAK,
+		spanMs = READY_SPAN_MS,
 		fetch = fetchOnce,
 		now = Date.now,
 		sleep = delay,
@@ -150,6 +153,8 @@ export async function waitForHostingReady(
 	if (!url) throw new Error('No hosting URL to wait for: the deployed stack has no HostingUrl output.');
 	const start = now();
 	let attempts = 0;
+	/** When the current run of HTML answers began; undefined while there is none. */
+	let htmlSince: number | undefined;
 	let inARow = 0;
 	let last = '';
 	for (;;) {
@@ -163,15 +168,19 @@ export async function waitForHostingReady(
 			seen = describeError(error);
 		}
 		if (seen === 'HTML') {
+			htmlSince ??= now();
 			inARow += 1;
-			if (inARow >= streak) {
+			const spanned = now() - htmlSince;
+			if (spanned >= spanMs) {
 				const elapsedMs = now() - start;
 				log(
-					`✅ ${url} served HTML ${streak} time(s) in a row (${(elapsedMs / 1000).toFixed(1)}s after the deploy, ${attempts} request(s))`,
+					`✅ ${url} served HTML on every request for ${(spanned / 1000).toFixed(1)}s ` +
+						`(${inARow} in a row; ${(elapsedMs / 1000).toFixed(1)}s after the deploy, ${attempts} request(s))`,
 				);
 				return { attempts, elapsedMs };
 			}
 		} else {
+			htmlSince = undefined;
 			inARow = 0;
 			if (seen !== last) log(`⏳ ${url} is not serving the app yet: ${seen}`);
 		}
@@ -179,8 +188,9 @@ export async function waitForHostingReady(
 		const elapsed = now() - start;
 		if (elapsed >= timeoutMs) {
 			throw new Error(
-				`${url} did not serve an HTML document (HTTP 200, text/html) ${streak} time(s) in a row within ` +
-					`${Math.round(timeoutMs / 1000)}s of the deploy (${attempts} requests). Last response: ${last}`,
+				`${url} did not serve an HTML document (HTTP 200, text/html) on every request for ` +
+					`${Math.round(spanMs / 1000)}s within ${Math.round(timeoutMs / 1000)}s of the deploy ` +
+					`(${attempts} requests). Last response: ${last}`,
 			);
 		}
 		await sleep(Math.min(intervalMs, timeoutMs - elapsed));

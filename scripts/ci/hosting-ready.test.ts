@@ -79,16 +79,21 @@ describe('describeResponse', () => {
 });
 
 describe('waitForHostingReady', () => {
-	it('returns after three HTML answers in a row', async () => {
+	it('returns once every answer has been HTML for 15 s, polling every 2 s', async () => {
 		const clock = fakeClock();
+		const lines: string[] = [];
 		const fetch = seqFetch([res(200, 'text/html', HTML)]);
-		const r = await waitForHostingReady(URL_, { fetch, ...clock, log: () => {} });
-		assert.deepEqual(r, { attempts: 3, elapsedMs: 4_000 });
-		assert.deepEqual(clock.sleeps, [2_000, 2_000], 'polls every 2 s by default');
-		assert.deepEqual(fetch.urls, [URL_, URL_, URL_]);
+		const r = await waitForHostingReady(URL_, { fetch, ...clock, log: (l) => lines.push(l) });
+		// HTML at 0, 2, …, 14 spans 14 s, not enough; the answer at 16 s ends the wait.
+		assert.deepEqual(r, { attempts: 9, elapsedMs: 16_000 });
+		assert.deepEqual(clock.sleeps, Array(8).fill(2_000));
+		assert.equal(fetch.urls.length, 9);
+		assert.deepEqual(lines, [
+			`✅ ${URL_} served HTML on every request for 16.0s (9 in a row; 16.0s after the deploy, 9 request(s))`,
+		]);
 	});
 
-	it('waits through XML, a network error and 503s, and starts the count again when HTML is followed by XML', async () => {
+	it('restarts the span on any other answer, so HTML before it does not count', async () => {
 		const clock = fakeClock();
 		const lines: string[] = [];
 		const fetch = seqFetch([
@@ -96,31 +101,27 @@ describe('waitForHostingReady', () => {
 				cause: Object.assign(new Error('getaddrinfo'), { code: 'ENOTFOUND' }),
 			}),
 			res(200, 'application/xml', XML),
-			res(200, 'application/xml', XML),
 			// A router that refuses requests until it has its route table.
 			res(503, null, ''),
+			// HTML from 6 s to 14 s, then an edge server without the route table.
+			...Array(5).fill(res(200, 'text/html; charset=utf-8', HTML)),
+			res(404, 'text/html', 'Not Found'),
+			// HTML from 18 s on: ready once that has lasted 15 s.
 			res(200, 'text/html; charset=utf-8', HTML),
-			// Another edge server without the route table yet.
-			res(200, 'application/xml', XML),
-			res(200, 'text/html; charset=utf-8', HTML),
-			res(200, 'text/html; charset=utf-8', HTML),
-			res(200, 'text/html; charset=utf-8', HTML),
-			res(200, 'application/xml', XML),
 		]);
 		const r = await waitForHostingReady(URL_, { fetch, ...clock, log: (l) => lines.push(l) });
-		assert.deepEqual(r, { attempts: 9, elapsedMs: 16_000 });
-		assert.equal(fetch.urls.length, 9, 'stops at the third HTML answer in a row');
+		assert.deepEqual(r, { attempts: 18, elapsedMs: 34_000 });
 		// One line per new kind of answer (again after HTML), then the result.
 		assert.deepEqual(lines, [
 			`⏳ ${URL_} is not serving the app yet: TypeError: fetch failed (ENOTFOUND)`,
 			`⏳ ${URL_} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
 			`⏳ ${URL_} is not serving the app yet: HTTP 503 (no content-type)`,
-			`⏳ ${URL_} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
-			`✅ ${URL_} served HTML 3 time(s) in a row (16.0s after the deploy, 9 request(s))`,
+			`⏳ ${URL_} is not serving the app yet: HTTP 404 text/html: Not Found`,
+			`✅ ${URL_} served HTML on every request for 16.0s (9 in a row; 34.0s after the deploy, 18 request(s))`,
 		]);
 	});
 
-	it('throws once the budget is spent, naming the URL, the budget and the last response', async () => {
+	it('throws once the budget is spent, naming the URL, the span, the budget and the last response', async () => {
 		const clock = fakeClock();
 		const fetch = seqFetch([res(200, 'application/xml', XML)]);
 		await assert.rejects(
@@ -128,14 +129,24 @@ describe('waitForHostingReady', () => {
 			(error: Error) => {
 				assert.equal(
 					error.message,
-					`${URL_} did not serve an HTML document (HTTP 200, text/html) 3 time(s) in a row within 12s of the deploy (4 requests). ` +
-						`Last response: HTTP 200 application/xml: ${XML_SNIPPET}`,
+					`${URL_} did not serve an HTML document (HTTP 200, text/html) on every request for 15s within 12s ` +
+						`of the deploy (4 requests). Last response: HTTP 200 application/xml: ${XML_SNIPPET}`,
 				);
 				return true;
 			},
 		);
 		// Requests at 0, 5, 10 and the deadline (12): the last sleep is cut to what is left.
 		assert.deepEqual(clock.sleeps, [5_000, 5_000, 2_000]);
+	});
+
+	it('throws when the budget ends before HTML has lasted the span', async () => {
+		const clock = fakeClock();
+		const fetch = seqFetch([res(200, 'application/xml', XML), res(200, 'text/html', HTML)]);
+		// HTML from 2 s; at the 12 s deadline it has lasted 10 s.
+		await assert.rejects(
+			waitForHostingReady(URL_, { fetch, ...clock, timeoutMs: 12_000, log: () => {} }),
+			/on every request for 15s within 12s of the deploy \(7 requests\)\. Last response: HTML$/,
+		);
 	});
 
 	// A server that accepts each request and never finishes it: the wait must
@@ -162,7 +173,7 @@ describe('waitForHostingReady', () => {
 				const started = performance.now();
 				await assert.rejects(
 					waitForHostingReady(url, { timeoutMs, requestTimeoutMs, intervalMs: 50, log: () => {} }),
-					/did not serve an HTML document \(HTTP 200, text\/html\) 3 time\(s\) in a row within \d+s of the deploy \(\d+ requests\)\. Last response: TimeoutError/,
+					/did not serve an HTML document \(HTTP 200, text\/html\) on every request for \d+s within \d+s of the deploy \(\d+ requests\)\. Last response: TimeoutError/,
 				);
 				const elapsed = performance.now() - started;
 				assert.ok(elapsed >= timeoutMs, `waited ${elapsed} ms, less than the ${timeoutMs} ms budget`);
@@ -191,7 +202,7 @@ describe('waitForHostingReady', () => {
 	});
 
 	it('waits on a real server through XML, 503 and a flap back to XML, each request on a new connection', async () => {
-		const answers = ['xml', '503', 'html', 'xml', 'html', 'html', 'html'];
+		const answers = ['xml', '503', 'html', 'xml', 'html'];
 		let requests = 0;
 		let connections = 0;
 		const server = createServer((_req, response) => {
@@ -210,18 +221,19 @@ describe('waitForHostingReady', () => {
 		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
 		try {
 			const { port } = server.address() as AddressInfo;
-			const lines: string[] = [];
-			const r = await waitForHostingReady(`http://127.0.0.1:${port}/`, { intervalMs: 20, log: (l) => lines.push(l) });
-			assert.equal(r.attempts, 7);
-			assert.equal(requests, 7);
-			assert.equal(connections, 7, 'every request opens its own connection');
 			const url = `http://127.0.0.1:${port}/`;
+			const lines: string[] = [];
+			const r = await waitForHostingReady(url, { intervalMs: 20, spanMs: 100, log: (l) => lines.push(l) });
+			// After the flap, HTML must last 100 ms at a request every ≥20 ms: at least 6 more requests.
+			assert.ok(r.attempts >= 4 + 6, `ready after ${r.attempts} requests`);
+			assert.equal(requests, r.attempts);
+			assert.equal(connections, requests, 'every request opens its own connection');
 			assert.deepEqual(lines.slice(0, 3), [
 				`⏳ ${url} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
 				`⏳ ${url} is not serving the app yet: HTTP 503 (no content-type)`,
 				`⏳ ${url} is not serving the app yet: HTTP 200 application/xml: ${XML_SNIPPET}`,
 			]);
-			assert.match(lines[3], /^✅ .* served HTML 3 time\(s\) in a row /);
+			assert.match(lines[3], /^✅ .* served HTML on every request for \d+\.\ds \(\d+ in a row; /);
 			assert.equal(lines.length, 4);
 		} finally {
 			await new Promise((resolve) => server.close(resolve));
