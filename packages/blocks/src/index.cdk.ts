@@ -194,6 +194,9 @@ export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
 	ChunkingConfig,
 	ChunkingStrategy,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentToolResult,
 	KnowledgeBaseOptions,
 	MetadataFilter,
 	RetrieveOptions,

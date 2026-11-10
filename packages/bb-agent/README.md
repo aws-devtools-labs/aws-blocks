@@ -617,7 +617,19 @@ await agent.stream(message, { conversationId, userId, context: { userId, tenantI
 
 ### Using KnowledgeBase with the Agent
 
-The `KnowledgeBase` BB can be used as an agent tool, giving the agent the ability to search documents on demand:
+The `KnowledgeBase` BB can be used as an agent tool, giving the agent the ability to search documents on demand. The shortest safe form is `kb.asAgentTool()`: the model supplies only the query, a required `filter` callback derives the search scope from the tool context, and the tool is marked `untrustedOutput: true` (see [Use as an Agent tool](../bb-knowledge-base/README.md#use-as-an-agent-tool)):
+
+```typescript
+const agent = new Agent(scope, 'assistant', {
+  systemPrompt: 'Answer questions from the documentation.',
+  toolContextSchema: z.object({ tenantId: z.string() }),
+  tools: (tool) => ({
+    searchDocs: tool(kb.asAgentTool({ filter: (context) => ({ tenant: { equals: context.tenantId } }) })),
+  }),
+});
+```
+
+Or write the tool yourself:
 
 ```typescript
 import { Agent } from '@aws-blocks/bb-agent';

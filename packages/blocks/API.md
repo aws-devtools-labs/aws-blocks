@@ -122,6 +122,9 @@ import { github } from '@aws-blocks/bb-auth-oidc';
 import { google } from '@aws-blocks/bb-auth-oidc';
 import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { KnowledgeBaseAgentTool } from '@aws-blocks/bb-knowledge-base';
+import { KnowledgeBaseAgentToolOptions } from '@aws-blocks/bb-knowledge-base';
+import { KnowledgeBaseAgentToolResult } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
 import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
@@ -527,6 +530,12 @@ export { google }
 export { GroupAdmin }
 
 export { KnowledgeBase }
+
+export { KnowledgeBaseAgentTool }
+
+export { KnowledgeBaseAgentToolOptions }
+
+export { KnowledgeBaseAgentToolResult }
 
 export { KnowledgeBaseErrors }
 

@@ -305,3 +305,11 @@ test('CDK: calling a runtime method throws an actionable synth-time error (not a
     );
   }
 });
+
+test('CDK: asAgentTool() can be declared at synth; its handler throws the synth-time error', async () => {
+  const { kb } = buildStack();
+  const tool = kb.asAgentTool({ filter: () => undefined });
+  assert.strictEqual(tool.untrustedOutput, true);
+  assert.deepStrictEqual(Object.keys(tool.parameters.shape), ['query']);
+  await assert.rejects(tool.handler({ input: { query: 'docs' }, context: {} }), /retrieve/);
+});

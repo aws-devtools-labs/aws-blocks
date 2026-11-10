@@ -255,6 +255,25 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
       });
     });
 
+    describe('asAgentTool', () => {
+      before(async () => {
+        await gateOnSync(getApi());
+      });
+
+      test('the agent sees results scoped by the server-side filter, wrapped as untrusted data', async () => {
+        const api = getApi();
+        // Without the filter this query also matches guides/getting-started.md.
+        const unscoped = await api.kbRetrieve('Building Blocks Scope', { maxResults: 50 });
+        assert.ok(unscoped.some((r) => r.metadata.folder !== 'faq'), 'query should match docs outside faq');
+
+        // The canned model echoes the tool result it was given, so `text` is what the model saw.
+        const { text } = await api.kbAgentToolSearch('use searchDocs');
+        assert.match(text, /<untrusted-data id="[0-9a-f]{18}" source="searchDocs">/, `tool result was not wrapped: ${text}`);
+        assert.ok(text.includes('faq/general.md'), `expected faq results: ${text}`);
+        assert.ok(!text.includes('getting-started.md'), `a document outside the scope reached the agent: ${text}`);
+      });
+    });
+
   });
 
 }
