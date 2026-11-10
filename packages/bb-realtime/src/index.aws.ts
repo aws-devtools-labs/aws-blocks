@@ -390,6 +390,8 @@ export const Realtime: {
 		validateChannelPath(fullChannel);
 		// Real WebSocket for cross-invocation publish (established once secret resolves)
 		let wsSub: ServerSubscription | null = null;
+		// The secret resolves asynchronously; an unsubscribe before then must prevent the socket from opening.
+		let cancelled = false;
 		// Local EventEmitter for same-invocation publish, until the socket is live
 		// (see server-subscribe.ts), so each message reaches the handler once.
 		const local = localListener(handler, () => wsSub);
@@ -398,13 +400,14 @@ export const Realtime: {
 		if (wsUrl) {
 			const fullId = this.fullId;
 			this._cachedSecretPromise.then(secret => {
-				if (!secret) return; // SSM unavailable (e.g., codegen)
+				if (!secret || cancelled) return; // SSM unavailable (e.g., codegen) or already unsubscribed
 				const channelToken = mintChannelToken(fullChannel, secret);
 				const connectToken = mintConnectToken(fullId, secret);
 				wsSub = serverSubscribe(wsUrl, connectToken, fullChannel, channelToken, handler);
 			}).catch(() => {});
 		}
 		return () => {
+			cancelled = true;
 			this._localEmitter.off(fullChannel, local);
 			if (wsSub) wsSub.unsubscribe();
 		};
