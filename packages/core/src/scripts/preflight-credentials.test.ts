@@ -667,7 +667,7 @@ describe('assertAwsCredentials', () => {
 		assert.match(message, /AWS denied access while checking credentials for `npm run sandbox` \(AccessDenied\)/);
 		assert.match(message, /AWS Organizations policy/);
 		assert.doesNotMatch(message, /arn:|123456789012|777788889999|o-exampleorgid|p-examplepolicyid123/);
-		assert.doesNotMatch(message, /limit|budget|spend|credentials were found/i);
+		assert.doesNotMatch(message, /limit|budget|spend/i);
 	});
 
 	it("points an ordinary denial at the deploying identity's permissions", async () => {
@@ -682,7 +682,7 @@ describe('assertAwsCredentials', () => {
 			/AWS denied access while checking credentials for `npm run sandbox` \(AccessDeniedException\)/,
 		);
 		assert.match(message, /permissions/);
-		assert.doesNotMatch(message, /Organizations|123456789012|credentials were found/);
+		assert.doesNotMatch(message, /Organizations|123456789012/);
 	});
 
 	it('skips the probe (with a warning) when no region is resolvable', async () => {

@@ -641,7 +641,7 @@ describe('Option validation (parity with CDK)', () => {
 		});
 	}
 
-	test('non-secret setting without a value throws (no longer silently defaults to "")', () => {
+	test('non-secret setting without a value throws', () => {
 		rejectsValidation(
 			() => new AppSetting({ id: 'root' } as any, 'no-value', { name: '/app/no-value' }),
 			'non-secret settings require a value',

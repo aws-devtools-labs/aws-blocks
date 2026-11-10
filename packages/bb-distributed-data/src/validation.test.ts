@@ -472,13 +472,11 @@ describe('stripLiteralsAndComments — positional parameters', () => {
 
   it('still strips genuine dollar-quoted strings ($$ ... $$)', () => {
     const out = stripLiteralsAndComments('SELECT $$ raw FOREIGN KEY text $$ AS x');
-    assert.ok(!out.includes('FOREIGN KEY'), `dollar-quoted body must be stripped, got: ${out}`);
     assert.equal(out, "SELECT '__LITERAL__' AS x");
   });
 
   it('still strips genuine tagged dollar-quoted strings ($tag$ ... $tag$)', () => {
     const out = stripLiteralsAndComments('SELECT $body$ TRUNCATE foo $body$ AS x');
-    assert.ok(!out.includes('TRUNCATE'), `tagged dollar-quoted body must be stripped, got: ${out}`);
     assert.equal(out, "SELECT '__LITERAL__' AS x");
   });
 
@@ -486,7 +484,6 @@ describe('stripLiteralsAndComments — positional parameters', () => {
     // `$1` is a param; the `$$...$$` after it is a real literal that must be stripped.
     const out = stripLiteralsAndComments('SELECT $1, $$ FOREIGN KEY $$ AS note');
     assert.ok(out.includes('$1'), 'positional param should remain');
-    assert.ok(!out.includes('FOREIGN KEY'), `dollar-quoted body must be stripped, got: ${out}`);
     assert.equal(out, "SELECT $1, '__LITERAL__' AS note");
   });
 

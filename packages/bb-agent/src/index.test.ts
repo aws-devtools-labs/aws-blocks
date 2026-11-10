@@ -302,7 +302,6 @@ describe('AgentStreamResult.toJSON()', () => {
 		const result = await agent.stream('hello', { userId: 'test-user' });
 		const serialized = JSON.parse(JSON.stringify(result));
 		assert.deepStrictEqual(serialized, { channelId: result.channelId, channel: null });
-		assert.strictEqual('complete' in serialized, false);
 	});
 });
 
@@ -3821,13 +3820,11 @@ describe('deployed Agent S3Storage region (multi-region)', () => {
 	test('constructs S3Storage with the Lambda execution region (eu-west-1)', () => {
 		const config = configForRegion('eu-west-1', 'test-s3-region-euw1');
 		assert.strictEqual(config.region, 'eu-west-1');
-		assert.notStrictEqual(config.region, 'us-east-1');
 	});
 
 	test('does not hard-pin us-east-1 when deployed to another region (ap-southeast-2)', () => {
 		const config = configForRegion('ap-southeast-2', 'test-s3-region-apse2');
 		assert.strictEqual(config.region, 'ap-southeast-2');
-		assert.notStrictEqual(config.region, 'us-east-1');
 	});
 
 	test('deployed Agent constructs on the aws-runtime path', () => {

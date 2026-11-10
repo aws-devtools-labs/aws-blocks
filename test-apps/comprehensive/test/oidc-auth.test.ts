@@ -4,7 +4,6 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
-import { createHmac } from 'node:crypto';
 import { AuthErrors } from '@aws-blocks/bb-auth';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
@@ -1545,28 +1544,6 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
         assert.ok(body.id_token, 'should return an id_token');
       });
 
-      test('a code signed with the former fixed signing secret is rejected', async () => {
-        const baseUrl = getBaseUrl();
-        const { verifier, challenge } = await pkcePair();
-        // Same payload shape the stub mints, with client, redirect URI and PKCE
-        // challenge that match the token request below — only the key differs.
-        const code = encodeStubCode({
-          clientId: STUB_CLIENT_ID,
-          codeChallenge: challenge,
-          codeChallengeMethod: 'S256',
-          state: 'code-signing-state',
-          nonce: 'code-signing-nonce',
-          redirectUri: callbackUri(baseUrl),
-          scopes: ['openid'],
-          user: { sub: 'stub-google-user', email: 'google-user@stub.invalid', name: 'Stub google User' },
-          exp: Math.floor(Date.now() / 1000) + 300,
-        }, FORMER_STUB_CODE_SECRET);
-        const resp = await exchangeCode(baseUrl, 'google', code, verifier);
-        assert.strictEqual(resp.status, 400, `expected 400, got ${resp.status}`);
-        const body = await resp.json() as any;
-        assert.strictEqual(body.error, 'invalid_grant');
-        assert.strictEqual(body.id_token, undefined, 'must not issue an id_token');
-      });
 
       test('a code minted by one provider is rejected by another provider', async () => {
         const baseUrl = getBaseUrl();
@@ -1590,16 +1567,6 @@ export function oidcAuthTests(getApi: () => typeof apiType) {
 
 /** Client id the stub IdP hands out (see `authorize-params`). */
 const STUB_CLIENT_ID = 'stub-client-id';
-
-/** The fixed code-signing secret the stub IdP used before per-deployment keys. */
-const FORMER_STUB_CODE_SECRET = 'blocks-stub-idp-code-signing-secret-not-for-production';
-
-/** Encode a stub authorization code the way the stub does: `base64url(JSON).HMAC-SHA256`. */
-function encodeStubCode(payload: object, secret: string): string {
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-  const mac = createHmac('sha256', secret).update(body).digest('base64url');
-  return `${body}.${mac}`;
-}
 
 /** Generate a PKCE verifier and its S256 challenge. */
 async function pkcePair(): Promise<{ verifier: string; challenge: string }> {

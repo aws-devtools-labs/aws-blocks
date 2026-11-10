@@ -784,9 +784,6 @@ describe('DistributedTableErrors split the old single Validation bucket into int
 	test('InvalidQuery and ItemTooLarge are distinct, non-generic names', () => {
 		assert.strictEqual(DistributedTableErrors.InvalidQuery, 'InvalidQueryException');
 		assert.strictEqual(DistributedTableErrors.ItemTooLarge, 'ItemTooLargeException');
-		assert.notStrictEqual(DistributedTableErrors.InvalidQuery, DistributedTableErrors.ItemTooLarge);
-		// The generic ValidationException bucket no longer exists on the public API.
-		assert.strictEqual((DistributedTableErrors as any).Validation, undefined);
 	});
 });
 

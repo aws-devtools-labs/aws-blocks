@@ -57,7 +57,6 @@ test('wrapError preserves a known DatabaseErrors name, brands it, and keeps the 
       assert.ok(isWireSafeError(err), 'expected the re-tagged error to be branded');
       // The client-facing message is the stable BB string, NOT the raw driver text.
       assert.strictEqual(err.message, `${DatabaseErrors.UniqueConstraintViolation}: The item violates a unique constraint`);
-      assert.ok(!err.message.includes('users_pkey'), 'raw driver text must not leak into the message');
       // The original driver error is retained server-side as cause.
       assert.strictEqual((err.cause as Error).message, 'duplicate key value violates unique constraint "users_pkey"');
       return true;
@@ -75,7 +74,6 @@ test('wrapError sets unknown error names to QueryFailed with a stable branded me
       assert.strictEqual(err.name, DatabaseErrors.QueryFailed);
       assert.ok(isWireSafeError(err));
       assert.strictEqual(err.message, `${DatabaseErrors.QueryFailed}: The database query failed`);
-      assert.ok(!err.message.includes('relation'), 'raw driver text must not leak into the message');
       assert.strictEqual((err.cause as Error).message, 'ERROR: relation "todos" does not exist at character 15');
       return true;
     }

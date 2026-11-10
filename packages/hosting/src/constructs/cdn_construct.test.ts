@@ -682,11 +682,6 @@ void describe('CdnConstruct', () => {
       // Static routes are NOT per-route cache behaviors anymore. The only
       // additional behaviors are the origin-binding sentinels (server here).
       const patterns = additionalBehaviorPatterns(template);
-      assert.ok(
-        !patterns.includes('/_next/static/*') &&
-          !patterns.includes('/favicon.ico'),
-        `static routes must not be wired as behaviors; got ${JSON.stringify(patterns)}`,
-      );
       assert.deepEqual(patterns.sort(), ['/__blocks_origin_server/*']);
 
       // The distribution carries the S3 + server origins by stable id.

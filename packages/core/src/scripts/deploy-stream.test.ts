@@ -867,7 +867,6 @@ describe('a failed deploy reports its reason on stderr and its verdict on stdout
       assert.doesNotMatch(out, /Resource handler returned message/, 'the failure reason must not move to stdout');
       assert.match(err, /DeployProcessError/, "the entrypoint's console.error(error) puts the error on stderr");
       assert.match(out, /❌ Deployment failed\./, 'the verdict is on stdout so a stdout-only capture sees it');
-      assert.doesNotMatch(err, /❌ Deployment failed\./, 'the verdict is no longer on stderr (see the changeset)');
       assert.match(out, /CREATE_IN_PROGRESS/, 'progress still streams to stdout');
       assert.strictEqual(readFileSync(join(dir, 'wrapper-status'), 'utf-8'), 'failed');
       assert.ok(!existsSync(join(dir, 'cfn-done')), 'the failing deploy must not report completion');

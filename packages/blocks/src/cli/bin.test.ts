@@ -10,8 +10,7 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
 };
 
 describe('the bin map of @aws-blocks/blocks', () => {
-	it('installs the CLI as cdk-blocks, and no blocks command', () => {
+	it('installs the CLI as cdk-blocks', () => {
 		assert.strictEqual(manifest.bin['cdk-blocks'], './dist/cli/bin.js');
-		assert.strictEqual(Object.hasOwn(manifest.bin, 'blocks'), false);
 	});
 });

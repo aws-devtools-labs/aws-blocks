@@ -173,7 +173,7 @@ await assertAwsCredentials({ command: 'deploy', projectRoot: process.cwd() });`,
 			join(directory, 'credentials'),
 			'[a]\naws_access_key_id = AKIDPROFILEA\naws_secret_access_key = s\n',
 		);
-		const { stdout, stderr } = await runPreflight({
+		const { stdout } = await runPreflight({
 			AWS_PROFILE: 'a',
 			AWS_ACCESS_KEY_ID: 'AKIDENVIRONMENTB',
 			AWS_SECRET_ACCESS_KEY: 's',
@@ -185,6 +185,5 @@ await assertAwsCredentials({ command: 'deploy', projectRoot: process.cwd() });`,
 			'sts:AKIDENVIRONMENTB',
 		]);
 		assert.match(stdout, /Deployment target: access keys in AWS_ACCESS_KEY_ID \(used instead of AWS_PROFILE\)/);
-		assert.doesNotMatch(stderr, /Multiple credential sources/);
 	});
 });

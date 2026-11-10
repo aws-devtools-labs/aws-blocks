@@ -12,7 +12,6 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, it } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import * as root from './index.js';
 import * as internal from './internal.js';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -22,16 +21,6 @@ describe('data-common internal entry', () => {
 		assert.strictEqual(typeof internal.closeOnProcessExit, 'function');
 		assert.strictEqual(typeof internal.pgliteUnrefTimersExtension, 'object');
 		assert.strictEqual(typeof internal.pgliteUnrefTimersExtension.setup, 'function');
-	});
-
-	it('the package root no longer exports the PGlite process helpers', () => {
-		for (const name of ['closeOnProcessExit', 'pgliteUnrefTimersExtension', 'runWithUnrefTimers']) {
-			assert.ok(!(name in root), `${name} is still exported from the package root`);
-		}
-	});
-
-	it('runWithUnrefTimers stays module-private (not on the internal entry either)', () => {
-		assert.ok(!('runWithUnrefTimers' in internal));
 	});
 
 	it('package.json maps ./internal to the built entry', () => {

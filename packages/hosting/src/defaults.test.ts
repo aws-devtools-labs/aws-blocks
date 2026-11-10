@@ -345,7 +345,6 @@ void describe('redirect runtime semantics (executed against the generated code)'
       request: { uri: '/old/', headers: {} },
     }) as { headers?: { location: { value: string } } };
     assert.equal(result.headers?.location.value, '/new/');
-    assert.ok(!result.headers?.location.value.includes('*'));
   });
 });
 

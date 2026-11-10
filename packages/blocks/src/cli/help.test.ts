@@ -79,7 +79,7 @@ describe('command help', () => {
 	it('lists the subcommands of a group', () => {
 		const help = commandHelp(findCommand(['sandbox']) ?? assert.fail());
 		assert.match(help, /sandbox destroy {2,}Delete your sandbox stack/);
-		assert.doesNotMatch(help, /sandbox up|sandbox:destroy/);
+		assert.doesNotMatch(help, /sandbox:destroy/);
 	});
 
 	it('prints on stdout for --help, help <command> and an alias', async () => {

@@ -419,7 +419,6 @@ test('Data API serialization failure (SQLState 40001) maps to a distinct seriali
   await assert.rejects(
     () => engine.execute('UPDATE accounts SET v = 1 WHERE id = $1', ['a']),
     (err: Error) => {
-      assert.notStrictEqual(err.name, DatabaseErrors.QueryFailed, 'must not be a generic QueryFailed');
       assert.strictEqual(err.name, SERIALIZATION_FAILURE_NAME);
       return true;
     },

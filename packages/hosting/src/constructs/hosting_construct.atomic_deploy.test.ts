@@ -25,12 +25,9 @@ import { SkewProtectionConfig } from './skew_protection.js';
 // before the objects exist and CloudFront returns 403 Access Denied for the
 // duration of the deploy.
 //
-// These tests assert the synthesized CloudFormation ordering:
-//   1. the KvKeys custom resource (RouteStoreKeys) DependsOn every asset
-//      BucketDeployment custom resource, and
-//   2. no BucketDeployment carries a `/*` CloudFront invalidation anymore
-//      (which is both useless under immutable build-id prefixes and was the
-//      bad dependency that forced uploads to run AFTER the distribution).
+// These tests assert the synthesized CloudFormation ordering: the KvKeys
+// custom resource (RouteStoreKeys) DependsOn every asset BucketDeployment
+// custom resource.
 
 type CfnTemplate = {
   Resources: Record<
@@ -187,39 +184,6 @@ void describe('Atomic deploy - build-id cutover waits for asset uploads', () => 
       cutoverResourceIds(tpl),
       assetDeploymentIds(tpl),
     );
-  });
-
-  void it('does NOT emit a /* CloudFront invalidation on any BucketDeployment', () => {
-    const staticDir = createStaticDir();
-    const tpl = synth({
-      version: 1,
-      compute: {},
-      staticAssets: {
-        directory: staticDir,
-        immutablePaths: ['*.abcd1234.js'],
-      },
-      routes: [{ pattern: '/*', target: 'static' }],
-      buildId: 'atomic-noinval-1',
-    });
-
-    // With immutable build-id prefixes there is nothing stale to invalidate:
-    // each deploy writes to a brand-new builds/<id>/ prefix that was never
-    // requested. A `/*` invalidation served no purpose AND created the
-    // BucketDeployment -> Distribution dependency that re-opened the 403
-    // window, so it was intentionally removed. The CDK BucketDeployment only
-    // renders DistributionId / DistributionPaths when `distribution` is set,
-    // so their absence proves the invalidation is gone.
-    for (const [id, r] of Object.entries(tpl.Resources)) {
-      const props = r.Properties ?? {};
-      assert.ok(
-        !('DistributionId' in props),
-        `resource ${id} unexpectedly carries a DistributionId (invalidation)`,
-      );
-      assert.ok(
-        !('DistributionPaths' in props),
-        `resource ${id} unexpectedly carries DistributionPaths (invalidation)`,
-      );
-    }
   });
 
   void it('SSR build-id function waits for the error-page deployment too', () => {

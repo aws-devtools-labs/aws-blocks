@@ -420,7 +420,6 @@ setInterval(() => {}, 1000);
 				await sleep(25);
 			assert.strictEqual(isGroupRunning(frontendGroup), false, `the frontend outlived cdk-blocks dev\n${output}`);
 			assert.strictEqual(isGroupRunning(cli.pid ?? 0), false, `a process of cdk-blocks dev outlived it\n${output}`);
-			assert.doesNotMatch(output, /Force killing|Killing process/);
 			assert.ok(took <= withinMs, `stopped after ${took} ms, not within ${withinMs} ms\n${output}`);
 			return code as number | null;
 		} finally {

@@ -131,7 +131,6 @@ CREATE TABLE public.tags (id serial PRIMARY KEY, label text);
 test('extractCreatedTableNames ignores CREATE TABLE in function bodies, comments, and literals', () => {
   const names = extractCreatedTableNames(BASELINE_WITH_FUNCTION_BODY).sort();
   assert.deepStrictEqual(names, ['projects', 'tags']);
-  assert.ok(!names.includes('AS'), 'must not extract the phantom "AS" from the function body literal');
 });
 
 test('decideBaseline marks an existing pulled DB as applied (no phantom-driven ambiguity)', () => {
