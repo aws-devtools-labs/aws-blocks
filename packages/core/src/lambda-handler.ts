@@ -11,7 +11,8 @@ import { errorResponse } from './rpc.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher } from './dispatch.js';
 import type { DispatchRequest, DispatchResponse } from './dispatch.js';
-import { isLoopbackForwardedHost } from './request-context.js';
+import { PUBLIC_HOST_HEADER } from './constants.js';
+import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 
 export { parseCorsPatterns, _resetCorsPatterns } from './cors.js';
 // The request base URL store (see `buildEventBaseUrl`, which the dispatcher puts
@@ -67,21 +68,31 @@ function decodeEventBody(event: any): { bodyText: string; bodyStream: ReadableSt
 /** The fields of an API Gateway Lambda event that its origin and stage are read from. */
 type EventOriginFields = {
   headers?: Record<string, string | undefined> | null;
+  multiValueHeaders?: Record<string, unknown> | null;
   requestContext?: { stage?: string } | null;
 };
 
 /**
- * The origin a Lambda event arrived at, and the API Gateway stage prefix of
- * that origin's external URLs (`''` when there is none).
+ * Where a Lambda event arrived: the gateway-side origin and the API Gateway stage
+ * prefix of that origin's external URLs (`''` when there is none) — together the
+ * base URL the backend itself is reachable at — and the origin the client called,
+ * which `ctx.request.url` reports. A loopback forwarded host contributes only its
+ * host: its own query, fragment or userinfo (`localhost:3000?a=b`) never rides along.
  *
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
- *   front door), the origin is the browser-visible one: that host, plain `http`,
+ *   front door), both origins are the browser-visible one: that host, plain `http`,
  *   and **no** stage prefix. See {@link isLoopbackForwardedHost} for the gate.
  * - Otherwise host comes from `Host`/`host`, protocol from `x-forwarded-proto`
  *   (default `https`), and the prefix is `/{stage}` for a REST API stage. An HTTP
  *   API's `$default` stage has no path, so it gets none.
+ * - Behind a Blocks CloudFront front door — which drops the viewer's `Host` and
+ *   stamps it as `x-blocks-public-host` instead — the client called
+ *   `https://<that host>` (CloudFront adds the stage as the gateway origin's path).
+ *   Taken only when the host is one of the backend's own front-door hosts; see
+ *   {@link trustedPublicHost}. The base URL stays the gateway's, for code that must
+ *   address the gateway directly (an issuer URL the Lambda fetches).
  */
-function resolveEventOrigin(event: EventOriginFields): { origin: string; stagePrefix: string } {
+function resolveEventOrigin(event: EventOriginFields): { origin: string; stagePrefix: string; viewerOrigin: string } {
   const forwardedHost: string | undefined =
     event.headers?.['x-forwarded-host'] || event.headers?.['X-Forwarded-Host'];
 
@@ -101,7 +112,8 @@ function resolveEventOrigin(event: EventOriginFields): { origin: string; stagePr
     // A user-supplied TLS front door (`https://localhost`) is a known, unsupported
     // limitation; the proper fix is a config-derived front-door origin rather than
     // header inference.
-    return { origin: `http://${forwardedHost}`, stagePrefix: '' };
+    const origin = new URL(`http://${forwardedHost}`).origin;
+    return { origin, stagePrefix: '', viewerOrigin: origin };
   }
 
   const host = event.headers?.Host || event.headers?.host || 'localhost';
@@ -110,7 +122,13 @@ function resolveEventOrigin(event: EventOriginFields): { origin: string; stagePr
   // gateway's external URL but NOT included in event.path. It belongs to the
   // base URL (callback URLs, stub IdP issuer URLs, etc.), not to the route path.
   const stage = event.requestContext?.stage;
-  return { origin: `${proto}://${host}`, stagePrefix: stage && stage !== '$default' ? `/${stage}` : '' };
+  const origin = `${proto}://${host}`;
+  const publicHost = trustedPublicHost(singleEventHeader(event, PUBLIC_HOST_HEADER));
+  return {
+    origin,
+    stagePrefix: stage && stage !== '$default' ? `/${stage}` : '',
+    viewerOrigin: publicHost ? `https://${publicHost}` : origin,
+  };
 }
 
 /**
@@ -134,18 +152,20 @@ function buildEventBaseUrl(event: EventOriginFields): string {
  *   falling back to `event.queryStringParameters`, then `event.rawQueryString` (v2).
  * - When a trusted loopback `X-Forwarded-Host` is present (the sandbox dev-server
  *   front door), the URL is rebuilt as the browser-visible origin: that host and
- *   plain `http`. Otherwise host comes from `Host`/`host` and protocol from
- *   `x-forwarded-proto` (default `https`). See {@link isLoopbackForwardedHost} for the gate.
+ *   plain `http`. Behind a Blocks CloudFront front door it is the URL the viewer
+ *   called (`x-blocks-public-host`, when it names one of the backend's front-door
+ *   hosts). Otherwise host comes from `Host`/`host` and protocol from
+ *   `x-forwarded-proto` (default `https`). See {@link resolveEventOrigin}.
  *
  * @internal Exported for testing only.
  */
 export function buildEventUrl(event: any): URL {
   const path: string = event.path || event.requestContext?.http?.path || '/';
-  const { origin } = resolveEventOrigin(event);
+  const { viewerOrigin } = resolveEventOrigin(event);
 
   // Assign the path rather than resolving it against the origin: `new URL(path, origin)`
   // reads a path starting with `//` as a protocol-relative reference and swaps the host.
-  const url = new URL(origin);
+  const url = new URL(viewerOrigin);
   url.pathname = path;
 
   if (event.rawQueryString) {
@@ -165,6 +185,29 @@ export function buildEventUrl(event: any): URL {
   }
 
   return url;
+}
+
+/**
+ * The value of the event header `name` (lower-case), matched case-insensitively,
+ * when the request carried exactly one header of that name; `undefined` when it
+ * carried none or several — a client copy under another letter case, or a repeat
+ * that a REST event keeps only the last of in `headers` (every copy is in
+ * `multiValueHeaders`). The container refuses the same requests' value.
+ */
+function singleEventHeader(
+  event: { headers?: Record<string, unknown> | null; multiValueHeaders?: Record<string, unknown> | null },
+  name: string,
+): string | undefined {
+  for (const [key, values] of Object.entries(event.multiValueHeaders ?? {})) {
+    if (key.toLowerCase() === name && Array.isArray(values) && values.length > 1) return undefined;
+  }
+  let found: string | undefined;
+  for (const [key, value] of Object.entries(event.headers ?? {})) {
+    if (key.toLowerCase() !== name) continue;
+    if (found !== undefined || typeof value !== 'string') return undefined;
+    found = value;
+  }
+  return found;
 }
 
 /**

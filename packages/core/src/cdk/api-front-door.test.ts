@@ -199,3 +199,49 @@ describe('resolveApiFrontDoor', () => {
 		}
 	});
 });
+
+// A handler behind the gateway gets the gateway's own `Host` from CloudFront, so
+// the distribution stamps the viewer's host, and the backend's config lists the
+// hosts a handler may take from that stamp.
+describe('cloudfront: the viewer host reaches handlers behind the gateway', () => {
+	/** The parts of the synthesized template these tests read. */
+	type Association = { EventType: string; FunctionARN: { 'Fn::GetAtt': [string, string] } };
+	type Resources = Record<
+		string,
+		{
+			Type: string;
+			Properties: { FunctionCode?: string; DistributionConfig?: { DefaultCacheBehavior: { FunctionAssociations?: Association[] } } };
+		}
+	>;
+	type ViewerRequest = (event: unknown) => { headers: Record<string, { value: string } | undefined> };
+
+	const synth = () => {
+		const stack = new cdk.Stack(new cdk.App(), 'S');
+		scheduleApiFrontDoor(stack, true, GATEWAY_URL);
+		const resources = Template.fromStack(stack).toJSON().Resources as Resources;
+		const [, distribution] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::CloudFront::Distribution') ?? [];
+		const config = distribution?.Properties.DistributionConfig;
+		assert.ok(config, 'one distribution');
+		return { resources, config };
+	};
+
+	test('the gateway behavior stamps the viewer host over a client copy, and keeps the dev-server X-Forwarded-Host', () => {
+		const { resources, config } = synth();
+		const associations = config.DefaultCacheBehavior.FunctionAssociations;
+		assert.strictEqual(associations?.length, 1, 'one viewer-request function');
+		assert.strictEqual(associations[0].EventType, 'viewer-request');
+		const code = String(resources[associations[0].FunctionARN['Fn::GetAtt'][0]]?.Properties.FunctionCode);
+		const viewerRequest = new Function(`${code}\nreturn handler;`)() as ViewerRequest;
+		const forwarded = viewerRequest({
+			request: {
+				headers: {
+					host: { value: 'd111.cloudfront.net' },
+					'x-blocks-public-host': { value: 'attacker.example' },
+					'x-forwarded-host': { value: 'localhost:3000' },
+				},
+			},
+		});
+		assert.strictEqual(forwarded.headers['x-blocks-public-host']?.value, 'd111.cloudfront.net');
+		assert.strictEqual(forwarded.headers['x-forwarded-host']?.value, 'localhost:3000', 'the sandbox dev server names its origin');
+	});
+});
