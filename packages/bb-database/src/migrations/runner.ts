@@ -4,7 +4,13 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DEFAULT_MIGRATIONS_ROOT, DEFAULT_SCHEMA, MIGRATION_LAMBDA_TIMEOUT_MINUTES, quoteIdent } from '../constants.js';
+import {
+	AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS,
+	DEFAULT_MIGRATIONS_ROOT,
+	DEFAULT_SCHEMA,
+	MIGRATION_LAMBDA_TIMEOUT_MINUTES,
+	quoteIdent,
+} from '../constants.js';
 import {
 	type CatalogState,
 	catalogState,
@@ -21,17 +27,16 @@ interface RunPlanOptions {
 	schemaName: string;
 	log?: (message: string) => void;
 	/**
-	 * How long one `aurora` transaction may run, in milliseconds, read when the transaction begins. The migration
-	 * Lambda passes its invocation's remaining time less a margin, and the runner sets PostgreSQL 17's
-	 * `transaction_timeout` from it, so a file that would outlive the invocation is cancelled by the server and
-	 * reported with its file and statement instead of the invocation's own timeout, which names nothing.
+	 * On AWS, an `aurora` file is one transaction inside one Lambda invocation. With this set, the runner gives the
+	 * server PostgreSQL 17's `transaction_timeout` just under the invocation's limit, so a file that would outlive
+	 * the invocation is cancelled by the server and reported with its file and statement instead of the
+	 * invocation's own timeout, which names nothing.
 	 */
-	transactionBudgetMs?: () => number;
+	boundToInvocation?: boolean;
 }
 
 // PostgreSQL 17 reports a cancelled transaction (`transaction_timeout`) with this SQLSTATE.
 const PG_TRANSACTION_TIMEOUT = '25P04';
-const MIN_TRANSACTION_BUDGET_MS = 1000;
 
 /** An `aurora` file: every step in one transaction, so nothing of it persists until the whole file has run. */
 const isOneTransaction = (file: FilePlan): boolean =>
@@ -296,12 +301,11 @@ export async function runMigrationPlan(
 				if (step.transactional) {
 					if (!handle) {
 						handle = await engine.beginTransaction();
-						if (plan.kind === 'aurora' && options.transactionBudgetMs) {
-							const budget = Math.max(
-								MIN_TRANSACTION_BUDGET_MS,
-								Math.floor(options.transactionBudgetMs()),
+						if (plan.kind === 'aurora' && options.boundToInvocation) {
+							await engine.executeInTransaction(
+								handle,
+								`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`,
 							);
-							await engine.executeInTransaction(handle, `SET LOCAL transaction_timeout = ${budget}`);
 						}
 					}
 					await engine.executeInTransaction(handle, step.sql);

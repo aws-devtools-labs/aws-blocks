@@ -6,6 +6,8 @@ import { sanitizeConfigKey } from '@aws-blocks/core/bb-utils';
 import type { ClusterType } from './types.js';
 
 export const MIGRATION_LAMBDA_TIMEOUT_MINUTES = 10;
+/** How long one aurora migration transaction may run: the invocation's time less a minute for the report. */
+export const AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS = (MIGRATION_LAMBDA_TIMEOUT_MINUTES - 1) * 60 * 1000;
 
 // CloudFormation stops waiting for a custom resource after its ServiceTimeout, at most 3600 s. The provider
 // polls for less than that, so a long DSQL job fails the deploy with a message instead of a hung stack.
