@@ -31,6 +31,7 @@ import { RealtimeErrors } from './errors.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,

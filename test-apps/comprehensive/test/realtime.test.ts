@@ -233,6 +233,49 @@ export function realtimeTests(getApi: () => typeof apiType) {
 			});
 		});
 
+		describe('Channel token scope', () => {
+			const cursor: Cursor = { userId: 'u1', x: 1, y: 2, color: 'blue' };
+
+			async function firstMessage(channel: Awaited<ReturnType<typeof apiType.realtimeGetExactChannel>>, publish: () => Promise<unknown>) {
+				return new Promise<Cursor>((resolve, reject) => {
+					const timer = globalThis.setTimeout(() => reject(new Error('No message within 10s')), 10000);
+					const sub = channel.subscribe((msg) => {
+						clearTimeout(timer);
+						sub.unsubscribe();
+						resolve(msg);
+					});
+					sub.established.then(publish).catch(reject);
+				});
+			}
+
+			test('an exact handle subscribes to its own channel', async () => {
+				const api = getApi();
+				const channel = await api.realtimeGetExactChannel('scope-exact');
+				assert.deepStrictEqual(await firstMessage(channel, () => api.realtimePublishToChannel('scope-exact', cursor)), cursor);
+			});
+
+			test('an exact token is refused for a sub-channel', async () => {
+				const api = getApi();
+				const child = await api.realtimeGetChildOfChannel('scope-exact-parent', 'exact');
+				const sub = child.subscribe(() => {});
+				await assert.rejects(
+					sub.established,
+					(err: unknown) => isBlocksError(err, 'ConnectionFailedException'),
+					'an exact token must not authorize <channel>/child',
+				);
+				sub.unsubscribe();
+			});
+
+			test('a default (subtree) token still opens a sub-channel', async () => {
+				const api = getApi();
+				const child = await api.realtimeGetChildOfChannel('scope-subtree-parent', 'subtree');
+				assert.deepStrictEqual(
+					await firstMessage(child, () => api.realtimePublishToChannel('scope-subtree-parent/child', cursor)),
+					cursor,
+				);
+			});
+		});
+
 		describe('Subscribe Options Form', () => {
 			test('options form receives messages via onMessage', async () => {
 				const api = getApi();

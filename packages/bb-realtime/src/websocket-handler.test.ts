@@ -14,9 +14,10 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert';
 import { ApiGatewayManagementApiClient } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { Scope } from '@aws-blocks/core';
+import { Scope, isBlocksError } from '@aws-blocks/core';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { Realtime } from './index.aws.js';
+import { Realtime, RealtimeErrors } from './index.aws.js';
+import type { GetChannelOptions } from './index.aws.js';
 
 const DOMAIN = 'example.execute-api.us-east-1.amazonaws.com';
 const STAGE = 'prod';
@@ -112,9 +113,9 @@ beforeEach(() => {
 });
 
 /** A connection that completed $connect with the channel's connect token. */
-async function connected(channel = 'room-1') {
+async function connected(channel = 'room-1', options?: GetChannelOptions) {
 	// toJSON() is the wire descriptor a client receives.
-	const json = (await rt.getChannel('chat', channel)).toJSON();
+	const json = (await rt.getChannel('chat', channel, options)).toJSON();
 	const descriptor = { channel: json.channel, token: String(json.token), connectToken: String(json.connectToken) };
 	const connectionId = newConnectionId();
 	const res = await wsHandler()(connectEvent(connectionId, descriptor.connectToken));
@@ -166,6 +167,56 @@ describe('WebSocket handler: subscribe', () => {
 			assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
 		});
 	}
+});
+
+describe('WebSocket handler: channel token scope', () => {
+	it('an exact token subscribes to its own channel', async () => {
+		const { connectionId, descriptor } = await connected('room-a', { scope: 'exact' });
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel: descriptor.channel, token: descriptor.token }));
+		assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'subscribe_success', channel: descriptor.channel }]);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__', descriptor.channel]);
+	});
+
+	it('an exact token is refused for a sub-channel', async () => {
+		const { connectionId, descriptor } = await connected('room-a', { scope: 'exact' });
+		const channel = `${descriptor.channel}/b`;
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel, token: descriptor.token }));
+		assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'error', channel, message: 'Unauthorized: invalid or expired token' }]);
+		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+	});
+
+	it('a default (subtree) token still subscribes to a sub-channel', async () => {
+		const { connectionId, descriptor } = await connected('room-a');
+		const channel = `${descriptor.channel}/b`;
+		await wsHandler()(messageEvent(connectionId, { action: 'subscribe', channel, token: descriptor.token }));
+		assert.deepStrictEqual(repliesTo(connectionId), [{ type: 'subscribe_success', channel }]);
+	});
+
+	it('getChannel() rejects an unknown scope value', async () => {
+		await assert.rejects(
+			() => rt.getChannel('chat', 'room-a', { scope: 'all' as unknown as 'exact' }),
+			(e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed),
+		);
+	});
+});
+
+describe('Realtime (AWS runtime): channel name grammar', () => {
+	for (const name of ['', '/a', 'a/', 'a//b', '.', '..', 'a/../b']) {
+		it(`publish(), subscribe() and getChannel() reject ${JSON.stringify(name)}`, async () => {
+			const isInvalid = (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed);
+			await assert.rejects(() => rt.publish('chat', name, {}), isInvalid);
+			assert.throws(() => rt.subscribe('chat', name, () => {}), isInvalid);
+			await assert.rejects(() => rt.getChannel('chat', name), isInvalid);
+		});
+	}
+
+	it('rejects undefined as a channel name', async () => {
+		const isInvalid = (e: unknown) => isBlocksError(e, RealtimeErrors.ValidationFailed);
+		const name = undefined as unknown as string;
+		await assert.rejects(() => rt.publish('chat', name, {}), isInvalid);
+		assert.throws(() => rt.subscribe('chat', name, () => {}), isInvalid);
+		await assert.rejects(() => rt.getChannel('chat', name), isInvalid);
+	});
 });
 
 describe('WebSocket handler: unsubscribe', () => {

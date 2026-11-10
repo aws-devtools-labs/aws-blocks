@@ -225,6 +225,7 @@ export type {
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export type {
 	DisconnectReason,
+	GetChannelOptions,
 	RealtimeChannel,
 	RealtimeSubscription,
 	SubscribeOptions,
