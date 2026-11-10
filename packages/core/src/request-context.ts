@@ -6,6 +6,7 @@
 // trusted-forwarded-host gate used when building absolute request URLs.
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { PUBLIC_HOSTS_CONFIG_KEY } from './constants.js';
 
 /**
  * AsyncLocalStorage that carries the inbound HTTP request cookies through
@@ -92,4 +93,51 @@ export function isLoopbackForwardedHost(forwardedHost: string | undefined): bool
     return false;
   }
   return LOOPBACK_HOSTNAMES.has(hostname);
+}
+
+/**
+ * The parsed {@link PUBLIC_HOSTS_CONFIG_KEY} list, re-parsed only when the variable
+ * changes: exact hosts, and the `.example.com` suffix of each wildcard alias
+ * (`*.example.com`).
+ */
+let publicHosts: { raw: string; exact: ReadonlySet<string>; wildcardSuffixes: readonly string[] } | undefined;
+
+/** One DNS label: letters, digits and inner hyphens, at most 63 characters. */
+const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/**
+ * The front-door host a request names in `PUBLIC_HOST_HEADER`, when it is one of
+ * the backend's own CloudFront front-door hosts (the `BLOCKS_PUBLIC_HOSTS` config
+ * the doors register at synth); otherwise `undefined`.
+ *
+ * The header itself proves nothing: the door stamps it, overwriting the viewer's
+ * copy, but the gateway behind the door is reachable directly. Checking it against
+ * the backend's own hosts is what makes it safe to build absolute URLs from — a
+ * forged value can only name another of the app's own domains. One host only,
+ * compared case-insensitively; a list, a port or anything else is not taken.
+ *
+ * A wildcard alias (`*.example.com`) covers what CloudFront serves for it: any
+ * hostname ending in `.example.com`, at any depth, but not `example.com` itself.
+ * Such a host must be a plain DNS name (letters, digits, hyphens and dots).
+ *
+ * @internal Exported for testing only.
+ */
+export function trustedPublicHost(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const raw = process.env[PUBLIC_HOSTS_CONFIG_KEY];
+  if (!raw) return undefined;
+  if (publicHosts?.raw !== raw) {
+    const exact = new Set<string>();
+    const wildcardSuffixes: string[] = [];
+    for (const entry of raw.split(',')) {
+      const host = entry.trim().toLowerCase();
+      if (host.startsWith('*.')) wildcardSuffixes.push(host.slice(1));
+      else if (host !== '') exact.add(host);
+    }
+    publicHosts = { raw, exact, wildcardSuffixes };
+  }
+  const host = value.toLowerCase();
+  if (publicHosts.exact.has(host)) return host;
+  const covered = publicHosts.wildcardSuffixes.some((suffix) => host.length > suffix.length && host.endsWith(suffix));
+  return covered && host.split('.').every((label) => DNS_LABEL.test(label)) ? host : undefined;
 }
