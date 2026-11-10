@@ -33,7 +33,9 @@ export const AuthOIDCErrors = {
 	/**
 	 * `signOut` cleared the session cookie but could not delete the server-side
 	 * session row (e.g. a transient session-store failure); HTTP 503. A copy of
-	 * the cookie may still authenticate until the session expires.
+	 * the cookie may still authenticate: until the current access token expires
+	 * if the IdP revoked the refresh token, otherwise for as long as the refresh
+	 * token keeps working, at most until the cookie expires (30 days after sign-in).
 	 */
 	SignOutIncomplete: 'SignOutIncompleteException',
 } as const;

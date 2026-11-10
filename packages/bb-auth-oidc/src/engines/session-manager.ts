@@ -64,6 +64,13 @@ export function pendingCookieName(prefix: string): string {
 	return `${prefix}_${PENDING_COOKIE_SUFFIX}`;
 }
 
+/** The branded 503 sign-out reports when the server-side session was not invalidated. */
+function signOutIncomplete(): ApiError {
+	return new ApiError('Sign-out could not be completed: the server-side session was not invalidated', 503, {
+		name: AuthOIDCErrors.SignOutIncomplete,
+	});
+}
+
 export class SessionManager {
 	private readonly cookieSecretResolver: () => Promise<string>;
 	/** Per-Lambda-container refresh coalescer. */
@@ -178,6 +185,11 @@ export class SessionManager {
 	 * (503) rather than reporting success. The raw store error is logged, never
 	 * thrown — it can carry SDK metadata/ARNs. A failed read alone is logged:
 	 * the delete still invalidates the session, only upstream revocation is lost.
+	 *
+	 * The cookies are cleared before the cookie-signing secret is resolved, so a
+	 * failed resolution (e.g. a transient SSM error) still signs this device out.
+	 * The session cannot be identified without the secret, so that failure is
+	 * also reported as `SignOutIncompleteException`.
 	 */
 	async signOutSession(
 		ctx: BlocksContext,
@@ -185,35 +197,39 @@ export class SessionManager {
 	): Promise<void> {
 		const cookieHeader = ctx.request.headers.get('cookie');
 		const raw = readCookie(cookieHeader, sessionCookieName(this.options.cookieNamePrefix));
-		const payload = raw ? decodeSignedCookie<SessionCookiePayload>(raw, await this.cookieSecretResolver()) : null;
-		let refreshToken: string | undefined;
-		let deleteFailed = false;
-		if (payload) {
-			try {
-				const row = await this.options.sessionStore.get(payload.sessionId);
-				refreshToken = row?.refreshToken || undefined;
-			} catch (err) {
-				// eslint-disable-next-line no-console
-				console.warn('AuthOIDC signOut: session read failed; upstream revocation skipped:', describeError(err));
-			}
-			try {
-				await this.options.sessionStore.delete(payload.sessionId);
-			} catch (err) {
-				deleteFailed = true;
-				// eslint-disable-next-line no-console
-				console.error('AuthOIDC signOut: session delete failed; session not invalidated:', describeError(err));
-			}
-		}
 		this.clearSessionCookie(ctx);
 		this.clearPendingAuthCookie(ctx);
-		if (payload && refreshToken) {
+		if (!raw) return;
+		let secret: string;
+		try {
+			secret = await this.cookieSecretResolver();
+		} catch (err) {
+			// eslint-disable-next-line no-console
+			console.error('AuthOIDC signOut: cookie secret unavailable; session not invalidated:', describeError(err));
+			throw signOutIncomplete();
+		}
+		const payload = decodeSignedCookie<SessionCookiePayload>(raw, secret);
+		if (!payload) return;
+		let refreshToken: string | undefined;
+		try {
+			const row = await this.options.sessionStore.get(payload.sessionId);
+			refreshToken = row?.refreshToken || undefined;
+		} catch (err) {
+			// eslint-disable-next-line no-console
+			console.warn('AuthOIDC signOut: session read failed; upstream revocation skipped:', describeError(err));
+		}
+		let deleteFailed = false;
+		try {
+			await this.options.sessionStore.delete(payload.sessionId);
+		} catch (err) {
+			deleteFailed = true;
+			// eslint-disable-next-line no-console
+			console.error('AuthOIDC signOut: session delete failed; session not invalidated:', describeError(err));
+		}
+		if (refreshToken) {
 			await revoke(refreshToken, payload.provider);
 		}
-		if (deleteFailed) {
-			throw new ApiError('Sign-out could not be completed: the server-side session was not invalidated', 503, {
-				name: AuthOIDCErrors.SignOutIncomplete,
-			});
-		}
+		if (deleteFailed) throw signOutIncomplete();
 	}
 
 	/**

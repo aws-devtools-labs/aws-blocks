@@ -1585,6 +1585,48 @@ describe('signOut — session-store failures must not report a completed sign-ou
 		}
 	});
 
+	test('a failed cookie-secret resolution still clears cookies and throws SignOutIncomplete (no revoke, no leak)', async () => {
+		// In production the secret is an SSM fetch that can fail transiently, and
+		// memoizedSecretResolver rethrows (it never memoizes a failure).
+		const RAW_SSM_ERROR = 'ThrottlingException: Rate exceeded for arn:aws:ssm:us-east-1:123456789012:parameter/cookie';
+		const rows = new Map<string, SessionRow>();
+		const sessionStore = {
+			get: async (k: string) => rows.get(k) ?? null,
+			put: async (k: string, v: SessionRow) => { rows.set(k, v); },
+			delete: async (k: string) => { rows.delete(k); },
+		};
+		const cookieAttributes = { secure: false, partitioned: false, sameSite: 'Lax', path: '/' } as const;
+		// One container signed the cookie; this one cannot resolve the secret.
+		const signer = new SessionManager({ sessionStore, cookieSecret: 'test-secret', cookieNamePrefix: 'test', cookieAttributes });
+		const sm = new SessionManager({
+			sessionStore,
+			cookieSecret: () => { throw new Error(RAW_SSM_ERROR); },
+			cookieNamePrefix: 'test',
+			cookieAttributes,
+		});
+		const cookie = await signedInCookie(signer);
+
+		const revoked: string[] = [];
+		const originalError = console.error;
+		console.error = () => {};
+		try {
+			const ctx = withCookie(cookie);
+			await assert.rejects(() => sm.signOutSession(ctx, async (rt) => { revoked.push(rt); }), (e: unknown) => {
+				assert.ok(e instanceof ApiError, `expected ApiError, got ${String(e)}`);
+				assert.strictEqual(e.name, AuthOIDCErrors.SignOutIncomplete);
+				assert.strictEqual(e.status, 503);
+				assert.doesNotMatch(e.message, /arn:aws|123456789012|Throttling|ssm/i);
+				return true;
+			});
+			// This device is signed out even though the session could not be identified.
+			assertCookiesCleared(ctx);
+			assert.deepStrictEqual(revoked, [], 'no refresh token was read, so nothing is revoked');
+			assert.strictEqual(rows.size, 1, 'the row was not deleted (why SignOutIncomplete is reported)');
+		} finally {
+			console.error = originalError;
+		}
+	});
+
 	test('Cognito engine: upstream revocation still runs with the stored refresh token when the delete fails', async () => {
 		const rows = new Map<string, SessionRow>();
 		const sm = new SessionManager({

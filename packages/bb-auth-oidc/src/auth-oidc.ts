@@ -415,9 +415,13 @@ export class AuthOIDC<
 	 * even when the row delete fails.
 	 *
 	 * @throws {AuthOIDCErrors.SignOutIncomplete} (503) If the session row could
-	 * not be deleted (e.g. a transient session-store failure): the cookie was
+	 * not be deleted (e.g. a transient session-store failure, or the
+	 * cookie-signing secret could not be resolved to identify it): the cookie was
 	 * cleared, but the server-side session was NOT invalidated, so a copy of the
-	 * cookie keeps authenticating until the session expires.
+	 * cookie keeps authenticating. If the refresh token was revoked at the IdP,
+	 * that stops at the current access-token expiry; revocation is best-effort,
+	 * and without it the session keeps refreshing for as long as the IdP honors
+	 * the refresh token, at most until the cookie expires (30 days after sign-in).
 	 */
 	async signOut(ctx: BlocksContext): Promise<void> {
 		if (this.options.onSignOut) {
