@@ -145,7 +145,14 @@ private fun passesSelfTest(candidate: KeyCustody): Boolean {
 /**
  * The OS-held custody for this machine, or null where none is implemented yet.
  *
- * Every platform falls through to null for now, so each keeps the behaviour it has today until its
+ * macOS hands the key to the login keychain, which holds it and writes nothing beside the entries.
+ * Every other platform falls through to null and so keeps the behaviour it has today until its
  * binding lands.
  */
-private fun osKeyCustody(directory: Path): KeyCustody? = null
+private fun osKeyCustody(directory: Path): KeyCustody? {
+    val os = System.getProperty("os.name").orEmpty()
+    return when {
+        os.startsWith("Mac") -> KeychainKeyCustody(service = "aws-blocks")
+        else -> null
+    }
+}
