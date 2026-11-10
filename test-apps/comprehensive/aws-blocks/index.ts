@@ -1743,6 +1743,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return descriptor;
   },
 
+  async realtimeGetExactChannel(subChannel: string) {
+    return realtime.getChannel('cursors', subChannel, { scope: 'exact' });
+  },
+
+  async realtimeGetChildOfChannel(subChannel: string, scope: 'exact' | 'subtree') {
+    // A handle for `<subChannel>/child` that carries the token minted for
+    // `<subChannel>`: what a client holding the parent handle could send.
+    const ch = await realtime.getChannel('cursors', subChannel, { scope });
+    const descriptor = ch.toJSON() as Record<string, unknown>;
+    descriptor.channel = `${String(descriptor.channel)}/child`;
+    return descriptor as unknown as typeof ch;
+  },
+
   async realtimeGetPoisonedChannel(subChannel: string) {
     // Return a channel descriptor with a bad token — middleware hydrates it normally,
     // but the WS server / AppSync will reject the invalid token on subscribe.

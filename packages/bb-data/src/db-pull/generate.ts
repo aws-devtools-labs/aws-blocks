@@ -255,7 +255,7 @@ export function generateMigrationGuide(
     claimsBlock =
       `\nDetected non-standard claims in your policies:\n\n` +
       lines +
-      `\nConfigure your OIDC provider to include these claims in access tokens.\n`;
+      `\nConfigure your OIDC provider to include these claims in the token AuthOIDC verifies.\n`;
   }
 
   return header + rows + GUIDE_AUTH_TO_LIMITATIONS + claimsBlock + GUIDE_USERID_NOTE;

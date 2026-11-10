@@ -57,7 +57,7 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, agent, cron, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, agent, cron, observability, amplify, demo/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
@@ -244,6 +244,7 @@ describe('create-blocks-app template metadata', () => {
       backend: { port: 3001, frontend: false },
       sql: { port: 3001, frontend: false },
       cron: { port: 3001, frontend: false },
+      observability: { port: 3001, frontend: false },
       nextjs: frontend,
       'auth-cognito': frontend,
       agent: frontend,

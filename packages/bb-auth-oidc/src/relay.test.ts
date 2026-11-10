@@ -1,9 +1,9 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe } from 'node:test';
+import { test, describe, afterEach, beforeEach } from 'node:test';
 import assert from 'node:assert';
-import { relayOrigin, validateRelay, type RelayOrigin } from './relay.js';
+import { backendHostsFor, relayOrigin, validateRelay, type RelayOrigin } from './relay.js';
 
 const sameOriginUrl = new URL('https://api.myapp.com/auth/authorize-params/google');
 
@@ -109,5 +109,68 @@ describe('validateRelay', () => {
 			validateRelay('evilapp://auth', { allowList: ALLOW, sameOrigin: sameOriginUrl }),
 			{ allowed: false, reason: 'unknown-origin' },
 		);
+	});
+});
+
+describe('validateRelay — the backend\'s own hosts', () => {
+	// What the callback re-check passes: every host the backend serves over HTTPS.
+	const backendHosts = ['d111.cloudfront.net', '*.tenant.example.com', 'abc.execute-api.us-east-1.amazonaws.com'];
+	const callbackUrl = new URL('https://app.example.com/aws-blocks/auth/callback');
+	const check = (uri: string) => validateRelay(uri, { allowList: [], sameOrigin: callbackUrl, backendHosts });
+
+	test('a relay to any of them, a wildcard alias\'s subdomain at any depth included, is same-origin', () => {
+		for (const uri of [
+			'https://d111.cloudfront.net/app',
+			'https://a.tenant.example.com/app',
+			'https://deep.a.tenant.example.com/',
+			'https://abc.execute-api.us-east-1.amazonaws.com/prod/app',
+			'https://app.example.com/app',
+		]) {
+			assert.deepStrictEqual(check(uri), { allowed: true }, uri);
+		}
+	});
+
+	test('a wildcard alias\'s apex, a lookalike, plain HTTP and another port are not', () => {
+		for (const uri of [
+			'https://tenant.example.com/app',
+			'https://eviltenant.example.com/app',
+			'https://d111.cloudfront.net.evil.example/app',
+			'https://d111.cloudfront.net:8443/app',
+		]) {
+			assert.deepStrictEqual(check(uri), { allowed: false, reason: 'unknown-origin' }, uri);
+		}
+		assert.deepStrictEqual(check('http://d111.cloudfront.net/app'), { allowed: false, reason: 'plaintext-non-loopback' });
+	});
+});
+
+describe('backendHostsFor — the gateway host a callback came in on', () => {
+	const GATEWAY = 'abc123.execute-api.us-east-1.amazonaws.com';
+	const saved = process.env.BLOCKS_PUBLIC_HOSTS;
+	beforeEach(() => {
+		delete process.env.BLOCKS_PUBLIC_HOSTS;
+	});
+	afterEach(() => {
+		if (saved === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+		else process.env.BLOCKS_PUBLIC_HOSTS = saved;
+	});
+	const request = (url: string, host: string) => ({ url: new URL(url), headers: new Headers({ host }) });
+	const refusedAtCallback = (relay: string, req: { url: URL; headers: Headers }) =>
+		validateRelay(relay, { allowList: [], sameOrigin: req.url, backendHosts: backendHostsFor(req) }).allowed === false;
+
+	test("a callback through a CloudFront door accepts a relay to the gateway's own host", () => {
+		const req = request('https://app.example.com/aws-blocks/auth/callback', GATEWAY);
+		assert.deepStrictEqual(backendHostsFor(req), [GATEWAY]);
+		assert.strictEqual(refusedAtCallback(`https://${GATEWAY}/prod/app`, req), false);
+	});
+
+	test('a Host that is not an execute-api endpoint, or arrived over plain HTTP, grants nothing', () => {
+		// A local dev-server callback: the client chose the Host, the request is plain HTTP.
+		const local = request('http://relay.example:3000/aws-blocks/auth/callback', 'relay.example:3000');
+		assert.deepStrictEqual(backendHostsFor(local), []);
+		assert.strictEqual(refusedAtCallback('https://relay.example/signed-in', local), true);
+		assert.deepStrictEqual(backendHostsFor(request('http://localhost:3000/aws-blocks/auth/callback', GATEWAY)), []);
+		for (const host of ['relay.example', `${GATEWAY}:8443`, `evil.example/${GATEWAY}`, `${GATEWAY}.evil.example`]) {
+			assert.deepStrictEqual(backendHostsFor(request('https://app.example.com/aws-blocks/auth/callback', host)), [], host);
+		}
 	});
 });

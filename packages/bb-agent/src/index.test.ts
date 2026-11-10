@@ -1151,6 +1151,24 @@ describe('conversation ownership on write paths', () => {
 		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
 	});
 
+	test('stream() and resume() reject a channel Realtime would refuse, before dispatching', async () => {
+		const { agent } = approvalAgent('test-own-channel-grammar');
+		const convId = await agent.createConversationId(ownerId);
+		for (const [channelId, userId] of [['a//b', ownerId], ['a/', ownerId], ['..', ownerId], ['ok', '..'], ['ok', '.']]) {
+			await assert.rejects(
+				() => agent.stream('hi', { channelId, userId }),
+				(err: any) => err.name === AgentErrors.InvalidUsage,
+				`stream ${channelId} / ${userId}`,
+			);
+		}
+		await assert.rejects(
+			() => agent.resume('a//b', [{ interruptId: 'i-1', approved: true }], { conversationId: convId, userId: ownerId }),
+			(err: any) => err.name === AgentErrors.InvalidUsage,
+		);
+		const history = await agent.getConversation(convId, { userId: ownerId });
+		assert.ok(!history.some(m => m.role === 'approval'), 'no approval may be persisted for a resume that is rejected');
+	});
+
 	test('getChannel() without a userId throws InvalidUsage when persistence is enabled', async () => {
 		const { agent } = approvalAgent('test-own-channel-nouser');
 		await assert.rejects(
