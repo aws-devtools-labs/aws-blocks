@@ -677,9 +677,19 @@ The file is written on **every** synth, whether or not `permissionsBoundary` is 
 
 ### When the role's grants outgrow its inline policy
 
-Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: Blocks first merges statements that share their actions or resources, then the overflow is packed into managed policies (`BlocksRoleOverflowPolicy1`, `2`, …, sized by CDK to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before. An app within the budget gets the same template as before.
+Grants land on the role's inline default policy, which IAM caps at 10,240 characters. When an app's grants go past that, synth still succeeds: CDK packs the overflow into managed policies (`BlocksRoleOverflowPolicy1`, `2`, …, sized to stay under IAM's 6,144-character limit) attached to the role. Blocks keep calling `grant*()` as before.
 
-IAM also limits how many managed policies one role can carry: 10 by default, up to 20 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role. To fix it, check `<stack>.blocks-iam.json` for the Building Blocks that grant the most and consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
+To fit more grants into fewer policies, turn on statement merging for the role in `cdk.json`. New projects from `create-blocks-app` have it on; existing apps opt in:
+
+```json
+{ "context": { "@aws-blocks/core:mergeExecutionRolePolicies": true } }
+```
+
+Merging combines statements with the same effect and conditions (and no `Sid`, `NotAction` or `NotResource` differences) that share their actions or their resources. It never combines both lists at once, so no permission is added. With the key unset or `false`, the role is exactly what CDK produces. With it on, the role's policy is merged at every size, so the template changes once when you turn it on and doesn't switch back and forth as grants are added.
+
+If the role already overflows into managed policies, turning merging on moves statements between `BlocksRoleDefaultPolicy` and the overflow policies in one deploy. CloudFormation updates those policies in parallel, so during that deploy a permission can be missing for a short time and calls can fail with `AccessDenied`. Turn it on in a quiet window.
+
+IAM also limits how many managed policies one role can carry: 10 by default, up to 20 with a quota increase. If the role's grants were packed into overflow policies and the role then needs more managed policies than that, synth fails with an error naming the role and the Building Blocks that grant the most. To fix it, consolidate resources where possible, or move some Building Blocks into a separate Blocks backend (another `BlocksStack` / `BlocksBackend`), which has its own execution role. If the account's "Managed policies per role" quota was raised, set it in `cdk.json`:
 
 ```json
 { "context": { "@aws-blocks/core:managedPoliciesPerRoleQuota": 20 } }

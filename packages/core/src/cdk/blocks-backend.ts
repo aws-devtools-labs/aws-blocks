@@ -233,11 +233,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
-	// When the grants outgrow the inline policy budget, merge combinable statements
-	// before CDK packs the overflow into managed policies, and fail synth with a fix
-	// if the role would exceed the managed-policies-per-role quota. A role within
-	// budget is left as is (role-policy-packing.ts).
-	enableRolePolicyPacking(executionRole);
+	// When `@aws-blocks/core:mergeExecutionRolePolicies` is on, merge combinable
+	// statements before CDK packs any overflow into managed policies; either way,
+	// fail synth with a fix if the role would exceed the managed-policies-per-role
+	// quota. With the key unset the role is exactly what CDK produces
+	// (role-policy-packing.ts).
+	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
 	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an

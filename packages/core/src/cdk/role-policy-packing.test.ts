@@ -15,6 +15,7 @@ import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as cxapi from 'aws-cdk-lib/cx-api';
+import { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { ComputeBase } from './compute/compute.js';
@@ -23,17 +24,24 @@ import { BlocksStack } from './index.js';
 import {
 	enableRolePolicyPacking,
 	MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY,
-	ROLE_POLICY_PACKING_DRIFT_WARNING_ID,
+	MERGE_EXECUTION_ROLE_POLICIES_CONTEXT_KEY,
 } from './role-policy-packing.js';
 
 // IAM's documented limits the packed output must stay under.
 const INLINE_LIMIT = 10_240;
 const MANAGED_LIMIT = 6_144;
 
-type Statement = { Effect: string; Action: string | string[]; Resource: string | string[] };
+type Statement = {
+	Effect: string;
+	Action?: string | string[];
+	NotAction?: string | string[];
+	Resource?: unknown;
+	NotResource?: unknown;
+	Condition?: unknown;
+};
 type PolicyResource = { Properties: { PolicyDocument: { Statement: Statement[] }; Roles: unknown[] } };
 
-const asArray = <T>(v: T | T[]): T[] => (Array.isArray(v) ? v : [v]);
+const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
 /** A long literal ARN, so sizes are exact rather than CDK's token estimate. */
 const arn = (i: number) => `arn:aws:s3:::blocks-packing-test-bucket-${i}-${'x'.repeat(80)}/*`;
@@ -53,6 +61,8 @@ function addCombinable(role: iam.IRole, n: number) {
 	}
 }
 
+const MERGE_ON = { [MERGE_EXECUTION_ROLE_POLICIES_CONTEXT_KEY]: true };
+
 function makeRole(options: { packing: boolean; context?: Record<string, unknown> }) {
 	const app = new cdk.App({ context: options.context });
 	const stack = new cdk.Stack(app, 'PackingStack');
@@ -68,21 +78,25 @@ function policiesOf(template: Template) {
 	return { inline, managed };
 }
 
-/** Every (action, resource) pair the role is granted, across all of its policies. */
-function grantedPairs(template: Template): Set<string> {
+/**
+ * Every (effect, action, resource, condition) tuple the role is granted, across
+ * all of its policies. `NotAction` / `NotResource` entries are kept distinct.
+ */
+function grantedTuples(template: Template): Set<string> {
 	const { inline, managed } = policiesOf(template);
-	const pairs = new Set<string>();
+	const tuples = new Set<string>();
 	for (const p of [...inline, ...managed.map(([, m]) => m)]) {
 		for (const s of p.Properties.PolicyDocument.Statement) {
-			for (const a of asArray(s.Action)) for (const r of asArray(s.Resource)) pairs.add(`${a} ${r}`);
+			const actions = [...asArray(s.Action), ...asArray(s.NotAction).map((a) => `not:${a}`)];
+			const resources = [...asArray(s.Resource), ...asArray(s.NotResource).map((r) => ({ not: r }))];
+			const condition = JSON.stringify(s.Condition ?? {});
+			for (const a of actions) {
+				for (const r of resources) tuples.add(JSON.stringify([s.Effect, a, r, condition]));
+			}
 		}
 	}
-	return pairs;
+	return tuples;
 }
-
-/** Drift warnings the packing added anywhere in the stack. */
-const driftWarnings = (stack: cdk.Stack) =>
-	Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(ROLE_POLICY_PACKING_DRIFT_WARNING_ID));
 
 const hasOverflow = (template: Template) =>
 	Object.keys(template.findResources('AWS::IAM::ManagedPolicy')).some((id) => id.includes('OverflowPolicy'));
@@ -95,11 +109,14 @@ const statementCount = (template: Template) => {
 	);
 };
 
-describe('enableRolePolicyPacking — within the inline budget', () => {
-	test('changes nothing: same template as without packing, statements not merged', () => {
+const mergeNotAppliedInfo = (stack: cdk.Stack) =>
+	Annotations.fromStack(stack).findInfo('*', Match.stringLikeRegexp("PolicyDocument's 'minimize' field"));
+
+describe('enableRolePolicyPacking — merging off (context key unset or false)', () => {
+	test('within budget: same template as without packing, statements not merged', () => {
 		const build = (packing: boolean) => {
 			const { stack, role } = makeRole({ packing });
-			// Combinable statements: if consolidation ran, they would be merged.
+			// Combinable statements: if merging ran, they would be merged.
 			addCombinable(role, 20);
 			return Template.fromStack(stack);
 		};
@@ -108,11 +125,64 @@ describe('enableRolePolicyPacking — within the inline budget', () => {
 		withPacking.resourceCountIs('AWS::IAM::ManagedPolicy', 0);
 		assert.strictEqual(statementCount(withPacking), 20);
 	});
+
+	for (const context of [undefined, { [MERGE_EXECUTION_ROLE_POLICIES_CONTEXT_KEY]: false }]) {
+		test(`an overflowing role synthesizes byte-identically to plain CDK (${context ? 'false' : 'unset'})`, () => {
+			const build = (packing: boolean) => {
+				const { stack, role } = makeRole({ packing, context });
+				addCombinable(role, 150);
+				addDistinct(role, 40);
+				return JSON.stringify(Template.fromStack(stack).toJSON());
+			};
+			const packed = build(true);
+			assert.ok(packed.includes('OverflowPolicy'), 'the role overflows');
+			assert.strictEqual(packed, build(false));
+		});
+	}
 });
 
-describe('enableRolePolicyPacking — over the inline budget', () => {
+describe('enableRolePolicyPacking — merge context key', () => {
+	const build = (value: unknown) => {
+		const { stack, role } = makeRole({
+			packing: true,
+			context: value === undefined ? undefined : { [MERGE_EXECUTION_ROLE_POLICIES_CONTEXT_KEY]: value },
+		});
+		addCombinable(role, 20);
+		return () => Template.fromStack(stack);
+	};
+
+	for (const value of [true, 'true']) {
+		test(`${JSON.stringify(value)} merges`, () => {
+			assert.ok(statementCount(build(value)()) < 20, 'statements were merged');
+		});
+	}
+
+	for (const value of [false, 'false', undefined]) {
+		test(`${value === undefined ? 'unset' : JSON.stringify(value)} does not merge`, () => {
+			assert.strictEqual(statementCount(build(value)()), 20);
+		});
+	}
+
+	for (const value of ['yes', 1, '']) {
+		test(`${JSON.stringify(value)} fails synth`, () => {
+			assert.throws(build(value), /mergeExecutionRolePolicies" must be true or false/);
+		});
+	}
+});
+
+describe('enableRolePolicyPacking — merging on', () => {
+	test('merges with the installed aws-cdk-lib, even within the inline budget', () => {
+		// Guards the `minimize` coupling: a CDK that keeps the field but ignores it fails here.
+		const { stack, role } = makeRole({ packing: true, context: MERGE_ON });
+		addCombinable(role, 20);
+		const template = Template.fromStack(stack);
+		assert.strictEqual(statementCount(template), 1, 'the 20 statements share their actions');
+		assert.ok(!hasOverflow(template));
+		assert.deepStrictEqual(mergeNotAppliedInfo(stack), []);
+	});
+
 	test('synthesizes with the overflow packed into managed policies attached to the role', () => {
-		const { stack, role } = makeRole({ packing: true });
+		const { stack, role } = makeRole({ packing: true, context: MERGE_ON });
 		const n = 120;
 		addDistinct(role, n);
 		const template = Template.fromStack(stack);
@@ -130,196 +200,170 @@ describe('enableRolePolicyPacking — over the inline budget', () => {
 		const inlineSize = JSON.stringify(inline[0].Properties.PolicyDocument).length;
 		assert.ok(inlineSize <= INLINE_LIMIT, `DefaultPolicy is ${inlineSize} chars, over ${INLINE_LIMIT}`);
 
-		const expected = new Set(Array.from({ length: n }, (_, i) => `s3:GetObjectV${i} ${arn(i)}`));
-		assert.deepStrictEqual(grantedPairs(template), expected, 'every granted permission is preserved');
+		const expected = new Set(
+			Array.from({ length: n }, (_, i) => JSON.stringify(['Allow', `s3:GetObjectV${i}`, arn(i), '{}'])),
+		);
+		assert.deepStrictEqual(grantedTuples(template), expected, 'every granted permission is preserved');
 	});
 
 	test('merges combinable statements first, so fewer managed policies are needed', () => {
-		const build = (packing: boolean) => {
-			const { stack, role } = makeRole({ packing });
+		const build = (merge: boolean) => {
+			const { stack, role } = makeRole({ packing: true, context: merge ? MERGE_ON : undefined });
 			addCombinable(role, 150);
 			return Template.fromStack(stack);
 		};
-		const packed = build(true);
-		const unpacked = build(false);
+		const merged = build(true);
+		const unmerged = build(false);
 
-		const packedCount = policiesOf(packed).managed.length;
-		const unpackedCount = policiesOf(unpacked).managed.length;
-		assert.ok(
-			packedCount < unpackedCount,
-			`expected fewer managed policies with consolidation: ${packedCount} vs ${unpackedCount}`,
-		);
-		assert.ok(statementCount(packed) < 150, 'statements were merged');
-		assert.deepStrictEqual(grantedPairs(packed), grantedPairs(unpacked), 'merging preserves every permission');
-		for (const [id, m] of policiesOf(packed).managed) {
+		const mergedCount = policiesOf(merged).managed.length;
+		const unmergedCount = policiesOf(unmerged).managed.length;
+		assert.ok(mergedCount < unmergedCount, `expected fewer managed policies: ${mergedCount} vs ${unmergedCount}`);
+		assert.ok(statementCount(merged) < 150, 'statements were merged');
+		assert.deepStrictEqual(grantedTuples(merged), grantedTuples(unmerged), 'merging preserves every permission');
+		for (const [id, m] of policiesOf(merged).managed) {
 			const size = JSON.stringify(m.Properties.PolicyDocument).length;
 			assert.ok(size <= MANAGED_LIMIT, `${id} is ${size} chars, over ${MANAGED_LIMIT}`);
 		}
 	});
 
 	test('merges with the aspect-priorities and aspect-stabilization flags on', () => {
-		const context = { [cxapi.ASPECT_PRIORITIES_MUTATING]: true, '@aws-cdk/core:aspectStabilization': true };
-		const build = (packing: boolean) => {
-			const { stack, role } = makeRole({ packing, context });
+		const flags = { [cxapi.ASPECT_PRIORITIES_MUTATING]: true, '@aws-cdk/core:aspectStabilization': true };
+		const build = (merge: boolean) => {
+			const { stack, role } = makeRole({ packing: true, context: { ...flags, ...(merge ? MERGE_ON : {}) } });
 			addCombinable(role, 150);
 			return Template.fromStack(stack);
 		};
-		const packed = build(true);
-		const unpacked = build(false);
-		const packedCount = policiesOf(packed).managed.length;
-		const unpackedCount = policiesOf(unpacked).managed.length;
-		assert.ok(
-			packedCount < unpackedCount,
-			`expected fewer managed policies with consolidation: ${packedCount} vs ${unpackedCount}`,
-		);
-		assert.deepStrictEqual(grantedPairs(packed), grantedPairs(unpacked), 'merging preserves every permission');
+		const merged = build(true);
+		const unmerged = build(false);
+		const mergedCount = policiesOf(merged).managed.length;
+		const unmergedCount = policiesOf(unmerged).managed.length;
+		assert.ok(mergedCount < unmergedCount, `expected fewer managed policies: ${mergedCount} vs ${unmergedCount}`);
+		assert.deepStrictEqual(grantedTuples(merged), grantedTuples(unmerged), 'merging preserves every permission');
 	});
 
-	/**
-	 * Build packed and unpacked roles with `n` combinable statements for every `n`
-	 * in a range that straddles CDK's split threshold, and assert the packed
-	 * template is byte-identical whenever CDK leaves the unpacked policy inline, and
-	 * that no drift warning appears for any `n`.
-	 */
-	function assertUnchangedAroundThreshold(
-		addStatements: (stack: cdk.Stack, role: iam.Role, n: number) => void,
-		range: [number, number],
-	) {
-		const build = (packing: boolean, n: number) => {
-			const { stack, role } = makeRole({ packing });
-			addStatements(stack, role, n);
-			return { stack, template: Template.fromStack(stack) };
-		};
-		let inlineCases = 0;
-		let overflowCases = 0;
-		for (let n = range[0]; n <= range[1]; n++) {
-			const unpacked = build(false, n).template;
-			const packed = build(true, n);
-			assert.deepStrictEqual(driftWarnings(packed.stack), [], `drift warning at ${n} statements`);
-			if (hasOverflow(unpacked)) {
-				overflowCases++;
-				continue;
+	test('preserves every (effect, action, resource, condition) tuple for grants that must not be combined', () => {
+		const build = (merge: boolean) => {
+			const { stack, role } = makeRole({ packing: true, context: merge ? MERGE_ON : undefined });
+			const add = (props: iam.PolicyStatementProps) => role.addToPrincipalPolicy(new iam.PolicyStatement(props));
+			for (let i = 0; i < 20; i++) {
+				const b1 = `arn:aws:s3:::hostile-a-${i}/*`;
+				const b2 = `arn:aws:s3:::hostile-b-${i}/*`;
+				// Cross-product trap: merging both lists would grant Get on b2 and Put on b1.
+				add({ actions: ['s3:GetObject'], resources: [b1] });
+				add({ actions: ['s3:PutObject'], resources: [b2] });
+				// Same action, different conditions.
+				add({
+					actions: ['s3:DeleteObject'],
+					resources: [b1],
+					conditions: { StringEquals: { 'aws:PrincipalTag/team': `t${i}` } },
+				});
+				add({ actions: ['s3:DeleteObject'], resources: [b2] });
+				// Deny next to Allow on the same action and resource.
+				add({ effect: iam.Effect.DENY, actions: ['s3:GetObject'], resources: [b2] });
+				// `*` next to specific ARNs.
+				add({ actions: ['s3:ListAllMyBuckets'], resources: ['*'] });
+				add({ actions: ['s3:ListAllMyBuckets'], resources: [b1] });
+				// Statements with a Sid are never merged.
+				add({ sid: `Sid${i}`, actions: ['s3:GetObject'], resources: [b2] });
+				// NotAction / NotResource.
+				add({ notActions: ['s3:DeleteBucket'], resources: [b1] });
+				add({ actions: ['s3:GetObjectAcl'], notResources: [b2] });
+				// Exact duplicates.
+				add({ actions: ['s3:GetObjectTagging'], resources: [b1] });
+				add({ actions: ['s3:GetObjectTagging'], resources: [b1] });
 			}
-			inlineCases++;
-			assert.strictEqual(
-				JSON.stringify(packed.template.toJSON()),
-				JSON.stringify(unpacked.toJSON()),
-				`template changed at ${n} statements, where CDK leaves the policy inline`,
-			);
-		}
-		// Well clear of the threshold on both sides, so a shift in either direction is caught.
-		assert.ok(
-			inlineCases >= 10 && overflowCases >= 10,
-			`the range should straddle CDK’s split threshold: ${inlineCases} inline, ${overflowCases} overflowing`,
-		);
-	}
-
-	test('around CDK’s split threshold with token resources, the template is unchanged whenever CDK creates no overflow', () => {
-		assertUnchangedAroundThreshold(
-			(stack, role, n) => {
-				const bucket = new s3.Bucket(stack, 'Bucket');
-				// Combinable statements with token resources: CDK sizes each token with its estimate,
-				// so consolidation turning on below CDK's threshold would show up as merged statements.
-				for (let i = 0; i < n; i++) {
-					role.addToPrincipalPolicy(
-						new iam.PolicyStatement({
-							actions: SHARED_ACTIONS,
-							resources: [bucket.arnForObjects(`p${i}/*`)],
-						}),
-					);
-				}
-			},
-			[10, 70],
-		);
-	});
-
-	test('around CDK’s split threshold with literal resources, the template is unchanged whenever CDK creates no overflow', () => {
-		// Literal ARNs are sized by their exact length rather than the token estimate.
-		assertUnchangedAroundThreshold((_stack, role, n) => addCombinable(role, n), [15, 75]);
-	});
-
-	test('uses aws-cdk-lib’s own size estimator', () => {
-		const { stack, role } = makeRole({ packing: true });
-		addCombinable(role, 150);
-		Template.fromStack(stack);
-		const fallback = Annotations.fromStack(stack).findInfo(
-			'*',
-			Match.stringLikeRegexp("doesn't expose the policy size estimate"),
-		);
-		assert.deepStrictEqual(fallback, []);
-	});
-
-	test('warns when CDK’s split uses a different inline threshold than the packing assumed', () => {
-		const { stack, role } = makeRole({ packing: true });
-		addCombinable(role, 45);
-		// Simulate an aws-cdk-lib whose split keeps up to 12,000 characters inline: the packing
-		// still turns merging on at 10,000, so the role's policy changes where CDK wouldn't split.
-		type Splittable = { _splitDocument: (scope: unknown, self: number, split: number) => unknown };
-		const splitter = role as unknown as { splitLargePolicy: () => void; defaultPolicy?: iam.Policy };
-		const realSplit = splitter.splitLargePolicy;
-		splitter.splitLargePolicy = function (this: typeof splitter) {
-			const doc = this.defaultPolicy?.document as unknown as Splittable;
-			const inner = doc._splitDocument;
-			doc._splitDocument = (scope, _self, split) => inner.call(doc, scope, 12_000, split);
-			realSplit.call(this);
-		};
-
-		const template = Template.fromStack(stack);
-		assert.ok(!hasOverflow(template), 'nothing overflows at the simulated threshold');
-		const warnings = driftWarnings(stack);
-		assert.strictEqual(warnings.length, 1, JSON.stringify(warnings));
-		assert.match(
-			String(warnings[0].entry.data),
-			/split at an estimated 12000 characters, AWS Blocks expected 10000/,
-		);
-		assert.match(String(warnings[0].entry.data), /consolidated without overflowing/);
-	});
-
-	test('adds an info annotation when CDK keeps the minimize field but no longer merges', () => {
-		type Mergeable = { shouldMerge: (scope: unknown) => boolean };
-		const proto = iam.PolicyDocument.prototype as unknown as Mergeable;
-		const realShouldMerge = proto.shouldMerge;
-		// Simulate an aws-cdk-lib that still has a writable `minimize` field but ignores it.
-		proto.shouldMerge = () => false;
-		try {
-			const { stack, role } = makeRole({ packing: true });
+			// Padding that merges, so the role overflows and merging has an effect.
 			addCombinable(role, 150);
-			const template = Template.fromStack(stack);
-			assert.strictEqual(statementCount(template), 150, 'nothing merged');
-			Annotations.fromStack(stack).hasInfo(
-				'/PackingStack/Role',
-				Match.stringLikeRegexp("didn't merge statements through PolicyDocument's 'minimize' field"),
+			return Template.fromStack(stack);
+		};
+		const merged = build(true);
+		const unmerged = build(false);
+		assert.ok(hasOverflow(unmerged), 'the unmerged role overflows');
+		assert.ok(
+			policiesOf(merged).managed.length < policiesOf(unmerged).managed.length,
+			'merging reduced the overflow policy count',
+		);
+		assert.deepStrictEqual(grantedTuples(merged), grantedTuples(unmerged));
+	});
+
+	test('merges and packs a grant added by an inherited aspect at CDK’s split priority', () => {
+		const build = (merge: boolean) => {
+			const { stack, role } = makeRole({ packing: true, context: merge ? MERGE_ON : undefined });
+			addCombinable(role, 150);
+			let added = false;
+			cdk.Aspects.of(stack).add(
+				{
+					visit(node) {
+						if (node !== role || added) return;
+						added = true;
+						for (let i = 0; i < 40; i++) {
+							role.addToPrincipalPolicy(
+								new iam.PolicyStatement({ actions: ['s3:PutObject'], resources: [`${arn(i)}-late`] }),
+							);
+						}
+					},
+				},
+				{ priority: cdk.AspectPriority.DEFAULT },
 			);
-			assert.deepStrictEqual(driftWarnings(stack), []);
-		} finally {
-			proto.shouldMerge = realShouldMerge;
+			return Template.fromStack(stack);
+		};
+		const merged = build(true);
+		const late = [...policiesOf(merged).inline, ...policiesOf(merged).managed.map(([, m]) => m)]
+			.flatMap((p) => p.Properties.PolicyDocument.Statement)
+			.filter((s) => asArray(s.Action).includes('s3:PutObject'));
+		assert.strictEqual(late.length, 1, 'the 40 late statements were merged into one');
+		for (const p of policiesOf(merged).inline) {
+			const size = JSON.stringify(p.Properties.PolicyDocument).length;
+			assert.ok(size <= INLINE_LIMIT, `DefaultPolicy is ${size} chars, over ${INLINE_LIMIT}`);
 		}
+		assert.deepStrictEqual(grantedTuples(merged), grantedTuples(build(false)));
 	});
 
-	test('adds no merge info annotation when merging took effect', () => {
-		const { stack, role } = makeRole({ packing: true });
-		addCombinable(role, 150);
-		Template.fromStack(stack);
-		const info = Annotations.fromStack(stack).findInfo('*', Match.stringLikeRegexp("didn't merge statements"));
-		assert.deepStrictEqual(info, []);
-		assert.deepStrictEqual(driftWarnings(stack), []);
-	});
-
-	test('skips consolidation with an info annotation when CDK no longer exposes the minimize field', () => {
-		const { stack, role } = makeRole({ packing: true });
+	test('skips merging with an info annotation when CDK no longer exposes the minimize field', () => {
+		const { stack, role } = makeRole({ packing: true, context: MERGE_ON });
 		addCombinable(role, 150);
 		const document = (role.node.findChild('DefaultPolicy') as iam.Policy).document;
-		// Simulate an aws-cdk-lib version without the field the consolidation sets.
+		// Simulate an aws-cdk-lib version without the field merging sets.
 		delete (document as unknown as { minimize?: boolean }).minimize;
 
 		const template = Template.fromStack(stack);
 		assert.strictEqual(statementCount(template), 150, 'nothing merged');
+		assert.ok(hasOverflow(template), 'CDK still packs the unmerged statements');
 		Annotations.fromStack(stack).hasInfo(
 			'/PackingStack/Role',
-			Match.stringLikeRegexp("didn't merge statements through PolicyDocument's 'minimize' field"),
+			Match.stringLikeRegexp("doesn't allow merging .*the field is missing or read-only"),
 		);
 	});
+
+	test('skips merging with an info annotation when the minimize field is read-only', () => {
+		const { stack, role } = makeRole({ packing: true, context: MERGE_ON });
+		addCombinable(role, 150);
+		const document = (role.node.findChild('DefaultPolicy') as iam.Policy).document;
+		Object.defineProperty(document, 'minimize', { value: undefined, writable: false });
+
+		const template = Template.fromStack(stack);
+		assert.strictEqual(statementCount(template), 150, 'nothing merged');
+		assert.strictEqual(mergeNotAppliedInfo(stack).length, 1);
+	});
 });
+
+/** A stand-in for a Building Block: a construct with a `fullId`, owning `buckets` buckets granted to `role`. */
+class FakeBlock extends Construct {
+	readonly fullId: string;
+	constructor(scope: Construct, id: string, role: iam.IRole, buckets: number) {
+		super(scope, id);
+		this.fullId = `fake-${id.toLowerCase()}`;
+		for (let i = 0; i < buckets; i++) {
+			const bucket = new s3.Bucket(this, `Bucket${i}`);
+			role.addToPrincipalPolicy(
+				new iam.PolicyStatement({
+					actions: [`s3:GetObjectV${id}${i}`],
+					resources: [bucket.arnForObjects('*')],
+				}),
+			);
+		}
+	}
+}
 
 describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 	// ~78,000 estimated characters: 10,000 stay inline, the rest needs 11+ managed policies.
@@ -332,12 +376,65 @@ describe('enableRolePolicyPacking — managed-policies-per-role quota', () => {
 			() => Template.fromStack(stack),
 			(err: Error) => {
 				assert.match(err.message, /PackingStack\/Role needs \d+ managed policies, more than the 10 allowed/);
-				assert.match(err.message, /PackingStack\.blocks-iam\.json/);
 				assert.match(err.message, /separate Blocks backend \(another BlocksStack or BlocksBackend\)/);
 				assert.ok(err.message.includes(MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY), err.message);
+				assert.doesNotMatch(err.message, /blocks-iam\.json/);
+				// Merging wasn't requested, so the message doesn't claim it ran.
+				assert.match(err.message, /even after packing them into managed policies/);
+				assert.doesNotMatch(err.message, /merging/);
 				return true;
 			},
 		);
+	});
+
+	test('mentions merging only when it was applied', () => {
+		const { stack, role } = makeRole({ packing: true, context: MERGE_ON });
+		addDistinct(role, MANY);
+		assert.throws(() => Template.fromStack(stack), /even after merging statements and packing them/);
+
+		const fallback = makeRole({ packing: true, context: MERGE_ON });
+		addDistinct(fallback.role, MANY);
+		const document = (fallback.role.node.findChild('DefaultPolicy') as iam.Policy).document;
+		delete (document as unknown as { minimize?: boolean }).minimize;
+		assert.throws(
+			() => Template.fromStack(fallback.stack),
+			(err: Error) => {
+				assert.doesNotMatch(err.message, /merging/);
+				return true;
+			},
+		);
+	});
+
+	test('names the Building Blocks granting the most, largest first', () => {
+		const { stack, role } = makeRole({ packing: true });
+		new FakeBlock(stack, 'Small', role, 2);
+		new FakeBlock(stack, 'Large', role, 40);
+		new FakeBlock(stack, 'Medium', role, 10);
+		addDistinct(role, MANY);
+		assert.throws(
+			() => Template.fromStack(stack),
+			(err: Error) => {
+				assert.match(
+					err.message,
+					/granting the most \(approximate characters of policy statements\): fake-large \(PackingStack\/Large\): ~\d+; fake-medium \(PackingStack\/Medium\): ~\d+; fake-small \(PackingStack\/Small\): ~\d+\./,
+				);
+				return true;
+			},
+		);
+	});
+
+	test('passes with exactly the quota of managed policies, fails one above it', () => {
+		const build = (awsManaged: number) => {
+			const { stack, role } = makeRole({ packing: true });
+			for (let i = 0; i < awsManaged; i++) {
+				role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName(`Policy${i}`));
+			}
+			addDistinct(role, 120);
+			return () => Template.fromStack(stack);
+		};
+		const overflow = policiesOf(build(0)()).managed.length;
+		assert.doesNotThrow(build(10 - overflow));
+		assert.throws(build(11 - overflow), /needs 11 managed policies, more than the 10 allowed/);
 	});
 
 	for (const raised of [20, '20']) {
@@ -486,6 +583,13 @@ describe('shared execution role (BlocksRole)', () => {
 		const app = new cdk.App();
 		const stack = await makeStack(app, 'OverQuotaStack');
 		addDistinct(stack.executionRole, 400);
-		assert.throws(() => app.synth(), /OverQuotaStack\/BlocksRole needs \d+ managed policies/);
+		assert.throws(
+			() => app.synth(),
+			(err: Error) => {
+				assert.match(err.message, /OverQuotaStack\/BlocksRole needs \d+ managed policies/);
+				assert.doesNotMatch(err.message, /blocks-iam\.json/);
+				return true;
+			},
+		);
 	});
 });
