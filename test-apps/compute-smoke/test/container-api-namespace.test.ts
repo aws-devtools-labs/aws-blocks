@@ -142,7 +142,7 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       const lambdaUrl = new URL(onLambda.requestUrl);
       assert.strictEqual(containerUrl.origin, lambdaUrl.origin, 'same scheme and host');
       // Same path shape (the route path, no stage), differing only in the namespace segment.
-      assert.match(lambdaUrl.pathname, /\/aws-blocks\/api\/reports$/);
+      assert.match(lambdaUrl.pathname, /^\/aws-blocks\/api\/reports$/);
       assert.strictEqual(containerUrl.pathname, lambdaUrl.pathname.replace(/\/reports$/, '/containerApi'));
     });
 
