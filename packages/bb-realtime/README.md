@@ -64,6 +64,8 @@ Returned by `subscribe()` on a channel handle:
 
 Always `await sub.established` before relying on the subscription — this ensures the WebSocket handshake and server-side authorization have completed.
 
+Deployed, the server confirms a subscription once `publish()` can find it, which can take a moment after the subscribe. If it can't tell within about 3 seconds (the subscription index lags, or the lookup fails), it confirms anyway and logs a warning; a message published right away may then not arrive.
+
 ## Usage Patterns
 
 ### Server-Side Publish via API

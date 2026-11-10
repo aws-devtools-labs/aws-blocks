@@ -144,7 +144,7 @@ TTL: expiresAt     (Number)
 ```
 
 - **Sentinel record** (`SK: "__connection__"`): Created at $connect, carries `lastTtlSweep` timestamp.
-- **Channel records**: Created on subscribe, one per (connectionId, channel) pair.
+- **Channel records**: Created on subscribe, one per (connectionId, channel) pair. Each carries a `subscribeId`, a random UUID unique to the subscribe that wrote it (see "Subscribe confirmation waits for the index" below).
 - **TTL**: Sentinel = 2.5 hours, channel records = 1 hour.
 
 ### TTL Refresh (Sweep-Based)
@@ -159,6 +159,8 @@ This keeps cost at O(1) per ping for the common case, with periodic O(N) sweeps.
 ### Publish Fan-Out
 
 `publish()` queries the GSI by channel, then calls `postToConnection` for each connectionId in parallel. 410 GoneException triggers cleanup of all records for that connectionId.
+
+**Subscribe confirmation waits for the index, for at most 3 s:** DynamoDB updates `channel-index` after the table write, and reads of a GSI are eventually consistent. For a moment after a subscribe, a publish would not find the new subscriber, and the message would be dropped rather than delayed. The deployed `$default` handler therefore sends `subscribe_success` once a `channel-index` query returns the new record (it queries at once, then again after pauses of 20 ms doubling up to 320 ms), so a publish sent as soon as `established` resolves reaches the subscriber. The query matches the record's `subscribeId`, not only its keys: when a connection unsubscribes from a channel and subscribes again at once (as `createChat` does before it resumes a turn), the unsubscribe's delete and the new put reach the index separately, and until then the index can still show the previous subscription's record, which is about to disappear. The index projects all attributes (the DistributedTable GSI manager creates every GSI with `ProjectionType: ALL`), so `subscribeId` is readable there without changing the index. The wait is best effort and bounded: the 3 s budget covers every query as well as the pauses, a query still running at the deadline is abandoned (DistributedTable queries can't be cancelled, so it finishes on its own and its result is ignored), and a query that fails, for example read throttling that outlasted the SDK's retries, ends the wait. In each of those cases the handler confirms anyway and logs a warning, so `established` never hangs on the index, but a publish sent right away may still miss the subscriber. A subscribe therefore costs at least one extra GSI query, and up to 3 s of confirmation latency while the index lags. The local WebSocket server keeps its subscriptions in memory, so it confirms at once.
 
 **Concurrency model:** All `postToConnection` calls are issued via `Promise.all` — no application-level batching or semaphore. Concurrency is governed by the AWS SDK's HTTP agent, which defaults to `maxSockets: 50` per origin. This means at most 50 requests are in-flight simultaneously; the rest queue at the HTTP layer.
 
