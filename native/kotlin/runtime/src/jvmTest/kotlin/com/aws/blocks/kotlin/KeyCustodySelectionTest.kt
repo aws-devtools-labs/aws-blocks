@@ -148,4 +148,18 @@ class KeyCustodySelectionTest {
         built[0] shouldNotBe root.toPath()
         built[1] shouldBe root.toPath()
     }
+
+    @Test
+    fun resolvesToTheHostStoreOnAPlatformThatHasOne() {
+        // The only test that leaves the OS candidate at its default, so the only one that exercises
+        // the decision production actually makes. Every other case here injects a candidate, which
+        // proves the selection logic but not that this machine reaches a working store through it.
+        //
+        // On a platform with a tier, this drives a real self-test: a probe written, read back and
+        // deleted under a random alias. Linux has no binding yet and so still expects the file tier.
+        val os = System.getProperty("os.name").orEmpty()
+        val hasHostStore = os.startsWith("Windows") || os.startsWith("Mac")
+
+        selectKeyCustody(root.toPath()).tier shouldBe if (hasHostStore) KeyTier.OS else KeyTier.FILE
+    }
 }
