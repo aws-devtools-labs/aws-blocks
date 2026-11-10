@@ -460,7 +460,11 @@ export class AuthOIDC<
 			 */
 			getClient: async (): Promise<OIDCClient<ProviderName<P>>> => {
 				const providerConfigs: Record<string, { authorizeUrl: string; clientId: string; scopes: string[]; kind: string }> = {};
-				for (const name of this.providers) {
+				// Only providers the engine serves: a configured provider the
+				// engine does not serve (e.g. a stub outside a sandbox) would
+				// make `getAuthorizeParams` throw and fail the whole handle.
+				const servedProviders = this.servedProviderNames();
+				for (const name of servedProviders) {
 					const params = await this.engine.getAuthorizeParams(name, ctx);
 					providerConfigs[name] = {
 						authorizeUrl: params.authorizeUrl,
@@ -471,7 +475,7 @@ export class AuthOIDC<
 				}
 				const basePath = this.callbackPath.slice(0, this.callbackPath.lastIndexOf('/'));
 				const config = {
-					providers: [...this.providers],
+					providers: servedProviders,
 					providerConfigs,
 					callbackPath: this.callbackPath,
 					exchangePath: `${basePath}/exchange`,
@@ -493,11 +497,21 @@ export class AuthOIDC<
 	}
 
 	/**
-	 * Compose the `signedOut` state. Each provider becomes an external
-	 * `AuthAction` pointing at the sign-in kickoff route.
+	 * Configured provider names the engine serves, in configuration order.
+	 * Excludes providers the engine treats as unavailable (e.g. a stub
+	 * provider outside a sandbox deployment).
+	 */
+	private servedProviderNames(): ProviderName<P>[] {
+		return this.providers.filter((name) => this.engine.hasProvider(name));
+	}
+
+	/**
+	 * Compose the `signedOut` state. Each provider the engine serves becomes
+	 * an external `AuthAction` pointing at the sign-in kickoff route.
 	 */
 	protected signedOutState(_ctx: BlocksContext): AuthState {
-		const actions: AuthAction[] = this.options.providers.map((p) => ({
+		const served = this.options.providers.filter((p) => this.engine.hasProvider(p.name));
+		const actions: AuthAction[] = served.map((p) => ({
 			name: p.name,
 			label: `Sign in with ${formatProviderLabel(p.name)}`,
 			fields: [],

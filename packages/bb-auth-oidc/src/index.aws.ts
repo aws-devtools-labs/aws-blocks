@@ -30,7 +30,8 @@ import { mountAuthRoutes } from './routes.js';
 // `stub-routes.js` has no static import of the stub IdP engine
 // (`engines/stub-idp.js`): it registers the stub routes synchronously and loads
 // the engine on first request. It is called only in the sandbox branch below,
-// so the engine module is never evaluated outside a sandbox deployment.
+// so the engine module is not evaluated unless a stub route is called in a
+// sandbox deployment (it may still be shipped in the bundle).
 import { mountStubIdpRoutes } from './stub-routes.js';
 import { cognitoEnvPrefix, cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';

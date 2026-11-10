@@ -9,8 +9,8 @@
  * the stub IdP engine (`engines/stub-idp.ts`). This module imports only the
  * issuer path helper; the engine is loaded with a dynamic `import()` the first
  * time a mounted stub route needs it. The AWS runtime calls
- * `mountStubIdpRoutes` only in sandbox deployments, so outside a sandbox the
- * engine module is never evaluated.
+ * `mountStubIdpRoutes` only in sandbox deployments, so the engine module is
+ * not evaluated unless a stub route is called in a sandbox deployment.
  *
  * Why the routes are registered eagerly and only the engine is deferred: core
  * locks the RawRoute registry as soon as the backend module has been imported
@@ -19,10 +19,10 @@
  * `await import(...)` continuation would land after the lock and throw.
  *
  * Bundling trade-off: esbuild CJS bundles inline a dynamically imported module
- * as a lazily-evaluated wrapper rather than a separate file. The engine code is
- * therefore still shipped in a deployed bundle, but its module body (and its
- * key material, code signing, and handlers) is never evaluated unless a
- * sandbox deployment mounts these routes and a request reaches one.
+ * as a lazily-evaluated wrapper rather than a separate file. The engine may
+ * therefore still be shipped in a bundle, but its module body (and its key
+ * material, code signing, and handlers) is not evaluated unless a stub route
+ * is called in a sandbox deployment.
  */
 
 import { RawRoute } from '@aws-blocks/core';

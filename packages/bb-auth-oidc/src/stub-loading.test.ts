@@ -12,8 +12,10 @@
  * evaluate the engine at load time. These tests catch that.
  *
  * The import graph comes from an esbuild metafile over the compiled `dist/`
- * output, which records each edge's kind (`import-statement` vs
- * `dynamic-import`). Only static edges are followed. Third-party and
+ * output, which records each edge's kind (`import-statement`,
+ * `require-call`, `import-rule`, `dynamic-import`, ...). Every kind except
+ * `dynamic-import` loads its target when the importer is evaluated, so all of
+ * those are followed as static edges. Third-party and
  * `@aws-blocks/*` packages are left external: this guard is about this
  * package's own modules.
  */
@@ -47,8 +49,9 @@ async function metafileFor(entry: string): Promise<Metafile> {
 }
 
 /**
- * Every module reachable from `entry`. With `staticOnly`, only
- * `import`/`export ... from` edges are followed, never `import()`.
+ * Every module reachable from `entry`. With `staticOnly`, every edge kind
+ * except `dynamic-import` is followed (`import`/`export ... from`,
+ * `require()`, `require.resolve()`, CSS `@import`, ...), never `import()`.
  */
 function reachable(metafile: Metafile, entry: string, staticOnly: boolean): Set<string> {
 	const seen = new Set<string>([entry]);
@@ -57,7 +60,7 @@ function reachable(metafile: Metafile, entry: string, staticOnly: boolean): Set<
 		const current = queue.shift() as string;
 		for (const edge of metafile.inputs[current]?.imports ?? []) {
 			if (edge.external) continue;
-			if (staticOnly && edge.kind !== 'import-statement') continue;
+			if (staticOnly && edge.kind === 'dynamic-import') continue;
 			if (!seen.has(edge.path)) {
 				seen.add(edge.path);
 				queue.push(edge.path);

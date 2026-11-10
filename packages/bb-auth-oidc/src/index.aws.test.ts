@@ -289,6 +289,56 @@ describe('AuthOIDC (aws-runtime): stub providers are served only in a sandbox de
 		);
 	});
 
+	/** The `createApi()` handler, called directly with a request context. */
+	type AuthApiMethods = {
+		getAuthState(): Promise<{ state: string; actions?: { name: string }[] }>;
+		getClient(): Promise<{ toJSON(): { providers: string[]; providerConfigs: Record<string, unknown> } }>;
+	};
+	function apiFor(auth: ReturnType<typeof construct>, ctx: BlocksContext): AuthApiMethods {
+		return (auth.createApi() as unknown as (c: BlocksContext) => AuthApiMethods)(ctx);
+	}
+
+	test('production: getClient and the signed-out actions leave out the stub and keep google', async () => {
+		await loadDeployedConfig({ BLOCKS_DEPLOYMENT_TYPE: 'production' });
+		// Answer Google discovery so the real provider resolves; anything else 404s.
+		fetchMock.mock.mockImplementation(async (input: string | URL | Request) => {
+			const url = String(input instanceof Request ? input.url : input);
+			if (url === 'https://accounts.google.com/.well-known/openid-configuration') {
+				return Response.json({
+					issuer: 'https://accounts.google.com',
+					authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+					token_endpoint: 'https://oauth2.googleapis.com/token',
+					jwks_uri: 'https://www.googleapis.com/oauth2/v3/certs',
+				});
+			}
+			return new Response('', { status: 404 });
+		});
+		const auth = construct('dev-client-prod');
+		const api = apiFor(auth, requestCtx().ctx);
+
+		const client = (await api.getClient()).toJSON();
+		assert.deepStrictEqual(client.providers, ['google']);
+		assert.deepStrictEqual(Object.keys(client.providerConfigs), ['google']);
+
+		const state = await api.getAuthState();
+		assert.strictEqual(state.state, 'signedOut');
+		assert.deepStrictEqual(state.actions?.map((a) => a.name), ['google']);
+
+		const urls = fetchMock.mock.calls.map((c) => String(c.arguments[0]));
+		assert.ok(
+			urls.every((u) => !u.includes(stubIssuerPath('dev-client-prod'))),
+			`the stub issuer must not be discovered outside a sandbox: ${urls.join(', ')}`,
+		);
+	});
+
+	test('sandbox: the signed-out actions include both the stub and google', async () => {
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'sandbox';
+		const auth = construct('dev-actions-sandbox');
+		const state = await apiFor(auth, requestCtx().ctx).getAuthState();
+		assert.strictEqual(state.state, 'signedOut');
+		assert.deepStrictEqual(state.actions?.map((a) => a.name), ['google', 'dev-actions-sandbox']);
+	});
+
 	test('sandbox: a mounted stub route loads the engine on first request and answers', async () => {
 		process.env.BLOCKS_DEPLOYMENT_TYPE = 'sandbox';
 		construct('dev-lazy');

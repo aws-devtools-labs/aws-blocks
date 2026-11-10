@@ -114,6 +114,11 @@ export class CognitoFederationEngine implements AuthEngine {
 		this.cognitoUserPoolId = options.cognitoUserPoolId;
 	}
 
+	/** Only `cognitoFederated()` providers are served by this engine. */
+	hasProvider(name: string): boolean {
+		return this.providerByName.has(name);
+	}
+
 	async buildSignInUrl(input: BuildSignInUrlInput): Promise<BuildSignInUrlOutput> {
 		const provider = this.providerByName.get(input.provider);
 		if (!provider) throw engineError(`Provider not configured: ${input.provider}`);

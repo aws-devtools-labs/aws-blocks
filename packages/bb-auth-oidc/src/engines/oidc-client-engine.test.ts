@@ -21,7 +21,9 @@ import type { BlocksContext } from '@aws-blocks/core';
 import { OidcClientEngine, idpError, providerNotConfigured } from './oidc-client-engine.js';
 import { stubIdp } from '../providers.js';
 import { resolveProviderIssuerUrl } from '../utils.js';
-import type { ProviderConfig, SessionStore } from '../types.js';
+import { encodeSignedCookie, type PendingAuthPayload, type SessionCookiePayload } from '../session-cookie.js';
+import { pendingCookieName, sessionCookieName } from './session-manager.js';
+import type { ProviderConfig, SessionRow, SessionStore } from '../types.js';
 
 /** A raw IdP error whose message carries detail that must never reach the wire. */
 const RAW_IDP_SECRET = 'invalid_grant: code expired for client 1234567890.apps.googleusercontent.com';
@@ -144,15 +146,19 @@ describe('OidcClientEngine: trustStubProviders', () => {
 		return `${header}.${payload}.sig`;
 	}
 
+	const COOKIE_SECRET = 'test-cookie-secret-test-cookie-secret';
+	const COOKIE_PREFIX = 'oidc_test';
+
 	/** Build an engine with one stub provider; `resolveIssuerUrl` calls are counted. */
-	function engineFor(trustStubProviders: boolean) {
+	function engineFor(trustStubProviders: boolean, sessionStore: SessionStore = {} as unknown as SessionStore) {
 		const resolved: string[] = [];
 		const engine = new OidcClientEngine({
 			providers: [stubIdp({ name: 'dev' })],
-			// Plumbing only: the paths under test never reach the session store.
-			sessionStore: {} as unknown as SessionStore,
-			cookieSecret: 'test-cookie-secret-test-cookie-secret',
-			cookieNamePrefix: 'oidc_test',
+			// Plumbing only unless a test passes a store: most paths under
+			// test never reach the session store.
+			sessionStore,
+			cookieSecret: COOKIE_SECRET,
+			cookieNamePrefix: COOKIE_PREFIX,
 			cookieAttributes: { secure: true, partitioned: false, sameSite: 'Lax', path: '/' },
 			callbackPath: '/aws-blocks/auth/callback',
 			postSignInPath: '/',
@@ -206,6 +212,63 @@ describe('OidcClientEngine: trustStubProviders', () => {
 		assert.strictEqual(await engine.refreshBearerTokens({ refreshToken: 'r', provider: 'dev' }, ctx), null);
 		assert.deepStrictEqual(resolved, []);
 		assert.strictEqual(fetchMock.mock.callCount(), 0);
+	});
+
+	test('false: hasProvider reports the stub as not served', () => {
+		assert.strictEqual(engineFor(false).engine.hasProvider('dev'), false);
+		assert.strictEqual(engineFor(true).engine.hasProvider('dev'), true);
+	});
+
+	test('false: a callback whose pending-auth cookie names the stub answers ProviderNotConfigured', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const { engine, resolved } = engineFor(false);
+		const pending: PendingAuthPayload = {
+			provider: 'dev',
+			state: 'st',
+			nonce: 'n',
+			codeVerifier: 'v',
+			callbackUrl: `${ORIGIN}/aws-blocks/auth/callback`,
+			exp: Math.floor(Date.now() / 1000) + 600,
+		};
+		const cookie = `${pendingCookieName(COOKIE_PREFIX)}=${encodeSignedCookie(pending, COOKIE_SECRET)}`;
+		const ctx = ctxWith(new Headers({ cookie }));
+		ctx.request.url.searchParams.set('state', 'st');
+		ctx.request.url.searchParams.set('code', 'c');
+		await assert.rejects(engine.handleCallback(ctx), { name: 'ProviderNotConfiguredException' });
+		assert.deepStrictEqual(resolved, []);
+		assert.strictEqual(fetchMock.mock.callCount(), 0);
+	});
+
+	test('false: signing out a stub session never revokes upstream (no fetch)', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const rows = new Map<string, SessionRow>([
+			['sid-1', { userId: 'u', refreshToken: 'rt', expiresAt: 0, claims: {}, state: 'ready' }],
+		]);
+		const deleted: string[] = [];
+		const store: SessionStore = {
+			get: async (key) => rows.get(key) ?? null,
+			put: async (key, value) => {
+				rows.set(key, value);
+			},
+			delete: async (key) => {
+				deleted.push(key);
+				rows.delete(key);
+			},
+		};
+		const { engine, resolved } = engineFor(false, store);
+		const session: SessionCookiePayload = {
+			mode: 'stateful',
+			provider: 'dev',
+			sessionId: 'sid-1',
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const cookie = `${sessionCookieName(COOKIE_PREFIX)}=${encodeSignedCookie(session, COOKIE_SECRET)}`;
+		const ctx = ctxWith(new Headers({ cookie }));
+		await engine.signOut(ctx);
+		// The local session is still cleaned up; only the upstream revoke is skipped.
+		assert.deepStrictEqual(deleted, ['sid-1']);
+		assert.deepStrictEqual(resolved, [], 'the stub issuer must not be resolved on sign-out');
+		assert.strictEqual(fetchMock.mock.callCount(), 0, 'no revocation or discovery for an untrusted stub');
 	});
 
 	test('true: the stub issuer is matched and discovery runs against it', async () => {

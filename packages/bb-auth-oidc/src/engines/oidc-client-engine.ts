@@ -208,6 +208,11 @@ export class OidcClientEngine implements AuthEngine {
 		});
 	}
 
+	/** `false` for a configured stub provider when `trustStubProviders` is `false`. */
+	hasProvider(name: string): boolean {
+		return this.providerByName.has(name);
+	}
+
 	async buildSignInUrl(input: BuildSignInUrlInput): Promise<BuildSignInUrlOutput> {
 		const provider = this.providerByName.get(input.provider);
 		if (!provider) throw providerNotConfigured(input.provider);

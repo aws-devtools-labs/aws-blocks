@@ -446,17 +446,21 @@ output and deployed code drift apart:
   answer `ProviderNotConfiguredException` for them, a bearer token whose `iss`
   names a stub issuer is never matched, and no issuer discovery runs. A stub
   provider is then just an unavailable provider. The mock runtime passes `true`.
+  `AuthOIDC` asks the engine `hasProvider(name)` and leaves providers the engine
+  does not serve out of `getClient()` and the signed-out sign-in actions, so a
+  client never sees a sign-in option that cannot complete.
 - **Engine loading.** The AWS entry has no static import path to the stub IdP
   engine (`engines/stub-idp.ts`). The issuer helpers that `utils.ts` and the
   route table need live in `engines/stub-issuer.ts`, and the stub routes live in
   `stub-routes.ts`, which loads the engine with a dynamic `import()` on the first
   request a mounted stub route receives. The routes themselves are registered
   synchronously, because core locks the RawRoute registry once the backend
-  module has loaded. Outside a sandbox the routes are not mounted, so the engine
-  module is never evaluated. esbuild CJS bundles inline a dynamically imported
-  module as a lazily-evaluated wrapper, so the engine code is still shipped in a
-  deployed bundle, but its module body does not run. `stub-loading.test.ts`
-  checks the static import graph of the compiled output.
+  module has loaded. The engine may still be shipped in a bundle (esbuild CJS
+  bundles inline a dynamically imported module as a lazily-evaluated wrapper),
+  but is not evaluated unless a stub route is called in a sandbox deployment.
+  Outside a sandbox the routes are not mounted. `stub-loading.test.ts` checks
+  the static import graph of the compiled output (every import kind except
+  `dynamic-import` counts as static).
 
 `getDeploymentType()` reports the same value at synth and runtime, so an app
 that branches on it (`'production'` → real providers, otherwise `stubIdp()`)
