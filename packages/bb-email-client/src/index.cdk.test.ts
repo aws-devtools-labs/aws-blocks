@@ -72,6 +72,14 @@ test('CDK: the SES grant stays scoped to this account', () => {
 	assert.ok(!resources.includes('"*"'), 'no wildcard resource');
 });
 
+test('CDK: the SES grant is scoped to the stack region and partition, not every region', () => {
+	const resources = JSON.stringify(sesStatements()[0].Resource);
+	assert.ok(!resources.includes('arn:aws:ses:*:'), `no any-region wildcard: ${resources}`);
+	assert.ok(resources.includes(':ses:us-east-1:123456789012:identity/*'), resources);
+	assert.ok(resources.includes(':ses:us-east-1:123456789012:configuration-set/*'), resources);
+	assert.ok(resources.includes('AWS::Partition'), `partition is not hard-coded: ${resources}`);
+});
+
 test('CDK: an invalid maxBatchSize fails at synth', () => {
 	assert.throws(() => sesStatements({ maxBatchSize: 0 }), /maxBatchSize/);
 });

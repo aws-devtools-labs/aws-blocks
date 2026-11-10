@@ -35,7 +35,9 @@ export class EmailClient extends BuildingBlockScope {
 		//   3. Include a link to the SES identity setup guide in the warning message
 
 		// Grant the Lambda handler permission to send emails
-		// Scoped to this account's SES identities rather than '*'
+		// Scoped to this account's SES identities rather than '*', in this stack's
+		// region and partition: the runtime SES client uses the Lambda's own region,
+		// so no other region is ever called.
 		// Only the two SESv2 actions the runtime calls: send() uses SendEmail and
 		// sendBatch() uses SendBulkEmail with an inline template. No raw-MIME or
 		// stored-template sends are made, so those actions are not granted.
@@ -46,8 +48,8 @@ export class EmailClient extends BuildingBlockScope {
 				'ses:SendBulkEmail',
 			],
 			resources: [
-				`arn:aws:ses:*:${Stack.of(this).account}:identity/*`,
-				`arn:aws:ses:*:${Stack.of(this).account}:configuration-set/*`,
+				Stack.of(this).formatArn({ service: 'ses', resource: 'identity', resourceName: '*' }),
+				Stack.of(this).formatArn({ service: 'ses', resource: 'configuration-set', resourceName: '*' }),
 			],
 		}));
 	}
