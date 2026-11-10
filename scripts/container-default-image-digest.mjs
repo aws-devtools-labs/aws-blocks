@@ -16,8 +16,10 @@
 // Run: node scripts/container-default-image-digest.mjs
 // Exit code: 0 when the pin is valid and matches the tag's current digest,
 // 1 when it is valid but behind the tag, 2 on a registry or network error,
-// 3 when the pin is invalid (not a digest reference, doesn't resolve, isn't an
-// image index, or doesn't list linux/arm64).
+// 3 when the pin is invalid (the pin file can't be read, isn't a digest
+// reference, doesn't resolve, isn't an image index, or doesn't list linux/arm64).
+// Any failure maps to 2 or 3, so 1 always means "behind"; the workflow treats any
+// other code (a crash, an abort) as a failure too.
 //
 // Uses ECR Public's anonymous pull token and the OCI distribution API; no
 // Docker, crane or AWS credentials needed.
@@ -69,14 +71,14 @@ export function assertListsLinuxArm64(index) {
 	}
 }
 
-async function pullToken() {
+async function pullToken(fetch) {
 	const res = await fetch(`https://${REGISTRY}/token/?scope=repository:${REPOSITORY}:pull`);
 	if (!res.ok) throw new Error(`token request failed: HTTP ${res.status}`);
 	const { token } = await res.json();
 	return token;
 }
 
-function manifest(token, reference, method) {
+function manifest(fetch, token, reference, method) {
 	return fetch(`https://${REGISTRY}/v2/${REPOSITORY}/manifests/${reference}`, {
 		method,
 		headers: { Authorization: `Bearer ${token}`, Accept: ACCEPT },
@@ -84,8 +86,8 @@ function manifest(token, reference, method) {
 }
 
 /** The tag's current index digest. */
-async function currentDigest(token) {
-	const res = await manifest(token, TAG, 'HEAD');
+async function currentDigest(fetch, token) {
+	const res = await manifest(fetch, token, TAG, 'HEAD');
 	if (!res.ok) throw new Error(`manifest request for ${TAG} failed: HTTP ${res.status}`);
 	// The digest header is only the multi-arch index digest when the registry served an index.
 	assertIndexMediaType(res.headers.get('content-type'), `${TAG}'s manifest`);
@@ -95,51 +97,72 @@ async function currentDigest(token) {
 }
 
 /** Throws InvalidPinError unless the pinned digest resolves to an image index that lists linux/arm64. */
-async function verifyPinned(token, digest) {
-	const res = await manifest(token, digest, 'GET');
+async function verifyPinned(fetch, token, digest) {
+	const res = await manifest(fetch, token, digest, 'GET');
 	// ECR Public answers an unknown digest with 404; anything else non-OK is a registry error.
 	if (res.status === 404) throw new InvalidPinError(`the pinned digest ${digest} doesn't resolve (HTTP 404)`);
 	if (!res.ok) throw new Error(`manifest request for ${digest} failed: HTTP ${res.status}`);
+	// Parsed outside the try below: a truncated or non-JSON body is a registry error (exit 2), not an invalid pin.
+	const body = await res.json();
 	try {
 		assertIndexMediaType(res.headers.get('content-type'), 'the pinned digest');
-		assertListsLinuxArm64(await res.json());
+		assertListsLinuxArm64(body);
 	} catch (err) {
 		throw new InvalidPinError(err instanceof Error ? err.message : String(err));
 	}
 }
 
-async function main() {
-	const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-	const pinned = readPinned(readFileSync(join(root, 'packages/bb-container-compute/src/default-image.ts'), 'utf8'));
-	console.log(`pinned:  ${pinned ?? '(not found)'}`);
+const PIN_FILE = join(
+	dirname(fileURLToPath(import.meta.url)),
+	'..',
+	'packages/bb-container-compute/src/default-image.ts',
+);
 
-	let latest;
+/**
+ * Runs the check and returns the exit code (see the header), instead of exiting.
+ * Every failure, including a missing pin file, maps to 2 or 3, so 1 always means "behind".
+ * The dependencies are injectable for the tests.
+ */
+export async function run({
+	fetch = globalThis.fetch,
+	readFile = (path) => readFileSync(path, 'utf8'),
+	log = console.log,
+	error = console.error,
+} = {}) {
+	let pinned;
+	try {
+		pinned = readPinned(readFile(PIN_FILE));
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		error(`The pinned default image is invalid: can't read ${PIN_FILE}: ${message}`);
+		return 3;
+	}
+	log(`pinned:  ${pinned ?? '(not found)'}`);
 	try {
 		const digest = pinnedDigest(pinned);
-		const token = await pullToken();
-		await verifyPinned(token, digest);
-		console.log('The pinned digest resolves to an image index that lists linux/arm64.');
+		const token = await pullToken(fetch);
+		await verifyPinned(fetch, token, digest);
+		log('The pinned digest resolves to an image index that lists linux/arm64.');
 		// Digest-only reference (`repository@sha256:…`), the form ECS documents for `image`.
-		latest = `${REGISTRY}/${REPOSITORY}@${await currentDigest(token)}`;
+		const latest = `${REGISTRY}/${REPOSITORY}@${await currentDigest(fetch, token)}`;
+		log(`current: ${latest} (${TAG})`);
+		if (pinned === latest) {
+			log('The pinned default image is current.');
+			return 0;
+		}
+		log('The pinned default image is behind the tag. Update DEFAULT_CONTAINER_IMAGE to the current reference.');
+		return 1;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		if (err instanceof InvalidPinError) {
-			console.error(`The pinned default image is invalid: ${message}`);
-			process.exit(3);
+			error(`The pinned default image is invalid: ${message}`);
+			return 3;
 		}
-		console.error(`Could not check ${REGISTRY}/${REPOSITORY}: ${message}`);
-		process.exit(2);
-	}
-
-	console.log(`current: ${latest} (${TAG})`);
-	if (pinned === latest) {
-		console.log('The pinned default image is current.');
-	} else {
-		console.log('The pinned default image is behind the tag. Update DEFAULT_CONTAINER_IMAGE to the current reference.');
-		process.exit(1);
+		error(`Could not check ${REGISTRY}/${REPOSITORY}: ${message}`);
+		return 2;
 	}
 }
 
 // Run only when executed directly, not when imported by the tests. Compare real
 // paths: import.meta.url is resolved through symlinks, process.argv[1] isn't.
-if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) await main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1])) process.exitCode = await run();
