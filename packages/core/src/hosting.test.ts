@@ -1430,7 +1430,7 @@ describe('Hosting', () => {
   // ── Issue #728: SSR cache policy honors origin Cache-Control ──
 
   describe('SSR cache policy (issue #728)', () => {
-    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=31536000 for compute behaviors', () => {
+    it('uses a cache policy with minTTL=0, defaultTTL=0, maxTTL=86400 for compute behaviors', () => {
       createNextjsBuildOutput(tmpDir);
 
       const app = new App();
@@ -1445,13 +1445,13 @@ describe('Hosting', () => {
       const template = Template.fromStack(stack);
 
       // The L3 construct should create an SsrCachePolicy with these values.
-      // maxTtl is 1 year (31536000s): it clamps wild origin Cache-Control
-      // values to at most a year.
+      // maxTtl is 1 day (86400s): it clamps origin Cache-Control values
+      // (e.g. `s-maxage=31536000`) to at most a day at the edge.
       template.hasResourceProperties('AWS::CloudFront::CachePolicy', {
         CachePolicyConfig: Match.objectLike({
           MinTTL: 0,
           DefaultTTL: 0,
-          MaxTTL: 31536000,
+          MaxTTL: 86400,
         }),
       });
     });
