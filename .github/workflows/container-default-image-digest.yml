@@ -19,17 +19,22 @@ on:
       - scripts/container-default-image-digest.test.mjs
       - .github/workflows/container-default-image-digest.yml
 
+# Only the tracking-issue job, which never runs on pull requests, can write issues.
 permissions:
   contents: read
-  issues: write
 
+# One group per pull request (or ref), so a pull-request run never cancels another
+# PR's run or the queued scheduled run. A new push supersedes its PR's older run.
 concurrency:
-  group: container-default-image-digest
-  cancel-in-progress: false
+  group: container-default-image-digest-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    outputs:
+      behind: ${{ steps.digest.outputs.behind }}
+      report: ${{ steps.digest.outputs.report }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -37,12 +42,13 @@ jobs:
             scripts/container-default-image-digest.mjs
             scripts/container-default-image-digest.test.mjs
             packages/bb-container-compute/src/default-image.ts
+            .nvmrc
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version-file: '.nvmrc'
 
       - name: Test the script's checks
         run: node --test scripts/container-default-image-digest.test.mjs
@@ -50,31 +56,56 @@ jobs:
       - name: Verify the pin and compare it with the tag's current digest
         id: digest
         # Exit 0 = current, 1 = behind, 2 = registry/network error, 3 = invalid pin.
-        # 2 and 3 fail the job; 1 only opens the tracking issue on the schedule.
+        # Only 0 and 1 pass; 1 opens the tracking issue on the schedule. Any other
+        # code (2, 3, or a crash or kill) fails the job.
         run: |
           set +e
           node scripts/container-default-image-digest.mjs > digest.txt 2>&1
           code=$?
           set -e
           cat digest.txt
-          if [ "$code" = 2 ] || [ "$code" = 3 ]; then exit 1; fi
-          echo "behind=$([ "$code" = 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          case "$code" in
+            0) behind=false ;;
+            1) behind=true ;;
+            *) echo "::error::the digest check exited $code"; exit 1 ;;
+          esac
+          {
+            echo "behind=$behind"
+            echo 'report<<DIGEST_REPORT_EOF'
+            cat digest.txt
+            echo 'DIGEST_REPORT_EOF'
+          } >> "$GITHUB_OUTPUT"
 
+  tracking-issue:
+    needs: check
+    if: github.event_name != 'pull_request' && needs.check.outputs.behind == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
       - name: Open or update the tracking issue
-        if: steps.digest.outputs.behind == 'true' && github.event_name != 'pull_request'
         env:
+          REPORT: ${{ needs.check.outputs.report }}
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           title='ContainerCompute default image digest is behind node:24-slim'
-          body="$(printf 'The pinned default image in `packages/bb-container-compute/src/default-image.ts` is behind the `node:24-slim` tag on ECR Public:\n\n```\n%s\n```\n\nTo bump: replace the digest in `DEFAULT_CONTAINER_IMAGE` with the `current` reference above, run the `@aws-blocks/bb-container-compute` tests, and add a changeset. Found by the scheduled `Container default image digest` workflow.' "$(cat digest.txt)")"
+          body="$(printf 'The pinned default image in `packages/bb-container-compute/src/default-image.ts` is behind the `node:24-slim` tag on ECR Public:\n\n```\n%s\n```\n\nTo bump: replace the digest in `DEFAULT_CONTAINER_IMAGE` with the `current` reference above, run the `@aws-blocks/bb-container-compute` tests, and add a changeset. Found by the scheduled `Container default image digest` workflow.' "$REPORT")"
           # Dedup on a dedicated label, not a title search: issue search is
           # full-text and tokenizes `node:24-slim`, so it can miss the open issue.
           label='container-default-image-digest'
           gh label create "$label" --force --color ededed --description 'Scheduled check: the ContainerCompute default image pin is behind node:24-slim'
           existing="$(gh issue list --state open --label "$label" --limit 1 --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
+            # Skip when the latest post already reports this upstream digest, so a
+            # pin that stays behind the same digest doesn't get a comment every week.
+            current="$(printf '%s\n' "$REPORT" | grep '^current:')"
+            latest="$(gh issue view "$existing" --json body,comments --jq '([.body] + [.comments[].body]) | last')"
+            if printf '%s\n' "$latest" | grep -qxF -- "$current"; then
+              echo "#$existing already reports $current"
+            else
+              gh issue comment "$existing" --body "$body"
+            fi
           else
             gh issue create --title "$title" --body "$body" --label "$label"
           fi
