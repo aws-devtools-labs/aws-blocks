@@ -44,6 +44,10 @@ test('resolveKmsEncryption: an unrecognized value fails the synth with the block
 				assert.match(err.message, /Unrecognized encryption/);
 				assert.match(err.message, /'aws-managed', 'customer-managed', or Thing\.fromKmsKey\(arn\)/);
 				assert.match(err.message, /@aws-blocks\/bb-test/);
+				// The bad value is named verbatim: strings as-is, objects as JSON (never '[object Object]').
+				const rendered = typeof option === 'string' ? option : JSON.stringify(option);
+				assert.ok(err.message.includes(`Unrecognized encryption '${rendered}'`), err.message);
+				assert.ok(!err.message.includes('[object Object]'), err.message);
 				return true;
 			},
 		);

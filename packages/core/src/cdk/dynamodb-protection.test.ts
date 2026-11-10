@@ -75,7 +75,7 @@ describe('resolveDynamoDbProtection — encryption', () => {
 	test('a non-branded object fails the synth (isKmsKeyRef discriminant rejects it)', () => {
 		assert.throws(
 			() => resolve({ encryption: { keyArn: 'x' } as unknown as ExternalKmsKeyRef }),
-			/Unrecognized encryption/,
+			/Unrecognized encryption '\{"keyArn":"x"\}'/,
 		);
 	});
 });
