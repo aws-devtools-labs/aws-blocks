@@ -289,7 +289,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Two cases publish no chunk and are only logged (and persisted): a turn whose channel can't
 	 * be scoped to its user (stream()/resume() reject that before dispatching; the bare
 	 * caller-chosen channelId may be another user's channel), and a turn whose error chunk
-	 * itself fails to publish (e.g. a channel path over Realtime's size limit).
+	 * itself fails to publish (e.g. a channel path over Realtime's size limit). A turn without a
+	 * `userId` on an `inferenceOnly` agent with `sessionScope: 'user'` falls in the first case:
+	 * it is refused and logged, never run in a shared `'anonymous'` scope.
 	 *
 	 * The `error` chunk and the persisted `metadata.error` are client-visible, so they carry the
 	 * error's message only when it is a branded Building Block error (`blocksError()` /
@@ -301,11 +303,15 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * @param payload - the turn to run (see {@link AgentTurnPayload}).
 	 * @internal Invoked by the compute layer (agentcore-entry / dispatchTurn), not customer API.
 	 */
-	async invokeTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+	async invokeTurn(payload: Omit<AgentTurnPayload<TContext>, 'userId'> & { userId?: string }): Promise<void> {
 		let channel: string | undefined;
+		// A request that reaches the runtime without a userId: refused for `sessionScope: 'user'`
+		// (as stream()/resume() refuse it), since 'anonymous' would put every such turn in one scope.
+		const userId = payload.userId ?? 'anonymous';
 		try {
-			channel = this.chunksChannel(payload.channelId, payload.userId);
-			await this.runAgent(payload.message, payload.conversationId, channel, payload.userId, payload.interruptResponses, payload.context);
+			this.assertUserIdForUserScope(payload.userId, 'invokeTurn');
+			channel = this.chunksChannel(payload.channelId, userId);
+			await this.runAgent(payload.message, payload.conversationId, channel, userId, payload.interruptResponses, payload.context);
 		} catch (err) {
 			const errorMessage = err instanceof Error ? err.message : String(err);
 			// Same rule as core's RPC serializer: only a branded error's message is client-safe.
@@ -334,7 +340,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			// Best-effort: persist error to conversation history (don't let DB failure block error chunk)
 			try {
 				if (payload.conversationId && this.messages) {
-					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId: payload.userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
+					await this.messages.put({ conversationId: payload.conversationId, messageId: ulid(), role: 'assistant' as const, content: '', contentType: 'text' as const, userId, createdAt: Date.now(), metadata: JSON.stringify({ error: clientMessage, ...(errorName && { errorName }) }) });
 				}
 			} catch (persistErr) {
 				this.log.error('Failed to persist error to history', { error: persistErr });
@@ -910,8 +916,10 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * Throws InvalidUsage when an `inferenceOnly` agent with `sessionScope: 'user'` is called
 	 * without a userId: the default 'anonymous' would put every such caller in one shared scope.
 	 */
-	private assertUserIdForUserScope(userId: string | undefined, method: string): void {
-		if (this.scopesSessionsToUser && !userId) {
+	private assertUserIdForUserScope(userId: unknown, method: string): void {
+		// Same test as requireUserId: an untyped RPC caller's `123` would otherwise get the
+		// channel of '123' but the session hash of the number, a different session.
+		if (this.scopesSessionsToUser && (typeof userId !== 'string' || !userId)) {
 			throw blocksAgentError(AgentErrors.InvalidUsage, `${method}() requires options.userId when sessionScope is 'user'. Take it from the authenticated session.`);
 		}
 	}
