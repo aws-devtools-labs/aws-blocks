@@ -581,10 +581,6 @@ describe('Supabase Auth detection', () => {
 // ── Connection string validation ───────────────────────────────────────
 
 describe('connection string URL validation', () => {
-	test('valid connection string parses without error', () => {
-		assert.doesNotThrow(() => new URL('postgresql://postgres.abc:mypass@db.example.com:5432/postgres'));
-	});
-
 	test('unencoded # in password fails URL parsing', () => {
 		assert.throws(() => new URL('postgresql://postgres.abc:pass#word@db.example.com:5432/postgres'));
 	});

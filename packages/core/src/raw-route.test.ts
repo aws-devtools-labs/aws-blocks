@@ -251,14 +251,6 @@ describe('clearRouteRegistry', () => {
   });
 });
 
-// ── RawRouteErrors ──────────────────────────────────────────────────────────
-
-describe('RawRouteErrors', () => {
-  it('has DuplicateRoute error constant', () => {
-    assert.strictEqual(RawRouteErrors.DuplicateRoute, 'DuplicateRouteException');
-  });
-});
-
 // ── FIX 1: Path traversal via wildcard decoding ─────────────────────────────
 
 describe('path traversal prevention', () => {

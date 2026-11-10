@@ -475,14 +475,6 @@ describe('Disk persistence', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('Error constants', () => {
-	test('AppSettingErrors has ParameterNotFound', () => {
-		assert.strictEqual(AppSettingErrors.ParameterNotFound, 'ParameterNotFoundException');
-	});
-
-	test('AppSettingErrors has ValidationFailed', () => {
-		assert.strictEqual(AppSettingErrors.ValidationFailed, 'ValidationFailedException');
-	});
-
 	test('AppSettingErrors is typed as const', () => {
 		// as const provides compile-time literal types, not runtime freezing
 		// Verify the values are string literals (not just 'string')

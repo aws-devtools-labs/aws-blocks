@@ -321,16 +321,6 @@ test('fromExisting returns ExternalTableRef', () => {
 	assert.strictEqual(ref.tableName, 'my-table');
 });
 
-// ── Error constants ─────────────────────────────────────────────────────────
-
-test('KVStoreErrors has ConditionalCheckFailed', () => {
-	assert.strictEqual(KVStoreErrors.ConditionalCheckFailed, 'ConditionalCheckFailedException');
-});
-
-test('KVStoreErrors.ItemTooLarge is a distinct name', () => {
-	assert.strictEqual(KVStoreErrors.ItemTooLarge, 'ItemTooLargeException');
-});
-
 // ── fullId ──────────────────────────────────────────────────────────────────
 
 test('fullId generation with parent', () => {

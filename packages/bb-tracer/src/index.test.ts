@@ -84,13 +84,6 @@ test('segment.addMetadata stores metadata', async () => {
 	assert.deepStrictEqual(traces[0].metadata.request, { url: '/api/test', method: 'GET' });
 });
 
-test('tracer.addAnnotation stores root annotation', async () => {
-	const tracer = new Tracer({ id: 'root' } as any, 'test');
-	tracer.addAnnotation('endpoint', '/api/users');
-	// Root annotations are stored in memory — verify via getTraceId existing
-	assert.ok(true);
-});
-
 // ── Error handling ──────────────────────────────────────────────────────────
 
 test('segment.addError records error without throwing', async () => {

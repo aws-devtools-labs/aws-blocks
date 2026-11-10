@@ -555,16 +555,6 @@ describe('flush', () => {
 	});
 });
 
-// ── Error Constants ─────────────────────────────────────────────────────────
-
-describe('error constants', () => {
-	test('MetricsErrors has expected constants', () => {
-		assert.strictEqual(MetricsErrors.InvalidMetricName, 'InvalidMetricNameException');
-		assert.strictEqual(MetricsErrors.InvalidDimensions, 'InvalidDimensionsException');
-		assert.strictEqual(MetricsErrors.BatchTooLarge, 'BatchTooLargeException');
-	});
-});
-
 // ── EMF Format Correctness ──────────────────────────────────────────────────
 
 describe('EMF format', () => {

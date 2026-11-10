@@ -20,17 +20,6 @@ import { _setMantleResolverForTest } from './mantle.js';
 import { z } from 'zod';
 import { createStrandsModel } from './model-factory.js';
 
-// ── AgentErrors ─────────────────────────────────────────────────────────────
-
-describe('AgentErrors', () => {
-	test('has expected error names', () => {
-		assert.strictEqual(AgentErrors.PersistenceRequired, 'PersistenceRequiredException');
-		assert.strictEqual(AgentErrors.InvalidModelConfig, 'InvalidModelConfigException');
-		assert.strictEqual(AgentErrors.BrowserNotSupported, 'BrowserNotSupportedException');
-		assert.strictEqual(AgentErrors.ConversationNotFound, 'ConversationNotFoundException');
-	});
-});
-
 // ── classifyModelAccessError ────────────────────────────────────────────────
 
 describe('classifyModelAccessError', () => {

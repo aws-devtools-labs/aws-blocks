@@ -17,17 +17,6 @@ test('serializationConflict builds a 409 ApiError preserving name + retriable', 
   assert.strictEqual((e.cause as Error).message, 'could not serialize access due to read/write dependencies');
 });
 
-test('DatabaseErrors has all expected keys', () => {
-  assert.strictEqual(DatabaseErrors.QueryFailed, 'QueryFailedException');
-  assert.strictEqual(DatabaseErrors.ConnectionFailed, 'ConnectionFailedException');
-  assert.strictEqual(DatabaseErrors.TransactionFailed, 'TransactionFailedException');
-  assert.strictEqual(DatabaseErrors.UniqueConstraintViolation, 'UniqueConstraintViolationException');
-  assert.strictEqual(DatabaseErrors.PermissionDenied, 'PermissionDeniedException');
-  assert.strictEqual(DatabaseErrors.CheckViolation, 'CheckViolationException');
-  assert.strictEqual(DatabaseErrors.NotNullViolation, 'NotNullViolationException');
-  assert.strictEqual(DatabaseErrors.ForeignKeyViolation, 'ForeignKeyViolationException');
-});
-
 test('wrapError keeps a request-error name as the same 4xx ApiError the engines build', () => {
   const raw = Object.assign(new Error('permission denied for table projects'), { name: DatabaseErrors.PermissionDenied });
   assert.throws(

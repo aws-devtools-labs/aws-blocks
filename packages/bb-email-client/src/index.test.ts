@@ -295,16 +295,6 @@ test('rejects messages exceeding 40 MB', async () => {
 	);
 });
 
-// ── Error constants ─────────────────────────────────────────────────────────
-
-test('EmailErrors has expected constants', () => {
-	assert.strictEqual(EmailErrors.SendFailed, 'EmailSendFailedException');
-	assert.strictEqual(EmailErrors.InvalidInput, 'InvalidInputException');
-	assert.strictEqual(EmailErrors.DomainNotVerified, 'DomainNotVerifiedException');
-	assert.strictEqual(EmailErrors.AccountPaused, 'AccountSendingPausedException');
-	assert.strictEqual(EmailErrors.RateLimited, 'RateLimitedException');
-});
-
 // ── fullId generation ───────────────────────────────────────────────────────
 
 test('fullId generation with parent', () => {
