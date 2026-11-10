@@ -88,6 +88,12 @@ const NON_TRANSACTIONAL_FORMS: ReadonlyArray<{ test: RegExp; message: string }> 
 		message:
 			'This statement cannot run inside a transaction block, and each migration file on this cluster is one transaction. It is not schema: run it outside the deploy.',
 	},
+	{
+		// An embedded COMMIT would end the runner's transaction, and a failure after it could not be rolled back.
+		test: /^\s*(?:BEGIN|START\s+TRANSACTION|COMMIT|END|ROLLBACK|ABORT)\b/i,
+		message:
+			'Transaction control is not allowed in a migration file: each file on this cluster is already one transaction. Remove BEGIN, COMMIT, END and ROLLBACK.',
+	},
 ];
 
 function auroraIssues(sql: string): string[] {

@@ -3,7 +3,9 @@
 
 import assert from 'node:assert';
 import { describe, test } from 'node:test';
+import pg from 'pg';
 import { asyncDdlTarget } from '../dialect/async-ddl.js';
+import { PgEngine, type PgPool, type PgPoolClient } from '../engines/pg-engine.js';
 import { MIGRATION_FAILED_ERROR_NAME } from '../errors.js';
 import { RecordingEngine } from '../test-support/recording-engine.js';
 import { buildMigrationPlan, type MigrationPlan } from './plan.js';
@@ -36,8 +38,9 @@ class ScriptedEngine extends RecordingEngine {
 	private nextJob = 0;
 
 	protected override answer(sql: string, params: unknown[]): unknown[] {
-		if (/^SELECT name FROM _migrations/.test(sql)) return [...this.migrations].map((name) => ({ name }));
-		if (/^SELECT name, step, job_id, file_hash FROM _migration_progress/.test(sql)) {
+		if (/^SELECT name FROM "public"\."_migrations"/.test(sql))
+			return [...this.migrations].map((name) => ({ name }));
+		if (/^SELECT name, step, job_id, file_hash FROM "public"\."_migration_progress"/.test(sql)) {
 			return [...this.progress].map(([name, row]) => ({
 				name,
 				step: row.step,
@@ -78,14 +81,14 @@ class ScriptedEngine extends RecordingEngine {
 		}
 		const drop = /^DROP INDEX IF EXISTS "([^"]+)"\."([^"]+)"/.exec(sql);
 		if (drop) this.indexes.delete(`${drop[1]}.${drop[2]}`);
-		else if (/^INSERT INTO _migration_progress/.test(sql)) {
+		else if (/^INSERT INTO "public"\."_migration_progress"/.test(sql)) {
 			this.progress.set(String(params[0]), {
 				step: Number(params[1]),
 				jobId: text(params[2]),
 				fileHash: text(params[3]) ?? '',
 			});
-		} else if (/^INSERT INTO _migrations/.test(sql)) this.migrations.add(String(params[0]));
-		else if (/^DELETE FROM _migration_progress/.test(sql)) this.progress.delete(String(params[0]));
+		} else if (/^INSERT INTO "public"\."_migrations"/.test(sql)) this.migrations.add(String(params[0]));
+		else if (/^DELETE FROM "public"\."_migration_progress"/.test(sql)) this.progress.delete(String(params[0]));
 		else if (/^SELECT\b/i.test(sql)) throw new Error(`unscripted SQL: ${sql}`);
 		// The file's own DDL and DML, and the runner's CREATE TABLE IF NOT EXISTS, run without an answer.
 		return [];
@@ -456,6 +459,54 @@ describe('migration runner', () => {
 			log: () => {},
 		});
 		assert.ok(!dsql.statements.some((s) => /transaction_timeout/.test(s)), 'dsql batches are not bounded');
+	});
+
+	test('through the real engine, a transaction_timeout keeps its SQLSTATE on the cause and the message names the limit', async () => {
+		// pg-engine re-tags the driver error as QueryFailed and keeps the SQLSTATE on `cause`; the runner must look there.
+		const statements: string[] = [];
+		const client: PgPoolClient = {
+			async query(sql: string): Promise<pg.QueryResult> {
+				statements.push(sql);
+				if (/generate_series/.test(sql)) {
+					throw Object.assign(
+						new pg.DatabaseError('canceling transaction due to transaction timeout', 1, 'error'),
+						{
+							code: '25P04',
+						},
+					);
+				}
+				return { rows: [], rowCount: 0, command: sql, oid: 0, fields: [] };
+			},
+			release() {},
+		};
+		const pool: PgPool = {
+			connect: async () => client,
+			query: (sql: string) => client.query(sql),
+			end: async () => {},
+		};
+		const engine = new PgEngine({
+			kind: 'aurora',
+			endpoint: 'stub',
+			role: 'postgres',
+			getAuthToken: async () => '',
+			pool,
+		});
+		await assert.rejects(
+			runMigrationPlan(
+				engine,
+				buildMigrationPlan(
+					{ '001_t.sql': 'CREATE TABLE t (id INT);\nINSERT INTO t SELECT generate_series(1, 10);' },
+					'aurora',
+				),
+				{ schemaName: 'public', boundToInvocation: true, log: () => {} },
+			),
+			{
+				name: MIGRATION_FAILED_ERROR_NAME,
+				message: /longer than the migration function's invocation allows[\s\S]*Split the file/,
+			},
+		);
+		assert.ok(statements.includes('SET LOCAL transaction_timeout = 540000'));
+		assert.ok(statements.includes('ROLLBACK'));
 	});
 
 	test('any other failure in an aurora file says the file runs again from the start, not that it resumes', async () => {

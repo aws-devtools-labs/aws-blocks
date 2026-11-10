@@ -271,9 +271,9 @@ try {
 
 `npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
 
-A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production. An `aurora` cluster is PostgreSQL on both sides, so only the privilege rule applies locally: the deployed app role can read and write rows, not create tables or `TRUNCATE` them, and the mock refuses the same statements. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them.
+A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production. An `aurora` cluster is PostgreSQL on both sides, so only the privilege rule applies locally: the deployed app role can read and write rows, not create tables or `TRUNCATE` them, and the mock refuses the same statements. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them. Locally, statements run as PGlite's superuser, so Row Level Security policies are not enforced under `npm run dev`; on AWS the app connects as its own role and they are.
 
-A connection to an `aurora` cluster is released ten seconds after its last statement, so a cluster at `minCapacity: 0` can pause between requests (an open connection keeps it running); the next request reconnects.
+A connection to an `aurora` cluster is closed ten seconds after its last statement while the function is running, so a cluster at `minCapacity: 0` can pause between requests (an open connection keeps it running); the next request reconnects. A frozen Lambda execution environment keeps its socket until it is thawed or reclaimed, so the pause can come later than five minutes after the last request.
 
 Your DSQL migration files run unchanged. `ASYNC` index builds and constraint validations complete at once, and a `sys.wait_for_job(…)` copied from the AWS examples returns immediately.
 

@@ -53,19 +53,31 @@ interface RunPlanResult {
 	waitingOn?: PendingJob;
 }
 
+/** The two bookkeeping tables, schema-qualified: a file that changes `search_path` must not redirect the ledger. */
+interface Ledger {
+	migrations: string;
+	progress: string;
+}
+
+const ledgerTables = (schemaName: string): Ledger => ({
+	migrations: `${quoteIdent(schemaName)}.${quoteIdent('_migrations')}`,
+	progress: `${quoteIdent(schemaName)}.${quoteIdent('_migration_progress')}`,
+});
+
 export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: string): Promise<void> {
+	const ledger = ledgerTables(schemaName);
 	if (schemaName !== DEFAULT_SCHEMA) await engine.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schemaName)}`);
 	await engine.execute(
-		'CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())',
+		`CREATE TABLE IF NOT EXISTS ${ledger.migrations} (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
 	);
 	await engine.execute(
-		'CREATE TABLE IF NOT EXISTS _migration_progress ' +
+		`CREATE TABLE IF NOT EXISTS ${ledger.progress} ` +
 			'(name TEXT PRIMARY KEY, step INTEGER NOT NULL, job_id TEXT, file_hash TEXT NOT NULL)',
 	);
 }
 
-async function appliedMigrations(engine: DatabaseEngine): Promise<Set<string>> {
-	const rows = await engine.query<{ name: string }>('SELECT name FROM _migrations ORDER BY name');
+async function appliedMigrations(engine: DatabaseEngine, ledger: Ledger): Promise<Set<string>> {
+	const rows = await engine.query<{ name: string }>(`SELECT name FROM ${ledger.migrations} ORDER BY name`);
 	return new Set(rows.map((r) => r.name));
 }
 
@@ -78,9 +90,12 @@ interface ProgressRecord {
 }
 
 /** One `_migration_progress` row per partly applied file; `fileHash` is `FilePlan.hash` of the text the steps ran from. */
-async function readProgress(engine: DatabaseEngine): Promise<Map<string, ProgressRecord & { fileHash: string }>> {
+async function readProgress(
+	engine: DatabaseEngine,
+	ledger: Ledger,
+): Promise<Map<string, ProgressRecord & { fileHash: string }>> {
 	const rows = await engine.query<{ name: string; step: number; job_id: string | null; file_hash: string }>(
-		'SELECT name, step, job_id, file_hash FROM _migration_progress',
+		`SELECT name, step, job_id, file_hash FROM ${ledger.progress}`,
 	);
 	return new Map(
 		rows.map((row) => [
@@ -98,21 +113,27 @@ async function exec(engine: DatabaseEngine, sql: string, params: unknown[], hand
 
 function recordProgress(
 	engine: DatabaseEngine,
+	ledger: Ledger,
 	file: FilePlan,
 	record: ProgressRecord,
 	handle?: TransactionHandle,
 ): Promise<void> {
 	return exec(
 		engine,
-		'INSERT INTO _migration_progress (name, step, job_id, file_hash) VALUES ($1, $2, $3, $4) ' +
+		`INSERT INTO ${ledger.progress} (name, step, job_id, file_hash) VALUES ($1, $2, $3, $4) ` +
 			'ON CONFLICT (name) DO UPDATE SET step = EXCLUDED.step, job_id = EXCLUDED.job_id, file_hash = EXCLUDED.file_hash',
 		[file.file, record.step, record.jobId ?? null, file.hash],
 		handle,
 	);
 }
 
-function deleteProgress(engine: DatabaseEngine, file: FilePlan, handle?: TransactionHandle): Promise<void> {
-	return exec(engine, 'DELETE FROM _migration_progress WHERE name = $1', [file.file], handle);
+function deleteProgress(
+	engine: DatabaseEngine,
+	ledger: Ledger,
+	file: FilePlan,
+	handle?: TransactionHandle,
+): Promise<void> {
+	return exec(engine, `DELETE FROM ${ledger.progress} WHERE name = $1`, [file.file], handle);
 }
 
 // Messages count the file's statements, which the author wrote; a wait step is the runner's own and is reported at
@@ -144,8 +165,10 @@ function failed(file: FilePlan, index: number, cause: unknown): Error {
 	const statement = step.kind === 'statement' ? step : step.statement;
 	const { k, n } = statementPosition(file, index);
 	const detail = cause instanceof Error ? cause.message : String(cause);
+	// The engine re-tags a server error and keeps the SQLSTATE on its cause.
+	const code = pgErrorCode(cause) ?? (cause instanceof Error ? pgErrorCode(cause.cause) : undefined);
 	const wayForward = isOneTransaction(file)
-		? pgErrorCode(cause) === PG_TRANSACTION_TIMEOUT
+		? code === PG_TRANSACTION_TIMEOUT
 			? `The file is one transaction and it ran longer than the migration function's invocation allows ` +
 				`(${MIGRATION_LAMBDA_TIMEOUT_MINUTES} minutes). Nothing from the file was applied. ` +
 				'Split the file into smaller files, or move a long backfill out of the migrations.'
@@ -268,9 +291,10 @@ export async function runMigrationPlan(
 	options: RunPlanOptions,
 ): Promise<RunPlanResult> {
 	const log = options.log ?? ((m: string) => console.log(m));
+	const ledger = ledgerTables(options.schemaName);
 	await ensureMigrationTables(engine, options.schemaName);
-	const applied = await appliedMigrations(engine);
-	const progress = await readProgress(engine);
+	const applied = await appliedMigrations(engine, ledger);
+	const progress = await readProgress(engine, ledger);
 	const results: string[] = [];
 
 	for (const file of plan.files) {
@@ -286,8 +310,8 @@ export async function runMigrationPlan(
 			engine,
 			file,
 			log,
-			save: (record, handle) => recordProgress(engine, file, record, handle),
-			clear: () => deleteProgress(engine, file),
+			save: (record, handle) => recordProgress(engine, ledger, file, record, handle),
+			clear: () => deleteProgress(engine, ledger, file),
 		};
 		if (startAt > 0) {
 			const { k, n } = statementPosition(file, startAt);
@@ -361,8 +385,10 @@ export async function runMigrationPlan(
 		}
 
 		await withTransaction(engine, async (record) => {
-			await engine.executeInTransaction(record, 'INSERT INTO _migrations (name) VALUES ($1)', [file.file]);
-			await deleteProgress(engine, file, record);
+			await engine.executeInTransaction(record, `INSERT INTO ${ledger.migrations} (name) VALUES ($1)`, [
+				file.file,
+			]);
+			await deleteProgress(engine, ledger, file, record);
 		});
 		results.push(file.file);
 		log(`[bb-database] Applied: ${file.file}`);

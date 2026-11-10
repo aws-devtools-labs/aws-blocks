@@ -124,7 +124,9 @@ describe('DSQL transaction handle lifecycle', () => {
 	test('a BEGIN that fails hands the client back to the pool with the error, so the pool discards it', async () => {
 		const { engine, client } = stubbedEngine();
 		client.failOn.set('BEGIN', new Error('Connection terminated unexpectedly'));
-		await assert.rejects(engine.beginTransaction(), (e: unknown) => isBlocksError(e, DatabaseErrors.QueryFailed));
+		await assert.rejects(engine.beginTransaction(), (e: unknown) =>
+			isBlocksError(e, DatabaseErrors.ConnectionFailed),
+		);
 		assert.strictEqual(client.releases.length, 1);
 		assert.ok(client.releases[0] instanceof Error);
 	});
@@ -134,7 +136,7 @@ describe('DSQL transaction handle lifecycle', () => {
 		client.failOn.set('COMMIT', new Error('Connection terminated unexpectedly'));
 		const handle = await engine.beginTransaction();
 		await assert.rejects(engine.commitTransaction(handle), (e: unknown) =>
-			isBlocksError(e, DatabaseErrors.QueryFailed),
+			isBlocksError(e, DatabaseErrors.ConnectionFailed),
 		);
 		assert.ok(client.releases[0] instanceof Error);
 		await engine.rollbackTransaction(handle);
@@ -176,6 +178,24 @@ describe('DSQL stale schema cache', () => {
 				isBlocksError(e, DatabaseErrors.SerializationFailure) && e instanceof ApiError && e.retriable,
 		);
 		assert.deepStrictEqual(client.statements, ['BEGIN', 'SELECT 1'], 'no retry on the aborted transaction');
+	});
+});
+
+describe('socket errors without a SQLSTATE', () => {
+	test('a dead idle client surfaces as a code-less error; the autocommit statement is run once more', async () => {
+		const { engine, client } = stubbedEngine();
+		client.failOn.set('SELECT 1', new Error('Connection terminated unexpectedly'));
+		assert.deepStrictEqual(await engine.query('SELECT 1'), []);
+		assert.deepStrictEqual(client.statements, ['SELECT 1', 'SELECT 1']);
+	});
+
+	test('a connect that timed out is ConnectionFailed and is not run again', async () => {
+		const { engine, client } = stubbedEngine();
+		client.failOn.set('SELECT 1', new Error('timeout exceeded when trying to connect'));
+		await assert.rejects(engine.query('SELECT 1'), (e: unknown) =>
+			isBlocksError(e, DatabaseErrors.ConnectionFailed),
+		);
+		assert.deepStrictEqual(client.statements, ['SELECT 1']);
 	});
 });
 

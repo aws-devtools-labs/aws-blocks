@@ -13,7 +13,7 @@ import {
 	searchPathFor,
 } from '../constants.js';
 import { iamAuthToken, PgEngine } from '../engines/pg-engine.js';
-import { DatabaseErrors, isSerializationConflict, pgErrorCode } from '../errors.js';
+import { DatabaseErrors, isConnectionLost, isConnectTimeout, isSerializationConflict, pgErrorCode } from '../errors.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
 import type { ClusterType } from '../types.js';
@@ -24,16 +24,16 @@ const MAX_DELAY_MS = 30000;
 
 /** @internal A lost connection, a cluster still starting, or a serialization conflict; the run resumes from its progress rows. */
 export function isRetryableMigrationError(e: unknown): boolean {
-	if (!(e instanceof Error)) return false;
-	const raw = e.cause instanceof Error ? e.cause : undefined;
 	const matches = (err: Error): boolean =>
 		err.name === DatabaseErrors.ConnectionFailed ||
 		isSerializationConflict(err) ||
-		pgErrorCode(err)?.startsWith('08') === true ||
-		err.message.includes('Connection terminated') ||
-		err.message.includes('ECONNREFUSED') ||
-		err.message.includes('ENOTFOUND');
-	return matches(e) || (raw !== undefined && matches(raw));
+		isConnectionLost(err) ||
+		isConnectTimeout(err);
+	// The runner wraps the engine's error, which wraps the driver's: walk the chain.
+	for (let err: unknown = e, depth = 0; err instanceof Error && depth < 5; err = err.cause, depth++) {
+		if (matches(err)) return true;
+	}
+	return false;
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -102,6 +102,14 @@ export async function provisionAppRole(
 		const list = views.map((v) => `${quoteIdent(schemaName)}.${quoteIdent(v.viewname)}`).join(', ');
 		await engine.execute(`GRANT SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
 	}
+	const matviews = await engine.query<{ matviewname: string }>(
+		'SELECT matviewname FROM pg_matviews WHERE schemaname = $1',
+		[schemaName],
+	);
+	if (matviews.length > 0) {
+		const list = matviews.map((v) => `${quoteIdent(schemaName)}.${quoteIdent(v.matviewname)}`).join(', ');
+		await engine.execute(`GRANT SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
+	}
 	const sequences = await engine.query<{ sequencename: string }>(
 		'SELECT sequencename FROM pg_sequences WHERE schemaname = $1',
 		[schemaName],
@@ -111,7 +119,7 @@ export async function provisionAppRole(
 		await engine.execute(`GRANT USAGE, SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
 	}
 	console.log(
-		`[bb-database] Role '${dbRoleName}' granted DML on ${tables.length} table(s), ${views.length} view(s), ${sequences.length} sequence(s) in schema '${schemaName}'`,
+		`[bb-database] Role '${dbRoleName}' granted DML on ${tables.length} table(s), ${views.length} view(s), ${matviews.length} materialized view(s), ${sequences.length} sequence(s) in schema '${schemaName}'`,
 	);
 }
 

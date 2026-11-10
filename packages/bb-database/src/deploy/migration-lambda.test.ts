@@ -10,12 +10,17 @@ import { RecordingEngine } from '../test-support/recording-engine.js';
 import { isRetryableMigrationError, provisionAppRole } from './migration-lambda.js';
 
 class GrantEngine extends RecordingEngine {
-	constructor(private readonly tables: string[] = []) {
+	constructor(
+		private readonly tables: string[] = [],
+		private readonly matviews: string[] = [],
+	) {
 		super();
 	}
 
 	protected override answer(sql: string): unknown[] {
-		return /FROM pg_tables/.test(sql) ? this.tables.map((tablename) => ({ tablename })) : [];
+		if (/FROM pg_tables/.test(sql)) return this.tables.map((tablename) => ({ tablename }));
+		if (/FROM pg_matviews/.test(sql)) return this.matviews.map((matviewname) => ({ matviewname }));
+		return [];
 	}
 }
 
@@ -37,6 +42,15 @@ describe('provisionAppRole', () => {
 		assert.ok(engine.statements.includes('GRANT USAGE ON SCHEMA "app_dbxa" TO "blocks_app_x"'));
 	});
 
+	test('a materialized view gets SELECT like a view', async () => {
+		const engine = new GrantEngine(['notes'], ['daily']);
+		await provisionAppRole(engine, 'aurora', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
+		assert.ok(
+			engine.statements.includes('GRANT SELECT ON "app_dbxa"."daily" TO "blocks_app_x"'),
+			engine.statements.join('\n'),
+		);
+	});
+
 	test('on an aurora cluster the role joins rds_iam instead of an AWS IAM GRANT', async () => {
 		const engine = new GrantEngine(['notes']);
 		await provisionAppRole(engine, 'aurora', 'blocks_app_x', 'arn:aws:iam::123:role/app', 'app_dbxa');
@@ -56,5 +70,15 @@ describe('isRetryableMigrationError', () => {
 			isRetryableMigrationError(new Error('migration failed', { cause: serializationConflict(new Error('x')) })),
 		);
 		assert.ok(!isRetryableMigrationError(new Error('syntax error at or near "CREAT"')));
+	});
+
+	test('a dead socket or a connect timeout is retried, however deeply the runner and engine wrapped it', () => {
+		const socket = new Error('Connection terminated unexpectedly');
+		const wrapped = new Error('Migration 001 failed', {
+			cause: new Error('The database query failed', { cause: socket }),
+		});
+		assert.ok(isRetryableMigrationError(wrapped));
+		assert.ok(isRetryableMigrationError(new Error('timeout exceeded when trying to connect')));
+		assert.ok(!isRetryableMigrationError(new Error('outer', { cause: new Error('relation "t" does not exist') })));
 	});
 });

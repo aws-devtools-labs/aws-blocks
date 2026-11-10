@@ -651,6 +651,23 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 		assert.strictEqual((await db.queryOne<{ c: number }>(sql`SELECT count(*)::int AS c FROM t`))?.c, 3001);
 	});
 
+	test('a pg_dump header that clears search_path does not redirect the migration ledger', async () => {
+		const { scope, shared } = auroraCluster();
+		current = new Database(scope, 'sp', {
+			cluster: shared,
+			migrationsPath: migrations({
+				'001.sql':
+					"SELECT pg_catalog.set_config('search_path', '', false);\nCREATE TABLE sp.items (id integer PRIMARY KEY);",
+			}),
+		});
+		const db = current;
+		assert.strictEqual((await db.execute(sql`INSERT INTO items VALUES (1)`)).rowCount, 1);
+		assert.deepStrictEqual(
+			(await db.query<{ name: string }>(sql`SELECT name FROM _migrations`)).map((r) => r.name),
+			['001.sql'],
+		);
+	});
+
 	test('DDL in a handler is refused, as the deployed app role has DML only; simulateConflict works', async () => {
 		const { scope, shared } = auroraCluster();
 		current = new Database(scope, 'ddl', {

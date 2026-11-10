@@ -201,6 +201,21 @@ describe('migration plan (aurora): one transaction per file', () => {
 		stops('VACUUM ANALYZE t;');
 		stops("ALTER SYSTEM SET work_mem = '64MB';");
 		stops('CREATE DATABASE other;');
+		// Transaction control: an embedded COMMIT would end the runner's transaction.
+		for (const sql of ['BEGIN;', 'START TRANSACTION;', 'COMMIT;', 'END;', 'ROLLBACK;']) {
+			assert.throws(() => lintMigrationFiles({ '005.sql': `${sql}\nCREATE TABLE t (id INT);` }, 'aurora'), {
+				name: MIGRATION_VALIDATION_ERROR_NAME,
+				message: /005\.sql: Transaction control is not allowed/,
+			});
+		}
+		// BEGIN and END inside a function body are not statements.
+		lintMigrationFiles(
+			{
+				'006.sql':
+					'CREATE FUNCTION touch() RETURNS trigger AS $$ BEGIN NEW.updated_at = now(); RETURN NEW; END $$ LANGUAGE plpgsql;\nDO $$ BEGIN PERFORM 1; END $$;',
+			},
+			'aurora',
+		);
 		// The words inside a literal or a comment are not statements.
 		lintMigrationFiles(
 			{

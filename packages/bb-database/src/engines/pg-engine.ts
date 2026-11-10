@@ -89,9 +89,13 @@ export interface PgPool extends Queryable {
 // let go seconds after its last statement; the next invocation pays the reconnect, the idle cluster pays nothing.
 const IDLE_TIMEOUT_MS: Record<ClusterType, number> = { dsql: 5 * 60 * 1000, aurora: 10 * 1000 };
 
+// Under the Lambda handler's deadline (~28 s): a paused Aurora cluster resumes in about 18 s; past this the statement
+// fails as ConnectionFailed (retriable) instead of running after the caller has already been answered.
+const CONNECT_TIMEOUT_MS = 25 * 1000;
+
 function createPool(config: PgEngineConfig): PgPool {
 	const searchPath = config.searchPath;
-	return new pg.Pool({
+	const pool = new pg.Pool({
 		host: config.endpoint,
 		port: PG_PORT,
 		user: config.role,
@@ -99,6 +103,7 @@ function createPool(config: PgEngineConfig): PgPool {
 		ssl: true,
 		max: config.poolSize ?? DEFAULT_POOL_SIZE,
 		idleTimeoutMillis: IDLE_TIMEOUT_MS[config.kind],
+		connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
 		// DSQL ends a connection after 60 minutes, so the pool retires it first; harmless on Aurora.
 		maxLifetimeSeconds: 3300,
 		password: config.getAuthToken,
@@ -106,6 +111,11 @@ function createPool(config: PgEngineConfig): PgPool {
 		// pg-pool awaits the hook: a SET that fails fails that connect, and the statement waiting on it reports it.
 		onConnect: searchPath ? (client) => client.query(`SET search_path TO ${quoteIdent(searchPath)}`) : undefined,
 	});
+	// An idle pooled client's error is re-emitted on the pool; unhandled, it would end the process.
+	pool.on('error', (e) =>
+		console.warn(`[${ENGINE}] idle connection closed`, { code: pgErrorCode(e), message: e.message }),
+	);
+	return pool;
 }
 
 const ENGINE = 'PgEngine';

@@ -136,7 +136,7 @@ export class Database extends Scope {
 					const { applied } = await runMigrationPlan(mock, plan, {
 						schemaName: this.schemaName,
 						log: (m) => this.log.info(m),
-					});
+					}).finally(() => inner.cluster.forgetSchema()); // a file may have changed the session's search_path
 					// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
 					if (applied.length > 0) {
 						console.log(
