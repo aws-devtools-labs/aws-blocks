@@ -344,12 +344,29 @@ export type HostingProps = {
      * `Cache-Control: private`. Synth fails closed if this resolves to > 0
      * and neither `cacheKeyCookies` nor `cacheKeyHeaders` is set.
      *
-     * NOTE: this fail-closed guard covers only `ssrDefaultTtl` — it cannot
+     * NOTE: this synth guard covers only `ssrDefaultTtl` — it cannot
      * detect origin-emitted caching. Routes made cacheable via an origin
      * `s-maxage`/`revalidate` header (e.g. Next `revalidate`, Nuxt/Astro
-     * defaults) with `ssrDefaultTtl` unset are NOT caught by synth, so such
-     * routes must themselves set `cacheKeyCookies`/`cacheKeyHeaders` or emit
-     * `Cache-Control: private`.
+     * defaults) are covered at runtime instead: the SSR server (any
+     * framework; a Lambda handler, or a Node.js server on the Lambda Web
+     * Adapter or a Web Function) runs behind a cache guard that sends `Cache-Control: private, no-store` when the request carries
+     * `Authorization` (unless `'authorization'` is in {@link cacheKeyHeaders})
+     * or a cookie not in the cache key (the Next.js preview cookies, the
+     * skew-protection `__dpl` cookie and {@link cacheKeyCookies}), and the
+     * response is shared-cacheable (`s-maxage`, `public`, `max-age` without
+     * `private`, a future `Expires`, or no caching headers while this TTL is
+     * positive). Where the guard cannot be installed (e.g. a Lambda Web
+     * Adapter server that is not Node.js), synth emits a
+     * `@aws-blocks/hosting:SsrCacheGuardNotInstalled` warning instead.
+     * Responses already `private`/`no-store` (or `no-cache` without
+     * `s-maxage`) are left alone. Adding the credential to
+     * `cacheKeyCookies`/`cacheKeyHeaders` puts it in the cache key and keeps
+     * such responses cacheable, keyed per credential.
+     *
+     * Any SSR response that sets cookies (`Set-Cookie`) is always sent with
+     * `Cache-Control: private, no-store`: CloudFront stores `Set-Cookie`
+     * with a cached object and replays it on every hit. Edge TTLs of SSR
+     * responses are clamped to at most 1 day.
      * @default Duration.seconds(0) — no caching unless the origin opts in.
      */
     ssrDefaultTtl?: Duration;
@@ -360,7 +377,9 @@ export type HostingProps = {
      * cached per-session rather than shared. Required (together with or instead
      * of `cacheKeyHeaders`) to safely enable `ssrDefaultTtl`. CloudFront allows
      * at most 10 cookies in the cache key (2 are reserved for Next.js preview
-     * mode).
+     * mode). A request carrying a cookie NOT listed here (or reserved) gets
+     * shared-cacheable SSR responses as `Cache-Control: private, no-store`
+     * (see {@link ssrDefaultTtl}).
      */
     cacheKeyCookies?: string[];
     /**
@@ -368,7 +387,9 @@ export type HostingProps = {
      * a name declares that the response differs by that header, so CloudFront
      * keys the SSR cache on it. `'accept-encoding'` is not allowed (handled
      * automatically). Required (together with or instead of `cacheKeyCookies`)
-     * to safely enable `ssrDefaultTtl`.
+     * to safely enable `ssrDefaultTtl`. Listing `'authorization'` keeps
+     * shared-cacheable SSR responses to requests carrying `Authorization`
+     * cacheable, keyed per credential (see {@link ssrDefaultTtl}).
      *
      * On compute deploys the configured cache-key cookies and headers are
      * stripped from static and image routes, so those assets keep a shared

@@ -210,6 +210,26 @@ export type CdnConstructProps = {
   /**
    * Default TTL for SSR/compute cache behaviors when the origin doesn't
    * set Cache-Control. Enables CDN caching of dynamic responses.
+   *
+   * ⚠️ SECURITY: enabling this makes SSR responses without an explicit
+   * `Cache-Control` header shared at the CloudFront edge. Because the SSR
+   * cache key does NOT include Authorization or session cookies by default,
+   * one cached response would answer requests regardless of their
+   * credentials. CloudFront ignores `Vary`. Before enabling, set
+   * {@link cacheKeyCookies} and/or {@link cacheKeyHeaders} to include
+   * credentials in the cache key, or ensure personalized routes emit
+   * `Cache-Control: private`. Synth fails closed if this resolves to > 0 and
+   * neither is set.
+   *
+   * At runtime, the SSR server's responses pass through the SSR cache guard:
+   * a response that sets cookies (`Set-Cookie`), and a shared-cacheable
+   * response (`s-maxage`, `public`, `max-age` without `private`, or no
+   * `Cache-Control` while this TTL is positive) to a request carrying
+   * `Authorization` or a cookie that is not in the cache key, are sent with
+   * `Cache-Control: private, no-store`. Listing the credential in
+   * {@link cacheKeyCookies}/{@link cacheKeyHeaders} keeps those responses
+   * cacheable, keyed per credential. Edge TTLs are clamped to at most 1 day.
+   * See HostingProps.cdn.ssrDefaultTtl.
    * @default Duration.seconds(0)
    */
   ssrDefaultTtl?: Duration;
@@ -888,8 +908,12 @@ export class CdnConstruct extends Construct {
     //   (preserves the safe default; SSR routes that forget to set
     //   Cache-Control still don't accidentally cache personalized
     //   responses)
-    // - maxTtl: 1 year — clamps any wild origin values (e.g. corrupted
-    //   Cache-Control: s-max-age=999999999) to at most a year.
+    // - maxTtl: 1 day — clamps any wild origin values (e.g. corrupted
+    //   Cache-Control: s-max-age=999999999, or a framework's 1-year
+    //   `s-maxage` on prerendered HTML) to at most a day, which bounds how
+    //   long any one edge entry can be served. Frameworks revalidate in the
+    //   background (stale-while-revalidate), so a shorter clamp costs an
+    //   origin request per object per day at most.
     //
     // Content negotiation is handled by enableAcceptEncodingBrotli/Gzip
     // flags — CloudFront normalizes the Accept-Encoding header into
@@ -910,7 +934,7 @@ export class CdnConstruct extends Construct {
             'SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers',
           minTtl: Duration.seconds(0),
           defaultTtl: props.ssrDefaultTtl ?? Duration.seconds(0),
-          maxTtl: Duration.days(365),
+          maxTtl: Duration.days(1),
           headerBehavior: CacheHeaderBehavior.allowList(
             'rsc',
             'next-router-prefetch',

@@ -499,7 +499,7 @@
             "OPEN_NEXT_ORIGIN": "{}"
           }
         },
-        "Handler": "index.handler",
+        "Handler": "blocks_cache_guard_handler.handler",
         "LoggingConfig": {
           "LogGroup": {
             "Ref": "HostingComputedefaultFunctionLogGroup17DE1884"
@@ -874,7 +874,7 @@
         "CachePolicyConfig": {
           "Comment": "SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers",
           "DefaultTTL": 0,
-          "MaxTTL": 31536000,
+          "MaxTTL": 86400,
           "MinTTL": 0,
           "Name": {
             "Fn::Join": [

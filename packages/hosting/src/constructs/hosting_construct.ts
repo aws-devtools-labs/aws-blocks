@@ -44,7 +44,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
-import type { DeployManifest } from '../manifest/types.js';
+import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 import {
   type EnvValue,
   type KindStoreOptions,
@@ -69,6 +69,12 @@ import {
   generateAlbEventShimCode,
   generateForwardedHostShimCode,
 } from './alb_lambda_event.js';
+import {
+  isDefaultTtlPositive,
+  type SsrCacheGuardConfig,
+  withSsrCacheGuard,
+  withSsrCacheGuardNodeOption,
+} from './ssr_cache_guard.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
@@ -889,6 +895,14 @@ export class HostingConstruct extends Construct {
     // built: a door that invokes it without streaming gets a buffered server.
     const serverResponse = serverResponseFor(props.frontDoor);
     this.serverResponse = serverResponse;
+    // The SSR cache guard (see ssr_cache_guard.ts) needs the same cache-key
+    // names the CDN's SSR cache policy keys on, and whether a response with no
+    // Cache-Control is edge-cached.
+    const ssrCacheGuardConfig: SsrCacheGuardConfig = {
+      cacheKeyCookies: f.cacheKeyCookies,
+      cacheKeyHeaders: f.cacheKeyHeaders,
+      defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
+    };
 
     for (const [name, resource] of computeEntries) {
       if (resource.type === 'edge') {
@@ -916,7 +930,7 @@ export class HostingConstruct extends Construct {
         this.warnInapplicableWebFunctionOptions(props.compute);
         const webFunction = new WebFunctionConstruct(this, `WebCompute-${name}`, {
           name,
-          computeResource: resource,
+          computeResource: this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'web-function').resource,
           timeout: computeTimeout,
           logRetention: props.compute.logRetention,
           skipRegionValidation: props.skipRegionValidation,
@@ -927,9 +941,22 @@ export class HostingConstruct extends Construct {
         continue;
       }
 
+      // The SSR cache guard goes in front of the server first, so a door shim
+      // (which converts the door's event shape) wraps the guarded handler.
+      const guarded = isSsrCompute ? this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'lambda') : undefined;
+      const ssrResource = guarded ? withDoorEventShim(guarded.resource, props.frontDoor) : resource;
+      // `compute.environment` is applied over the manifest's environment, so a
+      // NODE_OPTIONS set there must keep loading the guard.
+      const computeEnvironment =
+        guarded?.installed && ssrResource.type === 'http-server' && props.compute?.environment?.NODE_OPTIONS !== undefined
+          ? {
+              ...props.compute.environment,
+              NODE_OPTIONS: withSsrCacheGuardNodeOption(props.compute.environment.NODE_OPTIONS),
+            }
+          : props.compute?.environment;
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
-        computeResource: isSsrCompute ? withDoorEventShim(resource, props.frontDoor) : resource,
+        computeResource: ssrResource,
         memorySize: props.compute?.memorySize,
         timeout: computeTimeout,
         reservedConcurrency: props.compute?.reservedConcurrency,
@@ -941,7 +968,7 @@ export class HostingConstruct extends Construct {
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
-        environment: props.compute?.environment,
+        environment: computeEnvironment,
         ...(isSsrCompute && serverResponse === 'buffered' ? { responseMode: 'buffered' as const } : {}),
       });
 
@@ -2545,6 +2572,30 @@ export class HostingConstruct extends Construct {
     }
     for (const entry of this.computeWebFunctions) targets.push(entry);
     return targets;
+  }
+
+  /**
+   * Put the SSR cache guard in front of an SSR server (see ssr_cache_guard.ts),
+   * and warn when it cannot be installed: that server's responses are then
+   * cached exactly as its own `Cache-Control` says.
+   */
+  private withSsrCacheGuard(
+    name: string,
+    resource: ComputeResource,
+    config: SsrCacheGuardConfig,
+    host: 'lambda' | 'web-function',
+  ): { resource: ComputeResource; installed: boolean } {
+    const result = withSsrCacheGuard(resource, config, host);
+    if (result.skipped !== undefined) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:SsrCacheGuardNotInstalled',
+        `The SSR cache guard is not installed in front of compute '${name}': ${result.skipped}. ` +
+          'Its responses are cached as their Cache-Control says, so routes that set cookies or depend on ' +
+          "the request's cookies or Authorization should send `Cache-Control: private`, or list those " +
+          'credentials in cdn.cacheKeyCookies/cdn.cacheKeyHeaders.',
+      );
+    }
+    return { resource: result.resource, installed: result.resource !== resource };
   }
 
   /**

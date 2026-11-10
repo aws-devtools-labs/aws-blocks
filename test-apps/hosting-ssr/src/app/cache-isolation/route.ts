@@ -16,6 +16,10 @@ export const dynamic = 'force-dynamic';
  * app's `cdn.cacheKeyCookies` includes `bb_session`, each distinct session
  * value keys a separate cache entry, so the e2e can assert responses are
  * keyed per session.
+ *
+ * A request carrying a cookie outside the cache key (or `Authorization`) gets
+ * the same response as `Cache-Control: private, no-store` from the hosting
+ * SSR cache guard, so it is never stored under the shared key.
  */
 export async function GET(req: NextRequest) {
   const session = req.cookies.get('bb_session')?.value ?? 'anonymous';

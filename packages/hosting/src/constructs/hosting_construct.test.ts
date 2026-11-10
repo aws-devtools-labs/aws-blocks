@@ -11,6 +11,7 @@ import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
+import { SSR_CACHE_GUARD_NODE_OPTION } from './ssr_cache_guard.js';
 
 // ---- Helpers ----
 
@@ -213,6 +214,82 @@ void describe('HostingConstruct — SSR mode', () => {
           PORT: '3000',
         }),
       },
+    });
+  });
+
+  void it('keeps the SSR cache guard first in a compute.environment NODE_OPTIONS for a Web Adapter server', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    fs.writeFileSync(path.join(bundleDir, 'run.sh'), '#!/bin/sh\nexec node index.mjs\n');
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {
+          default: {
+            type: 'http-server',
+            bundle: bundleDir,
+            entrypoint: 'run.sh',
+            port: 3000,
+            placement: 'regional',
+            runtime: 'nodejs24.x',
+          },
+        },
+        staticAssets: { directory: staticDir },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'ssr-http-node-options',
+      },
+      compute: { environment: { NODE_OPTIONS: '--enable-source-maps' } },
+      skipRegionValidation: true,
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'run.sh',
+      Environment: {
+        Variables: Match.objectLike({
+          NODE_OPTIONS: `${SSR_CACHE_GUARD_NODE_OPTION} --enable-source-maps`,
+        }),
+      },
+    });
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('SsrCacheGuardNotInstalled'));
+  });
+
+  void it('warns when the SSR cache guard cannot be installed in front of the server', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    fs.writeFileSync(path.join(bundleDir, 'run.sh'), '#!/bin/sh\nexec ./bootstrap\n');
+    const stack = createStack();
+
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: {
+        version: 1,
+        compute: {
+          default: {
+            type: 'http-server',
+            bundle: bundleDir,
+            entrypoint: 'run.sh',
+            port: 3000,
+            placement: 'regional',
+            runtime: 'nodejs24.x',
+          },
+        },
+        staticAssets: { directory: staticDir },
+        routes: [{ pattern: '/*', target: 'default' }],
+        buildId: 'ssr-http-not-node',
+      },
+      compute: { environment: { NODE_OPTIONS: '--enable-source-maps' } },
+      skipRegionValidation: true,
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      '*',
+      Match.stringLikeRegexp("SSR cache guard is not installed in front of compute 'default'.*does not start a Node\\.js server"),
+    );
+    // The guard is not loaded, so NODE_OPTIONS stays as given.
+    Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+      Handler: 'run.sh',
+      Environment: { Variables: Match.objectLike({ NODE_OPTIONS: '--enable-source-maps' }) },
     });
   });
 

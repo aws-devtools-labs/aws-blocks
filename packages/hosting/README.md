@@ -1272,11 +1272,35 @@ new HostingConstruct(stack, 'Hosting', {
 });
 ```
 
-The guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
+The synth guard covers only `ssrDefaultTtl`. Routes made cacheable by the origin
 emitting `s-maxage`/`revalidate` (Next.js `revalidate`, Nuxt `routeRules`,
-Astro SSR) are not seen by synth, so those routes must set the cache-key options
-themselves or emit `Cache-Control: private`. Any route that sets cookies or
-otherwise varies per user should emit `Cache-Control: private`.
+Astro SSR) are not seen by synth; for those, the SSR server's responses pass
+through a runtime cache guard that the construct installs in front of the SSR
+server: Lambda handlers, and Node.js servers on the Lambda Web Adapter or a Web
+Function, for every framework. Where the guard cannot be installed (for example
+a Lambda Web Adapter server that is not Node.js, or a handler module missing from
+the bundle), synth emits a `@aws-blocks/hosting:SsrCacheGuardNotInstalled`
+warning and that server's responses are cached as its `Cache-Control` says. The
+guard sends `Cache-Control: private, no-store` instead of the origin's value
+when:
+
+- the response sets cookies (`Set-Cookie`), whatever else it says — CloudFront
+  stores `Set-Cookie` with a cached object and replays it on every hit; or
+- the request carries `Authorization` (unless `'authorization'` is in
+  `cacheKeyHeaders`) or a cookie whose name is not in the cache key (the Next.js
+  preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`),
+  and the response is shared-cacheable: `s-maxage`, `public`, `max-age` without
+  `private`, a future `Expires`, or no caching headers while
+  `ssrDefaultTtl > 0`.
+
+Responses that are already `private`/`no-store`, or `no-cache` without
+`s-maxage`, are left as they are. To keep a credentialed route cacheable, list
+its credential in `cacheKeyCookies`/`cacheKeyHeaders` so the cache is keyed per
+credential. Any route that otherwise varies per user should still emit
+`Cache-Control: private`.
+
+The SSR cache policy clamps edge TTLs to at most **1 day**, whatever
+`s-maxage` the origin sends.
 
 CloudFront caps the cache key at 10 cookies and 10 headers; reserved slots leave
 **8 cookies** and **5 headers** for callers. `accept-encoding` is handled
