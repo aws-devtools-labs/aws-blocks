@@ -53,9 +53,13 @@ jobs:
         run: |
           title='ContainerCompute default image digest is behind node:24-slim'
           body="$(printf 'The pinned default image in `packages/bb-container-compute/src/default-image.ts` is behind the `node:24-slim` tag on ECR Public:\n\n```\n%s\n```\n\nTo bump: replace the digest in `DEFAULT_CONTAINER_IMAGE` with the `current` reference above, run the `@aws-blocks/bb-container-compute` tests, and add a changeset. Found by the scheduled `Container default image digest` workflow.' "$(cat digest.txt)")"
-          existing="$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')"
+          # Dedup on a dedicated label, not a title search: issue search is
+          # full-text and tokenizes `node:24-slim`, so it can miss the open issue.
+          label='container-default-image-digest'
+          gh label create "$label" --force --color ededed --description 'Scheduled check: the ContainerCompute default image pin is behind node:24-slim'
+          existing="$(gh issue list --state open --label "$label" --limit 1 --json number --jq '.[0].number // empty')"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
           else
-            gh issue create --title "$title" --body "$body"
+            gh issue create --title "$title" --body "$body" --label "$label"
           fi
