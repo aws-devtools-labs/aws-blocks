@@ -103,6 +103,8 @@ await sub.established; // wait for server confirmation
 
 > **A handle also opens the channel's sub-channels by default.** The token in a handle for `tenants/acme` authorizes `tenants/acme` and every channel under it, such as `tenants/acme/billing`. If a name under the channel can belong to someone else, pass `{ scope: 'exact' }`. See [Sub-channels and access](#sub-channels-and-access).
 
+Declaring a `Realtime` block adds its client middleware to the generated client, and that middleware runs on the result of every API call in the app, not only methods that return channels. It replaces each channel descriptor, at any depth, with a live channel and copies every other object and array with the same own keys (a JSON key such as `"__proto__"` stays an ordinary key); other values are unchanged.
+
 ### Server-Side Subscribe
 
 The server can subscribe to channels too — useful for aggregation, logging, or triggering side effects:

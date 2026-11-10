@@ -435,6 +435,12 @@ function isRealtimeDescriptor(data: unknown): data is RealtimeChannelDescriptor 
  * @internal Exposed for tests. Hydrates `{ __blocks: 'realtime/channel' }`
  * descriptors into live channel clients. Registered as response middleware
  * for production use via `registerMiddleware` below.
+ *
+ * The middleware runs on the result of every API call in the app, so it
+ * walks arrays and plain objects to find nested descriptors. Every other
+ * object comes back as a plain object with the same own enumerable keys
+ * (a JSON key such as `"__proto__"` stays an ordinary key) and
+ * `Object.prototype` as its prototype; primitives are returned unchanged.
  */
 export function hydrate(data: unknown): unknown {
 	if (isRealtimeDescriptor(data)) {
