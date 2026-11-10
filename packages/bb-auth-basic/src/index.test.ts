@@ -846,13 +846,15 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 	});
 
 	test('a failure older than windowSeconds resets the running count', async () => {
-		const auth = makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 1, lockoutSeconds: 1 } });
+		// The counter row expires after max(windowSeconds, lockoutSeconds), counted in whole seconds.
+		// At 1 it could lapse at the next second boundary before this test read it back, so use 60.
+		const auth = makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 60, lockoutSeconds: 60 } });
 		await auth.signUp('frank', 'password123');
 
 		// Seed a near-threshold counter whose firstFailAt is older than the
 		// window — the next failure must start a FRESH window at count=1, not
 		// increment to the lock threshold.
-		const staleFirstFailAt = Date.now() - 5000; // older than windowSeconds=1
+		const staleFirstFailAt = Date.now() - 300_000; // older than windowSeconds=60
 		await codesStore(auth).put('lockout:frank', JSON.stringify({ count: 2, firstFailAt: staleFirstFailAt }));
 
 		await assert.rejects(
