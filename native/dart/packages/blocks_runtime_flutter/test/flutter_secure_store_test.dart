@@ -120,5 +120,20 @@ void main() {
       verifyNever(previousStorage.containsKey(key: 'k'));
       verify(mockStorage.write(key: 'k', value: 'v')).called(1);
     });
+
+    test('set writes a fresh key without deleting', () async {
+      when(
+        mockStorage.containsKey(key: 'k'),
+      ).thenAnswer((_) async => false);
+      when(
+        previousStorage.containsKey(key: 'k'),
+      ).thenAnswer((_) async => false);
+      when(mockStorage.write(key: 'k', value: 'v')).thenAnswer((_) async {});
+
+      await store.set('k', 'v');
+
+      verifyNever(mockStorage.delete(key: 'k'));
+      verify(mockStorage.write(key: 'k', value: 'v')).called(1);
+    });
   });
 }

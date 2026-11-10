@@ -2,6 +2,7 @@ package com.aws.blocks.kotlin
 
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.collections.shouldBeEmpty
+import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
@@ -205,7 +206,9 @@ class EncryptedFileKeyValueStoreTest {
                 PosixFilePermissions.fromString("rw-------")
             // Entries are written through a temporary file and renamed into place, so the
             // permissions they end up with are the temporary file's.
-            storageDir.listFiles { file -> file.name != ".key" }!!.forEach { entry ->
+            val entries = storageDir.listFiles { file -> file.name != ".key" }!!.toList()
+            entries.shouldNotBeEmpty()
+            entries.forEach { entry ->
                 Files.getPosixFilePermissions(entry.toPath()) shouldBe
                     PosixFilePermissions.fromString("rw-------")
             }

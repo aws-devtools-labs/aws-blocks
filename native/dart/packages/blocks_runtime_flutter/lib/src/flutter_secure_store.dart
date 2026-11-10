@@ -50,10 +50,14 @@ class FlutterSecureStore implements TokenStore {
   /// Where items written by an earlier version of this package can be found,
   /// or null when there is nothing to fall back to.
   ///
-  /// flutter_secure_storage includes `kSecAttrAccessible` in its Keychain
-  /// queries, so an item stored with the previous accessibility is not found
-  /// by a read or `containsKey` made with the new one. Delete is the
-  /// exception: it matches every accessibility.
+  /// flutter_secure_storage_darwin 0.4.0 through 0.4.2 include
+  /// `kSecAttrAccessible` in their Keychain queries, so an item stored with the
+  /// previous accessibility is not found by a read or `containsKey` made with
+  /// the new one (delete matches every accessibility). 0.4.3 and later fall
+  /// back across accessibility levels and migrate the item on write
+  /// themselves. The fallback read in [get] and the delete-before-write in
+  /// [set] exist for apps that resolve 0.4.0 through 0.4.2, and are harmless
+  /// no-ops on 0.4.3 and later.
   final FlutterSecureStorage? _previousStorage;
 
   /// Only the Apple options changed, so only there can an item exist under
@@ -75,6 +79,9 @@ class FlutterSecureStore implements TokenStore {
     return previous.read(key: key);
   }
 
+  /// The containsKey/delete/write sequence is not atomic: if the process dies
+  /// between the delete and the write, the value is lost and the user signs
+  /// in again. The plugin's own write has the same window.
   @override
   Future<void> set(String key, String value) async {
     final previous = _previousStorage;
