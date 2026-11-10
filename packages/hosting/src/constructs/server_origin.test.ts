@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import assert from 'node:assert';
 import { createHash } from 'node:crypto';
 import { App, Stack } from 'aws-cdk-lib';
-import { Match, Template } from 'aws-cdk-lib/assertions';
+import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { Bucket } from 'aws-cdk-lib/aws-s3';
 import { Code, Function as LambdaFunction, Runtime } from 'aws-cdk-lib/aws-lambda';
 import { RetentionDays } from 'aws-cdk-lib/aws-logs';
@@ -99,6 +99,30 @@ const originReferer = (resources: Resources, originId: string): unknown => {
 const legacySecret = (stackName: string): string =>
   createHash('sha256').update(stackName).update(`${stackName}/Cdn`).update('origin-verify-v1').digest('hex');
 
+/** Logical id of the one resource of `type` whose logical id contains `fragment`. */
+const logicalId = (resources: Resources, type: string, fragment: string): string => {
+  const ids = Object.entries(resources)
+    .filter(([id, r]) => r.Type === type && id.includes(fragment))
+    .map(([id]) => id);
+  assert.strictEqual(ids.length, 1, `one ${type} matching ${fragment} (got ${ids.join(', ')})`);
+  return ids[0];
+};
+
+/** Path parts of the resources on a REST API, e.g. `['{proxy+}', '_ipx']`. */
+const apiPathParts = (resources: Resources, apiId: string): string[] =>
+  Object.values(resources)
+    .filter((r) => r.Type === 'AWS::ApiGateway::Resource' && JSON.stringify(r.Properties?.RestApiId).includes(apiId))
+    .map((r) => String(r.Properties?.PathPart));
+
+/** The custom header names on a distribution origin. */
+const originHeaderNames = (resources: Resources, originId: string): string[] => {
+  const dist = Object.values(resources).find((r) => r.Type === 'AWS::CloudFront::Distribution');
+  const origins = (dist?.Properties?.DistributionConfig as {
+    Origins: Array<{ Id: string; OriginCustomHeaders?: Array<{ HeaderName: string }> }>;
+  } | undefined)?.Origins ?? [];
+  return origins.find((o) => o.Id === originId)?.OriginCustomHeaders?.map((h) => h.HeaderName) ?? [];
+};
+
 void describe('server origin lock-down', () => {
   void describe('origin-verify secret', () => {
     void it('is a Secrets Manager dynamic reference, not a value derived from the stack name', () => {
@@ -156,6 +180,47 @@ void describe('server origin lock-down', () => {
       assert.ok(resolved.includes(legacySecret('TestStack')));
       // The header CloudFront sends is still only the new secret.
       assert.match(JSON.stringify(originReferer(resources, ORIGIN_ID.server)), /resolve:secretsmanager/);
+    });
+
+    void it('acceptLegacyVerifyHeader adds the derived value to the SSR API only, not the new image API', () => {
+      const { stack, resources } = synth({ ipx: true, props: { serverOrigin: { acceptLegacyVerifyHeader: true } } });
+      const referers = policyReferers(resources);
+      const ssr = stack.resolve(referers.get(logicalId(resources, 'AWS::ApiGateway::RestApi', 'SsrRestApi')));
+      const image = stack.resolve(referers.get(logicalId(resources, 'AWS::ApiGateway::RestApi', 'ImageRestApi')));
+      assert.ok(Array.isArray(ssr) && ssr.length === 2 && ssr.includes(legacySecret('TestStack')));
+      // No edge on the previous distribution config targets the new image API.
+      assert.ok(!Array.isArray(image), 'the image API accepts only its own secret');
+      assert.match(JSON.stringify(image), /resolve:secretsmanager/);
+    });
+
+    void it('acceptLegacyVerifyHeader keeps the IPX routes on the SSR API, for edges still on the previous origin', () => {
+      const plain = synth({ ipx: true }).resources;
+      assert.deepStrictEqual(
+        apiPathParts(plain, logicalId(plain, 'AWS::ApiGateway::RestApi', 'SsrRestApi')).sort(),
+        ['{proxy+}'],
+        'without the flag the SSR API serves only SSR',
+      );
+      const legacy = synth({ ipx: true, props: { serverOrigin: { acceptLegacyVerifyHeader: true } } }).resources;
+      const ssrApi = logicalId(legacy, 'AWS::ApiGateway::RestApi', 'SsrRestApi');
+      assert.deepStrictEqual(apiPathParts(legacy, ssrApi).sort(), ['_ipx', '{proxy+}', '{proxy+}']);
+      // `/_ipx` and `/_ipx/{proxy+}` on the SSR API invoke the image Lambda.
+      const ipxMethods = Object.values(legacy).filter(
+        (r) =>
+          r.Type === 'AWS::ApiGateway::Method' &&
+          JSON.stringify(r.Properties?.RestApiId).includes(ssrApi) &&
+          JSON.stringify(r.Properties?.Integration).includes('ImageFn'),
+      );
+      assert.strictEqual(ipxMethods.length, 2);
+    });
+
+    void it('acceptLegacyVerifyHeader warns at synth until it is removed', () => {
+      const { stack } = synth({ props: { serverOrigin: { acceptLegacyVerifyHeader: true } } });
+      Annotations.fromStack(stack).hasWarning(
+        '*',
+        Match.stringLikeRegexp('Remove frontDoor\\.features\\.serverOrigin\\.acceptLegacyVerifyHeader'),
+      );
+      const plain = synth().stack;
+      Annotations.fromStack(plain).hasNoWarning('*', Match.stringLikeRegexp('acceptLegacyVerifyHeader'));
     });
   });
 
@@ -237,6 +302,47 @@ void describe('server origin lock-down', () => {
       for (const rule of props.Rules) assert.strictEqual(rule.VisibilityConfig.SampledRequestsEnabled, false);
     });
 
+    void it('logs only the requests the web ACL blocks or counts', () => {
+      const { template } = synth({ props: { originWafRateLimit: 500 } });
+      template.hasResourceProperties('AWS::WAFv2::LoggingConfiguration', {
+        LoggingFilter: {
+          DefaultBehavior: 'DROP',
+          Filters: [
+            {
+              Behavior: 'KEEP',
+              Requirement: 'MEETS_ANY',
+              Conditions: [{ ActionCondition: { Action: 'BLOCK' } }, { ActionCondition: { Action: 'COUNT' } }],
+            },
+          ],
+        },
+      });
+    });
+
+    void it('CloudFront sends the rate-rule marker even without a web ACL, so turning waf on later has no window', () => {
+      const { resources } = synth({ ipx: true });
+      assert.ok(originHeaderNames(resources, ORIGIN_ID.server).includes('x-blocks-front-door'));
+      assert.ok(originHeaderNames(resources, ORIGIN_ID.image).includes('x-blocks-front-door'));
+    });
+
+    void it('with acceptLegacyVerifyHeader, the SSR stage web ACL waits for the next deploy (edges on the old config send no marker)', () => {
+      const { template, resources } = synth({
+        ipx: true,
+        props: { originWafRateLimit: 500, serverOrigin: { acceptLegacyVerifyHeader: true } },
+      });
+      // Only the new image API, which no edge on the old config targets, gets it now.
+      const assoc = Object.keys(resources).filter((id) => resources[id].Type === 'AWS::WAFv2::WebACLAssociation');
+      assert.strictEqual(assoc.length, 1);
+      assert.ok(assoc[0].includes('AssociationImageRestApi'), assoc[0]);
+      template.resourceCountIs('AWS::WAFv2::WebACL', 1);
+      // Without IPX there is no stage web ACL at all for this deploy.
+      synth({ props: { originWafRateLimit: 500, serverOrigin: { acceptLegacyVerifyHeader: true } } }).template.resourceCountIs(
+        'AWS::WAFv2::WebACL',
+        0,
+      );
+      // The marker is sent in this deploy, so every edge carries it by the next.
+      assert.ok(originHeaderNames(resources, ORIGIN_ID.server).includes('x-blocks-front-door'));
+    });
+
     void it('names each stage association after its REST API, so it does not depend on which stages exist', () => {
       const withIpx = synth({ ipx: true, props: { originWafRateLimit: 500 } }).resources;
       const ids = Object.entries(withIpx)
@@ -314,7 +420,9 @@ void describe('server origin lock-down', () => {
       );
       assert.throws(
         () => hosting({ features: { serverOrigin: { verifySecretRotation: -1 } } }),
-        (e: unknown) => e instanceof HostingError && /verifySecretRotation/.test(e.message),
+        (e: unknown) =>
+          e instanceof HostingError &&
+          e.message.includes('`frontDoor.features.serverOrigin.verifySecretRotation` must be a non-negative integer'),
       );
     });
   });

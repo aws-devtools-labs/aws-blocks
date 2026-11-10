@@ -72,7 +72,7 @@ import {
 import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { KvKeys } from './kv_keys.js';
 import type { WebFunctionConstruct } from './web_function_construct.js';
-import type { HostingServerOriginConfig } from './front_door_options.js';
+import { type HostingServerOriginConfig, validateVerifySecretRotation } from './front_door_options.js';
 import {
   SERVER_ORIGIN_LOG_RETENTION,
   SERVER_ORIGIN_MARKER_HEADER,
@@ -484,26 +484,35 @@ export class CdnConstruct extends Construct {
     // template, so CDK's deployment hash redeploys the stage with it.
     const serverOriginOpts = props.serverOrigin ?? {};
     const rotation = serverOriginOpts.verifySecretRotation ?? 0;
-    if (!Number.isInteger(rotation) || rotation < 0) {
-      throw new HostingError('InvalidFrontDoorSettingError', {
-        message: `serverOriginOpts.verifySecretRotation must be a non-negative integer (got ${rotation}).`,
-        resolution: 'Use 0 (the default) and bump it by one to rotate the origin-verify secrets.',
-      });
+    validateVerifySecretRotation(rotation, 'frontDoor.features.serverOrigin');
+    // The upgrade deploy from the earlier releases' derived value
+    // (`acceptLegacyVerifyHeader`). For this one deploy the Lambda SSR REST
+    // API keeps what edges on the previous distribution config rely on: the
+    // derived value next to the new secret, and (with IPX) the image routes.
+    // Its stage web ACL waits for the next deploy, once every edge sends the
+    // marker the rate rule exempts. (A REST API new in this release, such as
+    // the IPX one, only gets requests from edges on the new config.)
+    const acceptLegacy = serverOriginOpts.acceptLegacyVerifyHeader === true;
+    if (acceptLegacy) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:AcceptLegacyVerifyHeader',
+        'Remove frontDoor.features.serverOrigin.acceptLegacyVerifyHeader after this deploy. While it is set, the ' +
+          'server origin also accepts the origin-verify value derived from the stack name and construct path, and ' +
+          'the SSR REST API stage gets no web ACL until the next deploy.',
+      );
     }
-    // The earlier releases' derived value, accepted next to the new secret for
-    // one deploy when the app asks (`acceptLegacyVerifyHeader`).
-    const legacyVerify = serverOriginOpts.acceptLegacyVerifyHeader ? [legacyOriginVerifyValue(this)] : [];
     const logRetention = serverOriginOpts.logRetention ?? SERVER_ORIGIN_LOG_RETENTION;
     // Origin custom headers CloudFront adds to every server-origin request:
-    // the secret, plus (with a stage web ACL) the marker its rate rule exempts.
+    // the secret, and the marker the stage web ACL's rate rule exempts. The
+    // marker is sent with or without a web ACL, so turning `waf` on later (or
+    // removing `acceptLegacyVerifyHeader`) attaches the ACL to a stage every
+    // edge already marks its requests for.
     const verifyHeaders = (secret: string): Record<string, string> => ({
       // CloudFront's customHeaders OVERWRITE any same-named viewer
       // header (documented), so a client sending `Referer:` cannot
       // reach the API GW with their own value here.
       Referer: secret,
-      ...(props.originWafRateLimit !== undefined
-        ? { [SERVER_ORIGIN_MARKER_HEADER]: serverOriginMarkerValue(this) }
-        : {}),
+      [SERVER_ORIGIN_MARKER_HEADER]: serverOriginMarkerValue(this),
     });
 
     // Stage access logs (opt-in) share one log group across the server-origin
@@ -523,11 +532,11 @@ export class CdnConstruct extends Construct {
     // A REGIONAL web ACL on each server-origin stage, mirroring the
     // distribution's Blocks-managed web ACL (set only when it has one).
     let originWaf: ServerOriginWaf | undefined;
-    const protectStage = (api: RestApi): void => {
+    const protectStage = (api: RestApi, deferWaf: boolean): void => {
       if (serverOriginOpts.accessLogging) {
         api.deploymentStage.node.addDependency(ensureApiGatewayAccount(Stack.of(this)));
       }
-      if (props.originWafRateLimit !== undefined) {
+      if (props.originWafRateLimit !== undefined && !deferWaf) {
         originWaf ??= new ServerOriginWaf(this, 'ServerOriginWaf', {
           rateLimit: props.originWafRateLimit,
           logRetention,
@@ -538,7 +547,7 @@ export class CdnConstruct extends Construct {
 
     // REGIONAL: CloudFront is already in front; edge-optimized would
     // double-proxy and cap streaming idle timeout at 30s.
-    const createOriginRestApi = (id: string, verifySecret: string): RestApi => {
+    const createOriginRestApi = (id: string, verifySecret: string, legacyVerify: readonly string[] = []): RestApi => {
       const api = new RestApi(this, id, {
         endpointTypes: [EndpointType.REGIONAL],
         deployOptions: { stageName: 'prod', ...accessLogOptions() },
@@ -560,10 +569,15 @@ export class CdnConstruct extends Construct {
         // Lambda is invoked.
         policy: originVerifyPolicy([verifySecret, ...legacyVerify]),
       });
-      protectStage(api);
+      // The API that still accepts the legacy value still gets requests from
+      // edges that send no marker, so its web ACL waits for the next deploy.
+      protectStage(api, legacyVerify.length > 0);
       return api;
     };
 
+    // The Lambda SSR REST API, which also carries the IPX routes during an
+    // `acceptLegacyVerifyHeader` upgrade (see the image wiring below).
+    let ssrRestApi: RestApi | undefined;
     if (ssrWebFunction && ssrComputeName) {
       // Web Function SSR: CloudFront signs every origin request with the
       // function's OAC (IamAuth endpoint); the resource policy granting this
@@ -584,7 +598,14 @@ export class CdnConstruct extends Construct {
         'The Referer header value CloudFront sends to the server (SSR) origin REST API.',
         rotation,
       ).value;
-      const restApi = createOriginRestApi('SsrRestApi', ssrVerify);
+      // Edges on the previous distribution config still send the derived
+      // value to this API, so it alone accepts it during the upgrade.
+      const restApi = createOriginRestApi(
+        'SsrRestApi',
+        ssrVerify,
+        acceptLegacy ? [legacyOriginVerifyValue(this)] : [],
+      );
+      ssrRestApi = restApi;
       const integration = new LambdaIntegration(ssrFn, {
         proxy: true,
         responseTransferMode: ResponseTransferMode.STREAM,
@@ -660,14 +681,23 @@ export class CdnConstruct extends Construct {
       const ipxIntegration = new LambdaIntegration(ipxFn, { proxy: true });
       // e.g. baseURL '/_ipx' → resource path segments ['_ipx'] + '{proxy+}'.
       const segments = ipxBaseUrl.split('/').filter(Boolean);
-      let node = ipxApi.root;
-      for (const seg of segments) {
-        node = node.getResource(seg) ?? node.addResource(seg);
-      }
-      // The IPX Lambda needs the prefix itself (it matches `/_ipx`), so wire
-      // ANY on both the prefix root and its `{proxy+}` catch-all.
-      node.addMethod('ANY', ipxIntegration);
-      node.addResource('{proxy+}').addMethod('ANY', ipxIntegration);
+      const addIpxRoutes = (api: RestApi): void => {
+        let node = api.root;
+        for (const seg of segments) {
+          node = node.getResource(seg) ?? node.addResource(seg);
+        }
+        // The IPX Lambda needs the prefix itself (it matches `/_ipx`), so wire
+        // ANY on both the prefix root and its `{proxy+}` catch-all.
+        node.addMethod('ANY', ipxIntegration);
+        node.addResource('{proxy+}').addMethod('ANY', ipxIntegration);
+      };
+      addIpxRoutes(ipxApi);
+      // Earlier releases served IPX from the SSR REST API. During the
+      // `acceptLegacyVerifyHeader` upgrade, edges still on the previous origin
+      // config send `<baseURL>/...` there, so keep those routes for this one
+      // deploy; otherwise its `{proxy+}` would hand image requests to the SSR
+      // Lambda. API Gateway matches the more specific `<baseURL>` resource first.
+      if (acceptLegacy && ssrRestApi) addIpxRoutes(ssrRestApi);
 
       // Override the image origin (was the Function URL) to the IPX API GW.
       computeOrigins.set(

@@ -471,7 +471,10 @@ CloudFront ─(OAC, SigV4)─▶ Web Function endpoint (IamAuth) ─▶ framewor
 ### The server origin's REST API (`compute.type: 'lambda'`)
 
 CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
-`execute-api` URL is public, so the API is locked to the distribution:
+`execute-api` URL is public, so the API is locked to the distribution. A Nuxt
+IPX image optimizer gets a REST API of its own with either compute type, so
+with `compute.type: 'web-function'` everything below, including the
+`serverOrigin` settings, applies to that image REST API.
 
 - **Origin-verify secret.** The REST API's resource policy denies any request
   whose `Referer` header is not a secret that CloudFront adds as an origin
@@ -492,14 +495,17 @@ CloudFront reaches the SSR Lambda through a regional API Gateway REST API. Its
   (`waf: { enabled: true }`), each server-origin stage also gets a REGIONAL web
   ACL with the same rules (AWS managed common and known-bad-inputs rule groups,
   and the per-IP rate limit at the same `rateLimit`), logged to a CloudWatch log
-  group named `aws-waf-logs-…` (the `Referer`, `Cookie` and `Authorization`
-  headers are redacted, and the ACL keeps no sampled requests, which AWS WAF
-  doesn't redact). Requests
-  from CloudFront carry an `x-blocks-front-door` marker (the stack's id) that
-  exempts them from the stage's rate rule, since they all come from edge IPs
-  and the distribution's own web ACL already rate-limits viewers. It follows
-  `waf.enabled` because each web ACL is billed per month; a `waf.webAclArn` of
-  your own adds nothing to the stage.
+  group named `aws-waf-logs-…`. The logs keep only the requests a rule blocked
+  or counted, with the `Referer`, `Cookie` and `Authorization` headers
+  redacted, and the ACL keeps no sampled requests, which AWS WAF doesn't
+  redact. Requests from CloudFront carry an `x-blocks-front-door` marker (the
+  stack's id), with or without a web ACL, that exempts them from the stage's
+  rate rule, since they all come from edge IPs and the distribution's own web
+  ACL already rate-limits viewers. It follows `waf.enabled` because each web
+  ACL costs money: a monthly charge, a charge per request it evaluates (every
+  uncached SSR request is now evaluated by two web ACLs), and the CloudWatch
+  Logs ingestion of the requests it blocks or counts. A `waf.webAclArn` of your
+  own adds nothing to the stage.
 - **Access logs (opt-in).** `serverOrigin: { accessLogging: true }` writes JSON
   access logs (`AccessLogFormat.jsonWithStandardFields()`) from each stage to a
   CloudWatch log group. REST API access logging needs the account-level API
@@ -527,8 +533,18 @@ header value from the stack name and construct path. The first deploy with the
 random secret updates the REST API policy within seconds, while the
 distribution takes minutes to carry the new header, so the server origin
 answers 403 in between. To upgrade without that window, deploy once with
-`serverOrigin: { acceptLegacyVerifyHeader: true }` (the policy then accepts
-both values), and then deploy again without it.
+`serverOrigin: { acceptLegacyVerifyHeader: true }`, and then deploy again
+without it. For that one deploy:
+
+- the SSR REST API's policy accepts both values;
+- with a Nuxt IPX optimizer, the SSR REST API keeps the image routes it served
+  in earlier releases, for the edges still sending image requests there;
+- the SSR REST API's stage gets no web ACL, because edges on the previous
+  config don't send the `x-blocks-front-door` marker yet and would hit the
+  per-IP rate limit. The ACL is attached on the next deploy.
+
+Synth warns (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`) while the option
+is set.
 
 **Rotating the secret.** Bump `serverOrigin.verifySecretRotation` (`1`, `2`, …)
 and deploy: Secrets Manager generates new values, and the REST API policies and

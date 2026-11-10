@@ -125,6 +125,12 @@ export type HostingServerOriginConfig = {
    * to the random secret without 403s while the distribution propagates.
    * Deploy once with `true`, then remove it: while it is set, anyone who can
    * derive that value can reach the server origin directly.
+   *
+   * For that deploy the SSR REST API also keeps the IPX image routes earlier
+   * releases served from it, and its stage gets no web ACL yet (edges on the
+   * previous config don't send the marker its rate rule exempts); the next
+   * deploy attaches it. Synth warns
+   * (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`) while it is set.
    * @default false
    */
   acceptLegacyVerifyHeader?: boolean;
@@ -692,6 +698,22 @@ const validateSettingKeys = (explicit: Record<string, unknown>, featuresPath: st
 };
 
 /**
+ * Check `serverOrigin.verifySecretRotation`: a non-negative integer.
+ *
+ * @param rotation the value the app set.
+ * @param prop where the app wrote the `serverOrigin` setting (e.g. `frontDoor.features.serverOrigin`).
+ * @throws HostingError('InvalidFrontDoorSettingError') naming the setting.
+ * @internal Framework-only.
+ */
+export function validateVerifySecretRotation(rotation: unknown, prop: string): void {
+  if (rotation === undefined || (typeof rotation === 'number' && Number.isInteger(rotation) && rotation >= 0)) return;
+  throw new HostingError('InvalidFrontDoorSettingError', {
+    message: `\`${prop}.verifySecretRotation\` must be a non-negative integer (got ${String(rotation)}).`,
+    resolution: 'Use 0 (the default) and bump it by one to rotate the origin-verify secrets.',
+  });
+}
+
+/**
  * The geo restriction with its type normalized to `'allowlist'` / `'denylist'`.
  *
  * @throws HostingError('InvalidFrontDoorSettingError') for any other type.
@@ -733,7 +755,7 @@ const normalizeGeo = (geo: HostingGeoRestriction, prop: string): HostingGeoRestr
  * @returns the door kind and its effective settings.
  * @throws HostingError('UnsupportedFrontDoorError') when `frontDoor` is not a known door.
  * @throws HostingError('InvalidFrontDoorOptionError') for an unknown or mistyped door option.
- * @throws HostingError('InvalidFrontDoorSettingError') for an unknown key inside a setting, or an unknown geo type.
+ * @throws HostingError('InvalidFrontDoorSettingError') for an unknown key inside a setting, an unknown geo type, or a `serverOrigin.verifySecretRotation` that is not a non-negative integer.
  * @throws HostingError('FrontDoorSettingConflictError') when a setting is set twice.
  * @throws HostingError('UnsupportedFrontDoorSettingError') when the kind doesn't implement a setting.
  * @internal Framework-only: the merge `HostingConstruct` and the `@aws-blocks/core` `Hosting` share.
@@ -789,6 +811,7 @@ export function resolveFrontDoorFeatures<TDomain>(
     throw unsupported(kind, label, featuresPath, `${propOf('domain')}.wwwRedirect`);
   }
   if (features.geoRestriction) features.geoRestriction = normalizeGeo(features.geoRestriction, propOf('geoRestriction'));
+  validateVerifySecretRotation(features.serverOrigin?.verifySecretRotation, propOf('serverOrigin'));
 
   return { kind, features };
 }

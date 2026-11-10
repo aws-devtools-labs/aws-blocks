@@ -25,8 +25,8 @@ import { WafConstruct } from './waf_construct.js';
 export const SERVER_ORIGIN_LOG_RETENTION = RetentionDays.ONE_MONTH;
 
 /**
- * Header CloudFront adds to the server-origin requests it forwards when the
- * stage has a web ACL, so the ACL's per-IP rate rule skips them (they come
+ * Header CloudFront adds to every server-origin request it forwards, so the
+ * stage web ACL's per-IP rate rule (when there is one) skips them (they come
  * from CloudFront edge IPs). Same name as `@aws-blocks/core`'s API marker.
  */
 export const SERVER_ORIGIN_MARKER_HEADER = 'x-blocks-front-door';
@@ -146,10 +146,26 @@ export const ensureApiGatewayAccount = (stack: Stack): CfnAccount => {
 export const SERVER_ORIGIN_WAF_REDACTED_HEADERS = ['referer', 'cookie', 'authorization'] as const;
 
 /**
+ * The server-origin web ACL's logging filter: keep the requests a rule
+ * blocked or counted, drop the rest.
+ */
+export const SERVER_ORIGIN_WAF_LOGGING_FILTER = {
+  DefaultBehavior: 'DROP',
+  Filters: [
+    {
+      Behavior: 'KEEP',
+      Requirement: 'MEETS_ANY',
+      Conditions: [{ ActionCondition: { Action: 'BLOCK' } }, { ActionCondition: { Action: 'COUNT' } }],
+    },
+  ],
+} as const;
+
+/**
  * A REGIONAL web ACL with the distribution's rules (AWS managed common and
  * known-bad-inputs rule groups, then the per-IP rate limit), associated with
  * each server-origin stage, with its logs in a CloudWatch log group
- * (`aws-waf-logs-…`, the prefix AWS WAF requires).
+ * (`aws-waf-logs-…`, the prefix AWS WAF requires) that keeps only the
+ * blocked and counted requests.
  */
 export class ServerOriginWaf extends Construct {
   private readonly webAclArn: string;
@@ -192,6 +208,10 @@ export class ServerOriginWaf extends Construct {
       // The origin-verify secret travels in `Referer`, and the server origin
       // gets the viewer's cookies and `Authorization`; keep them out of the logs.
       redactedFields: SERVER_ORIGIN_WAF_REDACTED_HEADERS.map((Name) => ({ singleHeader: { Name } })),
+      // Keep only the requests a rule blocked or counted: those are what this
+      // ACL's logs are for, and allowed requests (every uncached SSR request)
+      // would add a log record and ingestion cost per request.
+      loggingFilter: SERVER_ORIGIN_WAF_LOGGING_FILTER,
     });
     logging.node.addDependency(logGroup);
   }

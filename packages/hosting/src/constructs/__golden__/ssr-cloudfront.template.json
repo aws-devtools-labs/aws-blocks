@@ -1517,6 +1517,22 @@
                       ]
                     ]
                   }
+                },
+                {
+                  "HeaderName": "x-blocks-front-door",
+                  "HeaderValue": {
+                    "Fn::Select": [
+                      2,
+                      {
+                        "Fn::Split": [
+                          "/",
+                          {
+                            "Ref": "AWS::StackId"
+                          }
+                        ]
+                      }
+                    ]
+                  }
                 }
               ],
               "OriginPath": {
