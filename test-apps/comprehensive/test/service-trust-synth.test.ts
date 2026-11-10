@@ -80,8 +80,8 @@ describe('every service-principal trust in the comprehensive app is scoped to th
           for (const svc of [s.Principal?.Service ?? []].flat()) if (typeof svc === 'string') services.add(svc);
         }
         const roleIds = [id, ...(r.Metadata?.['aws:cdk:path'] ? [r.Metadata['aws:cdk:path']] : [])];
-        const findings = findUnscopedServiceTrust(trust, roleIds);
-        if (findings.length > 0) problems.push(describeUnscopedServiceTrust(`${file}: ${id}`, findings));
+        const gaps = findUnscopedServiceTrust(trust, roleIds);
+        if (gaps.length > 0) problems.push(describeUnscopedServiceTrust(`${file}: ${id}`, gaps));
       }
     }
     // The app exercises every BB, so a near-empty count means synth went wrong (e.g. mocks loaded).

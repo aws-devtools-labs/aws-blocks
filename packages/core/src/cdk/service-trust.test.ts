@@ -94,10 +94,10 @@ describe('findUnscopedServiceTrust', () => {
 	});
 
 	test('reports a service trust with aws:SourceAccount only', () => {
-		const findings = findUnscopedServiceTrust(
+		const gaps = findUnscopedServiceTrust(
 			trust('bedrock.amazonaws.com', { StringEquals: { 'aws:SourceAccount': '123456789012' } }),
 		);
-		assert.deepStrictEqual(findings, [{ principal: 'bedrock.amazonaws.com', missing: ['aws:SourceArn'] }]);
+		assert.deepStrictEqual(gaps, [{ principal: 'bedrock.amazonaws.com', missing: ['aws:SourceArn'] }]);
 	});
 
 	test('accepts both keys under any operator, matching key names case-insensitively', () => {

@@ -20,7 +20,7 @@
  * that role carries neither key).
  *
  * Two consumers use it: a repo test that synthesizes every Building Block and
- * fails on a finding (`test-apps/comprehensive/test/service-trust-synth.test.ts`),
+ * fails on any of them (`test-apps/comprehensive/test/service-trust-synth.test.ts`),
  * and {@link warnOnUnscopedServiceTrust}, which adds a synth warning in apps.
  *
  * @internal
@@ -130,11 +130,11 @@ function isExcluded(principal: string, roleIds: readonly string[]): boolean {
  * @param trustPolicy - the role's trust policy, as rendered for the template.
  * @param roleIds - the role's construct path and/or logical id, matched against
  *   an exclusion's `role` pattern.
- * @returns the findings, one per principal per statement; empty when every
+ * @returns one entry per principal per statement; empty when every
  *   service trust is scoped or excluded.
  */
 export function findUnscopedServiceTrust(trustPolicy: unknown, roleIds: readonly string[] = []): UnscopedServiceTrust[] {
-	const findings: UnscopedServiceTrust[] = [];
+	const gaps: UnscopedServiceTrust[] = [];
 	const statements = asArray((trustPolicy as { Statement?: unknown } | undefined)?.Statement);
 	for (const raw of statements) {
 		if (!raw || typeof raw !== 'object') continue;
@@ -144,15 +144,15 @@ export function findUnscopedServiceTrust(trustPolicy: unknown, roleIds: readonly
 		const missing = SERVICE_TRUST_KEYS.filter((k) => !keys.has(k.toLowerCase()));
 		if (missing.length === 0) continue;
 		for (const principal of servicePrincipals(statement)) {
-			if (!isExcluded(principal, roleIds)) findings.push({ principal, missing });
+			if (!isExcluded(principal, roleIds)) gaps.push({ principal, missing });
 		}
 	}
-	return findings;
+	return gaps;
 }
 
-/** One line per finding, for warnings and test failures. */
-export function describeUnscopedServiceTrust(role: string, findings: readonly UnscopedServiceTrust[]): string {
-	return findings.map((f) => `${role}: ${f.principal} trust lacks ${f.missing.join(' and ')}`).join('\n');
+/** One line per unscoped principal, for warnings and test failures. */
+export function describeUnscopedServiceTrust(role: string, gaps: readonly UnscopedServiceTrust[]): string {
+	return gaps.map((f) => `${role}: ${f.principal} trust lacks ${f.missing.join(' and ')}`).join('\n');
 }
 
 /**
@@ -210,14 +210,14 @@ export function warnOnUnscopedServiceTrust(root: Construct): void {
 		onSynthesize: () => {
 			for (const role of finalizeBlocksRoles(root)) {
 				const logicalId = cdk.Stack.of(role).resolve(role.logicalId) as string;
-				const findings = findUnscopedServiceTrust(renderedProperties(role).AssumeRolePolicyDocument, [
+				const gaps = findUnscopedServiceTrust(renderedProperties(role).AssumeRolePolicyDocument, [
 					role.node.path,
 					logicalId,
 				]);
-				if (findings.length === 0) continue;
+				if (gaps.length === 0) continue;
 				cdk.Annotations.of(role).addWarningV2(
 					UNSCOPED_SERVICE_TRUST_WARNING,
-					`${describeUnscopedServiceTrust(role.node.path, findings)}. ` +
+					`${describeUnscopedServiceTrust(role.node.path, gaps)}. ` +
 						'Any resource of that service, in any account, could get it to assume this role. Add ' +
 						'"StringEquals": { "aws:SourceAccount": <account> } and "ArnLike": { "aws:SourceArn": ' +
 						'<this account\'s resources of that service> } to the trust statement ' +

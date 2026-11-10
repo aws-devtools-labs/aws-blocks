@@ -2639,8 +2639,8 @@ describe('Hosting', () => {
       for (const s of stacks) {
         for (const [id, r] of Object.entries(Template.fromStack(s).findResources('AWS::IAM::Role'))) {
           checked++;
-          const findings = findUnscopedServiceTrust(r.Properties?.AssumeRolePolicyDocument, [id]);
-          if (findings.length > 0) problems.push(describeUnscopedServiceTrust(`${s.node.id}/${id}`, findings));
+          const gaps = findUnscopedServiceTrust(r.Properties?.AssumeRolePolicyDocument, [id]);
+          if (gaps.length > 0) problems.push(describeUnscopedServiceTrust(`${s.node.id}/${id}`, gaps));
         }
       }
       assert.ok(checked > 0, 'Hosting should create roles');
