@@ -846,8 +846,8 @@ describe('AuthBasic sign-in throttling / lockout', () => {
 	});
 
 	test('a failure older than windowSeconds resets the running count', async () => {
-		// The counter row expires after max(windowSeconds, lockoutSeconds), counted in whole seconds:
-		// with both at 1 it can expire at the next second boundary, before this test reads it back.
+		// The counter row expires after max(windowSeconds, lockoutSeconds), counted in whole seconds.
+		// At 1 it could lapse at the next second boundary before this test read it back, so use 60.
 		const auth = makeAuth({ lockout: { maxAttempts: 3, windowSeconds: 60, lockoutSeconds: 60 } });
 		await auth.signUp('frank', 'password123');
 
