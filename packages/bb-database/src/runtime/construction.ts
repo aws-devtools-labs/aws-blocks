@@ -39,8 +39,8 @@ function acu(value: number, name: string, floor: number, fullId: string): number
 
 /**
  * Checks a `DatabaseCluster`'s options the same way in every entry point, so a value the service would reject
- * fails `npm run dev` and the unit tests, not the deploy. Aurora Serverless v2 scales in 0.5 ACU steps; 0 pauses
- * the cluster. Backups are kept 1 to 35 days.
+ * fails `npm run dev` and the unit tests, not the deploy. Aurora Serverless v2 scales in 0.5 ACU steps; a minimum of 0 pauses
+ * the cluster, and the maximum is at least 1. Backups are kept 1 to 35 days.
  */
 export function resolveClusterOptions(options: DatabaseClusterOptions, fullId: string): ResolvedClusterOptions {
 	if (!isClusterType(options?.type)) {
@@ -48,7 +48,8 @@ export function resolveClusterOptions(options: DatabaseClusterOptions, fullId: s
 	}
 	if (options.type !== 'aurora') return options;
 	const minCapacity = acu(options.minCapacity ?? DEFAULT_AURORA_MIN_CAPACITY, 'minCapacity', 0, fullId);
-	const maxCapacity = acu(options.maxCapacity ?? DEFAULT_AURORA_MAX_CAPACITY, 'maxCapacity', 0.5, fullId);
+	// The service requires a maximum above 0.5 ACU (CloudFormation: "The maximum capacity must be higher than 0.5 ACUs").
+	const maxCapacity = acu(options.maxCapacity ?? DEFAULT_AURORA_MAX_CAPACITY, 'maxCapacity', 1, fullId);
 	if (minCapacity > maxCapacity) {
 		throw configError(
 			`DatabaseCluster '${fullId}': minCapacity (${minCapacity}) is above maxCapacity (${maxCapacity}).`,

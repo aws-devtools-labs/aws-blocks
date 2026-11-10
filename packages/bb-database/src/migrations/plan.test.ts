@@ -186,4 +186,28 @@ describe('migration plan (aurora): one transaction per file', () => {
 			},
 		);
 	});
+
+	test('a statement PostgreSQL refuses inside a transaction block is named, since each file is one', () => {
+		const stops = (sql: string) =>
+			assert.throws(() => lintMigrationFiles({ '003.sql': sql }, 'aurora'), {
+				name: MIGRATION_VALIDATION_ERROR_NAME,
+				message: /003\.sql: .*cannot run inside a transaction block/,
+			});
+		stops('CREATE INDEX CONCURRENTLY t_n ON t (n);');
+		stops('CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS u ON t (a);');
+		stops('DROP INDEX CONCURRENTLY IF EXISTS t_n;');
+		stops('REINDEX INDEX CONCURRENTLY t_n;');
+		stops('REINDEX (VERBOSE) TABLE CONCURRENTLY t;');
+		stops('VACUUM ANALYZE t;');
+		stops("ALTER SYSTEM SET work_mem = '64MB';");
+		stops('CREATE DATABASE other;');
+		// The words inside a literal or a comment are not statements.
+		lintMigrationFiles(
+			{
+				'004.sql':
+					"-- VACUUM later\nINSERT INTO t (name) VALUES ('CREATE INDEX CONCURRENTLY');\nCREATE INDEX t_n ON t (n);",
+			},
+			'aurora',
+		);
+	});
 });

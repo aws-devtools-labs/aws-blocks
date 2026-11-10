@@ -73,11 +73,28 @@ const DSQL_ONLY_FORMS: ReadonlyArray<{ test: RegExp; message: string }> = [
 	},
 ];
 
+// PostgreSQL refuses these inside a transaction block (SQLSTATE 25001), and an aurora file is one transaction.
+// Named here so the file stops at construction and at synth, not at deploy with the bare driver error.
+const NON_TRANSACTIONAL_FORMS: ReadonlyArray<{ test: RegExp; message: string }> = [
+	{
+		test: /\b(?:CREATE\s+(?:UNIQUE\s+)?INDEX|DROP\s+INDEX|REINDEX(?:\s+\([^)]*\))?(?:\s+\w+)?)\s+CONCURRENTLY\b/i,
+		message:
+			'`CONCURRENTLY` cannot run inside a transaction block, and each migration file on this cluster is one transaction. Drop `CONCURRENTLY`: a deploy accepts the brief lock.',
+	},
+	{
+		test: /^\s*(?:VACUUM|CREATE\s+DATABASE|DROP\s+DATABASE|ALTER\s+SYSTEM|CREATE\s+TABLESPACE|DROP\s+TABLESPACE)\b/i,
+		message:
+			'This statement cannot run inside a transaction block, and each migration file on this cluster is one transaction. It is not schema: run it outside the deploy.',
+	},
+];
+
 function auroraIssues(sql: string): string[] {
 	const issues: string[] = [];
 	for (const statement of splitStatements(sql)) {
 		const cleaned = stripLiteralsAndComments(statement);
-		for (const form of DSQL_ONLY_FORMS) if (form.test.test(cleaned)) issues.push(form.message);
+		for (const form of [...DSQL_ONLY_FORMS, ...NON_TRANSACTIONAL_FORMS]) {
+			if (form.test.test(cleaned)) issues.push(form.message);
+		}
 	}
 	return issues;
 }
@@ -85,7 +102,8 @@ function auroraIssues(sql: string): string[] {
 /**
  * Checks every file against its cluster kind before anything runs; one error lists every finding across every
  * file. A `dsql` file goes through dsql-lint. An `aurora` file is PostgreSQL and is checked only for the DSQL-only
- * forms (`ASYNC`, `sys.wait_for_job`), which PostgreSQL would otherwise reject with a bare syntax error.
+ * forms (`ASYNC`, `sys.wait_for_job`), which PostgreSQL would otherwise reject with a bare syntax error, and for the
+ * statements PostgreSQL refuses inside a transaction block (`CONCURRENTLY`, `VACUUM`, …), since each file is one.
  */
 export function lintMigrationFiles(migrations: Record<string, string>, kind: ClusterType): void {
 	const errors: string[] = [];

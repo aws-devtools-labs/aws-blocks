@@ -68,7 +68,7 @@ export interface AuroraClusterOptions {
 	 */
 	minCapacity?: number;
 	/**
-	 * The largest capacity the cluster scales up to, in ACUs (0.5 to 256).
+	 * The largest capacity the cluster scales up to, in ACUs (1 to 256, in 0.5 steps).
 	 * Default `2`. Can be raised in place; no cluster replacement.
 	 */
 	maxCapacity?: number;

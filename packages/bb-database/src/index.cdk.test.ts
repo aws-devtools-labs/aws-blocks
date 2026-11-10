@@ -313,8 +313,8 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 			/minCapacity must be a multiple of 0\.5/,
 		);
 		assert.throws(
-			() => new DatabaseCluster(parent, 'c2', { type: 'aurora', maxCapacity: 0 }),
-			/maxCapacity must be a multiple of 0\.5 between 0\.5/,
+			() => new DatabaseCluster(parent, 'c2', { type: 'aurora', maxCapacity: 0.5 }),
+			/maxCapacity must be a multiple of 0\.5 between 1 and 256/,
 		);
 		assert.throws(
 			() => new DatabaseCluster(parent, 'c3', { type: 'aurora', minCapacity: 4, maxCapacity: 2 }),
