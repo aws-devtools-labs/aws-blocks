@@ -124,8 +124,6 @@ export interface SharedDatabaseOptions extends DatabaseBlockOptions {
 	cluster: DatabaseClusterLike;
 }
 
-/** @deprecated Use {@link SharedDatabaseOptions}; a shared cluster is `dsql` or `aurora`. */
-export type DsqlDatabaseOptions = SharedDatabaseOptions;
 
 /** Every options shape a `Database` constructor accepts. */
 export type DatabaseOptions = OwnedDatabaseOptions | SharedDatabaseOptions;

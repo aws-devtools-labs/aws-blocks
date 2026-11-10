@@ -96,9 +96,6 @@ export interface DsqlClusterOptions {
     type: 'dsql';
 }
 
-// @public @deprecated (undocumented)
-export type DsqlDatabaseOptions = SharedDatabaseOptions;
-
 // @public
 export interface OwnedDatabaseOptions extends DatabaseBlockOptions {
     // (undocumented)

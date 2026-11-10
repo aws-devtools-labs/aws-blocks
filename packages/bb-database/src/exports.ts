@@ -15,7 +15,6 @@ export type {
 	DatabaseClusterOptions,
 	DatabaseOptions,
 	DsqlClusterOptions,
-	DsqlDatabaseOptions,
 	OwnedDatabaseOptions,
 	QueryOptions,
 	SharedDatabaseOptions,
