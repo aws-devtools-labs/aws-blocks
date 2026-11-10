@@ -37,13 +37,13 @@ class StubBlocksStack extends cdk.Stack {
 	}
 }
 
-function sesStatements(): Array<{ Action: string | string[]; Resource: unknown }> {
+function sesStatements(options: { maxBatchSize?: number } = {}): Array<{ Action: string | string[]; Resource: unknown }> {
 	const app = new cdk.App();
 	const stack = new StubBlocksStack(app, 'TestStack');
 	const originalWarn = console.warn;
 	console.warn = () => {}; // the construct prints an SES domain-verification reminder
 	try {
-		new EmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com' });
+		new EmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com', ...options });
 	} finally {
 		console.warn = originalWarn;
 	}
@@ -70,4 +70,8 @@ test('CDK: the SES grant stays scoped to this account', () => {
 	assert.ok(resources.includes(':123456789012:identity/*'), resources);
 	assert.ok(resources.includes(':123456789012:configuration-set/*'), resources);
 	assert.ok(!resources.includes('"*"'), 'no wildcard resource');
+});
+
+test('CDK: an invalid maxBatchSize fails at synth', () => {
+	assert.throws(() => sesStatements({ maxBatchSize: 0 }), /maxBatchSize/);
 });

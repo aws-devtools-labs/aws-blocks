@@ -14,10 +14,13 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 
 import type { EmailOptions } from './types.js';
 import { BB_NAME } from './version.js';
+import { resolveMaxBatchSize } from './validation.js';
 
 export class EmailClient extends BuildingBlockScope {
 	constructor(scope: ScopeParent, id: string, options: EmailOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SES] } });
+		// Fail at synth on a bad maxBatchSize rather than at the first sendBatch() call.
+		resolveMaxBatchSize(options.maxBatchSize);
 
 		console.warn(
 			`\n⚠️  [Email] Prerequisite: Domain for "${options.fromAddress}" must be verified in SES.\n` +

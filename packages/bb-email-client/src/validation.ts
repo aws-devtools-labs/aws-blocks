@@ -14,6 +14,8 @@ import type { EmailMessage } from './types.js';
 export const MAX_RECIPIENTS_PER_MESSAGE = 50;
 /** SES limit on the total message size. */
 export const MAX_MESSAGE_BYTES = 40 * 1024 * 1024; // 40 MB
+/** Default for `EmailOptions.maxBatchSize`: the most messages one `sendBatch()` call accepts. */
+export const DEFAULT_MAX_BATCH_SIZE = 100;
 
 // Basic RFC 5322 addr-spec
 const EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
@@ -98,5 +100,32 @@ export function validateMessage(message: EmailMessage, fromAddress: string, repl
 	const messageSize = Buffer.byteLength(JSON.stringify(message), 'utf8');
 	if (messageSize > MAX_MESSAGE_BYTES) {
 		throw blocksError(EmailErrors.SendFailed, `Message size ${messageSize} bytes exceeds the 40 MB limit`);
+	}
+}
+
+/**
+ * Resolve `EmailOptions.maxBatchSize`: the default when unset, otherwise the
+ * given value, which must be a positive integer. Run in every layer's
+ * constructor, so a bad value fails at synth and at startup, not on first send.
+ *
+ * @throws {EmailErrors.InvalidInput} If the value is not a positive integer.
+ */
+export function resolveMaxBatchSize(maxBatchSize: number | undefined): number {
+	if (maxBatchSize === undefined) return DEFAULT_MAX_BATCH_SIZE;
+	if (!Number.isSafeInteger(maxBatchSize) || maxBatchSize < 1) {
+		throw blocksError(EmailErrors.InvalidInput, 'maxBatchSize must be a positive integer.');
+	}
+	return maxBatchSize;
+}
+
+/**
+ * Reject a `sendBatch()` call with more messages than the cap, before any
+ * message is validated or sent. Both the mock and AWS run this first.
+ *
+ * @throws {EmailErrors.InvalidInput} If `count` exceeds `maxBatchSize`.
+ */
+export function validateBatchSize(count: number, maxBatchSize: number): void {
+	if (count > maxBatchSize) {
+		throw blocksError(EmailErrors.InvalidInput, `Batch size ${count} exceeds the maximum of ${maxBatchSize} messages.`);
 	}
 }
