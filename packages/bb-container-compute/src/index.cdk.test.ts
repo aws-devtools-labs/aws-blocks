@@ -332,10 +332,9 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 		assert.match(DEFAULT_CONTAINER_IMAGE, DIGEST_PINNED_DEFAULT);
 	});
 
-	test('a custom image is never rewritten or pinned by Blocks (tag or digest)', async () => {
-		const tagged = 'public.ecr.aws/example/custom-node:24';
-		const pinned = `public.ecr.aws/example/custom-node:24@sha256:${'a'.repeat(64)}`;
-		assert.deepStrictEqual(await synthImages('ContainerCustomTagStack', tagged), [tagged]);
+	test('a custom digest-pinned image is used verbatim, not re-pinned by Blocks', async () => {
+		// The tagged case is covered by 'a custom image is used verbatim' above.
+		const pinned = `public.ecr.aws/example/custom-node@sha256:${'a'.repeat(64)}`;
 		assert.deepStrictEqual(await synthImages('ContainerCustomDigestStack', pinned), [pinned]);
 	});
 });
