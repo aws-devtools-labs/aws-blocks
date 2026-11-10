@@ -10,7 +10,9 @@ void describe('getSecret() / getConfig() runtime resolvers', () => {
 	const envBackup = { ...process.env };
 	beforeEach(() => _resetSecretCache());
 	afterEach(() => {
-		process.env = { ...envBackup };
+		// Restore in place: replacing `process.env` would leave this file's keys on the real environment object.
+		for (const key of Object.keys(process.env)) if (!(key in envBackup)) delete process.env[key];
+		Object.assign(process.env, envBackup);
 		_resetSecretCache();
 	});
 

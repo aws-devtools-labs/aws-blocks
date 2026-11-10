@@ -505,7 +505,7 @@ void describe('nitroAdapter — preset + feature validation', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hosting-nitro-validate-'));
     mock.method(spawn, 'sync', () => undefined);
     stderrChunks = [];
-    const original = process.stderr.write.bind(process.stderr);
+    const original = process.stderr.write;
     process.stderr.write = ((chunk: string | Uint8Array): boolean => {
       stderrChunks.push(chunk.toString());
       return true;
