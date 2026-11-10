@@ -118,7 +118,9 @@ type is a compile error.
   digest. At boot, a small bootstrap script uses the task's role to download
   your code from S3 and starts it. ECS pulls the image at every task start, so
   pin a custom image by digest (`my-image@sha256:<digest>`) rather than a
-  tag.
+  tag. The default image runs as its unprivileged `node` user (uid/gid 1000),
+  not root. A custom image runs as its own default user; to run the stock Node
+  image as root, set `image` to it explicitly.
 
 ## API namespaces
 

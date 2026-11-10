@@ -107,7 +107,7 @@ options:
 |--------|------|---------|-------------|
 | `size` | `ContainerSize` | `{ vcpu: 0.5, memory: 1024 }` | A valid Fargate vCPU and memory pair. Invalid pairs don't type-check. |
 | `scaling` | `ContainerScaling` | fixed at one task | `{ minInstances, maxInstances, strategy? }`. `strategy` is one or more `cpu`, `memory` or `queue-depth` signals; omitted, it's inferred (queue depth for a compute that drains queues, CPU otherwise, and both when it drains queues and serves an `ApiNamespace`: CPU scales it in, the queue backlog only adds tasks). |
-| `image` | `string` | `public.ecr.aws/docker/library/node:24-slim`, pinned by digest | Public or ECR image URI, pulled verbatim. It must be arm64-compatible and provide Node 24 on `PATH`. Pin it by digest (see [Container image](#container-image)). |
+| `image` | `string` | `public.ecr.aws/docker/library/node:24-slim`, pinned by digest, run as a non-root user | Public or ECR image URI, pulled verbatim. It must be arm64-compatible and provide Node 24 on `PATH`. Pin it by digest (see [Container image](#container-image)). A custom image runs as its own default user. |
 | `logRetention` | `RetentionDays` | the stack's `defaults.logRetention` | How long the container's logs are kept. |
 
 Blocks builds no container image, so deploying needs no local Docker. Your code
@@ -139,8 +139,25 @@ The default image is ECR Public's mirror of the Docker official
 `node:24-slim` image, pinned by digest:
 `public.ecr.aws/docker/library/node@sha256:…` (the full reference is
 `DEFAULT_CONTAINER_IMAGE` in `src/default-image.ts`). It doesn't change
-between deploys until a Blocks release bumps the digest. The image's default
-user is root.
+between deploys until a Blocks release bumps the digest.
+
+The image's default user is root, but Blocks runs the default image as its
+unprivileged `node` user (uid/gid 1000; the task definition's container `user`
+is `1000:1000`). The app boots from `/home/node/app`, which that user owns. The
+API (8080) and readiness (8081) ports aren't privileged, so nothing needs root.
+As in Lambda, write scratch files under `/tmp`.
+
+A custom `image` runs as the image's own default user (Blocks sets no container
+`user` for it) and boots from `/app`, as before. If your app needs root, for
+example to install packages at boot, set `image` explicitly; passing the stock
+Node image runs it as root:
+
+```ts
+new Compute(scope, 'worker', {
+  type: 'container',
+  image: 'public.ecr.aws/docker/library/node@sha256:<64-hex digest>', // node:24-slim, runs as root
+});
+```
 
 `scaling.minInstances: 0` scales the service to zero between jobs. It needs at
 least one `AsyncJob` or `CronJob` on the compute and the default (or
