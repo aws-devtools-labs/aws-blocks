@@ -15,9 +15,9 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
-import { METHOD_NOT_FOUND, rpcCall, type ComputeTestContext } from './context.js';
+import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
-type WhereAmI = { functionName: string | null; memoryMb: string | null };
+type WhereAmI = { functionName: string | null; memoryMb: string | null; requestUrl: string };
 
 /** The client endpoint's host for each front door. */
 const FRONT_DOOR_HOST = {
@@ -43,6 +43,14 @@ export function apiNamespaceComputeTests(ctx: ComputeTestContext) {
       assert.notStrictEqual(onReports.functionName, onDefault.functionName, 'different functions');
       assert.strictEqual(onReports.memoryMb, '512', "the reports compute's memory option applies");
       assert.notStrictEqual(onDefault.memoryMb, '512', 'the default compute keeps its own size');
+    });
+
+    test("a Lambda handler sees the front door's public URL as ctx.request.url", async () => {
+      // Behind CloudFront the gateway gets its own `Host`; the door stamps the
+      // viewer's, so the URL is the one the client called — the same a container
+      // handler behind the same door reports (container-api-namespace.test.ts).
+      const onReports = await whereAmI('reports');
+      assert.strictEqual(onReports.requestUrl, requestUrlFor(ctx.apiUrl(), 'reports'));
     });
 
     if (ctx.strictNamespacePlacement) {

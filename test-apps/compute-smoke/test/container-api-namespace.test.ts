@@ -21,7 +21,7 @@ import assert from 'node:assert';
 import { request } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
-import { METHOD_NOT_FOUND, rpcCall, type ComputeTestContext } from './context.js';
+import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = {
   computeId: string | null;
@@ -141,13 +141,13 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       const containerUrl = new URL(onContainer.requestUrl);
       const lambdaUrl = new URL(onLambda.requestUrl);
       assert.strictEqual(containerUrl.origin, lambdaUrl.origin, 'same scheme and host');
-      // Same path shape (including any stage prefix), differing only in the namespace segment.
+      // Same path shape (the route path, no stage), differing only in the namespace segment.
       assert.match(lambdaUrl.pathname, /\/aws-blocks\/api\/reports$/);
       assert.strictEqual(containerUrl.pathname, lambdaUrl.pathname.replace(/\/reports$/, '/containerApi'));
     });
 
     test("sees the front door's public URL as ctx.request.url", () => {
-      assert.strictEqual(onContainer.requestUrl, `${ctx.apiUrl()}/containerApi`);
+      assert.strictEqual(onContainer.requestUrl, requestUrlFor(ctx.apiUrl(), 'containerApi'));
     });
 
     test('a path naming a different namespace than the body is rejected', async () => {
@@ -162,7 +162,7 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       const res = await post('whereAmI', [], { 'x-blocks-forwarded-host': 'attacker.example', 'x-blocks-forwarded-stage': 'evil' });
       assert.strictEqual(res.status, 200);
       const reply = (await res.json()) as { result?: WhereAmI };
-      assert.strictEqual(reply.result?.requestUrl, `${ctx.apiUrl()}/containerApi`);
+      assert.strictEqual(reply.result?.requestUrl, requestUrlFor(ctx.apiUrl(), 'containerApi'));
     });
 
     if (ctx.frontDoor === 'cloudfront') {
@@ -172,7 +172,7 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
         const res = await post('whereAmI', [], { 'x-forwarded-host': 'localhost' });
         assert.strictEqual(res.status, 200);
         const reply = (await res.json()) as { result?: WhereAmI };
-        assert.strictEqual(reply.result?.requestUrl, `${ctx.apiUrl()}/containerApi`);
+        assert.strictEqual(reply.result?.requestUrl, requestUrlFor(ctx.apiUrl(), 'containerApi'));
       });
     }
 
@@ -184,7 +184,7 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       assert.ok(res.status === 200 || res.status === 400, `status ${res.status}: ${res.body}`);
       if (res.status === 200) {
         const reply = JSON.parse(res.body) as { result?: WhereAmI };
-        assert.strictEqual(reply.result?.requestUrl, `${ctx.apiUrl()}/containerApi`);
+        assert.strictEqual(reply.result?.requestUrl, requestUrlFor(ctx.apiUrl(), 'containerApi'));
       }
       assert.ok(!res.body.includes('attacker.example'), res.body);
     });

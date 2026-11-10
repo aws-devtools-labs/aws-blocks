@@ -1,15 +1,18 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe, beforeEach, afterEach } from 'node:test';
+import { test, describe, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert';
 import { rmSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { once } from 'node:events';
 import { createServer, type Server } from 'node:http';
-import { clearRouteRegistry, ApiError } from '@aws-blocks/core';
+import { inspect } from 'node:util';
+import { clearRouteRegistry, ApiError, blocksError, getRegisteredRoutes, isWireSafeError } from '@aws-blocks/core';
 import type { BlocksContext } from '@aws-blocks/core';
 import { requestBaseUrl } from '@aws-blocks/core/lambda-handler';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { AuthOIDC, AuthOIDCErrors, stubIdp, google, customOidc, customOauth2, cognitoFederated } from './index.mock.js';
 import {
 	handleDiscovery,
@@ -21,7 +24,7 @@ import {
 	stubCodeEncode,
 	stubCodeDecode,
 } from './engines/stub-idp.js';
-import { buildExchangeUrl } from './engines/oidc-client-engine.js';
+import { buildExchangeUrl, withCause } from './engines/oidc-client-engine.js';
 import { SignJWT, generateKeyPair, exportJWK } from 'jose';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
@@ -1260,6 +1263,37 @@ describe('Cognito issuer validation - cross-pool rejection', () => {
 		const user = await engine.verifyAccessToken(token, ctx);
 		assert.strictEqual(user, null, 'token from wrong region must be rejected');
 	});
+
+	describe('token-endpoint failure keeps the Cognito response body off the wire', () => {
+		const RAW_BODY = '{"error":"invalid_client","error_description":"Client 123456789012 arn:aws:cognito-idp:us-east-1:123456789012:userpool/us-east-1_LegitPool1"}';
+
+		afterEach(() => {
+			mock.restoreAll();
+		});
+
+		test('handleExchange throws a stable branded message with the body on a non-enumerable cause', async () => {
+			mock.method(globalThis, 'fetch', async () => new Response(RAW_BODY, { status: 400 }));
+			const engine = makeCognitoEngine(LEGITIMATE_POOL_ID);
+
+			const thrown = await engine
+				.handleExchange(
+					{ code: 'c', verifier: 'v', state: 's', nonce: 'n', provider: 'google', callbackUrl: 'http://localhost:3000/aws-blocks/auth/callback' },
+					freshContext(),
+				)
+				.then(
+					() => assert.fail('handleExchange should reject'),
+					(err: unknown) => err,
+				);
+
+			assert.ok(thrown instanceof Error);
+			assert.ok(isWireSafeError(thrown), 'still a branded engine error');
+			assert.ok(thrown.message.includes('HTTP 400'), `the status is kept, got: ${thrown.message}`);
+			assert.ok(!thrown.message.includes('123456789012'), `message must not embed the token-endpoint body: ${thrown.message}`);
+			assert.ok(!thrown.message.includes('invalid_client'));
+			assert.ok(thrown.cause instanceof Error && thrown.cause.message === RAW_BODY, 'the body is kept on cause for server-side diagnostics');
+			assert.ok(!Object.keys(thrown).includes('cause'), 'cause is non-enumerable (Core rule 5)');
+		});
+	});
 });
 
 describe('alg:none rejection', () => {
@@ -1394,4 +1428,233 @@ describe('alg:none rejection', () => {
 		const user = await auth.getCurrentUser(ctx);
 		assert.strictEqual(user, null, 'alg:none with valid claims must still be rejected');
 	});
+});
+
+// Behind a Blocks CloudFront front door, ctx.request.url is the host the request came
+// in on. Authorize can come in on any of the door's hosts; the IdP sends the callback
+// to the one BLOCKS_PUBLIC_ORIGIN names. A same-origin relay accepted at authorize must
+// still be accepted at the callback's re-check.
+describe('relay — a same-origin relay survives the callback on another of the backend\'s hosts', () => {
+	const savedHosts = process.env.BLOCKS_PUBLIC_HOSTS;
+	let server: Server;
+	let issuer: string;
+
+	// A local OIDC discovery document, so authorize-params resolves the provider
+	// without the network (the door hosts below are not real).
+	beforeEach(async () => {
+		server = createServer((req, res) => {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				issuer,
+				authorization_endpoint: `${issuer}/authorize`,
+				token_endpoint: `${issuer}/token`,
+				jwks_uri: `${issuer}/jwks.json`,
+			}));
+		});
+		server.listen(0, '127.0.0.1');
+		await once(server, 'listening');
+		const address = server.address();
+		assert.ok(address && typeof address === 'object', 'a TCP address');
+		issuer = `http://127.0.0.1:${address.port}`;
+	});
+
+	afterEach(() => {
+		server?.close();
+		if (savedHosts === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+		else process.env.BLOCKS_PUBLIC_HOSTS = savedHosts;
+	});
+
+	/** The gateway's own host: the `Host` a callback through any door reaches the Lambda with. */
+	const GATEWAY_HOST = 'abc123.execute-api.us-east-1.amazonaws.com';
+
+	/** Authorize at `authorizeOrigin` with `relayTo`, then call back at `callbackOrigin` with the signed state. */
+	async function relayThrough(authorizeOrigin: string, relayTo: string, callbackOrigin: string) {
+		const auth = new AuthOIDC(ROOT, unique('relay-hosts'), {
+			providers: [customOidc({ name: 'p', issuerUrl: issuer, clientId: 'id', clientSecret: 'secret' })],
+		});
+		const params = await auth.getAuthorizeParams(freshContext(`${authorizeOrigin}/aws-blocks/auth/authorize-params/p`), 'p', {
+			csrf: 'csrf-1',
+			relayTo,
+		});
+		assert.ok(params.state, 'the relay flow returns a signed state');
+		const callback = new URL(`${callbackOrigin}/aws-blocks/auth/callback`);
+		callback.searchParams.set('code', 'auth-code');
+		callback.searchParams.set('state', params.state);
+		const ctx = freshContext(callback.href);
+		ctx.request.headers.set('host', GATEWAY_HOST);
+		return auth.handleCallbackDispatch(ctx);
+	}
+
+	test('authorized on the CloudFront domain, called back on the custom domain', async () => {
+		process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net,app.example.com';
+		const result = await relayThrough('https://d111.cloudfront.net', 'https://d111.cloudfront.net/signed-in', 'https://app.example.com');
+		assert.strictEqual(result.kind, 'relay', JSON.stringify(result));
+		assert.ok(result.kind === 'relay' && result.redirectTo.startsWith('https://d111.cloudfront.net/signed-in?'), JSON.stringify(result));
+	});
+
+	test('authorized on a subdomain of a wildcard alias', async () => {
+		process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net,*.tenant.example.com,app.example.com';
+		const result = await relayThrough('https://a.tenant.example.com', 'https://a.tenant.example.com/signed-in', 'https://app.example.com');
+		assert.strictEqual(result.kind, 'relay', JSON.stringify(result));
+	});
+
+	test("authorized on the gateway's execute-api URL, called back on a CloudFront door", async () => {
+		// No BLOCKS_API_URL: backend compute doesn't get one. The callback's Host is the gateway's.
+		process.env.BLOCKS_PUBLIC_HOSTS = 'app.example.com';
+		const gateway = `https://${GATEWAY_HOST}`;
+		const result = await relayThrough(`${gateway}/prod`, `${gateway}/prod/signed-in`, 'https://app.example.com');
+		assert.strictEqual(result.kind, 'relay', JSON.stringify(result));
+	});
+});
+
+// ── Route error redaction ─────────────────────────────────────────────────────
+//
+// The auth RawRoutes catch their own errors, so core's RawRoute sanitizer never
+// sees them. An unbranded error (an `onSignIn` hook's driver error, an SSM/SDK
+// failure) must collapse to a nameless generic 500 with the original logged
+// server-side; an ApiError or a branded Building Block error keeps its status,
+// name and message.
+
+describe('auth routes never echo raw error text', () => {
+	const RAW_DETAIL = 'User: arn:aws:sts::123456789012:assumed-role/BlocksRole/x is not authorized to perform: ssm:GetParameter';
+
+	// Every route-facing AuthOIDC method throws `failure`, so each route's catch is
+	// exercised directly. The callback route's second catch (server-initiated
+	// exchange) is reached by dispatching to 'server-exchange' first.
+	class FailingAuth extends AuthOIDC {
+		failure: unknown = new Error('unset');
+		dispatchFails = true;
+		override async handleCallbackDispatch(): Promise<{ kind: 'server-exchange' }> {
+			if (this.dispatchFails) throw this.failure;
+			return { kind: 'server-exchange' };
+		}
+		override async handleCallback(): Promise<never> {
+			throw this.failure;
+		}
+		override async getSignInUrl(): Promise<never> {
+			throw this.failure;
+		}
+		override async handleExchange(): Promise<never> {
+			throw this.failure;
+		}
+		override async getAuthorizeParams(): Promise<never> {
+			throw this.failure;
+		}
+		override async refreshBearerTokens(): Promise<never> {
+			throw this.failure;
+		}
+	}
+
+	const VALID_CSRF = 'c'.repeat(32);
+	type RouteCase = { label: string; method: string; path: string; body?: unknown; rawBody?: string; dispatchFails?: boolean };
+	const routeCases: RouteCase[] = [
+		{ label: 'callback (dispatch)', method: 'GET', path: '/aws-blocks/auth/callback' },
+		{ label: 'callback (server exchange)', method: 'GET', path: '/aws-blocks/auth/callback', dispatchFails: false },
+		{ label: 'signin', method: 'GET', path: '/aws-blocks/auth/signin/google' },
+		{
+			label: 'exchange',
+			method: 'POST',
+			path: '/aws-blocks/auth/exchange',
+			body: { code: 'c', verifier: 'v', state: 's', provider: 'google', callbackUrl: 'http://localhost:3000/aws-blocks/auth/callback' },
+		},
+		{ label: 'authorize-params GET', method: 'GET', path: '/aws-blocks/auth/authorize-params/google' },
+		{ label: 'authorize-params POST', method: 'POST', path: '/aws-blocks/auth/authorize-params/google', body: { csrf: VALID_CSRF } },
+		{ label: 'refresh', method: 'POST', path: '/aws-blocks/auth/refresh', body: { refreshToken: 'r', provider: 'google' } },
+	];
+
+	function setup(failure: unknown) {
+		const errors: unknown[] = [];
+		const logger: ChildLogger = {
+			debug() {},
+			info() {},
+			warn() {},
+			error(message, context) {
+				// inspect() renders an Error's message, as the real logger does; JSON.stringify drops it.
+				errors.push(inspect({ message, context }));
+			},
+			child: () => logger,
+		};
+		const auth = new FailingAuth(ROOT, unique('route-redact'), {
+			providers: [stubIdp({ name: 'google' })],
+			allowBearerAuth: true,
+			logger,
+		});
+		auth.failure = failure;
+		return { auth, errors };
+	}
+
+	async function invoke(auth: FailingAuth, c: RouteCase) {
+		auth.dispatchFails = c.dispatchFails ?? true;
+		const route = getRegisteredRoutes().find((r) => r.method === c.method && r.path === c.path);
+		assert.ok(route, `route ${c.method} ${c.path} should be mounted`);
+		let status = 200;
+		let sent: unknown;
+		const ctx = {
+			request: {
+				headers: new Headers(),
+				body: null,
+				// `rawBody` reproduces the runtime's `JSON.parse(bodyText)` on a malformed body.
+				json: async () => (c.rawBody !== undefined ? JSON.parse(c.rawBody) : c.body),
+				text: async () => c.rawBody ?? JSON.stringify(c.body ?? null),
+				url: new URL(`http://localhost:3000${c.path}?code=x&state=y`),
+				params: {},
+			},
+			response: {
+				headers: new Headers(),
+				get status() { return status; },
+				set status(v: number) { status = v; },
+				send: (b: unknown) => { sent = b; },
+			},
+		} as unknown as BlocksContext;
+		await route.handler(ctx);
+		return { status, body: sent as { error?: string; name?: string } };
+	}
+
+	for (const c of routeCases) {
+		test(`${c.label}: an unbranded error becomes a nameless generic 500 and is logged`, async () => {
+			const { auth, errors } = setup(new Error(RAW_DETAIL));
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 500);
+			assert.deepStrictEqual(body, { error: 'Internal error' });
+			assert.ok(JSON.stringify(errors).includes(RAW_DETAIL), 'the original error is logged server-side');
+		});
+
+		test(`${c.label}: an ApiError keeps its status, name and message`, async () => {
+			const { auth } = setup(new ApiError('Sign-in is disabled for this account', 403, { name: 'SignInBlockedException' }));
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 403);
+			assert.deepStrictEqual(body, { error: 'Sign-in is disabled for this account', name: 'SignInBlockedException' });
+		});
+
+		test(`${c.label}: a branded Building Block error keeps its name and message as a 400`, async () => {
+			const branded = blocksError(AuthOIDCErrors.InvalidState, 'state mismatch');
+			const { auth } = setup(branded);
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 400);
+			assert.deepStrictEqual(body, { error: branded.message, name: AuthOIDCErrors.InvalidState });
+		});
+	}
+
+	for (const path of ['/aws-blocks/auth/exchange', '/aws-blocks/auth/refresh']) {
+		test(`${path}: a malformed JSON body is a 400 for missing fields, not a 500`, async () => {
+			const { auth } = setup(new Error('unreachable'));
+			const { status, body } = await invoke(auth, { label: 'malformed', method: 'POST', path, rawBody: '{not json' });
+			assert.strictEqual(status, 400);
+			assert.match(String(body.error), /Missing required fields/);
+		});
+	}
+
+	// A failed Cognito token exchange throws a branded engine error whose response body rides
+	// only on the non-enumerable `cause`. The body must stay off the wire but reach the log.
+	const TOKEN_BODY = '{"error":"invalid_client","error_description":"Client 123456789012 rejected"}';
+	for (const c of routeCases.filter((rc) => rc.label === 'exchange' || rc.label === 'callback (server exchange)')) {
+		test(`${c.label}: a branded error's cause is logged server-side and kept out of the response`, async () => {
+			const failure = withCause(blocksError('AuthOIDCEngineError', 'CognitoFederationEngine: Cognito token exchange failed (HTTP 400)'), new Error(TOKEN_BODY));
+			const { auth, errors } = setup(failure);
+			const { status, body } = await invoke(auth, c);
+			assert.strictEqual(status, 400);
+			assert.ok(!JSON.stringify(body).includes('123456789012'), `response must not carry the token-endpoint body: ${JSON.stringify(body)}`);
+			assert.ok(JSON.stringify(errors).includes('invalid_client'), 'the token-endpoint body is logged server-side');
+		});
+	}
 });

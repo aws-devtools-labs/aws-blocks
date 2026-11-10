@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
@@ -2026,6 +2026,120 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     const v6 = buildEventUrl({ path: '/', headers: { 'x-forwarded-host': '[::1]:3000', Host: EXECUTE_API } });
     assert.strictEqual(v6.hostname, '[::1]');
   });
+
+  it('takes only the host from a loopback X-Forwarded-Host, never a query, fragment or userinfo', () => {
+    for (const forwarded of ['localhost:3000?role=admin#injected', 'user:pw@localhost:3000/evil']) {
+      const url = buildEventUrl({
+        path: '/aws-blocks/api/x',
+        headers: { 'x-forwarded-host': forwarded, Host: EXECUTE_API },
+        queryStringParameters: { a: '1' },
+      });
+      assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/x?a=1', forwarded);
+    }
+    const noQuery = buildEventUrl({ path: '/x', headers: { 'x-forwarded-host': 'localhost:3000?role=admin#injected', Host: EXECUTE_API } });
+    assert.strictEqual(noQuery.href, 'http://localhost:3000/x');
+  });
+});
+
+describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
+  // CloudFront forwards the gateway's own Host; the door stamps the viewer's host as
+  // x-blocks-public-host, and the backend's config lists the hosts its doors serve.
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+  const VIEWER = 'd111.cloudfront.net';
+  const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+  beforeEach(() => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},app.example.com`;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+    else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+  });
+  const throughDoor = (headers: Record<string, string>, path = '/aws-blocks/api/reports') => ({
+    path,
+    headers: { Host: EXECUTE_API, 'X-Forwarded-Proto': 'https', ...headers },
+    requestContext: { stage: 'prod' },
+    queryStringParameters: { a: '1' },
+  });
+
+  it('reports the URL the viewer called: its host, no stage', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${VIEWER}/aws-blocks/api/reports?a=1`);
+  });
+
+  it("reports a custom domain the door serves, whatever the header's letter case", () => {
+    const url = buildEventUrl(throughDoor({ 'X-Blocks-Public-Host': 'App.Example.com' }));
+    assert.strictEqual(url.href, 'https://app.example.com/aws-blocks/api/reports?a=1');
+  });
+
+  it("ignores a host that isn't one of the backend's front doors (a direct execute-api caller)", () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': 'attacker.example' }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('ignores a list of hosts, and a host with a port', () => {
+    for (const value of [`${VIEWER}, app.example.com`, `${VIEWER}:443`]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': value }));
+      assert.strictEqual(url.host, EXECUTE_API, value);
+    }
+  });
+
+  it('ignores two copies under different letter case', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER, 'X-Blocks-Public-Host': 'app.example.com' }));
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('ignores a header repeated on the wire, as the container does', () => {
+    // A REST event keeps the last copy in `headers` and every copy in `multiValueHeaders`.
+    const url = buildEventUrl({
+      ...throughDoor({ 'x-blocks-public-host': VIEWER }),
+      multiValueHeaders: { 'x-blocks-public-host': ['attacker.example', VIEWER] },
+    });
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('reports a subdomain of a wildcard custom domain the door serves, at any depth', () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of ['a.tenant.example.com', 'deep.a.tenant.example.com', 'A.Tenant.Example.com']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.href, `https://${host.toLowerCase()}/aws-blocks/api/reports?a=1`, host);
+    }
+  });
+
+  it("ignores a host a wildcard custom domain doesn't cover: its apex, a lookalike, a longer domain", () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of [
+      'tenant.example.com',
+      'eviltenant.example.com',
+      'a.tenant.example.com.evil.example',
+      '.tenant.example.com',
+      'x/y.tenant.example.com',
+      'u@a.tenant.example.com',
+      'a.tenant.example.com:443',
+      'a..tenant.example.com',
+    ]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.host, EXECUTE_API, host);
+    }
+  });
+
+  it('ignores the header when the backend has no front-door hosts', () => {
+    delete process.env.BLOCKS_PUBLIC_HOSTS;
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('keeps the loopback dev-server origin first (a sandbox proxying through the door)', () => {
+    const url = buildEventUrl(throughDoor({ 'x-forwarded-host': 'localhost:3000', 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/reports?a=1');
+  });
+
+  it('never moves to another host on a //- or /\\-prefixed path', () => {
+    for (const path of ['//evil.example/x', '/\\evil.example/x']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }, path));
+      assert.strictEqual(url.host, VIEWER, path);
+      assert.strictEqual(url.pathname, '//evil.example/x', path);
+    }
+  });
 });
 
 describe('isLoopbackForwardedHost', () => {
@@ -2172,6 +2286,30 @@ describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage',
     await invoke({}, stageEvent('/auth/callback', { 'x-forwarded-host': 'localhost:3000' }));
 
     assert.strictEqual(base, 'http://localhost:3000');
+  });
+
+  it("behind a Blocks CloudFront front door: ctx.request.url is the viewer's URL, the base URL stays the gateway's", async () => {
+    const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+    process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net';
+    try {
+      const seen = { url: '', base: '' };
+      registerRoute({
+        method: 'GET',
+        path: '/auth/callback',
+        handler: async (ctx) => {
+          seen.url = ctx.request.url.href;
+          seen.base = getRequestBaseUrl(ctx);
+          ctx.response.send('');
+        },
+      });
+
+      await invoke({}, stageEvent('/auth/callback', { 'x-blocks-public-host': 'd111.cloudfront.net' }));
+
+      assert.deepStrictEqual(seen, { url: 'https://d111.cloudfront.net/auth/callback?q=a+b', base: `https://${EXECUTE_API}/prod` });
+    } finally {
+      if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+      else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+    }
   });
 
   it('getRequestBaseUrl falls back to the request origin outside the Lambda handler (local dev)', () => {
