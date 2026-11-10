@@ -108,9 +108,13 @@ export interface RealtimeServer<T extends NamespaceDefs> {
 	 * Stale connections (410 Gone) are automatically cleaned up.
 	 *
 	 * @param namespace - Namespace name (type-checked from constructor).
-	 * @param channel - Dynamic channel name (e.g., `room-123`).
+	 * @param channel - Dynamic channel name (e.g., `room-123`). `/` separates
+	 *   segments (`tenants/acme/billing`). A name that is empty, starts or ends
+	 *   with `/`, contains an empty segment (`a//b`), or has a `.` or `..` segment
+	 *   is rejected. The same rule applies to `subscribe()` and `getChannel()`.
 	 * @param data - The payload to broadcast. Validated against the namespace schema.
 	 * @throws {RealtimeErrors.ValidationFailed} If the data fails schema validation.
+	 * @throws {RealtimeErrors.ValidationFailed} If `channel` is not a valid channel name.
 	 */
 	publish<K extends string & keyof T>(namespace: K, channel: string, data: InferMessage<T[K]>): Promise<void>;
 
@@ -130,12 +134,40 @@ export interface RealtimeServer<T extends NamespaceDefs> {
 	 *
 	 * @param namespace - Namespace name (type-checked from constructor).
 	 * @param channel - Dynamic channel name (e.g., `room-123`).
+	 * @param options - Optional. `scope` decides which channels the handle's token
+	 *   authorizes. The default, `'subtree'`, authorizes `channel` and every
+	 *   `/`-separated sub-channel under it (a handle for `tenants/acme` also opens
+	 *   `tenants/acme/billing`). Pass `{ scope: 'exact' }` to authorize `channel` only.
 	 * @returns A `RealtimeChannel<T>` Transferable.
+	 * @throws {RealtimeErrors.ValidationFailed} If `channel` is not a valid channel name (see {@link RealtimeServer.publish}).
+	 *
+	 * @example
+	 * ```typescript
+	 * // One tenant's handle must not open another channel under it:
+	 * return rt.getChannel('events', `tenants/${tenantId}`, { scope: 'exact' });
+	 * ```
 	 */
-	getChannel<K extends string & keyof T>(namespace: K, channel: string): Promise<RealtimeChannel<InferMessage<T[K]>>>;
+	getChannel<K extends string & keyof T>(namespace: K, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<InferMessage<T[K]>>>;
 }
 
 // ── Options ─────────────────────────────────────────────────────────────────
+
+/** Options for `getChannel()`. */
+export interface GetChannelOptions {
+	/**
+	 * Which channels the returned handle's token authorizes a client to subscribe to.
+	 *
+	 * - `'subtree'` (default): the channel and every `/`-separated sub-channel
+	 *   under it. A handle for `tenants/acme` also opens `tenants/acme/billing`.
+	 * - `'exact'`: the channel only.
+	 *
+	 * Use `'exact'` whenever a sub-channel of the name can belong to someone else,
+	 * for example per-tenant or per-user channels nested under one another.
+	 *
+	 * @defaultValue 'subtree'
+	 */
+	scope?: 'exact' | 'subtree';
+}
 
 export interface RealtimeOptions<T extends NamespaceDefs> {
 	/** Namespace definitions. */
