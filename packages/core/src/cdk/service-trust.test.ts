@@ -105,7 +105,7 @@ describe('findUnscopedServiceTrust', () => {
 		assert.deepStrictEqual(gaps, [{ principal: 'bedrock.amazonaws.com', missing: ['aws:SourceArn'] }]);
 	});
 
-	test('accepts both keys under any operator, matching key names case-insensitively', () => {
+	test('accepts both keys under constraining operators, matching key names case-insensitively', () => {
 		assert.deepStrictEqual(findUnscopedServiceTrust(trust('states.amazonaws.com', BOTH)), []);
 		assert.deepStrictEqual(
 			findUnscopedServiceTrust(
