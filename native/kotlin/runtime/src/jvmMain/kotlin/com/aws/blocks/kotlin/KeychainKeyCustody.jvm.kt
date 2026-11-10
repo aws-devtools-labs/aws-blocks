@@ -59,40 +59,31 @@ internal class KeychainKeyCustody(private val service: String) : KeyCustody {
             NativeLibrary.getInstance(library).getGlobalVariableAddress(name)
     }
 
-    override fun load(alias: String): ByteArray? {
-        val query = dictionary(
+    override fun load(alias: String): ByteArray? = withCf { cf ->
+        val query = cf.dictionary(
             constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
-            constant("Security", "kSecAttrService") to string(service),
-            constant("Security", "kSecAttrAccount") to string(alias),
+            constant("Security", "kSecAttrService") to cf.string(service),
+            constant("Security", "kSecAttrAccount") to cf.string(alias),
             constant("Security", "kSecReturnData") to constant("CoreFoundation", "kCFBooleanTrue"),
         )
         val out = PointerByReference()
-        try {
-            if (security.SecItemCopyMatching(query, out) != ERR_SUCCESS) return null
-            val data = out.value ?: return null
-            try {
-                val length = coreFoundation.CFDataGetLength(data).toInt()
-                if (length != AES_KEY_SIZE) return null
-                return coreFoundation.CFDataGetBytePtr(data).getByteArray(0, length)
-            } finally {
-                coreFoundation.CFRelease(data)
-            }
-        } finally {
-            coreFoundation.CFRelease(query)
-        }
+        if (security.SecItemCopyMatching(query, out) != ERR_SUCCESS) return@withCf null
+        // `kSecReturnData` hands back a copy, so this reference is ours to release.
+        val data = cf.owned(out.value) ?: return@withCf null
+        val length = coreFoundation.CFDataGetLength(data).toInt()
+        if (length != AES_KEY_SIZE) return@withCf null
+        coreFoundation.CFDataGetBytePtr(data).getByteArray(0, length)
     }
 
     override fun storeIfAbsent(alias: String, key: ByteArray): ByteArray {
-        val attributes = dictionary(
-            constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
-            constant("Security", "kSecAttrService") to string(service),
-            constant("Security", "kSecAttrAccount") to string(alias),
-            constant("Security", "kSecValueData") to data(key),
-        )
-        val status = try {
+        val status = withCf { cf ->
+            val attributes = cf.dictionary(
+                constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
+                constant("Security", "kSecAttrService") to cf.string(service),
+                constant("Security", "kSecAttrAccount") to cf.string(alias),
+                constant("Security", "kSecValueData") to cf.data(key),
+            )
             security.SecItemAdd(attributes, null)
-        } finally {
-            coreFoundation.CFRelease(attributes)
         }
         if (status == ERR_SUCCESS) return key
         // Another process stored one first, and its key is the one entries were written under.
@@ -104,35 +95,61 @@ internal class KeychainKeyCustody(private val service: String) : KeyCustody {
     }
 
     override fun delete(alias: String) {
-        val query = dictionary(
-            constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
-            constant("Security", "kSecAttrService") to string(service),
-            constant("Security", "kSecAttrAccount") to string(alias),
-        )
-        try {
+        withCf { cf ->
+            val query = cf.dictionary(
+                constant("Security", "kSecClass") to constant("Security", "kSecClassGenericPassword"),
+                constant("Security", "kSecAttrService") to cf.string(service),
+                constant("Security", "kSecAttrAccount") to cf.string(alias),
+            )
             security.SecItemDelete(query)
-        } finally {
-            coreFoundation.CFRelease(query)
         }
     }
 
-    private fun string(value: String): Pointer =
-        coreFoundation.CFStringCreateWithCString(null, value, UTF8)
-
-    private fun data(bytes: ByteArray): Pointer =
-        coreFoundation.CFDataCreate(null, bytes, bytes.size.toLong())
-
     /**
-     * The dictionary owns its keys and values through the CFType callback tables, so releasing it
-     * releases the strings and data built for it.
+     * Runs [block] and releases every CoreFoundation object it created, in reverse order.
+     *
+     * A dictionary built with the CFType callback tables takes a retain of its own on everything put
+     * into it, so releasing the dictionary does **not** release the strings and data created to fill
+     * it — those references are still ours. Tracking them here is what keeps each one released
+     * exactly once, on every path including the early returns.
+     *
+     * The `kSec*` globals are never released: they were never ours.
      */
-    private fun dictionary(vararg entries: Pair<Pointer, Pointer>): Pointer =
-        coreFoundation.CFDictionaryCreate(
-            null,
-            entries.map { it.first }.toTypedArray(),
-            entries.map { it.second }.toTypedArray(),
-            entries.size.toLong(),
-            structAddress("CoreFoundation", "kCFTypeDictionaryKeyCallBacks"),
-            structAddress("CoreFoundation", "kCFTypeDictionaryValueCallBacks"),
-        )
+    private fun <T> withCf(block: (CfScope) -> T): T {
+        val scope = CfScope()
+        return try {
+            block(scope)
+        } finally {
+            scope.releaseAll()
+        }
+    }
+
+    /** The CoreFoundation objects created for one call, and the only thing that releases them. */
+    private class CfScope {
+        private val created = mutableListOf<Pointer>()
+
+        /** Takes ownership of a reference some other call returned to us, such as a copied value. */
+        fun owned(pointer: Pointer?): Pointer? = pointer?.also { created += it }
+
+        fun string(value: String): Pointer =
+            coreFoundation.CFStringCreateWithCString(null, value, UTF8).also { created += it }
+
+        fun data(bytes: ByteArray): Pointer =
+            coreFoundation.CFDataCreate(null, bytes, bytes.size.toLong()).also { created += it }
+
+        fun dictionary(vararg entries: Pair<Pointer, Pointer>): Pointer =
+            coreFoundation.CFDictionaryCreate(
+                null,
+                entries.map { it.first }.toTypedArray(),
+                entries.map { it.second }.toTypedArray(),
+                entries.size.toLong(),
+                structAddress("CoreFoundation", "kCFTypeDictionaryKeyCallBacks"),
+                structAddress("CoreFoundation", "kCFTypeDictionaryValueCallBacks"),
+            ).also { created += it }
+
+        fun releaseAll() {
+            created.asReversed().forEach { coreFoundation.CFRelease(it) }
+            created.clear()
+        }
+    }
 }
