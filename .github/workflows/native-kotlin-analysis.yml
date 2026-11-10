@@ -151,6 +151,71 @@ jobs:
       - name: Run runtime unit tests (JVM)
         run: ./gradlew :runtime:jvmTest
 
+  linux-keyring-test:
+    name: Build & Test (runtime, Linux keyring, ${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    defaults:
+      run:
+        working-directory: native/kotlin
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+
+      # libsecret is not preinstalled on the runners, and the key custody needs a keyring daemon
+      # serving org.freedesktop.secrets to talk to.
+      - name: Install libsecret and a keyring daemon
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsecret-1-0 gnome-keyring dbus-x11
+
+      # Both architectures, because the variadic calling convention is the risk this proves.
+      #
+      # Gradle runs inside the dbus-run-session block, after the unlock: a second session gets a
+      # fresh bus and an empty keyring. --no-daemon matters for the same reason — a daemon started
+      # outside the block has no DBUS_SESSION_BUS_ADDRESS to hand the test JVM, and every libsecret
+      # call then fails. -i makes Gradle forward test output to this log.
+      - name: Run runtime unit tests under an unlocked keyring
+        env:
+          BLOCKS_EXPECT_OS_KEY_TIER: "1"
+        run: |
+          dbus-run-session -- bash -c '
+            echo -n "ci-keyring" | gnome-keyring-daemon --unlock --components=secrets
+            ./gradlew --no-daemon :runtime:jvmTest -i
+          '
+
+      # A green suite alone does not show the keyring was reached: these tests return early off
+      # Linux rather than failing, and an early return is indistinguishable from a pass in Gradle's
+      # output. The times tell them apart — an early return is ~0ms, a real libsecret round trip
+      # tens of milliseconds — so print them, and keep this job self-evidencing.
+      - name: Report per-test times for the key custody suites
+        if: always()
+        run: |
+          python3 -I - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in sorted(glob.glob('runtime/build/test-results/jvmTest/*.xml')):
+              suite = ET.parse(path).getroot()
+              name = suite.get('name', '')
+              if 'KeyCustody' not in name:
+                  continue
+              print(name)
+              for case in suite.iter('testcase'):
+                  millis = float(case.get('time', 0)) * 1000
+                  print(f'  {millis:9.1f} ms  {case.get("name")}')
+          PY
+
   ios-test:
     name: Build & Test (runtime, iOS)
     runs-on: macos-15
