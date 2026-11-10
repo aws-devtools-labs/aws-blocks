@@ -14,9 +14,9 @@ import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk
 import type { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
-import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, CannedToolHints } from './types.js';
+import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, ToolHandlerArgs, CannedToolHints } from './types.js';
 import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavailableMessage, classifyModelAccessError, InterruptError, walkCauseChain } from './errors.js';
-import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolOutput } from './untrusted.js';
+import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolError, wrapUntrustedToolOutput } from './untrusted.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import { ulid } from 'ulid';
 import { createHash } from 'node:crypto';
@@ -604,7 +604,7 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	}
 
 	private async createStrandsAgent(sessionId?: string, fallbackContext?: TContext): Promise<StrandsAgent> {
-		const { Agent: StrandsAgent, tool, SessionManager, BeforeToolCallEvent } = await loadStrands();
+		const { Agent: StrandsAgent, tool, SessionManager, BeforeToolCallEvent, InterruptError: StrandsInterruptError } = await loadStrands();
 		const toolDefs = [...this.toolMap.values()];
 		// Validate mutual exclusivity of needsApproval/trustable and interrupt
 		for (const t of toolDefs) {
@@ -629,12 +629,23 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 			description: t.description,
 			inputSchema: t.parameters,
 			callback: async (input, context) => {
-				const result = await t.handler({
+				const handlerArgs: ToolHandlerArgs<any, TContext> = {
 					input,
 					context: readContext(context),
 					interrupt: (params) => context!.interrupt(params),
-				});
-				return t.untrustedOutput && untrustedNonce ? wrapUntrustedToolOutput(t.name!, result, untrustedNonce) : result;
+				};
+				if (!t.untrustedOutput || !untrustedNonce) return t.handler(handlerArgs);
+				let result: JSONValue;
+				try {
+					result = await t.handler(handlerArgs);
+				} catch (err) {
+					// Strands turns a thrown error into an error tool result whose text is the
+					// message, so it reaches the model too. Wrap it like a successful result. An
+					// interrupt isn't a failure: rethrow it untouched so the approval flow still works.
+					if (err instanceof StrandsInterruptError) throw err;
+					throw wrapUntrustedToolError(t.name!, err, untrustedNonce);
+				}
+				return wrapUntrustedToolOutput(t.name!, result, untrustedNonce);
 			},
 		}));
 
