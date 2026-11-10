@@ -215,8 +215,9 @@ const REFRESH_REJECTIONS: ReadonlySet<string> = new Set([
  * window's ceiling starts at `REFRESH_RETRY_BASE_MS` and doubles with each
  * consecutive failure up to `REFRESH_RETRY_MAX_MS`; the delay is drawn from
  * the upper half of the window so sessions throttled together don't retry
- * together. During a Cognito throttle each session then attempts at most one
- * refresh per window, instead of one per request.
+ * together. Once a failure is recorded, later requests skip the refresh until
+ * the window passes; requests that read the record before it was written can
+ * each still make one attempt (this is not a single-flight lock).
  */
 const REFRESH_RETRY_BASE_MS = 1000;
 const REFRESH_RETRY_MAX_MS = 30_000;
