@@ -14,6 +14,6 @@ Responses already `private`/`no-store`, or `no-cache` without `s-maxage`, are un
 
 **BREAKING:** SSR responses that the origin marks shared-cacheable are no longer edge-cached for requests that carry `Authorization` or cookies outside the cache key, and responses with `Set-Cookie` are never cached. To keep a credentialed route cacheable, list its session cookie in `cacheKeyCookies` and/or `'authorization'` in `cacheKeyHeaders`, so the cache is keyed per credential.
 
-The SSR cache policy's maximum TTL is lowered from 1 year to 1 day, so an origin `s-maxage` longer than a day is clamped to a day.
+The SSR cache policy's maximum TTL (and the server-route cache policy of the CloudFront-over-ALB front door) is lowered from 1 year to 1 day, so an origin `s-maxage` longer than a day is clamped to a day.
 
 On a Lambda Web Adapter server the guard is loaded through `NODE_OPTIONS` (`--import`); a `NODE_OPTIONS` set in `compute.environment` keeps the guard loaded first.

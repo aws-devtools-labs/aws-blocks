@@ -222,6 +222,16 @@ describe('cloudFrontEdgeDoor — behaviors, caching, rules', () => {
     assert.equal(config.MaxTTL, 31536000);
   });
 
+  it('a server route the router serves: origin TTLs clamped to a day', () => {
+    const { t, config } = edgeFor('SrvTtl', serverPlan([{ pattern: '/*', kind: 'server' }]), { server: true });
+    // The catch-all server route is the distribution's default behavior.
+    const policies = t.findResources('AWS::CloudFront::CachePolicy');
+    const server = policies[(config.DefaultCacheBehavior.CachePolicyId as { Ref: string }).Ref]?.Properties.CachePolicyConfig;
+    assert.ok(server, 'server-route cache policy present');
+    assert.equal(server.ParametersInCacheKeyAndForwardedToOrigin.CookiesConfig.CookieBehavior, 'all');
+    assert.equal(server.MaxTTL, 86400);
+  });
+
   it("the app's header rules run on the S3 behaviors and the router behaviors alike", () => {
     const { t, config, behaviors, s3Id } = edgeFor(
       'Hdr',

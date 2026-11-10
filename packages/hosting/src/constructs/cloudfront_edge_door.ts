@@ -128,10 +128,13 @@ export const cloudFrontEdgeDoor = defineFrontDoor<CloudFrontEdgeDoorInput, Cloud
           protocolPolicy,
           customHeaders,
         });
+    // Server routes: the origin's TTLs, clamped to a day (as the SSR cache
+    // policy behind the CloudFront door), so a long origin `s-maxage` on a
+    // rendered page can't pin it at the edge for longer.
     const cachePolicy = new CachePolicy(scope, 'CfAlbCache', {
       defaultTtl: Duration.seconds(0),
       minTtl: Duration.seconds(0),
-      maxTtl: Duration.days(365),
+      maxTtl: Duration.days(1),
       cookieBehavior: CacheCookieBehavior.all(),
       headerBehavior: CacheHeaderBehavior.none(),
       queryStringBehavior: CacheQueryStringBehavior.all(),
