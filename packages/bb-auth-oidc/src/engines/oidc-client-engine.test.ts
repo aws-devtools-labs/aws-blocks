@@ -15,9 +15,13 @@
  * `JSON.stringify` must not expose the cause. Without them, adding the raw text
  * back passes the rest of the suite silently (the gap osama flagged).
  */
-import { test, describe } from 'node:test';
+import { test, describe, mock, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { idpError, providerNotConfigured } from './oidc-client-engine.js';
+import type { BlocksContext } from '@aws-blocks/core';
+import { OidcClientEngine, idpError, providerNotConfigured } from './oidc-client-engine.js';
+import { stubIdp } from '../providers.js';
+import { resolveProviderIssuerUrl } from '../utils.js';
+import type { ProviderConfig, SessionStore } from '../types.js';
 
 /** A raw IdP error whose message carries detail that must never reach the wire. */
 const RAW_IDP_SECRET = 'invalid_grant: code expired for client 1234567890.apps.googleusercontent.com';
@@ -104,5 +108,116 @@ describe('OIDC error helpers do not leak the raw cause over the wire', () => {
 		const err = idpError('refresh_token grant failed (HTTP 400)', new Error(RAW_HTTP_BODY));
 		assert.strictEqual(err.message, 'IdP error: refresh_token grant failed (HTTP 400)');
 		assertNoLeak(err, 'IdpErrorException', RAW_HTTP_BODY);
+	});
+});
+
+describe('OidcClientEngine: trustStubProviders', () => {
+	const ORIGIN = 'https://api.example.test';
+	const STUB_ISSUER = `${ORIGIN}/aws-blocks/auth/idp/dev`;
+
+	/** Request context whose origin resolves the stub issuer to `STUB_ISSUER`. */
+	function ctxWith(headers: Headers = new Headers()): BlocksContext {
+		return {
+			request: {
+				headers,
+				body: null,
+				json: async () => ({}),
+				text: async () => '',
+				url: new URL(`${ORIGIN}/`),
+				params: {},
+			},
+			response: {
+				headers: new Headers(),
+				status: 200,
+				send: () => {},
+			},
+		} as unknown as BlocksContext;
+	}
+
+	/** Unsigned token whose payload names `iss`; matching runs before signature checks. */
+	function tokenWithIssuer(iss: string): string {
+		const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k' })).toString('base64url');
+		const now = Math.floor(Date.now() / 1000);
+		const payload = Buffer.from(
+			JSON.stringify({ iss, sub: 'u', aud: 'stub-client-id', exp: now + 3600, iat: now }),
+		).toString('base64url');
+		return `${header}.${payload}.sig`;
+	}
+
+	/** Build an engine with one stub provider; `resolveIssuerUrl` calls are counted. */
+	function engineFor(trustStubProviders: boolean) {
+		const resolved: string[] = [];
+		const engine = new OidcClientEngine({
+			providers: [stubIdp({ name: 'dev' })],
+			// Plumbing only: the paths under test never reach the session store.
+			sessionStore: {} as unknown as SessionStore,
+			cookieSecret: 'test-cookie-secret-test-cookie-secret',
+			cookieNamePrefix: 'oidc_test',
+			cookieAttributes: { secure: true, partitioned: false, sameSite: 'Lax', path: '/' },
+			callbackPath: '/aws-blocks/auth/callback',
+			postSignInPath: '/',
+			resolveIssuerUrl: (provider: ProviderConfig, ctx: BlocksContext) => {
+				resolved.push(provider.name);
+				return resolveProviderIssuerUrl(provider, ctx);
+			},
+			allowInsecureIssuers: false,
+			trustStubProviders,
+		});
+		return { engine, resolved };
+	}
+
+	afterEach(() => {
+		mock.restoreAll();
+	});
+
+	test('false: a bearer token issued by the stub issuer is not matched and no discovery runs', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const { engine, resolved } = engineFor(false);
+		const user = await engine.verifyAccessToken(tokenWithIssuer(STUB_ISSUER), ctxWith());
+		assert.strictEqual(user, null);
+		assert.deepStrictEqual(resolved, [], 'the stub issuer must not be resolved from the request');
+		assert.strictEqual(fetchMock.mock.callCount(), 0, 'no issuer discovery for an untrusted stub');
+	});
+
+	test('false: sign-in, authorize-params, and exchange answer ProviderNotConfigured for the stub', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const { engine, resolved } = engineFor(false);
+		const ctx = ctxWith();
+		const notConfigured = { name: 'ProviderNotConfiguredException' };
+		await assert.rejects(
+			engine.buildSignInUrl({ provider: 'dev', callbackUrl: `${ORIGIN}/aws-blocks/auth/callback`, ctx }),
+			notConfigured,
+		);
+		await assert.rejects(engine.getAuthorizeParams('dev', ctx), notConfigured);
+		await assert.rejects(
+			engine.handleExchange(
+				{
+					code: 'c',
+					verifier: 'v',
+					state: 's',
+					nonce: '',
+					provider: 'dev',
+					callbackUrl: `${ORIGIN}/aws-blocks/auth/callback`,
+				},
+				ctx,
+			),
+			notConfigured,
+		);
+		assert.strictEqual(await engine.refreshBearerTokens({ refreshToken: 'r', provider: 'dev' }, ctx), null);
+		assert.deepStrictEqual(resolved, []);
+		assert.strictEqual(fetchMock.mock.callCount(), 0);
+	});
+
+	test('true: the stub issuer is matched and discovery runs against it', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const { engine, resolved } = engineFor(true);
+		// Discovery is answered 404, so verification still fails closed; what
+		// this pins is that a trusted stub IS matched and discovered.
+		const user = await engine.verifyAccessToken(tokenWithIssuer(STUB_ISSUER), ctxWith());
+		assert.strictEqual(user, null);
+		assert.ok(resolved.includes('dev'));
+		assert.ok(fetchMock.mock.callCount() > 0, 'expected issuer discovery for a trusted stub');
+		const firstUrl = String(fetchMock.mock.calls[0].arguments[0]);
+		assert.ok(firstUrl.startsWith(`${STUB_ISSUER}/.well-known/openid-configuration`), firstUrl);
 	});
 });

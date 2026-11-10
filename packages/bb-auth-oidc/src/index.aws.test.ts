@@ -8,14 +8,25 @@
  * Covers the runtime mount decision for `stubIdp()` providers: the stub IdP
  * routes are registered only when `getDeploymentType()` reports `'sandbox'`.
  * Assertions read the RawRoute registry that deployed compute dispatches from.
+ *
+ * Also covers the engine side of the same decision: outside a sandbox a stub
+ * provider is unavailable (sign-in answers ProviderNotConfigured, and a bearer
+ * token naming the stub issuer is not matched), and inside a sandbox the
+ * mounted routes load the stub IdP engine on first request.
  */
 
 import assert from 'node:assert';
 import { after, afterEach, before, beforeEach, describe, mock, test } from 'node:test';
 import { S3Client } from '@aws-sdk/client-s3';
-import { _resetConfigCache, clearRouteRegistry, getRegisteredRoutes, preloadConfig } from '@aws-blocks/core';
+import {
+	_resetConfigCache,
+	type BlocksContext,
+	clearRouteRegistry,
+	getRegisteredRoutes,
+	preloadConfig,
+} from '@aws-blocks/core';
 import { AuthOIDC, google, stubIdp } from './index.aws.js';
-import { stubIssuerPath } from './engines/stub-idp.js';
+import { stubIssuerPath } from './engines/stub-issuer.js';
 
 const ENV_KEYS = [
 	'AWS_REGION',
@@ -67,10 +78,53 @@ async function loadDeployedConfig(config: Record<string, string>): Promise<void>
 	await preloadConfig();
 }
 
-function construct(stubName = 'dev'): void {
-	new AuthOIDC({ id: 'my-app' }, 'auth', {
+function construct(stubName = 'dev', allowBearerAuth = false) {
+	return new AuthOIDC({ id: 'my-app' }, 'auth', {
 		providers: [google({ clientId: 'cid', clientSecret: 'secret' }), stubIdp({ name: stubName })],
+		allowBearerAuth,
 	});
+}
+
+/** Request origin for the engine tests; the stub issuer resolves under it. */
+const ORIGIN = 'https://api.example.test';
+
+/** Minimal request context; `sent` captures what a route handler sends. */
+function requestCtx(headers: Headers = new Headers()): { ctx: BlocksContext; sent: unknown[] } {
+	const sent: unknown[] = [];
+	const ctx = {
+		request: {
+			headers,
+			body: null,
+			json: async () => ({}),
+			text: async () => '',
+			url: new URL(`${ORIGIN}/`),
+			params: {},
+		},
+		response: {
+			headers: new Headers(),
+			status: 200,
+			send: (body: unknown) => {
+				sent.push(body);
+			},
+		},
+	} as unknown as BlocksContext;
+	return { ctx, sent };
+}
+
+/** Bearer header carrying an unsigned token whose `iss` is the stub issuer for `name`. */
+function stubBearerHeaders(name: string): Headers {
+	const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'k' })).toString('base64url');
+	const now = Math.floor(Date.now() / 1000);
+	const payload = Buffer.from(
+		JSON.stringify({
+			iss: `${ORIGIN}${stubIssuerPath(name)}`,
+			sub: 'u',
+			aud: 'stub-client-id',
+			exp: now + 3600,
+			iat: now,
+		}),
+	).toString('base64url');
+	return new Headers({ authorization: `Bearer ${header}.${payload}.sig` });
 }
 
 describe('AuthOIDC (aws-runtime): stubIdp route mounting by deployment type', () => {
@@ -165,5 +219,86 @@ describe('AuthOIDC (aws-runtime): stubIdp route mounting by deployment type', ()
 		process.env.BLOCKS_DEPLOYMENT_TYPE = 'production';
 		construct();
 		assert.ok(getRegisteredRoutes().length > 0, 'expected the shared auth routes to be registered');
+	});
+});
+
+describe('AuthOIDC (aws-runtime): stub providers are served only in a sandbox deployment', () => {
+	let warn: ReturnType<typeof mock.method<Console, 'warn'>>;
+	let fetchMock: ReturnType<typeof mock.method<typeof globalThis, 'fetch'>>;
+	const prevApiUrl = process.env.BLOCKS_API_URL;
+
+	beforeEach(() => {
+		clearRouteRegistry();
+		_resetConfigCache();
+		for (const key of ['BLOCKS_DEPLOYMENT_TYPE', 'BLOCKS_CONFIG_BUCKET', 'BLOCKS_CONFIG_KEY'] as const) {
+			delete process.env[key];
+		}
+		// The stub issuer then resolves from the request origin.
+		delete process.env.BLOCKS_API_URL;
+		warn = mock.method(console, 'warn', () => {});
+		// Issuer discovery is the first network call a trusted stub makes; answer
+		// it 404 so nothing leaves the process and verification fails closed.
+		fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+	});
+
+	afterEach(() => {
+		warn.mock.restore();
+		mock.restoreAll();
+		clearRouteRegistry();
+		_resetConfigCache();
+		if (prevApiUrl === undefined) delete process.env.BLOCKS_API_URL;
+		else process.env.BLOCKS_API_URL = prevApiUrl;
+	});
+
+	test('production: authorize-params for the stub provider answers ProviderNotConfigured', async () => {
+		await loadDeployedConfig({ BLOCKS_DEPLOYMENT_TYPE: 'production' });
+		const auth = construct('dev-trust-prod');
+		await assert.rejects(auth.getAuthorizeParams(requestCtx().ctx, 'dev-trust-prod'), {
+			name: 'ProviderNotConfiguredException',
+		});
+		assert.strictEqual(fetchMock.mock.callCount(), 0, 'no issuer discovery outside a sandbox');
+	});
+
+	test('production: a bearer token naming the stub issuer is not accepted and not discovered', async () => {
+		await loadDeployedConfig({ BLOCKS_DEPLOYMENT_TYPE: 'production' });
+		const auth = construct('dev-bearer-prod', true);
+		const user = await auth.getCurrentUser(requestCtx(stubBearerHeaders('dev-bearer-prod')).ctx);
+		assert.strictEqual(user, null);
+		assert.strictEqual(fetchMock.mock.callCount(), 0, 'the stub issuer must not be discovered outside a sandbox');
+	});
+
+	test('local (unset): a bearer token naming the stub issuer is not accepted', async () => {
+		const auth = construct('dev-bearer-local', true);
+		const user = await auth.getCurrentUser(requestCtx(stubBearerHeaders('dev-bearer-local')).ctx);
+		assert.strictEqual(user, null);
+		assert.strictEqual(fetchMock.mock.callCount(), 0);
+	});
+
+	test('sandbox: a bearer token naming the stub issuer is matched (discovery runs against it)', async () => {
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'sandbox';
+		const auth = construct('dev-bearer-sandbox', true);
+		// Discovery is answered 404, so the token is still not accepted; this
+		// pins that the stub provider IS trusted in a sandbox.
+		const user = await auth.getCurrentUser(requestCtx(stubBearerHeaders('dev-bearer-sandbox')).ctx);
+		assert.strictEqual(user, null);
+		assert.ok(fetchMock.mock.callCount() > 0, 'expected issuer discovery for a sandbox stub');
+		const firstUrl = String(fetchMock.mock.calls[0].arguments[0]);
+		assert.ok(
+			firstUrl.startsWith(`${ORIGIN}${stubIssuerPath('dev-bearer-sandbox')}/.well-known/openid-configuration`),
+			firstUrl,
+		);
+	});
+
+	test('sandbox: a mounted stub route loads the engine on first request and answers', async () => {
+		process.env.BLOCKS_DEPLOYMENT_TYPE = 'sandbox';
+		construct('dev-lazy');
+		const discoveryPath = `${stubIssuerPath('dev-lazy')}/.well-known/openid-configuration`;
+		const route = getRegisteredRoutes().find((r) => r.method === 'GET' && r.path === discoveryPath);
+		assert.ok(route, `expected GET ${discoveryPath} to be registered`);
+		const { ctx, sent } = requestCtx();
+		await route.handler(ctx);
+		assert.strictEqual(sent.length, 1);
+		const body = (typeof sent[0] === 'string' ? JSON.parse(sent[0]) : sent[0]) as { issuer?: string };
+		assert.strictEqual(body.issuer, `${ORIGIN}${stubIssuerPath('dev-lazy')}`);
 	});
 });

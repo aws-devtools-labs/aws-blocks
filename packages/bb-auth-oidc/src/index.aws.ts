@@ -26,7 +26,12 @@ import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
-import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
+import { mountAuthRoutes } from './routes.js';
+// `stub-routes.js` has no static import of the stub IdP engine
+// (`engines/stub-idp.js`): it registers the stub routes synchronously and loads
+// the engine on first request. It is called only in the sandbox branch below,
+// so the engine module is never evaluated outside a sandbox deployment.
+import { mountStubIdpRoutes } from './stub-routes.js';
 import { cognitoEnvPrefix, cookieSecretEnvVar, resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 
@@ -117,6 +122,11 @@ export class AuthOIDC<
 
 		const hasCognitoFederated = options.providers.some(p => p.kind === 'cognito-federated');
 
+		// Read once and used for both the stub-route mount decision (below) and
+		// the engine's `trustStubProviders`, so the two can never disagree: a
+		// stub provider is served only where its routes are mounted.
+		const deploymentType = getDeploymentType();
+
 		let engine: AuthEngine;
 		if (hasCognitoFederated) {
 			const sessionManager = new SessionManager({
@@ -156,6 +166,9 @@ export class AuthOIDC<
 				postSignInPath: options.postSignInPath ?? '/',
 				resolveIssuerUrl: resolveProviderIssuerUrl,
 				allowInsecureIssuers: false,
+				// Outside a sandbox the stub IdP is not mounted, so a stub provider
+				// is treated as unavailable rather than resolved from the request.
+				trustStubProviders: deploymentType === 'sandbox',
 				allowedRelayOrigins: options.allowedRelayOrigins,
 			});
 		}
@@ -185,8 +198,8 @@ export class AuthOIDC<
 		//   from compute that Blocks does not configure.
 		// The loaded config value (the source `getDeploymentType()` reads on
 		// deployed compute) only selects the message; the mount decision uses
-		// `getDeploymentType()` alone.
-		const deploymentType = getDeploymentType();
+		// `getDeploymentType()` alone (`deploymentType`, read above before the
+		// engine was built).
 		for (const provider of options.providers) {
 			if (provider.kind !== 'stub') continue;
 			if (deploymentType === 'sandbox') {
