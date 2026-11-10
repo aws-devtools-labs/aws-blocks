@@ -640,6 +640,14 @@ const fallbackAgent = new Agent(scope, 'fallback', {
 // FileBucket - File storage (S3)
 const bucket = new FileBucket(scope, 'files', { removalPolicy: 'destroy' });
 
+// FileBucket with upload constraints: only listed content types, uploads of at
+// most 1 KiB (presigned uploads must sign a contentLength).
+const constrainedBucket = new FileBucket(scope, 'constrained-files', {
+  allowedContentTypes: ['text/plain', 'image/*'],
+  maxUploadBytes: 1024,
+  removalPolicy: 'destroy',
+});
+
 // FileBucket with versioning enabled
 const versionedBucket = new FileBucket(scope, 'versioned-files', { versioned: true, removalPolicy: 'destroy' });
 
@@ -2588,6 +2596,31 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async fileVerifyUploaded(path: string) {
     const file = await bucket.get(path);
+    if (!file) return null;
+    return { body: file.body.toString(), contentType: file.contentType, size: file.size };
+  },
+
+  async filePutUrlWithOptions(path: string, options: { contentType?: string; contentLength?: number }) {
+    return await bucket.putUrl(path, options);
+  },
+
+  async fileGetUrlAttachment(path: string, attachment: boolean | string) {
+    return await bucket.getUrl(path, { attachment });
+  },
+
+  // FileBucket with allowedContentTypes / maxUploadBytes
+
+  async constrainedFilePutUrl(path: string, options: { contentType?: string; contentLength?: number }) {
+    return await constrainedBucket.putUrl(path, options);
+  },
+
+  async constrainedFilePut(path: string, content: string, contentType?: string) {
+    await constrainedBucket.put(path, content, contentType ? { contentType } : undefined);
+    return { success: true };
+  },
+
+  async constrainedFileGet(path: string) {
+    const file = await constrainedBucket.get(path);
     if (!file) return null;
     return { body: file.body.toString(), contentType: file.contentType, size: file.size };
   },

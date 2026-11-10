@@ -88,6 +88,11 @@ public final class FileUploadHandle: Sendable {
 
     /// Uploads a file from disk to the presigned URL.
     ///
+    /// The request's `Content-Length` is the file's size. If the handle was
+    /// created on the server with a `contentLength` option, that size is signed
+    /// into the URL and the upload is rejected unless the file is exactly that
+    /// many bytes.
+    ///
     /// - Parameter fileURL: The local file URL to upload.
     /// - Throws: `FileBucketError.uploadFailed` on HTTP errors or network failures.
     public func uploadFrom(fileURL: URL) async throws {

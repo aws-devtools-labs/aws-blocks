@@ -191,6 +191,57 @@ export interface FileBucketOptions {
 	 * Ignored by the mock and browser runtimes (no AWS resource to retain).
 	 */
 	removalPolicy?: 'destroy' | 'retain';
+	/**
+	 * Content types this bucket accepts on upload. Default: any content type.
+	 *
+	 * Each entry is an exact media type (`'application/pdf'`) or a `type/*`
+	 * wildcard (`'image/*'`), without parameters. Matching ignores case and
+	 * parameters, so `text/plain; charset=utf-8` matches `'text/plain'` or
+	 * `'text/*'`. A wildcard matches every subtype of its type: `'image/*'`
+	 * includes `image/svg+xml`, which a browser runs as a page (scripts included)
+	 * when it displays the file inline. To serve uploads inline, list exact raster
+	 * types (`'image/png'`, `'image/jpeg'`), or download them with `getUrl()`'s
+	 * `attachment` option.
+	 *
+	 * Checked by `put()`, `putUrl()` and `createUploadHandle()` against the
+	 * effective content type — the caller's `contentType`, or
+	 * `application/octet-stream` when omitted (list it to accept uploads that
+	 * don't name a type). A content type that isn't listed throws
+	 * `ValidationFailed` (HTTP 400). Presigned uploads always sign the content
+	 * type, so the uploader can't send a different one.
+	 *
+	 * Must be a non-empty array of `type/subtype` or `type/*` strings; anything
+	 * else is rejected at synth (and by the mock at construction). Enforced by the
+	 * mock and the AWS runtime identically, including for a bucket wrapped with
+	 * `bucket`.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'avatars', { allowedContentTypes: ['image/png', 'image/jpeg'] });
+	 * ```
+	 */
+	allowedContentTypes?: string[];
+	/**
+	 * Largest upload, in bytes, this bucket accepts. Default: no limit (S3's own
+	 * limits apply).
+	 *
+	 * When set:
+	 * - `putUrl()` and `createUploadHandle()` require `contentLength` and reject
+	 *   one above the limit; the signed URL only accepts a body of exactly that
+	 *   size;
+	 * - `put()` rejects a body above the limit.
+	 *
+	 * A rejection throws `ValidationFailed` (HTTP 400). Must be a positive integer;
+	 * anything else is rejected at synth (and by the mock at construction).
+	 * Enforced by the mock and the AWS runtime identically, including for a
+	 * bucket wrapped with `bucket`.
+	 *
+	 * @example
+	 * ```ts
+	 * new FileBucket(scope, 'uploads', { maxUploadBytes: 10 * 1024 * 1024 }); // 10 MiB
+	 * ```
+	 */
+	maxUploadBytes?: number;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
 }
@@ -198,7 +249,14 @@ export interface FileBucketOptions {
 // ── Method options ──────────────────────────────────────────────────────────
 
 export interface PutOptions {
-	/** MIME type of the file (e.g., `image/png`). */
+	/**
+	 * MIME type of the file (e.g., `image/png`). Default: `application/octet-stream`.
+	 *
+	 * Must be a single `type/subtype` media type with optional `; name=value`
+	 * parameters (no comma-separated list, ASCII only), or `put()` throws
+	 * `ValidationFailed`. Must be in the bucket's `allowedContentTypes` when that option is set;
+	 * otherwise `put()` throws `ValidationFailed`.
+	 */
 	contentType?: string;
 	/**
 	 * Custom metadata key-value pairs.
@@ -217,17 +275,63 @@ export interface PutOptions {
 export interface GetUrlOptions {
 	/** URL expiration in whole seconds. Must be an integer from 1 to 604800. Default: 3600. */
 	expiresIn?: number;
+	/**
+	 * Make the browser download the file instead of displaying it. Default: off —
+	 * the file is served with its stored content type and displayed inline when
+	 * the browser can render it.
+	 *
+	 * - `true` signs `Content-Disposition: attachment` into the URL.
+	 * - a filename (e.g. `'report.pdf'`) also suggests that name:
+	 *   `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`. Control
+	 *   characters are removed; in the quoted ASCII `filename`, quotes,
+	 *   backslashes, `%` and non-ASCII characters become `_`, while `filename*`
+	 *   carries the full UTF-8 name.
+	 *
+	 * Recommended for user-uploaded content: a file displayed inline can run as a
+	 * page (HTML, SVG) in whatever origin serves it.
+	 *
+	 * @throws `ValidationFailed` when neither a boolean nor a non-empty filename.
+	 */
+	attachment?: boolean | string;
 }
 
 export interface PutUrlOptions {
 	/** URL expiration in whole seconds. Must be an integer from 1 to 604800. Default: 3600. */
 	expiresIn?: number;
-	/** Required content type for the upload. */
+	/**
+	 * Required content type for the upload. Default: `application/octet-stream`.
+	 *
+	 * Always signed into the URL: the upload must send exactly this
+	 * `Content-Type` header, or S3 (and the local dev server) rejects it with
+	 * `403 SignatureDoesNotMatch`. `createUploadHandle().upload()` sends it for
+	 * you. Must be a single `type/subtype` media type with optional `; name=value`
+	 * parameters (no comma-separated list, ASCII only). Must be in the bucket's
+	 * `allowedContentTypes` when that option is set;
+	 * otherwise the call throws `ValidationFailed`.
+	 */
 	contentType?: string;
+	/**
+	 * Exact size of the upload, in bytes. When set, it is signed into the URL and
+	 * S3 (and the local dev server) only accepts a body of exactly this size.
+	 * Browsers set `Content-Length` from the body automatically.
+	 *
+	 * Required when the bucket sets `maxUploadBytes`, and must not exceed it.
+	 *
+	 * @throws `ValidationFailed` when not a non-negative integer, missing while
+	 *   `maxUploadBytes` is set, or above `maxUploadBytes`.
+	 */
+	contentLength?: number;
 }
 
 export interface ScanOptions {
-	/** Only list files whose keys start with this prefix. */
+	/**
+	 * Only list files whose keys start with this prefix.
+	 *
+	 * Validated with the same rules as object keys, except that it may be empty
+	 * and may end with `/`: a leading `/`, an empty interior segment, a `.` or
+	 * `..` segment, a backslash and control or bidirectional formatting
+	 * characters throw `ValidationFailed`.
+	 */
 	prefix?: string;
 }
 
@@ -396,5 +500,6 @@ export interface FileDownloadDescriptor {
 export interface FileUploadDescriptor {
 	readonly __blocks: 'file-bucket/upload';
 	readonly url: string;
+	/** The signed content type the upload must send. Always set by current servers. */
 	readonly contentType?: string;
 }
