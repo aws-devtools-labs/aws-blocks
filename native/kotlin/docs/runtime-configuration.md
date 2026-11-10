@@ -92,7 +92,7 @@ configures it once with no platform-specific source sets — see [`example/kmp`]
 |---|---|
 | Android | `EncryptedSharedPreferences`, in the app's sandbox |
 | iOS | Keychain Services, scoped to the app's access group |
-| JVM | AES-256-GCM encrypted files under `~/.blocks/<applicationId>`, or memory if no id is set |
+| JVM | AES-256-GCM encrypted files under `~/.blocks/<applicationId>`, with the key held by the OS, or memory if no id is set |
 
 On the JVM the encryption key is stored in a file next to the encrypted entries, and both are
 protected only by file permissions. On a POSIX filesystem (Linux, macOS) they are owner-only
@@ -112,6 +112,41 @@ separate directories.
 There is deliberately no way to name the directory outright. The id is what the runtime needs in
 order to keep applications apart, and a path would be a second way to say the same thing — with
 the failure mode that two applications can be pointed at one directory by mistake.
+
+### What desktop storage protects
+
+The key that encrypts those files is held by the host operating system — the Keychain on macOS —
+rather than written beside them. Entries copied off the machine in a backup, a disk image or a
+synced folder therefore cannot be decrypted elsewhere.
+
+**This is not a boundary against other software on the machine.** A desktop OS gives an application
+no private storage, and its secret stores are reachable by anything running as the same user, so
+another program the user runs can read a stored session. What limits the exposure is the session's
+own lifetime and the backend revoking it at sign-out, not local storage. Treat desktop storage as
+convenience across restarts rather than as a security boundary. Android and iOS are different: there
+the OS does isolate one application's storage from another's.
+
+macOS is a partial exception. A keychain item is bound to the code identity of the program that
+created it, so a program built on a different Java runtime is refused until the user consents. Two
+applications bundling the same runtime share one identity, and an application that changes its
+bundled runtime prompts its user once.
+
+Where no OS secret store can be used, the key is kept beside the entries instead and the at-rest
+protection above is simply absent. Windows and Linux are in that position today. So is any
+application packaged as a standalone installer without the declarations native access needs:
+
+```kotlin
+compose.desktop {
+    application {
+        nativeDistributions {
+            modules("jdk.unsupported")
+        }
+        jvmArgs += "--enable-native-access=ALL-UNNAMED"
+    }
+}
+```
+
+Omitting either costs the protection, not correctness — nothing fails, and sessions still persist.
 
 ## Signing out
 
