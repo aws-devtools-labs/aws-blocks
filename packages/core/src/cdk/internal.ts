@@ -109,6 +109,7 @@ export {
 	findUnscopedServiceTrust,
 	SERVICE_TRUST_EXCLUSIONS,
 	SERVICE_TRUST_KEYS,
+	SERVICE_TRUST_OPERATORS,
 	scopeProviderWaiterTrust,
 	type ServiceTrustExclusion,
 	UNSCOPED_SERVICE_TRUST_WARNING,

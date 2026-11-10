@@ -77,7 +77,9 @@ export const SERVICE_TRUST_EXCLUSIONS: readonly ServiceTrustExclusion[] = [
 		// The account-level CloudWatch Logs role API Gateway uses for REST and
 		// WebSocket access logging (core's and Hosting's ensureApiGatewayAccount).
 		principal: 'apigateway.amazonaws.com',
-		role: /(^|\/)BlocksApiGatewayCloudWatchRole/,
+		// The role itself only (its `Resource` path or its logical id), not a construct
+		// whose id merely starts with the same name.
+		role: /(^|\/)BlocksApiGatewayCloudWatchRole\/Resource$|^BlocksApiGatewayCloudWatchRole[A-F0-9]{8}$/,
 		reason:
 			"API Gateway's CloudWatch Logs role is set once per account and Region (AWS::ApiGateway::Account), not " +
 			'per API. The documented trust policy names only the service principal, and API Gateway does not ' +
@@ -91,28 +93,68 @@ export const SERVICE_TRUST_EXCLUSIONS: readonly ServiceTrustExclusion[] = [
 export interface UnscopedServiceTrust {
 	/** The service principal, e.g. `bedrock.amazonaws.com`. */
 	readonly principal: string;
-	/** Which of {@link SERVICE_TRUST_KEYS} its statement lacks. */
+	/**
+	 * Which of {@link SERVICE_TRUST_KEYS} its statement doesn't constrain: the key
+	 * is absent, or appears only under an operator outside
+	 * {@link SERVICE_TRUST_OPERATORS} or with a wildcard-only value.
+	 */
 	readonly missing: readonly (typeof SERVICE_TRUST_KEYS)[number][];
 }
 
 const asArray = (v: unknown): unknown[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
-/** Condition keys in a statement's `Condition`, lowercased (IAM condition keys are case-insensitive). */
-function conditionKeys(condition: unknown): Set<string> {
+/**
+ * The condition operators that constrain each key to particular values. Negated
+ * operators (`StringNotEquals`, `ArnNotLike`), `Null`, the `…IfExists` forms
+ * (true when the key is absent) and the `ForAnyValue:`/`ForAllValues:` set
+ * operators don't, so a key under them alone counts as missing.
+ */
+export const SERVICE_TRUST_OPERATORS: Readonly<Record<(typeof SERVICE_TRUST_KEYS)[number], readonly string[]>> = {
+	'aws:SourceAccount': ['StringEquals'],
+	'aws:SourceArn': ['ArnLike', 'ArnEquals', 'StringEquals', 'StringLike'],
+};
+
+/**
+ * A condition value that limits the key: at least one entry, and no entry made
+ * only of `*` and `?` wildcards. An intrinsic (`{ Ref: 'AWS::AccountId' }`,
+ * `Fn::Join`, …) counts as a concrete value.
+ */
+function isConstrainingValue(value: unknown): boolean {
+	const values = asArray(value);
+	return values.length > 0 && values.every((v) => typeof v !== 'string' || !/^[*?]*$/.test(v));
+}
+
+/**
+ * The keys of {@link SERVICE_TRUST_KEYS} that a statement's `Condition`
+ * constrains, lowercased (IAM condition keys are case-insensitive).
+ */
+function constrainedKeys(condition: unknown): Set<string> {
 	const keys = new Set<string>();
 	if (!condition || typeof condition !== 'object') return keys;
-	for (const block of Object.values(condition as Record<string, unknown>)) {
+	for (const [operator, block] of Object.entries(condition as Record<string, unknown>)) {
 		if (!block || typeof block !== 'object') continue;
-		for (const key of Object.keys(block as Record<string, unknown>)) keys.add(key.toLowerCase());
+		for (const [key, value] of Object.entries(block as Record<string, unknown>)) {
+			const known = SERVICE_TRUST_KEYS.find((k) => k.toLowerCase() === key.toLowerCase());
+			if (known && SERVICE_TRUST_OPERATORS[known].includes(operator) && isConstrainingValue(value)) {
+				keys.add(known.toLowerCase());
+			}
+		}
 	}
 	return keys;
 }
 
-/** The literal service principals of a statement (`Principal.Service`); tokens and intrinsics are skipped. */
+/**
+ * The service principals of a statement (`Principal.Service`). A principal that
+ * isn't a literal string (an unresolved token or an intrinsic such as `Fn::Sub`)
+ * is returned as its JSON, so it is reported rather than skipped and never
+ * matches an exclusion.
+ */
 function servicePrincipals(statement: Record<string, unknown>): string[] {
 	const principal = statement.Principal;
 	if (!principal || typeof principal !== 'object') return [];
-	return asArray((principal as Record<string, unknown>).Service).filter((s): s is string => typeof s === 'string');
+	return asArray((principal as Record<string, unknown>).Service).map((s) =>
+		typeof s === 'string' ? s : JSON.stringify(s),
+	);
 }
 
 function isExcluded(principal: string, roleIds: readonly string[]): boolean {
@@ -124,8 +166,11 @@ function isExcluded(principal: string, roleIds: readonly string[]): boolean {
 /**
  * Every service principal in `trustPolicy` (a resolved `AssumeRolePolicyDocument`)
  * whose `Allow` statement lacks `aws:SourceAccount` or `aws:SourceArn`, minus
- * the {@link SERVICE_TRUST_EXCLUSIONS}. Any condition operator counts
- * (`StringEquals`, `ArnLike`, …); key names match case-insensitively.
+ * the {@link SERVICE_TRUST_EXCLUSIONS}. A key counts only under one of its
+ * {@link SERVICE_TRUST_OPERATORS} with a value that isn't wildcard-only; key
+ * names match case-insensitively. A service principal that isn't a literal
+ * string can't be matched against the exclusions, so it is reported (as its
+ * JSON) whenever its statement lacks a key.
  *
  * @param trustPolicy - the role's trust policy, as rendered for the template.
  * @param roleIds - the role's construct path and/or logical id, matched against
@@ -133,14 +178,17 @@ function isExcluded(principal: string, roleIds: readonly string[]): boolean {
  * @returns one entry per principal per statement; empty when every
  *   service trust is scoped or excluded.
  */
-export function findUnscopedServiceTrust(trustPolicy: unknown, roleIds: readonly string[] = []): UnscopedServiceTrust[] {
+export function findUnscopedServiceTrust(
+	trustPolicy: unknown,
+	roleIds: readonly string[] = [],
+): UnscopedServiceTrust[] {
 	const gaps: UnscopedServiceTrust[] = [];
 	const statements = asArray((trustPolicy as { Statement?: unknown } | undefined)?.Statement);
 	for (const raw of statements) {
 		if (!raw || typeof raw !== 'object') continue;
 		const statement = raw as Record<string, unknown>;
 		if (statement.Effect !== 'Allow') continue;
-		const keys = conditionKeys(statement.Condition);
+		const keys = constrainedKeys(statement.Condition);
 		const missing = SERVICE_TRUST_KEYS.filter((k) => !keys.has(k.toLowerCase()));
 		if (missing.length === 0) continue;
 		for (const principal of servicePrincipals(statement)) {
@@ -184,7 +232,9 @@ export function scopeProviderWaiterTrust(provider: Construct): void {
 				Action: 'sts:AssumeRole',
 				Condition: {
 					StringEquals: { 'aws:SourceAccount': stack.account },
-					ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:states:${stack.region}:${stack.account}:stateMachine:*` },
+					ArnLike: {
+						'aws:SourceArn': `arn:${stack.partition}:states:${stack.region}:${stack.account}:stateMachine:*`,
+					},
 				},
 			},
 		],
@@ -220,7 +270,7 @@ export function warnOnUnscopedServiceTrust(root: Construct): void {
 					`${describeUnscopedServiceTrust(role.node.path, gaps)}. ` +
 						'Any resource of that service, in any account, could get it to assume this role. Add ' +
 						'"StringEquals": { "aws:SourceAccount": <account> } and "ArnLike": { "aws:SourceArn": ' +
-						'<this account\'s resources of that service> } to the trust statement ' +
+						"<this account's resources of that service> } to the trust statement " +
 						'(https://docs.aws.amazon.com/IAM/latest/UserGuide/confused-deputy.html).',
 				);
 			}

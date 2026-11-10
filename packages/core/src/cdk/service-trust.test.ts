@@ -74,10 +74,15 @@ const handlerPath = join(__dirname, '__fixtures__', 'handler.js');
 const unscopedBackendPath = join(__dirname, '__fixtures__', 'iam-boundary-backend.js');
 const noRoleBackendPath = join(__dirname, '__fixtures__', 'factory-backend.js');
 
-const trust = (service: string | string[], condition?: Record<string, unknown>, effect = 'Allow') => ({
+const trust = (service: unknown, condition?: Record<string, unknown>, effect = 'Allow') => ({
 	Version: '2012-10-17',
 	Statement: [
-		{ Effect: effect, Principal: { Service: service }, Action: 'sts:AssumeRole', ...(condition ? { Condition: condition } : {}) },
+		{
+			Effect: effect,
+			Principal: { Service: service },
+			Action: 'sts:AssumeRole',
+			...(condition ? { Condition: condition } : {}),
+		},
 	],
 });
 const BOTH = {
@@ -113,6 +118,61 @@ describe('findUnscopedServiceTrust', () => {
 		);
 	});
 
+	test('a key under a non-constraining operator or with a wildcard-only value counts as missing', () => {
+		const both = { principal: 'bedrock.amazonaws.com', missing: ['aws:SourceAccount', 'aws:SourceArn'] };
+		for (const condition of [
+			{ Null: { 'aws:SourceAccount': 'false', 'aws:SourceArn': 'false' } },
+			{
+				StringNotEquals: { 'aws:SourceAccount': '000000000000' },
+				ArnNotLike: { 'aws:SourceArn': 'arn:aws:x:::y' },
+			},
+			{
+				StringEqualsIfExists: { 'aws:SourceAccount': '123456789012' },
+				ArnLikeIfExists: { 'aws:SourceArn': 'arn:*' },
+			},
+			{ 'ForAnyValue:StringEquals': { 'aws:SourceAccount': '123456789012', 'aws:SourceArn': 'arn:aws:x:::y' } },
+			{ StringEquals: { 'aws:SourceAccount': '*' }, ArnLike: { 'aws:SourceArn': ['*'] } },
+			{ StringLike: { 'aws:SourceAccount': '*' }, StringEquals: { 'aws:SourceArn': [] } },
+		]) {
+			assert.deepStrictEqual(
+				findUnscopedServiceTrust(trust('bedrock.amazonaws.com', condition)),
+				[both],
+				JSON.stringify(condition),
+			);
+		}
+		assert.deepStrictEqual(
+			findUnscopedServiceTrust(
+				trust('bedrock.amazonaws.com', {
+					StringEquals: { 'aws:SourceAccount': '123456789012' },
+					ArnNotLike: { 'aws:SourceArn': 'arn:aws:bedrock:*' },
+				}),
+			),
+			[{ principal: 'bedrock.amazonaws.com', missing: ['aws:SourceArn'] }],
+		);
+	});
+
+	test('an intrinsic condition value counts as concrete', () => {
+		assert.deepStrictEqual(
+			findUnscopedServiceTrust(
+				trust('states.amazonaws.com', {
+					StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+					ArnLike: {
+						'aws:SourceArn': { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':states:*']] },
+					},
+				}),
+			),
+			[],
+		);
+	});
+
+	test('reports a service principal that is not a literal string instead of skipping it', () => {
+		const principal = { 'Fn::Sub': 'bedrock.amazonaws.com' };
+		assert.deepStrictEqual(findUnscopedServiceTrust(trust([principal, 'lambda.amazonaws.com'])), [
+			{ principal: JSON.stringify(principal), missing: ['aws:SourceAccount', 'aws:SourceArn'] },
+		]);
+		assert.deepStrictEqual(findUnscopedServiceTrust(trust(principal, BOTH)), []);
+	});
+
 	test('reports each non-excluded principal of a multi-principal statement', () => {
 		assert.deepStrictEqual(findUnscopedServiceTrust(trust(['lambda.amazonaws.com', 'states.amazonaws.com'])), [
 			{ principal: 'states.amazonaws.com', missing: ['aws:SourceAccount', 'aws:SourceArn'] },
@@ -128,16 +188,31 @@ describe('findUnscopedServiceTrust', () => {
 	});
 
 	test('the Lambda execution-role principals are excluded on every role', () => {
-		assert.deepStrictEqual(findUnscopedServiceTrust(trust(['lambda.amazonaws.com', 'edgelambda.amazonaws.com'])), []);
+		assert.deepStrictEqual(
+			findUnscopedServiceTrust(trust(['lambda.amazonaws.com', 'edgelambda.amazonaws.com'])),
+			[],
+		);
 	});
 
 	test('apigateway.amazonaws.com is excluded only on the account-level CloudWatch Logs role', () => {
 		const doc = trust('apigateway.amazonaws.com');
 		assert.deepStrictEqual(findUnscopedServiceTrust(doc, ['BlocksApiGatewayCloudWatchRoleAB12CD34']), []);
 		assert.deepStrictEqual(findUnscopedServiceTrust(doc, ['App/BlocksApiGatewayCloudWatchRole/Resource']), []);
-		assert.deepStrictEqual(findUnscopedServiceTrust(doc, ['App/Api/CredentialsRole/Resource']), [
-			{ principal: 'apigateway.amazonaws.com', missing: ['aws:SourceAccount', 'aws:SourceArn'] },
-		]);
+		const gap = [{ principal: 'apigateway.amazonaws.com', missing: ['aws:SourceAccount', 'aws:SourceArn'] }];
+		assert.deepStrictEqual(findUnscopedServiceTrust(doc, ['App/Api/CredentialsRole/Resource']), gap);
+		// A construct whose id only starts with the role's name, and roles inside it, are not excluded.
+		assert.deepStrictEqual(
+			findUnscopedServiceTrust(doc, ['App/BlocksApiGatewayCloudWatchRoleHelper/AnyRole/Resource']),
+			gap,
+		);
+		assert.deepStrictEqual(
+			findUnscopedServiceTrust(doc, ['App/BlocksApiGatewayCloudWatchRole/Inner/Resource']),
+			gap,
+		);
+		assert.deepStrictEqual(
+			findUnscopedServiceTrust(doc, ['BlocksApiGatewayCloudWatchRoleHelperAnyRoleAB12CD34']),
+			gap,
+		);
 	});
 
 	test('every exclusion names a reason and an AWS documentation link', () => {
@@ -166,8 +241,8 @@ describe('scopeProviderWaiterTrust', () => {
 		const waiterRole = provider.node.findChild('waiter-state-machine').node.findChild('Role').node
 			.defaultChild as cdk.CfnResource;
 		const template = Template.fromStack(stack);
-		const rendered = template.toJSON().Resources[stack.resolve(waiterRole.logicalId)].Properties
-			.AssumeRolePolicyDocument;
+		const rendered =
+			template.toJSON().Resources[stack.resolve(waiterRole.logicalId)].Properties.AssumeRolePolicyDocument;
 		assert.deepStrictEqual(rendered.Statement, [
 			{
 				Effect: 'Allow',
@@ -219,7 +294,10 @@ describe('unscoped service-trust synth warning', () => {
 		const warnings = annotations.findWarning('*', WARNING_ACK_TAG);
 		assert.strictEqual(warnings.length, 1, JSON.stringify(warnings, null, 2));
 		assert.match(warnings[0].id, /\/kv\/HelperRole\/Resource$/);
-		assert.match(String(warnings[0].entry.data), /bedrock\.amazonaws\.com trust lacks aws:SourceAccount and aws:SourceArn/);
+		assert.match(
+			String(warnings[0].entry.data),
+			/bedrock\.amazonaws\.com trust lacks aws:SourceAccount and aws:SourceArn/,
+		);
 	});
 
 	test('acknowledging the warning id on an ancestor silences it', async () => {

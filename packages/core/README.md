@@ -708,7 +708,7 @@ Three principals are trusted without the keys, because their documented trust po
 | `edgelambda.amazonaws.com` | `Hosting`'s Lambda@Edge execution role | [Lambda@Edge roles](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-edge-permissions.html) |
 | `apigateway.amazonaws.com` | the account-level CloudWatch Logs role for access logging (`BlocksApiGatewayCloudWatchRole`) | [API Gateway CloudWatch logging](https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-logging.html) |
 
-At synth, `BlocksStack` and `BlocksBackend` check the trust policy of every role AWS Blocks creates for them (in a `BlocksStack`, every role in the stack, including roles you add yourself). A role that trusts any other service without both keys gets a warning (id `blocks:iam:unscopedServiceTrust`); synth doesn't fail. Add the two keys to the statement, as in this Step Functions example:
+At synth, `BlocksStack` and `BlocksBackend` check the trust policy of every role AWS Blocks creates for them (in a `BlocksStack`, every role in the stack, including roles you add yourself). A role that trusts any other service without both keys gets a warning (id `blocks:iam:unscopedServiceTrust`); synth doesn't fail. A key counts only when it limits the value: `aws:SourceAccount` under `StringEquals`, `aws:SourceArn` under `ArnLike`, `ArnEquals`, `StringEquals` or `StringLike`, with a value that isn't only wildcards. Negated operators, `Null`, the `…IfExists` forms and `ForAnyValue:`/`ForAllValues:` don't count. Add the two keys to the statement, as in this Step Functions example:
 
 ```ts
 new iam.Role(stack, 'StatesRole', {
