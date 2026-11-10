@@ -31,6 +31,12 @@ export interface ContainerComputeProps {
 	 * re-pushed. The default, `public.ecr.aws/docker/library/node:24-slim`, is
 	 * pinned by digest (`DEFAULT_CONTAINER_IMAGE`), so it doesn't change between
 	 * deploys.
+	 *
+	 * The default image runs as its unprivileged `node` user (uid/gid 1000) and
+	 * boots from `/home/node/app`. A custom image runs as its own default user
+	 * (Blocks sets no `user` for it) and boots from `/app`, so an image that
+	 * needs root keeps it; setting `image` to the stock Node image explicitly is
+	 * the opt-out for an app that needs root on the default image.
 	 */
 	image?: string;
 	/**

@@ -20,7 +20,11 @@
  * aren't subject to Docker Hub rate limits.
  *
  * At this digest, `24-slim` was Node 24.22.2 (Debian slim) and the image's
- * default user is root.
+ * default user is root. Blocks doesn't run it as root: the task definition sets
+ * the container user to {@link DEFAULT_CONTAINER_USER} (the image's built-in
+ * `node` user) and boots from {@link DEFAULT_CONTAINER_APP_DIR}, which that user
+ * owns. When bumping the digest, confirm the image still ships `node` as
+ * uid/gid 1000 with `/home/node` as its home directory.
  *
  * **Bumping it.** Dependabot doesn't track this constant. To pick up a newer
  * `24-slim` (security patches, Node minor releases), run
@@ -38,3 +42,32 @@
  */
 export const DEFAULT_CONTAINER_IMAGE =
 	'public.ecr.aws/docker/library/node@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9'; // node:24-slim
+
+/**
+ * Container user (`uid:gid`) the default image runs as: the unprivileged `node`
+ * user (uid/gid 1000) that the Docker official Node images create. Numeric, so
+ * ECS doesn't need to look the name up in the image's `/etc/passwd`. Applied only
+ * to {@link DEFAULT_CONTAINER_IMAGE}; a custom `image` runs as its own default
+ * user.
+ *
+ * @internal
+ */
+export const DEFAULT_CONTAINER_USER = '1000:1000';
+
+/**
+ * Directory the default image boots from (bootstrap, `main.js`, `worker.js`).
+ * Under the `node` user's home directory, which that user owns — the root-owned
+ * `/app` isn't writable by {@link DEFAULT_CONTAINER_USER}. A custom `image` keeps
+ * {@link CUSTOM_IMAGE_APP_DIR}.
+ *
+ * @internal
+ */
+export const DEFAULT_CONTAINER_APP_DIR = '/home/node/app';
+
+/**
+ * Directory a custom `image` boots from. Unchanged from earlier releases, so an
+ * image that prepared `/app` for its own (possibly non-root) user keeps working.
+ *
+ * @internal
+ */
+export const CUSTOM_IMAGE_APP_DIR = '/app';

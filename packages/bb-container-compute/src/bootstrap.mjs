@@ -11,7 +11,9 @@
  * pinned by digest; or the customer's `image`) verbatim, and the application
  * code (`main.js` + `worker.js`) is shipped separately as an S3 asset. A task
  * command override runs this script at boot; it downloads both bundles to
- * `/app` and execs `node /app/main.js`.
+ * `BLOCKS_APP_DIR` (`/app` when unset) and execs `node <dir>/main.js`. The
+ * default image runs as its unprivileged `node` user and boots from
+ * `/home/node/app`, a directory that user owns; a custom image boots from `/app`.
  *
  * HARD CONSTRAINT: this file runs BEFORE the app bundles exist on disk, on a
  * stock Node image that has no AWS CLI, no curl, and no `@aws-sdk/*`. So it must
@@ -32,6 +34,7 @@
  *   BLOCKS_CODE_MAIN_KEY     S3 key of main.js (the parent bundle)
  *   BLOCKS_CODE_WORKER_KEY   S3 key of worker.js (the per-job worker bundle)
  *   BLOCKS_CODE_PKG_KEY      S3 key of package.json ({"type":"commonjs"})
+ *   BLOCKS_APP_DIR           directory to write the bundles to (default `/app`)
  *   AWS_REGION               region of the bucket (set by ECS)
  *   AWS_CONTAINER_CREDENTIALS_RELATIVE_URI   task-role creds endpoint (set by ECS)
  */
@@ -41,7 +44,7 @@ import { get as httpGet } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { spawn } from 'node:child_process';
 
-const APP_DIR = '/app';
+const APP_DIR = process.env.BLOCKS_APP_DIR || '/app';
 const CREDS_HOST = '169.254.170.2'; // ECS task metadata/credentials link-local address
 
 /** Minimal GET over http (used only for the link-local credentials endpoint). */
@@ -182,11 +185,13 @@ async function main() {
 		);
 	}
 
-	const creds = await getTaskCredentials();
+	// Create the boot dir first, so a dir the container user can't write fails
+	// before any credentials are fetched.
 	mkdirSync(APP_DIR, { recursive: true });
+	const creds = await getTaskCredentials();
 
 	// Fetch each bundle by its exact S3 key and write it under /app with the name
-	// main.js runtime expects (BLOCKS_JOB_WORKER_ENTRY points at /app/worker.js).
+	// main.js runtime expects (BLOCKS_JOB_WORKER_ENTRY points at <APP_DIR>/worker.js).
 	for (const { name, key } of files) {
 		const body = await s3Get(bucket, key, region, creds);
 		writeFileSync(`${APP_DIR}/${name}`, body);

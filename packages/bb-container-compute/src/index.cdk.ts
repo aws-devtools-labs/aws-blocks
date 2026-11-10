@@ -53,7 +53,12 @@ import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as s3assets from 'aws-cdk-lib/aws-s3-assets';
 import type * as sqs from 'aws-cdk-lib/aws-sqs';
 import { bundleContainerAsset } from './bundle.js';
-import { DEFAULT_CONTAINER_IMAGE } from './default-image.js';
+import {
+	CUSTOM_IMAGE_APP_DIR,
+	DEFAULT_CONTAINER_APP_DIR,
+	DEFAULT_CONTAINER_IMAGE,
+	DEFAULT_CONTAINER_USER,
+} from './default-image.js';
 import {
 	buildContainerApiWidgets,
 	buildContainerHealthWidgets,
@@ -132,8 +137,8 @@ const STOP_TIMEOUT_SECONDS = 120;
  */
 const DRAIN_GRACE_SECONDS = STOP_TIMEOUT_SECONDS - 10;
 
-/** Absolute in-container path the bootstrap runs from (also runs itself from here). */
-const BOOTSTRAP_PATH = '/app/bootstrap.mjs';
+/** File name of the bootstrap inside the boot directory (it runs itself from there). */
+const BOOTSTRAP_FILE = 'bootstrap.mjs';
 
 /** SQS queue URLs an AsyncJob assigned to a container registers here so the compute's
  * queue-depth autoscaling can sum them. Keyed per compute via a Symbol on the instance. */
@@ -321,6 +326,13 @@ export class ContainerCompute extends ComputeBase {
 		workerAsset.grantRead(taskRole);
 		pkgAsset.grantRead(taskRole);
 
+		// The default image runs as its unprivileged `node` user, booting from a
+		// directory that user owns. A custom image keeps its own default user (it
+		// may need root, or already run as a user of its own) and the `/app` boot
+		// directory, so existing custom images behave exactly as before.
+		const usesDefaultImage = options?.image === undefined;
+		const appDir = usesDefaultImage ? DEFAULT_CONTAINER_APP_DIR : CUSTOM_IMAGE_APP_DIR;
+
 		this.container = this.taskDefinition.addContainer('Backend', {
 			// Stock public Node image by default, or the customer's image verbatim —
 			// either way via fromRegistry (a remote pull, never a local build). The
@@ -334,7 +346,10 @@ export class ContainerCompute extends ComputeBase {
 			// sanctioned ECS "generic image + command override" pattern; see
 			// bootstrap.mjs.
 			entryPoint: ['node', '-e'],
-			command: [this.buildBootstrapLauncher(assetPath)],
+			command: [this.buildBootstrapLauncher(assetPath, appDir)],
+			// Not root: ports 8080/8081 aren't privileged and the boot dir is owned
+			// by this user. Omitted for a custom image (its own USER applies).
+			...(usesDefaultImage ? { user: DEFAULT_CONTAINER_USER } : {}),
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
 			environment: {
 				NODE_ENV: 'production',
@@ -343,6 +358,8 @@ export class ContainerCompute extends ComputeBase {
 				BLOCKS_CONFIG_KEY: configKey,
 				BLOCKS_COMPUTE_ID: this.fullId,
 				BLOCKS_SERVICE_MODE: 'worker',
+				// Where bootstrap.mjs writes the bundles and main.js finds worker.js.
+				BLOCKS_APP_DIR: appDir,
 				// Where bootstrap.mjs fetches each app bundle from (same bucket; the
 				// three files are individually-keyed S3 assets).
 				BLOCKS_CODE_BUCKET: mainAsset.s3BucketName,
@@ -882,23 +899,26 @@ export class ContainerCompute extends ComputeBase {
 	 * The container's own code (`main.js`/`worker.js`) lives in S3 and is fetched
 	 * at boot — but the fetcher itself (`bootstrap.mjs`) can't be fetched the same
 	 * way without a chicken-and-egg. So we inline the committed `bootstrap.mjs`
-	 * verbatim: write it to {@link BOOTSTRAP_PATH} and import it. The script then
+	 * verbatim: write it to `<appDir>/bootstrap.mjs` and import it. The script then
 	 * reads `BLOCKS_CODE_BUCKET`/`BLOCKS_CODE_PREFIX`, downloads the bundles with
 	 * the task role, and execs the parent. No extra S3 round-trip for the booter,
 	 * and nothing baked into the image.
 	 *
 	 * @param assetDir - the synth-time asset dir containing `bootstrap.mjs`.
+	 * @param appDir - the in-container boot directory (writable by the container
+	 *   user): the default image's non-root dir, or `/app` for a custom image.
 	 */
-	private buildBootstrapLauncher(assetDir: string): string {
+	private buildBootstrapLauncher(assetDir: string, appDir: string): string {
 		const bootstrapSource = readFileSync(join(assetDir, 'bootstrap.mjs'), 'utf8');
 		const b64 = Buffer.from(bootstrapSource, 'utf8').toString('base64');
 		// Write the ESM bootstrap to disk, then import() it (node -e runs CJS, so we
 		// can't inline ESM syntax directly — import() of a file works from CJS).
+		const bootstrapPath = `${appDir}/${BOOTSTRAP_FILE}`;
 		return [
 			'const {writeFileSync,mkdirSync}=require("node:fs");',
-			'mkdirSync("/app",{recursive:true});',
-			`writeFileSync(${JSON.stringify(BOOTSTRAP_PATH)},Buffer.from(${JSON.stringify(b64)},"base64"));`,
-			`import(${JSON.stringify(BOOTSTRAP_PATH)}).catch(e=>{console.error(e);process.exit(1);});`,
+			`mkdirSync(${JSON.stringify(appDir)},{recursive:true});`,
+			`writeFileSync(${JSON.stringify(bootstrapPath)},Buffer.from(${JSON.stringify(b64)},"base64"));`,
+			`import(${JSON.stringify(bootstrapPath)}).catch(e=>{console.error(e);process.exit(1);});`,
 		].join('');
 	}
 }
