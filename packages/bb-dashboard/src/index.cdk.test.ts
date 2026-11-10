@@ -188,6 +188,11 @@ describe('Dashboard synth ids', () => {
 // Every AWS::IAM::Role in every synthesized template (custom-resource provider
 // roles and any other stack or helper stack's roles included) must carry the
 // configured boundary and be listed in the synth-time IAM report.
+//
+// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-container-compute and bb-cron-job
+// cdk test files, and mirrors core's `assertEveryRoleBounded` in
+// `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
+// belongs in all of them.
 
 const GUARD_BOUNDARY = 'blocks-guard-boundary';
 const GUARD_EXPECTED = {
@@ -198,9 +203,12 @@ const GUARD_EXPECTED = {
 };
 
 /**
- * Read every template and the IAM report in `outdir`; fail on a role without the
- * boundary or missing from the report. Returns the checked roles as
+ * Read every top-level template and the IAM report in `outdir`; fail on a role
+ * without the boundary or missing from the report. Returns the checked roles as
  * `<artifact>/<logicalId>` (for asserting a block's own roles were reached).
+ *
+ * Only the top level of the cloud assembly is read: templates from a CDK `Stage`
+ * (written under `assembly-*` folders) are not. No block tested here creates a Stage.
  */
 function assertEveryRoleBoundedAndReported(outdir: string, reportFile: string): string[] {
 	const report = JSON.parse(readFileSync(join(outdir, reportFile), 'utf8')) as {
@@ -250,6 +258,9 @@ describe('Dashboard under defaults.permissionsBoundary', () => {
 			app.synth();
 
 			const checked = assertEveryRoleBoundedAndReported(outdir, `${stack.artifactId}.blocks-iam.json`);
+			// Dashboard owns no IAM roles today, and `BlocksRole` is the shared execution role every
+			// BlocksStack has, so this check doesn't prove Dashboard was reached. The test is a guard:
+			// a role Dashboard adds later must carry the boundary and be reported.
 			assert.ok(
 				checked.some((r) => r.includes('BlocksRole')),
 				`the shared execution role was checked: ${checked}`,
