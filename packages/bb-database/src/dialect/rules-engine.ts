@@ -9,8 +9,12 @@ import type { ClusterType } from '../types.js';
 import { inspectStatement, type StatementInfo, TransactionTracker, validateStatement } from './validation.js';
 
 const ddlNotAllowed = (kind: ClusterType): string =>
-	`DDL statements (CREATE, ALTER, DROP) are not allowed in the app runtime of a ${kind} cluster: the app role has ` +
-	'DML only. Put them in a migration file; the migration Lambda runs DDL as the cluster admin.';
+	`DDL statements (CREATE, ALTER, DROP) and TRUNCATE are not allowed in the app runtime of a ${kind} cluster: the ` +
+	'app role has SELECT, INSERT, UPDATE and DELETE only. Put DDL in a migration file; the migration Lambda runs it as ' +
+	'the cluster admin.';
+
+// TRUNCATE needs its own privilege, which the deployed app role is never granted; locally PGlite would allow it.
+const TRUNCATE = /^\s*TRUNCATE\b/i;
 
 export interface CountedRows<T> {
 	rows: T[];
@@ -69,7 +73,8 @@ export class RulesEngine implements DatabaseEngine {
 		const info = inspectStatement(sql);
 		if (!this.allowDdl) {
 			if (this.limited) validateStatement(sql, info.cleaned);
-			if (info.kind === 'ddl') throw blocksError(PERMISSION_ERROR_NAME, ddlNotAllowed(this.kind));
+			if (info.kind === 'ddl' || TRUNCATE.test(info.cleaned))
+				throw blocksError(PERMISSION_ERROR_NAME, ddlNotAllowed(this.kind));
 		}
 		return info;
 	}

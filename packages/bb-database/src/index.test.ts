@@ -662,6 +662,8 @@ describe('DatabaseCluster (shared Aurora, express configuration)', () => {
 			name: PERMISSION_ERROR_NAME,
 			message: /not allowed in the app runtime of a aurora cluster/,
 		});
+		// The deployed role has no TRUNCATE privilege; PGlite alone would allow it.
+		await assert.rejects(db.execute(sql`TRUNCATE t`), { name: PERMISSION_ERROR_NAME });
 		simulateConflict(db);
 		await assert.rejects(
 			db.transaction(async (tx) => {

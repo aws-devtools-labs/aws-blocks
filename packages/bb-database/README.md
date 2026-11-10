@@ -267,7 +267,7 @@ try {
 
 `npm run dev` needs no AWS account. Each cluster is one PGlite (PostgreSQL compiled to WebAssembly) under `.bb-data/`, with one schema per block, as on AWS.
 
-A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production. An `aurora` cluster is PostgreSQL on both sides, so only the DDL rule applies locally: the deployed app role can read and write rows, not create tables. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them.
+A `dsql` cluster adds DSQL's checks locally: `dsql-lint` on every handler statement (cached per statement text), no DDL outside a migration, and the 3,000-row and 10 MiB transaction limits (see [Transactions](#transactions)). Unsupported SQL fails on your machine, not in production. An `aurora` cluster is PostgreSQL on both sides, so only the privilege rule applies locally: the deployed app role can read and write rows, not create tables or `TRUNCATE` them, and the mock refuses the same statements. DSQL's forms (`ASYNC`, `sys.wait_for_job`) are rejected locally on an `aurora` cluster, as Aurora rejects them.
 
 A connection to an `aurora` cluster is released ten seconds after its last statement, so a cluster at `minCapacity: 0` can pause between requests (an open connection keeps it running); the next request reconnects.
 

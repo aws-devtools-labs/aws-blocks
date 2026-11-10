@@ -16,6 +16,9 @@ type _DbxKind = Expect<Equal<Info['dbx']['cluster']['kind'], ClusterType>>;
 type _DbxcKind = Expect<Equal<Info['dbxc']['cluster']['kind'], ClusterType>>;
 type Task = NonNullable<Awaited<ReturnType<typeof apiType.dbxcAdd>>>;
 type _Task = Expect<Equal<Task, { id: number; title: string; done: boolean }>>;
+// The result schema, not a type argument, types the validated read on the aurora path too.
+type ValidatedTask = NonNullable<Awaited<ReturnType<typeof apiType.dbxcGetValidated>>>;
+type _ValidatedTask = Expect<Equal<ValidatedTask, { id: number; title: string; done: boolean }>>;
 // A result schema, not a type argument, is what types these two: the inferred
 // type must be the schema's output, and `id` must be a number on both environments.
 type Validated = NonNullable<Awaited<ReturnType<typeof apiType.dbxGetValidated>>>;
@@ -185,6 +188,63 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.deepStrictEqual(completed, { done: true, touched: true });
       assert.deepStrictEqual(await api.dbxcBulk(3001), { inserted: 3001, deleted: 3001 });
       assert.deepStrictEqual(await api.dbxcDelete(task.id), { rowCount: 1 });
+    });
+
+    test('aurora cluster - a foreign key is enforced, a join aggregates, and a delete cascades', async () => {
+      const api = getApi();
+      const task = await api.dbxcAdd(`fk-${Date.now().toString(36)}`);
+      assert.ok(task);
+      const orphan = await api.dbxcAddComment(task.id + 1_000_000, 'no such task');
+      assert.strictEqual(orphan.error, DatabaseErrors.QueryFailed, 'SQLSTATE 23503 reaches the client as QueryFailed');
+      const first = await api.dbxcAddComment(task.id, 'first');
+      const second = await api.dbxcAddComment(task.id, 'second');
+      assert.ok(first.id !== null && second.id !== null && second.id > first.id, 'SERIAL ids on the child table');
+      assert.deepStrictEqual(await api.dbxcTasksWithCounts([task.id]), [{ id: task.id, title: task.title, comments: 2 }]);
+      assert.deepStrictEqual(await api.dbxcDelete(task.id), { rowCount: 1 });
+      assert.strictEqual(await api.dbxcCommentCount(task.id), 0, 'ON DELETE CASCADE removed the comments');
+    });
+
+    test('aurora cluster - a transaction that throws after writing keeps nothing, and the ApiError passes through', async () => {
+      const result = await getApi().dbxcAtomicFail(50);
+      assert.strictEqual(result.error, 'ApiError');
+      assert.strictEqual(result.kept, 0);
+    });
+
+    test('aurora cluster - DDL and TRUNCATE are refused: the app role has DML only', async () => {
+      const api = getApi();
+      for (const result of [await api.dbxcRejectDdl(), await api.dbxcRejectTruncate()]) {
+        assert.ok(
+          result.error === 'DatabasePermissionException' || result.error === DatabaseErrors.QueryFailed,
+          `expected the mock's guard or the role's missing privilege, got ${result.error}`,
+        );
+      }
+    });
+
+    test('aurora cluster - a result schema types and validates rows; a mismatch is ResultValidationFailed', async () => {
+      const api = getApi();
+      const task = await api.dbxcAdd(`schema-${Date.now().toString(36)}`);
+      assert.ok(task);
+      try {
+        assert.deepStrictEqual(await api.dbxcGetValidated(task.id), { id: task.id, title: task.title, done: false });
+        assert.strictEqual((await api.dbxcSchemaMismatch(task.id)).error, DatabaseErrors.ResultValidationFailed);
+      } finally {
+        await api.dbxcDelete(task.id);
+      }
+    });
+
+    test('aurora cluster - a simulated conflict is retried with retryOnConflict (local mode)', async () => {
+      const api = getApi();
+      const task = await api.dbxcAdd(`conflict-${Date.now().toString(36)}`);
+      assert.ok(task);
+      try {
+        const result = await api.dbxcSimulatedConflictComplete(task.id);
+        if (result.simulated) {
+          assert.strictEqual(result.attempts, 2, 'the callback ran once, conflicted at commit, and ran again');
+          assert.deepStrictEqual(await api.dbxcGetValidated(task.id), { id: task.id, title: task.title, done: true });
+        }
+      } finally {
+        await api.dbxcDelete(task.id);
+      }
     });
 
     test('shared cluster - the validated foreign key and check constraint are enforced on DSQL', async () => {

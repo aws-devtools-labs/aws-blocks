@@ -403,6 +403,7 @@ const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 // transaction may change any number of rows. Scales to zero between requests.
 const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
 const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
+const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -1825,6 +1826,100 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async dbxcDelete(id: number) {
     const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE id = ${id}`);
     return { rowCount };
+  },
+
+  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as QueryFailed.
+  async dbxcAddComment(taskId: number, body: string) {
+    try {
+      const row = await dbxc.queryOne<{ id: number }>(
+        sql`INSERT INTO comments (task_id, body) VALUES (${taskId}, ${body}) RETURNING id`,
+      );
+      return { id: row?.id ?? null, error: null };
+    } catch (e) {
+      return { id: null, error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // A join with an aggregate in one statement; `count(*)` is bigint, cast so it is a number on both environments.
+  async dbxcTasksWithCounts(ids: number[]) {
+    return await dbxc.query<{ id: number; title: string; comments: number }>(
+      sql`SELECT t.id, t.title, count(c.id)::int AS comments
+          FROM tasks t LEFT JOIN comments c ON c.task_id = t.id
+          WHERE t.id = ANY(${ids})
+          GROUP BY t.id, t.title ORDER BY t.id`,
+    );
+  },
+
+  async dbxcCommentCount(taskId: number) {
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM comments WHERE task_id = ${taskId}`);
+    return row?.n ?? 0;
+  },
+
+  // A transaction that fails after writing: PostgreSQL keeps nothing, however many rows it touched.
+  async dbxcAtomicFail(count: number) {
+    const prefix = `atomic-${Date.now().toString(36)}-`;
+    let error: string | null = null;
+    try {
+      await dbxc.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO tasks (title) SELECT ${prefix} || g FROM generate_series(1, ${count}) g`);
+        throw new ApiError('abort after the insert', 409);
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.name : String(e);
+    }
+    const kept = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { error, kept: kept?.n ?? 0 };
+  },
+
+  // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
+  // missing privilege (42501, QueryFailed) when deployed.
+  async dbxcRejectDdl() {
+    try {
+      await dbxc.execute(sql`CREATE TABLE dbxc_should_not_exist (id INT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxcRejectTruncate() {
+    try {
+      await dbxc.execute(sql`TRUNCATE tasks`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // A result schema on the aurora path: the row type comes from the value, and a mismatch is a typed error.
+  async dbxcGetValidated(id: number) {
+    return await dbxc.queryOne(sql`SELECT id, title, done FROM tasks WHERE id = ${id}`, { schema: DbxcTask });
+  },
+
+  async dbxcSchemaMismatch(id: number) {
+    try {
+      await dbxc.queryOne(sql`SELECT id, title FROM tasks WHERE id = ${id}`, { schema: DbxcTask });
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxcSimulatedConflictComplete(id: number) {
+    try {
+      simulateConflict(dbxc);
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbxc.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE tasks SET done = true WHERE id = ${id}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
   },
 
   async dbxInsert(id: string, name: string, value: number) {
