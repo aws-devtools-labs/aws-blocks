@@ -80,9 +80,11 @@ import { SessionManager, pendingCookieName } from './session-manager.js';
  * callback request. `openid-client` derives the token request's `redirect_uri`
  * from this URL's origin + path, so basing it on the stored callback URL — not
  * the raw inbound request — keeps authorize and token byte-identical. Behind
- * CloudFront/API Gateway the inbound request resolves to the execute-api host,
- * which would otherwise mismatch the public authorize `redirect_uri` and make
- * the IdP reject the exchange with `invalid_grant`.
+ * API Gateway, or a front door that doesn't stamp the viewer host, the inbound
+ * request resolves to the execute-api host; behind a Blocks CloudFront door it is
+ * the host the IdP redirected to, which needn't be the callback origin authorize
+ * used. Either would otherwise mismatch the public authorize `redirect_uri` and
+ * make the IdP reject the exchange with `invalid_grant`.
  *
  * @internal Exported for testing only.
  */
@@ -625,10 +627,11 @@ export class OidcClientEngine implements AuthEngine {
 		// redirect_uri sent at the authorize step — carrying the IdP's returned
 		// query params (code/state/iss). `openid-client` derives the token
 		// request's `redirect_uri` from this URL, so it must byte-match what
-		// authorize sent. Using the raw `ctx.request.url` breaks behind
-		// CloudFront/API Gateway: the callback request resolves to the execute-api
-		// host, not the public callback origin, so the token `redirect_uri` no
-		// longer matches authorize → the IdP returns `invalid_grant`. (PKCE's
+		// authorize sent. Using the raw `ctx.request.url` breaks behind API
+		// Gateway or a door that doesn't stamp the viewer host: the callback
+		// request resolves to the execute-api host, not the public callback
+		// origin, so the token `redirect_uri` no longer matches authorize → the
+		// IdP returns `invalid_grant`. (PKCE's
 		// `handleExchange` avoids this the same way, via its `syntheticUrl`.)
 		const exchangeUrl = buildExchangeUrl(pending.callbackUrl, ctx.request.url);
 		let tokens: Awaited<ReturnType<typeof authorizationCodeGrant>>;
