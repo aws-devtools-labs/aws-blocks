@@ -91,12 +91,8 @@ void main() {
     });
 
     test('set replaces an item stored by an earlier version', () async {
-      when(
-        mockStorage.containsKey(key: 'k'),
-      ).thenAnswer((_) async => false);
-      when(
-        previousStorage.containsKey(key: 'k'),
-      ).thenAnswer((_) async => true);
+      when(mockStorage.containsKey(key: 'k')).thenAnswer((_) async => false);
+      when(previousStorage.containsKey(key: 'k')).thenAnswer((_) async => true);
       when(mockStorage.delete(key: 'k')).thenAnswer((_) async {});
       when(mockStorage.write(key: 'k', value: 'v')).thenAnswer((_) async {});
 
@@ -109,9 +105,7 @@ void main() {
     });
 
     test('set updates an item already stored by this version', () async {
-      when(
-        mockStorage.containsKey(key: 'k'),
-      ).thenAnswer((_) async => true);
+      when(mockStorage.containsKey(key: 'k')).thenAnswer((_) async => true);
       when(mockStorage.write(key: 'k', value: 'v')).thenAnswer((_) async {});
 
       await store.set('k', 'v');
@@ -122,9 +116,7 @@ void main() {
     });
 
     test('set writes a fresh key without deleting', () async {
-      when(
-        mockStorage.containsKey(key: 'k'),
-      ).thenAnswer((_) async => false);
+      when(mockStorage.containsKey(key: 'k')).thenAnswer((_) async => false);
       when(
         previousStorage.containsKey(key: 'k'),
       ).thenAnswer((_) async => false);
