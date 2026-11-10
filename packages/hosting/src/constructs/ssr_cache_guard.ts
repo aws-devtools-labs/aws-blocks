@@ -36,7 +36,8 @@
  *   - Native Lambda handlers (OpenNext, Nitro's `aws-lambda` preset): a handler
  *     wrapper rewrites a buffered result's headers, and a streaming handler's
  *     response prelude (the JSON metadata written before the body, either
- *     through `awslambda.HttpResponseStream.from` or written directly).
+ *     through `awslambda.HttpResponseStream.from` or written directly, with or
+ *     without the integration content type).
  *
  * The Node HTTP server path needs a Node.js server; a server the guard cannot
  * be installed in front of (see {@link withSsrCacheGuard}) gets a synth warning
@@ -230,9 +231,9 @@ function guardHeaders(target, request) {
   const cacheControl = [...inHeaders, ...inMulti];
   const expires = [...headerValues(target.headers, 'expires'), ...headerValues(target.multiValueHeaders, 'expires')][0];
   const setCookie =
-    headerValues(target.headers, 'set-cookie').length > 0 ||
-    headerValues(target.multiValueHeaders, 'set-cookie').length > 0 ||
-    (Array.isArray(target.cookies) && target.cookies.length > 0);
+    headerValues(target.headers, 'set-cookie').some((v) => v !== '') ||
+    headerValues(target.multiValueHeaders, 'set-cookie').some((v) => v !== '') ||
+    (Array.isArray(target.cookies) && target.cookies.some((v) => v != null && String(v) !== ''));
   const next = guardCacheControl(request, {
     cacheControl: cacheControl.length ? cacheControl.join(', ') : undefined,
     expires,
@@ -264,10 +265,21 @@ export function runWithRequest(request, fn) {
   return requestStore.run(request, fn);
 }
 
+// The fields of a response prelude. A first write on a stream with no content
+// type is read as a prelude only when it is a JSON object with a numeric
+// statusCode and no other fields, so an unframed body is passed on as is.
+const PRELUDE_FIELDS = new Set(['statusCode', 'headers', 'multiValueHeaders', 'cookies']);
+
+function isPrelude(value) {
+  return typeof value.statusCode === 'number' && Object.keys(value).every((key) => PRELUDE_FIELDS.has(key));
+}
+
 // Guard the prelude in a handler's first write. The write may also carry the
 // 8-NUL delimiter and the start of the body: only the part before the first
-// NUL is the JSON prelude, and the rest is passed on byte for byte.
-function guardPreludeChunk(chunk, request) {
+// NUL is the JSON prelude, and the rest is passed on byte for byte. With
+// strict set (no content type marks the stream), the JSON must have the
+// prelude's shape.
+function guardPreludeChunk(chunk, request, strict) {
   try {
     const isString = typeof chunk === 'string';
     const bytes = isString
@@ -279,6 +291,7 @@ function guardPreludeChunk(chunk, request) {
     const head = isString ? (nul === -1 ? chunk : chunk.slice(0, nul)) : (nul === -1 ? bytes : bytes.subarray(0, nul)).toString('utf8');
     const prelude = JSON.parse(head);
     if (!prelude || typeof prelude !== 'object' || Array.isArray(prelude)) return chunk;
+    if (strict && !isPrelude(prelude)) return chunk;
     const json = JSON.stringify(guardHeaders(prelude, request));
     if (nul === -1) return json;
     return isString ? json + chunk.slice(nul) : Buffer.concat([Buffer.from(json, 'utf8'), bytes.subarray(nul)]);
@@ -288,27 +301,34 @@ function guardPreludeChunk(chunk, request) {
 }
 
 /**
- * Guard a response stream whose prelude the handler writes itself: after
- * setContentType(<http-integration-response>), the first write is the JSON
- * prelude. A stream whose prelude HttpResponseStream.from already guarded is
- * skipped, so a body chunk is never read as a prelude.
+ * Guard a response stream whose prelude the handler writes itself: the first
+ * write is the JSON prelude after setContentType(<http-integration-response>),
+ * and also when no content type is set at all, as behind an API Gateway
+ * streaming integration (which frames every response with a prelude, so a
+ * handler built for it may not set the marker). In that case the first write
+ * is read as a prelude only when it has the prelude's shape. A stream with
+ * another content type, or whose prelude HttpResponseStream.from already
+ * guarded, is skipped, so a body chunk is never read as a prelude.
  */
 export function guardStream(stream, request) {
   if (!stream || typeof stream.write !== 'function') return stream;
-  let integration = false;
+  // undefined until the handler sets a content type, then the last one set.
+  let contentType;
   let done = false;
   const setContentType = stream.setContentType;
   if (typeof setContentType === 'function') {
     stream.setContentType = function (type) {
-      if (String(type) === PRELUDE_TYPE) integration = true;
+      contentType = String(type);
       return setContentType.apply(this, arguments);
     };
   }
   const write = stream.write;
   stream.write = function (chunk, ...rest) {
-    if (integration && !done) {
+    if (!done) {
       done = true;
-      if (!guardedStreams.has(stream)) chunk = guardPreludeChunk(chunk, request);
+      if (!guardedStreams.has(stream) && (contentType === undefined || contentType === PRELUDE_TYPE)) {
+        chunk = guardPreludeChunk(chunk, request, contentType === undefined);
+      }
     }
     return write.call(this, chunk, ...rest);
   };
@@ -341,7 +361,12 @@ function installHttpServerGuard() {
         const argExpires = fromArgs('expires');
         const currentExpires = this.getHeader('expires');
         const expires = argExpires.length ? argExpires[0] : currentExpires == null ? undefined : String([].concat(currentExpires)[0]);
-        const setCookie = fromArgs('set-cookie').length > 0 || this.getHeader('set-cookie') != null;
+        // An empty Set-Cookie value (e.g. setHeader('Set-Cookie', []), which a
+        // server may call for every response) sends no header, so it does not count.
+        const currentSetCookie = this.getHeader('set-cookie');
+        const setCookie =
+          fromArgs('set-cookie').some((v) => v !== '') ||
+          (currentSetCookie != null && [].concat(currentSetCookie).some((v) => String(v) !== ''));
         const request = {
           authorization: req.headers.authorization != null,
           cookies: [...new Set(cookieNames(req.headers.cookie))],

@@ -356,6 +356,111 @@ export const handler = run;
     assert.equal(chunks[0], 'not json\0\0body');
   });
 
+  void it('guards the prelude of a streaming handler that writes it without a content type', async () => {
+    const dir = path.join(tmpRoot, `h${counter++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    // OpenNext's streaming wrapper as built for API Gateway: the content type
+    // call is removed, the prelude and 8 NUL bytes are still written first.
+    fs.writeFileSync(
+      path.join(dir, 'index.mjs'),
+      `const run = async (event, stream) => {
+  void 0;
+  const cookies = event.path === '/set-cookie' ? ['v=1; Path=/'] : [];
+  stream.write(JSON.stringify({ statusCode: 200, headers: { 'cache-control': 'public, s-maxage=300' }, cookies }));
+  stream.write(new Uint8Array(8));
+  stream.write('{"statusCode":200,"headers":{"cache-control":"body"}}');
+  stream.end();
+};
+run[Symbol.for('aws.lambda.runtime.handler.streaming')] = 'response';
+export const handler = run;
+`,
+    );
+    withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, { cacheKeyCookies: ['bb_session'] });
+    const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as {
+      handler: (event: unknown, stream: unknown) => Promise<void>;
+    };
+    const invoke = async (event: unknown): Promise<unknown[]> => {
+      const chunks: unknown[] = [];
+      const stream = {
+        setContentType: (_type: string) => undefined,
+        write: (chunk: unknown) => {
+          chunks.push(chunk);
+          return true;
+        },
+        end: () => undefined,
+      };
+      await mod.handler(event, stream);
+      return chunks;
+    };
+    const other = await invoke({ path: '/', headers: { Cookie: 'bb_other=1' } });
+    assert.equal(JSON.parse(String(other[0])).headers['cache-control'], PRIVATE);
+    assert.equal(other[2], '{"statusCode":200,"headers":{"cache-control":"body"}}');
+    const setCookie = await invoke({ path: '/set-cookie', headers: {} });
+    assert.equal(JSON.parse(String(setCookie[0])).headers['cache-control'], PRIVATE);
+    const keyed = await invoke({ path: '/', headers: { Cookie: 'bb_session=1' } });
+    assert.equal(JSON.parse(String(keyed[0])).headers['cache-control'], 'public, s-maxage=300');
+  });
+
+  void it('leaves the first write alone on a stream without a content type when it is not a prelude', async () => {
+    const dir = path.join(tmpRoot, `h${counter++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'index.mjs'),
+      `const run = async (event, stream) => {
+  stream.write('{"statusCode":200,"headers":{"cache-control":"s-maxage=60"},"data":1}');
+  stream.end();
+};
+run[Symbol.for('aws.lambda.runtime.handler.streaming')] = 'response';
+export const handler = run;
+`,
+    );
+    withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, {});
+    const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as {
+      handler: (event: unknown, stream: unknown) => Promise<void>;
+    };
+    const chunks: unknown[] = [];
+    const stream = {
+      write: (chunk: unknown) => {
+        chunks.push(chunk);
+        return true;
+      },
+      end: () => undefined,
+    };
+    await mod.handler({ headers: { authorization: 'Bearer x' } }, stream);
+    assert.equal(chunks[0], '{"statusCode":200,"headers":{"cache-control":"s-maxage=60"},"data":1}');
+  });
+
+  void it('leaves the first write alone on a stream with a non-prelude content type', async () => {
+    const dir = path.join(tmpRoot, `h${counter++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'index.mjs'),
+      `const run = async (event, stream) => {
+  stream.setContentType('application/json');
+  stream.write('{"statusCode":200,"headers":{"cache-control":"s-maxage=60"}}');
+  stream.end();
+};
+run[Symbol.for('aws.lambda.runtime.handler.streaming')] = 'response';
+export const handler = run;
+`,
+    );
+    withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, {});
+    const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as {
+      handler: (event: unknown, stream: unknown) => Promise<void>;
+    };
+    const chunks: unknown[] = [];
+    const stream = {
+      setContentType: (_type: string) => undefined,
+      write: (chunk: unknown) => {
+        chunks.push(chunk);
+        return true;
+      },
+      end: () => undefined,
+    };
+    await mod.handler({ headers: { authorization: 'Bearer x' } }, stream);
+    assert.equal(chunks[0], '{"statusCode":200,"headers":{"cache-control":"s-maxage=60"}}');
+  });
+
   void it('wraps a CommonJS handler module, through its named export or the default export', async () => {
     const dir = path.join(tmpRoot, `h${counter++}`);
     fs.mkdirSync(dir, { recursive: true });
@@ -425,6 +530,12 @@ void describe('Node HTTP server (writeHead)', () => {
       } else if (req.url === '/expires') {
         res.writeHead(200, { Expires: new Date(Date.now() + 3_600_000).toUTCString() });
         res.end('f');
+      } else if (req.url === '/empty-set-cookie') {
+        // OpenNext's node wrapper sets the prelude's cookies on every response,
+        // usually an empty list, before writeHead.
+        res.setHeader('Set-Cookie', []);
+        res.writeHead(200, { 'cache-control': 'public, s-maxage=300' });
+        res.end('g');
       } else if (req.url === '/set-cookie') {
         res.setHeader('Cache-Control', 'public, s-maxage=300');
         res.setHeader('Set-Cookie', 'v=1; Path=/');
@@ -461,6 +572,15 @@ void describe('Node HTTP server (writeHead)', () => {
   void it('treats a future Expires passed to writeHead as shared-cacheable', async () => {
     assert.equal((await get('/expires', { cookie: 'theme=dark' })).headers.get('cache-control'), PRIVATE);
     assert.equal((await get('/expires')).headers.get('cache-control'), null);
+  });
+
+  void it('does not count an empty Set-Cookie value as setting a cookie', async () => {
+    assert.equal((await get('/empty-set-cookie')).headers.get('cache-control'), 'public, s-maxage=300');
+    assert.equal(
+      (await get('/empty-set-cookie', { cookie: 'bb_session=1' })).headers.get('cache-control'),
+      'public, s-maxage=300',
+    );
+    assert.equal((await get('/empty-set-cookie', { cookie: 'theme=dark' })).headers.get('cache-control'), PRIVATE);
   });
 
   void it('makes a response with Set-Cookie private', async () => {
