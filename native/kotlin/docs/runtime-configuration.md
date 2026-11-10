@@ -94,6 +94,14 @@ configures it once with no platform-specific source sets — see [`example/kmp`]
 | iOS | Keychain Services, scoped to the app's access group |
 | JVM | AES-256-GCM encrypted files under `~/.blocks/<applicationId>`, or memory if no id is set |
 
+On the JVM the encryption key is stored in a file next to the encrypted entries, and both are
+protected only by file permissions: owner-only (`rwx------` for the directory, `rw-------` for the
+files) on a POSIX filesystem, and the platform's owner-only file flags elsewhere. That keeps other
+OS users out, but it does not protect the session from other processes running as the same OS
+user, or from anyone who can read a backup or copy of the directory. If that is not acceptable for
+your application, leave `applicationId` unset: the session is then held in memory only and never
+written to disk.
+
 The JVM path is one location on every desktop OS, in the manner of `~/.aws` or `~/.gradle`. An id
 is reduced to characters a directory name can hold; when that reduction changes anything, a digest
 of the id as you wrote it is appended, so two ids that would otherwise reduce to the same name keep

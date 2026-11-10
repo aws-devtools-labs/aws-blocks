@@ -35,6 +35,15 @@ internal actual fun platformKeyValueStore(name: String, applicationId: String?):
  * [directory] is already private to the application that supplied it, so the store names its
  * entries directly within it rather than inserting a directory of its own. It is resolved on
  * first use, off the calling thread, so creating it is not the caller's concern.
+ *
+ * The key file sits unencrypted next to the entries it decrypts, and is protected only by file
+ * permissions: on a POSIX filesystem the store directory is `rwx------` and the key and entry
+ * files `rw-------`; elsewhere the store falls back to the coarser [File] owner-only flags. That
+ * keeps other OS users out, but any process running as the same OS user can read the key and
+ * decrypt the entries, and so can anything with access to a backup or copy of the directory. The
+ * encryption guards against casual inspection of the files, not against those readers. An
+ * application that needs more than this should leave `applicationId` unset, so the session is held
+ * in memory for the life of the process and never written to disk.
  */
 internal class EncryptedFileKeyValueStore(
     private val name: String,

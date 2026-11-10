@@ -51,4 +51,74 @@ void main() {
 
     verify(mockStorage.delete(key: 'k')).called(1);
   });
+
+  test('stores Apple Keychain items with this-device-only accessibility', () {
+    expect(
+      FlutterSecureStore.defaultStorage.iOptions.accessibility,
+      KeychainAccessibility.unlocked_this_device,
+    );
+    expect(
+      FlutterSecureStore.defaultStorage.mOptions.accessibility,
+      KeychainAccessibility.unlocked_this_device,
+    );
+  });
+
+  group('with previous storage', () {
+    late MockFlutterSecureStorage previousStorage;
+
+    setUp(() {
+      previousStorage = MockFlutterSecureStorage();
+      store = FlutterSecureStore.withPreviousStorage(
+        storage: mockStorage,
+        previousStorage: previousStorage,
+      );
+    });
+
+    test('get prefers the current storage', () async {
+      when(mockStorage.read(key: 'k')).thenAnswer((_) async => 'new');
+
+      expect(await store.get('k'), 'new');
+      verifyNever(previousStorage.read(key: 'k'));
+    });
+
+    test('get falls back to an item stored by an earlier version', () async {
+      when(mockStorage.read(key: 'k')).thenAnswer((_) async => null);
+      when(previousStorage.read(key: 'k')).thenAnswer((_) async => 'old');
+
+      expect(await store.get('k'), 'old');
+      verifyNever(mockStorage.delete(key: 'k'));
+      verifyNever(mockStorage.write(key: 'k', value: anyNamed('value')));
+    });
+
+    test('set replaces an item stored by an earlier version', () async {
+      when(
+        mockStorage.containsKey(key: 'k'),
+      ).thenAnswer((_) async => false);
+      when(
+        previousStorage.containsKey(key: 'k'),
+      ).thenAnswer((_) async => true);
+      when(mockStorage.delete(key: 'k')).thenAnswer((_) async {});
+      when(mockStorage.write(key: 'k', value: 'v')).thenAnswer((_) async {});
+
+      await store.set('k', 'v');
+
+      verifyInOrder([
+        mockStorage.delete(key: 'k'),
+        mockStorage.write(key: 'k', value: 'v'),
+      ]);
+    });
+
+    test('set updates an item already stored by this version', () async {
+      when(
+        mockStorage.containsKey(key: 'k'),
+      ).thenAnswer((_) async => true);
+      when(mockStorage.write(key: 'k', value: 'v')).thenAnswer((_) async {});
+
+      await store.set('k', 'v');
+
+      verifyNever(mockStorage.delete(key: 'k'));
+      verifyNever(previousStorage.containsKey(key: 'k'));
+      verify(mockStorage.write(key: 'k', value: 'v')).called(1);
+    });
+  });
 }

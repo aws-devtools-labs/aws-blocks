@@ -203,6 +203,12 @@ class EncryptedFileKeyValueStoreTest {
                 PosixFilePermissions.fromString("rwx------")
             Files.getPosixFilePermissions(File(storageDir, ".key").toPath()) shouldBe
                 PosixFilePermissions.fromString("rw-------")
+            // Entries are written through a temporary file and renamed into place, so the
+            // permissions they end up with are the temporary file's.
+            storageDir.listFiles { file -> file.name != ".key" }!!.forEach { entry ->
+                Files.getPosixFilePermissions(entry.toPath()) shouldBe
+                    PosixFilePermissions.fromString("rw-------")
+            }
         }
     }
 }
