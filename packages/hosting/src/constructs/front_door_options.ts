@@ -31,7 +31,7 @@
  * | `monitoring` | ✓ | ✓ (`enabled` only) | – | ✓ |
  * | `skewProtection` | ✓ | – | – | ✓ |
  * | `geoRestriction` | ✓ | – | – | ✓ |
- * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas` | ✓ | – | – | – |
+ * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
  *
  * The stacked door (`@aws-blocks/core` `Hosting` only) scopes its settings
  * per layer: {@link StackedDoorFeatures}. `'none'` takes no settings.
@@ -39,6 +39,7 @@
  * @module
  */
 import type { Duration } from 'aws-cdk-lib';
+import type { RetentionDays } from 'aws-cdk-lib/aws-logs';
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import type { IResponseHeadersPolicy, PriceClass } from 'aws-cdk-lib/aws-cloudfront';
 import type { IVpc } from 'aws-cdk-lib/aws-ec2';
@@ -70,6 +71,69 @@ export type HostingLoggingConfig = {
   partitioning?: AccessLogPartitioning;
   /** (v2 only) Delivered log record format. @default 'w3c' */
   format?: AccessLogFormat;
+};
+
+/**
+ * The server (SSR) origin behind the CloudFront door: the API Gateway REST API
+ * that CloudFront reaches the server Lambda through (and, for an IPX image
+ * optimizer, a second REST API for the image Lambda).
+ *
+ * Each REST API is locked to the distribution by a resource policy that
+ * denies any request without the origin-verify `Referer` header CloudFront
+ * adds. The header value is a random secret Secrets Manager generates once per
+ * deployment (one for the server, another for the image origin); the policy
+ * and the CloudFront origin read it through a CloudFormation dynamic
+ * reference, so it never appears in the template.
+ *
+ * When the door has a Blocks-managed web ACL (`waf: { enabled: true }`), the
+ * same rules (AWS managed common and known-bad-inputs rules plus the per-IP
+ * rate limit) also run on each REST API stage in a REGIONAL web ACL, with its
+ * logs in CloudWatch Logs, so a call made straight to the `execute-api` URL
+ * meets a web ACL too.
+ */
+export type HostingServerOriginConfig = {
+  /**
+   * Structured JSON access logs (`AccessLogFormat.jsonWithStandardFields()`)
+   * from each server-origin REST API stage, in a CloudWatch log group.
+   *
+   * Off by default: REST API access logging needs the account-level API
+   * Gateway CloudWatch Logs role (`AWS::ApiGateway::Account`), an
+   * account/region-level setting. This creates it once per stack (shared with
+   * `@aws-blocks/core`'s own access logging), so turn it on in one stack per
+   * account and region, or manage that role yourself.
+   * @default false
+   */
+  accessLogging?: boolean;
+  /**
+   * How long CloudWatch Logs keeps the server origin's access logs and its
+   * web ACL logs.
+   * @default RetentionDays.ONE_MONTH
+   */
+  logRetention?: RetentionDays;
+  /**
+   * Bump to rotate the origin-verify secrets: a new number makes Secrets
+   * Manager generate new values, and the next deploy updates the REST API
+   * policies and the CloudFront origins together. The REST API policy applies
+   * within seconds and the distribution takes minutes to propagate, so expect
+   * 403s from the server origin in between; rotate in a quiet window.
+   * @default 0
+   */
+  verifySecretRotation?: number;
+  /**
+   * Also accept the origin-verify value of earlier releases (derived from the
+   * stack name and construct path) for one deploy, so an existing stack moves
+   * to the random secret without 403s while the distribution propagates.
+   * Deploy once with `true`, then remove it: while it is set, anyone who can
+   * derive that value can reach the server origin directly.
+   *
+   * For that deploy the SSR REST API also keeps the IPX image routes earlier
+   * releases served from it, and its stage gets no web ACL yet (edges on the
+   * previous config don't send the marker its rate rule exempts); the next
+   * deploy attaches it. Synth warns
+   * (`@aws-blocks/hosting:AcceptLegacyVerifyHeader`) while it is set.
+   * @default false
+   */
+  acceptLegacyVerifyHeader?: boolean;
 };
 
 /**
@@ -142,6 +206,12 @@ export type CloudFrontDoorFeatures<TDomain = HostingDomainConfig> = {
   responseHeadersPolicy?: IResponseHeadersPolicy;
   /** The AWS Service Quotas you were granted (cache behaviors, Lambda\@Edge associations, header policies). */
   quotas?: QuotaOverrides;
+  /**
+   * The server (SSR) origin's REST API: access logs, origin-verify secret
+   * rotation and the upgrade from the earlier derived secret. See
+   * {@link HostingServerOriginConfig}.
+   */
+  serverOrigin?: HostingServerOriginConfig;
 };
 
 /**
@@ -405,6 +475,7 @@ export const FRONT_DOOR_SETTINGS = {
     'cacheKeyHeaders',
     'responseHeadersPolicy',
     'quotas',
+    'serverOrigin',
   ],
   alb: ['domain', 'waf', 'logging', 'monitoring'],
   apiGateway: ['domain'],
@@ -464,6 +535,7 @@ const SETTING_KEYS: Readonly<Partial<Record<FrontDoorSettingName, readonly strin
   monitoring: ['enabled', 'subscriptions'],
   skewProtection: ['enabled', 'maxAge'],
   geoRestriction: ['type', 'countries'],
+  serverOrigin: ['accessLogging', 'logRetention', 'verifySecretRotation', 'acceptLegacyVerifyHeader'],
 };
 
 const GEO_TYPES: Readonly<Record<string, 'allowlist' | 'denylist'>> = {
@@ -626,6 +698,22 @@ const validateSettingKeys = (explicit: Record<string, unknown>, featuresPath: st
 };
 
 /**
+ * Check `serverOrigin.verifySecretRotation`: a non-negative integer.
+ *
+ * @param rotation the value the app set.
+ * @param prop where the app wrote the `serverOrigin` setting (e.g. `frontDoor.features.serverOrigin`).
+ * @throws HostingError('InvalidFrontDoorSettingError') naming the setting.
+ * @internal Framework-only.
+ */
+export function validateVerifySecretRotation(rotation: unknown, prop: string): void {
+  if (rotation === undefined || (typeof rotation === 'number' && Number.isInteger(rotation) && rotation >= 0)) return;
+  throw new HostingError('InvalidFrontDoorSettingError', {
+    message: `\`${prop}.verifySecretRotation\` must be a non-negative integer (got ${String(rotation)}).`,
+    resolution: 'Use 0 (the default) and bump it by one to rotate the origin-verify secrets.',
+  });
+}
+
+/**
  * The geo restriction with its type normalized to `'allowlist'` / `'denylist'`.
  *
  * @throws HostingError('InvalidFrontDoorSettingError') for any other type.
@@ -667,7 +755,7 @@ const normalizeGeo = (geo: HostingGeoRestriction, prop: string): HostingGeoRestr
  * @returns the door kind and its effective settings.
  * @throws HostingError('UnsupportedFrontDoorError') when `frontDoor` is not a known door.
  * @throws HostingError('InvalidFrontDoorOptionError') for an unknown or mistyped door option.
- * @throws HostingError('InvalidFrontDoorSettingError') for an unknown key inside a setting, or an unknown geo type.
+ * @throws HostingError('InvalidFrontDoorSettingError') for an unknown key inside a setting, an unknown geo type, or a `serverOrigin.verifySecretRotation` that is not a non-negative integer.
  * @throws HostingError('FrontDoorSettingConflictError') when a setting is set twice.
  * @throws HostingError('UnsupportedFrontDoorSettingError') when the kind doesn't implement a setting.
  * @internal Framework-only: the merge `HostingConstruct` and the `@aws-blocks/core` `Hosting` share.
@@ -723,6 +811,7 @@ export function resolveFrontDoorFeatures<TDomain>(
     throw unsupported(kind, label, featuresPath, `${propOf('domain')}.wwwRedirect`);
   }
   if (features.geoRestriction) features.geoRestriction = normalizeGeo(features.geoRestriction, propOf('geoRestriction'));
+  validateVerifySecretRotation(features.serverOrigin?.verifySecretRotation, propOf('serverOrigin'));
 
   return { kind, features };
 }

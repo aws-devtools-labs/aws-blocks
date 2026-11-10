@@ -1103,6 +1103,123 @@ describe('serveHttp — initialization and request targets', { timeout: 30_000 }
 
 // ── Request URL ─────────────────────────────────────────────────────────────
 
+// ── Strict API namespace placement (defaults.strictNamespacePlacement) ──────
+
+describe('serveHttp — strict API namespace placement', { timeout: 30_000 }, () => {
+  // What synth sets in the environment of every API compute when `reports` is
+  // placed on compute `app-reports`: the placement map on each of them, and the
+  // compute's own id only on that compute. The server reads both from
+  // process.env when it starts, as a container task does at boot.
+  const PLACEMENT = JSON.stringify({ reports: 'app-reports' });
+  const KEYS = ['BLOCKS_API_NAMESPACE_COMPUTES', 'BLOCKS_API_COMPUTE_ID'] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+    for (const k of KEYS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  function placedBackend(calls: string[]) {
+    return {
+      api: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('api'); return 'api'; } }),
+      reports: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('reports'); return 'reports'; } }),
+    };
+  }
+
+  async function call(server: HttpServerHandle, namespace: string, path = '/aws-blocks/api') {
+    const reply = await send(server.port, 'POST', path, json, rpc(`${namespace}.whereAmI`));
+    assert.strictEqual(reply.status, 200, 'a JSON-RPC envelope');
+    return JSON.parse(reply.body) as { result?: string; error?: { code?: number; message?: string } };
+  }
+
+  async function serve(calls: string[]) {
+    return serveHttp(placedBackend(calls), { port: 0, healthPort: 0 });
+  }
+
+  it('the default compute refuses a namespace placed on another compute, on the bare endpoint', async () => {
+    process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+    const calls: string[] = [];
+    const server = await serve(calls);
+    try {
+      const body = await call(server, 'reports');
+      assert.strictEqual(body.error?.code, -32601, 'refused like an unknown namespace');
+      assert.match(body.error?.message ?? '', /API 'reports' not found/);
+      assert.deepStrictEqual(calls, [], "the placed namespace's code never ran on the default compute");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('the default compute still serves its own namespaces on the bare endpoint and their own path', async () => {
+    process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+    const calls: string[] = [];
+    const server = await serve(calls);
+    try {
+      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+        assert.strictEqual((await call(server, 'api', path)).result, 'api', path);
+      }
+      assert.deepStrictEqual(calls, ['api', 'api']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('the placed compute serves its namespace on its own path and refuses every other one', async () => {
+    process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+    process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
+    const calls: string[] = [];
+    const server = await serve(calls);
+    try {
+      assert.strictEqual((await call(server, 'reports', '/aws-blocks/api/reports')).result, 'reports');
+      assert.strictEqual((await call(server, 'api')).error?.code, -32601);
+      assert.strictEqual((await call(server, 'api', '/aws-blocks/api/api')).error?.code, -32601);
+      assert.deepStrictEqual(calls, ['reports']);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('serves every namespace on the bare endpoint when no placement is configured', async () => {
+    const calls: string[] = [];
+    const server = await serve(calls);
+    try {
+      assert.strictEqual((await call(server, 'reports')).result, 'reports');
+    } finally {
+      await server.close();
+    }
+  });
+
+  for (const [name, env, message] of [
+    ['a malformed placement map', { BLOCKS_API_NAMESPACE_COMPUTES: '{not json' }, /must be a JSON object/],
+    ['a compute id without a placement map', { BLOCKS_API_COMPUTE_ID: 'app-reports' }, /BLOCKS_API_COMPUTE_ID is set but/],
+  ] as const) {
+    it(`fails to start on ${name}, and starts once the environment is right`, async () => {
+      Object.assign(process.env, env);
+      const calls: string[] = [];
+      let started: HttpServerHandle | undefined;
+      try {
+        await assert.rejects(async () => {
+          started = await serve(calls);
+        }, message);
+        assert.strictEqual(started, undefined, 'no listener on a bad placement');
+        // The replacement task starts with a deployed environment.
+        for (const k of KEYS) delete process.env[k];
+        process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+        process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
+        started = await serve(calls);
+        assert.strictEqual((await call(started, 'reports', '/aws-blocks/api/reports')).result, 'reports');
+      } finally {
+        await started?.close();
+      }
+    });
+  }
+});
+
 function incoming(url: string, headers: Record<string, string>): http.IncomingMessage {
   return { url, headers } as unknown as http.IncomingMessage;
 }
