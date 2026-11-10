@@ -40,6 +40,20 @@ health check plus an auth-gated CRUD resource with per-user isolation.
 There is no `src/`, `index.html`, or web bundle — nothing is served to a browser.
 Point any HTTP/JSON-RPC client at the RPC endpoint.
 
+## Security model
+
+- **Every `ApiNamespace` method is a public, internet-reachable endpoint.**
+  Nothing is gated by default. When you add a method, start it with
+  `await auth.requireAuth(context)` unless anyone on the internet may call it
+  signed out (like `health`). Scope what it touches to the caller (as
+  `userPath` and the `owner` key do here), not to an id or path the caller
+  passes in.
+- **A presigned URL is a bearer credential.** Whoever holds the URL that
+  `createUploadUrl` or `createDownloadUrl` returns can write or read that one
+  key until the URL expires (one hour by default; `expiresIn` sets it), without
+  signing in. Mint one only in a gated method, only for a key the caller owns,
+  and don't log the URL or share it.
+
 ## api-only vs backend
 
 The `backend` template is a bare greet stub — the minimum headless backend. This
