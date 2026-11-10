@@ -16,8 +16,14 @@ import type { SessionRecord } from './sessions.js';
 /** Test seam: the mock keeps its session store (and that store's KVStore) and HMAC secret private. */
 interface MockSessionInternals {
 	sessions: {
-		kv: { put: (...args: unknown[]) => Promise<void> };
+		kv: {
+			put: (...args: unknown[]) => Promise<void>;
+			delete: (...args: unknown[]) => Promise<void>;
+		};
 		createSession(record: SessionRecord): Promise<string>;
+		lookupSession(sessionId: string): Promise<SessionRecord | null>;
+		replaceSession(sessionId: string, expected: SessionRecord, next: SessionRecord): Promise<boolean>;
+		deleteSession(sessionId: string): Promise<void>;
 	};
 	state: { sessionSecret: string };
 }
@@ -420,6 +426,65 @@ describe('fetchAuthSession', () => {
 
 		assert.strictEqual(await at(exp * 1000, async () => auth.getCurrentUser(await requestFor())), null);
 		assert.strictEqual((await at(exp * 1000, async () => auth.fetchAuthSession(await requestFor()))).tokens, undefined);
+	});
+
+	test('an expired read whose session changed before its delete serves what changed it, as on AWS', async () => {
+		const auth = new AuthCognito(ROOT, unique('sess-lost-delete'));
+		const internals = auth as unknown as MockSessionInternals;
+		const jwt = (claims: Record<string, unknown>) =>
+			['e30', Buffer.from(JSON.stringify(claims)).toString('base64url'), 'sig'].join('.');
+		const tokens = (exp: number, refreshToken: string): SessionRecord => ({
+			idToken: jwt({ 'cognito:username': 'frank', sub: 'sub-frank', token_use: 'id', exp }),
+			accessToken: jwt({ sub: 'sub-frank', username: 'frank', token_use: 'access', exp }),
+			refreshToken,
+		});
+		const nowSeconds = Math.floor(Date.now() / 1000);
+		/**
+		 * A request reads an expired session; just before its conditional delete
+		 * lands, `change` runs — a concurrent `forceRefresh` that wrote newer
+		 * tokens, or a `signOut`.
+		 */
+		const expiredReadRacing = async (change: (id: string, stale: SessionRecord) => Promise<unknown>) => {
+			const stale = tokens(nowSeconds - 10, 'refresh-stale');
+			const id = await internals.sessions.createSession(stale);
+			const kv = internals.sessions.kv;
+			const realDelete = kv.delete.bind(kv);
+			kv.delete = async (...args: unknown[]) => {
+				kv.delete = realDelete;
+				await change(id, stale);
+				return realDelete(...args);
+			};
+			const { ctx } = freshContext();
+			ctx.request.headers.set('cookie', `auth_${auth.fullId}=${signSessionId(id, internals.state.sessionSecret)}`);
+			return { id, ctx };
+		};
+		const clearsCookie = (ctx: BlocksContext) => ctx.response.headers.get('set-cookie')?.includes('Max-Age=0') ?? false;
+
+		// Replaced by a live session: the request is served it, and it survives.
+		const live = tokens(nowSeconds + 3600, 'refresh-live');
+		const replace = (next: SessionRecord) => (id: string, stale: SessionRecord) => internals.sessions.replaceSession(id, stale, next);
+		let race = await expiredReadRacing(replace(live));
+		assert.strictEqual((await auth.getCurrentUser(race.ctx))?.username, 'frank', 'getCurrentUser serves the newer session');
+		assert.deepStrictEqual(await internals.sessions.lookupSession(race.id), live);
+		assert.ok(!clearsCookie(race.ctx));
+		race = await expiredReadRacing(replace(live));
+		assert.strictEqual((await auth.fetchAuthSession(race.ctx)).tokens?.accessToken.toString(), live.accessToken, 'fetchAuthSession serves the newer session');
+		assert.ok(!clearsCookie(race.ctx));
+
+		// Replaced by a session that is itself expired: unauthenticated, and left alone.
+		const alsoExpired = tokens(nowSeconds - 5, 'refresh-also-expired');
+		race = await expiredReadRacing(replace(alsoExpired));
+		assert.strictEqual(await auth.getCurrentUser(race.ctx), null);
+		assert.deepStrictEqual(await internals.sessions.lookupSession(race.id), alsoExpired);
+		assert.ok(!clearsCookie(race.ctx));
+
+		// Signed out meanwhile: unauthenticated, and the cookie is cleared.
+		race = await expiredReadRacing((id) => internals.sessions.deleteSession(id));
+		assert.strictEqual(await auth.getCurrentUser(race.ctx), null);
+		assert.ok(clearsCookie(race.ctx), 'a session deleted meanwhile clears the cookie');
+		race = await expiredReadRacing((id) => internals.sessions.deleteSession(id));
+		assert.strictEqual((await auth.fetchAuthSession(race.ctx)).tokens, undefined);
+		assert.ok(clearsCookie(race.ctx));
 	});
 });
 

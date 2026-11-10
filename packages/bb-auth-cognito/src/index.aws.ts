@@ -185,13 +185,28 @@ export { SessionStore, type SessionRecord } from './sessions.js';
 const DEFAULT_SESSION_TTL_SECONDS = 400 * 86400;
 
 /**
- * `REFRESH_TOKEN_AUTH` failures meaning the refresh token can never succeed
- * again: it expired or was revoked (`GlobalSignOut`, `AdminUserGlobalSignOut`),
- * or the user was disabled or deleted. Only these end a session; any other
- * failure (throttling, network, service errors) is transient, and the next
- * request retries the refresh.
+ * `REFRESH_TOKEN_AUTH` failures meaning the refresh can't succeed by being
+ * retried:
+ *
+ * - The refresh token expired or was revoked (`GlobalSignOut`,
+ *   `AdminUserGlobalSignOut`), or the user was disabled or deleted
+ *   (`NotAuthorizedException`, `UserNotFoundException`).
+ * - The pool config changed: the user pool or app client was deleted
+ *   (`ResourceNotFoundException`), the app client no longer allows the flow,
+ *   e.g. `ALLOW_REFRESH_TOKEN_AUTH` turned off (`UnsupportedOperationException`),
+ *   or the pool configuration is invalid (`InvalidUserPoolConfigurationException`).
+ *
+ * Only these end a session. Any other failure (throttling, network, service or
+ * Lambda-trigger errors) is treated as transient, and the next request
+ * retries the refresh.
  */
-const REFRESH_REJECTIONS: ReadonlySet<string> = new Set([AuthCognitoErrors.NotAuthorized, AuthCognitoErrors.UserNotFound]);
+const REFRESH_REJECTIONS: ReadonlySet<string> = new Set([
+	AuthCognitoErrors.NotAuthorized,
+	AuthCognitoErrors.UserNotFound,
+	'ResourceNotFoundException',
+	'UnsupportedOperationException',
+	'InvalidUserPoolConfigurationException',
+]);
 
 interface CognitoAttributeEntry {
 	Name: string;

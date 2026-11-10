@@ -433,6 +433,20 @@ describe('AuthCognito (aws runtime) — session refresh', () => {
 		assert.ok(clearsSessionCookie(rejected, auth));
 	});
 
+	test('a refresh the app client or user pool configuration rules out ends the session', async () => {
+		// `InitiateAuth` documents these for a deleted pool or app client, a flow the
+		// app client doesn't allow (e.g. `ALLOW_REFRESH_TOKEN_AUTH` turned off), and
+		// an invalid pool configuration. No retry of this request can fix them.
+		for (const name of ['ResourceNotFoundException', 'UnsupportedOperationException', 'InvalidUserPoolConfigurationException']) {
+			const { auth, id, cookie } = await expiredSession();
+			internals(auth).client.send = async () => { throw cognitoFailure(name); };
+			const rejected = requestWith(cookie);
+			assert.strictEqual(await auth.getCurrentUser(rejected), null, name);
+			assert.strictEqual(await internals(auth).sessions.lookupSession(id), null, `${name} must end the session`);
+			assert.ok(clearsSessionCookie(rejected, auth), `${name} must clear the session cookie`);
+		}
+	});
+
 	test('a rejected refresh on a stale request does not delete the session another request just refreshed', async () => {
 		const { auth, id, cookie } = await expiredSession();
 		const { first, secondCtx, secondResult } = await concurrentRefresh(auth, cookie, async () => {

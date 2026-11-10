@@ -1182,7 +1182,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	async getCurrentUser(context: BlocksContext): Promise<CognitoUser<O> | null> {
 		const id = await this.sessionIdFromCookie(context);
 		if (!id) return null;
-		const record = await this.sessions.lookupSession(id);
+		let record = await this.sessions.lookupSession(id);
 		if (!record) {
 			// Cookie points at a forgotten session — clear it.
 			clearSessionCookie(context, this.fullId, this.crossDomain);
@@ -1192,11 +1192,10 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			// Mock has no refresh-token concept — expired means dead. Drop
 			// the record + clear the cookie so the browser stops replaying.
 			// Conditional on the record read (AWS parity): if a concurrent
-			// `forceRefresh` already replaced it, the newer session survives.
-			if (await this.sessions.deleteSessionIfUnchanged(id, record)) {
-				clearSessionCookie(context, this.fullId, this.crossDomain);
-			}
-			return null;
+			// `forceRefresh` already replaced it, the newer session survives
+			// and this request is served it, as on AWS.
+			record = await this.endDeadSession(id, record, context);
+			if (!record) return null;
 		}
 		// Derive user fields from the record's ID token — same path as the
 		// AWS runtime. `decodeIdToken` is unsafe-decode (no signature check)
@@ -1244,10 +1243,8 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		if (isJwtExpired(record.accessToken)) {
 			// Expired — mock has no refresh; drop the record and cookie
 			// (conditionally, as in `getCurrentUser`).
-			if (await this.sessions.deleteSessionIfUnchanged(id, record)) {
-				clearSessionCookie(context, this.fullId, this.crossDomain);
-			}
-			return { tokens: undefined };
+			record = await this.endDeadSession(id, record, context);
+			if (!record) return { tokens: undefined };
 		}
 		if (options?.forceRefresh) {
 			const payload = decodeJwtPayload(record.idToken);
@@ -1259,11 +1256,11 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			if (!user) {
 				// The user record backing this session has been removed (e.g. tests
 				// wiped .bb-data mid-session). Clear and return empty — matches
-				// what a revoked refresh token would do in AWS.
-				if (await this.sessions.deleteSessionIfUnchanged(id, record)) {
-					clearSessionCookie(context, this.fullId, this.crossDomain);
-				}
-				return { tokens: undefined };
+				// what a revoked refresh token would do in AWS, including serving
+				// the session a concurrent request replaced it with.
+				record = await this.endDeadSession(id, record, context);
+				if (!record) return { tokens: undefined };
+				return { tokens: sessionToTokens(record), userSub: safeStringClaim(decodeJwtPayload(record.idToken), 'sub') || undefined };
 			}
 			const expSeconds = Math.floor(Date.now() / 1000) + this.sessionDuration;
 			const groups = Object.entries(this.state.groups)
@@ -1292,12 +1289,8 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			if (await this.sessions.replaceSession(id, record, refreshed)) {
 				record = refreshed;
 			} else {
-				const current = await this.sessions.lookupSession(id);
-				if (!current) {
-					clearSessionCookie(context, this.fullId, this.crossDomain);
-					return { tokens: undefined };
-				}
-				record = current;
+				record = await this.sessionAfterLostWrite(id, context);
+				if (!record) return { tokens: undefined };
 			}
 		}
 		return {
@@ -2216,6 +2209,37 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 		const cookie = readSessionCookie(context, this.fullId);
 		if (!cookie) return null;
 		return verifySessionId(cookie, this.state.sessionSecret);
+	}
+
+	/**
+	 * End a session the mock can't refresh (access token expired, or its user
+	 * is gone): delete it if it still holds the `record` this request read, and
+	 * clear the cookie. If it changed meanwhile, a concurrent request refreshed
+	 * or deleted it first — defer to that, as the AWS runtime does. Returns the
+	 * record to serve this request with, or `null` when it is unauthenticated.
+	 */
+	private async endDeadSession(id: string, record: SessionRecord, context: BlocksContext): Promise<SessionRecord | null> {
+		if (await this.sessions.deleteSessionIfUnchanged(id, record)) {
+			clearSessionCookie(context, this.fullId, this.crossDomain);
+			return null;
+		}
+		return this.sessionAfterLostWrite(id, context);
+	}
+
+	/**
+	 * This request's conditional write lost: the session changed after it was
+	 * read. Serve the record a concurrent `forceRefresh` wrote if its access
+	 * token is live. If the session was deleted (`signOut`, revoke), clear the
+	 * cookie — it stays signed out. Anything else leaves the session alone and
+	 * answers this request as unauthenticated. Same rule as the AWS runtime.
+	 */
+	private async sessionAfterLostWrite(id: string, context: BlocksContext): Promise<SessionRecord | null> {
+		const current = await this.sessions.lookupSession(id);
+		if (!current) {
+			clearSessionCookie(context, this.fullId, this.crossDomain);
+			return null;
+		}
+		return isJwtExpired(current.accessToken) ? null : current;
 	}
 
 	private toCognitoUser(username: string, user: MockUserRecord): CognitoUser<O> {
