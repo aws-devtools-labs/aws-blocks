@@ -281,6 +281,18 @@ describe('parseArgv', () => {
 		assert.strictEqual(parseArgv(['--version', '--output', 'json']).globals.version, true);
 		assert.strictEqual(parseArgv(['--help', '--output', 'json']).globals.help, true);
 	});
+
+	it('checks a cdk-blocks migrate --query path against its result, scripts by any name', () => {
+		for (const path of ['kept.0.reason', 'scriptsRewritten.dev.to', 'devConfig.frontendPort', 'removed.1']) {
+			assert.strictEqual(parseArgv(['migrate', '--query', path]).globals.query, path);
+		}
+		usageError(['migrate', '--query', 'kept.0.reasn'], /Fields of kept\.0: file, reason\.$/);
+		usageError(['migrate', '--query', 'scriptsRewritten.dev.too'], /Fields of scriptsRewritten\.dev: from, to\.$/);
+		usageError(
+			['migrate', '--query', 'devConfig.prt'],
+			/Fields of devConfig: port, frontendCommand, frontendPort, frontend\.$/,
+		);
+	});
 });
 
 describe('suggest', () => {
