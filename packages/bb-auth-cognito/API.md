@@ -462,6 +462,10 @@ export interface ResetPasswordResult {
 export interface SessionRecord {
     accessToken: string;
     idToken: string;
+    refreshBackoff?: {
+        failures: number;
+        retryAt: number;
+    };
     refreshToken: string;
 }
 

@@ -11,7 +11,7 @@ import type { AuthStateApi } from '@aws-blocks/auth-common';
 import { AuthCognito, extractUserAttributes, memoizePerContext, toCognitoApiError, AuthCognitoErrors, type CognitoUser } from './index.aws.js';
 import { ApiError, Scope, type BlocksContext } from '@aws-blocks/core';
 import { signSessionId } from './cookies.js';
-import type { SessionRecord, SessionStore } from './sessions.js';
+import { isJwtExpired, type SessionRecord, type SessionStore } from './sessions.js';
 
 describe('extractUserAttributes (JWT allow-shape)', () => {
 	test('passes through standard OIDC attributes', () => {
@@ -334,6 +334,23 @@ function expiredSession(): Promise<{ auth: AuthCognito; id: string; cookie: stri
 	return signedInSession(Math.floor(Date.now() / 1000) - 10);
 }
 
+/** The session as stored, read back to inspect its refresh backoff. */
+function storedRecord(auth: AuthCognito, id: string): Promise<SessionRecord | null> {
+	return internals(auth).sessions.lookupSession(id);
+}
+
+/** `Date.now()` frozen at the real time of the call until `set` moves it. */
+function controlledClock(): { now: () => number; set: (ms: number) => void; restore: () => void } {
+	let current = Date.now();
+	const clock = mock.method(Date, 'now', () => current);
+	return { now: () => current, set: (ms) => { current = ms; }, restore: () => clock.mock.restore() };
+}
+
+/** A retry delay is jittered between half its window's ceiling and the ceiling. */
+function assertRetryWindow(delayMs: number, ceilingMs: number): void {
+	assert.ok(delayMs >= ceilingMs / 2 && delayMs <= ceilingMs, `retry delay ${delayMs} ms must lie in [${ceilingMs / 2}, ${ceilingMs}] ms`);
+}
+
 /**
  * Two requests carrying the same cookie both find the access token expired and
  * both call `REFRESH_TOKEN_AUTH`. The first request's refresh succeeds and is
@@ -412,16 +429,75 @@ describe('AuthCognito (aws runtime) — session refresh', () => {
 		assert.strictEqual(await auth.getCurrentUser(requestWith(cookie)), null, 'the old cookie must stay signed out');
 	});
 
-	test('a transient refresh failure keeps the session for the next request', async () => {
+	test('a transient refresh failure keeps the session and retries it once its backoff window has passed', async () => {
 		const { auth, id, cookie } = await expiredSession();
-		internals(auth).client.send = async () => { throw cognitoFailure(AuthCognitoErrors.TooManyRequests); };
-		const throttled = requestWith(cookie);
-		assert.strictEqual(await auth.getCurrentUser(throttled), null);
-		assert.ok(await internals(auth).sessions.lookupSession(id), 'a throttled refresh must not delete the session');
-		assert.ok(!clearsSessionCookie(throttled, auth), 'a throttled refresh must not clear the session cookie');
+		const clock = controlledClock();
+		try {
+			let calls = 0;
+			internals(auth).client.send = async () => {
+				calls++;
+				throw cognitoFailure(AuthCognitoErrors.TooManyRequests);
+			};
+			const throttled = requestWith(cookie);
+			assert.strictEqual(await auth.getCurrentUser(throttled), null);
+			assert.strictEqual(calls, 1);
+			assert.ok(!clearsSessionCookie(throttled, auth), 'a throttled refresh must not clear the session cookie');
+			const backoff = (await storedRecord(auth, id))?.refreshBackoff;
+			assert.ok(backoff, 'a throttled refresh must keep the session and record the failure on it');
+			assert.strictEqual(backoff.failures, 1);
+			assertRetryWindow(backoff.retryAt - clock.now(), 1000);
 
-		internals(auth).client.send = async () => freshAuthenticationResult();
-		assert.strictEqual((await auth.getCurrentUser(requestWith(cookie)))?.username, 'alice');
+			// Inside the window: no Cognito call, the request is unauthenticated,
+			// and the session and cookie are kept.
+			clock.set(backoff.retryAt - 1);
+			const spaced = requestWith(cookie);
+			assert.strictEqual(await auth.getCurrentUser(spaced), null);
+			assert.strictEqual((await auth.fetchAuthSession(requestWith(cookie))).tokens, undefined);
+			assert.strictEqual((await auth.fetchAuthSession(requestWith(cookie), { forceRefresh: true })).tokens, undefined);
+			assert.strictEqual(calls, 1, 'no refresh is attempted inside the backoff window');
+			assert.ok(!clearsSessionCookie(spaced, auth));
+			assert.deepStrictEqual((await storedRecord(auth, id))?.refreshBackoff, backoff);
+
+			// From `retryAt` on, the next request retries; success clears the backoff.
+			clock.set(backoff.retryAt);
+			internals(auth).client.send = async () => {
+				calls++;
+				return freshAuthenticationResult();
+			};
+			assert.strictEqual((await auth.getCurrentUser(requestWith(cookie)))?.username, 'alice');
+			assert.strictEqual(calls, 2);
+			assert.strictEqual((await storedRecord(auth, id))?.refreshBackoff, undefined, 'a successful refresh clears the backoff');
+		} finally {
+			clock.restore();
+		}
+	});
+
+	test('consecutive transient refresh failures double the backoff window up to 30 seconds', async () => {
+		const { auth, id, cookie } = await expiredSession();
+		const clock = controlledClock();
+		try {
+			let calls = 0;
+			internals(auth).client.send = async () => {
+				calls++;
+				throw cognitoFailure(AuthCognitoErrors.InternalError);
+			};
+			const ceilings = [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000];
+			for (const [i, ceiling] of ceilings.entries()) {
+				assert.strictEqual(await auth.getCurrentUser(requestWith(cookie)), null);
+				assert.strictEqual(calls, i + 1, 'one refresh attempt per window');
+				const backoff = (await storedRecord(auth, id))?.refreshBackoff;
+				assert.ok(backoff);
+				assert.strictEqual(backoff.failures, i + 1);
+				assertRetryWindow(backoff.retryAt - clock.now(), ceiling);
+				// Requests inside the window don't reach Cognito.
+				clock.set(backoff.retryAt - 1);
+				assert.strictEqual(await auth.getCurrentUser(requestWith(cookie)), null);
+				assert.strictEqual(calls, i + 1);
+				clock.set(backoff.retryAt);
+			}
+		} finally {
+			clock.restore();
+		}
 	});
 
 	test('a refresh token the user pool rejects ends the session', async () => {
@@ -459,6 +535,19 @@ describe('AuthCognito (aws runtime) — session refresh', () => {
 
 		internals(auth).client.send = async () => { throw new Error('the refreshed access token is still valid'); };
 		assert.strictEqual((await auth.getCurrentUser(requestWith(cookie)))?.username, 'alice');
+	});
+
+	test('a transient failure on a stale request is served the session another request refreshed, without a backoff', async () => {
+		const { auth, id, cookie } = await expiredSession();
+		const { first, secondCtx, secondResult } = await concurrentRefresh(auth, cookie, async () => {
+			throw cognitoFailure(AuthCognitoErrors.TooManyRequests);
+		});
+		assert.strictEqual(first?.username, 'alice');
+		assert.strictEqual((await secondResult)?.username, 'alice', 'the stale request is served from the refreshed session');
+		const stored = await storedRecord(auth, id);
+		assert.ok(stored && !isJwtExpired(stored.accessToken), 'the refreshed session must survive');
+		assert.strictEqual(stored.refreshBackoff, undefined, 'a stale failure must not put a backoff on the refreshed session');
+		assert.ok(!clearsSessionCookie(secondCtx, auth));
 	});
 
 	test('two concurrent successful refreshes both stay signed in', async () => {

@@ -210,6 +210,11 @@ export function sessionToTokens(record: SessionRecord): {
  * In the mock runtime, tokens are synthetic base64url-encoded JWT-shaped
  * strings so the same decode path works.
  *
+ * Besides the tokens, the record carries one piece of server-side state:
+ * {@link SessionRecord.refreshBackoff}, which spaces refresh retries after a
+ * transient failure. It is not derived from the tokens, so it can't drift
+ * from what Cognito asserts.
+ *
  * @internal
  */
 export interface SessionRecord {
@@ -219,6 +224,19 @@ export interface SessionRecord {
 	accessToken: string;
 	/** Refresh token — used by `REFRESH_TOKEN_AUTH`. */
 	refreshToken: string;
+	/**
+	 * Set after a `REFRESH_TOKEN_AUTH` call failed transiently (throttling,
+	 * network, service error): no refresh is attempted before `retryAt`, so
+	 * a Cognito throttle isn't answered with a retry on every request.
+	 * `failures` counts consecutive transient failures and sizes the next
+	 * window. Absent once a refresh succeeds.
+	 */
+	refreshBackoff?: {
+		/** Consecutive transient refresh failures. */
+		failures: number;
+		/** Epoch ms from which the next refresh may be attempted. */
+		retryAt: number;
+	};
 }
 
 /**

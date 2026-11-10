@@ -165,7 +165,8 @@ export { SessionStore, type SessionRecord } from './sessions.js';
  *      disabled, pool config changed, …), `tryRefresh` returns `null` and
  *      the caller sees a 401 — the record is deleted and the cookie is also
  *      cleared. A transient failure (throttling, network) also answers that
- *      request with a 401 but keeps the session, so the next request retries.
+ *      request with a 401 but keeps the session, so a later request retries
+ *      once a short backoff window has passed (see `REFRESH_RETRY_BASE_MS`).
  *
  * Net result: a valid access-or-refresh token means the user continues; an
  * invalid one means re-auth. The cookie's lifetime is deliberately decoupled
@@ -197,8 +198,8 @@ const DEFAULT_SESSION_TTL_SECONDS = 400 * 86400;
  *   or the pool configuration is invalid (`InvalidUserPoolConfigurationException`).
  *
  * Only these end a session. Any other failure (throttling, network, service or
- * Lambda-trigger errors) is treated as transient, and the next request
- * retries the refresh.
+ * Lambda-trigger errors) is treated as transient: the session is kept and a
+ * later request retries the refresh after a backoff window.
  */
 const REFRESH_REJECTIONS: ReadonlySet<string> = new Set([
 	AuthCognitoErrors.NotAuthorized,
@@ -207,6 +208,18 @@ const REFRESH_REJECTIONS: ReadonlySet<string> = new Set([
 	'UnsupportedOperationException',
 	'InvalidUserPoolConfigurationException',
 ]);
+
+/**
+ * Backoff after a transient refresh failure, recorded on the session as
+ * `SessionRecord.refreshBackoff` so it holds across Lambda instances. The
+ * window's ceiling starts at `REFRESH_RETRY_BASE_MS` and doubles with each
+ * consecutive failure up to `REFRESH_RETRY_MAX_MS`; the delay is drawn from
+ * the upper half of the window so sessions throttled together don't retry
+ * together. During a Cognito throttle each session then attempts at most one
+ * refresh per window, instead of one per request.
+ */
+const REFRESH_RETRY_BASE_MS = 1000;
+const REFRESH_RETRY_MAX_MS = 30_000;
 
 interface CognitoAttributeEntry {
 	Name: string;
@@ -2488,7 +2501,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 	 *   and the cookie is cleared so the browser stops replaying it — unless a
 	 *   concurrent request already replaced the record.
 	 * - **Any other failure** (throttling, network, service error) is
-	 *   transient: the session and cookie are kept, so the next request retries.
+	 *   transient: the session and cookie are kept, and the failure is recorded
+	 *   on the session ({@link deferRefresh}) so no request retries before its
+	 *   backoff window has passed. A request inside the window is answered as
+	 *   unauthenticated without calling Cognito.
 	 */
 	private async tryRefresh(
 		id: string,
@@ -2496,6 +2512,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		context: BlocksContext,
 	): Promise<SessionRecord | null> {
 		if (!record.refreshToken) return this.endRejectedSession(id, record, context);
+		if (record.refreshBackoff && Date.now() < record.refreshBackoff.retryAt) return null;
 		let tokens: AuthenticationResultType | undefined;
 		try {
 			const resp = await this.client.send(new InitiateAuthCommand({
@@ -2517,11 +2534,11 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				sessionIdPrefix: id.slice(0, 8),
 				error,
 			});
-			return REFRESH_REJECTIONS.has(error) ? this.endRejectedSession(id, record, context) : null;
+			return REFRESH_REJECTIONS.has(error) ? this.endRejectedSession(id, record, context) : this.deferRefresh(id, record, context);
 		}
 		// A success without tokens is not a rejection of the refresh token, so
 		// keep the session (transient) rather than end it.
-		if (!tokens?.IdToken || !tokens.AccessToken) return null;
+		if (!tokens?.IdToken || !tokens.AccessToken) return this.deferRefresh(id, record, context);
 		const updated: SessionRecord = {
 			idToken: tokens.IdToken,
 			accessToken: tokens.AccessToken,
@@ -2533,6 +2550,22 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		const secret = await this.getSessionSecret();
 		setSessionCookie(context, this.fullId, signSessionId(id, secret), this.sessionTtlSeconds, this.crossDomain);
 		return updated;
+	}
+
+	/**
+	 * The refresh failed transiently: keep the session and record the failure
+	 * on it as `refreshBackoff`, so no request on any instance retries before
+	 * `retryAt` (see {@link REFRESH_RETRY_BASE_MS}). The write is conditional
+	 * on `record` like every write on the refresh path: if the session changed
+	 * meanwhile, defer to that ({@link sessionAfterLostWrite}) — a concurrent
+	 * refresh's live record is served. Otherwise this request is unauthenticated.
+	 */
+	private async deferRefresh(id: string, record: SessionRecord, context: BlocksContext): Promise<SessionRecord | null> {
+		const failures = (record.refreshBackoff?.failures ?? 0) + 1;
+		const ceilingMs = Math.min(REFRESH_RETRY_MAX_MS, REFRESH_RETRY_BASE_MS * 2 ** (failures - 1));
+		const retryAt = Date.now() + Math.ceil(ceilingMs / 2 + Math.random() * (ceilingMs / 2));
+		if (await this.sessions.replaceSession(id, record, { ...record, refreshBackoff: { failures, retryAt } })) return null;
+		return this.sessionAfterLostWrite(id, context);
 	}
 
 	/**
