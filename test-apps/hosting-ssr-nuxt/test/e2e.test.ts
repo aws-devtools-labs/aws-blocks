@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect, type Page, type APIRequestContext, type BrowserContext } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -79,19 +78,13 @@ async function loginViaApi(
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 
+// playwright.config.ts's globalSetup deploys the sandbox once per run (and
+// destroys it unless BLOCKS_SANDBOX_KEEP is set); each worker reads its URL.
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr-nuxt sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-
     const outputs = JSON.parse(
       readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'),
     );
@@ -112,21 +105,15 @@ test.beforeAll(async () => {
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot,
-      stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
-
 test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
   test.describe.configure({ mode: 'serial' });
 
-  const testUser = `e2e-nuxt-${Date.now()}@example.com`;
+  // Each attempt (a retry runs in a new worker) gets its own user and post
+  // title: a retry reuses the deployed stack, where a post from a failed
+  // attempt can still be listed on the public homepage.
+  const runId = Date.now();
+  const testUser = `e2e-nuxt-${runId}@example.com`;
+  const postTitle = `Hello Nuxt ${runId}`;
   const testPassword = 'TestPass123!';
 
   test('1. Homepage is server-rendered with post list', async ({ page, request }) => {
@@ -219,13 +206,13 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
     await page.goto(`${hostingUrl}/dashboard`);
 
     await gotoHydrated(page, `${hostingUrl}/create`);
-    await page.fill('#post-title', 'Hello Nuxt');
+    await page.fill('#post-title', postTitle);
     await page.fill('#post-body', 'My first post from the Nuxt SSR e2e test!');
     await page.click('#btn-publish');
     await page.waitForURL('**/dashboard');
 
     await expect(page.locator('[data-testid="my-post-card"]')).toHaveCount(1);
-    await expect(page.locator('[data-testid="my-posts"]')).toContainText('Hello Nuxt');
+    await expect(page.locator('[data-testid="my-posts"]')).toContainText(postTitle);
   });
 
   test('6. Dashboard SSR shows the post (auth-protected SSR)', async ({
@@ -235,7 +222,7 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
     await loginViaApi(request, page.context(), hostingUrl, testUser, testPassword);
     await page.goto(`${hostingUrl}/dashboard`);
 
-    await expect(page.locator('[data-testid="my-posts"]')).toContainText('Hello Nuxt');
+    await expect(page.locator('[data-testid="my-posts"]')).toContainText(postTitle);
 
     const cookies = await page.context().cookies();
     const cookieStr = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
@@ -244,7 +231,7 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
       headers: { Cookie: cookieStr },
     });
     const html = await rawResp.text();
-    expect(html).toContain('Hello Nuxt');
+    expect(html).toContain(postTitle);
     expect(html).toContain(testUser);
   });
 
@@ -253,26 +240,26 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
     request,
   }) => {
     await page.goto(hostingUrl);
-    await expect(page.locator('[data-testid="post-list"]')).toContainText('Hello Nuxt');
+    await expect(page.locator('[data-testid="post-list"]')).toContainText(postTitle);
 
     const rawResp = await request.get(hostingUrl);
     const html = await rawResp.text();
-    expect(html).toContain('Hello Nuxt');
+    expect(html).toContain(postTitle);
   });
 
   test('8. Post detail page is server-rendered', async ({ page, request }) => {
     await page.goto(hostingUrl);
-    const postLink = page.locator('[data-testid="post-card"] a').first();
+    const postLink = page.locator('[data-testid="post-card"]', { hasText: postTitle }).locator('a').first();
     const href = await postLink.getAttribute('href');
     expect(href).toBeTruthy();
 
     const rawResp = await request.get(`${hostingUrl}${href}`);
     const html = await rawResp.text();
-    expect(html).toContain('Hello Nuxt');
+    expect(html).toContain(postTitle);
     expect(html).toContain('My first post from the Nuxt SSR e2e test!');
 
     await page.goto(`${hostingUrl}${href}`);
-    await expect(page.locator('[data-testid="post-title"]')).toHaveText('Hello Nuxt');
+    await expect(page.locator('[data-testid="post-title"]')).toHaveText(postTitle);
     await expect(page.locator('[data-testid="post-body"]')).toContainText(
       'My first post',
     );
@@ -307,11 +294,13 @@ test.describe('Blog with Auth — Nuxt SSR Hosting', () => {
     await expect(page.locator('[data-testid="no-posts"]')).toBeVisible();
   });
 
-  test('11. Homepage no longer shows deleted post (SSR)', async ({ request }) => {
+  test('11. Homepage no longer shows deleted post (SSR)', async ({ request }, testInfo) => {
     const rawResp = await request.get(hostingUrl);
     const html = await rawResp.text();
-    expect(html).not.toContain('Hello Nuxt');
-    expect(html).toContain('No posts yet');
+    expect(html).not.toContain(postTitle);
+    // On a retry the homepage can still list the failed attempt's post (that
+    // attempt's user can't be signed in again to delete it).
+    if (testInfo.retry === 0) expect(html).toContain('No posts yet');
   });
 
   test('12. Unauthenticated /dashboard redirects to /login', async ({ page }) => {

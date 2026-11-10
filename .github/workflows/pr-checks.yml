@@ -313,6 +313,17 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      # The wait the hosting E2E suites run between deploy and their first test
+      # (scripts/ci/hosting-ready.ts).
+      - name: Test the hosting readiness wait
+        run: npx tsx --test scripts/ci/hosting-ready.test.ts
+
+      # The hosting E2E apps' Playwright globalSetup (scripts/ci/hosting-e2e-sandbox.ts):
+      # one deploy per run, a retry reusing it, teardown and failed deploys,
+      # with stub deploy scripts (no AWS, no browser).
+      - name: Test the hosting E2E sandbox setup
+        run: npx tsx --test scripts/ci/hosting-e2e-sandbox.test.ts
+
       - name: Test the E2E cleanup wrapper
         run: node --test scripts/ci/e2e-cleanup.test.mjs
 
@@ -1254,10 +1265,11 @@ jobs:
         run: npx tsx scripts/ci/hosting-redeploy.ts ${{ matrix.app-dir }}
 
       # Runs whenever the suite ran, passed or failed, like the suite's own
-      # afterAll destroy did, and a failed destroy fails the job, as it did
-      # from the afterAll (Web Function legs too; before, only Cleanup sandbox
-      # destroyed theirs, and ignored a failure). Cleanup sandbox retries when
-      # this step didn't succeed.
+      # teardown (scripts/ci/hosting-e2e-sandbox.ts, skipped here by
+      # BLOCKS_SANDBOX_KEEP) would, and a failed destroy fails the job, as it
+      # would from that teardown (Web Function legs too; before, only Cleanup
+      # sandbox destroyed theirs, and ignored a failure). Cleanup sandbox
+      # retries when this step didn't succeed.
       - name: Destroy sandbox
         id: destroy
         if: ${{ !cancelled() && steps.e2e.outcome != 'skipped' }}

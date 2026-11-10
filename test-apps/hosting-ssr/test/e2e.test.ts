@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { test, expect } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -11,21 +10,16 @@ import { createHash, randomBytes } from 'node:crypto';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
-const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
 
 let hostingUrl: string;
 let buildCacheBucketName: string;
 
-// ── Deploy / Teardown ──────────────────────────────────────────────────────
+// ── Sandbox ────────────────────────────────────────────────────────────────
+// playwright.config.ts's globalSetup deploys the sandbox once per run (and
+// destroys it unless BLOCKS_SANDBOX_KEEP is set); each worker reads its URL.
 
 test.beforeAll(async () => {
   if (ENV === 'sandbox') {
-    console.log('🚀 Deploying hosting-ssr sandbox...\n');
-    execFileSync('npx', ['tsx', 'test/sandbox-deploy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-
     const outputs = JSON.parse(readFileSync(join(projectRoot, '.blocks-sandbox', 'outputs.json'), 'utf-8'));
     const stackOutputs = Object.values(outputs)[0] as Record<string, string>;
     // CDK appends a hash suffix to output keys — find by prefix
@@ -44,22 +38,17 @@ test.beforeAll(async () => {
   }
 });
 
-test.afterAll(async () => {
-  if (ENV === 'sandbox' && !process.env.BLOCKS_SANDBOX_KEEP) {
-    console.log('\n🗑️  Destroying sandbox...');
-    execFileSync('npx', ['tsx', 'test/sandbox-destroy.ts', backendPath], {
-      cwd: projectRoot, stdio: 'inherit',
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-  }
-});
-
 // ── Full User Journey ──────────────────────────────────────────────────────
 
 test.describe('Blog with Auth — SSR Hosting', () => {
   test.describe.configure({ mode: 'serial' });
 
-  const testUser = `e2e-ssr-${Date.now()}@example.com`;
+  // Each attempt (a retry runs in a new worker) gets its own user and post
+  // title: a retry reuses the deployed stack, where a post from a failed
+  // attempt can still be listed on the public homepage.
+  const runId = Date.now();
+  const testUser = `e2e-ssr-${runId}@example.com`;
+  const postTitle = `Hello World ${runId}`;
   const testPassword = 'TestPass123!';
 
   test('1. Homepage is server-rendered with post list', async ({ page, request }) => {
@@ -127,14 +116,14 @@ test.describe('Blog with Auth — SSR Hosting', () => {
     await page.waitForURL('**/dashboard');
 
     await page.goto(`${hostingUrl}/create`);
-    await page.fill('#post-title', 'Hello World');
+    await page.fill('#post-title', postTitle);
     await page.fill('#post-body', 'My first blog post from the SSR e2e test!');
     await page.click('#btn-publish');
     await page.waitForURL('**/dashboard');
 
     // Post should appear in dashboard
     await expect(page.locator('[data-testid="my-post-card"]')).toHaveCount(1);
-    await expect(page.locator('[data-testid="my-posts"]')).toContainText('Hello World');
+    await expect(page.locator('[data-testid="my-posts"]')).toContainText(postTitle);
   });
 
   test('6. Dashboard SSR shows the post (auth-protected SSR)', async ({ page, request }) => {
@@ -146,7 +135,7 @@ test.describe('Blog with Auth — SSR Hosting', () => {
     await page.waitForURL('**/dashboard');
 
     // Verify post is in the SSR-rendered HTML
-    await expect(page.locator('[data-testid="my-posts"]')).toContainText('Hello World');
+    await expect(page.locator('[data-testid="my-posts"]')).toContainText(postTitle);
 
     // Get cookies from browser context to verify SSR
     const cookies = await page.context().cookies();
@@ -157,36 +146,36 @@ test.describe('Blog with Auth — SSR Hosting', () => {
       headers: { Cookie: cookieStr },
     });
     const html = await rawResp.text();
-    expect(html).toContain('Hello World');
+    expect(html).toContain(postTitle);
     expect(html).toContain(testUser);
   });
 
   test('7. Homepage shows "Hello World" in public list (SSR)', async ({ page, request }) => {
     await page.goto(hostingUrl);
-    await expect(page.locator('[data-testid="post-list"]')).toContainText('Hello World');
+    await expect(page.locator('[data-testid="post-list"]')).toContainText(postTitle);
 
     // SSR proof: raw HTML contains the post
     const rawResp = await request.get(hostingUrl);
     const html = await rawResp.text();
-    expect(html).toContain('Hello World');
+    expect(html).toContain(postTitle);
   });
 
   test('8. Post detail page is server-rendered', async ({ page, request }) => {
     // Get the post ID from the homepage link
     await page.goto(hostingUrl);
-    const postLink = page.locator('[data-testid="post-card"] a').first();
+    const postLink = page.locator('[data-testid="post-card"]', { hasText: postTitle }).locator('a').first();
     const href = await postLink.getAttribute('href');
     expect(href).toBeTruthy();
 
     // SSR proof: raw HTML has the content
     const rawResp = await request.get(`${hostingUrl}${href}`);
     const html = await rawResp.text();
-    expect(html).toContain('Hello World');
+    expect(html).toContain(postTitle);
     expect(html).toContain('My first blog post from the SSR e2e test!');
 
     // Also verify via Playwright
     await page.goto(`${hostingUrl}${href}`);
-    await expect(page.locator('[data-testid="post-title"]')).toHaveText('Hello World');
+    await expect(page.locator('[data-testid="post-title"]')).toHaveText(postTitle);
     await expect(page.locator('[data-testid="post-body"]')).toContainText('My first blog post');
   });
 
@@ -229,11 +218,13 @@ test.describe('Blog with Auth — SSR Hosting', () => {
     await expect(page.locator('[data-testid="no-posts"]')).toBeVisible();
   });
 
-  test('11. Homepage no longer shows deleted post (SSR)', async ({ request }) => {
+  test('11. Homepage no longer shows deleted post (SSR)', async ({ request }, testInfo) => {
     const rawResp = await request.get(hostingUrl);
     const html = await rawResp.text();
-    expect(html).not.toContain('Hello World');
-    expect(html).toContain('No posts yet');
+    expect(html).not.toContain(postTitle);
+    // On a retry the homepage can still list the failed attempt's post (that
+    // attempt's user can't be signed in again to delete it).
+    if (testInfo.retry === 0) expect(html).toContain('No posts yet');
   });
 
   test('12. Unauthenticated /dashboard redirects to /login', async ({ page }) => {
