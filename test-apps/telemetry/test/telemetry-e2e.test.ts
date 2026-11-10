@@ -20,7 +20,8 @@
 
 import { describe, test, before, after, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, execFile, type ChildProcess } from 'node:child_process';
+import { promisify } from 'node:util';
 import {
   mkdirSync,
   writeFileSync,
@@ -1380,13 +1381,17 @@ function sandboxLifecycleSuites(): void {
 
       // The suite's before() gave this run a fresh sandbox id, so the stack name is unique.
 
-      // Verify AWS credentials are valid before deploying
+      // Verify AWS credentials are valid before deploying. Asynchronous, because the suite runs
+      // its cases concurrently and a synchronous call would stall all of them while it runs. The
+      // 60 s cap leaves room for a busy runner: the call once ran past a 10 s cap (ETIMEDOUT),
+      // and the timeout was then reported as invalid credentials.
       try {
         // With the group's HOME, as the deploy below sees it.
-        execSync('aws sts get-caller-identity', {
-          encoding: 'utf-8', timeout: 10_000, env: { ...process.env, HOME: sandboxGroup.home },
+        await promisify(execFile)('aws', ['sts', 'get-caller-identity'], {
+          encoding: 'utf-8', timeout: 60_000, env: { ...process.env, HOME: sandboxGroup.home },
         });
       } catch (e: any) {
+        if (e.killed) assert.fail(`aws sts get-caller-identity did not finish within 60 s: ${e.message}`);
         assert.fail(`AWS credentials invalid before sandbox deploy: ${e.message}`);
       }
 
