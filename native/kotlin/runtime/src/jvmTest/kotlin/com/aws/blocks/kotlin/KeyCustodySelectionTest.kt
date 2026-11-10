@@ -158,7 +158,7 @@ class KeyCustodySelectionTest {
         // On a platform with a tier, this drives a real self-test: a probe written, read back and
         // deleted under a random alias. Linux has no binding yet and so still expects the file tier.
         val os = System.getProperty("os.name").orEmpty()
-        val hasHostStore = os.startsWith("Mac")
+        val hasHostStore = os.startsWith("Windows") || os.startsWith("Mac")
 
         selectKeyCustody(root.toPath()).tier shouldBe if (hasHostStore) KeyTier.OS else KeyTier.FILE
     }
