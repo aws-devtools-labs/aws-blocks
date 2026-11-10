@@ -436,7 +436,22 @@ export interface AgentStreamResult {
 	 * channel from `channelId` via the `useChat` `subscribe` callback.
 	 */
 	channel: Promise<RealtimeChannel<AgentStreamChunk>>;
-	/** Wait for the complete response (server-side). Resolves when the done chunk arrives. */
+	/**
+	 * Wait for the complete response (server-side). Resolves when the done chunk arrives.
+	 *
+	 * Rejects on an `error` chunk (`AgentErrors.StreamFailed`, or the error the server classified,
+	 * e.g. `AgentErrors.ModelUnavailable`) and with an `InterruptError` on an `interrupt` chunk.
+	 * It doesn't have to be called before the turn ends: the turn records its final chunk before
+	 * publishing it, so this settles even if the turn already finished. The record is kept for a
+	 * day on AWS and for the most recent 1,000 turns locally. Calling it again returns the same
+	 * outcome; after `resume()` on the same channel it waits for the resumed turn, ignoring the
+	 * earlier turn's final chunk (see {@link AgentStreamChunk.dispatchId}).
+	 *
+	 * There is no timeout, since a turn can run for hours. Inside an API method, bound the wait
+	 * yourself: API Gateway ends a request after about 29 seconds. It rejects when the channel can't
+	 * be subscribed and the turn hasn't recorded its outcome yet; a later call subscribes again
+	 * with fresh channel credentials.
+	 */
 	complete: () => Promise<AgentStreamChunk>;
 	/** Only `{ channelId, channel: null }` is serialized when this object crosses the RPC boundary. */
 	toJSON(): { channelId: string; channel: null };
@@ -461,6 +476,13 @@ export interface AgentStreamChunk {
 	 */
 	errorName?: string;
 	interrupts?: Array<{ id: string; name: string; reason?: any }>;
+	/**
+	 * On a `done`, `error` or `interrupt` chunk, the id of the `stream()` or `resume()` dispatch it
+	 * ends. `complete()` uses it to ignore another dispatch's final chunk on the same channel (for
+	 * example a paused turn's interrupt that arrives after `resume()`). Opaque; absent on other
+	 * chunk types and on chunks from an agent runtime that predates it.
+	 */
+	dispatchId?: string;
 }
 
 

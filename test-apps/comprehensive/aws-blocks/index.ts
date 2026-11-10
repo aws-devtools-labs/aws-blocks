@@ -2527,6 +2527,32 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { text: done.text ?? '' };
   },
 
+  // complete() called only after the turn has published its final chunk. It used to subscribe
+  // too late to see that chunk and wait forever. On AWS the turn runs on the AgentCore Runtime
+  // and complete() reads the outcome the turn recorded in the agent's session bucket.
+  async cannedCompleteAfterTurnEnded(message: string) {
+    const conversationId = await cannedAgent.createConversationId('test-user');
+    const channel = await cannedAgent.getChannel(conversationId, { userId: 'test-user' });
+    let markEnded = () => {};
+    const ended = new Promise<boolean>((resolve) => { markEnded = () => resolve(true); });
+    const sub = channel.subscribe((chunk) => {
+      if (chunk.type === 'done' || chunk.type === 'error' || chunk.type === 'interrupt') markEnded();
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await sub.established;
+      const result = await cannedAgent.stream(message, { conversationId, userId: 'test-user', context: { userId: 'test-user' } });
+      // Bounded: on AWS this observer can itself miss the chunk while its subscription isn't yet
+      // visible to publish(). complete() must settle either way.
+      const observedEnd = await Promise.race([ended, new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 10_000); })]);
+      const done = await result.complete();
+      return { text: done.text ?? '', observedEnd };
+    } finally {
+      clearTimeout(timer);
+      sub.unsubscribe();
+    }
+  },
+
   async agentTestApiKeyResolver() {
     // Tests the AppSetting → apiKey resolver pattern used for secure API key storage.
     // Puts a test value into its own secret setting, then resolves it via the same

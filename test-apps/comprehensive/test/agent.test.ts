@@ -656,6 +656,17 @@ export function agentTests(getApi: () => typeof apiType) {
       }
     });
 
+    describe('complete()', () => {
+      // Regression: complete() subscribed only when called, so it missed a final chunk the turn had
+      // already published and waited forever (a 504 inside an API method).
+      test('settles when the turn had already ended before complete() was called', { timeout: 30_000 }, async () => {
+        const api = getApi();
+        const { text, observedEnd } = await api.cannedCompleteAfterTurnEnded('hi');
+        assert.ok(text.length > 0, 'complete() should resolve with the final text');
+        console.log(`  [complete] the observer saw the turn end before complete(): ${observedEnd}`);
+      });
+    });
+
     describe('HITL — Tool Approval (deterministic)', () => {
       /**
        * The paused turn's pending interrupts, read from history once its `interrupt` chunk has

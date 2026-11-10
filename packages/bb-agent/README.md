@@ -98,7 +98,7 @@ Returned by `stream()`. Provides the Realtime channel and convenience methods:
 |--------|------|-------------|
 | `channelId` | `string` | Realtime channel where chunks are published. |
 | `channel` | `Promise<RealtimeChannel>` | Realtime channel handle — `await` it, then call `.subscribe(handler)`. |
-| `complete()` | `Promise<AgentStreamChunk>` | Wait for the done chunk (full text + token usage). |
+| `complete()` | `Promise<AgentStreamChunk>` | Wait for the done chunk (full text + token usage). Rejects on an `error` chunk, and with an `InterruptError` on an `interrupt`. Can be called after the turn has finished. No timeout; see [Headless Usage](#headless-usage-no-ui). |
 
 ### AgentStreamChunk
 
@@ -112,6 +112,8 @@ Each chunk published to the Realtime channel has a `type` and type-specific fiel
 | `done` | `text: string`, `usage: TokenUsage` | Agent finished. `text` contains the full response. `usage` has `{ inputTokens, outputTokens, totalTokens }`. |
 | `error` | `error: string`, `errorName?: string` | Agent encountered an error. `errorName` is set when the failure was classified — e.g. `ModelUnavailableException` when Bedrock refuses to invoke the model for this account. |
 | `interrupt` | `interrupts: Array<{ id, name, reason }>` | Agent paused for approval. See [Tool Approval](#tool-approval-human-in-the-loop). |
+
+`done`, `error` and `interrupt` chunks also carry an opaque `dispatchId?: string` naming the `stream()` or `resume()` call they end. `complete()` uses it to ignore another call's final chunk on the same channel. You don't need it to route chunks.
 
 ### Message Roles
 
@@ -709,6 +711,8 @@ tools: (tool) => ({
 ## Headless Usage (No UI)
 
 The Agent BB works without a frontend — for scripts, background jobs, or server-to-server flows. Use `complete()` to wait for the full response. For UI-based flows, see [Client API — createChat](#client-api--createchat-recommended).
+
+You don't have to call `complete()` before the turn ends. The turn records its final chunk before publishing it, so `complete()` still settles if the turn finished first. The record is kept for a day on AWS, and locally for the most recent 1,000 turns of each agent. If recording fails, `complete()` falls back to the live chunk alone. Calling it again returns the same result, and after `resume()` it waits for the resumed turn. It has no timeout, because a turn can run for hours. Inside an API method, bound the wait yourself: API Gateway ends a request after about 29 seconds. If `complete()` can't subscribe to the channel and the turn hasn't finished yet, it rejects, and calling it again subscribes again with fresh channel credentials.
 
 ### Without tool approval
 

@@ -13,6 +13,7 @@ import { AgentCoreRuntime } from './agentcore-runtime.cdk.js';
 import { mintedMantleRegion } from './mantle.js';
 import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
 import type { AgentConfig } from './types.js';
+import { TURN_OUTCOME_EXPIRATION_DAYS, TURN_OUTCOME_PREFIX } from './turn-outcomes.js';
 import { BB_NAME } from './version.js';
 
 export { AgentErrors, InterruptError } from './errors.js';
@@ -43,7 +44,13 @@ export class Agent extends BuildingBlockScope {
 		// `getSdkIdentifiers`, never the raw `fullId`) — so no name needs to be injected into the container. Propagate `removalPolicy` so customers can opt sandbox stacks into
 		// clean teardown (without it, CDK's RETAIN default applies). ID shortened to keep the S3 bucket
 		// name within the 63-char limit.
-		new FileBucket(this, 'sn', { removalPolicy: config?.removalPolicy });
+		// Each turn also records its final chunk here for `complete()` (turn-outcomes.ts). Nothing
+		// deletes those objects, since most turns are read by a browser and never by complete(), so
+		// they expire on their own.
+		new FileBucket(this, 'sn', {
+			removalPolicy: config?.removalPolicy,
+			lifecycleRules: [{ prefix: TURN_OUTCOME_PREFIX, expirationDays: TURN_OUTCOME_EXPIRATION_DAYS }],
+		});
 
 		// Conversation metadata + message history. These grant read/write to the shared execution
 		// role, which the AgentCore Runtime then runs as — so the loop can persist history.

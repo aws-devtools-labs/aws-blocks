@@ -10,11 +10,11 @@ import { Agent, AgentErrors, InterruptError, BedrockModels, OllamaModels } from 
 import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
-import type { AgentStreamChunk, ModelConfig } from './types.js';
+import type { AgentStreamChunk, DefaultToolContext, ModelConfig } from './types.js';
 import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
-import { AgentBase } from './agent.js';
+import { AgentBase, type AgentTurnPayload } from './agent.js';
 import { checkModelHealth } from './model-factory.js';
 import { _setMantleResolverForTest } from './mantle.js';
 import { z } from 'zod';
@@ -278,6 +278,426 @@ describe('AgentStreamResult.toJSON()', () => {
 		const serialized = JSON.parse(JSON.stringify(result));
 		assert.deepStrictEqual(serialized, { channelId: result.channelId, channel: null });
 		assert.strictEqual('complete' in serialized, false);
+	});
+});
+
+import { BucketTurnOutcomes, InProcessTurnOutcomes, TURN_OUTCOME_PREFIX } from './turn-outcomes.js';
+
+// ── complete() after the turn already ended ─────────────────────────────────
+
+describe('complete() after the turn already ended', () => {
+	// Regression: complete() subscribed to the Realtime channel only when called, after stream()
+	// had dispatched the turn. A terminal chunk (done/error/interrupt) published before that
+	// subscription existed was dropped (pub/sub isn't durable), and complete() waited forever.
+	// On AWS the turn runs on the AgentCore Runtime, so a fast turn can finish before the
+	// caller's server-side subscription reaches the server; locally it happens whenever the caller
+	// awaits anything between stream() and complete().
+	const canned = { deployed: { provider: 'canned' as const }, local: { provider: 'canned' as const } };
+	const userId = 'complete-user';
+	const TIMEOUT = { timeout: 5_000 };
+
+	/**
+	 * Runs each turn to completion inside dispatchTurn, so it has published its last chunk before
+	 * stream()/resume() return: the order a fast turn on the AgentCore Runtime can produce.
+	 */
+	class FinishBeforeReturnAgent<TContext = DefaultToolContext> extends Agent<TContext> {
+		protected override async dispatchTurn(payload: AgentTurnPayload<TContext>): Promise<void> {
+			await this.invokeTurn(payload);
+		}
+	}
+
+	/** Resolves once `channel` carries a terminal chunk, i.e. the turn has published its outcome. */
+	function turnEnded(channel: { subscribe(handler: (chunk: AgentStreamChunk) => void): { unsubscribe(): void } }): Promise<AgentStreamChunk> {
+		return new Promise((resolve) => {
+			const sub = channel.subscribe((chunk) => {
+				if (chunk.type === 'done' || chunk.type === 'error' || chunk.type === 'interrupt') { sub.unsubscribe(); resolve(chunk); }
+			});
+		});
+	}
+
+	test('resolves when the turn published done before complete() was called (persistence)', TIMEOUT, async () => {
+		const agent = new Agent(new Scope('test-late-complete'), 'lc', { systemPrompt: 'test', model: canned });
+		const conversationId = await agent.createConversationId(userId);
+		const ended = turnEnded(await agent.getChannel(conversationId, { userId }));
+		const result = await agent.stream('hello', { conversationId, userId });
+		assert.strictEqual((await ended).type, 'done', 'sanity: the turn has finished');
+		const done = await result.complete();
+		assert.strictEqual(done.type, 'done');
+		assert.ok(done.text, 'carries the final text');
+	});
+
+	test('resolves when the turn published done before complete() was called (inferenceOnly, no conversation)', TIMEOUT, async () => {
+		const agent = new Agent(new Scope('test-late-complete-io'), 'lcio', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const channelId = crypto.randomUUID();
+		const ended = turnEnded(await agent.getChannel(channelId, { userId }));
+		const result = await agent.stream('hello', { channelId });
+		await ended;
+		assert.strictEqual((await result.complete()).type, 'done');
+	});
+
+	test('resolves when dispatch ran the whole turn before stream() returned', TIMEOUT, async () => {
+		const agent = new FinishBeforeReturnAgent(new Scope('test-fast-turn'), 'ft', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const done = await (await agent.stream('hello')).complete();
+		assert.strictEqual(done.type, 'done');
+	});
+
+	test('rejects with the error chunk the turn published before complete() was called', TIMEOUT, async () => {
+		const agent = new FinishBeforeReturnAgent(new Scope('test-fast-error'), 'fe', {
+			systemPrompt: 'test',
+			model: canned,
+			tools: (tool) => ({ badTool: tool({ description: 'has both', parameters: z.object({}), needsApproval: true, interrupt: () => {}, handler: async () => ({}) }) }),
+		});
+		const result = await agent.stream('hello', { userId });
+		await assert.rejects(() => result.complete(), (err: unknown) => isBlocksError(err, AgentErrors.StreamFailed) && /badTool/.test((err as Error).message));
+	});
+
+	test('rejects with the interrupt the turn published before complete() was called, then follows resume()', TIMEOUT, async () => {
+		let handlerCalls = 0;
+		const agent = new FinishBeforeReturnAgent(new Scope('test-fast-interrupt'), 'fi', {
+			systemPrompt: 'test',
+			model: canned,
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		const conversationId = await agent.createConversationId(userId);
+		const result = await agent.stream('what is the weather?', { conversationId, userId });
+		// The README's headless approval loop: complete() → InterruptError → resume() → complete() again.
+		const err = await result.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, 'the turn paused for approval');
+		await agent.resume(result.channelId, err.interrupts.map(i => ({ interruptId: i.id, approved: true })), { conversationId, userId });
+		const done = await result.complete();
+		assert.strictEqual(done.type, 'done', "complete() after resume() settles on the resumed turn's outcome");
+		assert.strictEqual(handlerCalls, 1);
+	});
+
+	test('complete() called again returns the same outcome', TIMEOUT, async () => {
+		const agent = new FinishBeforeReturnAgent(new Scope('test-complete-twice'), 'ct', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const result = await agent.stream('hello');
+		const [first, concurrent] = await Promise.all([result.complete(), result.complete()]);
+		const later = await result.complete();
+		assert.strictEqual(first.type, 'done');
+		assert.deepStrictEqual(concurrent, first);
+		assert.deepStrictEqual(later, first);
+	});
+
+	type Subscription = { unsubscribe(): void; established: Promise<void> };
+	type ChannelHandle = { subscribe(handler: (chunk: AgentStreamChunk) => void): Subscription };
+	interface Internals {
+		rt: {
+			getChannel(namespace: string, channelKey: string): Promise<ChannelHandle>;
+			publish(namespace: string, channelKey: string, chunk: AgentStreamChunk): Promise<void>;
+		};
+		turnOutcomes: { read(dispatchId: string): Promise<AgentStreamChunk | null> };
+	}
+	/** Test plumbing: the private Realtime client and outcome store the tests intercept. */
+	function internalsOf(agent: Agent): Internals {
+		return agent as unknown as Internals;
+	}
+
+	/** Replaces subscribe() on every channel the agent gets from Realtime from now on (complete() gets one per wait). */
+	function interceptSubscribe(agent: Agent, subscribe: (handler: (chunk: AgentStreamChunk) => void, original: ChannelHandle['subscribe']) => Subscription): void {
+		const rt = internalsOf(agent).rt;
+		const getChannel = rt.getChannel.bind(rt);
+		rt.getChannel = async (namespace, channelKey) => {
+			const channel = await getChannel(namespace, channelKey);
+			const original = channel.subscribe.bind(channel);
+			channel.subscribe = (handler) => subscribe(handler, original);
+			return channel;
+		};
+	}
+
+	/** A subscription the server refused, the way a bad or expired channel token is refused on AWS. */
+	function refusedSubscription(err: Error): Subscription {
+		const established = Promise.reject(err);
+		established.catch(() => {});
+		return { unsubscribe() {}, established };
+	}
+
+	/** Counts the subscriptions complete() opens and how many it releases. */
+	function countSubscriptions(agent: Agent) {
+		const counts = { subscribed: 0, unsubscribed: 0 };
+		interceptSubscribe(agent, (handler, original) => {
+			counts.subscribed++;
+			const sub = original(handler);
+			return { established: sub.established, unsubscribe() { counts.unsubscribed++; sub.unsubscribe(); } };
+		});
+		return counts;
+	}
+
+	test('complete() releases its subscription once it settles, from the live chunk or the recorded one', TIMEOUT, async () => {
+		// Live: the in-process turn is still running when complete() subscribes.
+		const live = new Agent(new Scope('test-complete-release-live'), 'crl', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const liveResult = await live.stream('hello');
+		const liveCounts = countSubscriptions(live);
+		await Promise.all([liveResult.complete(), liveResult.complete()]);
+		assert.deepStrictEqual(liveCounts, { subscribed: 1, unsubscribed: 1 }, 'concurrent calls share one subscription, released on done');
+		// Recorded: the turn ended before complete() was called.
+		const recorded = new FinishBeforeReturnAgent(new Scope('test-complete-release-rec'), 'crr', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const recordedResult = await recorded.stream('hello');
+		const recordedCounts = countSubscriptions(recorded);
+		await recordedResult.complete();
+		assert.deepStrictEqual(recordedCounts, { subscribed: 1, unsubscribed: 1 });
+	});
+
+	test('a failed dispatch opens no channel, and a failed resume() leaves complete() on the paused turn', TIMEOUT, async () => {
+		class FlakyDispatchAgent extends FinishBeforeReturnAgent {
+			failDispatch = false;
+			protected override async dispatchTurn(payload: AgentTurnPayload): Promise<void> {
+				if (this.failDispatch) throw new Error('dispatch failed');
+				await super.dispatchTurn(payload);
+			}
+		}
+		const agent = new FlakyDispatchAgent(new Scope('test-complete-flaky'), 'cf', {
+			systemPrompt: 'test',
+			model: canned,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		const rt = internalsOf(agent).rt;
+		const getChannel = rt.getChannel.bind(rt);
+		let channelsRequested = 0;
+		rt.getChannel = (namespace, channelKey) => { channelsRequested++; return getChannel(namespace, channelKey); };
+
+		const conversationId = await agent.createConversationId(userId);
+		agent.failDispatch = true;
+		await assert.rejects(() => agent.stream('what is the weather?', { conversationId, userId }), /dispatch failed/);
+		assert.strictEqual(channelsRequested, 0, 'no channel or subscription is opened for a turn that was never dispatched');
+
+		agent.failDispatch = false;
+		const result = await agent.stream('what is the weather?', { conversationId, userId });
+		const paused = await result.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(paused instanceof InterruptError);
+		agent.failDispatch = true;
+		await assert.rejects(() => agent.resume(result.channelId, paused.interrupts.map(i => ({ interruptId: i.id, approved: true })), { conversationId, userId }), /dispatch failed/);
+		// The resume never ran, so complete() must not wait for it: it still reports the pause.
+		assert.strictEqual(await result.complete().then(() => undefined, (e: unknown) => e), paused);
+	});
+
+	test('rejects when the channel cannot be subscribed and nothing is recorded, and subscribes again on the next call', TIMEOUT, async () => {
+		class NeverRunsAgent extends Agent {
+			protected override async dispatchTurn(): Promise<void> {}
+		}
+		const agent = new NeverRunsAgent(new Scope('test-complete-unsubscribable'), 'cu', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const result = await agent.stream('hello');
+		const refused = new Error('Subscription rejected');
+		let attempts = 0;
+		interceptSubscribe(agent, () => { attempts++; return refusedSubscription(refused); });
+		await assert.rejects(() => result.complete(), (err: unknown) => err === refused);
+		await assert.rejects(() => result.complete(), (err: unknown) => err === refused);
+		assert.strictEqual(attempts, 2, 'a failed subscription is not cached as the outcome');
+	});
+
+	test('settles from the recorded outcome even when the channel cannot be subscribed', TIMEOUT, async () => {
+		const agent = new FinishBeforeReturnAgent(new Scope('test-complete-recorded-unsub'), 'cru', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const result = await agent.stream('hello');
+		interceptSubscribe(agent, () => refusedSubscription(new Error('Subscription rejected')));
+		assert.strictEqual((await result.complete()).type, 'done');
+	});
+
+	test('on AWS the outcome is read back from the session bucket', TIMEOUT, async () => {
+		// The deployed class with the AgentCore hop replaced by an in-process run, so the turn writes
+		// its outcome where the AgentCore Runtime would and complete() reads it where the Lambda would.
+		class InProcessDeployedAgent extends AwsAgent {
+			protected override async dispatchTurn(payload: AgentTurnPayload): Promise<void> {
+				await this.invokeTurn(payload);
+			}
+		}
+		const agent = new InProcessDeployedAgent(new Scope('test-complete-bucket'), 'cb', { systemPrompt: 'test', inferenceOnly: true, model: { deployed: { provider: 'canned' } } });
+		// Test plumbing: the session bucket is private; read the record the turn wrote to it.
+		const internals = agent as unknown as { sessionBucket: FileBucket };
+		const bucket = internals.sessionBucket;
+		// The mock bucket persists across runs, so compare against what earlier runs left behind.
+		const before = new Set(await outcomePaths(bucket));
+		const result = await agent.stream('hello');
+		const records = (await outcomePaths(bucket)).filter(path => !before.has(path));
+		assert.strictEqual(records.length, 1, 'the turn recorded its outcome before publishing it');
+		assert.match(records[0], /^bb-agent-turn-outcomes\/[0-9a-f-]{36}\.json$/);
+		const done = await result.complete();
+		assert.strictEqual(done.type, 'done');
+		const stored = await bucket.get(records[0]);
+		assert.ok(stored, 'the record outlives complete(); the lifecycle rule expires it');
+		assert.deepStrictEqual(JSON.parse(stored.body.toString()), done);
+	});
+
+	async function outcomePaths(bucket: FileBucket): Promise<string[]> {
+		const paths: string[] = [];
+		for await (const file of bucket.scan({ prefix: TURN_OUTCOME_PREFIX })) paths.push(file.path);
+		return paths;
+	}
+
+	/** Starts turns in the background like the base dispatchTurn, or only captures them while `deferDispatch` is set. */
+	class ControlledDispatchAgent extends Agent {
+		readonly running: Array<Promise<void>> = [];
+		readonly deferred: AgentTurnPayload[] = [];
+		deferDispatch = false;
+		protected override async dispatchTurn(payload: AgentTurnPayload): Promise<void> {
+			if (this.deferDispatch) this.deferred.push(payload);
+			else this.running.push(this.invokeTurn(payload));
+		}
+	}
+
+	/** Resolves once complete()'s next read of a recorded outcome has returned. complete() reads only after it has subscribed. */
+	function nextOutcomeRead(agent: Agent): Promise<void> {
+		const store = internalsOf(agent).turnOutcomes;
+		const read = store.read.bind(store);
+		return new Promise((resolve) => {
+			store.read = async (dispatchId) => {
+				store.read = read;
+				const outcome = await read(dispatchId);
+				setImmediate(resolve);
+				return outcome;
+			};
+		});
+	}
+
+	test('each new wait signs fresh channel credentials, so a resumed turn is observable after the token TTL', TIMEOUT, async () => {
+		const agent = new ControlledDispatchAgent(new Scope('test-complete-fresh-creds'), 'cfc', {
+			systemPrompt: 'test',
+			model: canned,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		// Test plumbing: model AWS channel credentials, which getChannel() signs once and the
+		// $default handler refuses once their TTL (an hour for the channel token) has passed.
+		const TOKEN_TTL_MS = 3_600_000;
+		let clock = 0;
+		const rt = internalsOf(agent).rt;
+		const getChannel = rt.getChannel.bind(rt);
+		rt.getChannel = async (namespace, channelKey) => {
+			const channel = await getChannel(namespace, channelKey);
+			const signedAt = clock;
+			const subscribe = channel.subscribe.bind(channel);
+			channel.subscribe = (handler) => {
+				return clock - signedAt <= TOKEN_TTL_MS ? subscribe(handler) : refusedSubscription(new Error('Unauthorized: invalid or expired token'));
+			};
+			return channel;
+		};
+
+		const conversationId = await agent.createConversationId(userId);
+		const result = await agent.stream('what is the weather?', { conversationId, userId });
+		const paused = await result.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(paused instanceof InterruptError);
+		await agent.running[0];
+		clock += TOKEN_TTL_MS + 1; // the approval took longer than a channel token lives
+		agent.deferDispatch = true;
+		await agent.resume(result.channelId, paused.interrupts.map(i => ({ interruptId: i.id, approved: true })), { conversationId, userId });
+		const read = nextOutcomeRead(agent);
+		const resumed = result.complete();
+		await read; // nothing is recorded yet: only the live subscription can see the resumed turn
+		await agent.invokeTurn(agent.deferred[0]);
+		assert.strictEqual((await resumed).type, 'done');
+	});
+
+	test("a resumed turn's completion ignores the paused turn's interrupt arriving late on the channel", TIMEOUT, async () => {
+		const agent = new ControlledDispatchAgent(new Scope('test-complete-late-interrupt'), 'cli', {
+			systemPrompt: 'test',
+			model: canned,
+			tools: (tool) => ({ getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => ({ temp: 22 }) }) }),
+		});
+		// Test plumbing: hold the paused turn's live interrupt publish. Its outcome is recorded
+		// before the publish, so complete() can read it, and the caller resume, meanwhile.
+		const rt = internalsOf(agent).rt;
+		const publish = rt.publish.bind(rt);
+		let interruptHeld = () => {};
+		const held = new Promise<void>((resolve) => { interruptHeld = resolve; });
+		let releaseInterrupt = () => {};
+		const gate = new Promise<void>((resolve) => { releaseInterrupt = resolve; });
+		rt.publish = async (namespace, channelKey, chunk) => {
+			if (chunk.type === 'interrupt') { interruptHeld(); await gate; }
+			return publish(namespace, channelKey, chunk);
+		};
+
+		const conversationId = await agent.createConversationId(userId);
+		const result = await agent.stream('what is the weather?', { conversationId, userId });
+		await held;
+		const paused = await result.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(paused instanceof InterruptError, 'read from the record while the live chunk is held');
+		agent.deferDispatch = true;
+		await agent.resume(result.channelId, paused.interrupts.map(i => ({ interruptId: i.id, approved: true })), { conversationId, userId });
+		const read = nextOutcomeRead(agent);
+		const resumed = result.complete();
+		await read; // the resumed wait is subscribed
+		releaseInterrupt(); // the paused turn's interrupt now reaches that subscription
+		await agent.running[0];
+		await agent.invokeTurn(agent.deferred[0]);
+		assert.strictEqual((await resumed).type, 'done', "the resumed turn's done, not the earlier interrupt");
+	});
+
+	test('final chunks carry their dispatch id; other chunk types and their routing are unchanged', TIMEOUT, async () => {
+		const agent = new Agent(new Scope('test-complete-stamp'), 'cs', { systemPrompt: 'test', inferenceOnly: true, model: canned, streamingMode: 'token' });
+		const channelId = crypto.randomUUID();
+		const channel = await agent.getChannel(channelId, { userId });
+		const chunks: AgentStreamChunk[] = [];
+		const sub = channel.subscribe((chunk) => { chunks.push(chunk); });
+		const done = await (await agent.stream('hello', { channelId })).complete();
+		sub.unsubscribe();
+		assert.match(done.dispatchId ?? '', /^[0-9a-f-]{36}$/);
+		assert.deepStrictEqual(chunks.filter(c => c.type !== 'text-delta'), [done], 'a browser subscriber sees the same done chunk');
+		assert.ok(chunks.some(c => c.type === 'text-delta'));
+		assert.ok(chunks.filter(c => c.type === 'text-delta').every(c => c.dispatchId === undefined));
+	});
+
+	test('a final chunk without a dispatch id, from a runtime that predates it, still settles complete()', TIMEOUT, async () => {
+		// Mixed-version deploy: a new caller's turn can run on an AgentCore Runtime still on the
+		// previous version, which ignores the dispatch id and publishes unstamped chunks without
+		// recording an outcome. complete() accepts those as it did before.
+		class OlderRuntimeAgent extends Agent {
+			protected override async dispatchTurn({ dispatchId: _ignored, ...payload }: AgentTurnPayload): Promise<void> {
+				void this.invokeTurn(payload);
+			}
+		}
+		const agent = new OlderRuntimeAgent(new Scope('test-complete-unstamped'), 'cun', { systemPrompt: 'test', inferenceOnly: true, model: canned });
+		const done = await (await agent.stream('hello')).complete();
+		assert.strictEqual(done.type, 'done');
+		assert.strictEqual(done.dispatchId, undefined);
+	});
+});
+
+describe('turn outcome stores', () => {
+	const chunk: AgentStreamChunk = { type: 'done', text: 'hi' };
+	function recordingLog() {
+		const warnings: Array<{ message: string; fields: { error?: string } }> = [];
+		// Test plumbing: only `warn` is exercised; the rest of ChildLogger is stubbed.
+		const log = { info: () => {}, warn: (message: string, fields: { error?: string }) => { warnings.push({ message, fields }); }, error: () => {}, debug: () => {}, child: () => log } as unknown as ChildLogger;
+		return { log, warnings };
+	}
+
+	test('the in-process store drops the oldest outcome beyond its bound, and release() forgets one', async () => {
+		const store = new InProcessTurnOutcomes(2);
+		await store.record('a', chunk);
+		await store.record('b', chunk);
+		await store.record('c', chunk);
+		assert.strictEqual(await store.read('a'), null);
+		assert.deepStrictEqual(await store.read('c'), chunk);
+		store.release('c');
+		assert.strictEqual(await store.read('c'), null);
+	});
+
+	test('the bucket store ignores ids stream()/resume() never mint', async () => {
+		const bucket = new FileBucket(new Scope('test-outcome-ids'), 'b');
+		const store = new BucketTurnOutcomes(bucket, recordingLog().log);
+		await store.record('../escape', chunk);
+		const written: string[] = [];
+		for await (const file of bucket.scan({})) written.push(file.path);
+		assert.deepStrictEqual(written, []);
+		assert.strictEqual(await store.read('../escape'), null);
+	});
+
+	test('the bucket store gives up on a write that hangs, without throwing', async () => {
+		const { log, warnings } = recordingLog();
+		// Test plumbing: a bucket whose put() never settles; record() only calls put().
+		const hanging = { put: () => new Promise<void>(() => {}) } as unknown as FileBucket;
+		const store = new BucketTurnOutcomes(hanging, log, 20);
+		await store.record(crypto.randomUUID(), chunk);
+		assert.strictEqual(warnings.length, 1);
+		assert.match(warnings[0].fields.error ?? '', /timed out/);
+	});
+
+	test('the bucket store reads a malformed record as no outcome', async () => {
+		const bucket = new FileBucket(new Scope('test-outcome-malformed'), 'b');
+		const store = new BucketTurnOutcomes(bucket, recordingLog().log);
+		const id = crypto.randomUUID();
+		await bucket.put(`${TURN_OUTCOME_PREFIX}${id}.json`, JSON.stringify({ type: 'nonsense' }));
+		assert.strictEqual(await store.read(id), null);
 	});
 });
 
@@ -3295,7 +3715,7 @@ describe('OllamaModels presets', () => {
 
 import { Agent as DeployedAgent } from './index.aws.js';
 import { createDeployedSnapshotStorage, Agent as AwsAgent } from './agent.aws.js';
-import { handleInvocation } from './agentcore-invocation.js';
+import { handleInvocation, requestSchema } from './agentcore-invocation.js';
 import { errorCauseShape } from './agent.js';
 import { SessionManager } from '@strands-agents/sdk';
 import type { Snapshot, SnapshotStorage, SnapshotManifest, SnapshotLocation, LocalAgent } from '@strands-agents/sdk';
@@ -4861,5 +5281,29 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		assert.deepStrictEqual(ack, { channelId: ownerConv, status: 'accepted' });
 		assert.strictEqual(turns[0].conversationId, undefined);
 		assert.strictEqual(turns[1].conversationId, 'conv-1');
+	});
+
+	test('each stream() sends its own dispatchId, and the AgentCore entry hands it to the turn', async () => {
+		const agent = new AwsAgent(new Scope('test-ac-dispatch-id'), 'acdi', { systemPrompt: 'test', inferenceOnly: true });
+		const sent: Array<{ payload?: Uint8Array }> = [];
+		// Test plumbing: replace the AgentCore client so no request leaves the process.
+		const internals = agent as unknown as { _agentCore: { send(command: { input: { payload?: Uint8Array } }): Promise<object> } };
+		internals._agentCore = { send: async (command) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		try {
+			await agent.stream('one');
+			await agent.stream('two');
+		} finally {
+			delete process.env[arnKey];
+		}
+		const bodies = sent.map(s => requestSchema.parse(JSON.parse(new TextDecoder().decode(s.payload))));
+		for (const body of bodies) assert.match(body.dispatchId ?? '', /^[0-9a-f-]{36}$/);
+		assert.notStrictEqual(bodies[0].dispatchId, bodies[1].dispatchId);
+
+		const turns: Array<{ dispatchId?: string }> = [];
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		handleInvocation({ invokeTurn: async (payload) => { turns.push(payload); } }, tasks, bodies[0], {});
+		assert.strictEqual(turns[0].dispatchId, bodies[0].dispatchId);
 	});
 });

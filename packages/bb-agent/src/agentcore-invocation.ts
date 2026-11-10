@@ -23,6 +23,8 @@ export const requestSchema = z.object({
 	interruptResponses: z.array(z.object({ interruptId: z.string(), response: z.string() })).optional(),
 	/** Per-call tool context, threaded through to tool handlers. Must be JSON-serializable. */
 	context: z.unknown().optional(),
+	/** Id the turn records its terminal chunk under, for `complete()` (see turn-outcomes.ts). Absent from an older caller. */
+	dispatchId: z.string().optional(),
 });
 
 /**
@@ -53,6 +55,7 @@ export function handleInvocation(
 			userId: request.userId ?? 'anonymous',
 			interruptResponses: request.interruptResponses,
 			context: request.context,
+			dispatchId: request.dispatchId,
 		})
 		.finally(() => tasks.completeAsyncTask(taskId));
 
