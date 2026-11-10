@@ -37,6 +37,7 @@ import { applyBlocksPermissionsBoundary } from './cdk/permissions-boundary.js';
 import { BLOCKS_RPC_PREFIX, BLOCKS_AUTH_PREFIX } from './constants.js';
 import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
+import { buildEventUrl } from './lambda-handler.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
 
 // ================================================================
@@ -611,6 +612,134 @@ describe('Hosting', () => {
         String(f.Properties.FunctionCode).includes('x-blocks-forwarded-host'),
       );
       assert.strictEqual(stamps.length, 0);
+    });
+  });
+
+  // CloudFront forwards the gateway's own `Host`, so the door stamps the viewer's
+  // host on its API behaviors, and the backend's config lists the hosts a handler
+  // may take from that stamp.
+  describe('the viewer host reaches handlers behind the gateway', () => {
+    /** The parts of the synthesized template these tests read. */
+    type Association = { EventType: string; FunctionARN: { 'Fn::GetAtt': [string, string] } };
+    type Behavior = { PathPattern?: string; FunctionAssociations?: Association[] };
+    type Resources = Record<
+      string,
+      {
+        Type: string;
+        Properties: {
+          FunctionCode?: string;
+          DistributionConfig?: { DefaultCacheBehavior?: Behavior; CacheBehaviors?: Behavior[] };
+        };
+      }
+    >;
+    type ViewerRequest = (event: unknown) => { headers: Record<string, { value: string } | undefined> };
+
+    function hostingWith(id: string) {
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), id, { env: { account: '111111111111', region: 'us-east-1' } });
+      new Hosting(stack, 'Hosting', { root: tmpDir, api: MOCK_API });
+      return { resources: Template.fromStack(stack).toJSON().Resources as Resources };
+    }
+
+    /** The viewer-request function an API behavior runs, as CloudFront would run it. */
+    function viewerRequestOf(resources: Resources, behavior: Behavior | undefined): ViewerRequest {
+      const association = (behavior?.FunctionAssociations ?? []).find((a) => a.EventType === 'viewer-request');
+      assert.ok(association, `${behavior?.PathPattern ?? 'default'} has a viewer-request function`);
+      const code = String(resources[association.FunctionARN['Fn::GetAtt'][0]]?.Properties.FunctionCode);
+      return new Function(`${code}\nreturn handler;`)() as ViewerRequest;
+    }
+
+    /**
+     * A resolved template value as CloudFormation would evaluate it, with each
+     * distribution's `DomainName` taken from `domains` — the only intrinsics a
+     * front door's host list is made of.
+     */
+    function evaluate(value: unknown, domains: Record<string, string>): string {
+      if (typeof value === 'string') return value;
+      if (value && typeof value === 'object' && 'Fn::GetAtt' in value) {
+        const [id, attribute] = value['Fn::GetAtt'] as [string, string];
+        assert.strictEqual(attribute, 'DomainName');
+        const domain = domains[id];
+        assert.ok(domain, `a domain for ${id}`);
+        return domain;
+      }
+      if (value && typeof value === 'object' && 'Fn::Join' in value) {
+        const [separator, parts] = value['Fn::Join'] as [string, unknown[]];
+        return parts.map((part) => evaluate(part, domains)).join(separator);
+      }
+      throw new Error(`unexpected template value ${JSON.stringify(value)}`);
+    }
+
+    it('every API behavior to the gateway stamps the viewer host over a client copy', () => {
+      const { resources } = hostingWith('HostingPublicHostStamp');
+      const [, dist] = Object.entries(resources).find(([, r]) => r.Type === 'AWS::CloudFront::Distribution') ?? [];
+      const behaviors = dist?.Properties.DistributionConfig?.CacheBehaviors ?? [];
+      for (const pattern of [BLOCKS_RPC_PREFIX, `${BLOCKS_RPC_PREFIX}/*`, '/aws-blocks/auth/*']) {
+        const behavior = behaviors.find((b) => b.PathPattern === pattern);
+        assert.ok(behavior, `a ${pattern} behavior`);
+        const forwarded = viewerRequestOf(resources, behavior)({
+          request: { headers: { host: { value: 'd111.cloudfront.net' }, 'x-blocks-public-host': { value: 'attacker.example' } } },
+        });
+        assert.strictEqual(forwarded.headers['x-blocks-public-host']?.value, 'd111.cloudfront.net', pattern);
+      }
+    });
+
+    it('a Lambda handler behind either of two doors sees the host the viewer called, custom domain included', () => {
+      // The backend's managed distribution and a Hosting distribution with a custom
+      // domain both front it (the compute-smoke `cloudfront` leg's shape).
+      createSpaBuildOutput(tmpDir);
+      const stack = new Stack(new App(), 'HostingPublicHostTwoDoors', { env: { account: '111111111111', region: 'us-east-1' } });
+      scheduleApiFrontDoor(stack, true, MOCK_API.apiUrl);
+      new Hosting(stack, 'Hosting', {
+        root: tmpDir,
+        api: MOCK_API,
+        domain: { domainName: 'app.example.com', hostedZone: 'example.com', hostedZoneId: 'Z123' },
+      });
+      const resources = Template.fromStack(stack).toJSON().Resources as Resources;
+      const distributions = Object.entries(resources).filter(([, r]) => r.Type === 'AWS::CloudFront::Distribution');
+      const managedId = distributions.find(([id]) => id.startsWith('ApiFrontDoor'))?.[0];
+      const hostingId = distributions.find(([id]) => id !== managedId)?.[0];
+      assert.ok(managedId && hostingId, 'both distributions');
+      const domains = { [managedId]: 'dmanaged.cloudfront.net', [hostingId]: 'dhosting.cloudfront.net' };
+      // The deployed config the handlers read: the registered hosts, as CloudFormation resolves them.
+      const registry = (stack as unknown as Record<symbol, { entries: Map<string, unknown> } | undefined>)[
+        Symbol.for('BLOCKS_CONFIG_REGISTRY')
+      ];
+      const hosts = evaluate(stack.resolve(registry?.entries.get('BLOCKS_PUBLIC_HOSTS')), domains);
+
+      const gatewayBehavior = (id: string) => {
+        const config = resources[id]?.Properties.DistributionConfig;
+        return id === managedId ? config?.DefaultCacheBehavior : config?.CacheBehaviors?.find((b) => b.PathPattern === `${BLOCKS_RPC_PREFIX}/*`);
+      };
+      /** The URL a Lambda handler sees for a call the viewer made to `viewerHost` through door `id`. */
+      const lambdaUrl = (id: string, viewerHost: string) => {
+        const forwarded = viewerRequestOf(resources, gatewayBehavior(id))({ request: { headers: { host: { value: viewerHost } } } });
+        return buildEventUrl({
+          path: `${BLOCKS_RPC_PREFIX}/reports`,
+          headers: { Host: 'abc123.execute-api.us-east-1.amazonaws.com', 'x-blocks-public-host': forwarded.headers['x-blocks-public-host']?.value },
+          requestContext: { stage: 'prod' },
+        }).href;
+      };
+
+      const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+      process.env.BLOCKS_PUBLIC_HOSTS = hosts;
+      try {
+        for (const [id, viewerHost] of [
+          [managedId, 'dmanaged.cloudfront.net'],
+          [hostingId, 'dhosting.cloudfront.net'],
+          [hostingId, 'app.example.com'],
+        ] as const) {
+          assert.strictEqual(lambdaUrl(id, viewerHost), `https://${viewerHost}${BLOCKS_RPC_PREFIX}/reports`, viewerHost);
+        }
+        // A host neither door serves keeps the gateway's host (the route path has no stage).
+        assert.strictEqual(
+          lambdaUrl(hostingId, 'other.cloudfront.net'),
+          `https://abc123.execute-api.us-east-1.amazonaws.com${BLOCKS_RPC_PREFIX}/reports`,
+        );
+      } finally {
+        if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+        else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+      }
     });
   });
 

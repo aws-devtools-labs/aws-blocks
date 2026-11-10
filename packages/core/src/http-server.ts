@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
+import { apiNamespaceFilterFromEnv } from './api-placement.js';
 import { registerBuiltinRoutes } from './builtin-routes.js';
 import {
   CLIENT_USER_AGENT_HEADER,
@@ -18,12 +19,13 @@ import {
   FORWARDED_HOST_HEADER,
   FORWARDED_STAGE_HEADER,
   isRpcPath,
+  PUBLIC_HOST_HEADER,
 } from './constants.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
 import type { Dispatcher, DispatchRequest, DispatchResponse } from './dispatch.js';
 import { lockRouteRegistry } from './raw-route.js';
-import { isLoopbackForwardedHost } from './request-context.js';
+import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from './rpc.js';
 
 /** @internal */
@@ -168,7 +170,11 @@ export async function serveHttp(backend: unknown, options: ServeHttpOptions = {}
     throw new Error(`[Blocks] The public origin must be an absolute URL, got "${publicOrigin}"`);
   }
   const env: RequestEnv = {
-    dispatch: createDispatcher(backend, { rpcErrorLabel: 'HTTP Server RPC Error:' }),
+    // With `defaults.strictNamespacePlacement`, serve only the API namespaces placed on this compute.
+    dispatch: createDispatcher(backend, {
+      rpcErrorLabel: 'HTTP Server RPC Error:',
+      servesNamespace: apiNamespaceFilterFromEnv(),
+    }),
     maxBodyBytes,
     publicOrigin,
     trustForwardedHeaders: options.trustForwardedHeaders ?? false,
@@ -405,7 +411,7 @@ export interface NodeDispatchRequestInit {
   path: string;
   /** Public origin for request URLs (see {@link buildRequestUrl}). */
   publicOrigin?: string;
-  /** Whether to trust front-door-stamped headers (see {@link buildRequestUrl}). */
+  /** Whether to trust front-door-stamped headers (see {@link buildRequestUrl} and {@link buildRequestBaseUrl}). */
   trustForwardedHeaders?: boolean;
   signal?: AbortSignal;
   requestId?: string;
@@ -427,6 +433,7 @@ export function toDispatchRequest(req: http.IncomingMessage, body: Buffer, init:
     clientUserAgent: header(req, CLIENT_USER_AGENT_HEADER),
     headers: () => toHeaders(req),
     url: () => buildRequestUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
+    baseUrl: () => buildRequestBaseUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
     body: () => ({ text: body.toString('utf-8'), stream: body.length > 0 ? bytesStream(body) : null }),
     signal: init.signal,
     requestId: init.requestId,
@@ -582,6 +589,47 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
 }
 
 /**
+ * Where a request arrived, in the order of {@link buildRequestUrl}: the origin and
+ * API Gateway stage prefix (`''` when there is none) of the base URL the backend is
+ * reachable at, and the origin the client called, which `ctx.request.url` reports.
+ * A loopback forwarded host contributes only its host: its own query, fragment or
+ * userinfo (`localhost:3000?a=b#c`) never rides along, as in the Lambda handler.
+ * Behind a Blocks CloudFront front door the client called the door's host (a
+ * trusted `x-blocks-public-host`), while the base URL stays the one the door
+ * stamped, as on Lambda.
+ */
+function resolveRequestOrigin(
+  req: http.IncomingMessage,
+  publicOrigin: string | undefined,
+  trustForwardedHeaders: boolean,
+): { origin: URL; stagePrefix: string; viewerOrigin: URL } {
+  const forwardedHost = header(req, 'x-forwarded-host');
+  if (isLoopbackForwardedHost(forwardedHost)) {
+    const origin = new URL(new URL(`http://${forwardedHost}`).origin);
+    return { origin, stagePrefix: '', viewerOrigin: origin };
+  }
+  const base = resolveBaseOrigin(req, publicOrigin, trustForwardedHeaders);
+  const publicHost = trustedPublicHost(header(req, PUBLIC_HOST_HEADER));
+  return { ...base, viewerOrigin: publicHost ? new URL(`https://${publicHost}`) : base.origin };
+}
+
+/** The base origin and stage of a request with no loopback forwarded host (see {@link resolveRequestOrigin}). */
+function resolveBaseOrigin(
+  req: http.IncomingMessage,
+  publicOrigin: string | undefined,
+  trustForwardedHeaders: boolean,
+): { origin: URL; stagePrefix: string } {
+  const stampedHost = trustForwardedHeaders ? header(req, FORWARDED_HOST_HEADER) : undefined;
+  if (stampedHost) {
+    const stamped = header(req, FORWARDED_STAGE_HEADER);
+    const stagePrefix = stamped && STAGE_PATTERN.test(stamped) ? `/${stamped}` : '';
+    return { origin: new URL(`https://${stampedHost}`), stagePrefix };
+  }
+  if (publicOrigin) return { origin: new URL(publicOrigin), stagePrefix: '' };
+  return { origin: new URL(`http://${requestHost(req)}`), stagePrefix: '' };
+}
+
+/**
  * The externally visible URL of a request — origin, path and query values as the
  * Lambda handler reports them in `ctx.request.url` for the same request:
  *
@@ -589,10 +637,17 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  *    `http://<that host><path>`, no stage. Applies with or without
  *    `trustForwardedHeaders`, as in the Lambda handler; only a loopback host is
  *    taken, so it never yields anything but a loopback `http://` URL.
- * 2. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}
- *    (+ optional {@link FORWARDED_STAGE_HEADER}): `https://<host>/<stage><path>`.
- * 3. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
- * 4. The request's own `Host`, over plain HTTP (local `docker run`).
+ * 2. A front-door host in `x-blocks-public-host` that is one of the backend's own
+ *    CloudFront front-door hosts (see {@link trustedPublicHost}):
+ *    `https://<host><path>` — exactly what the Lambda handler reports behind the
+ *    same door, whether the door reached this container straight or through the
+ *    gateway. Several values (a client copy under another letter case) are never
+ *    one of those hosts, so they fall through.
+ * 3. With `trustForwardedHeaders`, a front-door-stamped {@link FORWARDED_HOST_HEADER}:
+ *    `https://<host><path>`. The path is the route path, with no stage, as on
+ *    Lambda; a stamped {@link FORWARDED_STAGE_HEADER} goes to {@link buildRequestBaseUrl}.
+ * 4. The configured public origin (`BLOCKS_PUBLIC_ORIGIN`).
+ * 5. The request's own `Host`, over plain HTTP (local `docker run`).
  *
  * The request target only ever supplies the path and query: a `//host/...` or
  * absolute-form target can never move the URL to another host.
@@ -601,27 +656,31 @@ export function readBody(req: http.IncomingMessage, limit: number): Promise<Buff
  */
 export function buildRequestUrl(req: http.IncomingMessage, publicOrigin?: string, trustForwardedHeaders = false): URL {
   const { pathname, search } = splitTarget(req.url ?? '/');
-  const forwardedHost = header(req, 'x-forwarded-host');
-  const stampedHost = trustForwardedHeaders ? header(req, FORWARDED_HOST_HEADER) : undefined;
-  let url: URL;
-  let stage = '';
-  if (isLoopbackForwardedHost(forwardedHost)) {
-    url = new URL(`http://${forwardedHost}`);
-  } else if (stampedHost) {
-    url = new URL(`https://${stampedHost}`);
-    const stamped = header(req, FORWARDED_STAGE_HEADER);
-    if (stamped && STAGE_PATTERN.test(stamped)) stage = `/${stamped}`;
-  } else if (publicOrigin) {
-    url = new URL(publicOrigin);
-  } else {
-    url = new URL(`http://${requestHost(req)}`);
-  }
+  const url = new URL(resolveRequestOrigin(req, publicOrigin, trustForwardedHeaders).viewerOrigin);
   // Assign the path rather than resolving the target against the origin.
-  url.pathname = `${stage}${pathname}`;
+  url.pathname = pathname;
   // Re-serialize the query the way the Lambda handler does (it rebuilds it from
   // API Gateway's parsed parameters), so `href` matches across transports.
   url.search = new URLSearchParams(search).toString();
   return url;
+}
+
+/**
+ * The externally reachable base URL of a request (`getRequestBaseUrl()`): the
+ * origin the front door stamped plus the stamped API Gateway stage
+ * (`https://<host>/prod`), with no trailing slash, as the Lambda handler reports
+ * it for the same request. Behind a Blocks CloudFront front door it stays that
+ * stamped origin, while {@link buildRequestUrl} reports the host the client called.
+ *
+ * @internal Exported for testing only.
+ */
+export function buildRequestBaseUrl(
+  req: http.IncomingMessage,
+  publicOrigin?: string,
+  trustForwardedHeaders = false,
+): string {
+  const { origin, stagePrefix } = resolveRequestOrigin(req, publicOrigin, trustForwardedHeaders);
+  return `${origin.origin}${stagePrefix}`;
 }
 
 /**
