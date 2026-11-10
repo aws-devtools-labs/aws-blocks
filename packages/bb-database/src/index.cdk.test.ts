@@ -253,8 +253,19 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 		assert.strictEqual(cluster.Properties.ManageMasterUserPassword, undefined);
 		const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
 		assert.match(policies, /rds-db:connect/);
-		assert.match(policies, /DBClusterResourceId[\s\S]*?\/blocks_app_/, 'the app role connects as its own role');
-		assert.match(policies, /\/postgres"/, 'the migration Lambdas connect as the master user');
+		// arn:...:rds-db:<region>:<account>:dbuser:<resource id>/<user>; the CI deploy with a slash before the
+		// resource id refused every token ("The database query failed").
+		assert.match(
+			policies,
+			/:dbuser:"[\s\S]*?DBClusterResourceId[\s\S]*?\/blocks_app_/,
+			'the app role connects as its own role',
+		);
+		assert.match(
+			policies,
+			/:dbuser:"[\s\S]*?DBClusterResourceId[\s\S]*?\/postgres"/,
+			'the migration Lambdas connect as the master user',
+		);
+		assert.doesNotMatch(policies, /dbuser\//);
 		assert.doesNotMatch(policies, /dsql:/);
 		const env = Object.values(functionsByHandler(template, 'index.isComplete'))[0].Properties.Environment.Variables;
 		assert.strictEqual(env.CLUSTER_KIND, 'aurora');
@@ -308,6 +319,27 @@ describe('DatabaseCluster type aurora (CDK)', () => {
 		assert.throws(
 			() => new DatabaseCluster(parent, 'c3', { type: 'aurora', minCapacity: 4, maxCapacity: 2 }),
 			/minCapacity \(4\) is above maxCapacity \(2\)/,
+		);
+	});
+
+	test('the cluster identifier leaves room for the writer instance name the service appends', () => {
+		// The CI stack name made `<identifier>-instance-1` 64 characters: "Invalid database identifier".
+		const { stack, parent } = setup();
+		const long = new DatabaseCluster(parent, 'bb-test-runner-16cd7r-pr-1386-1-test-app-sharedaurora', {
+			type: 'aurora',
+		});
+		const cluster = Object.values(Template.fromStack(stack).findResources('AWS::RDS::DBCluster'))[0];
+		const identifier: string = cluster.Properties.DBClusterIdentifier;
+		assert.ok(identifier.length + '-instance-1'.length <= 63, identifier);
+		assert.match(identifier, /^[a-z][a-z0-9-]*[a-z0-9]$/);
+		assert.doesNotMatch(identifier, /--/);
+		assert.ok(
+			identifier.startsWith(
+				long.node.id
+					.slice(0, 20)
+					.toLowerCase()
+					.replace(/[^a-z0-9-]/g, '-'),
+			) || identifier.length === 52,
 		);
 	});
 

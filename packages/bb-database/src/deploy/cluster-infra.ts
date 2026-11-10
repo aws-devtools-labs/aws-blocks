@@ -152,6 +152,8 @@ function auroraCluster(
 			CopyTagsToSnapshot: true,
 		},
 	});
+	// `arn:aws:rds-db:<region>:<account>:dbuser:<resource id>/<user>`: a colon before the resource id, a slash
+	// before the user. With the default slash the policy never matches and every token is refused.
 	const connect = (user: string): iam.PolicyStatement =>
 		new iam.PolicyStatement({
 			actions: ['rds-db:connect'],
@@ -160,6 +162,7 @@ function auroraCluster(
 					service: 'rds-db',
 					resource: 'dbuser',
 					resourceName: `${resource.getAtt('DBClusterResourceId').toString()}/${user}`,
+					arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
 				}),
 			],
 		});

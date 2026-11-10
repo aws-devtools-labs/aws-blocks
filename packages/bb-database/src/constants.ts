@@ -64,16 +64,20 @@ const DB_ROLE_PREFIX = 'blocks_app_';
 // PostgreSQL identifiers and RDS cluster identifiers share the 63-character limit.
 const PG_NAME_MAX = 63;
 
-// Keeps `name` under PG_NAME_MAX by cutting it and appending a hash of `id`, so two long ids never collide.
-const hashSuffixed = (name: string, id: string, separator: string): string => {
-	if (name.length <= PG_NAME_MAX) return name;
+// Keeps `name` within `max` by cutting it and appending a hash of `id`, so two long ids never collide.
+const hashSuffixed = (name: string, id: string, separator: string, max = PG_NAME_MAX): string => {
+	if (name.length <= max) return name;
 	const hash = createHash('sha256').update(id).digest('hex').slice(0, 8);
-	return `${name.slice(0, PG_NAME_MAX - hash.length - 1).replace(new RegExp(`${separator}$`), '')}${separator}${hash}`;
+	return `${name.slice(0, max - hash.length - 1).replace(new RegExp(`${separator}$`), '')}${separator}${hash}`;
 };
+
+// The express configuration names the writer instance `<cluster>-instance-1`, and an instance identifier is
+// limited to 63 characters too, so the cluster identifier leaves room for the suffix.
+const AURORA_INSTANCE_SUFFIX = '-instance-1';
 
 /**
  * A DBClusterIdentifier for `fullId`: lower-case letters, digits and hyphens, starting with a letter, no run of
- * hyphens and no trailing one.
+ * hyphens and no trailing one, short enough for the writer instance's name to fit as well.
  */
 export const auroraClusterIdentifier = (fullId: string): string => {
 	let name = fullId
@@ -82,7 +86,7 @@ export const auroraClusterIdentifier = (fullId: string): string => {
 		.replace(/-+/g, '-')
 		.replace(/^-|-$/g, '');
 	if (!/^[a-z]/.test(name)) name = `db-${name}`;
-	return hashSuffixed(name, fullId, '-');
+	return hashSuffixed(name, fullId, '-', PG_NAME_MAX - AURORA_INSTANCE_SUFFIX.length);
 };
 
 export const sanitizeDbRoleName = (id: string): string => {
