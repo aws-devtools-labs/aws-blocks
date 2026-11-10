@@ -9,26 +9,26 @@ export 'package:blocks_runtime/blocks_runtime.dart' show BlocksClient, BlocksRpc
 // --- Models ---
 
 enum WidgetKind {
-  cost$,
-  a$b,
-  x$$y,
-  b$c,
-  d$e
+  cost_,
+  a_b,
+  x__y,
+  b_c,
+  d_e
 ;
 
   static const _jsonMap = <String, WidgetKind>{
-    'cost\$': cost$,
-    'a\$b': a$b,
-    'x\$\$y': x$$y,
-    'b-\$c': b$c,
-    'd_\$e': d$e,
+    'cost\$': cost_,
+    'a\$b': a_b,
+    'x\$\$y': x__y,
+    'b-\$c': b_c,
+    'd_\$e': d_e,
   };
   static const _toJsonMap = <WidgetKind, String>{
-    cost$: 'cost\$',
-    a$b: 'a\$b',
-    x$$y: 'x\$\$y',
-    b$c: 'b-\$c',
-    d$e: 'd_\$e',
+    cost_: 'cost\$',
+    a_b: 'a\$b',
+    x__y: 'x\$\$y',
+    b_c: 'b-\$c',
+    d_e: 'd_\$e',
   };
   String toJson() => _toJsonMap[this]!;
   static WidgetKind fromJson(String json) => _jsonMap[json]!;
@@ -41,7 +41,7 @@ class Widget {
   final String id;
   final String code;
   final WidgetKind kind;
-  final String? note$;
+  final String? note_;
   final int? count;
   final int? limit;
   final num? ratio;
@@ -52,7 +52,7 @@ class Widget {
     required this.id,
     required this.code,
     required this.kind,
-    this.note$,
+    this.note_,
     this.count,
     this.limit,
     this.ratio,
@@ -67,7 +67,7 @@ class Widget {
       id: json['id'] as String,
       code: json['code'] as String,
       kind: WidgetKind.fromJson(json['kind'] as String),
-      note$: json['note\$'] as String?,
+      note_: json['note\$'] as String?,
       count: (json['count'] as num?)?.toInt(),
       limit: (json['limit'] as num?)?.toInt(),
       ratio: json['ratio'] as num?,
@@ -81,7 +81,7 @@ class Widget {
       'id': id,
       'code': code,
       'kind': kind.toJson(),
-      if (note$ != null) 'note\$': note$,
+      if (note_ != null) 'note\$': note_,
       if (count != null) 'count': count,
       if (limit != null) 'limit': limit,
       if (ratio != null) 'ratio': ratio,
@@ -97,7 +97,7 @@ class Widget {
           id == other.id &&
           code == other.code &&
           kind == other.kind &&
-          note$ == other.note$ &&
+          note_ == other.note_ &&
           count == other.count &&
           limit == other.limit &&
           ratio == other.ratio &&
@@ -105,10 +105,10 @@ class Widget {
           flag == other.flag;
 
   @override
-  int get hashCode => Object.hash(id, code, kind, note$, count, limit, ratio, scale, flag);
+  int get hashCode => Object.hash(id, code, kind, note_, count, limit, ratio, scale, flag);
 
   @override
-  String toString() => 'Widget(id: $id, code: $code, kind: $kind, note\$: ${note$}, count: $count, limit: $limit, ratio: $ratio, scale: $scale, flag: $flag)';
+  String toString() => 'Widget(id: $id, code: $code, kind: $kind, note_: $note_, count: $count, limit: $limit, ratio: $ratio, scale: $scale, flag: $flag)';
 }
 
 
@@ -117,22 +117,22 @@ sealed class ApiDoActionInput {
   Map<String, dynamic> toJson();
   static ApiDoActionInput fromJson(Map<String, dynamic> json) {
     switch (json['action'] as String) {
-      case 'create\$': return Create$Input.fromJson(json);
-      case 're\$move': return Re$moveInput.fromJson(json);
+      case 'create\$': return Create_Input.fromJson(json);
+      case 're\$move': return Re_moveInput.fromJson(json);
       default: throw ArgumentError('Unknown action: ${json['action']}');
     }
   }
 }
 
-class Create$Input extends ApiDoActionInput {
+class Create_Input extends ApiDoActionInput {
   final String title;
 
-  const Create$Input({
+  const Create_Input({
     required this.title,
   });
 
-  factory Create$Input.fromJson(Map<String, dynamic> json) {
-    return Create$Input(
+  factory Create_Input.fromJson(Map<String, dynamic> json) {
+    return Create_Input(
       title: json['title'] as String,
     );
   }
@@ -148,25 +148,25 @@ class Create$Input extends ApiDoActionInput {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Create$Input &&
+      other is Create_Input &&
           title == other.title;
 
   @override
   int get hashCode => title.hashCode;
 
   @override
-  String toString() => 'Create\$Input(title: $title)';
+  String toString() => 'Create_Input(title: $title)';
 }
 
-class Re$moveInput extends ApiDoActionInput {
+class Re_moveInput extends ApiDoActionInput {
   final String id;
 
-  const Re$moveInput({
+  const Re_moveInput({
     required this.id,
   });
 
-  factory Re$moveInput.fromJson(Map<String, dynamic> json) {
-    return Re$moveInput(
+  factory Re_moveInput.fromJson(Map<String, dynamic> json) {
+    return Re_moveInput(
       id: json['id'] as String,
     );
   }
@@ -182,14 +182,14 @@ class Re$moveInput extends ApiDoActionInput {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is Re$moveInput &&
+      other is Re_moveInput &&
           id == other.id;
 
   @override
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => 'Re\$moveInput(id: $id)';
+  String toString() => 'Re_moveInput(id: $id)';
 }
 
 
@@ -231,7 +231,7 @@ class ApiApi {
   final BlocksClient _client;
   ApiApi(this._client);
 
-  Future<Widget> get$x({required String id}) async {
+  Future<Widget> get_x({required String id}) async {
     final params = <String, dynamic>{
       'id': id,
     };

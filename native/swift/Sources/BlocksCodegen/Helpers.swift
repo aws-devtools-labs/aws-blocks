@@ -55,7 +55,16 @@ let reservedTypeNames: Set<String> = [
 ///
 /// Exception: SCREAMING_SNAKE_CASE strings (all uppercase + digits + underscores)
 /// collapse underscores so `CONFIRM_SIGN_UP` → `ConfirmSignUp`.
+///
+/// Every type, case and operation name derives from this function, so its result
+/// goes through `swiftIdentifier`: whatever the input holds, the name can only
+/// hold identifier characters.
 func pascalCase(_ input: String) -> String {
+    let result = pascalCasedSegments(input)
+    return result.isEmpty ? result : swiftIdentifier(result)
+}
+
+private func pascalCasedSegments(_ input: String) -> String {
     let isScreamingSnake = input.contains("_") && input.allSatisfy { $0.isUppercase || $0.isNumber || $0 == "_" }
     if isScreamingSnake {
         return input.split(separator: "_")
@@ -122,31 +131,35 @@ func safeTypeName(_ name: String, parentName: String?) -> String {
     return name
 }
 
-/// Returns true if `name` is a valid Swift identifier:
-/// starts with letter/underscore, rest are letters/digits/underscores.
-func isValidSwiftIdentifier(_ name: String) -> Bool {
-    guard let first = name.first else { return false }
-    if !(first.isLetter || first == "_") { return false }
-    for char in name.dropFirst() where !(char.isLetter || char.isNumber || char == "_") {
-        return false
-    }
-    return true
+/// Whether `char` may appear in a generated identifier: ASCII letters, digits and `_`.
+private func isIdentifierCharacter(_ char: Character) -> Bool {
+    char.isASCII && (char.isLetter || char.isNumber || char == "_")
 }
 
-/// Sanitize an arbitrary spec property name into a Swift-legal identifier.
-/// Replaces illegal chars with underscores and prefixes a leading underscore
-/// when the name starts with a digit or is empty. Used for record field names
-/// like `custom:email` (Cognito attributes) which are valid JSON keys but
-/// not valid Swift property names.
+/// Returns true if `name` is a valid Swift identifier as generated code spells one:
+/// starts with an ASCII letter or underscore, rest are ASCII letters/digits/underscores,
+/// and is not underscores alone.
+func isValidSwiftIdentifier(_ name: String) -> Bool {
+    guard let first = name.first else { return false }
+    if !(first.isASCII && (first.isLetter || first == "_")) { return false }
+    if name.allSatisfy({ $0 == "_" }) { return false }
+    return name.allSatisfy(isIdentifierCharacter)
+}
+
+/// Sanitize an arbitrary spec name into a Swift-legal identifier.
+/// Replaces every character outside `[A-Za-z0-9_]` with an underscore and
+/// prefixes a leading underscore when the name starts with a digit. A name
+/// left empty or holding only underscores gains `unnamed`. Used for record
+/// field names like `custom:email` (Cognito attributes) which are valid JSON
+/// keys but not valid Swift property names.
 func sanitizedSwiftName(_ name: String) -> String {
     if name.isEmpty { return "_unnamed" }
     var result = ""
-    for (idx, char) in name.enumerated() {
-        if char.isLetter || char == "_" || (idx > 0 && char.isNumber) {
-            result.append(char)
-        } else {
-            result.append("_")
-        }
+    for char in name {
+        result.append(isIdentifierCharacter(char) ? char : "_")
+    }
+    if result.allSatisfy({ $0 == "_" }) {
+        return result + "unnamed"
     }
     if let first = result.first, first.isNumber {
         result = "_" + result
@@ -154,10 +167,19 @@ func sanitizedSwiftName(_ name: String) -> String {
     return result
 }
 
+/// The identifier generated code uses for a name the spec supplies, before any
+/// keyword escaping: the name itself when it is already one, else
+/// `sanitizedSwiftName`. Every name the spec supplies reaches generated code
+/// through this function, so an identifier can only hold `[A-Za-z0-9_]`; the
+/// spec's own text reaches generated code only as an escaped string literal.
+func swiftIdentifier(_ name: String) -> String {
+    isValidSwiftIdentifier(name) ? name : sanitizedSwiftName(name)
+}
+
 /// Escape a Swift identifier for use as a property/parameter name.
 /// Wraps Swift keywords in backticks and sanitizes illegal characters.
 func escapedSwiftName(_ name: String) -> String {
-    let safe = isValidSwiftIdentifier(name) ? name : sanitizedSwiftName(name)
+    let safe = swiftIdentifier(name)
     if swiftKeywords.contains(safe) {
         return "`\(safe)`"
     }

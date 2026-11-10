@@ -11,6 +11,28 @@ object NamingUtils {
     fun isKotlinKeyword(name: String): Boolean = name in HARD_KEYWORDS
 
     /**
+     * The identifier generated code uses for a name the spec supplies: every character outside
+     * `[A-Za-z0-9_]` becomes `_`, and a name that opens with a digit gains a leading `_`. A name
+     * left empty, or holding only underscores (which Kotlin reserves), gains a `_unnamed` suffix.
+     *
+     * A keyword passes through unchanged: KotlinPoet backticks it wherever it is emitted, and a
+     * field so named keeps its key through `@SerialName`. Every name the spec supplies reaches
+     * generated code through this function, so the identifier can only ever hold the characters
+     * above, whatever the spec holds; the spec's own text reaches generated code only as an escaped
+     * string literal.
+     */
+    fun safeIdentifier(name: String): String {
+        val mapped = buildString(name.length + 1) {
+            for (c in name) append(if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9' || c == '_') c else '_')
+        }
+        return when {
+            mapped.all { it == '_' } -> mapped + "_unnamed"
+            mapped.first().isDigit() -> "_$mapped"
+            else -> mapped
+        }
+    }
+
+    /**
      * The type a binding's `export` resolves to. Only each segment's first character is
      * raised, so an acronym the declaring package exports as `URL` is imported as `URL`;
      * [toPascalCase] would lower its tail and name a type the package does not export.

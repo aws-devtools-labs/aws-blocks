@@ -288,7 +288,9 @@ Two pieces native SDK authors need that the spec deliberately does not carry:
 
 ## Spec trust model
 
-The native generators (Dart, Swift, Kotlin) treat `blocks.spec.json` as the source of truth and copy schema-controlled strings from it into generated source: field and parameter names used as JSON keys, descriptions (where a generator emits them), patterns, enum values, discriminator properties and tags, RPC method names, server URLs, and defaults. Each generator routes every such value through its own string-literal escaper, so any character in a spec value produces well-formed generated code that carries the value verbatim at runtime and does not change the structure of the generated program. Identifier generation (turning names into Dart/Swift/Kotlin identifiers) is a separate concern and is not covered here.
+The native generators (Dart, Swift, Kotlin) treat `blocks.spec.json` as the source of truth and copy schema-controlled strings from it into generated source: field and parameter names used as JSON keys, descriptions (where a generator emits them), patterns, enum values, discriminator properties and tags, RPC method names, server URLs, and defaults. Each generator routes every such value through its own string-literal escaper, so any character in a spec value produces well-formed generated code that carries the value verbatim at runtime and does not change the structure of the generated program.
+
+The spec is a build input with the same trust as the backend source it is generated from: a developer generates it locally from their own backend, and the generated client compiles into their own app. The generators do not rely on that, though. Names the spec supplies that become identifiers (type and schema names, field and property names, enum cases, operation, parameter, namespace and server names, and discriminator keys) go through one sanitizer per generator: every character outside `[A-Za-z0-9_]` becomes `_`, a name that would open with a digit gains a leading `_` (on Dart a leading `$`, also added in front of an underscore the sanitizer put first, since Dart makes a leading `_` library-private), and the existing keyword handling applies on top. Dart still rejects a namespace that is not dot-separated ASCII segments. The original name still reaches the wire, emitted only as an escaped string literal (`@SerialName` on Kotlin, a `CodingKeys` raw value on Swift, the JSON map key on Dart). When two different names in one scope reduce to the same identifier, generation fails and names both, rather than emitting colliding declarations or dropping one. Kotlin enum constants and Swift OIDC provider cases are the exception: as before, a name another value already took is numbered (`MySso2`).
 
 ### Where the spec comes from today
 
@@ -316,11 +318,11 @@ flowchart LR
 - `database.meta.ts` — per-table metadata, including singular/plural names derived from table names.
 - `supabase.ts` — spreads `db.crud<TableMeta>()` into an `ApiNamespace`. The `CrudMethods` type derives method names (`list<Plural>`, `get<Singular>`, `create…`, `update…`, `delete…`) from that metadata.
 
-When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator.
+When the spec emitter reads these types, table and column names from the database become RPC method names and field names in `blocks.spec.json`. Spec values can therefore originate from database schema, not only from hand-written app code. The native-side escaping and identifier sanitizing above is what keeps such values well-formed at the native codegen step; the TypeScript emitted by `db pull` is produced by a separate generator.
 
 ### Sharing a spec
 
-If a spec is shared for third-party code generation, the same escaping applies to any spec the native generators accept. Consumers should still review and version generated client code as they would any other generated artifact.
+The escaping and identifier sanitizing above apply to any spec the native generators accept. A spec that does not come from your own backend source is a different input, though: when one team generates the spec and another generates clients from it (a backend team handing a spec to a mobile team, for example), or when the spec is derived from `db pull` against a database that others can change, treat the spec as untrusted input. Review changes to it as you would review code, and version the generated client code as you would any other generated artifact.
 
 ---
 

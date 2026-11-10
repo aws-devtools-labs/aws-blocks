@@ -77,6 +77,8 @@ data class ResolvedField(
     val description: String? = null,
     val constraints: Constraints = Constraints.EMPTY,
     val defaultValue: JsonElement? = null,
+    /** The key the field has on the wire, which [name] may differ from once it is an identifier. */
+    val serialName: String = name,
 )
 
 data class UnionVariant(
@@ -119,6 +121,8 @@ data class CodegenModel(
 data class ApiNamespace(
     val name: String,
     val operations: List<Operation>,
+    /** The namespace as the spec's method names spell it, which [name] may differ from once it is an identifier. */
+    val wireName: String = name,
 )
 
 data class Operation(
@@ -127,6 +131,8 @@ data class Operation(
     val result: OperationResult,
     val description: String?,
     val nestedTypes: List<NestedTypeNode> = emptyList(),
+    /** The operation as the spec's method name spells it, which [name] may differ from once it is an identifier. */
+    val wireName: String = name,
 )
 
 data class NestedTypeNode(

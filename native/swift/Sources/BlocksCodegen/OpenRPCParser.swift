@@ -32,8 +32,19 @@ public struct OpenRPCParser {
 
         // Resolve component schemas
         var componentSchemas: [String: TypeRef] = [:]
+        // A schema name becomes a type name, so two that reduce to one identifier would declare
+        // one type in place of two.
+        var schemaIdentifiers: [String: String] = [:]
         if let schemas = spec.components?.schemas {
-            for (name, jsonSchema) in schemas {
+            for (name, jsonSchema) in schemas.sorted(by: { $0.key < $1.key }) {
+                let identifier = swiftIdentifier(name)
+                if let prior = schemaIdentifiers[identifier], prior != name {
+                    throw CodegenError.unsupportedSchema(
+                        "The schemas '\(escapedForDiagnostic(prior))' and '\(escapedForDiagnostic(name))'"
+                            + " both generate the identifier '\(identifier)'. Rename one in the spec."
+                    )
+                }
+                schemaIdentifiers[identifier] = name
                 componentSchemas[name] = mapTypeRef(jsonSchema)
             }
         }

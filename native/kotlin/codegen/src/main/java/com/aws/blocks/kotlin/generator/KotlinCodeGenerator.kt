@@ -1,6 +1,7 @@
 package com.aws.blocks.kotlin.generator
 
 import com.aws.blocks.kotlin.NamingUtils
+import com.aws.blocks.kotlin.builder.IdentifierSanitizer
 import com.aws.blocks.kotlin.model.ApiNamespace
 import com.aws.blocks.kotlin.model.CodegenModel
 import com.aws.blocks.kotlin.CodegenException
@@ -230,6 +231,20 @@ class KotlinCodeGenerator(
                 )
             }
 
+        // Names the generator derives after sanitizing (server properties, the objects operations'
+        // own types nest in) can still meet, e.g. `get-x` and `getX` both nest in `GetX`.
+        IdentifierSanitizer.requireDistinct("server", "the spec", model.servers.map { it.name }, ::serverPropertyName)
+        for (namespace in model.apiNamespaces) {
+            val withObject = namespace.operations
+                .filter { it.nestedTypes.isNotEmpty() || narrowedTypeArgs(it).isNotEmpty() }
+                .associateBy { it.wireName }
+            IdentifierSanitizer.requireDistinct(
+                "operation",
+                "namespace '${namespace.wireName.forDiagnostic()}'",
+                withObject.keys.toList(),
+            ) { operationObjectName(withObject.getValue(it)) }
+        }
+
         if (relayTo == null &&
             relayToRequirement != RelayToRequirement.NotNeeded &&
             model.hasOidcTransferable()
@@ -278,7 +293,7 @@ class KotlinCodeGenerator(
                 if (isUnboundDirectResult(result, bound)) {
                     warnings.add(
                         formatUnboundTransferable(
-                            "${namespace.name}.${operation.name}",
+                            "${namespace.wireName}.${operation.wireName}",
                             result as ResolvedType.Transferable,
                         )
                     )
@@ -359,13 +374,17 @@ class KotlinCodeGenerator(
         .filter { it.values.name != it.preferredName }
         .map {
             "kotlin: ${fullMethodName(operation, namespace)} generates " +
-                "$className.${toPascalCase(operation.name)}.${it.values.name} rather than " +
+                "$className.${operationObjectName(operation)}.${it.values.name} rather than " +
                 "${it.preferredName}, since the operation already names a " +
                 "${it.preferredName} of its own."
         }
 
     private fun fullMethodName(operation: Operation, namespace: String): String =
         if (namespace == "_default") operation.name else "$namespace.${operation.name}"
+
+    /** The object an operation's own types nest in. */
+    private fun operationObjectName(operation: Operation): String =
+        NamingUtils.safeIdentifier(toPascalCase(operation.name))
 
     /**
      * The enum of values an operation's client accepts for its parameter. Each constant carries
@@ -584,13 +603,7 @@ class KotlinCodeGenerator(
             val propBuilder = PropertySpec
                 .builder(field.name, finalType)
                 .initializer(field.name)
-            if (isKotlinKeyword(field.name)) {
-                propBuilder.addAnnotation(
-                    AnnotationSpec.builder(ClassNames.serialName)
-                        .addMember("%S", field.name)
-                        .build()
-                )
-            }
+            addFieldSerialName(propBuilder, field)
             if (isTransferableType(field.type)) {
                 val transferableType = unwrapNullableTransferable(field.type)
                 if (transferableType != null) {
@@ -630,6 +643,21 @@ class KotlinCodeGenerator(
         return classBuilder.build()
     }
 
+    /**
+     * Names the field's wire key when its identifier differs from it, or is a keyword. The key is
+     * the spec's own text, so it is emitted as an escaped literal: %S would turn a key with a line
+     * break into a trimMargin raw string, which is no constant an annotation can take.
+     */
+    private fun addFieldSerialName(propBuilder: PropertySpec.Builder, field: ResolvedField) {
+        if (field.serialName != field.name || isKotlinKeyword(field.name)) {
+            propBuilder.addAnnotation(
+                AnnotationSpec.builder(ClassNames.serialName)
+                    .addMember("%L", kotlinStringLiteral(field.serialName))
+                    .build()
+            )
+        }
+    }
+
     private fun buildDataClassKdoc(
         description: String?,
         fields: List<ResolvedField>,
@@ -659,7 +687,7 @@ class KotlinCodeGenerator(
     private fun generateInitValidation(fields: List<ResolvedField>): CodeBlock? {
         val statements = mutableListOf<CodeBlock>()
         for (field in fields) {
-            val fieldStatements = generateFieldValidation(field.name, field.type, field.constraints, !field.required)
+            val fieldStatements = generateFieldValidation(field.name, field.serialName, field.type, field.constraints, !field.required)
             statements.addAll(fieldStatements)
         }
         if (statements.isEmpty()) return null
@@ -670,8 +698,13 @@ class KotlinCodeGenerator(
         return builder.build()
     }
 
+    /**
+     * [fieldName] is the property the checks read; [label] is the field's key as the spec spells
+     * it, which the messages name.
+     */
     private fun generateFieldValidation(
         fieldName: String,
+        label: String,
         type: ResolvedType,
         constraints: Constraints,
         isOptional: Boolean,
@@ -682,25 +715,25 @@ class KotlinCodeGenerator(
         if (type is ResolvedType.Primitive && type.kind == PrimitiveKind.STRING) {
             constraints.minLength?.let { min ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.length >= %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, min, "$fieldName must be at least $min characters")))
+                    CodeBlock.of("require(%N.length >= %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, min, message("$label must be at least $min characters"))))
             }
             constraints.maxLength?.let { max ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.length <= %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, max, "$fieldName must be at most $max characters")))
+                    CodeBlock.of("require(%N.length <= %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, max, message("$label must be at most $max characters"))))
             }
             constraints.pattern?.let { pattern ->
                 stmts.add(wrapOptional(fieldName, isOptional,
                     // Pattern via kotlinStringLiteral, not %S: %S turns a value with a newline into a
                     // trimMargin raw string, which drops a CR.
-                    CodeBlock.of("require(%L.matches(Regex(%L))) { %L }\n",
+                    CodeBlock.of("require(%N.matches(Regex(%L))) { %L }\n",
                         if (isOptional) "it" else fieldName, kotlinStringLiteral(pattern),
                         // Not %S: it would rewrite every `$` as `${'$'}`, changing benign output such as `^[A-Z]{3}$`.
-                        kotlinMessageLiteral("$fieldName must match pattern $pattern"))))
+                        kotlinMessageLiteral("$label must match pattern $pattern"))))
             }
             constraints.format?.let { format ->
-                val validationBlock = generateFormatValidation(fieldName, format, isOptional)
+                val validationBlock = generateFormatValidation(fieldName, label, format, isOptional)
                 if (validationBlock != null) stmts.add(validationBlock)
             }
         }
@@ -710,33 +743,33 @@ class KotlinCodeGenerator(
             constraints.minimum?.let { min ->
                 val minVal = if (type.kind == PrimitiveKind.INTEGER) min.toInt().toString() else min.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L >= %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, minVal, "$fieldName must be >= $minVal")))
+                    CodeBlock.of("require(%N >= %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, minVal, message("$label must be >= $minVal"))))
             }
             constraints.maximum?.let { max ->
                 val maxVal = if (type.kind == PrimitiveKind.INTEGER) max.toInt().toString() else max.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L <= %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, maxVal, "$fieldName must be <= $maxVal")))
+                    CodeBlock.of("require(%N <= %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, maxVal, message("$label must be <= $maxVal"))))
             }
             constraints.exclusiveMinimum?.let { min ->
                 val minVal = if (type.kind == PrimitiveKind.INTEGER) min.toInt().toString() else min.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L > %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, minVal, "$fieldName must be > $minVal")))
+                    CodeBlock.of("require(%N > %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, minVal, message("$label must be > $minVal"))))
             }
             constraints.exclusiveMaximum?.let { max ->
                 val maxVal = if (type.kind == PrimitiveKind.INTEGER) max.toInt().toString() else max.toString()
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L < %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, maxVal, "$fieldName must be < $maxVal")))
+                    CodeBlock.of("require(%N < %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, maxVal, message("$label must be < $maxVal"))))
             }
             constraints.multipleOf?.let { mult ->
                 val multVal = if (type.kind == PrimitiveKind.INTEGER) mult.toInt().toString() else mult.toString()
                 val zeroVal = if (type.kind == PrimitiveKind.INTEGER) "0" else "0.0"
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L %% %L == %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, multVal, zeroVal, "$fieldName must be a multiple of $multVal")))
+                    CodeBlock.of("require(%N %% %L == %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, multVal, zeroVal, message("$label must be a multiple of $multVal"))))
             }
         }
 
@@ -744,13 +777,13 @@ class KotlinCodeGenerator(
         if (type is ResolvedType.ListType) {
             type.constraints.minItems?.let { min ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.size >= %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, min, "$fieldName must have at least $min items")))
+                    CodeBlock.of("require(%N.size >= %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, min, message("$label must have at least $min items"))))
             }
             type.constraints.maxItems?.let { max ->
                 stmts.add(wrapOptional(fieldName, isOptional,
-                    CodeBlock.of("require(%L.size <= %L) { %S }\n",
-                        if (isOptional) "it" else fieldName, max, "$fieldName must have at most $max items")))
+                    CodeBlock.of("require(%N.size <= %L) { %L }\n",
+                        if (isOptional) "it" else fieldName, max, message("$label must have at most $max items"))))
             }
         }
 
@@ -769,21 +802,21 @@ class KotlinCodeGenerator(
         }
     }
 
-    private fun generateFormatValidation(fieldName: String, format: String, isOptional: Boolean): CodeBlock? {
+    private fun generateFormatValidation(fieldName: String, label: String, format: String, isOptional: Boolean): CodeBlock? {
         val ref = if (isOptional) "it" else fieldName
         return when (format) {
             "email" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.contains(%S) && %L.contains(%S)) { %S }\n",
-                    ref, "@", ref, ".", "$fieldName must be a valid email address"))
+                CodeBlock.of("require(%N.contains(%S) && %N.contains(%S)) { %L }\n",
+                    ref, "@", ref, ".", message("$label must be a valid email address")))
             "uri" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.startsWith(%S) || %L.startsWith(%S)) { %S }\n",
-                    ref, "http://", ref, "https://", "$fieldName must be a valid URI"))
+                CodeBlock.of("require(%N.startsWith(%S) || %N.startsWith(%S)) { %L }\n",
+                    ref, "http://", ref, "https://", message("$label must be a valid URI")))
             "ipv4" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.matches(Regex(%S))) { %S }\n",
-                    ref, """^(\d{1,3}\.){3}\d{1,3}$""", "$fieldName must be a valid IPv4 address"))
+                CodeBlock.of("require(%N.matches(Regex(%S))) { %L }\n",
+                    ref, """^(\d{1,3}\.){3}\d{1,3}$""", message("$label must be a valid IPv4 address")))
             "ipv6" -> wrapOptional(fieldName, isOptional,
-                CodeBlock.of("require(%L.contains(%S)) { %S }\n",
-                    ref, ":", "$fieldName must be a valid IPv6 address"))
+                CodeBlock.of("require(%N.contains(%S)) { %L }\n",
+                    ref, ":", message("$label must be a valid IPv6 address")))
             else -> null
         }
     }
@@ -830,7 +863,7 @@ class KotlinCodeGenerator(
             if (entryName != literal) {
                 entryBuilder.addAnnotation(
                     AnnotationSpec.builder(ClassNames.serialName)
-                        .addMember("%S", literal)
+                        .addMember("%L", kotlinStringLiteral(literal))
                         .build()
                 )
             }
@@ -843,12 +876,10 @@ class KotlinCodeGenerator(
     /**
      * Constant names for a string enum's values, each paired with the literal it serializes as.
      *
-     * A value whose PascalCase form can name a constant keeps it, backticked by KotlinPoet where
-     * it has to be, so a value like `cost$` still reads as the spec wrote it. The rest are values
-     * no identifier can hold even in backticks, which the generator would otherwise fail on: every
-     * character an identifier can't hold separates segments, so `v1.0` is `V10` and `okta:corp` is
-     * `OktaCorp`, and a value that leaves no segments at all is `Unnamed`. The serial name carries
-     * the literal either way.
+     * A value whose PascalCase form is already an identifier keeps it. For the rest, every
+     * character outside `[A-Za-z0-9]` separates segments, so `v1.0` is `V10`, `okta:corp` is
+     * `OktaCorp` and `cost$` is `Cost`, and a value that leaves no segments at all is `Unnamed`.
+     * The serial name carries the literal either way, as an escaped string.
      *
      * A repeated value is emitted once, and a name another value already took is numbered, since
      * two constants of one name don't compile.
@@ -870,9 +901,9 @@ class KotlinCodeGenerator(
         return constants
     }
 
-    /** Whether [name] can name a constant, as itself or backticked. */
+    /** Whether [name] can name a constant as it is, which [NamingUtils.safeIdentifier] leaves alone. */
     private fun canNameConstant(name: String): Boolean =
-        name.isNotEmpty() && name.all { isConstantNameChar(it) }
+        name.isNotEmpty() && name.all { isConstantNameChar(it) } && NamingUtils.safeIdentifier(name) == name
 
     private fun synthesizeConstantName(literal: String): String {
         val segments = literal.split(NON_IDENTIFIER_RUN)
@@ -881,8 +912,7 @@ class KotlinCodeGenerator(
         return when {
             segments.isEmpty() -> "Unnamed"
             // A synthesized name is never backticked, so it can't open with a digit.
-            segments.first().isDigit() -> "_$segments"
-            else -> segments
+            else -> NamingUtils.safeIdentifier(segments)
         }
     }
 
@@ -913,7 +943,7 @@ class KotlinCodeGenerator(
             if (discriminator != null) {
                 sealedBuilder.addAnnotation(
                     AnnotationSpec.builder(ClassNames.discriminator)
-                        .addMember("%S", discriminator.fieldName)
+                        .addMember("%L", kotlinStringLiteral(discriminator.fieldName))
                         .build()
                 )
             }
@@ -1022,7 +1052,7 @@ class KotlinCodeGenerator(
             .addAnnotation(ClassNames.serializable)
             .addAnnotation(
                 AnnotationSpec.builder(ClassNames.serialName)
-                    .addMember("%S", discValue)
+                    .addMember("%L", kotlinStringLiteral(discValue))
                     .build()
             )
 
@@ -1037,13 +1067,7 @@ class KotlinCodeGenerator(
 
             val propBuilder = PropertySpec.builder(field.name, finalType)
                 .initializer(field.name)
-            if (isKotlinKeyword(field.name)) {
-                propBuilder.addAnnotation(
-                    AnnotationSpec.builder(ClassNames.serialName)
-                        .addMember("%S", field.name)
-                        .build()
-                )
-            }
+            addFieldSerialName(propBuilder, field)
             unwrapNullableTransferable(field.type)?.let { transferableType ->
                 addTransferableSerializerAnnotation(
                     propBuilder,
@@ -1075,13 +1099,22 @@ class KotlinCodeGenerator(
             val embeddedName = variant.embeddedUnion.name
             val embeddedClassName = ClassName("", embeddedName)
             val discFieldName = variant.embeddedUnion.discriminator?.fieldName ?: "variant"
+            // The discriminator key is the spec's own text: the property takes its identifier,
+            // and the key stays on the wire as an escaped serial name.
+            val discField = ResolvedField(
+                name = NamingUtils.safeIdentifier(discFieldName),
+                type = variant.embeddedUnion,
+                required = true,
+                serialName = discFieldName,
+            )
 
             constructor.addParameter(
-                ParameterSpec.builder(discFieldName, embeddedClassName).build()
+                ParameterSpec.builder(discField.name, embeddedClassName).build()
             )
             variantBuilder.addProperty(
-                PropertySpec.builder(discFieldName, embeddedClassName)
-                    .initializer(discFieldName)
+                PropertySpec.builder(discField.name, embeddedClassName)
+                    .initializer(discField.name)
+                    .also { addFieldSerialName(it, discField) }
                     .build(),
             )
 
@@ -1135,7 +1168,7 @@ class KotlinCodeGenerator(
         for (entry in servers) {
             serversObjectBuilder.addProperty(
                 PropertySpec
-                    .builder(toCamelCase(entry.name), blocksServerClass)
+                    .builder(serverPropertyName(entry.name), blocksServerClass)
                     .initializer(
                         // url via kotlinStringLiteral, not %S, so a newline/CR in it is preserved exactly.
                         "%T(name = %S, url = %L)",
@@ -1171,7 +1204,7 @@ class KotlinCodeGenerator(
                     .addStatement(
                         "return %T.%N",
                         ClassName(packageName, "Servers"),
-                        toCamelCase(defaultServerName),
+                        serverPropertyName(defaultServerName),
                     )
                     .build(),
             )
@@ -1193,9 +1226,12 @@ class KotlinCodeGenerator(
                 "return %T(%T.%N)",
                 ClassNames.blocks,
                 ClassName(packageName, "Servers"),
-                toCamelCase(defaultServerName),
+                serverPropertyName(defaultServerName),
             )
             .build()
+
+    /** The `Servers` property for a server, whose name is the spec's own text. */
+    private fun serverPropertyName(server: String): String = NamingUtils.safeIdentifier(toCamelCase(server))
 
     // ── API naming ────────────────────────────────────────────────────
 
@@ -1205,13 +1241,13 @@ class KotlinCodeGenerator(
      * package overwrite each other and the loser disappears without an error.
      */
     private fun apiClassName(namespace: ApiNamespace): String {
-        val name = toPascalCase(namespace.name)
+        val name = NamingUtils.safeIdentifier(toPascalCase(namespace.name))
         return if (name in RESERVED_FILE_NAMES) name + API_SUFFIX else name
     }
 
     /** The accessor name for a namespace, suffixed alongside [apiClassName] so the two match. */
     private fun apiPropertyName(namespace: ApiNamespace): String {
-        val name = toCamelCase(namespace.name)
+        val name = NamingUtils.safeIdentifier(toCamelCase(namespace.name))
         return if (toPascalCase(namespace.name) in RESERVED_FILE_NAMES) name + API_SUFFIX else name
     }
 
@@ -1344,7 +1380,7 @@ class KotlinCodeGenerator(
             } else {
                 val opContext = operationContexts[operation]
                 classBuilder.addFunction(
-                    generateImplMethod(operation, namespace.name, index, opContext, bound),
+                    generateImplMethod(operation, namespace.wireName, index, opContext, bound),
                 )
             }
         }
@@ -1374,7 +1410,7 @@ class KotlinCodeGenerator(
     private fun buildOperationTypeContext(operation: Operation, apiClassName: String): OperationTypeContext? {
         val narrowed = narrowedTypeArgs(operation).map { it.values }
         if (operation.nestedTypes.isEmpty() && narrowed.isEmpty()) return null
-        val opObjectName = toPascalCase(operation.name)
+        val opObjectName = operationObjectName(operation)
         val context = OperationTypeContext(opObjectName)
 
         // A narrowed enum isn't a nested type of the result, so register it directly; the result's
@@ -1429,7 +1465,7 @@ class KotlinCodeGenerator(
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext?,
     ): TypeSpec {
-        val objectName = toPascalCase(operation.name)
+        val objectName = operationObjectName(operation)
         val objectBuilder = TypeSpec.objectBuilder(objectName)
 
         for (narrowed in narrowedTypeArgs(operation)) {
@@ -1639,7 +1675,7 @@ class KotlinCodeGenerator(
         boundResult: BoundResult?,
     ) {
         val hasOptionalParams = operation.parameters.any { !it.required }
-        val dottedMethod = "${namespace}.${operation.name}"
+        val dottedMethod = "${namespace}.${operation.wireName}"
 
         if (operation.parameters.isEmpty()) {
             funBuilder.addStatement(
@@ -1750,10 +1786,11 @@ class KotlinCodeGenerator(
         val inner = unwrapNullable(param.type)
         return when (inner) {
             is ResolvedType.Primitive -> when (inner.kind) {
-                PrimitiveKind.VOID, PrimitiveKind.UNKNOWN -> CodeBlock.of("%L", param.name)
-                else -> CodeBlock.of("%T(%L)", jsonPrimitiveClass, param.name)
+                PrimitiveKind.VOID, PrimitiveKind.UNKNOWN -> CodeBlock.of("%N", param.name)
+                else -> CodeBlock.of("%T(%N)", jsonPrimitiveClass, param.name)
             }
-            else -> generateToJsonExpression(inner, param.name, index)
+            // The expression builders splice their receiver in with %L, so it goes in as %N's output.
+            else -> generateToJsonExpression(inner, CodeBlock.of("%N", param.name).toString(), index)
         }
     }
 
@@ -1974,6 +2011,12 @@ class KotlinCodeGenerator(
         return "AWSBLOCKS-NATIVE-001: ${operation.forDiagnostic()} returns unbound transferable " +
             "'$safeTag' on kotlin; generated UnknownTransferable with $typeArgClause."
     }
+
+    /**
+     * Kotlin literal for a validation message that names a field's key. The key is spec text, so
+     * it goes through [kotlinStringLiteral] (byte-identical to %S for text without a newline).
+     */
+    private fun message(text: String): String = kotlinStringLiteral(text)
 
     /**
      * Quoted Kotlin literal for a validation message. Escapes `\\`, `"` and control characters, and escapes
@@ -2315,8 +2358,8 @@ class KotlinCodeGenerator(
         fun toPascalCase(name: String): String = NamingUtils.toPascalCase(name)
         fun toCamelCase(name: String): String = NamingUtils.toCamelCase(name)
 
-        /** A run of characters a Kotlin identifier can't hold, which separates name segments. */
-        private val NON_IDENTIFIER_RUN = Regex("[^\\p{L}\\p{N}]+")
+        /** A run of characters a generated identifier can't hold, which separates name segments. */
+        private val NON_IDENTIFIER_RUN = Regex("[^A-Za-z0-9]+")
 
         /**
          * Whether [name] can hold [char] — an allowlist, because each platform the generated code
@@ -2328,22 +2371,12 @@ class KotlinCodeGenerator(
          * outright: a provider named `c#` compiles and then fails the Android build with
          * "Field name 'C#' cannot be represented in dex format".
          *
-         * Non-ASCII is admitted, since the DEX ranges cover letters broadly, except the spaces
-         * DEX names explicitly — see
+         * The allowlist is the one every generated identifier keeps to, `[A-Za-z0-9_]`, so a
+         * constant never needs backticks and no spec text reaches it — see
          * [SimpleName](https://source.android.com/docs/core/runtime/dex-format#simplename).
          */
-        private fun isConstantNameChar(char: Char): Boolean = when {
-            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' -> true
-            char == '$' || char == '_' -> true
-            char.code < 0x80 -> false
-            else -> char !in DEX_REJECTED_SPACES
-        }
-
-        /** The spaces DEX rejects before version 040, which its SimpleName grammar excludes. */
-        private val DEX_REJECTED_SPACES = charArrayOf(
-            '\u00a0', '\u2000', '\u2001', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006',
-            '\u2007', '\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000',
-        )
+        private fun isConstantNameChar(char: Char): Boolean =
+            char in 'a'..'z' || char in 'A'..'Z' || char in '0'..'9' || char == '_'
 
         /** JSON integer literal (RFC 8259 grammar without fraction or exponent). */
         private val JSON_INTEGER_LITERAL = Regex("-?(0|[1-9][0-9]*)")

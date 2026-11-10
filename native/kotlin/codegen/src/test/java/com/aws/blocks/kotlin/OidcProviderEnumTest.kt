@@ -95,13 +95,14 @@ class OidcProviderEnumTest : FunSpec({
             spec(oidcResult(providerNames("login.gov", "my-sso", "okta:corp", "2fa", "login.gov", "☃"))),
         ).source()
 
-        // A name an identifier can't hold even backticked is rebuilt from its segments.
+        // A name that isn't an identifier is rebuilt from its `[A-Za-z0-9]` segments.
         source shouldContain "LoginGov(\"login.gov\")"
         source shouldContain "OktaCorp(\"okta:corp\")"
-        // The rest keep the name the spec wrote, as every other generated enum does.
         source shouldContain "MySso(\"my-sso\")"
-        source shouldContain "`2fa`(\"2fa\")"
-        source shouldContain "`☃`(\"☃\")"
+        // A leading digit gains an underscore, and a name with no such segments is Unnamed.
+        source shouldContain "_2fa(\"2fa\")"
+        source shouldContain "Unnamed(\"☃\")"
+        source shouldNotContain "`"
         // The repeated provider is emitted once, so the enum has one constant per name.
         Regex("LoginGov\\(").findAll(source).count() shouldBe 1
     }

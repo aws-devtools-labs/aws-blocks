@@ -1,5 +1,6 @@
 import 'package:blocks_codegen/src/dart_source.dart';
 import 'package:blocks_codegen/src/diagnostics.dart';
+import 'package:blocks_codegen/src/identifiers.dart';
 
 import 'builder.dart';
 import 'model.dart';
@@ -180,6 +181,12 @@ class DartCodeGenerator {
   ) {
     if (emitted.contains(record.name)) return '';
     emitted.add(record.name);
+    _requireDistinct(
+      'field',
+      'type ${record.name}',
+      record.fields.map((f) => f.name),
+      _escapeIdentifier,
+    );
     final buf = StringBuffer();
     final hasAdditional = record.additionalProperties != null;
     final additionalValueType = hasAdditional
@@ -304,6 +311,12 @@ class DartCodeGenerator {
     if (emitted.contains(enumType.name)) return '';
     emitted.add(enumType.name);
     final buf = StringBuffer();
+    _requireDistinct(
+      'enum value',
+      'enum ${enumType.name}',
+      enumType.values.toSet(),
+      _sanitizeEnumValue,
+    );
     final sanitized = enumType.values.map(_sanitizeEnumValue).toList();
     final needsMap = enumType.values.any((v) => v != _sanitizeEnumValue(v));
     buf.writeln('enum ${enumType.name} {');
@@ -341,19 +354,25 @@ class DartCodeGenerator {
 
   String _sanitizeEnumValue(String value) {
     // Convert kebab-case, snake_case, or other non-identifier chars to camelCase
-    if (RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*$').hasMatch(value)) return value;
+    final camel = RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*$').hasMatch(value)
+        ? value
+        : _camelCaseEnumValue(value);
+    // Whatever the separators leave goes through the same rule as every other
+    // identifier: only identifier characters reach code, a leading digit or an
+    // underscore the sanitizer put first gains a leading `$` (a leading `_`
+    // would make the constant library-private), and a keyword gains a
+    // trailing `$`.
+    final ident = safeDartIdentifier(camel);
+    return _dartKeywords.contains(ident) ? '$ident\$' : ident;
+  }
+
+  String _camelCaseEnumValue(String value) {
     final parts = value.split(RegExp(r'[-_.\s]+'));
-    final result =
-        parts.first +
+    return parts.first +
         parts
             .skip(1)
             .map((p) => p.isEmpty ? '' : p[0].toUpperCase() + p.substring(1))
             .join();
-    // Ensure it starts with a letter
-    if (result.isEmpty || !RegExp(r'^[a-zA-Z_]').hasMatch(result)) {
-      return '_$result';
-    }
-    return result;
   }
 
   String _emitSealedClass(
@@ -381,7 +400,7 @@ class DartCodeGenerator {
       );
       for (final v in sealed.variants) {
         buf.writeln(
-          "      case ${v.discriminantValue}: return ${v.className}.fromJson(json);",
+          "      case ${_boolLiteral(v.discriminantValue)}: return ${v.className}.fromJson(json);",
         );
       }
       buf.writeln('    }');
@@ -416,6 +435,12 @@ class DartCodeGenerator {
         buf.writeln();
       }
 
+      _requireDistinct(
+        'field',
+        'type ${v.className}',
+        v.fields.map((f) => f.name),
+        _escapeIdentifier,
+      );
       buf.writeln('class ${v.className} extends ${sealed.name} {');
       for (final f in v.fields) {
         final typeStr = _dartTypeStr(f.type, allTypes);
@@ -425,7 +450,7 @@ class DartCodeGenerator {
       }
       if (v.embeddedUnion != null) {
         buf.writeln(
-          '  final ${v.embeddedUnion!.name} ${v.embeddedUnion!.discriminant};',
+          '  final ${v.embeddedUnion!.name} ${_escapeIdentifier(v.embeddedUnion!.discriminant)};',
         );
       }
       buf.writeln();
@@ -439,7 +464,9 @@ class DartCodeGenerator {
           buf.writeln('    ${f.isRequired ? 'required ' : ''}this.$ident,');
         }
         if (v.embeddedUnion != null) {
-          buf.writeln('    required this.${v.embeddedUnion!.discriminant},');
+          buf.writeln(
+            '    required this.${_escapeIdentifier(v.embeddedUnion!.discriminant)},',
+          );
         }
         buf.writeln('  });');
       }
@@ -458,7 +485,7 @@ class DartCodeGenerator {
       }
       if (v.embeddedUnion != null) {
         buf.writeln(
-          "      ${v.embeddedUnion!.discriminant}: ${v.embeddedUnion!.name}.fromJson(json),",
+          "      ${_escapeIdentifier(v.embeddedUnion!.discriminant)}: ${v.embeddedUnion!.name}.fromJson(json),",
         );
       }
       buf.writeln('    );');
@@ -471,7 +498,7 @@ class DartCodeGenerator {
       buf.writeln('    return {');
       if (sealed.discriminantIsBoolean) {
         buf.writeln(
-          '      ${_dartStringLiteral(sealed.discriminant)}: ${v.discriminantValue},',
+          '      ${_dartStringLiteral(sealed.discriminant)}: ${_boolLiteral(v.discriminantValue)},',
         );
       } else {
         buf.writeln(
@@ -490,7 +517,9 @@ class DartCodeGenerator {
         }
       }
       if (v.embeddedUnion != null) {
-        buf.writeln("      ...${v.embeddedUnion!.discriminant}.toJson(),");
+        buf.writeln(
+          "      ...${_escapeIdentifier(v.embeddedUnion!.discriminant)}.toJson(),",
+        );
       }
       buf.writeln('    };');
       buf.writeln('  }');
@@ -498,7 +527,8 @@ class DartCodeGenerator {
       // == / hashCode / toString
       final variantFields = [
         for (final f in v.fields) _escapeIdentifier(f.name),
-        if (v.embeddedUnion != null) v.embeddedUnion!.discriminant,
+        if (v.embeddedUnion != null)
+          _escapeIdentifier(v.embeddedUnion!.discriminant),
       ];
       _emitEquality(buf, v.className, variantFields);
 
@@ -547,7 +577,19 @@ class DartCodeGenerator {
     buf.writeln('  final BlocksClient _client;');
     buf.writeln('  $className(this._client);');
 
+    _requireDistinct(
+      'operation',
+      'namespace ${ns.name}',
+      ns.operations.map((op) => op.name),
+      _escapeIdentifier,
+    );
     for (final op in ns.operations) {
+      _requireDistinct(
+        'parameter',
+        'operation ${op.fullName}',
+        op.params.map((p) => p.name),
+        _escapeIdentifier,
+      );
       buf.writeln();
       final unboundResult = _isUnboundTransferable(op.result)
           ? op.result as TransferableType
@@ -635,6 +677,12 @@ class DartCodeGenerator {
     buf.writeln('// --- Servers ---');
     buf.writeln();
     buf.writeln('class Servers {');
+    _requireDistinct(
+      'server',
+      'Servers',
+      servers.map((server) => server.name),
+      _escapeIdentifier,
+    );
     for (final server in servers) {
       final fieldName = _escapeIdentifier(server.name);
       buf.writeln(
@@ -1558,12 +1606,48 @@ class DartCodeGenerator {
     'yield',
   };
 
+  /// The identifier for a field, parameter, method, server or namespace name.
+  /// Dotted segments are joined camelCase, the result goes through
+  /// [safeDartIdentifier], and a keyword gains a trailing `$`.
   String _escapeIdentifier(String name) {
     final parts = name.split('.');
-    final ident = parts.length == 1
+    final joined = parts.length == 1
         ? name
         : parts.first + parts.skip(1).map(_capitalize).join();
+    final ident = safeDartIdentifier(joined);
     return _dartKeywords.contains(ident) ? '$ident\$' : ident;
+  }
+
+  /// A boolean discriminant's value as code, which only `true` or `false` can be.
+  String _boolLiteral(String value) {
+    if (value == 'true' || value == 'false') return value;
+    throw FormatException(
+      "Boolean discriminant value '${escapeForDiagnostic(value)}' is neither "
+      'true nor false',
+    );
+  }
+
+  /// Throws a [NamingConflictException] when two different [names] in [scope]
+  /// reduce to one identifier through [toIdentifier]; one declaration would
+  /// replace the other, or the output would not compile.
+  void _requireDistinct(
+    String kind,
+    String scope,
+    Iterable<String> names,
+    String Function(String) toIdentifier,
+  ) {
+    final claimed = <String, String>{};
+    for (final name in names) {
+      final ident = toIdentifier(name);
+      final prior = claimed.putIfAbsent(ident, () => name);
+      if (prior != name) {
+        throw NamingConflictException(
+          "The ${kind}s '${escapeForDiagnostic(prior)}' and "
+          "'${escapeForDiagnostic(name)}' in ${escapeForDiagnostic(scope)} "
+          "both generate the identifier '$ident'. Rename one in the spec.",
+        );
+      }
+    }
   }
 
   String _capitalize(String s) =>

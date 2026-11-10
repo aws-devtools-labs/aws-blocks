@@ -74,12 +74,16 @@ class CodegenModelBuilder {
             model.servers.map { ServerDefinition(it.name, it.url) }
         }
 
-        return CodegenModel(
-            apiNamespaces = apiGroups,
-            typeDefinitions = collector.typeDefinitions(),
-            servers = servers,
-            endpoint = model.endpoint,
-            nativeCatalogs = model.nativeCatalogs,
+        // Every name the generator emits as an identifier is rewritten here, once, so no spec
+        // text reaches generated code except as an escaped string literal.
+        return IdentifierSanitizer.sanitize(
+            CodegenModel(
+                apiNamespaces = apiGroups,
+                typeDefinitions = collector.typeDefinitions(),
+                servers = servers,
+                endpoint = model.endpoint,
+                nativeCatalogs = model.nativeCatalogs,
+            ),
         )
     }
 

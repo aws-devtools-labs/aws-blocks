@@ -1,4 +1,5 @@
 import 'package:blocks_codegen/src/diagnostics.dart';
+import 'package:blocks_codegen/src/identifiers.dart';
 import 'model.dart';
 
 const _packagesExtension = 'x-blocks-native-packages';
@@ -491,6 +492,7 @@ class CodegenModelBuilder {
     final namespaces = namespaceMap.entries
         .map((e) => Namespace(name: e.key, operations: e.value))
         .toList();
+    _sanitizeTypeNames(namespaces);
 
     return CodegenModel(
       title: rpc.title,
@@ -1025,6 +1027,106 @@ class CodegenModelBuilder {
     _types
       ..clear()
       ..addAll(rebuilt);
+  }
+
+  /// Rewrites every type name, variant class name and schema reference through
+  /// [safeDartIdentifier], once each, and rekeys the type table to match.
+  ///
+  /// Runs after collision resolution, so a name it settled stays settled. Two
+  /// different names that reduce to one identifier would emit one declaration
+  /// in place of two, so they throw a [NamingConflictException] instead.
+  void _sanitizeTypeNames(List<Namespace> namespaces) {
+    final seen = Set<Object>.identity();
+    // Each named type's identifier, and the spec name it came from.
+    final declared = <String, String>{};
+    void claim(String identifier, String original) {
+      final prior = declared.putIfAbsent(identifier, () => original);
+      if (prior != original) {
+        throw NamingConflictException(
+          "The types '${escapeForDiagnostic(prior)}' and "
+          "'${escapeForDiagnostic(original)}' both generate the identifier "
+          "'$identifier'. Rename one in the spec.",
+        );
+      }
+    }
+
+    String rename(String name) {
+      final identifier = safeDartIdentifier(name);
+      claim(identifier, name);
+      return identifier;
+    }
+
+    void visit(ResolvedType type) {
+      if (!seen.add(type)) return;
+      switch (type) {
+        case RecordType():
+          type.name = rename(type.name);
+          for (final f in type.fields) {
+            visit(f.type);
+          }
+          if (type.additionalProperties case final extra?) visit(extra);
+        case EnumType():
+          type.name = rename(type.name);
+        case SealedClassType():
+          type.name = rename(type.name);
+          for (var i = 0; i < type.variants.length; i++) {
+            final v = type.variants[i];
+            type.variants[i] = SealedVariant(
+              discriminantValue: v.discriminantValue,
+              className: rename(v.className),
+              fields: v.fields,
+              embeddedUnion: v.embeddedUnion,
+            );
+            for (final f in v.fields) {
+              visit(f.type);
+            }
+            if (v.embeddedUnion case final embedded?) visit(embedded);
+          }
+        // A reference names a type rather than declaring one, so it does not
+        // claim its identifier.
+        case SchemaReference():
+          type.name = safeDartIdentifier(type.name);
+        case NullableType(inner: final inner):
+          visit(inner);
+        case ListType(items: final items):
+          visit(items);
+        case MapType(valueType: final value):
+          visit(value);
+        case TupleType(items: final items):
+          items.forEach(visit);
+        case TransferableType(typeArgs: final args):
+          args.forEach(visit);
+        case PrimitiveType():
+          break;
+      }
+    }
+
+    final original = Map.of(_types);
+    original.values.forEach(visit);
+    for (final ns in namespaces) {
+      for (final op in ns.operations) {
+        for (final p in op.params) {
+          visit(p.type);
+        }
+        visit(op.result);
+      }
+    }
+
+    // References look a type up by its key, so the key takes the same identifier.
+    final keys = <String, String>{};
+    _types.clear();
+    for (final entry in original.entries) {
+      final key = safeDartIdentifier(entry.key);
+      final prior = keys.putIfAbsent(key, () => entry.key);
+      if (prior != entry.key) {
+        throw NamingConflictException(
+          "The types '${escapeForDiagnostic(prior)}' and "
+          "'${escapeForDiagnostic(entry.key)}' both generate the identifier "
+          "'$key'. Rename one in the spec.",
+        );
+      }
+      _types[key] = entry.value;
+    }
   }
 
   SchemaReference _trackedSchemaRef(String name) {

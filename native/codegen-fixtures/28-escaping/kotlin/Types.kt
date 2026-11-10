@@ -15,14 +15,15 @@ import kotlinx.serialization.Serializable
  * next
  * @property code Code matching a pattern with "quotes" and $
  * @property kind Kind *&#47; of widget, $ values
- * @property note$ Optional note; key and default hold special characters
+ * @property note_ Optional note; key and default hold special characters
  */
 @Serializable
 public data class Widget(
   public val id: String,
   public val code: String,
   public val kind: Kind,
-  public val `note$`: String? = "a/b é ${'$'}x ${'$'}{y} \"q\" 'q' \\ \\(z) */ end",
+  @SerialName("note${'$'}")
+  public val note_: String? = "a/b é ${'$'}x ${'$'}{y} \"q\" 'q' \\ \\(z) */ end",
   public val count: Int? = 7,
   public val limit: Int? = null,
   public val ratio: Double? = 1.5,
@@ -36,14 +37,14 @@ public data class Widget(
   @Serializable
   public enum class Kind {
     @SerialName("cost${'$'}")
-    `Cost$`,
+    Cost,
     @SerialName("a${'$'}b")
-    `A$b`,
+    AB,
     @SerialName("x${'$'}${'$'}y")
-    `X$$y`,
+    XY,
     @SerialName("b-${'$'}c")
-    `B$c`,
+    BC,
     @SerialName("d_${'$'}e")
-    `D$e`,
+    DE,
   }
 }

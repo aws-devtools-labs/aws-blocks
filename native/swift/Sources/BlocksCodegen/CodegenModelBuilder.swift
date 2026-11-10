@@ -32,17 +32,22 @@ public struct CodegenModelBuilder {
 
         // Step 1: Resolve component schemas with their declared names.
         for (schemaName, typeRef) in rpcModel.componentSchemas.sorted(by: { $0.key < $1.key }) {
+            // The schema name is spec text, so the type takes its identifier; the type's own
+            // declaration, references below and the parser's collision check all name the same
+            // identifier.
+            let typeName = swiftIdentifier(schemaName)
             let resolved = resolveType(
                 typeRef,
                 name: schemaName,
+                declaredName: typeName,
                 parentSchemaName: schemaName,
                 componentSchemas: rpcModel.componentSchemas,
                 typeDefinitions: &typeDefinitions,
                 declaredNames: &declaredNames
             )
-            if !declaredNames.contains(schemaName) {
-                typeDefinitions.append(TypeDefinition(name: schemaName, type: resolved))
-                declaredNames.insert(schemaName)
+            if !declaredNames.contains(typeName) {
+                typeDefinitions.append(TypeDefinition(name: typeName, type: resolved))
+                declaredNames.insert(typeName)
             }
         }
 
@@ -173,9 +178,12 @@ public struct CodegenModelBuilder {
 
     // MARK: - Type Resolution
 
+    /// `declaredName`, when set, is the name a component schema's own record, enum or union takes
+    /// as written, in place of one derived from `name`.
     private func resolveType(
         _ typeRef: TypeRef,
         name: String,
+        declaredName: String? = nil,
         parentSchemaName: String?,
         componentSchemas: [String: TypeRef],
         typeDefinitions: inout [TypeDefinition],
@@ -201,7 +209,7 @@ public struct CodegenModelBuilder {
             return .primitive(kind, constraints: constraints)
 
         case .inlineObject(let fields, let addProps, let embeddedUnion):
-            let recordName = pascalCase(name)
+            let recordName = declaredName ?? pascalCase(name)
             let myId = "\(currentParentId ?? "root").\(recordName)"
             // When resolving as a union variant, this object won't be added to
             // inlineTypes, so its children should be parented directly to the
@@ -278,7 +286,7 @@ public struct CodegenModelBuilder {
             return record
 
         case .unionLiteral(let values):
-            let enumName = safeTypeName(pascalCase(name), parentName: parentName)
+            let enumName = declaredName ?? safeTypeName(pascalCase(name), parentName: parentName)
             let resolved: ResolvedType = .enum(name: enumName, values: values)
             if !asUnionVariant {
                 if parentSchemaName != nil {
@@ -324,6 +332,7 @@ public struct CodegenModelBuilder {
             let innerResolved = resolveType(
                 inner,
                 name: name,
+                declaredName: declaredName,
                 parentSchemaName: parentSchemaName,
                 componentSchemas: componentSchemas,
                 typeDefinitions: &typeDefinitions,
@@ -335,7 +344,7 @@ public struct CodegenModelBuilder {
             return .nullable(inner: innerResolved)
 
         case .union(let members):
-            let unionName = pascalCase(name)
+            let unionName = declaredName ?? pascalCase(name)
             let myId = "\(currentParentId ?? "root").\(unionName)"
             let hasNullMember = members.contains { if case .primitive(kind: .void, _) = $0 { return true }
             return false
@@ -386,9 +395,9 @@ public struct CodegenModelBuilder {
 
         case .schemaRef(let refName, _):
             if componentSchemas[refName] != nil {
-                return .typeReference(name: refName)
+                return .typeReference(name: swiftIdentifier(refName))
             }
-            return .typeReference(name: refName)
+            return .typeReference(name: swiftIdentifier(refName))
 
         case .transferable(let blocksType, let typeArgs):
             // An oidc/client's argument is its provider enum, which the generator emits, not an inline type.
@@ -477,6 +486,7 @@ public struct CodegenModelBuilder {
     private func resolveType(
         _ typeRef: TypeRef,
         name: String,
+        declaredName: String? = nil,
         parentSchemaName: String?,
         componentSchemas: [String: TypeRef],
         typeDefinitions: inout [TypeDefinition],
@@ -489,6 +499,7 @@ public struct CodegenModelBuilder {
         return resolveType(
             typeRef,
             name: name,
+            declaredName: declaredName,
             parentSchemaName: parentSchemaName,
             componentSchemas: componentSchemas,
             typeDefinitions: &typeDefinitions,
@@ -606,18 +617,18 @@ public struct CodegenModelBuilder {
             case .record(_, let recordFields, let addProps, let embedded):
                 let dropName = discriminator?.fieldName
                 variantFields = recordFields.filter { $0.name != dropName }
-                payloadTypeName = refName
+                payloadTypeName = refName.map(swiftIdentifier)
                 variantAddProps = addProps
                 variantEmbedded = embedded
             case .nullable(let inner):
                 if case .record(_, let recordFields, let addProps, let embedded) = inner {
                     variantFields = recordFields
-                    payloadTypeName = refName
+                    payloadTypeName = refName.map(swiftIdentifier)
                     variantAddProps = addProps
                     variantEmbedded = embedded
                 } else {
                     variantFields = []
-                    payloadTypeName = refName
+                    payloadTypeName = refName.map(swiftIdentifier)
                     variantAddProps = nil
                     variantEmbedded = nil
                 }

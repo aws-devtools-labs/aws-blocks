@@ -47,6 +47,7 @@ public struct SwiftCodeGenerator {
             declaredBindings: model.declaredTransferableBindings,
             runtimePrefix: declaredModuleImports(model).isEmpty ? "" : "BlocksRuntime."
         )
+        try generator.rejectIdentifierCollisions(model)
         let output = generator.emitSources(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -198,12 +199,7 @@ public struct SwiftCodeGenerator {
             lines.append("")
             emitDeclaration(node.name, line: "\(indent)public enum \(node.name): String, Codable {", lines: &lines)
             for val in values {
-                let caseName = camelCase(val)
-                if caseName != val {
-                    lines.append("\(indent)    case \(caseName) = \(swiftStringLiteral(val))")
-                } else {
-                    lines.append("\(indent)    case \(caseName)")
-                }
+                lines.append("\(indent)    \(enumCaseDeclaration(val))")
             }
             lines.append("\(indent)}")
         case .union(_, let variants, let discriminator):
@@ -389,10 +385,18 @@ public struct SwiftCodeGenerator {
         }
     }
 
+    /// The `CodingKeys` case for a discriminator key. A key that is not an identifier as written
+    /// keeps its wire spelling as the case's escaped raw value.
+    func discriminatorCodingKeyCase(_ fieldName: String) -> String {
+        let safe = escapedSwiftName(fieldName)
+        let unescaped = safe.trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+        return unescaped == fieldName ? "case \(safe)" : "case \(safe) = \(swiftStringLiteral(fieldName))"
+    }
+
     private func emitDiscriminatedCodingNested(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, indent: String, lines: inout [String]) {
         lines.append("")
         emitDeclaration("CodingKeys", line: "\(indent)    enum CodingKeys: String, CodingKey {", lines: &lines)
-        lines.append("\(indent)        case \(escapedSwiftName(discriminator.fieldName))")
+        lines.append("\(indent)        \(discriminatorCodingKeyCase(discriminator.fieldName))")
         lines.append("\(indent)    }")
         lines.append("")
         lines.append("\(indent)    public func encode(to encoder: Encoder) throws {")
@@ -549,12 +553,7 @@ public struct SwiftCodeGenerator {
             lines.append("")
             emitDeclaration(name, line: "public nonisolated enum \(name): String, Codable {", lines: &lines)
             for val in values {
-                let caseName = camelCase(val)
-                if caseName != val {
-                    lines.append("    case \(caseName) = \(swiftStringLiteral(val))")
-                } else {
-                    lines.append("    case \(caseName)")
-                }
+                lines.append("    \(enumCaseDeclaration(val))")
             }
             lines.append("}")
 
@@ -1077,7 +1076,7 @@ public struct SwiftCodeGenerator {
         // internal-discriminator unions.
         lines.append("")
         emitDeclaration("CodingKeys", line: "    enum CodingKeys: String, CodingKey {", lines: &lines)
-        lines.append("        case \(escapedSwiftName(discriminator.fieldName))")
+        lines.append("        \(discriminatorCodingKeyCase(discriminator.fieldName))")
         lines.append("    }")
         lines.append("")
         lines.append("    public func encode(to encoder: Encoder) throws {")
