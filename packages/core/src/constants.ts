@@ -125,6 +125,33 @@ export const FORWARDED_HOST_HEADER = 'x-blocks-forwarded-host';
 export const FORWARDED_STAGE_HEADER = 'x-blocks-forwarded-stage';
 
 /**
+ * The host a viewer called a Blocks CloudFront front door at (the distribution's
+ * domain or one of its custom domains), stamped by a viewer-request function on
+ * every API request the door forwards — to the shared gateway (and from there to
+ * a Lambda or a container) or straight to a container's load balancer. CloudFront
+ * drops the viewer's `Host` on the way, so this is how a handler behind it learns
+ * the public URL.
+ *
+ * Unlike {@link FORWARDED_HOST_HEADER} it is never trusted as such: the gateway is
+ * reachable directly, and a direct caller can send any value. A handler takes it
+ * only when it names one of the backend's own front-door hosts
+ * ({@link PUBLIC_HOSTS_CONFIG_KEY}), so a forged value can at most pick another of
+ * the app's own domains.
+ *
+ * @internal Read by the Lambda handler and the container HTTP server, written by the CloudFront front doors; not public API.
+ */
+export const PUBLIC_HOST_HEADER = 'x-blocks-public-host';
+
+/**
+ * Config key (and so environment variable) listing the hosts of every Blocks
+ * CloudFront front door of a backend, comma-separated: the hosts
+ * {@link PUBLIC_HOST_HEADER} may name.
+ *
+ * @internal Registered by the CloudFront front doors at synth, read at runtime; not public API.
+ */
+export const PUBLIC_HOSTS_CONFIG_KEY = 'BLOCKS_PUBLIC_HOSTS';
+
+/**
  * Container port a container compute's HTTP server listens on: the backend's API
  * when the compute serves API traffic, a health check otherwise.
  *
