@@ -731,7 +731,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *   createConversationId(options.userId) (a missing and a foreign conversation look the same).
 	 *   Checked before anything is persisted or dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
-	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
+	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async stream(message: string, options?: StreamOptions<TContext>): Promise<AgentStreamResult> {
@@ -784,7 +785,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 *   before any approval is persisted or the turn is dispatched. Not checked for `inferenceOnly` agents.
 	 * @throws InterruptRequired when `responses` is empty or `options.conversationId` is missing.
 	 * @throws PersistenceRequired when persistence is enabled and `options.userId` is missing.
-	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate).
+	 * @throws InvalidUsage when `options.userId` can't be encoded into a channel key (an unpaired surrogate),
+	 *   or when the channelId and userId don't form a valid Realtime channel name (e.g. `a//b`, or a userId of `..`).
 	 * @throws InvalidModelConfig when the agent declares a `toolContextSchema` and `options.context` doesn't match it.
 	 */
 	async resume(channelId: string, responses: Array<InterruptResponse>, options?: { conversationId?: string; userId?: string; context?: TContext }): Promise<void> {
@@ -841,16 +843,27 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	 * can never prefix-match another's. It can't encode a userId with a lone surrogate;
 	 * that throws InvalidUsage, which stream()/resume() surface before persisting or
 	 * dispatching. inferenceOnly agents have no owner to scope by and keep the bare channelId.
+	 *
+	 * The result must also be a valid Realtime channel name (no empty, `.` or `..` segment,
+	 * no leading or trailing `/`). Realtime rejects any other name on publish and getChannel(),
+	 * so a channelId like `a//b` or a userId of `..` throws InvalidUsage here, before dispatch,
+	 * instead of a turn whose every chunk publish fails.
 	 */
 	private chunksChannel(channelId: string, userId: string): string {
-		if (!this.conversations) return channelId;
-		let user: string;
-		try {
-			user = encodeURIComponent(userId);
-		} catch {
-			throw blocksAgentError(AgentErrors.InvalidUsage, 'userId is not a well-formed string (it contains an unpaired surrogate), so its Realtime channel cannot be derived.');
+		let channel = channelId;
+		if (this.conversations) {
+			let user: string;
+			try {
+				user = encodeURIComponent(userId);
+			} catch {
+				throw blocksAgentError(AgentErrors.InvalidUsage, 'userId is not a well-formed string (it contains an unpaired surrogate), so its Realtime channel cannot be derived.');
+			}
+			channel = `u/${user}/${channelId}`;
 		}
-		return `u/${user}/${channelId}`;
+		if (channel.split('/').some(segment => segment === '' || segment === '.' || segment === '..')) {
+			throw blocksAgentError(AgentErrors.InvalidUsage, 'channelId and userId must form a valid Realtime channel name: no empty, "." or ".." segment, and no leading or trailing "/".');
+		}
+		return channel;
 	}
 
 	/**
