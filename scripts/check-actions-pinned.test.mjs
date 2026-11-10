@@ -8,6 +8,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { findUnpinned, scan } from './check-actions-pinned.mjs';
@@ -153,4 +154,17 @@ describe('repo .github tree', () => {
 		assert.deepEqual(scan(root), []);
 	});
 
+	// The guard only protects `main` if it can be a required status check: it must run on
+	// every PR to `main` (a path filter leaves a required check pending forever on PRs that
+	// skip it) under a stable job name, and fail the job on a violation.
+	it('runs the guard on every PR to main under a stable job name', () => {
+		const wf = readFileSync(join(root, '.github/workflows/actions-pinned.yml'), 'utf8');
+		const pr = /^ {2}pull_request:\n((?: {4}.*\n)+)/m.exec(wf);
+		assert.ok(pr, 'pull_request trigger present');
+		assert.match(pr[1], /branches: \[main\]/);
+		assert.doesNotMatch(pr[1], /paths(-ignore)?:/);
+		assert.match(wf, /^ {4}name: Require SHA-pinned actions$/m);
+		assert.doesNotMatch(wf, /continue-on-error/);
+		assert.match(wf, /run: node scripts\/check-actions-pinned\.mjs$/m);
+	});
 });
