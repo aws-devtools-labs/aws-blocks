@@ -1,7 +1,8 @@
 {
   "app": "npx tsx -C cdk aws-blocks/index.cdk.ts",
   "context": {
-    "@aws-blocks/bb-data:encryptStorageByDefault": true
+    "@aws-blocks/bb-data:encryptStorageByDefault": true,
+    "@aws-blocks/core:mergeExecutionRolePolicies": true
   },
   "watch": {
     "include": [
