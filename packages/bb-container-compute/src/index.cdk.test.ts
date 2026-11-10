@@ -297,7 +297,9 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 	 * The default image as an immutable reference: ECR Public's Node image by index digest only (`repository@sha256:…`, the form ECS documents).
 	 * This proves the reference shape only. It can't tell a multi-arch image-index digest from a single-platform manifest
 	 * digest, so it is not an arm64 guarantee: that needs a registry call. The source of truth for the digest is
-	 * `scripts/container-default-image-digest.mjs`, which requests the index media types and prints the index digest.
+	 * `scripts/container-default-image-digest.mjs`, which prints the tag's index digest and verifies the pin against the
+	 * registry (it must resolve to an image index that lists linux/arm64); the `Container default image digest` workflow
+	 * runs it on every pull request that changes the pin.
 	 */
 	const DIGEST_PINNED_DEFAULT = /^public\.ecr\.aws\/docker\/library\/node@sha256:[0-9a-f]{64}$/;
 

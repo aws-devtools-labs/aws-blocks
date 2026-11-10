@@ -25,9 +25,12 @@
  * **Bumping it.** Dependabot doesn't track this constant. To pick up a newer
  * `24-slim` (security patches, Node minor releases), run
  * `node scripts/container-default-image-digest.mjs` from the repo root; it
- * prints the current index digest and whether this constant matches. Replace
- * the digest below, run this package's tests (they fail unless the constant is
- * a `node@sha256:<64 hex>` reference), and add a changeset. A change of
+ * prints the current index digest and whether this constant matches, and
+ * verifies the pinned digest resolves to an image index that lists linux/arm64.
+ * Replace the digest below, run this package's tests (they fail unless the
+ * constant is a `node@sha256:<64 hex>` reference), and add a changeset; the
+ * `Container default image digest` workflow re-runs the registry check on the
+ * pull request. A change of
  * Node major is a separate decision: it must move together with the Lambda
  * runtime.
  *
