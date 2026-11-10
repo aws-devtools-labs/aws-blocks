@@ -71,7 +71,7 @@ The `setAuthState` method never throws. If any action fails, the error is caught
 
 1. The current session cookie is checked to determine whether the user is signed in or out.
 2. The appropriate base state (`signedIn` or `signedOut`) is constructed.
-3. The error message is merged: `{ ...baseState, error: e.message }`.
+3. The error message is merged: `{ ...baseState, error: e.message }` (plus `errorName` for a named `ApiError`) — but only when `e` is an `ApiError` or a branded Building Block error. Any other error (an AWS SDK, KVStore, AppSetting or `codeDelivery` failure, whose text can name accounts and ARNs) is logged server-side and merged as `{ ...baseState, error: 'Internal error' }`, matching the RPC serializer's rule for unbranded errors.
 
 This allows the Authenticator UI component to display errors without losing track of the current state machine position. Unknown actions return `{ ...signedOutState, error: "Unknown action: ..." }` without throwing.
 
@@ -89,7 +89,7 @@ This allows the Authenticator UI component to display errors without losing trac
 
 ### D-AB-2: JWT sessions signed with AppSetting secret
 
-**Decision:** Session tokens are JWTs signed with HS256 using a secret stored in AppSetting (SSM SecureString in AWS, in-memory in mock). The secret is lazily fetched and cached per instance.
+**Decision:** Session tokens are JWTs signed with HS256 using a secret stored in AppSetting (SSM SecureString in AWS, `.bb-data/settings.json` in mock). The secret is lazily fetched and cached per instance.
 
 **Rationale:**
 - **Mostly stateless validation** — a JWT is verified from the signing secret alone, with one small exception: sign-out revocation (below) adds a single KVStore read per authenticated request to check the token's `jti` against the revocation list. Tokens with no `jti` (issued before revocation shipped) skip that read and simply expire within `sessionDuration`.
@@ -236,8 +236,8 @@ All permissions (DynamoDB read/write, SSM GetParameter) are managed by the compo
 
 AuthBasic has no separate AWS runtime entry point. The same `src/index.ts` code runs in both mock and AWS environments. Context switching is handled by the composed Building Blocks:
 
-- **KVStore** — uses DynamoDB in AWS, JSON files (or in-memory) in mock.
-- **AppSetting** — uses SSM Parameter Store in AWS, in-memory value in mock.
+- **KVStore** — uses DynamoDB in AWS, a JSON file per store under `.bb-data/` in mock.
+- **AppSetting** — uses SSM Parameter Store in AWS, `.bb-data/settings.json` in mock.
 
 When running in AWS Lambda:
 - JWT secret is fetched from SSM SecureString on first use, then cached in-memory for the Lambda instance lifetime.
@@ -249,8 +249,8 @@ When running in AWS Lambda:
 
 The mock behavior is identical to AWS behavior with the following environment differences:
 
-- **KVStore mock** — stores data in-memory (or JSON files on disk, depending on KVStore mock mode). Data is lost on restart.
-- **AppSetting mock** — generates a random secret on first access within the process. Secret changes on restart (invalidating existing tokens).
+- **KVStore mock** — stores each store's data in `.bb-data/{fullId}/store.json`, so users, codes, revocation markers and lockout counters survive a dev server restart. `rm -rf .bb-data` wipes them.
+- **AppSetting mock** — generates a random secret the first time the setting is constructed and saves it to `.bb-data/settings.json`. The same secret is reused after a restart, so existing tokens stay valid until `.bb-data` is wiped.
 - **bcrypt** — runs identically (pure JS implementation, same cost factor 12).
 - **JWT** — same `jsonwebtoken` library, same HS256 algorithm.
 - **Code delivery** — calls the user-provided `codeDelivery` callback. In dev, this is typically `console.log` or a custom function.
@@ -289,10 +289,10 @@ Bumped on password reset (`confirmResetPassword`) — the only operation that bu
 
 | Behavior Difference | Impact | Mitigation |
 |------------|--------|------------|
-| Secret regenerated on restart (mock) | Existing JWTs are invalidated when the dev server restarts | Intentional for local dev — sign in again after restart |
-| No DynamoDB TTL reaper (mock) | Expired codes, revocation markers, and throttle counters remain in the in-memory store until read | Verification codes, `revoked:<jti>` markers, and `lockout:<username>` counters are all written with a TTL (`expiresAt`/`ttlSeconds`), so the AWS `codes` store (created with `ttl: true`) physically reaps them; reads filter expired entries on both layers regardless, so correctness never depends on the reaper |
-| Sign-in throttling is per-process (mock) | A lockout counter lives in the per-process in-memory store, so a multi-instance mock wouldn't share it | When `lockout` is enabled, counters live in the shared `codes` DynamoDB table, so the lock is enforced across every Lambda instance. When `lockout` is **not** set there is no application-layer limit at all — rely on CloudFront WAF or API Gateway throttling for volumetric protection |
-| No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | In AWS the revocation list lives in the shared `codes` DynamoDB table, so sign-out revokes the token for every instance; the mock's in-memory store is per-process, so a multi-instance mock would not share it (not applicable in single-instance local dev) |
+| Random local signing secret (mock) | Tokens are signed with a random secret generated on first run and kept in `.bb-data/settings.json`; they survive dev server restarts but are invalidated when `.bb-data` is wiped | Intentional for local dev — sign in again after wiping `.bb-data` |
+| No DynamoDB TTL reaper (mock) | Expired codes, revocation markers, and throttle counters remain in the mock store until read | Verification codes, `revoked:<jti>` markers, and `lockout:<username>` counters are all written with a TTL (`expiresAt`/`ttlSeconds`), so the AWS `codes` store (created with `ttl: true`) physically reaps them; reads filter expired entries on both layers regardless, so correctness never depends on the reaper |
+| Sign-in throttling is per-process (mock) | Each mock KVStore loads its `store.json` once at construction and then works from its own in-memory copy, so concurrently running mock processes wouldn't share a lockout counter | When `lockout` is enabled, counters live in the shared `codes` DynamoDB table, so the lock is enforced across every Lambda instance. When `lockout` is **not** set there is no application-layer limit at all — rely on CloudFront WAF or API Gateway throttling for volumetric protection |
+| No cross-instance session invalidation | Signing out on one mock instance doesn't affect others | In AWS the revocation list lives in the shared `codes` DynamoDB table, so sign-out revokes the token for every instance; each mock process works from its own in-memory copy of the store (loaded from `.bb-data` at construction), so concurrently running mock instances would not share it (not applicable in single-instance local dev) |
 | bcrypt timing may differ | Hashing speed varies between local machine and Lambda | No mitigation needed — timing differences don't affect correctness |
 | No email/SMS delivery infrastructure | Codes are delivered via callback (typically console.log in dev) | Intentional — codeDelivery is the integration point for real delivery in production |
 

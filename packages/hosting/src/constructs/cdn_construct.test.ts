@@ -1276,7 +1276,8 @@ void describe('CdnConstruct', () => {
 
       assert.ok(policySecret, 'Resource policy must contain a Referer secret');
       assert.ok(refererHeader, 'CloudFront origin must include Referer header');
-      assert.strictEqual(
+      // Both are the same Secrets Manager dynamic reference (a token object).
+      assert.deepStrictEqual(
         refererHeader['HeaderValue'],
         policySecret,
         'Origin Referer header value must match the resource policy secret',
@@ -2207,7 +2208,7 @@ void describe('CdnConstruct', () => {
       return Template.fromStack(stack);
     };
 
-    void it('IPX image Lambda (baseURL set) is attached to the shared SSR API Gateway', () => {
+    void it('IPX image Lambda (baseURL set) gets its own API Gateway, next to the SSR one', () => {
       const stack = createStack();
       const template = withImageOpt(stack, {
         bundle: '/tmp/img',
@@ -2216,8 +2217,10 @@ void describe('CdnConstruct', () => {
         sizes: [640],
         baseURL: '/_ipx',
       });
-      // Exactly ONE RestApi (shared) — the IPX Lambda did NOT get its own.
-      template.resourceCountIs('AWS::ApiGateway::RestApi', 1);
+      // Two RestApis: the SSR one and the IPX one, each locked by its own
+      // origin-verify secret.
+      template.resourceCountIs('AWS::ApiGateway::RestApi', 2);
+      template.resourceCountIs('AWS::SecretsManager::Secret', 2);
       // A dedicated `_ipx` resource exists on the API for IPX routing.
       template.hasResourceProperties('AWS::ApiGateway::Resource', {
         PathPart: '_ipx',

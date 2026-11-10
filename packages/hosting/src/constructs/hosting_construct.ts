@@ -95,7 +95,7 @@ import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createManagedEquivalentSecurityHeadersPolicy, createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
-import { WafConstruct } from './waf_construct.js';
+import { DEFAULT_WAF_RATE_LIMIT, WafConstruct } from './waf_construct.js';
 import { WEB_FUNCTION_INTERNAL_HEADERS, WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
 
 // Re-export build ID helpers for public API + tests
@@ -1603,6 +1603,11 @@ export class HostingConstruct extends Construct {
         cacheKeyHeaders: f.cacheKeyHeaders,
         webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
         quotas: f.quotas,
+        serverOrigin: f.serverOrigin,
+        // The Blocks-managed web ACL's rules also run on the server origin's
+        // REST API stage (a REGIONAL web ACL with the same rate limit), so a
+        // call made straight to `execute-api` meets them too.
+        originWafRateLimit: this.webAcl ? (f.waf?.rateLimit ?? DEFAULT_WAF_RATE_LIMIT) : undefined,
         customErrorPages: props.errorPages
           ? {
               notFound: !!props.errorPages.notFound,

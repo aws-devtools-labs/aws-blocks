@@ -9,6 +9,8 @@
 // guard and how its payload format carries `Set-Cookie`, the container's
 // body-size limit.
 
+import type { ServesApiNamespace } from './api-placement.js';
+import { requestBaseUrl } from './common/request-base-url.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { buildCorsHeaders, CORS_MAX_AGE, corsRejection, getCorsPatterns, isOriginAllowed } from './cors.js';
 import { getLoadedCoreCopies, getRegisteredRoutes, matchRoute } from './raw-route.js';
@@ -19,9 +21,11 @@ import {
   methodNotFoundResponse,
   parseRpcRequest,
   rawRouteErrorFromCatch,
+  sanitizeCaughtError,
   successResponse,
 } from './rpc.js';
-import { resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import { isDispatchableExport, resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import type { RpcErrorInfo } from './rpc-error-metric.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
 
@@ -49,6 +53,14 @@ export interface DispatchRequest {
   headers: () => Headers;
   /** Builds the absolute, externally visible request URL (`ctx.request.url`). */
   url: () => URL;
+  /**
+   * Builds the externally reachable base URL the request arrived under: its
+   * origin plus any API Gateway stage prefix (`https://<api-host>/prod`), with no
+   * trailing slash. `url().pathname` never carries the stage, so this is the only
+   * place a handler can read it from, through `getRequestBaseUrl()`. Required, so
+   * that a transport cannot leave the stage out by omission.
+   */
+  baseUrl: () => string;
   /** The decoded body (`text` is `''` and `stream` is `null` when absent). Called at most once. */
   body: () => DispatchRequestBody;
   /** Fires when the transport gives up on the request (timeout, client gone). */
@@ -72,7 +84,88 @@ export interface DispatchRequestBody {
 export interface DispatcherOptions {
   /** Prefix of the log line for an RPC method that throws. Default `'RPC Error:'`. */
   rpcErrorLabel?: string;
+  /**
+   * Called once for each RPC call that fails: a method that throws, or a call
+   * to an API namespace or method that doesn't exist. `status` is the HTTP
+   * status of a thrown error (as in its JSON-RPC envelope), or 404 for an
+   * unknown namespace or method. The Lambda handler uses it to
+   * write the `RpcErrors` metric (see rpc-error-metric.ts). Must not throw.
+   * Not called for a method that fails after `request.signal` was aborted: the
+   * transport already answered that call (e.g. the Lambda handler's 504) and
+   * reports it itself.
+   */
+  onRpcError?: (info: RpcErrorInfo) => void;
+  /**
+   * Which cross-origin requests are refused and which CORS headers every
+   * response carries. Default: the deployed allowlist from
+   * `CORS_ALLOWED_ORIGINS` / `CORS_HOSTING_ORIGINS` (see {@link getCorsPatterns}).
+   */
+  cors?: DispatchCorsPolicy;
+  /**
+   * Logs a RawRoute handler or RPC method that throws, in place of the default
+   * error line. Set by transports that format their own error output.
+   */
+  logHandlerError?: (failure: DispatchHandlerFailure) => void;
+  /** Observes each JSON-RPC request, for transports that log request traffic. */
+  rpcTrace?: DispatchRpcTrace;
+  /**
+   * Name the backend's callable APIs in the error for an unknown API namespace.
+   * Local development only: it tells any caller what the backend exports.
+   * Default `false`.
+   */
+  listApisWhenNotFound?: boolean;
+  /**
+   * Which API namespaces (by export name) this compute serves. A call to any
+   * other namespace gets the same "not found" error as an unknown one, whichever
+   * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
+   * namespace placed on another compute. Default: every namespace is served.
+   * The Lambda handler and the container HTTP server build it from the placement
+   * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
+   */
+  servesNamespace?: ServesApiNamespace;
 }
+
+/**
+ * A CORS policy for {@link createDispatcher}.
+ *
+ * @internal
+ */
+export interface DispatchCorsPolicy {
+  /** Whether a request carrying `Origin: origin` is refused with a 403. Called only for a non-empty origin. */
+  rejects(origin: string): boolean;
+  /** The CORS headers for a response to a request from `origin` (`''` when absent). */
+  headers(origin: string): Record<string, string>;
+}
+
+/**
+ * A handler that threw, as reported to {@link DispatcherOptions.logHandlerError}.
+ *
+ * @internal
+ */
+export type DispatchHandlerFailure =
+  | { source: 'rpc'; apiNamespace: string; method: string; error: unknown }
+  | { source: 'raw-route'; error: unknown };
+
+/**
+ * Callbacks for each stage of a JSON-RPC request. Each runs synchronously
+ * within the request's dispatch.
+ *
+ * @internal
+ */
+export interface DispatchRpcTrace {
+  /** The body was not a valid JSON-RPC request; `response` is the envelope sent back. */
+  parseError?(response: string): void;
+  /** The request names `apiNamespace.method`, about to be resolved and called with `args`. */
+  call?(apiNamespace: string, method: string, args: unknown[]): void;
+  /** The method returned; `value` is what the response carries as its result. */
+  result?(apiNamespace: string, method: string, value: unknown): void;
+}
+
+/** The deployed CORS policy: the configured allowlist, when there is one. */
+const ALLOWLIST_CORS_POLICY: DispatchCorsPolicy = {
+  rejects: (origin) => getCorsPatterns() !== null && !isOriginAllowed(origin),
+  headers: buildCorsHeaders,
+};
 
 /**
  * Which dispatch path produced a response. Adapters use it to keep any
@@ -126,19 +219,33 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
  * dispatch for any path outside `/aws-blocks/api`, and JSON-RPC for the
  * `/aws-blocks/api` subtree. Request cookies and the validated client user agent
  * are available to handlers through {@link requestCookies} /
- * {@link requestClientUserAgent} for the duration of the call.
+ * {@link requestClientUserAgent} for the duration of the call, and the request's
+ * {@link DispatchRequest.baseUrl} through `getRequestBaseUrl()` ({@link requestBaseUrl}).
  *
  * @internal
  */
 export function createDispatcher(backend: unknown, options: DispatcherOptions = {}): Dispatcher {
   const rpcErrorLabel = options.rpcErrorLabel ?? 'RPC Error:';
+  const reportRpcError = (info: RpcErrorInfo): void => {
+    try {
+      options.onRpcError?.(info);
+    } catch {
+      // Reporting is best-effort; it never changes the response.
+    }
+  };
+  const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
+  const trace = options.rpcTrace;
+  const servesNamespace = options.servesNamespace;
+  const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
+    if (options.logHandlerError) options.logHandlerError(failure);
+    else logRequestError(request, label, failure.error);
+  };
   return async (request) => {
     const { origin, method: httpMethod } = request;
-    const corsHeaders = buildCorsHeaders(origin);
+    const corsHeaders = cors.headers(origin);
 
     // Reject cross-origin requests from disallowed origins
-    const patterns = getCorsPatterns();
-    if (origin && patterns && !isOriginAllowed(origin)) {
+    if (origin && cors.rejects(origin)) {
       const rejection = corsRejection();
       return { kind: 'cors-rejected', status: rejection.statusCode, headers: rejection.headers, cookies: [], body: rejection.body };
     }
@@ -172,7 +279,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       if (!isRpcPath(requestPath)) {
         const matched = matchRoute(httpMethod, requestPath);
         if (matched) {
-          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders);
+          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders, logHandlerError);
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
@@ -206,10 +313,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       const parsed = parseRpcRequest(bodyText, { pathname: requestPath });
 
       if (!parsed.ok) {
+        trace?.parseError?.(parsed.response);
         return rpcEnvelope(parsed.response);
       }
 
       const { apiNamespace, method, args, id: rpcId } = parsed.request;
+      trace?.call?.(apiNamespace, method, args);
 
       // Declared outside the try so the error path can still deliver cookies the
       // method set before throwing (e.g. clearing a dead session on a 401).
@@ -242,9 +351,12 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
 
         // Get the API by export name. resolveApiNamespace refuses exported Building
         // Block instances and `_`-private exports, so only an API surface is callable.
-        const apiHandler = resolveApiNamespace(backend, apiNamespace);
+        // A namespace placed on another compute is refused exactly like an unknown one.
+        const apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
-          return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found`, rpcId));
+          reportRpcError({ status: 404, namespace: apiNamespace, method });
+          const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
+          return rpcEnvelope(methodNotFoundResponse(`API '${apiNamespace}' not found${available}`, rpcId));
         }
 
         // Call the handler to get methods
@@ -255,20 +367,29 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // Own/declared callable methods only — never an inherited Object.prototype member.
         const apiMethod = resolveApiMethod(apiMethods, method);
         if (!apiMethod) {
+          reportRpcError({ status: 404, namespace: apiNamespace, method });
           return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
         }
 
         const result = await apiMethod(...args);
+        const value = responseBody ?? result;
+        trace?.result?.(apiNamespace, method, value);
 
         return {
           kind: 'rpc-result',
           status: responseStatus,
           headers: withoutSetCookie(responseHeaders),
           cookies: setCookiesOf(responseHeaders),
-          body: successResponse(responseBody ?? result, rpcId),
+          body: successResponse(value, rpcId),
         };
       } catch (error: any) {
-        logRequestError(request, rpcErrorLabel, error);
+        logHandlerError({ source: 'rpc', apiNamespace, method, error }, request, rpcErrorLabel);
+        // A method that fails after the request was aborted (the Lambda handler's
+        // deadline won and already answered, and counted, the call with a 504)
+        // must not count the same call a second time.
+        if (!request.signal?.aborted) {
+          reportRpcError({ status: sanitizeCaughtError(error).status, namespace: apiNamespace, method });
+        }
         // Only Set-Cookie values that DELETE a cookie survive into the error
         // response, so e.g. `requireAuth` can throw a 401 AND clear a dead
         // session cookie, but a method that signs a user in and then throws can
@@ -288,8 +409,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     // malformed input never reaches the AWS user agent.
     const clientUserAgent = validateClientUserAgentToken(request.clientUserAgent);
 
+    // The stage-bearing base URL goes in a store as well: `ctx.request.url` has no
+    // stage, and Building Blocks that address the gateway itself (an OIDC callback
+    // or stub issuer URL) read it through `getRequestBaseUrl()`.
     return requestCookies.run(request.cookie, () =>
-      requestClientUserAgent.run(clientUserAgent, dispatchWithinStores),
+      requestClientUserAgent.run(clientUserAgent, () => requestBaseUrl.run(request.baseUrl(), dispatchWithinStores)),
     );
   };
 }
@@ -299,6 +423,7 @@ async function dispatchRawRoute(
   route: RegisteredRoute,
   params: Record<string, string>,
   corsHeaders: Record<string, string>,
+  logHandlerError: (failure: DispatchHandlerFailure, request: DispatchRequest, label: string) => void,
 ): Promise<DispatchResponse> {
   const headers = request.headers();
   const { text: bodyText, stream: bodyStream } = request.body();
@@ -340,7 +465,7 @@ async function dispatchRawRoute(
       body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
     };
   } catch (error: unknown) {
-    logRequestError(request, 'RawRoute Error:', error);
+    logHandlerError({ source: 'raw-route', error }, request, 'RawRoute Error:');
     const { status, body } = rawRouteErrorFromCatch(error);
     return {
       kind: 'raw-route',
@@ -350,6 +475,14 @@ async function dispatchRawRoute(
       body,
     };
   }
+}
+
+/** The names of the backend's exports that RPC can dispatch to, in export order. */
+function dispatchableExportNames(backend: unknown): string[] {
+  if (typeof backend !== 'object' || backend === null) return [];
+  return Object.entries(backend)
+    .filter(([name, value]) => isDispatchableExport(name, value))
+    .map(([name]) => name);
 }
 
 /**

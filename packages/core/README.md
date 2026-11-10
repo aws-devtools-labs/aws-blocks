@@ -193,12 +193,12 @@ So a real config problem looks like the client throwing `Blocks API URL not conf
 A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST API** in front of the whole backend (see [API front door](#api-front-door) for how it is exposed). It is the stack's `gateway`, and its RPC URL is the `ApiUrl` stack output.
 
 - **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-blocks/bb-compute`) is routed there without changing the app's endpoint.
-- **Container computes.** A namespace on a `container` compute is integrated through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC; the load balancer forwards each namespace's path to its container's tasks. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute.
+- **Container computes.** A namespace on a `container` compute is integrated through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC; the load balancer forwards each namespace's path to its container's tasks. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute. On the `cloudfront` tier, CloudFront reaches a container namespace straight from the distribution instead (see [API front door](#api-front-door)), so the gateway's throttling, access logs and limits don't apply to it.
 - **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
 - **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
 - **WAF** is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBackend`: `apiWaf: { enabled: true, rateLimit? }` creates a web ACL with the AWS managed Common rule set and Known Bad Inputs rule set, plus a per-IP rate limit (default 1000 requests per 5 minutes). The Common rule set's body rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`) only count, so normal RPC payloads, including user-written HTML or Markdown, pass. `apiWaf: { webAclArn }` attaches a web ACL you already have instead; its scope and region are checked at synth. It's attached as-is, so behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. The web ACL goes on whichever front door clients use:
   - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. If a `Hosting` door also forwards browser traffic to it, the rate rule adjusts so browser users aren't counted as one client: a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts, and behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`), so rate-limit on the door's own WAF. In both cases browser requests arriving through Hosting aren't rate-limited by `apiWaf`; turn on the door's own WAF (`frontDoor: { features: { waf: { enabled: true } } }`) to rate-limit them.
-  - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth).
+  - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution, which also covers the container namespaces it routes straight to their load balancer. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth). Without one, synth warns that those container namespaces have no rate limit (`blocks:api:direct-routes-without-waf`).
   - `apiFrontDoor: 'cloudfront'` with a CloudFront-backed `Hosting` fronting the API: the API is served from Hosting's distribution, so set the WAF on Hosting (`frontDoor: { features: { waf: { enabled: true } } }`); `apiWaf` then creates nothing and synth warns (`blocks:api-waf:deferred-to-hosting`).
   - Not covered: the gateway's `execute-api` endpoint under `'cloudfront'` (callable directly, and reached by browser traffic that a non-CloudFront `Hosting` door forwards), and `bb-realtime`'s WebSocket API (AWS WAF can't attach to API Gateway WebSocket APIs).
 
@@ -219,7 +219,7 @@ Either tier serves the API at the same path. The TypeScript client (and any manu
 POST /aws-blocks/api/{namespace}
 ```
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute.
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
 
 **Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
 
@@ -275,7 +275,7 @@ How `status` reaches the client over JSON-RPC: an uncaught error inside an RPC m
 }}
 ```
 
-The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`.
+The client decodes that back into an `ApiError` with the same `status`, `name` and `retriable`, which is why the same `isBlocksError(e, ...)` check works on both sides. Reserved JSON-RPC codes (`-32600`, `-32700`, …) decode to `status: 500`. A response that is not a JSON-RPC envelope, such as a gateway's own `429 {"message":"Too Many Requests"}` or an HTML error page, also rejects with an `ApiError`: `status` is the HTTP status (`502` if that status was 2xx) and `message` is the body's `message` when present, else `HTTP <status>`.
 
 #### `hasAuthError(state, name)`
 
@@ -298,6 +298,21 @@ if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 ```
 
 Rule of thumb: **thrown error → `isBlocksError`; returned `AuthState` → `hasAuthError`.** Match on the block's error constant, never on the human-facing `error` string.
+
+#### Monitoring failed RPC calls
+
+A failed RPC call (a method that throws, or a call to an unknown API namespace or method) reaches the client as a JSON-RPC error inside an HTTP 200 response, and the Lambda invocation itself succeeds. So Lambda's `Errors` metric never counts it. Instead, on Lambda each failed call writes one log line in CloudWatch embedded metric format, which CloudWatch turns into a metric with no SDK call and no extra IAM permission:
+
+| | |
+|---|---|
+| Namespace | `AWSBlocks` |
+| Metric | `RpcErrors` (Count) |
+| Dimensions | `FunctionName`, `StatusClass` (`4xx` for a client error such as an `ApiError` with status 403, `5xx` for anything else, including an unexpected error and the handler's 504 timeout) |
+| Also in the log line | `Status`, `ApiNamespace` and `Method`, searchable with CloudWatch Logs Insights |
+
+Alarm on `StatusClass = 5xx` to catch server failures; `4xx` counts include expected rejections such as an unauthenticated call. The error message is never written to the metric line.
+
+API namespaces on a `container` compute don't emit this metric yet: only Lambda functions write it.
 
 ### RawRoute
 
@@ -348,7 +363,7 @@ And what you read from `ctx.request`:
 | On `ctx.request` | Notes |
 |---|---|
 | `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
-| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. |
+| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. `url.pathname` is the route path, the same under `npm run dev` and deployed: it never includes the API Gateway stage (`/prod`). Behind a front door such as `Hosting`, `url.origin` is the API Gateway host the backend received, not the browser's, so don't build public links from it. |
 | `headers` | Request `Headers`, including `cookie`. |
 | `json()` / `text()` / `body` | Body as parsed JSON, raw text, or a `ReadableStream`. |
 | `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
@@ -368,6 +383,8 @@ new RawRoute(scope, 'user', {
 ```
 
 Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+
+To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
 `path` can be omitted, in which case it is derived from the scope-chain IDs, so `Scope('app') → Scope('v1') → RawRoute('health')` gives `/v1/health`. That means restructuring your construct tree silently changes URLs, so pass an explicit `path` for anything a client depends on.
 
@@ -399,6 +416,11 @@ new Hosting(stack, 'Web', {
 ```
 
 The `framework` option selects the frontend type: `'spa' | 'static' | 'nextjs'`. When omitted, the framework is auto-detected by reading your app's OWN `package.json` (not `node_modules`): a `next` dependency → `nextjs`; otherwise `spa`; and `static` when there is no `package.json`. Set `framework: 'spa'` explicitly to override auto-detection — e.g. when a stray `next` dependency would otherwise trigger an unwanted Next.js/OpenNext build. Full reference lives in the source JSDoc.
+
+`buildCommand` runs during synth, with `BLOCKS_API_URL` set to the backend the frontend talks to, and then the framework adapter runs its own build (OpenNext, Nitro, Astro, SvelteKit). Two synths skip both:
+
+- **Destroy.** `npm run destroy` and `npm run sandbox:destroy` don't deploy the frontend, so `Hosting` reuses the build output already on disk instead of building. It builds only when there is no output, for example on a fresh clone. Each framework adapter checks the output it deploys: a Next.js destroy reuses the `.open-next/` output of an earlier deploy, and with only `.next/` (after a plain `next build`) OpenNext still builds, because the synth needs its output. An exported `BLOCKS_SKIP_FRONTEND_BUILD=1` doesn't apply to a destroy.
+- **A deploy you ask to run on the existing build.** Set `BLOCKS_SKIP_FRONTEND_BUILD=1`, for example `BLOCKS_SKIP_FRONTEND_BUILD=1 npm run deploy`, to deploy what is already in the build output directory. Nothing is built, and a missing build output (the output directory, or the output the framework adapter deploys, such as Next.js's `.open-next/`) fails the synth with a message naming the variable. The build bakes in `BLOCKS_API_URL`, so only reuse a build made for the same backend; a deploy never reuses one on its own.
 
 Old builds are retained for rollback and expired by an S3 lifecycle rule after `buildRetentionDays` (default **30**). The build currently being served is never expired regardless of deploy cadence — only superseded builds are cleaned up. Only builds superseded by a normal `Update` cutover are auto-tagged (and thus auto-expired): pre-existing/orphaned builds and aborted or rolled-back deploys are never tagged and need manual cleanup (e.g. an S3 inventory / Batch Operations sweep). Raise the window with `buildRetentionDays` (it must be ≥ `skewProtection.maxAge` in days):
 

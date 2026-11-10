@@ -1148,9 +1148,34 @@ class KotlinCodeGenerator(
         }
         serverFileBuilder.addType(serversObjectBuilder.build().withApiVisibility())
         serverFileBuilder.addFunction(generateDefaultEntryPoint(servers.first().name))
+        serverFileBuilder.addProperty(generateDefaultServerValue(servers.first().name))
 
         return serverFileBuilder.build()
     }
+
+    /**
+     * Builds the spec's default server as a value, not only as the server the no-argument accessor
+     * reaches. A caller that configures nothing uses the accessor; a caller that configures
+     * anything has to assemble a `BlocksConfig`, which names a server — and without this it would
+     * have to name one of the generated constants directly, pinning a name the spec is free to
+     * change. Being a value rather than another accessor overload also means it keeps working
+     * whatever `BlocksConfig` gains later.
+     */
+    private fun generateDefaultServerValue(defaultServerName: String): PropertySpec =
+        PropertySpec
+            .builder("defaultServer", blocksServerClass)
+            .addModifiers(apiModifiers)
+            .receiver(ClassNames.blocksCompanion)
+            .getter(
+                FunSpec.getterBuilder()
+                    .addStatement(
+                        "return %T.%N",
+                        ClassName(packageName, "Servers"),
+                        toCamelCase(defaultServerName),
+                    )
+                    .build(),
+            )
+            .build()
 
     /**
      * Builds the accessor that lets callers write `Blocks()` for the spec's first server. The

@@ -300,9 +300,127 @@ describe('assertAwsCredentials', () => {
 			const { message } = await failure(errorName);
 			assert.match(message, /sign-in session for profile starter has expired or could not be refreshed/);
 			assert.match(message, /Sign in again: aws login --profile starter$/m);
-			assert.doesNotMatch(message, /New to AWS|aws configure|aws sso login/);
+			assert.doesNotMatch(message, /New to AWS|aws configure --profile|aws sso login/);
 			assert.doesNotMatch(message, /123456789012|WorkspaceAdminAccess/);
 		}
+	});
+
+	/** The guidance lines of a credential failure message, trimmed. */
+	function lines(message: string): string[] {
+		return message.split('\n').map((line) => line.trim());
+	}
+
+	it('sets the profile Region to the deployment Region before aws login', async () => {
+		await writeFile(
+			join(directory, 'config'),
+			'[profile starter]\nlogin_session = arn:aws:iam::123456789012:user/u\nregion = eu-north-1\n',
+		);
+		env.AWS_PROFILE = 'starter';
+		const { message } = await failure('CredentialsProviderError'); // deploys to us-east-1
+		const all = lines(message);
+		assert.ok(all.includes('Using profile starter in Region us-east-1.'), message);
+		const configure = all.findIndex((l) => l.endsWith('aws configure set region us-east-1 --profile starter'));
+		const login = all.findIndex((l) => l.endsWith('aws login --profile starter'));
+		assert.ok(configure >= 0 && configure < login, message);
+		assert.match(
+			message,
+			/If you change the Region of profile starter later, sign in again: aws login --profile starter$/m,
+		);
+	});
+
+	it('asks a profile without a Region to set one before aws login', async () => {
+		const { message } = await failure('CredentialsProviderError');
+		const all = lines(message);
+		const configure = all.findIndex((l) => l.endsWith('aws configure set region us-east-1 --profile default'));
+		const login = all.findIndex((l) => l.endsWith('aws login --profile default'));
+		assert.ok(configure >= 0 && configure < login, message);
+	});
+
+	it('does not ask to change a profile that already uses the deployment Region', async () => {
+		await writeFile(join(directory, 'config'), '[profile starter]\nlogin_session = x\nregion = us-east-1\n');
+		env.AWS_PROFILE = 'starter';
+		const { message } = await failure('ExpiredToken');
+		assert.ok(lines(message).includes('Using profile starter in Region us-east-1.'), message);
+		assert.match(message, /Sign in again: aws login --profile starter$/m);
+		assert.doesNotMatch(message, /aws configure set region|If you change the Region/);
+	});
+
+	it('checks the Region of the source profile that signs in', async () => {
+		await writeFile(
+			join(directory, 'config'),
+			'[profile app]\nrole_arn = arn:aws:iam::123456789012:role/Deploy\nsource_profile = base\nregion = us-east-1\n' +
+				'[profile base]\nlogin_session = x\n',
+		);
+		env.AWS_PROFILE = 'app';
+		const { message } = await failure('CredentialsProviderError');
+		assert.ok(lines(message).includes('Using profile app in Region us-east-1.'), message);
+		assert.match(message, /aws configure set region us-east-1 --profile base$/m);
+		assert.match(message, /aws login --profile base$/m);
+	});
+
+	it('points to the credentials file when its Region overrides the one that aws configure sets', async () => {
+		await writeFile(join(directory, 'config'), '[profile starter]\nlogin_session = x\nregion = us-east-1\n');
+		// The AWS CLI and the SDK read the credentials file over the config file; aws configure writes the config file.
+		await writeFile(join(directory, 'credentials'), '[starter]\nregion = eu-north-1\n');
+		env.AWS_PROFILE = 'starter';
+		const { message } = await failure('CredentialsProviderError'); // deploys to us-east-1
+		const all = lines(message);
+		const change = all.findIndex((l) =>
+			l.endsWith(
+				'set the Region of profile starter to us-east-1 in your AWS credentials file, which overrides aws configure.',
+			),
+		);
+		const login = all.findIndex((l) => l.endsWith('aws login --profile starter'));
+		assert.ok(change >= 0 && change < login, message);
+		assert.doesNotMatch(message, /aws configure set region/);
+	});
+
+	it('prints a placeholder for a Region that a shell could misread', async () => {
+		await writeFile(join(directory, 'cdk.json'), JSON.stringify({ region: 'us-east-1; touch x' }));
+		const { message } = await failure('CredentialsProviderError');
+		assert.ok(lines(message).includes('Using profile default in Region "us-east-1; touch x".'), message);
+		assert.match(message, /aws configure set region <region> --profile default$/m);
+		assert.doesNotMatch(message, /set region us-east-1; touch x/);
+	});
+
+	it('names only the Region for credentials in the environment', async () => {
+		env.AWS_ACCESS_KEY_ID = 'AKIAEXAMPLE';
+		env.AWS_SECRET_ACCESS_KEY = 'secret';
+		const { message } = await failure('InvalidClientTokenId');
+		assert.ok(lines(message).includes('Using Region us-east-1.'), message);
+		assert.doesNotMatch(message, /aws configure set region|AKIAEXAMPLE/);
+	});
+
+	it('pins aws login to the cdk.json Region when AWS_REGION names another one', async () => {
+		// cdk.json wins for the deployment, but the AWS CLI prefers AWS_REGION to the profile Region.
+		await writeFile(join(directory, 'cdk.json'), JSON.stringify({ region: 'eu-north-1' }));
+		await writeFile(join(directory, 'config'), '[profile starter]\nlogin_session = x\nregion = eu-north-1\n');
+		env.AWS_PROFILE = 'starter';
+		const { message } = await failure('CredentialsProviderError'); // AWS_REGION = us-east-1
+		assert.ok(lines(message).includes('Using profile starter in Region eu-north-1.'), message);
+		assert.match(message, /Sign in again: aws login --profile starter --region eu-north-1$/m);
+		assert.doesNotMatch(message, /aws login --profile starter$/m);
+	});
+
+	it('pins aws login to the deployment Region when AWS_DEFAULT_REGION names another one', async () => {
+		await writeFile(join(directory, 'cdk.json'), JSON.stringify({ region: 'eu-north-1' }));
+		const error = await assertAwsCredentials({
+			command: 'deploy',
+			env: { ...env, AWS_DEFAULT_REGION: 'us-west-2' },
+			projectRoot: directory,
+			probe: async () => {
+				throw namedError('CredentialsProviderError');
+			},
+			readAwsCliVersion: async () => CLI_WITH_LOGIN,
+		}).then(
+			() => assert.fail('expected a credential error'),
+			(rejection: unknown) => rejection,
+		);
+		assert.ok(error instanceof Error);
+		const all = lines(error.message);
+		const configure = all.findIndex((l) => l.endsWith('aws configure set region eu-north-1 --profile default'));
+		const login = all.findIndex((l) => l.endsWith('aws login --profile default --region eu-north-1'));
+		assert.ok(configure >= 0 && configure < login, error.message);
 	});
 
 	for (const [name, config] of [
@@ -477,7 +595,7 @@ describe('assertAwsCredentials', () => {
 			// For example a denied AssumeRole: it does not prove that the deployment credentials resolved.
 			name: 'an AccessDenied',
 			error: namedError('AccessDenied', 'User: arn:aws:iam::123456789012:user/alice is not authorized'),
-			expected: /Could not verify AWS credentials for `npm run sandbox` \(AccessDenied\)/,
+			expected: /AWS denied access while checking credentials for `npm run sandbox` \(AccessDenied\)/,
 		},
 		{
 			name: 'a credential provider that could not reach AWS, for example the SSO portal',
@@ -520,6 +638,52 @@ describe('assertAwsCredentials', () => {
 			}
 		});
 	}
+
+	/** Run the check with a probe that throws `error`, and return the single warning. */
+	async function warning(error: unknown): Promise<string> {
+		const warn = mock.method(console, 'warn', () => {});
+		try {
+			await assert.doesNotReject(() =>
+				check(async () => {
+					throw error;
+				}, 'sandbox'),
+			);
+			assert.strictEqual(warn.mock.callCount(), 1);
+			return String(warn.mock.calls[0].arguments[0]);
+		} finally {
+			warn.mock.restore();
+		}
+	}
+
+	it('explains an explicit organization policy denial without its details, and continues', async () => {
+		const message = await warning(
+			namedError(
+				'AccessDenied',
+				'User: arn:aws:sts::123456789012:assumed-role/Base/s is not authorized to perform: sts:AssumeRole on resource: ' +
+					'arn:aws:iam::123456789012:role/Deploy with an explicit deny in a service control policy: ' +
+					'arn:aws:organizations::777788889999:policy/o-exampleorgid/service_control_policy/p-examplepolicyid123',
+			),
+		);
+		assert.match(message, /AWS denied access while checking credentials for `npm run sandbox` \(AccessDenied\)/);
+		assert.match(message, /AWS Organizations policy/);
+		assert.doesNotMatch(message, /arn:|123456789012|777788889999|o-exampleorgid|p-examplepolicyid123/);
+		assert.doesNotMatch(message, /limit|budget|spend|credentials were found/i);
+	});
+
+	it("points an ordinary denial at the deploying identity's permissions", async () => {
+		const message = await warning(
+			namedError(
+				'AccessDeniedException',
+				'User: arn:aws:iam::123456789012:user/alice is not authorized to perform: x',
+			),
+		);
+		assert.match(
+			message,
+			/AWS denied access while checking credentials for `npm run sandbox` \(AccessDeniedException\)/,
+		);
+		assert.match(message, /permissions/);
+		assert.doesNotMatch(message, /Organizations|123456789012|credentials were found/);
+	});
 
 	it('skips the probe (with a warning) when no region is resolvable', async () => {
 		const warn = mock.method(console, 'warn', () => {});

@@ -257,10 +257,10 @@ jobs:
 
       # The Harbor agent check and agent bench only run from main or with model credentials, so
       # their cache-scope hardening (the Harbor build container and output guard, agent bench's
-      # lockfile-pinned Playwright matching PW_VERSION) and the Harbor approval gate are checked
-      # here on every PR.
-      - name: Test the benchmark workflows' cache-scope hardening and approval gate
-        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/agent-bench-playwright.test.mjs
+      # lockfile-pinned Playwright matching PW_VERSION), the Harbor approval gate and the bounds on
+      # the Harbor model credentials are checked here on every PR.
+      - name: Test the benchmark workflows' cache-scope hardening, approval gate and credentials
+        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/harbor-credentials.test.mjs scripts/ci/agent-bench-playwright.test.mjs
 
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
@@ -279,6 +279,11 @@ jobs:
       # stack whose teardown fails.
       - name: Test that cleanup-stacks.yml covers the E2E stacks
         run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
+
+      # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
+      # unblock Amplify sandboxes stuck in DELETE_FAILED.
+      - name: Test the stuck Amplify sandbox delete
+        run: node --test scripts/ci/amplify-stuck-delete.test.mjs
 
       # Decides which E2E jobs run, and which a PR can't skip by leaving them
       # out of its E2E trailer.
@@ -308,6 +313,11 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      # The wait the hosting E2E suites run between deploy and their first test
+      # (scripts/ci/hosting-ready.ts).
+      - name: Test the hosting readiness wait
+        run: npx tsx --test scripts/ci/hosting-ready.test.ts
+
       - name: Test the E2E cleanup wrapper
         run: node --test scripts/ci/e2e-cleanup.test.mjs
 
@@ -316,6 +326,16 @@ jobs:
       # as "nothing to sweep".
       - name: Test the stack cleanup's listing failures
         run: node --test scripts/ci/rest-api-quota.test.mjs scripts/ci/cleanup-listings.test.mjs
+
+      # The Windows E2E driver's teardown failure reporting and the stack tag
+      # cleanup-stacks.yml needs to reclaim a stack it leaks.
+      - name: Test the CI template driver helpers
+        run: node --test scripts/ci/_proc.test.mjs scripts/ci/_scaffold-tag.test.mjs
+
+      # .puppeteerrc.cjs skips Puppeteer's browser download on GitHub Actions,
+      # but only for installs under the repo's own node_modules.
+      - name: Test the Puppeteer download gate
+        run: node --test scripts/ci/puppeteerrc.test.mjs
 
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
@@ -756,10 +776,11 @@ jobs:
   e2e-compute-smoke:
     # The compute suite: one app (test-apps/compute-smoke) with a scenario module
     # per compute kind and workload — container AsyncJobs, an API namespace on
-    # its own serverless compute — deployed once per leg. The legs vary the API
-    # front door (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or
-    # its compute type. The `apigateway` front door is covered without a VPC by
-    # E2E Sandbox/Production (comprehensive) and behind Hosting by E2E Hosting.
+    # its own serverless compute, an API namespace on a container compute —
+    # deployed once per leg. The legs vary the API front door
+    # (COMPUTE_API_FRONT_DOOR), as E2E Hosting's legs vary the app or its compute
+    # type: a container namespace is reached through the gateway's VPC link on
+    # `apigateway`, and straight from CloudFront (a VPC origin) on `cloudfront`.
     name: E2E Compute Smoke (${{ matrix.front-door }})
     permissions:
       contents: read
@@ -790,13 +811,21 @@ jobs:
       # this account) cancels the pending one.
       max-parallel: 1
       matrix:
-        front-door: [cloudfront]
+        front-door: [apigateway, cloudfront]
+        # The cloudfront leg also turns on `defaults.strictNamespacePlacement`, so
+        # the bare endpoint's refusal of placed namespaces is proven on AWS while
+        # the apigateway leg keeps proving the default (off) behaviour, with no
+        # extra deploy.
+        include:
+          - front-door: cloudfront
+            strict-namespace-placement: 'true'
     env:
       # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
       # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
       # the app's FileBucket name past S3's 63 at four-digit PR numbers.
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
+      COMPUTE_STRICT_NAMESPACE_PLACEMENT: ${{ matrix.strict-namespace-placement || 'false' }}
     # No BLOCKS_SANDBOX_KEEP: ending the job once the delete has started would
     # release the concurrency group above while this stack's endpoints are
     # still in the shared VPC. The suite destroys its stacks and waits. (The

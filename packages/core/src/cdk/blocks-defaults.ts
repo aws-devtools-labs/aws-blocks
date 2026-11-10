@@ -268,6 +268,58 @@ export interface BlocksDefaults {
 	 * ```
 	 */
 	permissionsBoundary?: string | IManagedPolicy;
+
+	/**
+	 * Serve each API namespace only on the compute it is placed on.
+	 *
+	 * An `ApiNamespace` given its own `compute` (directly or through its scope) is
+	 * routed to that compute at `/aws-blocks/api/{namespace}`. The bare
+	 * `/aws-blocks/api` endpoint is served by the default compute and dispatches on
+	 * the JSON-RPC body, so without this option a raw `POST /aws-blocks/api` with
+	 * `{ "method": "reports.build" }` runs `reports` on the **default** compute —
+	 * outside the VPC, container or sizing its placement was meant to give it.
+	 *
+	 * With `strictNamespacePlacement: true`, every compute's dispatcher serves only
+	 * the namespaces placed on it, on any RPC path. A call to a namespace placed
+	 * elsewhere gets the same "method not found" error as an unknown namespace.
+	 * Namespaces without a placement keep running on the default compute, on the
+	 * bare endpoint and on their own path.
+	 *
+	 * It applies only to deployed computes: the local dev server (`npm run dev`)
+	 * serves every namespace on every RPC path, so a raw bare-endpoint call that
+	 * works there returns "method not found" once deployed.
+	 *
+	 * This keeps a namespace's code on the compute (and network) it was placed on.
+	 * It doesn't split IAM: every compute still runs under the app's one execution
+	 * role.
+	 *
+	 * The typed TypeScript client and the Kotlin, Swift and Dart clients always
+	 * call `/aws-blocks/api/{namespace}`, so they keep working. A raw HTTP caller,
+	 * or a native client generated before clients called per-namespace paths, that
+	 * posts a placed namespace to the bare endpoint is refused: point it at the
+	 * namespace's own path before enabling this.
+	 *
+	 * `false` in both {@link BlocksPresets}. While it is off and some
+	 * namespace runs on its own compute, synth emits the warning
+	 * `blocks:apigateway:bare-endpoint-serves-placed-namespaces`. If raw callers
+	 * still need the bare endpoint, acknowledge it by calling
+	 * `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
+	 * on the stack or backend returned by `create()`.
+	 *
+	 * @example Serve `reports` only on its own compute, keeping the preset the stack already picks
+	 * ```ts
+	 * const sandboxMode = app.node.tryGetContext('sandboxMode') === 'true';
+	 * export const blocksStack = await BlocksStack.create(app, 'my-app', {
+	 *   backendHandlerPath: join(__dirname, 'index.handler.ts'),
+	 *   backendCDKPath: join(__dirname, 'index.ts'),
+	 *   defaults: {
+	 *     ...(sandboxMode ? BlocksPresets.sandbox : BlocksPresets.production),
+	 *     strictNamespacePlacement: true,
+	 *   },
+	 * });
+	 * ```
+	 */
+	strictNamespacePlacement?: boolean;
 }
 
 /**
@@ -289,6 +341,7 @@ export const BlocksPresets = {
 		throttling: { rateLimit: 200, burstLimit: 400 },
 		accessLogging: false,
 		secretsStore: 'ssm',
+		strictNamespacePlacement: false,
 	},
 	/**
 	 * Durable, protected posture for permanent deployments. A higher throttle
@@ -309,5 +362,8 @@ export const BlocksPresets = {
 		// region — see the `accessLogging` field doc.
 		accessLogging: false,
 		secretsStore: 'secrets-manager',
+		// Off so existing raw callers of the bare endpoint keep working — see the
+		// `strictNamespacePlacement` field doc.
+		strictNamespacePlacement: false,
 	},
 } satisfies Record<string, BlocksDefaults>;

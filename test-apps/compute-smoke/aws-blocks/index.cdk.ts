@@ -3,7 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import { BlocksStack, BlocksPresets } from '@aws-blocks/blocks/cdk';
+import { BlocksStack, BlocksPresets, Hosting } from '@aws-blocks/blocks/cdk';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -29,8 +29,8 @@ const suffix = process.env.BLOCKS_STACK_SUFFIX;
 
 // The suite's variant axis: each CI leg deploys this same app with
 // COMPUTE_API_FRONT_DOOR set (as E2E Hosting does with HOSTING_COMPUTE_TYPE); the
-// legs that run are the `e2e-compute-smoke` matrix in pr-checks.yml (today:
-// cloudfront only). Each test module declares the legs it applies to.
+// legs that run are the `e2e-compute-smoke` matrix in pr-checks.yml (apigateway
+// and cloudfront). Each test module declares the legs it applies to.
 const FRONT_DOORS = ['apigateway', 'cloudfront'] as const;
 const apiFrontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as (typeof FRONT_DOORS)[number];
 if (!FRONT_DOORS.includes(apiFrontDoor)) {
@@ -44,6 +44,17 @@ if (!FRONT_DOORS.includes(apiFrontDoor)) {
 // prefixes. Keep the name short: resource names derive from it, and in sandbox
 // mode the FileBucket's must fit S3's 63 characters with a CI suffix like
 // `pr-1234-12` (56).
+// A second axis, set per leg in the same matrix: COMPUTE_STRICT_NAMESPACE_PLACEMENT
+// ('true' or 'false', default 'false') turns on `defaults.strictNamespacePlacement`,
+// so the bare /aws-blocks/api endpoint refuses the namespaces placed on their own
+// compute (test/api-namespace-compute.test.ts and container-api-namespace.test.ts
+// assert either behaviour). It doesn't change the stack name: one leg sets it.
+const strictPlacementFlag = process.env.COMPUTE_STRICT_NAMESPACE_PLACEMENT ?? 'false';
+if (strictPlacementFlag !== 'true' && strictPlacementFlag !== 'false') {
+  throw new Error(`COMPUTE_STRICT_NAMESPACE_PLACEMENT must be 'true' or 'false'; got '${strictPlacementFlag}'.`);
+}
+const strictNamespacePlacement = strictPlacementFlag === 'true';
+
 const leg = { apigateway: 'gw', cloudfront: 'cf' }[apiFrontDoor];
 const stackName = sandboxMode
   ? `bb-test-compute-${id}-${leg}${suffix ? `-${suffix}` : ''}`
@@ -79,6 +90,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   apiFrontDoor,
   defaults: {
     ...BlocksPresets.sandbox,
+    strictNamespacePlacement,
     vpc: {
       // Vpc.fromLookup needs a Stack scope to cache the context lookup, and it
       // must resolve BEFORE this BlocksStack is built (BlocksStack.create wires
@@ -99,8 +111,27 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   },
 });
 
+// On the `cloudfront` leg, a Hosting distribution (the default CloudFront door)
+// fronts the API too, so the suite reaches the container namespace through both
+// CloudFront paths that route it straight to the load balancer: the backend's
+// managed distribution (`ApiUrl`) and Hosting's (its `HostingUrl` output, see
+// test/hosting-container-api.test.ts). Hosting gets the gateway URL and the
+// direct routes rather than the backend itself: given the backend, it would
+// claim the front-door role, the managed distribution would stand down, and
+// `ApiUrl` would move onto Hosting, leaving the managed path untested. The
+// `apigateway` leg deploys no Hosting.
+if (apiFrontDoor === 'cloudfront') {
+  new Hosting(blocksStack, 'Hosting', {
+    root: join(__dirname, '..', 'site'),
+    framework: 'static',
+    buildOutputDir: 'public',
+    api: { apiUrl: blocksStack.apiUrl, _apiDirectRoutes: blocksStack._apiDirectRoutes },
+  });
+}
+
 // Tag the whole app, so the vpc-ref stack carries the purpose tag too:
 // cleanup-stacks.yml skips any stack without an e2e blocks:purpose tag.
 cdk.Tags.of(app).add('blocks:purpose', 'compute-smoke-e2e');
 cdk.Tags.of(blocksStack).add('blocks:api-front-door', apiFrontDoor);
+cdk.Tags.of(blocksStack).add('blocks:strict-namespace-placement', String(strictNamespacePlacement));
 cdk.Tags.of(blocksStack).add('blocks:deploy-mode', sandboxMode ? 'sandbox' : 'production');

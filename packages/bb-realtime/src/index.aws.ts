@@ -29,6 +29,7 @@ import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal'
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
@@ -39,10 +40,11 @@ import type {
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
 import { localListener, serverSubscribe, type ServerSubscription } from './server-subscribe.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validatePublishSize, isClientChannelPath } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, isClientChannelPath } from './utils.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
@@ -315,6 +317,8 @@ async function handleWebSocketEvent(event: any): Promise<any> {
  * **Best practices:**
  * - Use descriptive namespace names (`cursors`, `chat`, `notifications`)
  * - Use channels for dynamic scoping (`room-123`, `user-456`)
+ * - A channel handle also opens the channel's `/`-separated sub-channels by default;
+ *   pass `{ scope: 'exact' }` to `getChannel()` when a sub-channel can belong to someone else
  * - Keep message payloads small — large payloads increase latency and cost
  * - Return channel handles from API methods for seamless client hydration
  *
@@ -380,6 +384,7 @@ export const Realtime: {
 
 	async publish(namespace: string, channel: string, data: unknown): Promise<void> {
 		const ns = this._ns(namespace);
+		validateChannelName(channel);
 		await validateSchema(ns.schema, data);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
@@ -409,6 +414,7 @@ export const Realtime: {
 
 	subscribe(namespace: string, channel: string, handler: (message: unknown) => void): () => void {
 		const ns = this._ns(namespace);
+		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
 		// Real WebSocket for cross-invocation publish (established once secret resolves)
@@ -422,7 +428,8 @@ export const Realtime: {
 			const fullId = this.fullId;
 			getTokenSecretOrNull().then(secret => {
 				if (!secret) return; // secret store unavailable (e.g., codegen)
-				const channelToken = mintChannelToken(fullChannel, secret);
+				// Never leaves the server and only subscribes to fullChannel, so scope it exactly.
+				const channelToken = mintChannelToken(fullChannel, secret, undefined, 'exact');
 				const connectToken = mintConnectToken(fullId, secret);
 				wsSub = serverSubscribe(wsUrl, connectToken, fullChannel, channelToken, handler);
 			}).catch(() => {});
@@ -433,15 +440,17 @@ export const Realtime: {
 		};
 	}
 
-	async getChannel(namespace: string, channel: string): Promise<RealtimeChannel<unknown>> {
+	async getChannel(namespace: string, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<unknown>> {
 		const ns = this._ns(namespace);
+		const tokenScope = resolveChannelTokenScope(options);
+		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
 		const secret = await getTokenSecretOrNull();
 		if (!secret) {
 			throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret unavailable — cannot issue channel credentials');
 		}
-		const channelToken = mintChannelToken(fullChannel, secret);
+		const channelToken = mintChannelToken(fullChannel, secret, undefined, tokenScope);
 		const connectToken = mintConnectToken(this.fullId, secret);
 		const wsUrl = getSdkIdentifiers(this).wsUrl;
 		const localEmitter = this._localEmitter;

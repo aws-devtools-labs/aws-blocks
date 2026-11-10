@@ -159,6 +159,10 @@ is absent) never throws.
   labels automatically on each put, so the prior value becomes `'previous'`. On
   success it clears the instance read cache (a write invalidates `current`,
   `previous`, and any specific-version entries), so a later `get()` re-fetches.
+  It also increments a per-instance cache generation that `get()` snapshots
+  before fetching: a `get()` whose fetch was in flight across the write returns
+  its result but skips caching it, so it can't put the pre-write value back
+  into the cache or overwrite the entry a post-write `get()` stored.
 - `listVersions()` → `ListSecretVersionIdsCommand` (paginated, `IncludeDeprecated:
   false`), mapped to `SecretVersionInfo[]` (versionId + staging labels + created
   date — never values) and sorted newest-first.
@@ -197,6 +201,10 @@ When `options.schema` (any `StandardSchemaV1`) is provided:
 - `get()` returns the typed value (the mock reads the structured value; the AWS
   layer `JSON.parse`s the stored string), validating it. A validation failure —
   or malformed JSON on the AWS side — throws `SecretErrors.ValidationFailed`.
+  The error message is fixed and never carries the value, the library's issue
+  text (which can quote the received value), or the issue path (which a record
+  or map schema takes from the value's own keys); the issues and the first
+  failing path are kept on the non-enumerable `cause`.
 
 Without a schema the value is an opaque `string` stored/returned verbatim. The
 schema library is never a runtime dependency of this package — it is the
