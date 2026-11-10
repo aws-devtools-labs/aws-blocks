@@ -433,6 +433,195 @@ describe('inferenceOnly error handling', () => {
 	});
 });
 
+// ── inferenceOnly sessionScope: 'user' ──────────────────────────────────────
+
+describe("inferenceOnly sessionScope: 'user'", () => {
+	/** Snapshot storage that records every snapshot a turn loads, by sessionId. */
+	class RecordingSnapshotStorage extends FileBucketSnapshotStorage {
+		loads: Array<{ sessionId: string; snapshot: unknown }> = [];
+		override async loadSnapshot(params: Parameters<FileBucketSnapshotStorage['loadSnapshot']>[0]) {
+			const snapshot = await super.loadSnapshot(params);
+			this.loads.push({ sessionId: params.location.sessionId, snapshot });
+			return snapshot;
+		}
+	}
+
+	function makeAgent(id: string, sessionScope?: 'shared' | 'user') {
+		let storage: RecordingSnapshotStorage | undefined;
+		const agent = new AgentBase(new Scope(`test-io-scope-${id}`), id, { systemPrompt: 'test', inferenceOnly: true, ...(sessionScope && { sessionScope }) }, [{ provider: 'canned' }], (bucket) => {
+			storage = new RecordingSnapshotStorage(bucket);
+			return storage;
+		});
+		if (!storage) throw new Error('snapshot storage was not created');
+		return { agent, storage };
+	}
+
+	const secret = 'alice-private-note-7f3a';
+
+	test("user B who passes user A's conversationId does not load A's session state", async () => {
+		const { agent, storage } = makeAgent('iosu1', 'user');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+
+		storage.loads = [];
+		await (await agent.stream('what did I tell you?', { conversationId, userId: 'bob' })).complete();
+		assert.ok(storage.loads.length > 0, "bob's turn should load (or try to load) a session");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+
+		// Alice still resumes her own session.
+		storage.loads = [];
+		await (await agent.stream('and again?', { conversationId, userId: 'alice' })).complete();
+		assert.ok(storage.loads.some(({ snapshot }) => JSON.stringify(snapshot ?? null).includes(secret)), "alice's turn should restore her session");
+	});
+
+	test("user B can't receive user A's chunks on the shared conversationId channel", async () => {
+		const { agent } = makeAgent('iosu2', 'user');
+		const conversationId = crypto.randomUUID();
+		const aliceChannel = await agent.getChannel(conversationId, { userId: 'alice' });
+		const bobChannel = await agent.getChannel(conversationId, { userId: 'bob' });
+		const aliceReceived: unknown[] = [];
+		const bobReceived: unknown[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		const bobSub = bobChannel.subscribe((chunk) => { bobReceived.push(chunk); });
+		await (await agent.stream('hello', { conversationId, userId: 'alice' })).complete();
+		aliceSub.unsubscribe();
+		bobSub.unsubscribe();
+		// Alice's subscription proves the turn was delivered, so bob's empty list means "not his".
+		assert.ok(aliceReceived.length > 0, "alice's channel should carry her own chunks");
+		assert.strictEqual(bobReceived.length, 0, "bob's channel must not carry alice's chunks");
+	});
+
+	test("user B with user A's channelId (distinct from the conversationId) gets neither her chunks nor her session", async () => {
+		const { agent, storage } = makeAgent('iosu5', 'user');
+		const conversationId = crypto.randomUUID();
+		const channelId = `chan-${crypto.randomUUID()}`;
+		const aliceChannel = await agent.getChannel(channelId, { userId: 'alice' });
+		const bobChannel = await agent.getChannel(channelId, { userId: 'bob' });
+		const aliceReceived: unknown[] = [];
+		const bobReceived: unknown[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		const bobSub = bobChannel.subscribe((chunk) => { bobReceived.push(chunk); });
+		await (await agent.stream(`remember ${secret}`, { conversationId, channelId, userId: 'alice' })).complete();
+		storage.loads = [];
+		const bobTurn = await agent.stream('what did I tell you?', { conversationId, channelId, userId: 'bob' });
+		assert.strictEqual(bobTurn.channelId, channelId, 'the caller still sees the plain channelId');
+		await bobTurn.complete();
+		aliceSub.unsubscribe();
+		bobSub.unsubscribe();
+		assert.ok(aliceReceived.length > 0, "alice's channel should carry her own chunks");
+		assert.ok(bobReceived.length > 0, "bob's channel should carry his own chunks");
+		assert.ok(!JSON.stringify(bobReceived).includes(secret), "bob's chunks must not carry alice's session state");
+		const aliceDone = aliceReceived.filter((c) => (c as { type?: string }).type === 'done').length;
+		assert.strictEqual(aliceDone, 1, "bob's turn must not publish onto alice's channel");
+		for (const { snapshot } of storage.loads) {
+			assert.ok(!JSON.stringify(snapshot ?? null).includes(secret), "bob's turn must not load alice's session state");
+		}
+	});
+
+	test("user B can't resume user A's interrupted turn or publish onto her channel", async () => {
+		let handlerCalls = 0;
+		const agent = new Agent(new Scope('test-io-scope-iosu6'), 'iosu6', {
+			systemPrompt: 'test',
+			inferenceOnly: true,
+			sessionScope: 'user',
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({
+				getWeather: tool({ description: 'weather', parameters: z.object({ city: z.string() }), needsApproval: true, handler: async () => { handlerCalls++; return { temp: 22 }; } }),
+			}),
+		});
+		const conversationId = crypto.randomUUID();
+		const aliceTurn = await agent.stream('what is the weather?', { conversationId, userId: 'alice' });
+		const err = await aliceTurn.complete().then(() => undefined, (e: unknown) => e);
+		assert.ok(err instanceof InterruptError, "sanity: alice's turn should pause for approval");
+		const responses = err.interrupts.map((i) => ({ interruptId: i.id, approved: true }));
+
+		// Bob resumes with alice's conversationId, channelId and interrupt ids.
+		const aliceChannel = await agent.getChannel(aliceTurn.channelId, { userId: 'alice' });
+		const bobChannel = await agent.getChannel(aliceTurn.channelId, { userId: 'bob' });
+		const aliceReceived: unknown[] = [];
+		const aliceSub = aliceChannel.subscribe((chunk) => { aliceReceived.push(chunk); });
+		const bobSettled = new Promise<void>((resolve) => {
+			const sub = bobChannel.subscribe((chunk) => {
+				const type = (chunk as { type?: string }).type;
+				if (type === 'done' || type === 'error' || type === 'interrupt') { sub.unsubscribe(); resolve(); }
+			});
+		});
+		await agent.resume(aliceTurn.channelId, responses, { conversationId, userId: 'bob' });
+		await bobSettled;
+		aliceSub.unsubscribe();
+		assert.strictEqual(handlerCalls, 0, "bob's resume must not run alice's pending tool call");
+		assert.strictEqual(aliceReceived.length, 0, "bob's resume must not publish onto alice's channel");
+
+		// Alice can still resume her own turn.
+		const aliceDone = new Promise<{ type?: string }>((resolve) => {
+			const sub = aliceChannel.subscribe((chunk) => {
+				const c = chunk as { type?: string };
+				if (c.type === 'done' || c.type === 'error') { sub.unsubscribe(); resolve(c); }
+			});
+		});
+		await agent.resume(aliceTurn.channelId, responses, { conversationId, userId: 'alice' });
+		assert.strictEqual((await aliceDone).type, 'done');
+		assert.strictEqual(handlerCalls, 1);
+	});
+
+	test('stream(), resume() and getChannel() require a userId', async () => {
+		const { agent } = makeAgent('iosu3', 'user');
+		const isInvalidUsage = (err: any) => err.name === AgentErrors.InvalidUsage && /userId/.test(err.message);
+		await assert.rejects(() => agent.stream('hello', { conversationId: crypto.randomUUID() }), isInvalidUsage);
+		await assert.rejects(() => agent.resume('chan', [{ interruptId: 'i-1', approved: true }], { conversationId: crypto.randomUUID() }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for a caller on an older signature
+		await assert.rejects(() => agent.getChannel('chan'), isInvalidUsage);
+	});
+
+	test('stream() and resume() reject a non-string userId, as getChannel() does', async () => {
+		const { agent } = makeAgent('iosu7', 'user');
+		const isInvalidUsage = (err: any) => err.name === AgentErrors.InvalidUsage && /userId/.test(err.message);
+		// An untyped RPC caller: `123` would get the channel of '123' but a different session hash.
+		// @ts-expect-error -- exercising the runtime guard for an untyped caller
+		await assert.rejects(() => agent.stream('hello', { conversationId: crypto.randomUUID(), userId: 123 }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for an untyped caller
+		await assert.rejects(() => agent.resume('chan', [{ interruptId: 'i-1', approved: true }], { conversationId: crypto.randomUUID(), userId: 123 }), isInvalidUsage);
+		// @ts-expect-error -- exercising the runtime guard for an untyped caller
+		await assert.rejects(() => agent.getChannel('chan', { userId: 123 }), isInvalidUsage);
+	});
+
+	test('a runtime invocation without a userId is refused, not run as anonymous', async () => {
+		const { agent, storage } = makeAgent('iosu8', 'user');
+		const conversationId = crypto.randomUUID();
+		const anonymousChannel = await agent.getChannel(conversationId, { userId: 'anonymous' });
+		const received: unknown[] = [];
+		const sub = anonymousChannel.subscribe((chunk) => { received.push(chunk); });
+		const turns: Array<Promise<void>> = [];
+		const tasks = { addAsyncTask: () => 1, completeAsyncTask: () => true };
+		const recording = { invokeTurn: (payload: Parameters<typeof agent.invokeTurn>[0]) => { const t = agent.invokeTurn(payload); turns.push(t); return t; } };
+		handleInvocation(recording, tasks, { prompt: 'hello', channelId: conversationId, conversationId }, {});
+		await Promise.all(turns);
+		sub.unsubscribe();
+		assert.strictEqual(storage.loads.length, 0, 'the refused turn must not load any session');
+		assert.strictEqual(received.length, 0, "the refused turn must not run in the shared 'anonymous' scope");
+	});
+
+	test('the constructor rejects an unknown sessionScope', () => {
+		assert.throws(
+			// @ts-expect-error -- exercising the runtime guard for an untyped config
+			() => makeAgent('iosu9', 'owner'),
+			(err: any) => err.name === AgentErrors.InvalidModelConfig && /sessionScope/.test(err.message),
+		);
+	});
+
+	// The default keeps the documented shared-key behaviour, so existing sessions keep resolving.
+	test("the default ('shared') keys the session by the conversationId alone", async () => {
+		const { agent, storage } = makeAgent('iosu4');
+		const conversationId = crypto.randomUUID();
+		await (await agent.stream(`remember ${secret}`, { conversationId, userId: 'alice' })).complete();
+		storage.loads = [];
+		await (await agent.stream('again', { conversationId, userId: 'bob' })).complete();
+		assert.ok(storage.loads.some(({ sessionId }) => sessionId === conversationId));
+	});
+});
+
 // ── deleteConversation ownership scoping ─────────────────────────────────────
 
 describe('deleteConversation ownership scoping', () => {
@@ -4848,6 +5037,26 @@ describe('AgentCore: a turn without a conversation never runs in another session
 		}
 		for (const { runtimeSessionId } of sent) assert.match(runtimeSessionId ?? '', /^turn-[0-9a-f-]{36}$/);
 		assert.strictEqual(new Set(sent.map(s => s.runtimeSessionId)).size, 3, 'no two conversation-less turns share a session');
+	});
+
+	test("with sessionScope: 'user', two users on one conversationId route to different runtime sessions", async () => {
+		const agent = new AwsAgent(new Scope('test-ac-session-user'), 'acsu', { systemPrompt: 'test', inferenceOnly: true, sessionScope: 'user' });
+		const sent: Array<{ runtimeSessionId?: string; payload?: Uint8Array }> = [];
+		(agent as any)._agentCore = { send: async (command: any) => { sent.push(command.input); return {}; } };
+		const arnKey = `BB_AGENT_${agent.fullId}_RUNTIME_ARN`;
+		process.env[arnKey] = 'arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/test-runtime';
+		const conv = crypto.randomUUID();
+		try {
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'alice' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'bob' });
+			await (agent as any).dispatchTurn({ message: 'hi', conversationId: conv, channelId: conv, userId: 'alice' });
+		} finally {
+			delete process.env[arnKey];
+		}
+		assert.match(sent[0].runtimeSessionId ?? '', /^u-[0-9a-f]{64}$/);
+		assert.notStrictEqual(sent[0].runtimeSessionId, sent[1].runtimeSessionId, 'different users must not share a runtime session');
+		assert.strictEqual(sent[0].runtimeSessionId, sent[2].runtimeSessionId, "a user's turns keep routing to one session");
+		assert.strictEqual(JSON.parse(new TextDecoder().decode(sent[1].payload)).conversationId, conv, 'the payload still carries the plain conversationId');
 	});
 
 	test('the AgentCore entry does not turn the session id into a conversationId', async () => {
