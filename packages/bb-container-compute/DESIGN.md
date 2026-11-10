@@ -21,8 +21,10 @@ self-starts the SQS pollers for the event handlers assigned to it.
   customer's `image` — **verbatim via `fromRegistry`**. The default is pinned by
   its multi-arch index digest (`DEFAULT_CONTAINER_IMAGE` in
   `src/default-image.ts`), so every task start pulls the same image; a unit test
-  fails if it isn't a digest reference. `scripts/container-default-image-digest.mjs`
-  prints the tag's current digest when bumping it (Dependabot doesn't track it).
+  fails if it isn't a digest reference (it checks the reference shape only, not
+  that the digest is the multi-arch index). `scripts/container-default-image-digest.mjs`
+  requests the index media types and prints the tag's current index digest, so
+  bump with it (Dependabot doesn't track it).
   The customer's `image` is never rewritten. Blocks builds **no**
   container image, so `cdk deploy` never needs a local Docker daemon. The app
   code is co-bundled with esbuild (a `main.js` parent + a `worker.js` per-job
