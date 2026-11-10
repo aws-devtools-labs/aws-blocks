@@ -3,7 +3,18 @@
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
 
-import { parseCorsPatterns, escapeOriginToPattern, getCorsPatterns, isOriginAllowed, _resetCorsPatterns, buildCorsHeaders, CORS_MAX_AGE } from './cors.js';
+import {
+  parseCorsPatterns,
+  escapeOriginToPattern,
+  getCorsPatterns,
+  isOriginAllowed,
+  _resetCorsPatterns,
+  buildCorsHeaders,
+  CORS_MAX_AGE,
+  validateAllowedOrigins,
+  validateCorsOriginEntry,
+} from './cors.js';
+import { BlocksPresets } from './cdk/blocks-defaults.js';
 import { createLambdaHandler } from './lambda-handler.js';
 import { clearRouteRegistry } from './raw-route.js';
 import { CLIENT_USER_AGENT_HEADER } from './constants.js';
@@ -45,11 +56,24 @@ describe('parseCorsPatterns', () => {
     assert.strictEqual(patterns.length, 2);
   });
 
-  it('handles invalid regex by escaping and matching literally', () => {
-    const patterns = parseCorsPatterns('https://[invalid');
-    assert.strictEqual(patterns.length, 1);
-    assert.ok(patterns[0].test('https://[invalid'));
-    assert.ok(!patterns[0].test('https://valid'));
+  it('drops an entry that is not a valid regex (it never matches) and logs it once', () => {
+    _resetCorsPatterns();
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (msg: string) => { lines.push(msg); };
+    try {
+      const patterns = parseCorsPatterns('https://[invalid,https://a\\.com');
+      assert.strictEqual(patterns.length, 1, 'only the valid entry is compiled');
+      assert.ok(!patterns.some(re => re.test('https://[invalid')));
+      assert.ok(patterns[0].test('https://a.com'));
+      parseCorsPatterns('https://[invalid');
+      assert.strictEqual(lines.length, 1, 'the same bad entry is reported once');
+      assert.match(lines[0], /https:\/\/\[invalid/);
+      assert.match(lines[0], /defaults\.allowedOrigins/);
+    } finally {
+      console.error = original;
+      _resetCorsPatterns();
+    }
   });
 
   it('wildcard .* allows all origins', () => {
@@ -110,6 +134,226 @@ describe('parseCorsPatterns', () => {
     assert.strictEqual(patterns.length, 1);
     assert.ok(patterns[0].test('https://foo$'));
     assert.ok(!patterns[0].test('https://foo$bar'));
+  });
+});
+
+// ── plain origins (matched exactly) ─────────────────────────────────────────
+
+describe('parseCorsPatterns — plain origins', () => {
+  beforeEach(() => {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('matches a plain origin exactly: its dots are literal', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://app.example.com';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://app.example.com'), true);
+    assert.strictEqual(isOriginAllowed('https://appxexample.com'), false);
+    assert.strictEqual(isOriginAllowed('https://app-example.com'), false);
+    assert.strictEqual(isOriginAllowed('https://app.examplexcom'), false);
+    assert.strictEqual(isOriginAllowed('https://app.example.com.other'), false);
+  });
+
+  it('matches a plain origin case-insensitively', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://app.example.com';
+    _resetCorsPatterns();
+
+    assert.strictEqual(isOriginAllowed('https://APP.Example.com'), true);
+  });
+
+  it('emits no grant headers for a dot-substituted variant of a plain origin', () => {
+    process.env.CORS_ALLOWED_ORIGINS = 'https://app.example.com';
+    _resetCorsPatterns();
+
+    const original = console.warn;
+    console.warn = () => {};
+    try {
+      const headers = buildCorsHeaders('https://appxexample.com');
+      assert.strictEqual(headers['Access-Control-Allow-Origin'], undefined);
+      assert.strictEqual(headers['Access-Control-Allow-Credentials'], undefined);
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  it('accepts a port and drops a trailing slash', () => {
+    const patterns = parseCorsPatterns('http://localhost:3000/');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('http://localhost:3000'));
+    assert.ok(!patterns[0].test('http://localhost:30000'));
+    assert.ok(!patterns[0].test('http://localhost:3000/'));
+  });
+
+  it('matches a bracketed IPv6 origin literally', () => {
+    const patterns = parseCorsPatterns('http://[::1]:3000');
+    assert.strictEqual(patterns.length, 1);
+    assert.ok(patterns[0].test('http://[::1]:3000'));
+    assert.ok(!patterns[0].test('http://1:3000'));
+    assert.ok(!patterns[0].test('http://[::1]:30000'));
+  });
+
+  it('treats an entry with a path as a regex pattern, not a plain origin', () => {
+    // `/x` is not part of an origin, so the entry goes through the regex path,
+    // where its unescaped dot makes it invalid and it is dropped.
+    const original = console.error;
+    console.error = () => {};
+    try {
+      assert.strictEqual(parseCorsPatterns('https://app.example.com/x').length, 0);
+    } finally {
+      console.error = original;
+    }
+  });
+});
+
+// ── unbalanced / unescaped entries fail closed at runtime ───────────────────
+
+describe('getCorsPatterns — invalid regex entries are dropped', () => {
+  beforeEach(() => {
+    delete process.env.CORS_ALLOWED_ORIGINS;
+    delete process.env.CORS_HOSTING_ORIGINS;
+    _resetCorsPatterns();
+  });
+
+  it('drops an unbalanced-group entry instead of letting it close the wrapper group', () => {
+    const originalError = console.error;
+    const lines: string[] = [];
+    console.error = (msg: string) => { lines.push(msg); };
+    try {
+      process.env.CORS_ALLOWED_ORIGINS = 'a)|(?:.*';
+      _resetCorsPatterns();
+      assert.strictEqual(isOriginAllowed('https://anything.test'), false);
+      assert.deepStrictEqual(getCorsPatterns(), [], 'a configured allowlist with no valid entries matches nothing');
+      assert.strictEqual(lines.length, 1);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it('rejects cross-origin requests with 403 when every configured entry is dropped', async () => {
+    const originalError = console.error;
+    const originalWarn = console.warn;
+    console.error = () => {};
+    console.warn = () => {};
+    try {
+      process.env.CORS_ALLOWED_ORIGINS = 'a)|(?:.*';
+      _resetCorsPatterns();
+      clearRouteRegistry();
+      const backend = {
+        api: (_ctx: any) => ({
+          async echo(msg: string) { return { msg }; },
+        }),
+      };
+      const handler = createLambdaHandler(async () => backend);
+      const result = await handler({
+        httpMethod: 'POST',
+        path: '/aws-blocks/api',
+        headers: { 'Content-Type': 'application/json', origin: 'https://x.test' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'api.echo', params: ['hello'], id: 1 }),
+        isBase64Encoded: false,
+      }) as any;
+      assert.strictEqual(result.statusCode, 403);
+      assert.strictEqual(JSON.parse(result.body).error, 'Forbidden: cross-origin request rejected');
+    } finally {
+      console.error = originalError;
+      console.warn = originalWarn;
+    }
+  });
+
+  it('drops a regex with an unescaped dot and keeps the valid entries', () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      process.env.CORS_ALLOWED_ORIGINS = '^https://app.example\\.com$,https://ok\\.example\\.com';
+      _resetCorsPatterns();
+      assert.strictEqual(isOriginAllowed('https://app.example.com'), false);
+      assert.strictEqual(isOriginAllowed('https://appxexample.com'), false);
+      assert.strictEqual(isOriginAllowed('https://ok.example.com'), true);
+    } finally {
+      console.error = originalError;
+    }
+  });
+});
+
+// ── validateCorsOriginEntry / validateAllowedOrigins ────────────────────────
+
+describe('validateCorsOriginEntry', () => {
+  const valid = [
+    'https://app.example.com',
+    'http://localhost:3000',
+    'https://app.example.com/',
+    'https://app\\.example\\.com',
+    '^https://app\\.example\\.com$',
+    '.*',
+    'https://.*\\.example\\.com',
+    'https://.+\\.example\\.com',
+    'https://a.?b\\.com',
+    'https://x.{2}\\.com',
+    'http://[::1]:3000',
+    'https://[2001:db8::1]',
+    'https://app[.]example[.]com',
+    '^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$',
+    '^https://foo\\$',
+    ...BlocksPresets.sandbox.allowedOrigins,
+    ...BlocksPresets.production.allowedOrigins,
+  ];
+  for (const entry of valid) {
+    it(`accepts ${JSON.stringify(entry)}`, () => {
+      assert.strictEqual(validateCorsOriginEntry(entry), undefined);
+    });
+  }
+
+  const invalid: Array<[string, RegExp]> = [
+    ['a)|(?:.*', /not a valid regular expression/],
+    ['https://[invalid', /not a valid regular expression/],
+    ['^https://app.example\\.com$', /unescaped '\.'/],
+    ['https://(a|b).example\\.com', /unescaped '\.'/],
+    // An escaped backslash does not escape the dot after it.
+    ['https://app\\\\.example\\.com', /unescaped '\.'/],
+    // A dot after a closed character class is a wildcard again.
+    ['https://[a]b.c\\.com', /unescaped '\.'/],
+    ['https://a\\.com,https://b\\.com', /comma/],
+    // A `{` that does not open a quantifier is a literal brace, so the dot is bare.
+    ['https://a.{x}', /unescaped '\.'/],
+  ];
+  for (const [entry, problem] of invalid) {
+    it(`rejects ${JSON.stringify(entry)}`, () => {
+      const message = validateCorsOriginEntry(entry);
+      assert.ok(message, 'expected an error message');
+      assert.match(message, problem);
+      assert.ok(message.includes(`"${entry}"`), 'the message names the entry');
+      assert.match(message, /defaults\.allowedOrigins/);
+    });
+  }
+});
+
+describe('validateAllowedOrigins', () => {
+  it('accepts both presets', () => {
+    validateAllowedOrigins(BlocksPresets.sandbox.allowedOrigins);
+    validateAllowedOrigins(BlocksPresets.production.allowedOrigins);
+  });
+
+  it('skips empty and whitespace-only entries', () => {
+    validateAllowedOrigins(['', '   ', 'https://app.example.com']);
+  });
+
+  it('throws one Error listing every invalid entry', () => {
+    assert.throws(
+      () => validateAllowedOrigins(['https://ok.example.com', 'a)|(?:.*', '^https://app.example\\.com$']),
+      (e: unknown) => {
+        assert.ok(e instanceof Error);
+        assert.ok(e.message.includes('"a)|(?:.*"'));
+        assert.ok(e.message.includes('"^https://app.example\\.com$"'));
+        assert.ok(!e.message.includes('"https://ok.example.com"'));
+        return true;
+      },
+    );
+  });
+
+  it('rejects a non-string entry from an untyped caller', () => {
+    assert.throws(() => validateAllowedOrigins([42]), /must be a string/);
   });
 });
 

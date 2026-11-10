@@ -638,3 +638,49 @@ describe('create() without defaults (apps from older templates)', () => {
 		await assert.rejects(() => BlocksBackend.create(stack, 'NoDefaultsBackend', propsWithoutDefaults()), assertMissingDefaultsError);
 	});
 });
+
+// `defaults.allowedOrigins` is checked at synth by the same validator the
+// runtime uses, so an entry the runtime would ignore fails `cdk synth` instead.
+describe('create() validates defaults.allowedOrigins', () => {
+	const propsWithOrigins = (allowedOrigins: string[]) => ({
+		backendHandlerPath: handlerPath,
+		backendCDKPath: factoryBackendPath,
+		defaultComputeFactory: stubComputeFactory,
+		defaults: { ...BlocksPresets.production, allowedOrigins },
+	});
+
+	test('BlocksStack.create() rejects a regex entry with an unescaped dot', async () => {
+		const props = propsWithOrigins(['^https://app.example\\.com$']);
+		await assert.rejects(
+			() => BlocksStack.create(new cdk.App(), 'BadOriginsStack', props),
+			/defaults\.allowedOrigins entry "\^https:\/\/app\.example\\\.com\$": has an unescaped '\.'/,
+		);
+	});
+
+	test('BlocksBackend.create() rejects a regex entry that does not compile on its own', async () => {
+		const stack = new cdk.Stack(new cdk.App(), 'Host');
+		await assert.rejects(
+			() => BlocksBackend.create(stack, 'BadOriginsBackend', propsWithOrigins(['a)|(?:.*'])),
+			/not a valid regular expression/,
+		);
+	});
+
+	test('BlocksStack.create() accepts a plain origin', async () => {
+		await BlocksStack.create(new cdk.App(), 'PlainOriginStack', propsWithOrigins(['https://app.example.com']));
+	});
+
+	test('BlocksStack.create() skips unresolved tokens', async () => {
+		const app = new cdk.App();
+		const token = cdk.Lazy.string({ produce: () => 'https://d123.cloudfront.net' });
+		await BlocksStack.create(app, 'TokenOriginStack', propsWithOrigins([token]));
+	});
+
+	test('BlocksStack.create() skips an entry with an embedded unresolved token', async () => {
+		// The encoded token sits next to literal, unescaped dots, so without the
+		// unresolved-token filter the validator would reject this entry.
+		const host = cdk.Lazy.string({ produce: () => 'x' });
+		const entry = `https://${host}.example.com`;
+		assert.ok(cdk.Token.isUnresolved(entry));
+		await BlocksStack.create(new cdk.App(), 'EmbeddedTokenOriginStack', propsWithOrigins([entry]));
+	});
+});

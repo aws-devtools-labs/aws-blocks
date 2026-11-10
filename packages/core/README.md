@@ -591,7 +591,16 @@ In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-cal
 
 ## CORS Configuration
 
-By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
+By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
+
+### `allowedOrigins` entries
+
+Each entry in `defaults.allowedOrigins` is one of:
+
+- **A plain origin** — `scheme://host[:port]`, such as `'https://app.example.com'` or `'http://localhost:3000'`. It is matched exactly and case-insensitively; its dots are literal, so `https://appxexample.com` does not match. A trailing `/` is ignored.
+- **A regex pattern** — any entry with regex syntax (`^`, `$`, `\`, `(`, `|`, `*`, ...). It is anchored as `^(?:<entry>)$` and matched case-sensitively. Escape every dot (`'https://app\\.example\\.com'`) unless it is followed by a quantifier, as in `'https://.*\\.example\\.com'` or `'.*'`, and make sure the entry compiles on its own.
+
+`BlocksStack.create()` and `BlocksBackend.create()` reject an invalid regex entry (one that does not compile on its own, or has an unescaped `.`), so `cdk synth` fails with a message naming the entry. If one still reaches the runtime, it is ignored and logged.
 
 ### When using Hosting (recommended)
 
@@ -613,7 +622,7 @@ The dev server automatically allows `localhost` / `127.0.0.1` origins. No config
 ```typescript
 defaults: {
   ...BlocksPresets.sandbox,
-  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview\\.myapp\\.com'],
+  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview.myapp.com'],
 },
 ```
 
@@ -628,7 +637,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   backendCDKPath: join(__dirname, 'index.ts'),
   defaults: {
     ...BlocksPresets.production,
-    allowedOrigins: ['https://myapp\\.com', 'https://staging\\.myapp\\.com'],
+    allowedOrigins: ['https://myapp.com', 'https://staging.myapp.com'],
   },
 });
 ```

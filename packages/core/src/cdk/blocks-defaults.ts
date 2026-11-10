@@ -43,10 +43,21 @@ export interface BlocksDefaults {
 	deletionProtection: boolean;
 
 	/**
-	 * CORS origins the compute's API accepts, as regular-expression patterns
-	 * matched against the request `Origin` header. Empty means no cross-origin
-	 * requests are allowed. The `sandbox` preset allows localhost so a local dev
-	 * frontend can reach a deployed API; `production` allows none by default.
+	 * CORS origins the compute's API accepts, matched against the request
+	 * `Origin` header. Empty means no cross-origin requests are allowed. The
+	 * `sandbox` preset allows localhost so a local dev frontend can reach a
+	 * deployed API; `production` allows none by default.
+	 *
+	 * Each entry is either:
+	 * - a **plain origin** (`scheme://host[:port]`, e.g. `'https://app.example.com'`),
+	 *   matched exactly and case-insensitively — its dots are literal; or
+	 * - a **regex pattern** (any entry with regex syntax such as `^`, `$`, `\`,
+	 *   `(`, `|` or `*`), anchored as `^(?:<entry>)$` and matched case-sensitively.
+	 *   Dots must be escaped (`'https://app\\.example\\.com'`) unless followed
+	 *   by a quantifier (`.*`, `.+`), and the entry must compile on its own.
+	 *
+	 * Invalid regex entries fail `cdk synth` (`BlocksStack.create()` /
+	 * `BlocksBackend.create()`), and are ignored at runtime.
 	 */
 	allowedOrigins: string[];
 
