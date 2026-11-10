@@ -422,6 +422,71 @@ describe('migration runner', () => {
 		assert.doesNotMatch(resuming ?? '', /at step/);
 	});
 
+	test('an aurora file runs under the invocation budget as transaction_timeout; a dsql batch does not', async () => {
+		const auroraFiles = { '001_t.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nINSERT INTO t DEFAULT VALUES;' };
+		const budget = () => 570_000.7;
+		const aurora = new ScriptedEngine();
+		await runMigrationPlan(aurora, buildMigrationPlan(auroraFiles, 'aurora'), {
+			schemaName: 'public',
+			transactionBudgetMs: budget,
+		});
+		const begin = aurora.statements.indexOf('BEGIN');
+		assert.strictEqual(aurora.statements[begin + 1], 'SET LOCAL transaction_timeout = 570000');
+		assert.ok(aurora.statements.indexOf('CREATE TABLE t (id SERIAL PRIMARY KEY)') > begin + 1);
+
+		const dsql = new ScriptedEngine();
+		await runMigrationPlan(dsql, buildMigrationPlan(files, 'dsql'), {
+			schemaName: 'public',
+			transactionBudgetMs: budget,
+			log: () => {},
+		});
+		assert.ok(!dsql.statements.some((s) => /transaction_timeout/.test(s)));
+	});
+
+	test('a cancelled aurora transaction names the file and the statement and says to split the file', async () => {
+		const auroraFiles = {
+			'001_t.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nINSERT INTO t SELECT generate_series(1, 10);',
+		};
+		const engine = new ScriptedEngine();
+		engine.failOn.set(
+			/generate_series/,
+			Object.assign(new Error('canceling transaction due to transaction timeout'), { code: '25P04' }),
+		);
+		await assert.rejects(
+			runMigrationPlan(engine, buildMigrationPlan(auroraFiles, 'aurora'), {
+				schemaName: 'public',
+				transactionBudgetMs: () => 1,
+			}),
+			{
+				name: MIGRATION_FAILED_ERROR_NAME,
+				message:
+					/001_t\.sql failed at statement 2 of 2: INSERT INTO t SELECT generate_series\(1, 10\)\n[\s\S]*longer than the migration function's invocation allows \(10 minutes\)\. Nothing from the file was applied\. Split the file/,
+			},
+		);
+		assert.strictEqual(
+			engine.statements[engine.statements.indexOf('BEGIN') + 1],
+			'SET LOCAL transaction_timeout = 1000',
+		);
+		assert.ok(engine.statements.includes('ROLLBACK'));
+		assert.strictEqual(engine.progress.size, 0, 'nothing of the file persists');
+		assert.strictEqual(engine.migrations.size, 0);
+	});
+
+	test('any other failure in an aurora file says the file runs again from the start, not that it resumes', async () => {
+		const auroraFiles = { '001_t.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY);\nINSERT INTO t VALUES (1);' };
+		const engine = new ScriptedEngine();
+		engine.failOn.set(/INSERT INTO t VALUES/, new Error('boom'));
+		await assert.rejects(
+			runMigrationPlan(engine, buildMigrationPlan(auroraFiles, 'aurora'), { schemaName: 'public' }),
+			{
+				name: MIGRATION_FAILED_ERROR_NAME,
+				message:
+					/boom\nNothing from the file was applied\. Fix the cause and deploy again; the file runs again from the start\./,
+			},
+		);
+		assert.ok(!engine.statements.some((s) => /transaction_timeout/.test(s)), 'no budget, no timeout');
+	});
+
 	test('a progress row for a file absent from the plan is left alone', async () => {
 		const engine = new ScriptedEngine();
 		engine.progress.set('999_gone.sql', { step: 1, jobId: null, fileHash: 'abc' });

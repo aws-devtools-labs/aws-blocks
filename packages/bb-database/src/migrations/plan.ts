@@ -35,6 +35,8 @@ export interface FilePlan {
 }
 
 export interface MigrationPlan {
+	/** The cluster kind the steps were sequenced for. */
+	kind: ClusterType;
 	files: FilePlan[];
 }
 
@@ -142,5 +144,5 @@ export function buildMigrationPlan(migrations: Record<string, string>, kind: Clu
 			hash: createHash('sha256').update(migrations[file]).digest('hex'),
 			steps: splitStatements(migrations[file]).flatMap(sequence),
 		}));
-	return { files };
+	return { kind, files };
 }

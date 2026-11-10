@@ -210,6 +210,16 @@ export function databaseBlockTests(getApi: () => typeof apiType) {
       assert.strictEqual(result.kept, 0);
     });
 
+    test('aurora cluster - a block-level execute() inside transaction() runs in it: nothing is kept when the callback throws', async () => {
+      const result = await getApi().dbxcBlockWriteInAbortedTransaction(`xc-join-${Date.now().toString(36)}`);
+      assert.deepStrictEqual(result, { aborted: true, kept: 0 });
+    });
+
+    test("aurora cluster - a block-level query() inside transaction() sees the callback's own uncommitted write", async () => {
+      const result = await getApi().dbxcBlockReadInTransaction(`xc-see-${Date.now().toString(36)}`);
+      assert.deepStrictEqual(result, { seenInside: true, committed: true });
+    });
+
     test('aurora cluster - DDL and TRUNCATE are refused: the app role has DML only', async () => {
       const api = getApi();
       for (const result of [await api.dbxcRejectDdl(), await api.dbxcRejectTruncate()]) {

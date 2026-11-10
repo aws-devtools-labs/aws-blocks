@@ -4,7 +4,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DEFAULT_MIGRATIONS_ROOT, DEFAULT_SCHEMA, quoteIdent } from '../constants.js';
+import { DEFAULT_MIGRATIONS_ROOT, DEFAULT_SCHEMA, MIGRATION_LAMBDA_TIMEOUT_MINUTES, quoteIdent } from '../constants.js';
 import {
 	type CatalogState,
 	catalogState,
@@ -14,13 +14,28 @@ import {
 	type ResolvedTarget,
 } from '../dialect/async-ddl.js';
 import { withTransaction } from '../engines/handle.js';
-import { brandedError, configError, MIGRATION_FAILED_ERROR_NAME } from '../errors.js';
+import { brandedError, configError, MIGRATION_FAILED_ERROR_NAME, pgErrorCode } from '../errors.js';
 import type { FilePlan, MigrationPlan, StatementStep, WaitJobStep } from './plan.js';
 
 interface RunPlanOptions {
 	schemaName: string;
 	log?: (message: string) => void;
+	/**
+	 * How long one `aurora` transaction may run, in milliseconds, read when the transaction begins. The migration
+	 * Lambda passes its invocation's remaining time less a margin, and the runner sets PostgreSQL 17's
+	 * `transaction_timeout` from it, so a file that would outlive the invocation is cancelled by the server and
+	 * reported with its file and statement instead of the invocation's own timeout, which names nothing.
+	 */
+	transactionBudgetMs?: () => number;
 }
+
+// PostgreSQL 17 reports a cancelled transaction (`transaction_timeout`) with this SQLSTATE.
+const PG_TRANSACTION_TIMEOUT = '25P04';
+const MIN_TRANSACTION_BUDGET_MS = 1000;
+
+/** An `aurora` file: every step in one transaction, so nothing of it persists until the whole file has run. */
+const isOneTransaction = (file: FilePlan): boolean =>
+	file.steps.length > 0 && file.steps.every((step) => step.transactional);
 
 interface PendingJob {
 	file: string;
@@ -124,10 +139,17 @@ function failed(file: FilePlan, index: number, cause: unknown): Error {
 	const statement = step.kind === 'statement' ? step : step.statement;
 	const { k, n } = statementPosition(file, index);
 	const detail = cause instanceof Error ? cause.message : String(cause);
+	const wayForward = isOneTransaction(file)
+		? pgErrorCode(cause) === PG_TRANSACTION_TIMEOUT
+			? `The file is one transaction and it ran longer than the migration function's invocation allows ` +
+				`(${MIGRATION_LAMBDA_TIMEOUT_MINUTES} minutes). Nothing from the file was applied. ` +
+				'Split the file into smaller files, or move a long backfill out of the migrations.'
+			: 'Nothing from the file was applied. Fix the cause and deploy again; the file runs again from the start.'
+		: 'Fix the cause and deploy again; the runner resumes at this statement.';
 	return brandedError(
 		MIGRATION_FAILED_ERROR_NAME,
 		`Migration ${file.file} failed at statement ${k} of ${n}: ${statement.sql.replace(/\s+/g, ' ').trim()}\n` +
-			`${detail}\nFix the cause and deploy again; the runner resumes at this statement.`,
+			`${detail}\n${wayForward}`,
 		cause,
 	);
 }
@@ -272,7 +294,16 @@ export async function runMigrationPlan(
 			const step = file.steps[i];
 			try {
 				if (step.transactional) {
-					if (!handle) handle = await engine.beginTransaction();
+					if (!handle) {
+						handle = await engine.beginTransaction();
+						if (plan.kind === 'aurora' && options.transactionBudgetMs) {
+							const budget = Math.max(
+								MIN_TRANSACTION_BUDGET_MS,
+								Math.floor(options.transactionBudgetMs()),
+							);
+							await engine.executeInTransaction(handle, `SET LOCAL transaction_timeout = ${budget}`);
+						}
+					}
 					await engine.executeInTransaction(handle, step.sql);
 					// Progress is written once per batch, with the COMMIT that makes it visible.
 					const next = file.steps[i + 1];

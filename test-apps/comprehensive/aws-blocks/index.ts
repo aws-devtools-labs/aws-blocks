@@ -1871,6 +1871,34 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { error, kept: kept?.n ?? 0 };
   },
 
+  // A block-level execute() inside the callback runs in the transaction on the aurora cluster too: when the
+  // callback throws, nothing is kept (the statement would otherwise auto-commit on another pool connection).
+  async dbxcBlockWriteInAbortedTransaction(prefix: string) {
+    let aborted = false;
+    try {
+      await dbxc.transaction(async () => {
+        await dbxc.execute(sql`INSERT INTO tasks (title) VALUES (${`${prefix}-aborted`})`);
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A block-level query() inside the callback sees the callback's own uncommitted write.
+  async dbxcBlockReadInTransaction(title: string) {
+    const seenInside = await dbxc.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO tasks (title) VALUES (${title})`);
+      const row = await dbxc.queryOne<{ id: number }>(sql`SELECT id FROM tasks WHERE title = ${title}`);
+      return row !== null;
+    });
+    const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE title = ${title}`);
+    return { seenInside, committed: rowCount === 1 };
+  },
+
   // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
   // missing privilege (42501, QueryFailed) when deployed.
   async dbxcRejectDdl() {

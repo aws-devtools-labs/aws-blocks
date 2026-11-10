@@ -3,7 +3,7 @@
 
 import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
+import type { CloudFormationCustomResourceEvent, Context } from 'aws-lambda';
 import {
 	AURORA_MASTER_USER,
 	CLUSTER_ENV,
@@ -169,10 +169,21 @@ function buildEngine(cluster: ClusterEnv, schemaName: string): DatabaseEngine {
 	});
 }
 
-async function migrateBlock(props: MigrationProperties): Promise<boolean> {
+/** What the runner needs of the Lambda context: the time left in this invocation. */
+type InvocationClock = Pick<Context, 'getRemainingTimeInMillis'>;
+
+// Left for the rollback, the error report and the response after the server cancels a transaction.
+const TRANSACTION_BUDGET_MARGIN_MS = 30_000;
+
+async function migrateBlock(props: MigrationProperties, clock?: InvocationClock): Promise<boolean> {
 	const schemaName = props.schemaName || DEFAULT_SCHEMA;
 	const cluster = readClusterEnv();
 	const engine = buildEngine(cluster, schemaName);
+	// An aurora file is one transaction inside this invocation, so the server is told how long it may take.
+	const transactionBudgetMs =
+		cluster.kind === 'aurora' && clock
+			? () => clock.getRemainingTimeInMillis() - TRANSACTION_BUDGET_MARGIN_MS
+			: undefined;
 	try {
 		if (props.migrationsBucket && props.migrationsKey) {
 			// A dsql file was linted at synth; the dsql-lint binary is not deployed with the Lambda.
@@ -180,7 +191,7 @@ async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 				await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey),
 				cluster.kind,
 			);
-			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName }));
+			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName, transactionBudgetMs }));
 			console.log('[bb-database] Applied:', result.applied.length ? result.applied : '(none pending)');
 			if (result.waitingOn) {
 				console.log(
@@ -204,6 +215,7 @@ async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 
 export const handler = async (
 	event: CloudFormationCustomResourceEvent,
+	context?: InvocationClock,
 ): Promise<{ PhysicalResourceId: string; Data?: { migrationsComplete: string } }> => {
 	const props = (event.ResourceProperties ?? {}) as MigrationProperties;
 	console.log('[bb-database] Migration event:', JSON.stringify({ RequestType: event.RequestType, ...props }));
@@ -212,12 +224,15 @@ export const handler = async (
 	// Deleting a block retains its schema under the cluster's removal policy.
 	if (event.RequestType === 'Delete') return { PhysicalResourceId: event.PhysicalResourceId || physicalId };
 
-	const complete = await migrateBlock(props);
+	const complete = await migrateBlock(props, context);
 	return { PhysicalResourceId: physicalId, Data: { migrationsComplete: String(complete) } };
 };
 
-export const isComplete = async (event: IsCompleteEvent): Promise<{ IsComplete: boolean }> => {
+export const isComplete = async (
+	event: IsCompleteEvent,
+	context?: InvocationClock,
+): Promise<{ IsComplete: boolean }> => {
 	if (event.RequestType === 'Delete' || event.Data?.migrationsComplete === 'true') return { IsComplete: true };
 	const props = (event.ResourceProperties ?? {}) as MigrationProperties;
-	return { IsComplete: await migrateBlock(props) };
+	return { IsComplete: await migrateBlock(props, context) };
 };

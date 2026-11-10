@@ -162,7 +162,7 @@ Each `Database` on it gets a schema named after its id, with its own migrations 
 
 ## Migrations
 
-A `Database` on an `aurora` cluster runs PostgreSQL: write its migrations as you would for any PostgreSQL 17, nothing is rewritten, and each file runs in one transaction, so it applies entirely or not at all. The only check is for the two DSQL-only forms, `ASYNC` and `sys.wait_for_job()`; a file that carries them is stopped at `npm run dev` and at `cdk synth` with a message that names the file and what to change. The rest of this section is about the default `dsql` cluster. A statement PostgreSQL refuses inside a transaction block (`CREATE INDEX CONCURRENTLY`, `VACUUM`, `ALTER SYSTEM`, `CREATE DATABASE`) stops the file at construction with a message that names it: drop `CONCURRENTLY`, and keep the rest out of migrations.
+A `Database` on an `aurora` cluster runs PostgreSQL: write its migrations as you would for any PostgreSQL 17, nothing is rewritten, and each file runs in one transaction, so it applies entirely or not at all; on AWS a file must finish within the migration function's ten-minute invocation (see [How migrations deploy](#how-migrations-deploy)). The only check is for the two DSQL-only forms, `ASYNC` and `sys.wait_for_job()`; a file that carries them is stopped at `npm run dev` and at `cdk synth` with a message that names the file and what to change. The rest of this section is about the default `dsql` cluster. A statement PostgreSQL refuses inside a transaction block (`CREATE INDEX CONCURRENTLY`, `VACUUM`, `ALTER SYSTEM`, `CREATE DATABASE`) stops the file at construction with a message that names it: drop `CONCURRENTLY`, and keep the rest out of migrations.
 
 A `Database` on Aurora DSQL needs its migrations written in DSQL, as the AWS documentation shows them: [DDL and distributed transactions](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-ddl.html), [`CREATE TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-table-syntax-support.html), [`ALTER TABLE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/alter-table-syntax-support.html), [`CREATE SEQUENCE`](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/create-sequence-syntax-support.html) and [Asynchronous indexes](https://docs.aws.amazon.com/aurora-dsql/latest/userguide/working-with-create-index-async.html). What is in the file is what runs on the cluster. Every file is checked with [`dsql-lint`](https://github.com/awslabs/aurora-dsql-tools/tree/main/dsql-lint) before anything runs (see [What is rejected](#what-is-rejected)).
 
@@ -213,7 +213,11 @@ MigrationValidationError: Migration validation failed for Aurora DSQL (cluster k
 
 Locally, a block applies its pending files before its first query. On AWS they run during `cdk deploy`, before any function on the stack is updated, so new code never runs against the old schema. Blocks on one cluster migrate one at a time.
 
-If a deploy fails in a migration, the error names the file and the failed statement. Fix the cause and deploy again; the file resumes where it stopped. A failed index build or constraint validation usually means the data does not satisfy it: fix the rows, then deploy again. Do not edit a file that has partly run. The next deploy detects the edit, refuses the file and names it. Put the change in a new file instead.
+If a deploy fails in a migration, the error names the file and the failed statement. What to do next depends on the cluster.
+
+On an `aurora` cluster the file is one transaction, so nothing from it was applied: fix the file itself and deploy again; it runs from the start. A file must also finish within the migration function's ten-minute invocation. A transaction that runs longer is cancelled by the server, and the error names the file and the statement and says so; split the file, or move a long backfill out of the migrations.
+
+On a `dsql` cluster the file resumes where it stopped. A failed index build or constraint validation usually means the data does not satisfy it: fix the rows, then deploy again. Do not edit a `dsql` file that has partly run. The next deploy detects the edit, refuses the file and names it. Put the change in a new file instead.
 
 ## Transactions
 
