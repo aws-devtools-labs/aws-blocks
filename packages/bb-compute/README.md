@@ -139,13 +139,26 @@ export const reports = new ApiNamespace(scope, 'reports', (context) => ({
   `apiFrontDoor` tier and behind `Hosting`, so the API keeps one domain. A call
   to the bare `/aws-blocks/api` endpoint — a raw HTTP call, or one from a native
   client released before per-namespace paths — still runs on the default
-  compute.
+  compute, and synth warns (`blocks:apigateway:bare-endpoint-serves-placed-namespaces`).
+  Add `strictNamespacePlacement: true` to the stack's `defaults`, next to the
+  preset you already spread there, to refuse it instead: each compute then serves
+  only the namespaces placed on it, and a call to a namespace placed elsewhere
+  gets the same "method not found" error as an unknown namespace. The typed
+  clients already call each namespace at its own path, so they keep working. The
+  option applies only to deployed computes: the local dev server serves every
+  namespace on every path, so a raw bare-endpoint call that works under
+  `npm run dev` returns "method not found" once deployed. If raw callers still
+  need the bare endpoint, leave the option off and acknowledge
+  the warning with
+  `Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')`
+  on the stack or backend returned by `create()`.
 - **The gateway's limits still apply.** An API call is capped at ~29 seconds
   whatever the compute's `maxTimeoutSeconds` (except a container namespace that
   CloudFront reaches directly, below); run longer work in an `AsyncJob`.
 - **It's placement, not isolation.** Every compute runs the same backend bundle
   under the app's one execution role, so a separate compute is not a security
-  boundary.
+  boundary. `strictNamespacePlacement` keeps a namespace's code off the default
+  compute (and its network); it doesn't split IAM.
 - **Routing follows the export name** — the name your frontend imports
   (`export const reports = …` → `reports`), not the second `ApiNamespace`
   argument.

@@ -21,7 +21,7 @@ import assert from 'node:assert';
 import { request } from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ApiNamespaceClient } from '@aws-blocks/blocks/client';
-import { requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
+import { METHOD_NOT_FOUND, requestUrlFor, rpcCall, type ComputeTestContext } from './context.js';
 
 type WhereAmI = {
   computeId: string | null;
@@ -216,14 +216,24 @@ export function containerApiNamespaceTests(ctx: ComputeTestContext) {
       });
     }
 
-    test('a call to the bare endpoint runs on the default compute', async () => {
-      // Raw HTTP callers, and native clients released before per-namespace paths,
-      // POST to the bare `/aws-blocks/api`: it dispatches by the body, on the
-      // default (Lambda) compute, even for a container namespace.
-      const reply = await rpcCall(ctx.apiUrl(), 'containerApi.whereAmI');
-      const served = reply.result as WhereAmI;
-      assert.ok(served.functionName, 'a Lambda function served it');
-      assert.strictEqual(served.computeId, null);
-    });
+    if (ctx.strictNamespacePlacement) {
+      test('strict placement: the bare endpoint refuses the container namespace', async () => {
+        for (const method of ['containerApi.whereAmI', 'containerApi.echoCookie']) {
+          const reply = await rpcCall(ctx.apiUrl(), method);
+          assert.strictEqual(reply.error?.code, METHOD_NOT_FOUND, method);
+          assert.strictEqual(reply.result, undefined, method);
+        }
+      });
+    } else {
+      test('a call to the bare endpoint runs on the default compute', async () => {
+        // Raw HTTP callers, and native clients released before per-namespace paths,
+        // POST to the bare `/aws-blocks/api`: it dispatches by the body, on the
+        // default (Lambda) compute, even for a container namespace.
+        const reply = await rpcCall(ctx.apiUrl(), 'containerApi.whereAmI');
+        const served = reply.result as WhereAmI;
+        assert.ok(served.functionName, 'a Lambda function served it');
+        assert.strictEqual(served.computeId, null);
+      });
+    }
   });
 }
