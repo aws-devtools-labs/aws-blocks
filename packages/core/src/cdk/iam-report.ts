@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
 import { finalizeBlocksRoles } from './blocks-roles.js';
+import { cdkVersion } from './cdk-version.js';
 
 /** One statement on the shared execution role, normalized for diffing. */
 interface ReportStatement {
@@ -70,15 +70,6 @@ function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
 	const entry = Object.values(resolved?.Resources ?? {})[0];
 	if (!entry) throw cdkCouplingError(role, 'it returned no Resources entry');
 	return entry.Properties ?? {};
-}
-
-/** The installed aws-cdk-lib version, or `undefined` if it can't be read. */
-function cdkVersion(): string | undefined {
-	try {
-		return (createRequire(import.meta.url)('aws-cdk-lib/package.json') as { version?: string }).version;
-	} catch {
-		return undefined;
-	}
 }
 
 /**

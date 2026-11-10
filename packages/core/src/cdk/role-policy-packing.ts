@@ -29,6 +29,24 @@
  *
  * Per role, so a future per-compute role can opt in the same way.
  *
+ * **aws-cdk-lib coupling.** Validated against aws-cdk-lib 2.274.0 (core's peer
+ * range is `^2.257.0`). It relies on: the inline split threshold (mirrored as
+ * {@link CDK_INLINE_SPLIT_THRESHOLD}, the only size constant that decides
+ * whether merging turns on); `PolicyStatement._estimateSize()` and
+ * `deriveEstimateSizeOptions()` for sizing; `PolicyDocument`'s private
+ * `statements` and `minimize` fields and its `_splitDocument()` method; and, for
+ * a heuristic only, CDK's merge size cap ({@link CDK_MAX_MERGE_SIZE}). When the
+ * installed version or the peer range moves, re-check these and re-run
+ * `role-policy-packing.test.ts`, whose canaries compare packed and unpacked
+ * templates across the threshold. At synth time, a missing internal falls back
+ * with an info annotation, and a disagreement between the estimate and CDK's split
+ * is reported as a `rolePolicyPackingDrift` warning.
+ *
+ * Residual limitation: "merging was ignored" is detected only when the document
+ * had a pair of statements this module considers combinable (a conservative
+ * subset of CDK's rules), so a CDK that ignores `minimize` on a document without
+ * such a pair goes unreported; nothing would have been merged there anyway.
+ *
  * @internal
  */
 
@@ -36,6 +54,7 @@ import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cxapi from 'aws-cdk-lib/cx-api';
 import type { IConstruct } from 'constructs';
+import { cdkVersion } from './cdk-version.js';
 
 /**
  * CDK context key that raises the managed-policies-per-role limit the quota check
@@ -68,6 +87,21 @@ const CDK_ARN_SIZE_ESTIMATE_CONTEXT_KEY = '@aws-cdk/aws-iam.arnSizeEstimate';
 const CDK_DEFAULT_ARN_SIZE_ESTIMATE = 150;
 const CDK_ACTION_SIZE_ESTIMATE = 20;
 
+/**
+ * CDK's cap on the estimated size of a merged statement (`MAX_MERGE_SIZE` in
+ * `aws-iam/lib/private/merge-statements.js`). Only used by the heuristic that
+ * detects ignored merging, never to decide whether merging turns on.
+ */
+const CDK_MAX_MERGE_SIZE = 2_000;
+
+/**
+ * Warning id for a disagreement between the packing estimate and CDK's split
+ * (see {@link checkPackingOutcome}). Stable, so it can be acknowledged.
+ *
+ * @internal
+ */
+export const ROLE_POLICY_PACKING_DRIFT_WARNING_ID = '@aws-blocks/core:rolePolicyPackingDrift';
+
 /** Consolidation must run before CDK's split aspect, which uses this priority (`mutatingAspectPrio32333`). */
 function cdkSplitPriority(scope: IConstruct): number {
 	return cdk.FeatureFlags.of(scope).isEnabled(cxapi.ASPECT_PRIORITIES_MUTATING)
@@ -76,6 +110,33 @@ function cdkSplitPriority(scope: IConstruct): number {
 }
 
 const ENABLED = Symbol.for('blocks:RolePolicyPacking');
+
+/**
+ * What the consolidation aspect decided for a role, read back by the validation
+ * (which runs after CDK's split) to check that the split behaved as assumed.
+ */
+interface PackingState {
+	/** `minimize` was set on the DefaultPolicy document. */
+	mergeRequested: boolean;
+	/** Statements after dropping exact duplicates: the count CDK's split starts from. */
+	preSplitStatements: number;
+	/** At least one pair of statements looked combinable (see {@link hasCombinablePair}). */
+	hasCombinablePair: boolean;
+	/** The inline threshold CDK's split was called with, when it could be observed. */
+	observedInlineThreshold?: number;
+}
+
+const packingStates = new WeakMap<iam.Role, PackingState>();
+
+/** Annotation keys already added per role, so an aspect revisited by CDK doesn't repeat them. */
+const annotated = new WeakMap<iam.Role, Set<string>>();
+function annotateOnce(role: iam.Role, key: string, add: () => void): void {
+	const keys = annotated.get(role) ?? new Set<string>();
+	annotated.set(role, keys);
+	if (keys.has(key)) return;
+	keys.add(key);
+	add();
+}
 
 /**
  * Turn on statement consolidation and the managed-policy quota check for `role`
@@ -102,7 +163,12 @@ export function enableRolePolicyPacking(role: iam.Role): void {
 
 	// Validations run after every aspect, so this sees the OverflowPolicyN children
 	// CDK's split created.
-	role.node.addValidation({ validate: () => validateManagedPolicyQuota(role) });
+	role.node.addValidation({
+		validate: () => {
+			checkPackingOutcome(role);
+			return validateManagedPolicyQuota(role);
+		},
+	});
 }
 
 /**
@@ -116,51 +182,200 @@ export function enableRolePolicyPacking(role: iam.Role): void {
  * public way to change it after construction, and the feature flag can't be
  * scoped to the role (`node.setContext` is refused once a construct has children).
  * If a CDK upgrade removes the field, consolidation is skipped with an info
- * annotation and CDK still packs the unmerged statements.
+ * annotation and CDK still packs the unmerged statements. If the field stays
+ * writable but CDK stops reading it, {@link checkPackingOutcome} notices that
+ * nothing was merged and adds the same annotation.
  */
 function consolidateIfOverBudget(role: iam.Role): void {
 	const defaultPolicy = role.node.tryFindChild('DefaultPolicy');
 	if (!(defaultPolicy instanceof iam.Policy)) return;
 	const document = defaultPolicy.document;
-	if (estimateDocumentSize(role, document) < CDK_INLINE_SPLIT_THRESHOLD) return;
+	const statements = sizeStatements(role, document);
+	if (statements.reduce((n, s) => n + s.size, 0) < CDK_INLINE_SPLIT_THRESHOLD) return;
+
+	const state: PackingState = {
+		mergeRequested: false,
+		preSplitStatements: statements.length,
+		hasCombinablePair: hasCombinablePair(statements),
+	};
+	packingStates.set(role, state);
 
 	if (!('minimize' in document)) {
-		addMinimizeUnavailableInfo(role);
+		addMergeNotAppliedInfo(role);
 		return;
 	}
 	try {
 		(document as unknown as { minimize?: boolean }).minimize = true;
 	} catch {
 		// A future aws-cdk-lib might make the field read-only (getter-only or frozen).
-		addMinimizeUnavailableInfo(role);
+		addMergeNotAppliedInfo(role);
+		return;
 	}
+	state.mergeRequested = true;
+	observeSplitThreshold(role, document);
 }
 
-function addMinimizeUnavailableInfo(role: iam.Role): void {
-	cdk.Annotations.of(role).addInfo(
-		`AWS Blocks: ${role.node.path}'s grants exceed the inline policy budget, but this aws-cdk-lib version ` +
-			"doesn't expose PolicyDocument's 'minimize' field, so statements are packed into managed policies " +
-			'without being merged first.',
+function addMergeNotAppliedInfo(role: iam.Role): void {
+	annotateOnce(role, 'mergeNotApplied', () =>
+		cdk.Annotations.of(role).addInfo(
+			`AWS Blocks: ${role.node.path}'s grants exceed the inline policy budget, but this aws-cdk-lib version ` +
+				`(${cdkVersion() ?? 'unknown'}) didn't merge statements through PolicyDocument's 'minimize' field ` +
+				'(the field is missing, read-only, or no longer used), so statements are packed into managed ' +
+				'policies without being merged first.',
+		),
 	);
 }
 
-type StatementJson = Record<string, unknown>;
+const SPLIT_OBSERVED = Symbol.for('blocks:RolePolicyPacking.splitObserved');
 
 /**
- * Estimate `document`'s size the way CDK's split does (`PolicyStatement._estimateSize`,
+ * Record the inline threshold CDK's split is called with for this document, so
+ * the validation can compare it with {@link CDK_INLINE_SPLIT_THRESHOLD}. Wraps
+ * `_splitDocument` on this one document instance only (an own property that
+ * delegates unchanged), and only for a document whose merging was turned on, so
+ * no other policy is affected. If CDK renames the method, nothing is recorded and
+ * the validation falls back to checking for overflow policies.
+ */
+function observeSplitThreshold(role: iam.Role, document: iam.PolicyDocument): void {
+	const doc = document as unknown as Record<string | symbol, unknown>;
+	const split = doc._splitDocument;
+	if (typeof split !== 'function' || doc[SPLIT_OBSERVED]) return;
+	doc[SPLIT_OBSERVED] = true;
+	Object.defineProperty(document, '_splitDocument', {
+		configurable: true,
+		writable: true,
+		value(this: unknown, ...args: unknown[]) {
+			// `_splitDocument(scope, selfMaximumSize, splitMaximumSize)`.
+			const state = packingStates.get(role);
+			if (state && typeof args[1] === 'number') state.observedInlineThreshold = args[1];
+			return split.apply(this, args);
+		},
+	});
+}
+
+/** OverflowPolicyN managed policies CDK's split created on the role. */
+function overflowPolicies(role: iam.Role): iam.ManagedPolicy[] {
+	return role.node.children.filter(
+		(c): c is iam.ManagedPolicy => c instanceof iam.ManagedPolicy && /^OverflowPolicy\d+$/.test(c.node.id),
+	);
+}
+
+/**
+ * After CDK's split, check that it behaved the way the consolidation assumed. Only
+ * annotates; never fails synth.
+ *
+ * - **Threshold drift.** Merging was turned on because the estimate reached
+ *   {@link CDK_INLINE_SPLIT_THRESHOLD}. If CDK's split was called with a different
+ *   threshold, or (when the threshold couldn't be observed) the role ended up with
+ *   no overflow policies, the estimate and CDK's split may disagree and the role's
+ *   template may differ from what aws-cdk-lib alone would produce: warn.
+ *   With the threshold observed and matching, no overflow is expected when merging
+ *   alone brought the policy within budget, so that case is not warned about.
+ * - **Merging ignored.** If the document had a combinable pair and the split left
+ *   as many statements across DefaultPolicy and OverflowPolicyN as it started
+ *   with, nothing was merged: CDK no longer honors the `minimize` field.
+ */
+function checkPackingOutcome(role: iam.Role): void {
+	const state = packingStates.get(role);
+	if (!state?.mergeRequested) return;
+	const defaultPolicy = role.node.tryFindChild('DefaultPolicy');
+	if (!(defaultPolicy instanceof iam.Policy)) return;
+	const overflow = overflowPolicies(role);
+
+	const threshold = state.observedInlineThreshold;
+	const drifted = threshold !== undefined ? threshold !== CDK_INLINE_SPLIT_THRESHOLD : overflow.length === 0;
+	if (drifted) {
+		annotateOnce(role, 'drift', () =>
+			cdk.Annotations.of(role).addWarningV2(
+				ROLE_POLICY_PACKING_DRIFT_WARNING_ID,
+				`AWS Blocks: the policy size estimate used to merge ${role.node.path}'s statements and ` +
+					"aws-cdk-lib's policy split disagreed" +
+					(threshold !== undefined
+						? ` (aws-cdk-lib split at an estimated ${threshold} characters, AWS Blocks expected ` +
+							`${CDK_INLINE_SPLIT_THRESHOLD})`
+						: '') +
+					(overflow.length === 0
+						? ": the role's inline policy was consolidated without overflowing into managed policies"
+						: '') +
+					`. Please report this to AWS Blocks with the installed aws-cdk-lib version (${cdkVersion() ?? 'unknown'}).`,
+			),
+		);
+	}
+
+	const after = defaultPolicy.document.statementCount + overflow.reduce((n, p) => n + p.document.statementCount, 0);
+	// `>=`: AWS Blocks' de-duplication never drops more than CDK's, so a merge always shows as fewer statements.
+	if (state.hasCombinablePair && after >= state.preSplitStatements) addMergeNotAppliedInfo(role);
+}
+
+type StatementJson = Record<string, unknown>;
+/** A statement after de-duplication, with its estimated size. */
+interface SizedStatement {
+	json: StatementJson;
+	size: number;
+}
+
+/**
+ * The document's statements, exact duplicates dropped, each with its estimated
+ * size: CDK's own estimate when available, else AWS Blocks' copy of it.
+ */
+function sizeStatements(role: iam.Role, document: iam.PolicyDocument): SizedStatement[] {
+	const sized = sizeWithCdkEstimator(role, document);
+	if (sized) return sized;
+	annotateOnce(role, 'estimator', () =>
+		cdk.Annotations.of(role).addInfo(
+			`AWS Blocks: this aws-cdk-lib version (${cdkVersion() ?? 'unknown'}) doesn't expose the policy size ` +
+				`estimate its split uses, so ${role.node.path}'s policy size is estimated by a copy of it. Statement ` +
+				"merging may turn on at a slightly different size than aws-cdk-lib's split.",
+		),
+	);
+	return sizeWithMirroredEstimator(role, document);
+}
+
+/**
+ * Size statements with CDK's own estimator, the one `_splitDocument()` uses:
+ * `PolicyStatement._estimateSize(deriveEstimateSizeOptions(scope))`. Both are
+ * exported from `aws-cdk-lib/aws-iam` (`_estimateSize` is marked internal); the
+ * statement list is the document's private `statements` field. Returns
+ * `undefined` when any of these is missing, so the caller falls back.
+ *
+ * CDK's split first freezes the statements and drops exact duplicates
+ * (`mergeStatements` with `mergeIfCombinable: false`). This doesn't freeze (later
+ * aspects may still add to a statement); `_estimateSize` doesn't need it. Duplicates
+ * are dropped by {@link uniqueStatement} on the public `toStatementJson()`.
+ */
+function sizeWithCdkEstimator(role: iam.Role, document: iam.PolicyDocument): SizedStatement[] | undefined {
+	const statements = (document as unknown as { statements?: unknown }).statements;
+	if (!Array.isArray(statements) || typeof iam.deriveEstimateSizeOptions !== 'function') return undefined;
+	const usable = statements.every(
+		(s): s is iam.PolicyStatement => s instanceof iam.PolicyStatement && typeof s._estimateSize === 'function',
+	);
+	if (!usable) return undefined;
+	const options = iam.deriveEstimateSizeOptions(role);
+	const keep = uniqueStatement();
+	const sized: SizedStatement[] = [];
+	for (const statement of statements as iam.PolicyStatement[]) {
+		const json = statement.toStatementJson() as StatementJson;
+		if (keep(json)) sized.push({ json, size: statement._estimateSize(options) });
+	}
+	return sized;
+}
+
+/**
+ * Estimate statement sizes the way CDK's split does (`PolicyStatement._estimateSize`,
  * internal), but from the public `toJSON()` rendering so it doesn't freeze the
  * statements. Exact duplicates are counted once because CDK's split drops them
- * before measuring even without merging.
+ * before measuring even without merging. Only used when CDK's own estimator
+ * isn't available ({@link sizeWithCdkEstimator}).
  */
-function estimateDocumentSize(scope: IConstruct, document: iam.PolicyDocument): number {
+function sizeWithMirroredEstimator(scope: IConstruct, document: iam.PolicyDocument): SizedStatement[] {
 	const rawArnEstimate = scope.node.tryGetContext(CDK_ARN_SIZE_ESTIMATE_CONTEXT_KEY);
 	const arnEstimate = typeof rawArnEstimate === 'number' ? rawArnEstimate : CDK_DEFAULT_ARN_SIZE_ESTIMATE;
 	const statements = ((document.toJSON() as { Statement?: StatementJson[] } | undefined)?.Statement ?? []).filter(
 		uniqueStatement(),
 	);
 
-	let size = 0;
-	for (const s of statements) {
+	return statements.map((s) => {
+		let size = 0;
 		size += `"Effect": "${s.Effect}",`.length;
 		size += listSize('Action', s.Action, CDK_ACTION_SIZE_ESTIMATE);
 		size += listSize('NotAction', s.NotAction, CDK_ACTION_SIZE_ESTIMATE);
@@ -168,8 +383,8 @@ function estimateDocumentSize(scope: IConstruct, document: iam.PolicyDocument): 
 		size += listSize('NotResource', s.NotResource, arnEstimate);
 		// CDK stringifies the (possibly empty) conditions object: `{}` is 2 characters.
 		size += JSON.stringify(s.Condition ?? {}).length;
-	}
-	return size;
+		return { json: s, size };
+	});
 }
 
 function listSize(key: string, value: unknown, tokenEstimate: number): number {
@@ -198,6 +413,47 @@ function uniqueStatement(): (s: StatementJson) => boolean {
 		seen.add(key);
 		return true;
 	};
+}
+
+/**
+ * Whether CDK's merging should combine at least one pair of these statements: a
+ * conservative subset of CDK's `mergeIfCombinable` (same effect, condition and
+ * either the same actions or the same resources; no Sid, principals or Not*
+ * lists), and only when the two together fit CDK's merge size cap, which CDK
+ * enforces on the combined statement. Used only to decide whether "nothing was
+ * merged" means CDK ignored the request.
+ */
+function hasCombinablePair(statements: SizedStatement[]): boolean {
+	const setKey = (v: unknown) => JSON.stringify(asArray(v).map(String).sort());
+	const shapes = statements.map(({ json: s, size }) =>
+		s.Sid === undefined &&
+		s.Principal === undefined &&
+		s.NotPrincipal === undefined &&
+		s.NotAction === undefined &&
+		s.NotResource === undefined &&
+		s.Action !== undefined &&
+		s.Resource !== undefined
+			? {
+					effect: s.Effect,
+					condition: JSON.stringify(s.Condition ?? {}),
+					actions: setKey(s.Action),
+					resources: setKey(s.Resource),
+					size,
+				}
+			: undefined,
+	);
+	for (let i = 0; i < shapes.length; i++) {
+		const a = shapes[i];
+		if (!a) continue;
+		for (let j = i + 1; j < shapes.length; j++) {
+			const b = shapes[j];
+			if (!b || a.effect !== b.effect || a.condition !== b.condition) continue;
+			if (a.actions !== b.actions && a.resources !== b.resources) continue;
+			// The sum overestimates the combined statement (one shared list is dropped), so this stays conservative.
+			if (a.size + b.size <= CDK_MAX_MERGE_SIZE) return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -235,10 +491,7 @@ function validateManagedPolicyQuota(role: iam.Role): string[] {
 	const quota = resolveQuota(role);
 	if (typeof quota === 'string') return [quota];
 
-	const packed = role.node.children.some(
-		(c) => c instanceof iam.ManagedPolicy && /^OverflowPolicy\d+$/.test(c.node.id),
-	);
-	if (!packed) return [];
+	if (overflowPolicies(role).length === 0) return [];
 
 	const stack = cdk.Stack.of(role);
 	const roleCfn = role.node.defaultChild as iam.CfnRole;

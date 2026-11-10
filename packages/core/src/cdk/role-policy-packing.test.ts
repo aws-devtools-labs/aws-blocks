@@ -20,7 +20,11 @@ import { BlocksPresets } from './blocks-defaults.js';
 import { ComputeBase } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
 import { BlocksStack } from './index.js';
-import { enableRolePolicyPacking, MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY } from './role-policy-packing.js';
+import {
+	enableRolePolicyPacking,
+	MANAGED_POLICIES_PER_ROLE_QUOTA_CONTEXT_KEY,
+	ROLE_POLICY_PACKING_DRIFT_WARNING_ID,
+} from './role-policy-packing.js';
 
 // IAM's documented limits the packed output must stay under.
 const INLINE_LIMIT = 10_240;
@@ -75,6 +79,13 @@ function grantedPairs(template: Template): Set<string> {
 	}
 	return pairs;
 }
+
+/** Drift warnings the packing added anywhere in the stack. */
+const driftWarnings = (stack: cdk.Stack) =>
+	Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp(ROLE_POLICY_PACKING_DRIFT_WARNING_ID));
+
+const hasOverflow = (template: Template) =>
+	Object.keys(template.findResources('AWS::IAM::ManagedPolicy')).some((id) => id.includes('OverflowPolicy'));
 
 const statementCount = (template: Template) => {
 	const { inline, managed } = policiesOf(template);
@@ -164,38 +175,134 @@ describe('enableRolePolicyPacking — over the inline budget', () => {
 		assert.deepStrictEqual(grantedPairs(packed), grantedPairs(unpacked), 'merging preserves every permission');
 	});
 
-	test('around CDK’s split threshold with token resources, the template is unchanged whenever CDK creates no overflow', () => {
+	/**
+	 * Build packed and unpacked roles with `n` combinable statements for every `n`
+	 * in a range that straddles CDK's split threshold, and assert the packed
+	 * template is byte-identical whenever CDK leaves the unpacked policy inline, and
+	 * that no drift warning appears for any `n`.
+	 */
+	function assertUnchangedAroundThreshold(
+		addStatements: (stack: cdk.Stack, role: iam.Role, n: number) => void,
+		range: [number, number],
+	) {
 		const build = (packing: boolean, n: number) => {
 			const { stack, role } = makeRole({ packing });
-			const bucket = new s3.Bucket(stack, 'Bucket');
-			// Combinable statements with token resources: CDK sizes each token with its estimate,
-			// so consolidation turning on below CDK's threshold would show up as merged statements.
-			for (let i = 0; i < n; i++) {
-				role.addToPrincipalPolicy(
-					new iam.PolicyStatement({ actions: SHARED_ACTIONS, resources: [bucket.arnForObjects(`p${i}/*`)] }),
-				);
-			}
-			return Template.fromStack(stack);
+			addStatements(stack, role, n);
+			return { stack, template: Template.fromStack(stack) };
 		};
-		let sawInline = false;
-		let sawOverflow = false;
-		for (let n = 20; n <= 50; n++) {
-			const unpacked = build(false, n);
-			const overflow = Object.keys(unpacked.findResources('AWS::IAM::ManagedPolicy')).some((id) =>
-				id.includes('OverflowPolicy'),
-			);
-			if (overflow) {
-				sawOverflow = true;
+		let inlineCases = 0;
+		let overflowCases = 0;
+		for (let n = range[0]; n <= range[1]; n++) {
+			const unpacked = build(false, n).template;
+			const packed = build(true, n);
+			assert.deepStrictEqual(driftWarnings(packed.stack), [], `drift warning at ${n} statements`);
+			if (hasOverflow(unpacked)) {
+				overflowCases++;
 				continue;
 			}
-			sawInline = true;
+			inlineCases++;
 			assert.strictEqual(
-				JSON.stringify(build(true, n).toJSON()),
+				JSON.stringify(packed.template.toJSON()),
 				JSON.stringify(unpacked.toJSON()),
 				`template changed at ${n} statements, where CDK leaves the policy inline`,
 			);
 		}
-		assert.ok(sawInline && sawOverflow, 'the range should straddle CDK’s split threshold');
+		// Well clear of the threshold on both sides, so a shift in either direction is caught.
+		assert.ok(
+			inlineCases >= 10 && overflowCases >= 10,
+			`the range should straddle CDK’s split threshold: ${inlineCases} inline, ${overflowCases} overflowing`,
+		);
+	}
+
+	test('around CDK’s split threshold with token resources, the template is unchanged whenever CDK creates no overflow', () => {
+		assertUnchangedAroundThreshold(
+			(stack, role, n) => {
+				const bucket = new s3.Bucket(stack, 'Bucket');
+				// Combinable statements with token resources: CDK sizes each token with its estimate,
+				// so consolidation turning on below CDK's threshold would show up as merged statements.
+				for (let i = 0; i < n; i++) {
+					role.addToPrincipalPolicy(
+						new iam.PolicyStatement({
+							actions: SHARED_ACTIONS,
+							resources: [bucket.arnForObjects(`p${i}/*`)],
+						}),
+					);
+				}
+			},
+			[10, 70],
+		);
+	});
+
+	test('around CDK’s split threshold with literal resources, the template is unchanged whenever CDK creates no overflow', () => {
+		// Literal ARNs are sized by their exact length rather than the token estimate.
+		assertUnchangedAroundThreshold((_stack, role, n) => addCombinable(role, n), [15, 75]);
+	});
+
+	test('uses aws-cdk-lib’s own size estimator', () => {
+		const { stack, role } = makeRole({ packing: true });
+		addCombinable(role, 150);
+		Template.fromStack(stack);
+		const fallback = Annotations.fromStack(stack).findInfo(
+			'*',
+			Match.stringLikeRegexp("doesn't expose the policy size estimate"),
+		);
+		assert.deepStrictEqual(fallback, []);
+	});
+
+	test('warns when CDK’s split uses a different inline threshold than the packing assumed', () => {
+		const { stack, role } = makeRole({ packing: true });
+		addCombinable(role, 45);
+		// Simulate an aws-cdk-lib whose split keeps up to 12,000 characters inline: the packing
+		// still turns merging on at 10,000, so the role's policy changes where CDK wouldn't split.
+		type Splittable = { _splitDocument: (scope: unknown, self: number, split: number) => unknown };
+		const splitter = role as unknown as { splitLargePolicy: () => void; defaultPolicy?: iam.Policy };
+		const realSplit = splitter.splitLargePolicy;
+		splitter.splitLargePolicy = function (this: typeof splitter) {
+			const doc = this.defaultPolicy?.document as unknown as Splittable;
+			const inner = doc._splitDocument;
+			doc._splitDocument = (scope, _self, split) => inner.call(doc, scope, 12_000, split);
+			realSplit.call(this);
+		};
+
+		const template = Template.fromStack(stack);
+		assert.ok(!hasOverflow(template), 'nothing overflows at the simulated threshold');
+		const warnings = driftWarnings(stack);
+		assert.strictEqual(warnings.length, 1, JSON.stringify(warnings));
+		assert.match(
+			String(warnings[0].entry.data),
+			/split at an estimated 12000 characters, AWS Blocks expected 10000/,
+		);
+		assert.match(String(warnings[0].entry.data), /consolidated without overflowing/);
+	});
+
+	test('adds an info annotation when CDK keeps the minimize field but no longer merges', () => {
+		type Mergeable = { shouldMerge: (scope: unknown) => boolean };
+		const proto = iam.PolicyDocument.prototype as unknown as Mergeable;
+		const realShouldMerge = proto.shouldMerge;
+		// Simulate an aws-cdk-lib that still has a writable `minimize` field but ignores it.
+		proto.shouldMerge = () => false;
+		try {
+			const { stack, role } = makeRole({ packing: true });
+			addCombinable(role, 150);
+			const template = Template.fromStack(stack);
+			assert.strictEqual(statementCount(template), 150, 'nothing merged');
+			Annotations.fromStack(stack).hasInfo(
+				'/PackingStack/Role',
+				Match.stringLikeRegexp("didn't merge statements through PolicyDocument's 'minimize' field"),
+			);
+			assert.deepStrictEqual(driftWarnings(stack), []);
+		} finally {
+			proto.shouldMerge = realShouldMerge;
+		}
+	});
+
+	test('adds no merge info annotation when merging took effect', () => {
+		const { stack, role } = makeRole({ packing: true });
+		addCombinable(role, 150);
+		Template.fromStack(stack);
+		const info = Annotations.fromStack(stack).findInfo('*', Match.stringLikeRegexp("didn't merge statements"));
+		assert.deepStrictEqual(info, []);
+		assert.deepStrictEqual(driftWarnings(stack), []);
 	});
 
 	test('skips consolidation with an info annotation when CDK no longer exposes the minimize field', () => {
@@ -209,7 +316,7 @@ describe('enableRolePolicyPacking — over the inline budget', () => {
 		assert.strictEqual(statementCount(template), 150, 'nothing merged');
 		Annotations.fromStack(stack).hasInfo(
 			'/PackingStack/Role',
-			Match.stringLikeRegexp("doesn't expose PolicyDocument's 'minimize' field"),
+			Match.stringLikeRegexp("didn't merge statements through PolicyDocument's 'minimize' field"),
 		);
 	});
 });
