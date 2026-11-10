@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
@@ -13,6 +13,7 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { installClientUserAgent } from './server/client-user-agent.js';
 import { ApiNamespace } from './api.js';
 import type { BlocksContext } from './api.js';
+import { getRequestBaseUrl } from './bb-utils.js';
 
 beforeEach(() => {
   clearRouteRegistry();
@@ -222,6 +223,20 @@ describe('createLambdaHandler — RPC body handling', () => {
     assert.strictEqual(body.jsonrpc, '2.0');
     assert.ok(body.error);
     assert.strictEqual(body.error.code, -32600);
+  });
+
+  it('returns Invalid Request for a literal JSON null body instead of throwing', async () => {
+    const backend = {
+      api: (_ctx: BlocksContext) => ({
+        async noop() { return {}; },
+      }),
+    };
+
+    const result = await invoke(backend, makeEvent({ body: 'null' }));
+    assert.strictEqual(result.statusCode, 200);
+    const body = JSON.parse(result.body);
+    assert.strictEqual(body.error?.code, -32600);
+    assert.strictEqual(body.id, null);
   });
 
   it('decodes base64-encoded body', async () => {
@@ -1838,7 +1853,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     assert.strictEqual(url.host, 'localhost:3000');
   });
 
-  it('keeps proto and stage prefix for the non-loopback (deploy) path', () => {
+  it('keeps proto and host, but not the stage prefix, for the non-loopback (deploy) path', () => {
     const url = buildEventUrl({
       path: '/auth/callback',
       headers: { 'x-forwarded-proto': 'https', Host: EXECUTE_API },
@@ -1846,7 +1861,29 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     });
     assert.strictEqual(url.protocol, 'https:');
     assert.strictEqual(url.host, EXECUTE_API);
-    assert.strictEqual(url.pathname, '/prod/auth/callback');
+    // The route path, as under the dev server: every front door adds the stage
+    // on the way to the gateway, so it is not part of the path the app routes on.
+    assert.strictEqual(url.pathname, '/auth/callback');
+  });
+
+  it('does not prepend the `$default` stage of a v2 event', () => {
+    const url = buildEventUrl({
+      version: '2.0',
+      rawPath: '/echo/a',
+      headers: { host: 'abc123.lambda-url.us-east-1.on.aws' },
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/echo/a' } },
+    });
+    assert.strictEqual(url.pathname, '/echo/a');
+  });
+
+  it('keeps the selected origin when the path starts with `//`', () => {
+    // `new URL('//evil.example/x', origin)` would resolve the path as a
+    // protocol-relative reference and swap the host.
+    for (const requestContext of [undefined, { stage: 'prod' }]) {
+      const url = buildEventUrl({ path: '//evil.example/echo/a', headers: { Host: EXECUTE_API }, requestContext });
+      assert.strictEqual(url.host, EXECUTE_API);
+      assert.strictEqual(url.pathname, '//evil.example/echo/a');
+    }
   });
 
   it('accepts 127.0.0.1 and [::1] as loopback forwarded hosts', () => {
@@ -1855,6 +1892,120 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
     const v6 = buildEventUrl({ path: '/', headers: { 'x-forwarded-host': '[::1]:3000', Host: EXECUTE_API } });
     assert.strictEqual(v6.hostname, '[::1]');
+  });
+
+  it('takes only the host from a loopback X-Forwarded-Host, never a query, fragment or userinfo', () => {
+    for (const forwarded of ['localhost:3000?role=admin#injected', 'user:pw@localhost:3000/evil']) {
+      const url = buildEventUrl({
+        path: '/aws-blocks/api/x',
+        headers: { 'x-forwarded-host': forwarded, Host: EXECUTE_API },
+        queryStringParameters: { a: '1' },
+      });
+      assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/x?a=1', forwarded);
+    }
+    const noQuery = buildEventUrl({ path: '/x', headers: { 'x-forwarded-host': 'localhost:3000?role=admin#injected', Host: EXECUTE_API } });
+    assert.strictEqual(noQuery.href, 'http://localhost:3000/x');
+  });
+});
+
+describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
+  // CloudFront forwards the gateway's own Host; the door stamps the viewer's host as
+  // x-blocks-public-host, and the backend's config lists the hosts its doors serve.
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+  const VIEWER = 'd111.cloudfront.net';
+  const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+  beforeEach(() => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},app.example.com`;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+    else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+  });
+  const throughDoor = (headers: Record<string, string>, path = '/aws-blocks/api/reports') => ({
+    path,
+    headers: { Host: EXECUTE_API, 'X-Forwarded-Proto': 'https', ...headers },
+    requestContext: { stage: 'prod' },
+    queryStringParameters: { a: '1' },
+  });
+
+  it('reports the URL the viewer called: its host, no stage', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${VIEWER}/aws-blocks/api/reports?a=1`);
+  });
+
+  it("reports a custom domain the door serves, whatever the header's letter case", () => {
+    const url = buildEventUrl(throughDoor({ 'X-Blocks-Public-Host': 'App.Example.com' }));
+    assert.strictEqual(url.href, 'https://app.example.com/aws-blocks/api/reports?a=1');
+  });
+
+  it("ignores a host that isn't one of the backend's front doors (a direct execute-api caller)", () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': 'attacker.example' }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('ignores a list of hosts, and a host with a port', () => {
+    for (const value of [`${VIEWER}, app.example.com`, `${VIEWER}:443`]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': value }));
+      assert.strictEqual(url.host, EXECUTE_API, value);
+    }
+  });
+
+  it('ignores two copies under different letter case', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER, 'X-Blocks-Public-Host': 'app.example.com' }));
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('ignores a header repeated on the wire, as the container does', () => {
+    // A REST event keeps the last copy in `headers` and every copy in `multiValueHeaders`.
+    const url = buildEventUrl({
+      ...throughDoor({ 'x-blocks-public-host': VIEWER }),
+      multiValueHeaders: { 'x-blocks-public-host': ['attacker.example', VIEWER] },
+    });
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('reports a subdomain of a wildcard custom domain the door serves, at any depth', () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of ['a.tenant.example.com', 'deep.a.tenant.example.com', 'A.Tenant.Example.com']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.href, `https://${host.toLowerCase()}/aws-blocks/api/reports?a=1`, host);
+    }
+  });
+
+  it("ignores a host a wildcard custom domain doesn't cover: its apex, a lookalike, a longer domain", () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of [
+      'tenant.example.com',
+      'eviltenant.example.com',
+      'a.tenant.example.com.evil.example',
+      '.tenant.example.com',
+      'x/y.tenant.example.com',
+      'u@a.tenant.example.com',
+      'a.tenant.example.com:443',
+      'a..tenant.example.com',
+    ]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.host, EXECUTE_API, host);
+    }
+  });
+
+  it('ignores the header when the backend has no front-door hosts', () => {
+    delete process.env.BLOCKS_PUBLIC_HOSTS;
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('keeps the loopback dev-server origin first (a sandbox proxying through the door)', () => {
+    const url = buildEventUrl(throughDoor({ 'x-forwarded-host': 'localhost:3000', 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/reports?a=1');
+  });
+
+  it('never moves to another host on a //- or /\\-prefixed path', () => {
+    for (const path of ['//evil.example/x', '/\\evil.example/x']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }, path));
+      assert.strictEqual(url.host, VIEWER, path);
+      assert.strictEqual(url.pathname, '//evil.example/x', path);
+    }
   });
 });
 
@@ -1930,6 +2081,107 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     }));
 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
+  });
+});
+
+// ── RawRoute URL parity with the dev server (#1138) ─────────────────────────
+
+describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage', () => {
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+
+  function stageEvent(path: string, headers: Record<string, string> = {}) {
+    return makeEvent({
+      httpMethod: 'GET',
+      path,
+      body: null,
+      queryStringParameters: { q: 'a b' },
+      requestContext: { stage: 'prod' },
+      headers: { Host: EXECUTE_API, 'x-forwarded-proto': 'https', ...headers },
+    });
+  }
+
+  it('a RawRoute sees the route path, without the API Gateway stage', async () => {
+    let seen: { href: string; pathname: string; wildcard: string | undefined; q: string | null } | undefined;
+    registerRoute({
+      method: 'GET',
+      path: '/echo/*',
+      handler: async (ctx) => {
+        const { url, params } = ctx.request;
+        seen = { href: url.href, pathname: url.pathname, wildcard: params['*'], q: url.searchParams.get('q') };
+        ctx.response.send('');
+      },
+    });
+
+    const result = await invoke({}, stageEvent('/echo/a/b'));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(seen, {
+      href: `https://${EXECUTE_API}/echo/a/b?q=a+b`,
+      pathname: '/echo/a/b',
+      wildcard: 'a/b',
+      q: 'a b',
+    });
+  });
+
+  it('getRequestBaseUrl returns the gateway origin with its stage', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback'));
+
+    assert.strictEqual(base, `https://${EXECUTE_API}/prod`);
+  });
+
+  it('getRequestBaseUrl returns the loopback front door, without a stage, in sandbox', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback', { 'x-forwarded-host': 'localhost:3000' }));
+
+    assert.strictEqual(base, 'http://localhost:3000');
+  });
+
+  it("behind a Blocks CloudFront front door: ctx.request.url is the viewer's URL, the base URL stays the gateway's", async () => {
+    const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+    process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net';
+    try {
+      const seen = { url: '', base: '' };
+      registerRoute({
+        method: 'GET',
+        path: '/auth/callback',
+        handler: async (ctx) => {
+          seen.url = ctx.request.url.href;
+          seen.base = getRequestBaseUrl(ctx);
+          ctx.response.send('');
+        },
+      });
+
+      await invoke({}, stageEvent('/auth/callback', { 'x-blocks-public-host': 'd111.cloudfront.net' }));
+
+      assert.deepStrictEqual(seen, { url: 'https://d111.cloudfront.net/auth/callback?q=a+b', base: `https://${EXECUTE_API}/prod` });
+    } finally {
+      if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+      else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+    }
+  });
+
+  it('getRequestBaseUrl falls back to the request origin outside the Lambda handler (local dev)', () => {
+    const ctx = { request: { url: new URL('http://localhost:3000/aws-blocks/auth/callback?code=x') } };
+    assert.strictEqual(getRequestBaseUrl(ctx), 'http://localhost:3000');
   });
 });
 
@@ -2293,5 +2545,82 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
     const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
+});
+
+// ── request id in scope ─────────────────────────────────────────────────────
+// Each invocation runs with its Lambda awsRequestId in scope, so Building Blocks
+// (bb-logger) can tag their output with it. Overlapping invocations on one
+// container must each see their own id.
+
+describe('createLambdaHandler — request id in scope', () => {
+  const ctx = (awsRequestId: string): LambdaContext => ({ awsRequestId, getRemainingTimeInMillis: () => 30_000 });
+  const readStore = () =>
+    (globalThis as { __BLOCKS_REQUEST_ID_STORE__?: { getStore(): unknown } }).__BLOCKS_REQUEST_ID_STORE__?.getStore();
+
+  it('makes the invocation awsRequestId visible to the backend method', async () => {
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => backend);
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-111'));
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-111' });
+  });
+
+  it('keeps overlapping invocations apart', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const backend = {
+      api: (_c: BlocksContext) => ({
+        async slow() { await gate; return { id: readStore() ?? null }; },
+        async fast() { return { id: readStore() ?? null }; },
+      }),
+    };
+    const handler = createLambdaHandler(async () => backend);
+    const call = (method: string, id: string) =>
+      handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: [], id: 1 }) }), ctx(id)) as Promise<any>;
+    const slow = call('slow', 'req-slow');
+    const fast = await call('fast', 'req-fast');
+    release();
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(fast.body)), { id: 'req-fast' });
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse((await slow).body)), { id: 'req-slow' });
+  });
+
+  it('has no request id outside an invocation', () => {
+    assert.strictEqual(readStore(), undefined);
+  });
+
+  it('imports the backend outside the first invocation request id', async () => {
+    let idAtImport: unknown = 'not-imported';
+    const backend = { api: (_c: BlocksContext) => ({ async who() { return { id: readStore() ?? null }; } }) };
+    const handler = createLambdaHandler(async () => {
+      idAtImport = readStore();
+      return backend;
+    });
+    const res: any = await handler(makeEvent({ body: JSON.stringify({ jsonrpc: '2.0', method: 'api.who', params: [], id: 1 }) }), ctx('req-first'));
+    assert.strictEqual(idAtImport, undefined);
+    assert.deepStrictEqual(decodeRpcResponse(JSON.parse(res.body)), { id: 'req-first' });
+  });
+});
+
+describe('request-context — request id store registration', () => {
+  const KEY = '__BLOCKS_REQUEST_ID_STORE__';
+  const globals = globalThis as unknown as Record<string, unknown>;
+
+  it('replaces a non-store value at the globalThis key instead of throwing on use', async () => {
+    const original = globals[KEY];
+    globals[KEY] = { not: 'a store' };
+    try {
+      const fresh = await import(`./request-context.js?non-store-${Date.now()}`);
+      assert.strictEqual(fresh.currentRequestId(), undefined);
+      assert.strictEqual(fresh.requestIdStore.run('req-x', () => fresh.currentRequestId()), 'req-x');
+      assert.strictEqual(globals[KEY], fresh.requestIdStore);
+    } finally {
+      globals[KEY] = original;
+    }
+  });
+
+  it('a second copy of core reuses the registered store', async () => {
+    const original = globals[KEY];
+    const fresh = await import(`./request-context.js?second-copy-${Date.now()}`);
+    assert.strictEqual(fresh.requestIdStore, original);
   });
 });

@@ -11,9 +11,24 @@ export interface ComputeTestContext {
   readonly frontDoor: FrontDoor;
   /** The client endpoint, the stack's `ApiUrl` output. Set once the harness has deployed. */
   apiUrl(): string;
+  /**
+   * The Hosting distribution's public URL (its `HostingUrl` output), deployed on
+   * the `cloudfront` leg only (see aws-blocks/index.cdk.ts). Set once the harness
+   * has deployed.
+   */
+  hostingUrl(): string;
 }
 
 export type RpcReply = { result?: unknown; error?: { code?: number; message?: string; data?: { name?: string } } };
+
+/**
+ * The `ctx.request.url` a handler reports for a call to `namespace` through the
+ * front door: the door's origin and the route path. The path never carries the API
+ * Gateway stage, so on the `apigateway` leg this is `ApiUrl` without its `/prod`.
+ */
+export function requestUrlFor(apiUrl: string, namespace: string): string {
+  return `${new URL(apiUrl).origin}/aws-blocks/api/${namespace}`;
+}
 
 /**
  * POST one JSON-RPC call. `path` is appended to the endpoint (e.g. `'reports'`);

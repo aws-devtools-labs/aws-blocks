@@ -202,8 +202,9 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
 
   // cleanup-stacks.yml sweeps that keep account quotas in check: orphaned REST
   // APIs (120 EDGE APIs), API Gateway CloudWatch roles (3000 roles) and
-  // CloudFront response headers policies. Its calls swallow errors, so a missing
-  // grant here shows up as an empty sweep, not a failed job.
+  // CloudFront response headers policies. A REST API, region or IAM role listing
+  // it can't read fails the job, and a stack or CloudFront listing it can't read
+  // is a warning with the error, so a missing grant here shows up in the run.
   // These list calls have no resource-level scoping; '*' is the only valid resource.
   role.addToPolicy(
     new iam.PolicyStatement({
@@ -232,6 +233,17 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
       sid: 'CleanupApiGatewayCloudWatchRoles',
       actions: ['iam:DeleteRole', 'iam:DetachRolePolicy', 'iam:ListAttachedRolePolicies', 'iam:ListRolePolicies'],
       resources: E2E_PREFIXES.map((p) => `arn:aws:iam::${account}:role/${p}*`),
+    }),
+  );
+  // The Amplify sweep reports a DynamoDB table that a stuck sandbox's delete
+  // had to retain (scripts/ci/amplify-stuck-delete.sh --leftovers) until the
+  // table is gone. Describe only: no sweep deletes tables. Amplify sandbox
+  // tables are named <Model>-<apiId>-NONE.
+  role.addToPolicy(
+    new iam.PolicyStatement({
+      sid: 'CleanupLeftoverAmplifyTables',
+      actions: ['dynamodb:DescribeTable'],
+      resources: [`arn:aws:dynamodb:${region}:${account}:table/*-NONE`],
     }),
   );
   role.addToPolicy(

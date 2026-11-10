@@ -38,7 +38,7 @@ const bucket = new FileBucket(scope, id, options?)
 | `corsRules` | `CorsRule[]` | CORS rules for browser-based access. **Default: none — browsers block every cross-origin `fetch()` to the deployed bucket.** Required whenever browser code fetches a presigned URL directly (`download()` / `upload()` on a file handle, or `fetch()` on a `getUrl()` / `putUrl()` URL) against a deployed sandbox or production stack. Not inherited from the stack's `defaults.allowedOrigins` or the Hosting domain. Ignored when `bucket` wraps an existing bucket. See [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors), and [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
 | `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.storageAccessLogging`, then `BlocksDefaults.accessLogging`)** when omitted — so a stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
-| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. Any other value (e.g. a typo from untyped JavaScript or config) fails the synth with an error listing the valid values, rather than falling back to SSE-S3. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
 | `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can be added to a deployed bucket, but can't be turned off once on. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
@@ -53,7 +53,7 @@ The S3 bucket name is derived from the scope chain: the FileBucket id joined to 
 | Option | Type | Description |
 |--------|------|-------------|
 | `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. |
-| `metadata` | `Record<string, string>` | Custom metadata key-value pairs. |
+| `metadata` | `Record<string, string>` | Custom metadata key-value pairs, set when the object is written. It can't be edited in place: each `put()` replaces it, so a `put()` without `metadata` leaves none. See [Changing Metadata](#changing-metadata). S3 stores the keys in lowercase, so use lowercase keys. |
 | `cacheControl` | `string` | Cache-Control header value. |
 
 ### Presigned URL options
@@ -147,6 +147,33 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 }));
 ```
+
+### Changing Metadata
+
+Object metadata is fixed when the object is written: S3 can only change metadata by rewriting the object, and FileBucket doesn't expose S3's server-side copy (`CopyObject`), so there is no call that edits it. Every `put()` replaces the object's metadata with what it passes, and a `put()` without `metadata` leaves the object with none. To change metadata, `put()` the same body again with the complete new set:
+
+```typescript
+const bucket = new FileBucket(scope, 'documents');
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async markReviewed(path: string) {
+    const file = await bucket.get(path);
+    if (!file) return null;
+    await bucket.put(path, file.body, {
+      contentType: file.contentType,
+      metadata: { ...file.metadata, status: 'reviewed' },
+    });
+    return { status: 'reviewed' };
+  },
+}));
+```
+
+- The rewrite downloads and re-uploads the whole object, so it costs a GET and a PUT and takes longer for a large file.
+- `get()` doesn't return `cacheControl`. If you set one, pass it again.
+- Versioning is on by default (see [Versioned Bucket](#versioned-bucket)), so each rewrite stores another full copy of the object as a noncurrent version. It's kept, and billed, for `noncurrentVersionExpirationDays` (default 90). Until then the previous metadata stays on the previous version, and `restoreVersion()` brings it back with that version.
+- The rewrite isn't atomic. Anything written to the object between the `get()` and the `put()` (a new body or other metadata) is overwritten with what was read, and FileBucket has no conditional write to guard against it. Avoid rewriting objects that other code may be updating at the same time.
+- Uploads through presigned URLs (`putUrl()`, `createUploadHandle()`) carry no custom metadata. Set it afterwards with a rewrite like the one above.
+- S3 stores metadata keys in lowercase, so `get()` on AWS returns `{ owner: … }` for a key written as `Owner`. The local mock keeps the case you wrote (see [Mock vs AWS Behavior Differences](./DESIGN.md#mock-vs-aws-behavior-differences)). Use lowercase keys so both return the same thing.
 
 ### Presigned Upload URL
 

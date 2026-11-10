@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 class FileDownloadHandle(
     val url: String,
+    // No cookie jar: [url] is pre-authorized, so it carries its own credential.
     private val httpClient: HttpClient = defaultHttpClient()
 ) {
 
