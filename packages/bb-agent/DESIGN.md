@@ -202,7 +202,9 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   assistant message if the turn completed during the gap) and `getPendingInterrupts` (recovers a
   missed interrupt). Two guards protect the eventually-consistent DynamoDB read: `stillSameInFlightTurn`
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
-  `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
+  `extendsStream` (refuse to overwrite the live bubble with a prior-turn row; with nothing streamed
+  yet, a row that repeats the previous turn's answer counts as that turn's row, because the read can
+  miss the in-flight turn's user row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
 - **A turn that failed during the gap** is recovered from the row the backend saves for it: an
   assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the

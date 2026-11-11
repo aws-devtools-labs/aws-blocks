@@ -359,6 +359,19 @@ export function useChat(options: UseChatOptions): ChatInstance {
 	}
 
 	/**
+	 * The text of the last answer shown before the in-flight turn's bubble, or undefined when
+	 * there is none.
+	 */
+	function previousAnswer(): string | undefined {
+		const at = messages.findIndex(m => m.id === assistantId);
+		for (let i = (at === -1 ? messages.length : at) - 1; i >= 0; i--) {
+			const m = messages[i];
+			if (m.role === 'assistant' && m.content) return m.content;
+		}
+		return undefined;
+	}
+
+	/**
 	 * End the in-flight turn as failed: from a live `error` chunk, or from the error row a
 	 * reconnect re-sync finds when that chunk was missed.
 	 */
@@ -456,12 +469,12 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				if (stillSameInFlightTurn) armFailsafe();
 			} else if (turnComplete && stillSameInFlightTurn) {
 				// Adopt the persisted final text ONLY if it extends what we've already
-				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
-				// persisted text). If it does NOT extend our stream, `last` is a stale /
-				// previous-turn assistant row that does not continue the current bubble;
-				// adopting it would overwrite live text with prior-turn content and halt
-				// streaming, so we treat the turn as still running and wait for the terminal
-				// chunk instead.
+				// streamed this turn (the stream is a prefix of the persisted text, or nothing
+				// streamed yet and the row is not the previous turn's answer). If it does NOT
+				// extend our stream, `last` is a stale / previous-turn assistant row that does
+				// not continue the current bubble; adopting it would overwrite live text with
+				// prior-turn content and halt streaming, so we treat the turn as still running
+				// and wait for the terminal chunk instead.
 				//
 				// INVARIANT (resume path): a resume-start conversation must not end in a
 				// content-bearing assistant row. On resume, respondToInterrupt resets
@@ -473,7 +486,11 @@ export function useChat(options: UseChatOptions): ChatInstance {
 				// getConversation adapter that role-filters to user/assistant (as loadConversation
 				// does client-side) could re-expose this by dropping the interrupt row and
 				// surfacing a prior assistant row as `last`.
-				const extendsStream = assistantText === '' || last.content.startsWith(assistantText);
+				// With nothing streamed, a row repeating the previous turn's answer is that turn's
+				// row: the in-flight turn's user row is written after stream() returns, so the read
+				// can miss it. A new answer identical to the previous one waits for its live `done`.
+				const extendsStream =
+					assistantText === '' ? last.content !== previousAnswer() : last.content.startsWith(assistantText);
 				if (extendsStream) {
 					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
 					// Replace the in-flight assistant bubble with the persisted final text.
