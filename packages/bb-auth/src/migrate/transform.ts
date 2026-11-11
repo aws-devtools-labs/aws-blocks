@@ -321,7 +321,7 @@ export function analyzeFile(
 			if (block) exported.set(el.name.text, block);
 		}
 	}
-	const mentioned = new Set([...TODO_IF_MENTIONED].filter((n) => new RegExp(`\\b${n}\\b`).test(text)));
+	const mentioned = new Set([...TODO_IF_MENTIONED].filter((n) => new RegExp(`\\b${escapeRegExp(n)}\\b`).test(text)));
 	return { blocks, instanceExports: exported, classExports: classExports(ts, sf, classes), mentioned };
 }
 
@@ -2486,7 +2486,7 @@ function getterTarget(ts: TypeScript, n: TS.Expression): TS.Expression | undefin
 function keyOf(name: string, quote: string): string {
 	return IDENT_RE.test(name)
 		? name
-		: `${quote}${name.replace(/\\/g, '\\\\').replace(new RegExp(quote, 'g'), `\\${quote}`)}${quote}`;
+		: `${quote}${name.replace(/\\/g, '\\\\').replace(new RegExp(escapeRegExp(quote), 'g'), `\\${quote}`)}${quote}`;
 }
 
 function detectQuote(ts: TypeScript, sf: TS.SourceFile): string {

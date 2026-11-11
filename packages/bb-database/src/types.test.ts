@@ -7,6 +7,7 @@ import assert from 'node:assert';
 import { test } from 'node:test';
 import type { Scope } from '@aws-blocks/core';
 import type { DatabaseCluster as DatabaseClusterType, Database as DatabaseType } from './index.mock.js';
+import type { ClusterType } from './types.js';
 
 type Equal<X, Y> = (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
 type Expect<T extends true> = T;
@@ -28,7 +29,7 @@ function typeChecks(): void {
 
 	void onShared.query;
 	void owned.transaction;
-	type _Ref = Expect<Equal<typeof onShared.cluster.kind, 'dsql'>>;
+	type _Ref = Expect<Equal<typeof onShared.cluster.kind, ClusterType>>;
 	type _RefId = Expect<Equal<typeof onShared.cluster.id, string>>;
 
 	// @ts-expect-error: capacity options do not belong to a DSQL cluster
@@ -39,9 +40,26 @@ function typeChecks(): void {
 	new DatabaseCluster(scope, 'c3', { type: 'distributed' });
 	// @ts-expect-error: type is required
 	new DatabaseCluster(scope, 'c4', {});
-	// @ts-expect-error: provisioned is not available yet
+	// @ts-expect-error: the planned name was not kept; the second kind is 'aurora'
 	new DatabaseCluster(scope, 'c5', { type: 'provisioned' });
 	new DatabaseCluster(scope, 'c6', { type: 'dsql', removalPolicy: 'retain' });
+
+	const aurora = new DatabaseCluster(scope, 'main', { type: 'aurora', minCapacity: 0.5, maxCapacity: 8 });
+	type _Aurora = Expect<Equal<typeof aurora, DatabaseClusterType>>;
+	new DatabaseCluster(scope, 'a1', { type: 'aurora' });
+	new DatabaseCluster(scope, 'a2', {
+		type: 'aurora',
+		removalPolicy: 'snapshot',
+		pointInTimeRecovery: { retentionDays: 7 },
+	});
+	// @ts-expect-error: backups are an Aurora setting; DSQL has none to configure
+	new DatabaseCluster(scope, 'a5', { type: 'dsql', pointInTimeRecovery: true });
+	const onAurora = new Database(scope, 'reports', { cluster: aurora, migrationsPath: './reports' });
+	type _OnAurora = Expect<Equal<typeof onAurora, DatabaseType>>;
+	// @ts-expect-error: capacity is a number of ACUs
+	new DatabaseCluster(scope, 'a3', { type: 'aurora', minCapacity: '0.5' });
+	// @ts-expect-error: removalPolicy lives on the cluster once `cluster` is set, for aurora too
+	new Database(scope, 'a4', { cluster: aurora, removalPolicy: 'snapshot' });
 
 	// @ts-expect-error: removalPolicy lives on the cluster once `cluster` is set
 	new Database(scope, 'b1', { cluster: shared, removalPolicy: 'destroy' });

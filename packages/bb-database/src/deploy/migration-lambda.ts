@@ -3,13 +3,20 @@
 
 import type { DatabaseEngine } from '@aws-blocks/data-common';
 import { GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import type { CloudFormationCustomResourceEvent } from 'aws-lambda';
-import { DEFAULT_SCHEMA, quoteIdent, searchPathFor } from '../constants.js';
-import { DsqlEngine } from '../engines/dsql-engine.js';
-import { DatabaseErrors, isSerializationConflict, pgErrorCode } from '../errors.js';
+import {
+	AURORA_MASTER_USER,
+	CLUSTER_ENV,
+	DEFAULT_SCHEMA,
+	isClusterType,
+	quoteIdent,
+	searchPathFor,
+} from '../constants.js';
+import { iamAuthToken, PgEngine } from '../engines/pg-engine.js';
+import { DatabaseErrors, isConnectionLost, isConnectTimeout, isSerializationConflict, pgErrorCode } from '../errors.js';
 import { buildMigrationPlan } from '../migrations/plan.js';
 import { ensureMigrationTables, runMigrationPlan } from '../migrations/runner.js';
+import type { ClusterType } from '../types.js';
 
 const MAX_RETRIES = 8;
 const INITIAL_DELAY_MS = 1000;
@@ -17,16 +24,16 @@ const MAX_DELAY_MS = 30000;
 
 /** @internal A lost connection, a cluster still starting, or a serialization conflict; the run resumes from its progress rows. */
 export function isRetryableMigrationError(e: unknown): boolean {
-	if (!(e instanceof Error)) return false;
-	const raw = e.cause instanceof Error ? e.cause : undefined;
 	const matches = (err: Error): boolean =>
 		err.name === DatabaseErrors.ConnectionFailed ||
 		isSerializationConflict(err) ||
-		pgErrorCode(err)?.startsWith('08') === true ||
-		err.message.includes('Connection terminated') ||
-		err.message.includes('ECONNREFUSED') ||
-		err.message.includes('ENOTFOUND');
-	return matches(e) || (raw !== undefined && matches(raw));
+		isConnectionLost(err) ||
+		isConnectTimeout(err);
+	// The runner wraps the engine's error, which wraps the driver's: walk the chain.
+	for (let err: unknown = e, depth = 0; err instanceof Error && depth < 5; err = err.cause, depth++) {
+		if (matches(err)) return true;
+	}
+	return false;
 }
 
 async function withRetry<T>(fn: () => Promise<T>): Promise<T> {
@@ -49,9 +56,15 @@ function escapeString(value: string): string {
 	return value.replace(/'/g, "''");
 }
 
-/** @internal Idempotent and run on every deploy, so tables a new migration adds get their grants. */
+/**
+ * @internal Idempotent and run on every deploy, so tables a new migration adds get their grants. The role is
+ * mapped to IAM the way each engine spells it: DSQL's `AWS IAM GRANT` names the execution role's ARN; Aurora's
+ * `rds_iam` membership lets the role log in with any token for its name, and the `rds-db:connect` grant on the
+ * execution role (cluster-infra.ts) decides who gets one.
+ */
 export async function provisionAppRole(
 	engine: DatabaseEngine,
+	kind: ClusterType,
 	dbRoleName: string,
 	appRoleArn: string,
 	schemaName: string,
@@ -67,8 +80,11 @@ export async function provisionAppRole(
 			if (pgErrorCode(e instanceof Error && e.cause instanceof Error ? e.cause : e) !== '42710') throw e;
 		}
 	}
-	await engine.execute(`AWS IAM GRANT ${quoteIdent(dbRoleName)} TO '${escapeString(appRoleArn)}'`);
-	// `public` is a DSQL system entity: a schema-level grant on it is rejected, and custom roles can use it without one.
+	if (kind === 'dsql')
+		await engine.execute(`AWS IAM GRANT ${quoteIdent(dbRoleName)} TO '${escapeString(appRoleArn)}'`);
+	else await engine.execute(`GRANT rds_iam TO ${quoteIdent(dbRoleName)}`);
+	// `public` is a DSQL system entity: a schema-level grant on it is rejected, and custom roles can use it without
+	// one. PostgreSQL grants PUBLIC usage on it, so the skip holds for Aurora too.
 	if (schemaName !== DEFAULT_SCHEMA)
 		await engine.execute(`GRANT USAGE ON SCHEMA ${quoteIdent(schemaName)} TO ${quoteIdent(dbRoleName)}`);
 	const tables = await engine.query<{ tablename: string }>(
@@ -86,6 +102,14 @@ export async function provisionAppRole(
 		const list = views.map((v) => `${quoteIdent(schemaName)}.${quoteIdent(v.viewname)}`).join(', ');
 		await engine.execute(`GRANT SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
 	}
+	const matviews = await engine.query<{ matviewname: string }>(
+		'SELECT matviewname FROM pg_matviews WHERE schemaname = $1',
+		[schemaName],
+	);
+	if (matviews.length > 0) {
+		const list = matviews.map((v) => `${quoteIdent(schemaName)}.${quoteIdent(v.matviewname)}`).join(', ');
+		await engine.execute(`GRANT SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
+	}
 	const sequences = await engine.query<{ sequencename: string }>(
 		'SELECT sequencename FROM pg_sequences WHERE schemaname = $1',
 		[schemaName],
@@ -95,7 +119,7 @@ export async function provisionAppRole(
 		await engine.execute(`GRANT USAGE, SELECT ON ${list} TO ${quoteIdent(dbRoleName)}`);
 	}
 	console.log(
-		`[bb-database] Role '${dbRoleName}' granted DML on ${tables.length} table(s), ${views.length} view(s), ${sequences.length} sequence(s) in schema '${schemaName}'`,
+		`[bb-database] Role '${dbRoleName}' granted DML on ${tables.length} table(s), ${views.length} view(s), ${matviews.length} materialized view(s), ${sequences.length} sequence(s) in schema '${schemaName}'`,
 	);
 }
 
@@ -120,15 +144,34 @@ async function loadMigrationsAsset(bucket: string, key: string): Promise<Record<
 	return body ? (JSON.parse(body) as Record<string, string>) : {};
 }
 
-function buildEngine(schemaName: string): DatabaseEngine {
-	const endpoint = process.env.DSQL_ENDPOINT;
-	const region = process.env.DSQL_REGION;
-	if (!endpoint || !region) throw new Error(`Missing env: DSQL_ENDPOINT=${endpoint}, DSQL_REGION=${region}`);
-	const signer = new DsqlSigner({ hostname: endpoint, region });
-	return new DsqlEngine({
+interface ClusterEnv {
+	kind: ClusterType;
+	endpoint: string;
+	region: string;
+}
+
+function readClusterEnv(): ClusterEnv {
+	const kind = process.env[CLUSTER_ENV.kind];
+	const endpoint = process.env[CLUSTER_ENV.endpoint];
+	const region = process.env[CLUSTER_ENV.region];
+	if (!isClusterType(kind) || !endpoint || !region) {
+		throw new Error(
+			`Missing env: ${CLUSTER_ENV.kind}=${kind}, ${CLUSTER_ENV.endpoint}=${endpoint}, ${CLUSTER_ENV.region}=${region}`,
+		);
+	}
+	return { kind, endpoint, region };
+}
+
+// The cluster admin: DSQL's `admin` through its admin token, Aurora's master user through an RDS IAM token (the
+// express configuration creates the master user with IAM authentication and no password).
+function buildEngine(cluster: ClusterEnv, schemaName: string): DatabaseEngine {
+	const { kind, endpoint, region } = cluster;
+	const role = kind === 'dsql' ? 'admin' : AURORA_MASTER_USER;
+	return new PgEngine({
+		kind,
 		endpoint,
-		role: 'admin',
-		getAuthToken: () => signer.getDbConnectAdminAuthToken(),
+		role,
+		getAuthToken: iamAuthToken({ kind, endpoint, region, role, admin: true }),
 		searchPath: searchPathFor(schemaName),
 		poolSize: 1,
 	});
@@ -136,12 +179,18 @@ function buildEngine(schemaName: string): DatabaseEngine {
 
 async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 	const schemaName = props.schemaName || DEFAULT_SCHEMA;
-	const engine = buildEngine(schemaName);
+	const cluster = readClusterEnv();
+	const engine = buildEngine(cluster, schemaName);
 	try {
 		if (props.migrationsBucket && props.migrationsKey) {
-			// Linted at synth; the dsql-lint binary is not deployed with the Lambda.
-			const plan = buildMigrationPlan(await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey));
-			const result = await withRetry(() => runMigrationPlan(engine, plan, { schemaName }));
+			// A dsql file was linted at synth; the dsql-lint binary is not deployed with the Lambda.
+			const plan = buildMigrationPlan(
+				await loadMigrationsAsset(props.migrationsBucket, props.migrationsKey),
+				cluster.kind,
+			);
+			const result = await withRetry(() =>
+				runMigrationPlan(engine, plan, { schemaName, boundToInvocation: true }),
+			);
 			console.log('[bb-database] Applied:', result.applied.length ? result.applied : '(none pending)');
 			if (result.waitingOn) {
 				console.log(
@@ -153,8 +202,10 @@ async function migrateBlock(props: MigrationProperties): Promise<boolean> {
 			await withRetry(() => ensureMigrationTables(engine, schemaName));
 			console.log('[bb-database] This block has no migrations; schema ensured');
 		}
-		if (!props.dbRole || !props.appRoleArn) throw new Error('dbRole and appRoleArn are required on a DSQL cluster');
-		await withRetry(() => provisionAppRole(engine, props.dbRole as string, props.appRoleArn as string, schemaName));
+		if (!props.dbRole || !props.appRoleArn) throw new Error('dbRole and appRoleArn are required');
+		await withRetry(() =>
+			provisionAppRole(engine, cluster.kind, props.dbRole as string, props.appRoleArn as string, schemaName),
+		);
 		return true;
 	} finally {
 		await engine.destroy().catch((e) => console.error('[bb-database] engine cleanup failed', e));

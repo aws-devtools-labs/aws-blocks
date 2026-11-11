@@ -4,7 +4,13 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
-import { DEFAULT_MIGRATIONS_ROOT, DEFAULT_SCHEMA, quoteIdent } from '../constants.js';
+import {
+	AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS,
+	DEFAULT_MIGRATIONS_ROOT,
+	DEFAULT_SCHEMA,
+	MIGRATION_LAMBDA_TIMEOUT_MINUTES,
+	quoteIdent,
+} from '../constants.js';
 import {
 	type CatalogState,
 	catalogState,
@@ -14,13 +20,27 @@ import {
 	type ResolvedTarget,
 } from '../dialect/async-ddl.js';
 import { withTransaction } from '../engines/handle.js';
-import { brandedError, configError, MIGRATION_FAILED_ERROR_NAME } from '../errors.js';
+import { brandedError, configError, MIGRATION_FAILED_ERROR_NAME, pgErrorCode } from '../errors.js';
 import type { FilePlan, MigrationPlan, StatementStep, WaitJobStep } from './plan.js';
 
 interface RunPlanOptions {
 	schemaName: string;
 	log?: (message: string) => void;
+	/**
+	 * On AWS, an `aurora` file is one transaction inside one Lambda invocation. With this set, the runner gives the
+	 * server PostgreSQL 17's `transaction_timeout` just under the invocation's limit, so a file that would outlive
+	 * the invocation is cancelled by the server and reported with its file and statement instead of the
+	 * invocation's own timeout, which names nothing.
+	 */
+	boundToInvocation?: boolean;
 }
+
+// PostgreSQL 17 reports a cancelled transaction (`transaction_timeout`) with this SQLSTATE.
+const PG_TRANSACTION_TIMEOUT = '25P04';
+
+/** An `aurora` file: every step in one transaction, so nothing of it persists until the whole file has run. */
+const isOneTransaction = (file: FilePlan): boolean =>
+	file.steps.length > 0 && file.steps.every((step) => step.transactional);
 
 interface PendingJob {
 	file: string;
@@ -33,19 +53,31 @@ interface RunPlanResult {
 	waitingOn?: PendingJob;
 }
 
+/** The two bookkeeping tables, schema-qualified: a file that changes `search_path` must not redirect the ledger. */
+interface Ledger {
+	migrations: string;
+	progress: string;
+}
+
+const ledgerTables = (schemaName: string): Ledger => ({
+	migrations: `${quoteIdent(schemaName)}.${quoteIdent('_migrations')}`,
+	progress: `${quoteIdent(schemaName)}.${quoteIdent('_migration_progress')}`,
+});
+
 export async function ensureMigrationTables(engine: DatabaseEngine, schemaName: string): Promise<void> {
+	const ledger = ledgerTables(schemaName);
 	if (schemaName !== DEFAULT_SCHEMA) await engine.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(schemaName)}`);
 	await engine.execute(
-		'CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())',
+		`CREATE TABLE IF NOT EXISTS ${ledger.migrations} (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`,
 	);
 	await engine.execute(
-		'CREATE TABLE IF NOT EXISTS _migration_progress ' +
+		`CREATE TABLE IF NOT EXISTS ${ledger.progress} ` +
 			'(name TEXT PRIMARY KEY, step INTEGER NOT NULL, job_id TEXT, file_hash TEXT NOT NULL)',
 	);
 }
 
-async function appliedMigrations(engine: DatabaseEngine): Promise<Set<string>> {
-	const rows = await engine.query<{ name: string }>('SELECT name FROM _migrations ORDER BY name');
+async function appliedMigrations(engine: DatabaseEngine, ledger: Ledger): Promise<Set<string>> {
+	const rows = await engine.query<{ name: string }>(`SELECT name FROM ${ledger.migrations} ORDER BY name`);
 	return new Set(rows.map((r) => r.name));
 }
 
@@ -58,9 +90,12 @@ interface ProgressRecord {
 }
 
 /** One `_migration_progress` row per partly applied file; `fileHash` is `FilePlan.hash` of the text the steps ran from. */
-async function readProgress(engine: DatabaseEngine): Promise<Map<string, ProgressRecord & { fileHash: string }>> {
+async function readProgress(
+	engine: DatabaseEngine,
+	ledger: Ledger,
+): Promise<Map<string, ProgressRecord & { fileHash: string }>> {
 	const rows = await engine.query<{ name: string; step: number; job_id: string | null; file_hash: string }>(
-		'SELECT name, step, job_id, file_hash FROM _migration_progress',
+		`SELECT name, step, job_id, file_hash FROM ${ledger.progress}`,
 	);
 	return new Map(
 		rows.map((row) => [
@@ -78,21 +113,27 @@ async function exec(engine: DatabaseEngine, sql: string, params: unknown[], hand
 
 function recordProgress(
 	engine: DatabaseEngine,
+	ledger: Ledger,
 	file: FilePlan,
 	record: ProgressRecord,
 	handle?: TransactionHandle,
 ): Promise<void> {
 	return exec(
 		engine,
-		'INSERT INTO _migration_progress (name, step, job_id, file_hash) VALUES ($1, $2, $3, $4) ' +
+		`INSERT INTO ${ledger.progress} (name, step, job_id, file_hash) VALUES ($1, $2, $3, $4) ` +
 			'ON CONFLICT (name) DO UPDATE SET step = EXCLUDED.step, job_id = EXCLUDED.job_id, file_hash = EXCLUDED.file_hash',
 		[file.file, record.step, record.jobId ?? null, file.hash],
 		handle,
 	);
 }
 
-function deleteProgress(engine: DatabaseEngine, file: FilePlan, handle?: TransactionHandle): Promise<void> {
-	return exec(engine, 'DELETE FROM _migration_progress WHERE name = $1', [file.file], handle);
+function deleteProgress(
+	engine: DatabaseEngine,
+	ledger: Ledger,
+	file: FilePlan,
+	handle?: TransactionHandle,
+): Promise<void> {
+	return exec(engine, `DELETE FROM ${ledger.progress} WHERE name = $1`, [file.file], handle);
 }
 
 // Messages count the file's statements, which the author wrote; a wait step is the runner's own and is reported at
@@ -124,10 +165,19 @@ function failed(file: FilePlan, index: number, cause: unknown): Error {
 	const statement = step.kind === 'statement' ? step : step.statement;
 	const { k, n } = statementPosition(file, index);
 	const detail = cause instanceof Error ? cause.message : String(cause);
+	// The engine re-tags a server error and keeps the SQLSTATE on its cause.
+	const code = pgErrorCode(cause) ?? (cause instanceof Error ? pgErrorCode(cause.cause) : undefined);
+	const wayForward = isOneTransaction(file)
+		? code === PG_TRANSACTION_TIMEOUT
+			? `The file is one transaction and it ran longer than the migration function's invocation allows ` +
+				`(${MIGRATION_LAMBDA_TIMEOUT_MINUTES} minutes). Nothing from the file was applied. ` +
+				'Split the file into smaller files, or move a long backfill out of the migrations.'
+			: 'Nothing from the file was applied. Fix the cause and deploy again; the file runs again from the start.'
+		: 'Fix the cause and deploy again; the runner resumes at this statement.';
 	return brandedError(
 		MIGRATION_FAILED_ERROR_NAME,
 		`Migration ${file.file} failed at statement ${k} of ${n}: ${statement.sql.replace(/\s+/g, ' ').trim()}\n` +
-			`${detail}\nFix the cause and deploy again; the runner resumes at this statement.`,
+			`${detail}\n${wayForward}`,
 		cause,
 	);
 }
@@ -241,9 +291,10 @@ export async function runMigrationPlan(
 	options: RunPlanOptions,
 ): Promise<RunPlanResult> {
 	const log = options.log ?? ((m: string) => console.log(m));
+	const ledger = ledgerTables(options.schemaName);
 	await ensureMigrationTables(engine, options.schemaName);
-	const applied = await appliedMigrations(engine);
-	const progress = await readProgress(engine);
+	const applied = await appliedMigrations(engine, ledger);
+	const progress = await readProgress(engine, ledger);
 	const results: string[] = [];
 
 	for (const file of plan.files) {
@@ -259,8 +310,8 @@ export async function runMigrationPlan(
 			engine,
 			file,
 			log,
-			save: (record, handle) => recordProgress(engine, file, record, handle),
-			clear: () => deleteProgress(engine, file),
+			save: (record, handle) => recordProgress(engine, ledger, file, record, handle),
+			clear: () => deleteProgress(engine, ledger, file),
 		};
 		if (startAt > 0) {
 			const { k, n } = statementPosition(file, startAt);
@@ -272,7 +323,15 @@ export async function runMigrationPlan(
 			const step = file.steps[i];
 			try {
 				if (step.transactional) {
-					if (!handle) handle = await engine.beginTransaction();
+					if (!handle) {
+						handle = await engine.beginTransaction();
+						if (plan.kind === 'aurora' && options.boundToInvocation) {
+							await engine.executeInTransaction(
+								handle,
+								`SET LOCAL transaction_timeout = ${AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS}`,
+							);
+						}
+					}
 					await engine.executeInTransaction(handle, step.sql);
 					// Progress is written once per batch, with the COMMIT that makes it visible.
 					const next = file.steps[i + 1];
@@ -326,8 +385,10 @@ export async function runMigrationPlan(
 		}
 
 		await withTransaction(engine, async (record) => {
-			await engine.executeInTransaction(record, 'INSERT INTO _migrations (name) VALUES ($1)', [file.file]);
-			await deleteProgress(engine, file, record);
+			await engine.executeInTransaction(record, `INSERT INTO ${ledger.migrations} (name) VALUES ($1)`, [
+				file.file,
+			]);
+			await deleteProgress(engine, ledger, file, record);
 		});
 		results.push(file.file);
 		log(`[bb-database] Applied: ${file.file}`);

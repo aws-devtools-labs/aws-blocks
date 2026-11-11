@@ -21,3 +21,6 @@ export { sanitizeConfigKey } from './common/config.js';
 // Internal: the per-call fetch store the generated client reads and
 // `@aws-blocks/blocks/utils`'s createTestClient sets (see client/fetch-store.ts).
 export { CLIENT_FETCH_STORE } from './client/fetch-store.js';
+// Escape helpers for building regular expressions and HTML from values that
+// aren't constants (configuration, request data, file paths).
+export { escapeRegExp, escapeHtml } from './common/escape.js';

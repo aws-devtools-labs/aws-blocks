@@ -2,9 +2,70 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ScopeParent } from '@aws-blocks/core';
-import { DEFAULT_CLUSTER_ID, DEFAULT_SCHEMA, sanitizeSchemaName } from '../constants.js';
+import {
+	AURORA_BACKUP_DAYS_MAX,
+	AURORA_MAX_ACU,
+	DEFAULT_AURORA_MAX_CAPACITY,
+	DEFAULT_AURORA_MIN_CAPACITY,
+	DEFAULT_CLUSTER_ID,
+	DEFAULT_SCHEMA,
+	isClusterType,
+	sanitizeSchemaName,
+} from '../constants.js';
 import { configError } from '../errors.js';
-import type { ClusterRef, DatabaseClusterLike, DatabaseOptions } from '../types.js';
+import type {
+	AuroraClusterOptions,
+	ClusterRef,
+	DatabaseClusterLike,
+	DatabaseClusterOptions,
+	DatabaseOptions,
+} from '../types.js';
+
+/** `AuroraClusterOptions` with the capacity defaults filled in and every value checked. */
+export type ResolvedAuroraClusterOptions = AuroraClusterOptions & { minCapacity: number; maxCapacity: number };
+
+export type ResolvedClusterOptions =
+	| Exclude<DatabaseClusterOptions, AuroraClusterOptions>
+	| ResolvedAuroraClusterOptions;
+
+function acu(value: number, name: string, floor: number, fullId: string): number {
+	if (!Number.isFinite(value) || value < floor || value > AURORA_MAX_ACU || (value * 2) % 1 !== 0) {
+		throw configError(
+			`DatabaseCluster '${fullId}': ${name} must be a multiple of 0.5 between ${floor} and ${AURORA_MAX_ACU} ACUs, not ${value}.`,
+		);
+	}
+	return value;
+}
+
+/**
+ * Checks a `DatabaseCluster`'s options the same way in every entry point, so a value the service would reject
+ * fails `npm run dev` and the unit tests, not the deploy. Aurora Serverless v2 scales in 0.5 ACU steps; a minimum of 0 pauses
+ * the cluster, and the maximum is at least 1. Backups are kept 1 to 35 days.
+ */
+export function resolveClusterOptions(options: DatabaseClusterOptions, fullId: string): ResolvedClusterOptions {
+	if (!isClusterType(options?.type)) {
+		throw configError(`DatabaseCluster '${fullId}': 'type' must be 'dsql' or 'aurora'.`);
+	}
+	if (options.type !== 'aurora') return options;
+	const minCapacity = acu(options.minCapacity ?? DEFAULT_AURORA_MIN_CAPACITY, 'minCapacity', 0, fullId);
+	// The service requires a maximum above 0.5 ACU (CloudFormation: "The maximum capacity must be higher than 0.5 ACUs").
+	const maxCapacity = acu(options.maxCapacity ?? DEFAULT_AURORA_MAX_CAPACITY, 'maxCapacity', 1, fullId);
+	if (minCapacity > maxCapacity) {
+		throw configError(
+			`DatabaseCluster '${fullId}': minCapacity (${minCapacity}) is above maxCapacity (${maxCapacity}).`,
+		);
+	}
+	const pitr = options.pointInTimeRecovery;
+	if (typeof pitr === 'object' && pitr !== null) {
+		const days = pitr.retentionDays;
+		if (!Number.isInteger(days) || days < 1 || days > AURORA_BACKUP_DAYS_MAX) {
+			throw configError(
+				`DatabaseCluster '${fullId}': pointInTimeRecovery.retentionDays must be an integer from 1 to ${AURORA_BACKUP_DAYS_MAX}, not ${days}.`,
+			);
+		}
+	}
+	return { ...options, minCapacity, maxCapacity };
+}
 
 function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
 	return (
@@ -12,7 +73,7 @@ function isDatabaseClusterLike(value: unknown): value is DatabaseClusterLike {
 		value !== null &&
 		'type' in value &&
 		'fullId' in value &&
-		(value as { type: unknown }).type === 'dsql'
+		isClusterType((value as { type: unknown }).type)
 	);
 }
 
