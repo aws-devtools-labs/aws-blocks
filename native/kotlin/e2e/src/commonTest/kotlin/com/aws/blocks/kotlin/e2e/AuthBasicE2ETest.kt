@@ -2,7 +2,6 @@ package com.aws.blocks.kotlin.e2e
 
 import blocks.e2e.DeliveredCode
 import blocks.e2e.NativeSignInResult
-import com.aws.blocks.kotlin.BlocksClient
 import com.aws.blocks.kotlin.exceptions.ApiException
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.booleans.shouldBeFalse
@@ -107,7 +106,7 @@ class AuthBasicE2ETest {
 
     @Test
     fun requireAuthWithNoSessionThrowsNotAuthenticated() = runTest {
-        BlocksClient.clearCookies()
+        e2eBlocks().clearStoredState()
 
         val e = shouldThrow<ApiException> { api.basicRequireAuth() }
         e.name shouldBe AuthErrorNames.NotAuthenticated

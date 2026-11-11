@@ -39,7 +39,6 @@ on:
         default: ''
 
 permissions:
-  id-token: write
   contents: read
 
 # One run per PR at a time. NEVER cancel in progress: a cancelled runner skips the
@@ -64,6 +63,10 @@ jobs:
        (github.event.action != 'labeled' || github.event.label.name == 'e2e:upgrade-in-place'))
     runs-on: ubuntu-latest
     timeout-minutes: 75
+    # id-token only on the job that assumes an AWS role (OIDC), never at workflow scope.
+    permissions:
+      id-token: write
+      contents: read
     # The E2E account pool, like every other E2E job: the publish role stays
     # limited to publishing.
     environment: e2e
