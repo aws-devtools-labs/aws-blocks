@@ -274,11 +274,16 @@ export async function deleteCloudRecord(
 		await deleteItem({
 			tableName,
 			key,
-			// Guarded on the partition key so deleting something already gone
+			// Guarded on EVERY key attribute, so deleting something already gone
 			// reports NOT_FOUND. An unconditional delete succeeds on a missing
 			// record, and a silent success on a destructive action is a trap: it
 			// reads as "deleted" when nothing was.
-			conditionExpression: keyCondition(keyFields.slice(0, 1), 'attribute_exists'),
+			//
+			// Every declared alias must appear here. DynamoDB rejects an
+			// `ExpressionAttributeNames` entry no expression references, so
+			// guarding on the partition key alone made every delete on a
+			// composite-key table fail with a ValidationException.
+			conditionExpression: keyCondition(keyFields, 'attribute_exists'),
 			expressionAttributeNames,
 			...(context.region === undefined ? {} : { region: context.region }),
 		});

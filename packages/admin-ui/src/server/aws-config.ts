@@ -87,7 +87,12 @@ export function resetCredentialCache(): void {
 function credentialsFor(profile: string): CredentialsProvider {
 	const cached = credentialCache.get(profile);
 	if (cached) return cached;
-	const provider = fromIni({ profile });
+	// `ignoreCache` so the provider re-reads ~/.aws/credentials on each resolve.
+	// Without it the SDK's shared-config loader keeps the first contents it read,
+	// so refreshing expired temporary keys in that file did nothing until the
+	// dashboard restarted — which the UI explicitly says is not needed. The file
+	// read is cheap next to the AWS call it precedes.
+	const provider = fromIni({ profile, ignoreCache: true });
 	credentialCache.set(profile, provider);
 	return provider;
 }

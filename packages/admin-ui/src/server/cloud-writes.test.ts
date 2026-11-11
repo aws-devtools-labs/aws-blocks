@@ -166,8 +166,19 @@ describe('the key schema is read from DescribeTable on EVERY write path', () => 
 		assert.equal(result.ok, true);
 		assert.deepEqual(del.calls[0]?.key, { userId: 'u1', todoId: 't9' });
 		assert.deepEqual(del.calls[0]?.expressionAttributeNames, { '#k0': 'userId', '#k1': 'todoId' });
-		// Guarded on the DESCRIBED partition key, never on a hardcoded `pk`.
-		assert.equal(del.calls[0]?.conditionExpression, 'attribute_exists(#k0)');
+		// Guarded on the DESCRIBED key fields, never on a hardcoded `pk`, and on
+		// EVERY alias it declares. This asserted `attribute_exists(#k0)` alone,
+		// which left `#k1` declared and unreferenced: DynamoDB rejects an unused
+		// ExpressionAttributeNames entry, so every delete on a composite-key table
+		// failed with a ValidationException. This seam records the request instead
+		// of validating it, which is why the shape has to be asserted here.
+		assert.equal(del.calls[0]?.conditionExpression, 'attribute_exists(#k0) AND attribute_exists(#k1)');
+		for (const alias of Object.keys(del.calls[0]?.expressionAttributeNames ?? {})) {
+			assert.ok(
+				del.calls[0]?.conditionExpression?.includes(alias),
+				`every declared alias must be referenced; ${alias} was not`,
+			);
+		}
 	});
 
 	it('deletes from a table keyed userId/todoId, the case that made the reference return a 500', async () => {
