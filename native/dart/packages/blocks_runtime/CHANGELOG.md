@@ -35,6 +35,9 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 - `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
   its descriptor doesn't list or has no config for, as `signInRelay` does.
   It used to fail a null check.
+- `OidcClient.exchange` throws `OidcUnknownProviderException` for a
+  provider its descriptor doesn't list, before sending anything, as Kotlin's
+  does. It used to post the name to the backend, which rejected it.
 
 ## 0.2.0
 

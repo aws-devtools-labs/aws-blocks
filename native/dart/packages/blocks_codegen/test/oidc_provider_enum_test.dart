@@ -88,16 +88,33 @@ void main() {
     expect(warnings, isEmpty);
   });
 
-  test('the client re-exports TypedOidcClient and OidcProvider', () {
+  test('a typed result re-exports TypedOidcClient and OidcProvider', () {
     final (:source, warnings: _) = _generate([
-      _method('auth.getClient', _oidc()),
+      _method('auth.getClient', _oidc(['google'])),
     ]);
     expect(
       source,
       contains(
-        'show OidcClient, TypedOidcClient, OidcProvider, OidcAuthState, OidcSignedIn,',
+        "export 'package:blocks_runtime/blocks_runtime.dart' show TypedOidcClient, OidcProvider;",
       ),
     );
+  });
+
+  test('an untyped client re-exports neither, so an app type of that name '
+      'stays unambiguous', () {
+    final (:source, warnings: _) = _generate([
+      _method('auth.getClient', _oidc()),
+      _method('auth.menu', {
+        'type': 'object',
+        'properties': {
+          'client': _oidc(['google']),
+        },
+        'required': ['client'],
+      }),
+    ]);
+    expect(source, contains('show OidcClient, OidcAuthState'));
+    expect(source, isNot(contains('TypedOidcClient')));
+    expect(source, isNot(contains('OidcProvider')));
   });
 
   test('a spec that names no providers takes any provider', () {
@@ -347,6 +364,22 @@ void main() {
         r'getClient({required OidcProvider$ p, required TypedOidcClient$ q})',
       ),
     );
+  });
+
+  test('in a spec whose OIDC clients are all untyped, those names are left '
+      'as they are', () {
+    final (:source, :warnings) = _generate([
+      _method('auth.getClient', _oidc(), params: runtimeNamedParams()),
+    ], schemas: runtimeNamedSchemas());
+    expect(source, contains('class OidcProvider {'));
+    expect(source, contains('enum TypedOidcClient {'));
+    expect(
+      source,
+      contains(
+        'getClient({required OidcProvider p, required TypedOidcClient q})',
+      ),
+    );
+    expect(warnings, isEmpty);
   });
 
   test('in a spec with no OIDC client, those names are left as they are', () {
