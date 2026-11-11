@@ -8,6 +8,8 @@
 "@aws-blocks/bb-auth-cognito": patch
 "@aws-blocks/bb-agent": patch
 "@aws-blocks/bb-cron-job": patch
+"@aws-blocks/bb-app-setting": patch
+"@aws-blocks/bb-distributed-data": patch
 "@aws-blocks/blocks": minor
 ---
 
@@ -23,7 +25,9 @@ The IAM roles AWS Blocks creates for a backend now scope every service-principal
 
 Synth now checks the roles AWS Blocks covers for a backend for a service-principal trust with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition. That is the same set of roles `defaults.permissionsBoundary` applies to: for a `BlocksStack` the whole stack, for an embedded `BlocksBackend` its subtree and the stack-level roles created on its behalf. Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are, as is the `apigateway.amazonaws.com` trust of the account-level API Gateway CloudWatch Logs role (`BlocksApiGatewayCloudWatchRole`, created by `@aws-blocks/core` and `@aws-blocks/hosting` when access logging is on). That trust stays unconditioned: API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role, so a condition stops log delivery.
 
-- A role AWS Blocks creates (under a Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
-- A role the app adds to a `BlocksStack` itself, including one a CDK construct creates inside it (for example the `EventsRole` of an `events.Rule` targeting a state machine), gets a synth warning instead, and synth succeeds.
+- A role AWS Blocks creates (under an AWS Blocks Building Block or a compute, or at stack scope on a block's behalf) fails synth; the error names the role's construct path and the principal.
+- A role the app creates gets a synth warning instead, and synth succeeds: one its backend module adds (on a `BlocksStack` or an embedded `BlocksBackend`, at stack scope, under a `Scope` namespace, or inside a custom block the app writes as a `Scope` subclass), one added to a `BlocksStack` after `create()`, and one a CDK construct creates inside any of these (for example the `EventsRole` of an `events.Rule` targeting a state machine).
+
+Ownership follows who created the role: AWS Blocks' own blocks, computes and stack-level helpers mark the constructs they create, and every other covered role is the app's.
 
 To resolve the warning, add both conditions to the role's trust statement. For a role a CDK construct creates with no prop for its trust, set them with `role.node.defaultChild.addPropertyOverride('AssumeRolePolicyDocument.Statement.N.Condition', { ... })`; the warning names `N`. To keep the trust as it is, acknowledge the warning with `Annotations.of(role).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition')`, or on the stack for every role in it. See "Service-principal trust" in the `@aws-blocks/core` README.

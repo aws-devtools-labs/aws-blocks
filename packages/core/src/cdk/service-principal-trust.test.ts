@@ -17,6 +17,7 @@ import { BlocksPresets } from './blocks-defaults.js';
 import { coverBlocksRoot } from './blocks-roles.js';
 import { ComputeBase } from './compute/compute.js';
 import type { DefaultComputeFactory } from './compute/default-compute-factory.js';
+import { BlocksBackend } from './blocks-backend.js';
 import { BlocksStack } from './index.js';
 import {
 	addServicePrincipalTrustCheck,
@@ -129,22 +130,69 @@ function trustWarning(rolePath: string, service: string, index: number): string 
 	);
 }
 
-/** A BlocksStack whose backend module is the trust-check fixture. */
-async function trustCheckBlocksStack(id: string, { blockRole }: { blockRole: boolean }) {
-	const app = new cdk.App();
+interface FixtureRoles {
+	/** Add a role inside a block with an official `bbName`. */
+	readonly blockRole?: boolean;
+	/** Add a role a block hoists to stack scope and marks as its own. */
+	readonly helperRole?: boolean;
+}
+
+/** Run `build` with the fixture's opt-in roles switched on. */
+async function withFixtureRoles<T>({ blockRole, helperRole }: FixtureRoles, build: () => Promise<T>): Promise<T> {
 	if (blockRole) process.env.TRUST_CHECK_BLOCK_ROLE = '1';
+	if (helperRole) process.env.TRUST_CHECK_HELPER_ROLE = '1';
 	try {
-		const stack = await BlocksStack.create(app, id, {
+		return await build();
+	} finally {
+		delete process.env.TRUST_CHECK_BLOCK_ROLE;
+		delete process.env.TRUST_CHECK_HELPER_ROLE;
+	}
+}
+
+/** A BlocksStack whose backend module is the trust-check fixture. */
+async function trustCheckBlocksStack(id: string, roles: FixtureRoles) {
+	const app = new cdk.App();
+	const stack = await withFixtureRoles(roles, () =>
+		BlocksStack.create(app, id, {
 			backendHandlerPath: handlerPath,
 			backendCDKPath: trustBackendPath,
 			defaults: BlocksPresets.production,
 			defaultComputeFactory: stubComputeFactory,
-		});
-		return { app, stack };
-	} finally {
-		delete process.env.TRUST_CHECK_BLOCK_ROLE;
-	}
+		}),
+	);
+	return { app, stack };
 }
+
+/** A plain `cdk.Stack` with an embedded `BlocksBackend` whose backend module is the trust-check fixture. */
+async function trustCheckEmbeddedBackend(id: string, roles: FixtureRoles) {
+	const app = new cdk.App();
+	const stack = new cdk.Stack(app, id, { env: { account: '123456789012', region: 'us-east-1' } });
+	await withFixtureRoles(roles, () =>
+		BlocksBackend.create(stack, 'Blocks', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: trustBackendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: stubComputeFactory,
+		}),
+	);
+	return { app, stack };
+}
+
+const byId = ([a]: [string, string], [b]: [string, string]) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** The warnings expected for the fixture's app-owned roles, given role paths under `prefix`. */
+function expectedAppRoleWarnings(prefix: string, roles: [string, string][]): [string, string][] {
+	const path = (p: string) => `${prefix}/${p}/Resource`;
+	return roles.map(([role, service]) => [`/${path(role)}`, trustWarning(path(role), service, 0)]);
+}
+
+/** The fixture's app-owned roles on its root (stack-level ones aside). */
+const FIXTURE_ROOT_APP_ROLES: [string, string][] = [
+	['ModuleRole', 'glue.amazonaws.com'],
+	['UserSM/EventsRole', 'events.amazonaws.com'],
+	['app/NamespaceRole', 'glue.amazonaws.com'],
+	['mine/SM/EventsRole', 'events.amazonaws.com'],
+];
 
 /** A plain stack covered as a Blocks root, with the trust check registered. */
 function checkedStack(): { app: cdk.App; stack: cdk.Stack } {
@@ -294,17 +342,48 @@ describe('service-principal trust check', () => {
 		const { app, stack } = await trustCheckBlocksStack('TrustCheckAppRoles', { blockRole: false });
 		new iam.Role(stack, 'LateUnconditioned', { assumedBy: new iam.ServicePrincipal('glue.amazonaws.com') });
 		const assembly = app.synth();
-		const path = (p: string) => `TrustCheckAppRoles/${p}/Resource`;
-		const byId = ([a]: [string, string], [b]: [string, string]) => (a < b ? -1 : a > b ? 1 : 0);
 		// The EventsRole CDK creates for `targets.SfnStateMachine` only warns: the
-		// app owns it. (CDK already scopes the state machine's own role.)
-		const expected: [string, string][] = [
+		// app owns it, on the root and inside the app's custom block (a `Scope`
+		// subclass without an official `bbName`). (CDK already scopes the state
+		// machine's own role.)
+		const expected = expectedAppRoleWarnings('TrustCheckAppRoles', [
 			['LateUnconditioned', 'glue.amazonaws.com'],
-			['ModuleRole', 'glue.amazonaws.com'],
-			['UserSM/EventsRole', 'events.amazonaws.com'],
-			['app/NamespaceRole', 'glue.amazonaws.com'],
-		].map(([role, service]) => [`/${path(role)}`, trustWarning(path(role), service, 0)]);
+			...FIXTURE_ROOT_APP_ROLES,
+		]);
 		assert.deepStrictEqual(trustWarnings(assembly, stack).sort(byId), expected.sort(byId));
+	});
+
+	test('BlocksStack fails synth for an unconditioned role a block hoists to stack scope and marks', async () => {
+		const { app } = await trustCheckBlocksStack('TrustCheckHelperRole', { helperRole: true });
+		assertSynthErrors(app, [
+			trustError('TrustCheckHelperRole/BlocksFakeHelperRole/Resource', 'glue.amazonaws.com'),
+		]);
+	});
+
+	test('embedded BlocksBackend fails synth for an unconditioned role a block creates', async () => {
+		const { app } = await trustCheckEmbeddedBackend('TrustCheckEmbeddedBlockRole', { blockRole: true });
+		assertSynthErrors(app, [
+			trustError('TrustCheckEmbeddedBlockRole/Blocks/block/ServiceRole/Resource', 'glue.amazonaws.com'),
+		]);
+	});
+
+	test('embedded BlocksBackend fails synth for an unconditioned role a block hoists to stack scope and marks', async () => {
+		const { app } = await trustCheckEmbeddedBackend('TrustCheckEmbeddedHelperRole', { helperRole: true });
+		assertSynthErrors(app, [
+			trustError('TrustCheckEmbeddedHelperRole/BlocksFakeHelperRole/Resource', 'glue.amazonaws.com'),
+		]);
+	});
+
+	test('embedded BlocksBackend warns, without failing synth, for unconditioned roles its backend module adds', async () => {
+		const { app, stack } = await trustCheckEmbeddedBackend('TrustCheckEmbeddedAppRoles', {});
+		// A role the app adds to the stack itself, outside the backend, isn't
+		// covered at all (as before): no warning, no error.
+		new iam.Role(stack, 'OutsideBackend', { assumedBy: new iam.ServicePrincipal('glue.amazonaws.com') });
+		const expected = [
+			...expectedAppRoleWarnings('TrustCheckEmbeddedAppRoles/Blocks', FIXTURE_ROOT_APP_ROLES),
+			...expectedAppRoleWarnings('TrustCheckEmbeddedAppRoles', [['ModuleStackRole', 'glue.amazonaws.com']]),
+		];
+		assert.deepStrictEqual(trustWarnings(app.synth(), stack).sort(byId), expected.sort(byId));
 	});
 
 	test('the app-owned role warning can be acknowledged on the stack', async () => {

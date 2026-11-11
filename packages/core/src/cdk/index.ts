@@ -41,6 +41,7 @@ import type { ApiDirectRoute } from './api-direct-routes.js';
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { duplicateLambdaEventHandlerError, lambdaEventHandlerKey } from '../common/lambda-event-handlers.js';
+import { OFFICIAL_BB_NAMES } from '../common/official-bb-names.generated.js';
 import { BLOCKS_BACKEND_ROOT, findBackendRoot, getOrCreateOnRoot } from './root-registry.js';
 import type { SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext, recordBuildingBlock } from './stack-metadata.js';
@@ -393,10 +394,13 @@ export class Scope extends Construct {
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
-		// Building Blocks and computes subclass Scope; a plain `new Scope(...)` is an
-		// app namespace. Marks the roles a block creates as AWS Blocks' own for the
-		// service-principal trust check (see isAppOwnedRole in blocks-roles.ts).
-		if (new.target !== Scope) markBlocksOwned(this);
+		// An official Building Block (its `bbName` is one of OFFICIAL_BB_NAMES) marks
+		// the roles it creates as AWS Blocks' own for the service-principal trust
+		// check (see isAppOwnedRole in blocks-roles.ts). A plain `new Scope(...)`
+		// namespace and a `Scope` subclass the app writes (a custom block) stay
+		// unmarked, so their roles are the app's. Computes, `RawRoute` and
+		// first-party blocks without an official `bbName` mark themselves.
+		if (options?.bbName && OFFICIAL_BB_NAMES.has(options.bbName)) markBlocksOwned(this);
 		if (options?.bbName) {
 			this.bbName = options.bbName;
 			this.bbVersion = options.bbVersion;

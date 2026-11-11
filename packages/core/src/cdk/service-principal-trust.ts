@@ -141,12 +141,14 @@ function appOwnedTrustWarning(role: cdk.CfnResource, { service, statement }: Unc
  * `aws:SourceAccount` or `aws:SourceArn` condition. Lambda execution roles are
  * accepted as they are ({@link UNCONDITIONED_SERVICES}).
  *
- * In a `BlocksStack` that set is the whole stack, so it also holds roles the
- * app adds itself ({@link isAppOwnedRole}): those get a synth warning instead
- * (id {@link SERVICE_PRINCIPAL_TRUST_WARNING_ID}, which the app can
- * acknowledge), naming the property override that sets the condition. Roles
- * under a Building Block, a compute, or created by the framework at stack
- * scope still fail synth.
+ * That set also holds roles the app creates itself ({@link isAppOwnedRole}:
+ * its backend module's constructs in a `BlocksStack` or an embedded
+ * `BlocksBackend`, a custom block it writes, and in a `BlocksStack` whatever
+ * it adds after `create()`): those get a synth warning instead (id
+ * {@link SERVICE_PRINCIPAL_TRUST_WARNING_ID}, which the app can acknowledge),
+ * naming the property override that sets the condition. Roles under an AWS
+ * Blocks Building Block or a compute, or created by the framework at stack
+ * scope, still fail synth.
  *
  * Checks role trust policies only — not resource policies or KMS grants. Runs
  * as a construct validation, so it sees each trust policy after every block has

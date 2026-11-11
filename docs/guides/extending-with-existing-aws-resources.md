@@ -467,6 +467,11 @@ In tests, you can read `work.sent` to assert what would have been delivered.
 
 - One more package to build and own. Worth it when you have ≥2 callers or
   when hand-rolled SDK boilerplate becomes a liability.
+- Its IAM roles are your app's, as for any construct in your backend. A role
+  that trusts an AWS service principal (other than Lambda) without an
+  `aws:SourceAccount` or `aws:SourceArn` condition gets a synth warning, which
+  you resolve or acknowledge as described in "Service-principal trust" in the
+  [`@aws-blocks/core` README](../../packages/core/README.md).
 
 For the canonical example of an in-tree BB that does this, see
 [`packages/bb-kv-store/src/index.cdk.ts`](../../packages/bb-kv-store/src/index.cdk.ts) —

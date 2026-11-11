@@ -8,7 +8,7 @@
  */
 
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaEntry } from '@aws-blocks/core/cdk/internal';
+import { deployTimeLambdaEntry, markAddedChildrenBlocksOwned } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -28,6 +28,9 @@ export class DistributedDatabase extends BuildingBlockScope {
     super(id, { parent: scope, bbName: BB_NAME, vpc: { requiresEgress: true } });
 
     const stack = cdk.Stack.of(this);
+    // The cluster, migration function and provider below go at stack scope;
+    // they are this block's (marked at the end of the constructor).
+    const stackChildrenBefore = new Set(stack.node.children);
     const envName = this.fullId.replace(ENV_SANITIZE, '_');
     const region = stack.region;
     const dbRole = sanitizeDbRoleName(this.fullId);
@@ -135,6 +138,10 @@ export class DistributedDatabase extends BuildingBlockScope {
 
     // Ensure migrations run after cluster is created
     migrationCR.node.addDependency(cluster);
+
+    // So the service-principal trust check treats the roles of these stack-level
+    // constructs as AWS Blocks roles rather than the app's.
+    markAddedChildrenBlocksOwned(stack, stackChildrenBefore);
   }
 
   /**

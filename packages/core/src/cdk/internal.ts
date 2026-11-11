@@ -102,6 +102,12 @@ export {
 	scopeProviderWaiterTrust,
 	sourceScopedConditions,
 } from './service-principal-trust.js';
+// Marks a construct (and every role under it) as created by AWS Blocks, for the
+// service-principal trust check's ownership split. Used by first-party blocks
+// that add constructs at stack scope on a block's behalf (bb-app-setting,
+// bb-distributed-table, bb-distributed-data) or carry no official bbName at
+// synth (bb-database).
+export { markAddedChildrenBlocksOwned, markBlocksOwned } from './blocks-roles.js';
 // The service-agnostic half of the above: the `encryption` option parser, also
 // used by bb-file-bucket (S3) so every Blocks storage resource accepts the same
 // `'aws-managed' | 'customer-managed' | fromKmsKey(arn)` values.

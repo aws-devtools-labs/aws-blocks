@@ -6,7 +6,7 @@ import * as cdk from 'aws-cdk-lib';
 import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
-import { Construct } from 'constructs';
+import { Construct, type IConstruct } from 'constructs';
 import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY, MAX_API_NAMESPACE_COMPUTES_BYTES } from '../api-placement.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
@@ -29,7 +29,12 @@ import { type ApiDirectRoute, admitCloudFront, cloudFrontReachableRoutes } from 
 import { finalizeConfigRegistry, registerConfig } from './config-registry.js';
 import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
-import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
+import {
+	coverBlocksRoot,
+	coverStackLevelAdditions,
+	recordFrameworkChildren,
+	snapshotChildren,
+} from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
 import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
@@ -736,6 +741,11 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		const deploymentType = isSandboxContext(backend) ? 'sandbox' : 'production';
 		registerConfig(backend, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
 		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
+		// What the app's backend module adds — on the backend and at stack scope —
+		// is the app's own unless a Building Block or framework helper marks it
+		// (see recordFrameworkChildren and coverStackLevelAdditions below).
+		const backendChildrenBeforeModule = snapshotChildren(backend);
+		const stackChildrenBeforeModule = snapshotChildren(cdk.Stack.of(backend));
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -747,6 +757,10 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 				);
 			}
 		}
+		const addedByModule = (scope: Construct, before: ReadonlySet<IConstruct>) =>
+			new Set(scope.node.children.filter((c) => !before.has(c)));
+		const backendModuleChildren = addedByModule(backend, backendChildrenBeforeModule);
+		const stackModuleChildren = addedByModule(cdk.Stack.of(backend), stackChildrenBeforeModule);
 		addBlocksStackMetadata(cdk.Stack.of(backend));
 
 		// Build the single shared REST API gateway now that the backend module has
@@ -799,7 +813,12 @@ export class BlocksBackend extends Construct implements ApiFrontDoorOwner {
 		ensureVpcAccessPolicyWhenVpcActive(backend);
 
 		// Last, so every role a block or finalizer hoisted to stack scope exists.
-		coverStackLevelAdditions(backend, stackChildrenBefore);
+		coverStackLevelAdditions(backend, stackChildrenBefore, stackModuleChildren);
+		// The backend's direct children the framework added: everything but what
+		// the backend module added. Roles under the rest are app-owned unless a
+		// Building Block or framework helper sits above them (see isAppOwnedRole
+		// in blocks-roles.ts), the same split BlocksStack.create() records.
+		recordFrameworkChildren(backend, new Set(backend.node.children.filter((c) => !backendModuleChildren.has(c))));
 		warnOnMixedBoundaries(backend);
 
 		return backend;
