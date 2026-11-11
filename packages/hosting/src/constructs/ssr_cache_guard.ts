@@ -567,6 +567,17 @@ export const handler = typeof run !== 'function'
       const request = requestInfoFromEvent(event);
       return runWithRequest(request, () => run.call(this, event, guardStream(responseStream, request), ...rest));
     }
+  : run.length >= 3
+  ? // A callback-style handler (event, context, callback) reports its result
+    // through the callback, so the wrapper guards it there. It keeps the
+    // handler's arity and return value, so the runtime invokes it the same way.
+    function (event, context, callback, ...rest) {
+      const request = requestInfoFromEvent(event);
+      const done =
+        typeof callback === 'function' ? (err, res) => callback(err, err ? res : guardResult(res, request)) : callback;
+      const out = run.call(this, event, context, done, ...rest);
+      return out && typeof out.then === 'function' ? out.then((res) => guardResult(res, request)) : out;
+    }
   : async function (event, ...rest) {
       const request = requestInfoFromEvent(event);
       return guardResult(await run.call(this, event, ...rest), request);

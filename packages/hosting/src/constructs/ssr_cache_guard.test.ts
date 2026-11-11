@@ -282,6 +282,37 @@ void describe('handler wrapper', () => {
     assert.equal(anonymous?.headers?.['cache-control'], 's-maxage=60');
   });
 
+  void it('guards the result a callback-style handler passes to its callback', async () => {
+    const dir = path.join(tmpRoot, `h${counter++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'index.mjs'),
+      `export const handler = (event, context, callback) => {
+  if (event.fail) return void setTimeout(() => callback(new Error('boom'), { statusCode: 500 }), 0);
+  setTimeout(() => callback(null, { statusCode: 200, headers: { 'cache-control': 's-maxage=60' }, body: 'ok' }), 0);
+};
+`,
+    );
+    withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, {});
+    type Callback = (err: Error | null, res?: LambdaResult) => void;
+    const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as {
+      handler: (event: unknown, context: unknown, callback: Callback) => unknown;
+    };
+    assert.equal(mod.handler.length, 3);
+    const invoke = (event: unknown) =>
+      new Promise<{ err: Error | null; res?: LambdaResult; returned: unknown }>((resolve) => {
+        const returned = mod.handler(event, {}, (err, res) => resolve({ err, res, returned }));
+      });
+    const credentialed = await invoke({ headers: { cookie: 'theme=dark' } });
+    assert.equal(credentialed.returned, undefined);
+    assert.equal(credentialed.err, null);
+    assert.equal(credentialed.res?.headers?.['cache-control'], PRIVATE);
+    assert.equal((await invoke({ headers: {} })).res?.headers?.['cache-control'], 's-maxage=60');
+    const failed = await invoke({ fail: true, headers: { cookie: 'theme=dark' } });
+    assert.equal(failed.err?.message, 'boom');
+    assert.deepEqual(failed.res, { statusCode: 500 });
+  });
+
   void it('guards the prelude a streaming handler writes itself, and keeps its streaming marker', async () => {
     const dir = path.join(tmpRoot, `h${counter++}`);
     fs.mkdirSync(dir, { recursive: true });
