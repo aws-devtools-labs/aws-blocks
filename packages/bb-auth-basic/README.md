@@ -247,7 +247,7 @@ On plain-HTTP localhost the BB drops `Secure` for the `Lax` default and drops `P
 
 Server-side sign-out revocation (see `signOut`) adds **one DynamoDB `GetItem` per authenticated request** — `checkAuth`, `getCurrentUser`, `requireAuth`, and the `getAuthState` call that runs on page load each check the token's `jti` against a revocation list. On an auth-gated, high-traffic app this roughly doubles read volume to the underlying table versus pure stateless JWT validation. Tokens issued before revocation shipped (no `jti`) skip the read and simply expire within `sessionDuration`.
 
-The revocation read is an eventually-consistent `GetItem` (no `ConsistentRead`), so revocation is **near-immediate, not instantaneous**: for a sub-second window after `signOut`, a token replayed against a different Lambda instance may still authenticate before the revocation marker propagates. A signed-out token stops working everywhere within that propagation window, and always expires at its own `exp` regardless.
+The revocation read is a strongly consistent `GetItem` (`KVStore.get` reads with `ConsistentRead` by default), so a request that starts after `signOut` returns sees the revocation marker on every Lambda instance. A request that is already in flight when `signOut` writes the marker can still complete. A signed-out token always expires at its own `exp` regardless.
 
 ## Sign-in throttling
 

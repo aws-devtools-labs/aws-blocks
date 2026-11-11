@@ -390,7 +390,7 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		// each write back the same `attempts + 1`, advancing the counter once per
 		// burst rather than once per guess (slack scaling with attacker
 		// parallelism). The same CAS runs across Lambda instances on one DynamoDB
-		// row. `ifValueEquals` compares the serialized value, so the guard MUST be
+		// row. `ifValueEquals` compares the stored string exactly, so the guard MUST be
 		// the original `raw` string, never a re-stringified object (key order).
 		const reserved = JSON.stringify({ hmac, expires, attempts: attempts + 1 });
 		try {
@@ -894,10 +894,10 @@ export class AuthBasic extends Scope implements BlocksAuth {
 	 *
 	 * The write is a compare-and-swap against the exact value read
 	 * (`ifValueEquals`, or `ifNotExists` for a user who has never reset).
-	 * `codes.get` is eventually consistent, so a plain read-modify-write could
-	 * read a stale epoch and write back a value an already-issued token still
-	 * matches, letting that token survive the reset. DynamoDB evaluates the
-	 * condition against the item's current value, so a stale read or a
+	 * `codes.get` is strongly consistent, but two concurrent resets can read
+	 * the same epoch, so a plain read-modify-write could write back a value an
+	 * already-issued token still matches, letting that token survive the reset.
+	 * DynamoDB evaluates the condition against the item's current value, so a
 	 * concurrent bump fails the condition and the loop re-reads. A store error
 	 * (for example a throttle) is retried with a short backoff. After
 	 * {@link MAX_EPOCH_BUMP_ATTEMPTS} failures the last error is rethrown, and
