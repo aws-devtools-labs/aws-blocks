@@ -38,18 +38,6 @@ export const MAX_OBJECT_LOCK_RETENTION_DAYS = 36500;
 const MUTATING_CORS_METHODS: ReadonlyArray<CorsRule['allowedMethods'][number]> = ['PUT', 'POST', 'DELETE'];
 
 /**
- * Build a `ValidationFailed` error through the shared {@link validationFailed}
- * helper, the same one `mock-utils.ts` and `presigned-url.ts` use, so a rejected
- * key surfaces the same `.name`, name-prefixed `.message` and HTTP status
- * regardless of which layer rejected it. The error is a wire-safe `ApiError`
- * with status 400: the RPC serializer forwards its name and message to the
- * client as a 400 instead of collapsing it to a generic internal error.
- */
-function validationError(message: string): Error {
-	return validationFailed(message);
-}
-
-/**
  * True for a character that has no legitimate use in an object key or prefix:
  * - ASCII control characters (`\x00`–`\x1f`, `\x7f`) and C1 control
  *   characters (U+0080–U+009F, which includes NEL U+0085);
@@ -66,16 +54,39 @@ function isDisallowedKeyChar(code: number): 'control' | 'format' | null {
 }
 
 /**
+ * Encoded characters {@link isDotSegment} decodes: `%2e` (`.`), `%2f` (`/`) and
+ * `%5c` (`\`), in either case.
+ */
+const ENCODED_DOT_OR_SEPARATOR = /%2e|%2f|%5c/gi;
+
+/** The character each {@link ENCODED_DOT_OR_SEPARATOR} match decodes to. */
+const DECODED: Readonly<Record<string, string>> = { '%2e': '.', '%2f': '/', '%5c': '\\' };
+
+/**
  * True when `segment` is a `.` or `..` path segment, either literally or once
- * every `%2e` / `%2E` in it is read as `.` (so `%2e%2e`, `.%2E` and `%2e` all
- * count). Only that exact sequence is decoded: any other `%` — including a
+ * every `%2e` (`.`), `%2f` (`/`) and `%5c` (`\`) in it is decoded (in either
+ * case) and the result is split on `/` and `\`: `%2e%2e`, `.%2E`, `..%2f..`
+ * and `%2e%2e%2fb` all count, because a piece of the decoded segment is `.` or
+ * `..`. Only those three sequences are decoded: any other `%` — including a
  * literal one such as `100%done.txt` — is left as-is, so ordinary filenames
  * containing `%` stay valid.
+ *
+ * This is a single decoding pass. A double-encoded sequence (`%252e`) is not
+ * decoded again; rejecting it is out of scope.
  */
 function isDotSegment(segment: string): boolean {
-	const decoded = segment.replace(/%2e/gi, '.');
-	return decoded === '.' || decoded === '..';
+	const decoded = segment.replace(ENCODED_DOT_OR_SEPARATOR, (seq) => DECODED[seq.toLowerCase()]);
+	return decoded.split(/[/\\]/).some((piece) => piece === '.' || piece === '..');
 }
+
+/** S3's maximum object key length, in bytes of the key's UTF-8 encoding. */
+const MAX_KEY_BYTES = 1024;
+
+/**
+ * UTF-8 encoder for the key length check. `TextEncoder` is a global in Node and
+ * in browsers, so this module stays loadable from every entry point.
+ */
+const UTF8 = new TextEncoder();
 
 /**
  * Character and segment rules shared by {@link assertValidKey} and
@@ -87,23 +98,23 @@ function assertKeyShape(value: string, label: 'key' | 'prefix', allowTrailingSla
 		const code = value.charCodeAt(i);
 		const kind = isDisallowedKeyChar(code);
 		if (kind === 'control') {
-			throw validationError(`Invalid ${label}: contains control characters`);
+			throw validationFailed(`Invalid ${label}: contains control characters`);
 		}
 		if (kind === 'format') {
-			throw validationError(`Invalid ${label}: contains Unicode line-separator or bidirectional formatting characters`);
+			throw validationFailed(`Invalid ${label}: contains Unicode line-separator or bidirectional formatting characters`);
 		}
 		if (code === 0x5c) {
-			throw validationError(`Invalid ${label}: backslash not allowed`);
+			throw validationFailed(`Invalid ${label}: backslash not allowed`);
 		}
 	}
 	if (value.startsWith('/')) {
-		throw validationError(`Invalid ${label}: leading slash not allowed`);
+		throw validationFailed(`Invalid ${label}: leading slash not allowed`);
 	}
 	const segments = value.split('/');
 	for (let i = 0; i < segments.length; i++) {
 		const segment = segments[i];
 		if (isDotSegment(segment)) {
-			throw validationError(`Invalid ${label}: contains a path traversal segment`);
+			throw validationFailed(`Invalid ${label}: contains a path traversal segment`);
 		}
 		// Reject an empty segment (adjacent slashes `a//b` or a trailing slash
 		// `a/`). The mock maps keys onto the filesystem via `path.join`, which
@@ -113,7 +124,7 @@ function assertKeyShape(value: string, label: 'key' | 'prefix', allowTrailingSla
 		// leading slash; this covers interior and trailing ones.) A prefix may end
 		// with `/` (`uploads/`), so its final segment is allowed to be empty.
 		if (segment === '' && !(allowTrailingSlash && i === segments.length - 1)) {
-			throw validationError(`Invalid ${label}: contains an empty path segment`);
+			throw validationFailed(`Invalid ${label}: contains an empty path segment`);
 		}
 	}
 }
@@ -130,6 +141,8 @@ function assertKeyShape(value: string, label: 'key' | 'prefix', allowTrailingSla
  *
  * Rejects a key that:
  * - is empty or not a string — there is no meaningful object to address;
+ * - is longer than 1024 bytes once UTF-8 encoded — S3's key length limit, so
+ *   such a key is rejected locally just as S3 rejects it;
  * - contains a NUL byte or any other ASCII control character (`\x00`–`\x1f` or
  *   `\x7f`) — control bytes in a key are almost always a bug or an injected
  *   value and have no legitimate use in an S3 key;
@@ -148,10 +161,12 @@ function assertKeyShape(value: string, label: 'key' | 'prefix', allowTrailingSla
  * - contains a `..` (or `.`) path SEGMENT — checked per `/`-delimited segment,
  *   not by substring, so a normal filename such as `my..file.txt` is accepted
  *   while a path traversal segment like `a/../b` is rejected. A segment also
- *   counts when it becomes `.` or `..` once each `%2e` / `%2E` is read as `.`
- *   (`a/%2e%2e/b`), since code that URL-decodes keys would see a traversal
- *   segment there. No other percent-encoding is interpreted, so `100%done.txt`
- *   and `50%25.txt` stay valid.
+ *   counts when a piece of it is `.` or `..` once `%2e`, `%2f` and `%5c` are
+ *   decoded (in either case) and the result is split on `/` and `\`
+ *   (`a/%2e%2e/b`, `a/..%2f../b`, `a/%2e%2e%2fb`), since code that URL-decodes
+ *   keys would see a traversal segment there. No other percent-encoding is
+ *   interpreted, so `100%done.txt` and `50%25.txt` stay valid, and the decoding
+ *   is a single pass (a double-encoded `%252e` is not decoded again).
  *
  * Error messages are static and never include the key.
  *
@@ -164,7 +179,10 @@ function assertKeyShape(value: string, label: 'key' | 'prefix', allowTrailingSla
  */
 export function assertValidKey(key: string): void {
 	if (typeof key !== 'string' || key.length === 0) {
-		throw validationError('Invalid key: must be a non-empty string');
+		throw validationFailed('Invalid key: must be a non-empty string');
+	}
+	if (UTF8.encode(key).length > MAX_KEY_BYTES) {
+		throw validationFailed(`Invalid key: longer than ${MAX_KEY_BYTES} bytes in UTF-8`);
 	}
 	assertKeyShape(key, 'key', false);
 }
@@ -188,7 +206,7 @@ export function assertValidKey(key: string): void {
 export function assertValidPrefix(prefix: string | undefined): void {
 	if (prefix === undefined || prefix === '') return;
 	if (typeof prefix !== 'string') {
-		throw validationError('Invalid prefix: must be a string');
+		throw validationFailed('Invalid prefix: must be a string');
 	}
 	assertKeyShape(prefix, 'prefix', true);
 }

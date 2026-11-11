@@ -14,14 +14,37 @@ const RFC5987_EXTRA_ENCODE = /['()*]/g;
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
 
 /**
+ * True for a formatting character removed from a download filename: the
+ * bidirectional embedding/override (U+202A–U+202E) and isolate (U+2066–U+2069)
+ * characters that key validation also rejects, plus the directional marks
+ * U+200E (LRM), U+200F (RLM) and U+061C (ALM). Each changes how the name is
+ * displayed without being visible in it.
+ */
+function isDroppedFormatChar(code: number): boolean {
+	return (
+		(code >= 0x202a && code <= 0x202e) ||
+		(code >= 0x2066 && code <= 0x2069) ||
+		code === 0x200e ||
+		code === 0x200f ||
+		code === 0x061c
+	);
+}
+
+/** Path separators, replaced with `_` so the filename is a single path component. */
+const PATH_SEPARATORS = /[/\\]/g;
+
+/**
  * Build the `Content-Disposition` value for a download URL's `attachment` option.
  *
  * - `undefined` / `false` → `undefined` (no override; the object is served with
  *   S3's default disposition).
  * - `true` → `attachment`.
  * - a filename → `attachment; filename="<ascii>"; filename*=UTF-8''<encoded>`
- *   (RFC 6266 with the RFC 5987 extended parameter). Control characters are
- *   removed from the name. In the quoted ASCII fallback, `"`, `\`, `%` and every
+ *   (RFC 6266 with the RFC 5987 extended parameter). Control characters and
+ *   the {@link isDroppedFormatChar} formatting characters are removed from the
+ *   name, and `/` and `\` are replaced with `_` in both parameters, so the
+ *   saved file name is a single path component that displays as the characters
+ *   it contains. In the quoted ASCII fallback, `"`, `\`, `%` and every
  *   non-ASCII character are replaced with `_`; the `filename*` parameter carries
  *   the full UTF-8 name, percent-encoded, for clients that support it.
  *
@@ -30,7 +53,7 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
  * @param attachment - The `attachment` option from `getUrl()` / `getFileHandle()`.
  * @returns The header value, or `undefined` when no disposition is requested.
  * @throws {Error} `ValidationFailed` when `attachment` is not a boolean or a filename
- *   that is non-empty once control characters are removed.
+ *   that is non-empty once control and formatting characters are removed.
  */
 export function resolveContentDisposition(attachment: unknown): string | undefined {
 	if (attachment === undefined || attachment === false) return undefined;
@@ -38,15 +61,17 @@ export function resolveContentDisposition(attachment: unknown): string | undefin
 	if (typeof attachment !== 'string') {
 		throw validationFailed('Invalid attachment: must be a boolean or a filename');
 	}
-	// Drop lone surrogates (which `encodeURIComponent` can't encode) along with
-	// control characters.
+	// Drop lone surrogates (which `encodeURIComponent` can't encode) and
+	// formatting characters along with control characters, then replace path
+	// separators.
 	const name = Array.from(attachment)
 		.filter((ch) => {
 			const code = ch.codePointAt(0) ?? 0;
-			return !(code >= 0xd800 && code <= 0xdfff);
+			return !(code >= 0xd800 && code <= 0xdfff) && !isDroppedFormatChar(code);
 		})
 		.join('')
-		.replace(CONTROL_CHARS, '');
+		.replace(CONTROL_CHARS, '')
+		.replace(PATH_SEPARATORS, '_');
 	if (name.trim() === '') {
 		throw validationFailed('Invalid attachment: filename must not be empty');
 	}

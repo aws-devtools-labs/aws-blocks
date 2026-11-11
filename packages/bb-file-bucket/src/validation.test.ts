@@ -93,6 +93,14 @@ describe('assertValidKey rejects backslashes, %2e traversal segments and unsuppo
 		['rlo\u202e', 'ValidationFailed: Invalid key: contains Unicode line-separator or bidirectional formatting characters'],
 		['lri\u2066', 'ValidationFailed: Invalid key: contains Unicode line-separator or bidirectional formatting characters'],
 		['pdi\u2069', 'ValidationFailed: Invalid key: contains Unicode line-separator or bidirectional formatting characters'],
+		['a/..%2f../b', 'ValidationFailed: Invalid key: contains a path traversal segment'],
+		['a/%2e%2e%2fb', 'ValidationFailed: Invalid key: contains a path traversal segment'],
+		['a/%2E%2E%2Fb', 'ValidationFailed: Invalid key: contains a path traversal segment'],
+		['a/b%2f..', 'ValidationFailed: Invalid key: contains a path traversal segment'],
+		['a/%2e%2e%5cb', 'ValidationFailed: Invalid key: contains a path traversal segment'],
+		['a/b%5C.%5Cc', 'ValidationFailed: Invalid key: contains a path traversal segment'],
+		['x'.repeat(1025), 'ValidationFailed: Invalid key: longer than 1024 bytes in UTF-8'],
+		['\u00e9'.repeat(600), 'ValidationFailed: Invalid key: longer than 1024 bytes in UTF-8'],
 	];
 	for (const [key, message] of cases) {
 		test(`rejects ${JSON.stringify(key)} with a static message`, () => {
@@ -100,7 +108,7 @@ describe('assertValidKey rejects backslashes, %2e traversal segments and unsuppo
 		});
 	}
 
-	for (const key of ['100%done.txt', '50%25.txt', 'a/%2efile', 'a/file%2e', 'a/b%2e%2ec', '\u00e9t\u00e9.txt', 'a\u202fb', 'a\u2065b', 'a\u206ab']) {
+	for (const key of ['100%done.txt', '50%25.txt', 'a/%2efile', 'a/file%2e', 'a/b%2e%2ec', '\u00e9t\u00e9.txt', 'a\u202fb', 'a\u2065b', 'a\u206ab', 'a%2fb', 'a%5Cb', 'a/b%2f.c', 'a/%252e%252e/b', 'x'.repeat(1024), '\u00e9'.repeat(512)]) {
 		test(`accepts ${JSON.stringify(key)}`, () => {
 			assert.doesNotThrow(() => assertValidKey(key));
 		});

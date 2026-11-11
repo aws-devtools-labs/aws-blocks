@@ -180,6 +180,7 @@ describe('restoreVersion() encodes both the key and the caller-supplied versionI
 const INVALID_KEYS = [
 	'../etc/passwd', 'a/../../b', '/leading', 'foo\x00bar', 'ctrl\x01char', '.', 'a/./b', 'a//b', 'a/',
 	'a\\b', 'a/%2e%2e/b', '%2E', 'a/.%2e', 'nel\u0085x', 'c1\u009fx', 'ls\u2028x', 'ps\u2029x', 'rlo\u202ex', 'iso\u2066x',
+	'a/..%2f../b', 'a/%2e%2e%2fb', 'x'.repeat(1025), '\u00e9'.repeat(600),
 ];
 
 // Every public method that accepts an object key. Each is invoked with a single
@@ -613,7 +614,11 @@ describe('getUrl({ attachment }) signs the same Content-Disposition in both runt
 		[false, undefined],
 		[true, 'attachment'],
 		['report.pdf', `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`],
-		['a"b\\c%.txt', `attachment; filename="a_b_c_.txt"; filename*=UTF-8''a%22b%5Cc%25.txt`],
+		['a"b\\c%.txt', `attachment; filename="a_b_c_.txt"; filename*=UTF-8''a%22b_c%25.txt`],
+		['invoice\u202Efdp.exe', `attachment; filename="invoicefdp.exe"; filename*=UTF-8''invoicefdp.exe`],
+		['a\u200Eb\u200Fc\u061Cd\u2066e\u2069f\u202Ag.txt', `attachment; filename="abcdefg.txt"; filename*=UTF-8''abcdefg.txt`],
+		['../../etc/passwd', `attachment; filename=".._.._etc_passwd"; filename*=UTF-8''.._.._etc_passwd`],
+		['..\\..\\boot.ini', `attachment; filename=".._.._boot.ini"; filename*=UTF-8''.._.._boot.ini`],
 		['résumé (1).pdf', `attachment; filename="r_sum_ (1).pdf"; filename*=UTF-8''r%C3%A9sum%C3%A9%20%281%29.pdf`],
 		['line\r\nbreak.txt', `attachment; filename="linebreak.txt"; filename*=UTF-8''linebreak.txt`],
 	];
@@ -630,7 +635,7 @@ describe('getUrl({ attachment }) signs the same Content-Disposition in both runt
 		});
 	}
 
-	for (const bad of ['', '\r\n', 1, {}]) {
+	for (const bad of ['', '\r\n', '\u202e\u200f', 1, {}]) {
 		test(`attachment=${JSON.stringify(bad)} is rejected by both runtimes`, async () => {
 			const attachment = bad as unknown as string;
 			await assert.rejects(() => awsSigningBucket().bucket.getUrl('a', { attachment }), isValidation400);
