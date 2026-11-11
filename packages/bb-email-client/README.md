@@ -58,20 +58,25 @@ Instead, gate the method with `auth.requireAuth(context)` from an auth block, an
 message on the server so the caller can't choose the recipients or the content:
 
 ```typescript
-import { Scope, ApiNamespace } from '@aws-blocks/core';
+import { Scope, ApiNamespace, ApiError } from '@aws-blocks/core';
 import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import { EmailClient } from '@aws-blocks/bb-email-client';
 
 const scope = new Scope('my-app');
 const auth = new AuthBasic(scope, 'auth');
+// App-owned profile data, keyed by user ID. The app writes each user's address here.
+const profiles = new KVStore<{ email: string }>(scope, 'profiles');
 const emailClient = new EmailClient(scope, 'notifications', { fromAddress: 'noreply@example.com' });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async sendMeASummary() {
     const user = await auth.requireAuth(context); // throws 401 for a caller who isn't signed in
-    // In this app usernames are email addresses, so this only ever mails the signed-in user.
+    // Look the address up from app-owned data, so this only ever mails the signed-in user.
+    const profile = await profiles.get(user.userId);
+    if (!profile) throw new ApiError('No email address on file', 404);
     return await emailClient.send({
-      to: user.username,
+      to: profile.email,
       subject: 'Your summary',
       body: 'Here is your summary.',
     });
