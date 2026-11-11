@@ -258,17 +258,27 @@ registerConfig(blocksStack, 'LEGACY_SESSIONS_TABLE', LEGACY_TABLE); // runtime
 ```ts
 // index.ts
 import { Scope, KVStore, ApiNamespace } from '@aws-blocks/blocks';
+import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
+// `key` names the key attributes of the existing table (here: partition key `token`).
 const sessions = new KVStore(scope, 'sessions', {
+  schema: z.object({ token: z.string(), userId: z.string() }),
+  key: { partitionKey: 'token' },
   table: KVStore.fromExisting(process.env.LEGACY_SESSIONS_TABLE!),
 });
 
 export const api = new ApiNamespace(scope, 'api', () => ({
-  getSession: (token: string) => sessions.get(token),
+  getSession: (token: string) => sessions.get({ token }),
 }));
 ```
+
+Pass the `key` that matches the key schema of the existing table, and a `schema`
+for its items. `KVStore` reads and writes each top-level field of an item as one
+attribute, so it works with a table that another system filled. Without `key`,
+the block uses its own string partition key `_bkv_pk`, which only a table that
+a `KVStore` created has.
 
 > **IAM is handled for you.** When you pass `fromExisting(...)`, the BB still
 > calls `grantReadWriteData` / `grantReadWrite` on the bound resource and
