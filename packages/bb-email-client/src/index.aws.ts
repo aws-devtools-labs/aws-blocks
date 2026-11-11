@@ -12,7 +12,7 @@ export type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './
 
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
 import { EmailErrors } from './errors.js';
-import { validateMessage } from './validation.js';
+import { resolveMaxBatchSize, validateBatchSize, validateMessage } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
@@ -76,6 +76,7 @@ export class EmailClient extends Scope {
 	private fromAddress: string;
 	private replyTo?: string[];
 	private configurationSet?: string;
+	private maxBatchSize: number;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -91,6 +92,7 @@ export class EmailClient extends Scope {
 		this.fromAddress = options.fromAddress;
 		this.replyTo = options.replyTo;
 		this.configurationSet = options.configurationSet;
+		this.maxBatchSize = resolveMaxBatchSize(options.maxBatchSize);
 	}
 
 	/**
@@ -149,14 +151,20 @@ export class EmailClient extends Scope {
 	 *
 	 * Messages are chunked into groups of 50 destinations per API call (SES limit).
 	 *
+	 * A call takes at most `maxBatchSize` messages (default 100, set in `EmailOptions`). A larger
+	 * batch is rejected as a whole and nothing is sent, so one request can't fan out into an
+	 * unbounded number of SES sends.
+	 *
 	 * TODO: Add retry logic for transient failures (throttling, 5xx).
 	 *
 	 * @param messages - Array of email messages to send.
 	 * @returns Result with per-message status in the same order as the input array. A failed
 	 *   entry's `error` is a stable message naming the `EmailErrors` code or SES entry status;
 	 *   the raw SES error text is logged server-side, not returned.
+	 * @throws {EmailErrors.InvalidInput} If `messages` has more entries than `maxBatchSize`. Nothing is sent.
 	 */
 	async sendBatch(messages: EmailMessage[]): Promise<SendBatchResult> {
+		validateBatchSize(messages.length, this.maxBatchSize);
 		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> =
 			new Array(messages.length);
 

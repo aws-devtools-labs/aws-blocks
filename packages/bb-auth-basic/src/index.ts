@@ -264,8 +264,11 @@ function escapeRegex(s: string): string {
  *
  * ## Local Development
  *
- * In local dev mode, user data is stored in-memory via KVStore mock.
- * Users are lost on restart.
+ * In local dev mode, users, verification codes, sign-out revocations and
+ * lockout counters are stored by the KVStore mock under `.bb-data/` in the
+ * working directory, and the JWT signing secret by the AppSetting mock in
+ * `.bb-data/settings.json`. Users and sessions survive a dev server restart;
+ * `rm -rf .bb-data` wipes them.
  */
 export class AuthBasic extends Scope implements BlocksAuth {
 	private users: KVStore;

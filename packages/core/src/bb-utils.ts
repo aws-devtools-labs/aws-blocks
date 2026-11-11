@@ -18,3 +18,6 @@ export { getRequestBaseUrl } from './common/request-base-url.js';
 // Defined in the config module (it owns the config-key contract), re-exported
 // here so BB authors get it alongside the other BB utilities.
 export { sanitizeConfigKey } from './common/config.js';
+// Escape helpers for building regular expressions and HTML from values that
+// aren't constants (configuration, request data, file paths).
+export { escapeRegExp, escapeHtml } from './common/escape.js';

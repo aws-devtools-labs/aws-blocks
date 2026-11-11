@@ -217,6 +217,19 @@ export function emailClientTests(getApi: () => typeof apiType) {
         }
       });
 
+      test('sendBatch rejects a batch over the default cap of 100 messages', async () => {
+        const api = getApi();
+        const messages = Array.from({ length: 101 }, (_, i) => ({
+          to: `success+${i}@simulator.amazonses.com`,
+          subject: `Over cap ${i}`,
+          body: 'This batch is larger than the default maxBatchSize',
+        }));
+        await assert.rejects(
+          () => api.emailSendBatch(messages),
+          (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput),
+        );
+      });
+
       test('sendBatch rejects message with too many recipients', async () => {
         const api = getApi();
         const tooManyRecipients = Array.from({ length: 51 },

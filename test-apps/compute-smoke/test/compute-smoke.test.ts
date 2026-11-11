@@ -49,7 +49,14 @@ const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isDeployed = ENV === 'sandbox' || ENV === 'production';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
-const outputsPath = join(__dirname, '..', '.blocks-sandbox', 'outputs.json');
+// Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
+// production run must not read the sandbox's.
+const outputsPath = join(
+  __dirname,
+  '..',
+  '.blocks-sandbox',
+  ENV === 'production' ? 'outputs.production.json' : 'outputs.json',
+);
 
 // Same default and values as index.cdk.ts, which reads the same variable at synth.
 const frontDoor = (process.env.COMPUTE_API_FRONT_DOOR ?? 'cloudfront') as FrontDoor;

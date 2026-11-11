@@ -79,7 +79,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 import { declaredGroupNames } from './groups.js';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import type { AuthActionInput, AuthState, AuthStateApi, BlocksAuth } from '@aws-blocks/auth-common';
-import { decodeIdToken, decodeJwtPayload, jwtExpMs, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
+import { decodeIdToken, decodeJwtPayload, isJwtExpired, safeStringClaim, sessionToTokens, SessionStore, type SessionRecord } from './sessions.js';
 import {
 	clearAutoSignInCookie,
 	clearSessionCookie,
@@ -163,7 +163,9 @@ export { SessionStore, type SessionRecord } from './sessions.js';
  *      token, the record is updated and the request proceeds. If Cognito
  *      rejects (refresh token expired, revoked via `GlobalSignOut`, user
  *      disabled, pool config changed, …), `tryRefresh` returns `null` and
- *      the caller sees a 401 — the cookie is also cleared.
+ *      the caller sees a 401 — the record is deleted and the cookie is also
+ *      cleared. A transient failure (throttling, network) also answers that
+ *      request with a 401 but keeps the session, so the next request retries.
  *
  * Net result: a valid access-or-refresh token means the user continues; an
  * invalid one means re-auth. The cookie's lifetime is deliberately decoupled
@@ -181,6 +183,30 @@ export { SessionStore, type SessionRecord } from './sessions.js';
  * reaped instead of storing its Cognito refresh token indefinitely.
  */
 const DEFAULT_SESSION_TTL_SECONDS = 400 * 86400;
+
+/**
+ * `REFRESH_TOKEN_AUTH` failures meaning the refresh can't succeed by being
+ * retried:
+ *
+ * - The refresh token expired or was revoked (`GlobalSignOut`,
+ *   `AdminUserGlobalSignOut`), or the user was disabled or deleted
+ *   (`NotAuthorizedException`, `UserNotFoundException`).
+ * - The pool config changed: the user pool or app client was deleted
+ *   (`ResourceNotFoundException`), the app client no longer allows the flow,
+ *   e.g. `ALLOW_REFRESH_TOKEN_AUTH` turned off (`UnsupportedOperationException`),
+ *   or the pool configuration is invalid (`InvalidUserPoolConfigurationException`).
+ *
+ * Only these end a session. Any other failure (throttling, network, service or
+ * Lambda-trigger errors) is treated as transient, and the next request
+ * retries the refresh.
+ */
+const REFRESH_REJECTIONS: ReadonlySet<string> = new Set([
+	AuthCognitoErrors.NotAuthorized,
+	AuthCognitoErrors.UserNotFound,
+	'ResourceNotFoundException',
+	'UnsupportedOperationException',
+	'InvalidUserPoolConfigurationException',
+]);
 
 interface CognitoAttributeEntry {
 	Name: string;
@@ -1648,19 +1674,12 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
 		}
-		if (jwtExpMs(record.accessToken) < Date.now()) {
-			// Try token refresh before giving up.
+		if (isJwtExpired(record.accessToken)) {
+			// Try token refresh before giving up. A rejected refresh token has
+			// already ended the session inside `tryRefresh`; either way `null`
+			// means this request is unauthenticated.
 			const refreshed = await this.tryRefresh(id, record, context);
-			if (!refreshed) {
-				// Refresh token rejected (revoked, expired, user disabled, pool
-				// config changed). Delete the dead record so the KVStore doesn't
-				// accumulate zombies, and clear the cookie so the browser stops
-				// replaying it. Next request will be an unauthenticated 401.
-				await this.sessions.deleteSession(id);
-				clearSessionCookie(context, this.fullId, this.crossDomain);
-				return null;
-			}
-			return toCognitoUser(refreshed);
+			return refreshed ? toCognitoUser(refreshed) : null;
 		}
 		return toCognitoUser(record);
 	}
@@ -1686,15 +1705,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return { tokens: undefined };
 		}
-		const accessExp = jwtExpMs(record.accessToken);
-		const mustRefresh = options?.forceRefresh || accessExp < Date.now();
-		if (mustRefresh) {
+		if (options?.forceRefresh || isJwtExpired(record.accessToken)) {
 			const refreshed = await this.tryRefresh(id, record, context);
-			if (!refreshed) {
-				await this.sessions.deleteSession(id);
-				clearSessionCookie(context, this.fullId, this.crossDomain);
-				return { tokens: undefined };
-			}
+			if (!refreshed) return { tokens: undefined };
 			record = refreshed;
 		}
 		return { tokens: sessionToTokens(record), userSub: safeStringClaim(decodeJwtPayload(record.idToken), 'sub') || undefined };
@@ -2446,12 +2459,9 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			throw new ApiError('Authentication required', 401, { name: AuthCognitoErrors.NotAuthenticated });
 		}
-		if (jwtExpMs(record.accessToken) < Date.now()) {
+		if (isJwtExpired(record.accessToken)) {
 			const refreshed = await this.tryRefresh(id, record, context);
 			if (!refreshed) {
-				// Refresh rejected — drop the dead record and clear the cookie.
-				await this.sessions.deleteSession(id);
-				clearSessionCookie(context, this.fullId, this.crossDomain);
 				throw new ApiError('Authentication required', 401, { name: AuthCognitoErrors.NotAuthenticated });
 			}
 			return refreshed.accessToken;
@@ -2459,31 +2469,41 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		return record.accessToken;
 	}
 
+	/**
+	 * Refresh an expired session with `REFRESH_TOKEN_AUTH`. Returns the record
+	 * to serve this request with, or `null` when the request is unauthenticated.
+	 *
+	 * Several requests can refresh one session at once (parallel calls when the
+	 * access token expires, possibly on different Lambda instances), and
+	 * `signOut` can delete it mid-refresh. Every write is therefore conditional
+	 * on `record` — the value this request read — so the outcome doesn't depend
+	 * on which request lands last:
+	 *
+	 * - **Refreshed:** the new tokens replace `record` and the cookie's
+	 *   `Max-Age` is re-issued. If the session changed meanwhile, nothing is
+	 *   written ({@link sessionAfterLostWrite}) — a signed-out session stays
+	 *   deleted.
+	 * - **Rejected** ({@link REFRESH_REJECTIONS}, or no refresh token on file):
+	 *   the dead record is deleted so the KVStore doesn't accumulate zombies,
+	 *   and the cookie is cleared so the browser stops replaying it — unless a
+	 *   concurrent request already replaced the record.
+	 * - **Any other failure** (throttling, network, service error) is
+	 *   transient: the session and cookie are kept, so the next request retries.
+	 */
 	private async tryRefresh(
 		id: string,
 		record: SessionRecord,
 		context: BlocksContext,
 	): Promise<SessionRecord | null> {
-		if (!record.refreshToken) return null;
+		if (!record.refreshToken) return this.endRejectedSession(id, record, context);
+		let tokens: AuthenticationResultType | undefined;
 		try {
 			const resp = await this.client.send(new InitiateAuthCommand({
 				AuthFlow: 'REFRESH_TOKEN_AUTH',
 				ClientId: getSdkIdentifiers(this).clientId,
 				AuthParameters: { REFRESH_TOKEN: record.refreshToken },
 			}));
-			const tokens = resp.AuthenticationResult;
-			if (!tokens?.IdToken || !tokens.AccessToken) return null;
-			const updated: SessionRecord = {
-				idToken: tokens.IdToken,
-				accessToken: tokens.AccessToken,
-				// Cognito may rotate the refresh token or keep the existing one.
-				refreshToken: tokens.RefreshToken ?? record.refreshToken,
-			};
-			await this.sessions.updateSession(id, updated);
-			// Refresh the cookie Max-Age too.
-			const secret = await this.getSessionSecret();
-			setSessionCookie(context, this.fullId, signSessionId(id, secret), this.sessionTtlSeconds, this.crossDomain);
-			return updated;
+			tokens = resp.AuthenticationResult;
 		} catch (e) {
 			// Don't swallow silently — operators debugging "why is this user getting
 			// a 401 every hour?" need to distinguish a revoked refresh token
@@ -2492,12 +2512,56 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			// correlation key and the error name. The full session ID is omitted
 			// because cookies.ts rotates it — the prefix is enough for ops to
 			// correlate, not enough to replay.
+			const error = e instanceof Error ? e.name : 'unknown';
 			console.warn('[bb-auth-cognito] session refresh failed', {
 				sessionIdPrefix: id.slice(0, 8),
-				error: e instanceof Error ? e.name : 'unknown',
+				error,
 			});
+			return REFRESH_REJECTIONS.has(error) ? this.endRejectedSession(id, record, context) : null;
+		}
+		// A success without tokens is not a rejection of the refresh token, so
+		// keep the session (transient) rather than end it.
+		if (!tokens?.IdToken || !tokens.AccessToken) return null;
+		const updated: SessionRecord = {
+			idToken: tokens.IdToken,
+			accessToken: tokens.AccessToken,
+			// Cognito may rotate the refresh token or keep the existing one.
+			refreshToken: tokens.RefreshToken ?? record.refreshToken,
+		};
+		if (!(await this.sessions.replaceSession(id, record, updated))) return this.sessionAfterLostWrite(id, context);
+		// Refresh the cookie Max-Age too.
+		const secret = await this.getSessionSecret();
+		setSessionCookie(context, this.fullId, signSessionId(id, secret), this.sessionTtlSeconds, this.crossDomain);
+		return updated;
+	}
+
+	/**
+	 * Cognito rejected the refresh: delete the session if it still holds the
+	 * `record` this request read, and clear the cookie. If it changed meanwhile,
+	 * a concurrent request refreshed or deleted it first — defer to that.
+	 */
+	private async endRejectedSession(id: string, record: SessionRecord, context: BlocksContext): Promise<SessionRecord | null> {
+		if (await this.sessions.deleteSessionIfUnchanged(id, record)) {
+			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
 		}
+		return this.sessionAfterLostWrite(id, context);
+	}
+
+	/**
+	 * This request's conditional write lost: the session changed after it was
+	 * read. Serve the record a concurrent refresh wrote if its access token is
+	 * live. If the session was deleted (`signOut`, revoke), clear the cookie —
+	 * it stays signed out. Anything else leaves the session alone and answers
+	 * this request as unauthenticated.
+	 */
+	private async sessionAfterLostWrite(id: string, context: BlocksContext): Promise<SessionRecord | null> {
+		const current = await this.sessions.lookupSession(id);
+		if (!current) {
+			clearSessionCookie(context, this.fullId, this.crossDomain);
+			return null;
+		}
+		return isJwtExpired(current.accessToken) ? null : current;
 	}
 
 	private async issueSession(

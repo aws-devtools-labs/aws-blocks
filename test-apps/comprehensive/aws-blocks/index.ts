@@ -436,6 +436,12 @@ const DbxItem = z.object({ id: z.string(), name: z.string(), value: z.number(), 
 const sharedDsql = new DatabaseCluster(scope, 'shareddsql', { type: 'dsql', removalPolicy: 'destroy' });
 const dbxa = new SqlDatabase(scope, 'dbxa', { cluster: sharedDsql });
 const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
+// `dbxc` runs on an Aurora PostgreSQL cluster created with the express configuration (`type: 'aurora'`):
+// full PostgreSQL, so its migration uses SERIAL, a plain CREATE INDEX and a trigger in PL/pgSQL, and a
+// transaction may change any number of rows. Scales to zero between requests.
+const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
+const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
+const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
 // AsyncJob - Background job processing
 // Uses a KVStore to record handler execution so e2e tests can verify jobs ran
@@ -819,6 +825,23 @@ const disabledCron = new CronJob(scope, 'disabled-cron', {
 const kb = new KnowledgeBase(scope, 'docs', {
   removalPolicy: 'destroy',
   source: './aws-blocks/knowledge',
+});
+
+// KnowledgeBase as an Agent tool. The search scope comes from the per-call tool context, which
+// server code sets from the authenticated session; the model only supplies the query.
+const kbToolAgent = new Agent(scope, 'kbtool', {
+  removalPolicy: 'destroy',
+  inferenceOnly: true,
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'Answer questions from the documentation.',
+  toolContextSchema: z.object({ folder: z.string() }),
+  tools: (tool) => ({
+    searchDocs: tool({
+      ...kb.asAgentTool({ filter: (context) => ({ folder: { equals: context.folder } }), maxResults: 10 }),
+      // Canned provider only: search for a query that matches the docs instead of a placeholder.
+      cannedExamples: { query: 'Building Blocks Scope' },
+    }),
+  }),
 });
 
 // Tracer - Distributed tracing backed by X-Ray
@@ -1836,7 +1859,164 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       dbx: { cluster: dbx.cluster, schemaName: dbx.schemaName },
       dbxa: { cluster: dbxa.cluster, schemaName: dbxa.schemaName },
       dbxb: { cluster: dbxb.cluster, schemaName: dbxb.schemaName },
+      dbxc: { cluster: dbxc.cluster, schemaName: dbxc.schemaName },
     };
+  },
+
+  // dbxc: PostgreSQL features on an `aurora` cluster.
+  async dbxcAdd(title: string) {
+    return await dbxc.queryOne<{ id: number; title: string; done: boolean }>(
+      sql`INSERT INTO tasks (title) VALUES (${title}) RETURNING id, title, done`,
+    );
+  },
+
+  async dbxcComplete(id: number) {
+    const before = await dbxc.queryOne<{ updated_at: string }>(sql`SELECT updated_at::text FROM tasks WHERE id = ${id}`);
+    await dbxc.execute(sql`UPDATE tasks SET done = true WHERE id = ${id}`);
+    const after = await dbxc.queryOne<{ done: boolean; updated_at: string }>(
+      sql`SELECT done, updated_at::text FROM tasks WHERE id = ${id}`,
+    );
+    return { done: after?.done ?? false, touched: before !== null && after !== null && before.updated_at !== after.updated_at };
+  },
+
+  // More rows in one transaction than a DSQL cluster allows; an `aurora` cluster has no such limit.
+  async dbxcBulk(count: number) {
+    const prefix = `bulk-${Date.now().toString(36)}-`;
+    const inserted = await dbxc.transaction(async (tx) => {
+      const { rowCount } = await tx.execute(
+        sql`INSERT INTO tasks (title) SELECT ${prefix} || g FROM generate_series(1, ${count}) g`,
+      );
+      return rowCount;
+    });
+    const { rowCount: deleted } = await dbxc.execute(sql`DELETE FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { inserted, deleted };
+  },
+
+  async dbxcDelete(id: number) {
+    const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE id = ${id}`);
+    return { rowCount };
+  },
+
+  // A foreign key PostgreSQL enforces: an unknown task is SQLSTATE 23503, which reaches the client as QueryFailed.
+  async dbxcAddComment(taskId: number, body: string) {
+    try {
+      const row = await dbxc.queryOne<{ id: number }>(
+        sql`INSERT INTO comments (task_id, body) VALUES (${taskId}, ${body}) RETURNING id`,
+      );
+      return { id: row?.id ?? null, error: null };
+    } catch (e) {
+      return { id: null, error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // A join with an aggregate in one statement; `count(*)` is bigint, cast so it is a number on both environments.
+  async dbxcTasksWithCounts(ids: number[]) {
+    return await dbxc.query<{ id: number; title: string; comments: number }>(
+      sql`SELECT t.id, t.title, count(c.id)::int AS comments
+          FROM tasks t LEFT JOIN comments c ON c.task_id = t.id
+          WHERE t.id = ANY(${ids})
+          GROUP BY t.id, t.title ORDER BY t.id`,
+    );
+  },
+
+  async dbxcCommentCount(taskId: number) {
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM comments WHERE task_id = ${taskId}`);
+    return row?.n ?? 0;
+  },
+
+  // A transaction that fails after writing: PostgreSQL keeps nothing, however many rows it touched.
+  async dbxcAtomicFail(count: number) {
+    const prefix = `atomic-${Date.now().toString(36)}-`;
+    let error: string | null = null;
+    try {
+      await dbxc.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO tasks (title) SELECT ${prefix} || g FROM generate_series(1, ${count}) g`);
+        throw new ApiError('abort after the insert', 409);
+      });
+    } catch (e) {
+      error = e instanceof Error ? e.name : String(e);
+    }
+    const kept = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { error, kept: kept?.n ?? 0 };
+  },
+
+  // A block-level execute() inside the callback runs in the transaction on the aurora cluster too: when the
+  // callback throws, nothing is kept (the statement would otherwise auto-commit on another pool connection).
+  async dbxcBlockWriteInAbortedTransaction(prefix: string) {
+    let aborted = false;
+    try {
+      await dbxc.transaction(async () => {
+        await dbxc.execute(sql`INSERT INTO tasks (title) VALUES (${`${prefix}-aborted`})`);
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A block-level query() inside the callback sees the callback's own uncommitted write.
+  async dbxcBlockReadInTransaction(title: string) {
+    const seenInside = await dbxc.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO tasks (title) VALUES (${title})`);
+      const row = await dbxc.queryOne<{ id: number }>(sql`SELECT id FROM tasks WHERE title = ${title}`);
+      return row !== null;
+    });
+    const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE title = ${title}`);
+    return { seenInside, committed: rowCount === 1 };
+  },
+
+  // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
+  // missing privilege (42501, QueryFailed) when deployed.
+  async dbxcRejectDdl() {
+    try {
+      await dbxc.execute(sql`CREATE TABLE dbxc_should_not_exist (id INT PRIMARY KEY)`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxcRejectTruncate() {
+    try {
+      await dbxc.execute(sql`TRUNCATE tasks`);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  // A result schema on the aurora path: the row type comes from the value, and a mismatch is a typed error.
+  async dbxcGetValidated(id: number) {
+    return await dbxc.queryOne(sql`SELECT id, title, done FROM tasks WHERE id = ${id}`, { schema: DbxcTask });
+  },
+
+  async dbxcSchemaMismatch(id: number) {
+    try {
+      await dbxc.queryOne(sql`SELECT id, title FROM tasks WHERE id = ${id}`, { schema: DbxcTask });
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? e.name : String(e) };
+    }
+  },
+
+  async dbxcSimulatedConflictComplete(id: number) {
+    try {
+      simulateConflict(dbxc);
+    } catch {
+      return { simulated: false, attempts: 0 };
+    }
+    let attempts = 0;
+    await dbxc.transaction(
+      async (tx) => {
+        attempts++;
+        await tx.execute(sql`UPDATE tasks SET done = true WHERE id = ${id}`);
+      },
+      { retryOnConflict: true },
+    );
+    return { simulated: true, attempts };
   },
 
   async dbxInsert(id: string, name: string, value: number) {
@@ -2810,6 +2990,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kbWaitUntilSynced(options?: WaitUntilSyncedOptions) {
     await kb.waitUntilSynced(options);
     return { success: true };
+  },
+
+  async kbAgentToolSearch(message: string) {
+    // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
+    // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
+    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const done = await result.complete();
+    return { text: done.text ?? '' };
   },
 
   // ------------------------------------------------------------------------

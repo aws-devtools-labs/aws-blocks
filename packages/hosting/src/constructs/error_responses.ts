@@ -70,3 +70,33 @@ export function customErrorResponses(
   }
   return responses;
 }
+
+/**
+ * The 5xx statuses a server's response is never cached under. CloudFront
+ * caches them for the error caching minimum TTL (10 s by default), and for
+ * 500, 502, 503 and 504 it ignores `Cache-Control: private`/`no-store`/
+ * `no-cache`, so a server error rendered for one request would answer every
+ * request with the same cache key for that time. 501 follows the response's
+ * `Cache-Control` (as do 404 and 414, which the SSR cache guard covers) and is
+ * listed so that no server 5xx is cached.
+ */
+export const SERVER_ERROR_STATUSES_NOT_CACHED: readonly number[] = [500, 501, 502, 503, 504];
+
+/**
+ * The error responses of a distribution that fronts a server, with an error
+ * caching minimum TTL of 0 for each of {@link SERVER_ERROR_STATUSES_NOT_CACHED}:
+ * an existing response for the status keeps its page and response code and
+ * gets a TTL of 0, and a status with none gets one with only the TTL.
+ *
+ * @param responses the distribution's error responses.
+ * @returns the responses, in the same order, then the added ones.
+ */
+export function withServerErrorsNotCached(responses: readonly ErrorResponse[]): ErrorResponse[] {
+  const out = responses.map((r) =>
+    SERVER_ERROR_STATUSES_NOT_CACHED.includes(r.httpStatus) ? { ...r, ttl: Duration.seconds(0) } : r,
+  );
+  for (const status of SERVER_ERROR_STATUSES_NOT_CACHED) {
+    if (!out.some((r) => r.httpStatus === status)) out.push({ httpStatus: status, ttl: Duration.seconds(0) });
+  }
+  return out;
+}

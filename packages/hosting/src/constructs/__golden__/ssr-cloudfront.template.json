@@ -499,7 +499,7 @@
             "OPEN_NEXT_ORIGIN": "{}"
           }
         },
-        "Handler": "index.handler",
+        "Handler": "blocks_cache_guard_handler.handler",
         "LoggingConfig": {
           "LogGroup": {
             "Ref": "HostingComputedefaultFunctionLogGroup17DE1884"
@@ -874,7 +874,7 @@
         "CachePolicyConfig": {
           "Comment": "SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers",
           "DefaultTTL": 0,
-          "MaxTTL": 31536000,
+          "MaxTTL": 86400,
           "MinTTL": 0,
           "Name": {
             "Fn::Join": [
@@ -1371,22 +1371,26 @@
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 502,
               "ResponseCode": 502,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 503,
               "ResponseCode": 503,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 504,
               "ResponseCode": 504,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            },
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 501
             }
           ],
           "DefaultCacheBehavior": {

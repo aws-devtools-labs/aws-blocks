@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { BlocksContext } from '@aws-blocks/core';
-import { stubIssuerUrl } from './engines/stub-idp.js';
+import { stubIssuerUrl } from './engines/stub-issuer.js';
 import type { ProviderConfig } from './types.js';
 
 /**

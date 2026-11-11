@@ -4,7 +4,8 @@
 /**
  * Blocks canary.
  *
- * Scaffolds a fresh app from a published @aws-blocks registry.
+ * Scaffolds a fresh app from a published @aws-blocks registry, then builds it,
+ * runs its local e2e (mocks) and runs `cdk synth` (no AWS credentials).
  *
  * Usage:
  *   tsx scripts/canary/run-canary.ts [--template <name>] [--registry <url>] [--keep]
@@ -15,7 +16,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -83,7 +84,7 @@ function run(
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ): void {
   console.log(`\n$ ${cmd} ${cmdArgs.join(" ")}`);
-  execFileSync(cmd, cmdArgs, { stdio: "inherit", ...opts });
+  execFileSync(cmd, cmdArgs, { stdio: "inherit", cwd: opts.cwd, env: opts.env });
 }
 
 /** Run a command and capture trimmed stdout. */
@@ -92,7 +93,11 @@ function capture(
   cmdArgs: string[],
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ): string {
-  return execFileSync(cmd, cmdArgs, { encoding: "utf-8", ...opts }).trim();
+  return execFileSync(cmd, cmdArgs, {
+    encoding: "utf-8",
+    cwd: opts.cwd,
+    env: opts.env,
+  }).trim();
 }
 
 // ── Main ────────────────────────────────────────────────────────────
@@ -166,6 +171,22 @@ function main(): void {
     // ── Local e2e (mocks) ───────────────────────────────────
     console.log("\n=== Run local e2e (mocks, no AWS account) ===");
     run("npm", ["run", "test:e2e"], { cwd: appDir, env });
+
+    // ── CDK synth (no AWS account) ──────────────────────────
+    // The e2e above runs on mocks, so it never loads the CDK entry points.
+    // Synth does: it resolves the scaffold's fresh `^` aws-cdk-lib range and
+    // builds every block's construct, catching a CDK-layer break (a new CDK
+    // release, a construct that needs an account lookup) the day it lands
+    // rather than on a customer's first deploy. The runner has no AWS
+    // credentials, so this also proves a template synthesizes without them.
+    // Warnings (unset feature flags, alarm topic without subscribers) are
+    // expected; only a non-zero exit fails the canary.
+    if (existsSync(join(appDir, "cdk.json"))) {
+      console.log("\n=== CDK synth (no AWS credentials) ===");
+      run("npx", ["--no", "cdk", "synth", "-q"], { cwd: appDir, env });
+    } else {
+      console.log("\n=== CDK synth skipped: template has no cdk.json ===");
+    }
 
     console.log(
       `\n🎉 Blocks canary passed (template: ${args.template}).`,

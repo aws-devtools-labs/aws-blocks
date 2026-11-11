@@ -96,6 +96,15 @@ export interface BuildSignInUrlOutput {
 
 /** Minimal interface implemented by every engine. */
 export interface AuthEngine {
+	/**
+	 * Whether this engine serves the named provider. A configured provider can
+	 * still be unserved — e.g. a `stubIdp()` provider outside a sandbox
+	 * deployment, or a non-Cognito provider on the Cognito federation engine.
+	 * `AuthOIDC` uses this to leave unserved providers out of the client
+	 * handle and the signed-out sign-in actions.
+	 */
+	hasProvider(name: string): boolean;
+
 	buildSignInUrl(input: BuildSignInUrlInput): Promise<BuildSignInUrlOutput>;
 
 	/**
@@ -132,7 +141,10 @@ export interface AuthEngine {
 		ctx: BlocksContext,
 	): Promise<BearerRefreshResult | null>;
 
-	/** Clear session cookie, evict the row, and best-effort revoke upstream. */
+	/**
+	 * Clear session cookie, evict the row, and best-effort revoke upstream.
+	 * Throws `SignOutIncompleteException` (503) when the row could not be evicted.
+	 */
 	signOut(ctx: BlocksContext): Promise<void>;
 
 	/** Resolve the cookie-signing secret. Used by the relay callback dispatcher. */

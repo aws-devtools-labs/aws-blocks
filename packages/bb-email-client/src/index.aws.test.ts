@@ -13,7 +13,8 @@
  */
 import { test, describe, mock, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { inspect } from 'node:util';
 import { Scope, isBlocksError, isWireSafeError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -35,13 +36,14 @@ interface StubOptions {
 	failEntryFor?: string;
 	/** Throw from the whole SendBulkEmail call when it includes this recipient. */
 	throwCallFor?: string;
+	maxBatchSize?: number;
 }
 
 /** An AWS EmailClient whose SES client records every command instead of calling SES. */
 function awsClient(options: StubOptions | string = {}): { email: AwsEmailClient; sent: Sent[] } {
-	const { fromAddress = 'noreply@example.com', replyTo, failEntryFor, throwCallFor } =
+	const { fromAddress = 'noreply@example.com', replyTo, failEntryFor, throwCallFor, maxBatchSize } =
 		typeof options === 'string' ? { fromAddress: options } : options;
-	const email = new AwsEmailClient(new Scope('app'), 'mail', { fromAddress, replyTo });
+	const email = new AwsEmailClient(new Scope('app'), 'mail', { fromAddress, replyTo, maxBatchSize });
 	const sent: Sent[] = [];
 	(email as unknown as { client: { send: (c: Sent) => Promise<unknown> } }).client.send = async (command: Sent) => {
 		sent.push(command);
@@ -247,6 +249,75 @@ test('sendBatch() marks only the failing call\'s messages failed when a whole Se
 		{ status: 'success', messageId: 'bulk-2-1' },
 	]);
 });
+
+// sendBatch() takes at most `maxBatchSize` messages per call (default 100), on the
+// mock and on AWS. A larger batch is rejected as a whole, before any message is
+// sent, so one request cannot fan out into an unbounded number of SES sends.
+const batchOf = (n: number): EmailMessage[] =>
+	Array.from({ length: n }, (_, i) => ({ to: `user${i}@example.com`, subject: 's', body: 'b' }));
+
+test('sendBatch() accepts the default cap of 100 messages on both the mock and AWS', async () => {
+	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com' });
+	const mockResult = await mock.sendBatch(batchOf(100));
+	assert.ok(mockResult.results.every((r) => r.status === 'success'));
+	const { email, sent } = awsClient();
+	const awsResult = await email.sendBatch(batchOf(100));
+	assert.ok(awsResult.results.every((r) => r.status === 'success'));
+	assert.strictEqual(sent.length, 2, 'two SendBulkEmail calls of 50');
+});
+
+test('sendBatch() rejects more than 100 messages on both the mock and AWS, without sending any', async () => {
+	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com' });
+	let mockError: unknown;
+	await assert.rejects(() => mock.sendBatch(batchOf(101)), (e: unknown) => {
+		mockError = e;
+		return isBlocksError(e, EmailErrors.InvalidInput);
+	});
+	assert.ok(!existsSync(join('.bb-data', 'app-mail', 'emails.json')), 'the mock must not record any message');
+
+	const { email, sent } = awsClient();
+	await assert.rejects(() => email.sendBatch(batchOf(101)), (e: unknown) => {
+		assert.ok(isWireSafeError(e), 'the error is branded so its name crosses the wire');
+		assert.strictEqual((e as Error).message, (mockError as Error).message, 'same message on the mock and AWS');
+		return isBlocksError(e, EmailErrors.InvalidInput);
+	});
+	assert.strictEqual(sent.length, 0, 'an over-cap batch must not reach SES');
+	assert.match((mockError as Error).message, /Batch size 101 exceeds the maximum of 100 messages/);
+});
+
+test('sendBatch() honours a custom maxBatchSize on both the mock and AWS', async () => {
+	const mock = new MockEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com', maxBatchSize: 2 });
+	await assert.rejects(() => mock.sendBatch(batchOf(3)), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+	assert.strictEqual((await mock.sendBatch(batchOf(2))).results.length, 2);
+
+	const raised = new MockEmailClient(new Scope('app'), 'raised', { fromAddress: 'noreply@example.com', maxBatchSize: 150 });
+	assert.ok((await raised.sendBatch(batchOf(150))).results.every((r) => r.status === 'success'));
+
+	const { email, sent } = awsClient({ maxBatchSize: 2 });
+	await assert.rejects(() => email.sendBatch(batchOf(3)), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+	assert.strictEqual(sent.length, 0, 'an over-cap batch must not reach SES');
+	const atLimit = await email.sendBatch(batchOf(2));
+	assert.strictEqual(atLimit.results.length, 2);
+	assert.ok(atLimit.results.every((r) => r.status === 'success'), 'a batch at the cap is sent');
+	assert.strictEqual(sent.length, 1);
+
+	const { email: raisedAws, sent: raisedSent } = awsClient({ maxBatchSize: 150 });
+	const raisedResult = await raisedAws.sendBatch(batchOf(150));
+	assert.strictEqual(raisedResult.results.length, 150);
+	assert.ok(raisedResult.results.every((r) => r.status === 'success'), 'a raised cap lets a 150-message batch through');
+	assert.strictEqual(raisedSent.length, 3, '150 messages go out as 3 SendBulkEmail calls of 50');
+	assert.ok(raisedSent.every((c) => c instanceof SendBulkEmailCommand));
+});
+
+for (const maxBatchSize of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+	test(`the mock and AWS constructors reject maxBatchSize ${maxBatchSize}`, () => {
+		const options = { fromAddress: 'noreply@example.com', maxBatchSize };
+		const rejected = (e: unknown) =>
+			isBlocksError(e, EmailErrors.InvalidInput) && (e as Error).message.includes(`(got ${String(maxBatchSize)})`);
+		assert.throws(() => new MockEmailClient(new Scope('app'), 'mail', options), rejected);
+		assert.throws(() => new AwsEmailClient(new Scope('app'), 'mail', options), rejected);
+	});
+}
 
 const RAW_DETAIL = 'Email address is not verified. The following identities failed the check in region US-EAST-1: internal@corp.example (arn:aws:ses:us-east-1:123456789012:identity/corp.example)';
 

@@ -671,7 +671,7 @@ jobs:
         run: |
           set -u
           bash scripts/agent-bench/steps/lib/s3-put.sh "$AGG" "s3://${BUCKET}/bench/runs/${BENCH_SHA}/results.json" "aggregate"
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
             bash scripts/agent-bench/steps/lib/s3-put.sh "$AGG" "s3://${BUCKET}/bench/runs/latest-main.json" "latest-main pointer"
           fi
 

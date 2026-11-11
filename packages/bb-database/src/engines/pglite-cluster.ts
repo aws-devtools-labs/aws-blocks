@@ -12,6 +12,7 @@ import type { CountedRows, RowCountingEngine } from '../dialect/rules-engine.js'
 import { ASYNC_DDL } from '../dialect/validation.js';
 import { translated, translatePgError } from '../errors.js';
 import { currentTransactionHandle } from '../runtime/tx-scope.js';
+import type { ClusterType } from '../types.js';
 import { EngineTransaction, isSettled, openTransaction, withTransaction } from './handle.js';
 
 // How PGlite stands in for DSQL's asynchronous DDL. On DSQL, `CREATE INDEX ASYNC` and `ALTER TABLE ASYNC …
@@ -152,7 +153,10 @@ class PgliteCluster {
 	private readonly mutex = new Mutex();
 	private currentSchema?: string;
 
-	constructor(readonly dataDir: string) {
+	constructor(
+		readonly dataDir: string,
+		readonly kind: ClusterType,
+	) {
 		this.db = this.createDb();
 	}
 
@@ -196,7 +200,8 @@ class PgliteCluster {
 		})
 			.then(async (db) => {
 				this.db = db;
-				await db.exec(SYS_SCHEMA_STUB);
+				// DSQL's `sys` schema exists on a DSQL cluster only; an Aurora block that queries it fails locally too.
+				if (this.kind === 'dsql') await db.exec(SYS_SCHEMA_STUB);
 				return db;
 			})
 			.catch((error) => {
@@ -210,7 +215,8 @@ class PgliteCluster {
 
 	async raw<T>(sql: string, params?: unknown[]): Promise<{ rows: T[]; affectedRows: number }> {
 		const db = await this.ensureReady();
-		const result = await db.query<T>(synchronous(sql), params);
+		// ASYNC is a DSQL form; Aurora rejects it, and so does PGlite when the cluster is `aurora`.
+		const result = await db.query<T>(this.kind === 'dsql' ? synchronous(sql) : sql, params);
 		return { rows: result.rows, affectedRows: result.affectedRows ?? 0 };
 	}
 
@@ -412,10 +418,10 @@ export class SchemaEngine implements RowCountingEngine {
 
 const clusters = new Map<string, PgliteCluster>();
 
-export function sharedPgliteCluster(dataDir: string): PgliteCluster {
+export function sharedPgliteCluster(dataDir: string, kind: ClusterType): PgliteCluster {
 	let c = clusters.get(dataDir);
 	if (!c) {
-		c = new PgliteCluster(dataDir);
+		c = new PgliteCluster(dataDir, kind);
 		clusters.set(dataDir, c);
 	}
 	return c;

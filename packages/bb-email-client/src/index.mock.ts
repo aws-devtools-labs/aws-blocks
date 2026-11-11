@@ -24,7 +24,7 @@ export type {
 } from './types.js';
 
 import type { EmailOptions, EmailMessage, SendResult, SendBatchResult } from './types.js';
-import { validateMessage } from './validation.js';
+import { resolveMaxBatchSize, validateBatchSize, validateMessage } from './validation.js';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 
@@ -78,6 +78,7 @@ export class EmailClient extends Scope {
 	private emails: StoredEmail[];
 	private fromAddress: string;
 	private replyTo?: string[];
+	private maxBatchSize: number;
 
 	/** @internal Logger for internal operations. Defaults to error-level when not provided. */
 	protected log: ChildLogger;
@@ -87,6 +88,7 @@ export class EmailClient extends Scope {
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'error' });
 		this.fromAddress = options.fromAddress;
 		this.replyTo = options.replyTo;
+		this.maxBatchSize = resolveMaxBatchSize(options.maxBatchSize);
 		this.filePath = join(getMockDataDir(this), 'emails.json');
 		this.emails = this.loadFromDisk();
 	}
@@ -139,11 +141,16 @@ export class EmailClient extends Scope {
 	 * Messages exceeding this limit are marked as failed in the results (not thrown).
 	 * This matches SES SendBulkEmail behavior which returns per-entry status.
 	 *
+	 * A call takes at most `maxBatchSize` messages (default 100, set in `EmailOptions`). A larger
+	 * batch is rejected as a whole and nothing is recorded, the same as the deployed client.
+	 *
 	 * @param messages - Array of email messages to send.
 	 * @returns Result with per-message status in the same order as the input array.
 	 *          Each entry has status ('success' | 'failed'), messageId (on success), or error (on failure).
+	 * @throws {EmailErrors.InvalidInput} If `messages` has more entries than `maxBatchSize`. Nothing is sent.
 	 */
 	async sendBatch(messages: EmailMessage[]): Promise<SendBatchResult> {
+		validateBatchSize(messages.length, this.maxBatchSize);
 		const results: Array<{ status: 'success' | 'failed'; messageId?: string; error?: string }> = [];
 
 		for (let i = 0; i < messages.length; i++) {

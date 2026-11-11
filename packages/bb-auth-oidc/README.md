@@ -200,6 +200,14 @@ Stable per-human-per-IdP. Use this as a foreign key in your own tables. Signing 
 
 Sessions outlive the IdP's ID token — users won't get kicked out every hour. The BB provisions the session storage it needs automatically (no configuration), refreshes the access token in the background when it expires, and coordinates concurrent refreshes across containers via a compare-and-swap protocol so a request burst doesn't pile up on the IdP's token endpoint. Sign-out invalidates the session server-side, not just client-side.
 
+Sign-out deletes the session row (a replayed copy of the cookie stops authenticating) and best-effort revokes the refresh token at the IdP. The session cookie is always cleared, so the device is signed out either way. If the row delete fails (for example a transient session-store error), or the cookie-signing secret cannot be resolved to identify the session, sign-out reports `SignOutIncompleteException` (503) instead of success, because the server-side session was not invalidated and a copy of the cookie keeps authenticating (how long is described below):
+
+- `POST /aws-blocks/auth/signout` returns `503` with `{"error":"...","name":"SignOutIncompleteException"}` instead of `204`.
+- `auth.signOut(ctx)` rejects with that error; `setAuthState({ action: 'signOut' })` returns a signed-out state with `errorName: 'SignOutIncompleteException'`.
+- The browser client's `auth.signOut()` rejects with the same `ApiError` (`name`, `status`) and does not broadcast to other tabs or reload, so you can tell the user. Because the cookie is already cleared, it does clear its last-known user and notifies `onAuthStateChange` listeners with `null` first. On any other failed sign-out it leaves the signed-in state alone.
+
+The refresh token is still revoked at the IdP when possible (the token is read before the delete is attempted). That revocation decides how long a leftover session keeps authenticating. When the IdP revokes the token, the session stops at its current access-token expiry, because its next refresh fails. Revocation is best-effort, though: the IdP's response is not checked, and it is skipped for `oauth2-custom` providers, for IdPs whose discovery document has no `revocation_endpoint`, and when the session row could not be read. In those cases the leftover session keeps refreshing for as long as the IdP honors the refresh token, at most until the session cookie expires 30 days after sign-in. Because the cookie is already cleared, repeating the sign-out from the same browser does not delete the row.
+
 ### Provider helpers
 
 - `google({ clientId, clientSecret, scopes? })` — OIDC.
@@ -256,7 +264,7 @@ const providers = getDeploymentType() === 'production'
 const auth = new AuthOIDC(app, 'auth', { providers });
 ```
 
-`stubIdp()` is restricted to local development (`npm run dev`) and sandbox (`npm run sandbox`) deployments: synth fails when any other deployment configures a `stubIdp()` provider, and deployed compute serves the stub IdP routes only in a sandbox. `getDeploymentType()` returns `'local'`, `'sandbox'`, or `'production'` and reports the same value at synth and at runtime, so selecting providers with it keeps both sides consistent. At synth it reports the deployment type inside your backend module (once `BlocksStack` / `BlocksBackend` `create()` has begun importing it); at runtime it reports it on deployed compute. Wherever Blocks config and context are not present (before `create()`, in plain scripts, or on non-Blocks compute) it returns `'local'`, so call it from the backend module, as in the examples above. Authorization codes issued by the stub are signed with a key derived per deployment from the instance's cookie-signing secret.
+`stubIdp()` is restricted to local development (`npm run dev`) and sandbox (`npm run sandbox`) deployments: synth fails when any other deployment configures a `stubIdp()` provider, and deployed compute serves the stub IdP routes only in a sandbox. Outside a sandbox, deployed compute does not load the stub IdP engine and treats a `stubIdp()` provider as unavailable: sign-in with it fails with `ProviderNotConfiguredException`, session cookies and bearer tokens it issued are not accepted, and it is left out of `getClient()` and the sign-in actions. `getDeploymentType()` returns `'local'`, `'sandbox'`, or `'production'` and reports the same value at synth and at runtime, so selecting providers with it keeps both sides consistent. At synth it reports the deployment type inside your backend module (once `BlocksStack` / `BlocksBackend` `create()` has begun importing it); at runtime it reports it on deployed compute. Wherever Blocks config and context are not present (before `create()`, in plain scripts, or on non-Blocks compute) it returns `'local'`, so call it from the backend module, as in the examples above. Authorization codes issued by the stub are signed with a key derived per deployment from the instance's cookie-signing secret.
 
 `stubIdp()` is a real, spec-conformant OIDC provider that runs in-process: RS256 signing with a real keypair, a JWKS endpoint, OIDC discovery, the authorization-code grant with PKCE, refresh-token rotation, and RFC 7009 revocation. The engine runs the identical discovery + verify code path it uses against a real IdP. It just signs deterministic local users instead of authenticating a human. It is an explicit choice that sits next to your real providers in the `providers` array — it never silently replaces one. It is also what you use for E2E.
 
@@ -329,13 +337,15 @@ catch (e) {
 }
 ```
 
-`NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
+`NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`, `SignOutIncomplete`.
+
+`SignOutIncomplete` (503) means sign-out cleared the session cookie but could not invalidate the session server-side; see [Session management](#session-management).
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
 The auth routes (`callback`, `signin`, `exchange`, `authorize-params`, `refresh`) apply the same rule to every error they catch: an `ApiError` keeps its status, `name` and message; a branded Building Block error (e.g. `InvalidState`, `IdpError`) is a `400` with its `name` and message; anything else is logged server-side and answered with a nameless `500 { "error": "Internal error" }`.
 
-Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
+Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path for sign-in — react to errors on the imperative API with `isBlocksError` as shown above. The one exception is `setAuthState({ action: 'signOut' })`, which reports `SignOutIncomplete` on the returned state's `errorName` (for the returned-`AuthState` idiom, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs).
 
 ## Cognito-mediated federation
 
