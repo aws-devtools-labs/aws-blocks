@@ -31,14 +31,18 @@ jobs:
     steps:
       - name: Enforce main branch
         if: github.ref_name != 'main'
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          echo "::error::This workflow can only run from main (got '${{ github.ref_name }}')."
+          echo "::error::This workflow can only run from main (got '${REF_NAME}')."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-          token: ${{ secrets.OPS_GITHUB_TOKEN }}
+          # Don't persist the token into .git/config while repo scripts run.
+          # "Open revert PR" authenticates through the gh credential helper.
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '.nvmrc'
@@ -51,18 +55,23 @@ jobs:
           PR_BODY_FILE: ${{ runner.temp }}/revert-body.md
         run: node scripts/prepare-revert-release.mjs
 
+      # Opened with GITHUB_TOKEN, so the PR's checks wait for a maintainer to
+      # approve the workflow runs before it can merge.
       - name: Open revert PR
         if: steps.prep.outputs['has-changes'] == 'true'
         env:
-          GH_TOKEN: ${{ secrets.OPS_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LAST_RELEASE: ${{ steps.prep.outputs['last-release'] }}
+          BODY_FILE: ${{ runner.temp }}/revert-body.md
         run: |
+          gh auth setup-git
           BRANCH="revert-release/${{ github.run_id }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add -A
-          git commit -m "revert: roll back release ${{ steps.prep.outputs['last-release'] }}"
+          git commit -m "revert: roll back release ${LAST_RELEASE}"
           git push -u origin "$BRANCH"
           gh pr create --base main --head "$BRANCH" \
-            --title "Revert release ${{ steps.prep.outputs['last-release'] }}" \
-            --body-file "${{ runner.temp }}/revert-body.md"
+            --title "Revert release ${LAST_RELEASE}" \
+            --body-file "$BODY_FILE"
