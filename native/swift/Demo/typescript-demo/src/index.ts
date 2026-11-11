@@ -7,7 +7,7 @@ import { Authenticator, onAuthChange } from '@aws-blocks/blocks/ui';
 
 /** Escapes HTML metacharacters to prevent XSS when interpolating into innerHTML. */
 function esc(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 let currentUser: { username: string } | null = null;
@@ -226,7 +226,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('test-results')!.innerHTML = results.join('<br>');
   } catch (error: any) {
     document.getElementById('test-results')!.innerHTML = 
-      `<span class="error">✗ Tests failed: ${error.message}</span>`;
+      `<span class="error">✗ Tests failed: ${esc(error.message)}</span>`;
   }
 };
 
@@ -241,7 +241,7 @@ function setFileResult(text: string, type: 'success' | 'error' | 'info') {
   if (type === 'info') {
     el.textContent = text;
   } else {
-    el.innerHTML = `<span class="${type}">${esc(text)}</span>`;
+    el.innerHTML = `<span class="${esc(type)}">${esc(text)}</span>`;
   }
 }
 
