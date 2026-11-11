@@ -37,7 +37,7 @@ let swiftKeywords: Set<String> = [
 
 /// Type names that collide with Swift standard library, Foundation, or SwiftUI types.
 let reservedTypeNames: Set<String> = [
-    "State", "Type", "Method", "Error", "Result", "Action",
+    "State", "Type", "Self", "Method", "Error", "Result", "Action",
     "View", "Body", "Content", "Image", "Text", "Button",
     "List", "Group", "Section", "Form", "Label", "Picker",
     "Color", "Font", "Path", "Shape", "Scene", "App",
@@ -91,13 +91,19 @@ private func pascalCasedSegments(_ input: String) -> String {
 
 /// Names a union variant from its discriminator field + value.
 /// Boolean discriminators (`isSignedIn: true`) become `IsSignedInTrue` / `IsSignedInFalse`
-/// to avoid collisions. String discriminators use the value directly.
+/// to avoid collisions. String discriminators use the value directly, except that `Self` and
+/// `Type`, which cannot name a nested type, gain a `Value` suffix. Other reserved type names
+/// such as `Text` stay as written, because a nested type may shadow them.
 func variantNameFromDiscriminator(fieldName: String, value: String) -> String {
     if value == "true" || value == "false" {
         return pascalCase(fieldName) + pascalCase(value)
     }
-    return pascalCase(value)
+    let name = pascalCase(value)
+    return nonNestableTypeNames.contains(name) ? name + "Value" : name
 }
+
+/// Type names that do not compile as the name of a nested type declaration.
+let nonNestableTypeNames: Set<String> = ["Self", "Type"]
 
 func camelCase(_ input: String) -> String {
     let pascal = pascalCase(input)

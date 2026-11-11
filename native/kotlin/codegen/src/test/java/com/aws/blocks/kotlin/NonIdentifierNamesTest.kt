@@ -6,6 +6,8 @@ import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContain as shouldContainElement
+import io.kotest.matchers.collections.shouldNotContain as shouldNotContainElement
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
@@ -60,6 +62,41 @@ private fun recordSpec(vararg fields: String): String {
     }
     """.trimIndent()
 }
+
+private fun unionSpec(vararg discriminatorValues: String): String {
+    val members = discriminatorValues.joinToString(", ") { value ->
+        """{ "type": "object", "properties": { "kind": { "type": "string", "enum": ["$value"] } }, "required": ["kind"] }"""
+    }
+    return """
+    {
+      "openrpc": "1.3.2",
+      "info": { "title": "test", "version": "1.0.0" },
+      "methods": [
+        {
+          "name": "api.put",
+          "params": [{ "name": "input", "required": true, "schema": { "oneOf": [ $members ] } }],
+          "result": { "name": "PutResult", "schema": { "type": "boolean" } }
+        }
+      ]
+    }
+    """.trimIndent()
+}
+
+private fun namespacesSpec(vararg namespaces: String): String {
+    val methods = namespaces.joinToString(", ") { ns ->
+        """{ "name": "$ns.run", "params": [], "result": { "name": "RunResult", "schema": { "type": "boolean" } } }"""
+    }
+    return """
+    {
+      "openrpc": "1.3.2",
+      "info": { "title": "test", "version": "1.0.0" },
+      "methods": [ $methods ]
+    }
+    """.trimIndent()
+}
+
+private fun generateResult(spec: String) =
+    KotlinCodeGenerator("com.example.app").generate(CodegenModelBuilder().build(OpenRpcParser.parse(spec)))
 
 /** Names the spec supplies reach generated code only as sanitized identifiers or escaped literals. */
 class NonIdentifierNamesTest : FunSpec({
@@ -212,5 +249,47 @@ class NonIdentifierNamesTest : FunSpec({
 
         error.message shouldContain "servers"
         error.message shouldContain "'my-server'"
+    }
+    test("two discriminator values that name one union variant fail generation") {
+        for ((first, second, identifier) in listOf(Triple("a-b", "a_b", "AB"), Triple("Foo", "foo", "Foo"))) {
+            val error = shouldThrow<IdentifierCollisionException> { generate(unionSpec(first, second)) }
+
+            error.message shouldContain "union variants"
+            error.message shouldContain "'$first'"
+            error.message shouldContain "'$second'"
+            error.message shouldContain "'$identifier'. Rename one in the spec."
+        }
+    }
+
+    test("the reserved-file warning names the namespace as the spec spells it") {
+        val warnings = generateResult(namespacesSpec("types${'$'}")).warnings
+
+        warnings.single() shouldContain "The \"types${'$'}\" namespace would be generated as Types.kt"
+    }
+
+    test("a namespace matching a reserved file name in another case is suffixed") {
+        for ((namespace, className) in listOf("seRvers" to "SeRversApi", "tYPES" to "TYPESApi")) {
+            val result = generateResult(namespacesSpec(namespace))
+
+            val fileNames = result.files.map { it.name }
+            fileNames shouldContainElement className
+            fileNames shouldNotContainElement className.removeSuffix("Api")
+            result.warnings.single() shouldContain "The \"$namespace\" namespace"
+        }
+    }
+
+    test("two namespaces whose files differ only in case fail generation") {
+        val error = shouldThrow<IllegalStateException> { generate(namespacesSpec("foo", "fOO")) }
+
+        error.message shouldContain "\"foo\""
+        error.message shouldContain "\"fOO\""
+    }
+
+    test("the namespace collision error names the namespaces as the spec spells them") {
+        val error = shouldThrow<IllegalStateException> { generate(namespacesSpec("types", "types;Api")) }
+
+        error.message shouldContain "\"types\""
+        error.message shouldContain "\"types;Api\""
+        error.message shouldContain "TypesApi"
     }
 })

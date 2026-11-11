@@ -91,6 +91,7 @@ final class HelpersTests: XCTestCase {
         XCTAssertEqual(safeTypeName("State", parentName: "AuthState"), "AuthStateState")
         XCTAssertEqual(safeTypeName("Type", parentName: "AuthField"), "AuthFieldType")
         XCTAssertEqual(safeTypeName("Method", parentName: "AuthAction"), "AuthActionMethod")
+        XCTAssertEqual(safeTypeName("Self", parentName: "AuthField"), "AuthFieldSelf")
     }
 
     func testSafeTypeNameReservedWithoutParent() {

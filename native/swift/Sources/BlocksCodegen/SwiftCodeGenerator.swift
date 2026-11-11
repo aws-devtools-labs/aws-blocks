@@ -363,7 +363,7 @@ public struct SwiftCodeGenerator {
         lines.append("")
         emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
         for variant in variants {
-            let caseName = camelCase(variant.name)
+            let caseName = variantCaseName(variant)
             let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
             let payloadType = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil)
             if let payload = payloadType {
@@ -409,10 +409,10 @@ public struct SwiftCodeGenerator {
                 let encodedTag = swiftStringLiteral(discVal)
                 let discKey = escapedSwiftName(discriminator.fieldName)
                 if !hasPayload {
-                    lines.append("\(indent)        case .\(camelCase(variant.name)):")
+                    lines.append("\(indent)        case .\(variantCaseName(variant)):")
                     lines.append("\(indent)            try container.encode(\(encodedTag), forKey: .\(discKey))")
                 } else {
-                    lines.append("\(indent)        case .\(camelCase(variant.name))(let params):")
+                    lines.append("\(indent)        case .\(variantCaseName(variant))(let params):")
                     lines.append("\(indent)            try container.encode(\(encodedTag), forKey: .\(discKey))")
                     lines.append("\(indent)            try params.encode(to: encoder)")
                 }
@@ -438,10 +438,10 @@ public struct SwiftCodeGenerator {
                 let variant = group[0]
                 let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
                 if !hasSynthBody && variant.payloadTypeName == nil {
-                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))")
+                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(variantCaseName(variant))")
                 } else {
                     let payload = variant.payloadTypeName ?? variant.name
-                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
+                    lines.append("\(indent)        case \(swiftStringLiteral(tag)): self = .\(variantCaseName(variant))(try \(payload)(from: decoder))")
                 }
             } else {
                 lines.append("\(indent)        case \(swiftStringLiteral(tag)):")
@@ -449,7 +449,7 @@ public struct SwiftCodeGenerator {
                     let payload = variant.payloadTypeName ?? variant.name
                     let prefix = idx == 0 ? "if" : "} else if"
                     lines.append("\(indent)            \(prefix) let v = try? \(payload)(from: decoder) {")
-                    lines.append("\(indent)                self = .\(camelCase(variant.name))(v)")
+                    lines.append("\(indent)                self = .\(variantCaseName(variant))(v)")
                     lines.append("\(indent)                return")
                 }
                 lines.append("\(indent)            } else {")
@@ -480,7 +480,7 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)    public func encode(to encoder: Encoder) throws {")
         lines.append("\(indent)        switch self {")
         for variant in variants {
-            let caseName = camelCase(variant.name)
+            let caseName = variantCaseName(variant)
             let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
             if variant.payloadTypeName != nil || hasSynthBody {
                 lines.append("\(indent)        case .\(caseName)(let payload):")
@@ -504,14 +504,14 @@ public struct SwiftCodeGenerator {
             lines.append("\(indent)        var lastError: Error?")
         }
         for variant in variants {
-            let caseName = camelCase(variant.name)
+            let caseName = variantCaseName(variant)
             let hasSynthBody = !variant.fields.isEmpty || variant.additionalPropertiesType != nil || variant.embeddedUnion != nil
             if let payload = variant.payloadTypeName ?? (hasSynthBody ? variant.name : nil) {
                 appendVariantAttempt(caseName, payload: payload, keepsError: nestedFieldless == nil, indent: indent + "        ", lines: &lines)
             }
         }
         if let nestedFieldless {
-            lines.append("\(indent)        self = .\(camelCase(nestedFieldless.name))")
+            lines.append("\(indent)        self = .\(variantCaseName(nestedFieldless))")
         } else {
             let errDesc = "No \(name) variant matched"
             lines.append(
@@ -594,7 +594,7 @@ public struct SwiftCodeGenerator {
             body.append("")
             emitDeclaration(name, line: "public nonisolated enum \(name): Codable {", lines: &body)
             for variant in variants {
-                let caseName = camelCase(variant.name)
+                let caseName = variantCaseName(variant)
                 let hasSynthBody = !variant.fields.isEmpty
                     || variant.additionalPropertiesType != nil
                     || variant.embeddedUnion != nil
@@ -1089,10 +1089,10 @@ public struct SwiftCodeGenerator {
                     || variant.embeddedUnion != nil
                 let hasPayload = variant.payloadTypeName != nil || hasSynthBody
                 if !hasPayload {
-                    lines.append("        case .\(camelCase(variant.name)):")
+                    lines.append("        case .\(variantCaseName(variant)):")
                     lines.append("            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                 } else {
-                    lines.append("        case .\(camelCase(variant.name))(let params):")
+                    lines.append("        case .\(variantCaseName(variant))(let params):")
                     lines.append("            try container.encode(\(swiftStringLiteral(discVal)), forKey: .\(escapedSwiftName(discriminator.fieldName)))")
                     lines.append("            try params.encode(to: encoder)")
                 }
@@ -1123,10 +1123,10 @@ public struct SwiftCodeGenerator {
                     || variant.additionalPropertiesType != nil
                     || variant.embeddedUnion != nil
                 if !hasSynthBody && variant.payloadTypeName == nil {
-                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))")
+                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(variantCaseName(variant))")
                 } else {
                     let payload = variant.payloadTypeName ?? variant.name
-                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(camelCase(variant.name))(try \(payload)(from: decoder))")
+                    lines.append("        case \(swiftStringLiteral(tag)): self = .\(variantCaseName(variant))(try \(payload)(from: decoder))")
                 }
             } else {
                 lines.append("        case \(swiftStringLiteral(tag)):")
@@ -1134,7 +1134,7 @@ public struct SwiftCodeGenerator {
                     let payload = variant.payloadTypeName ?? variant.name
                     let prefix = idx == 0 ? "if" : "} else if"
                     lines.append("            \(prefix) let v = try? \(payload)(from: decoder) {")
-                    lines.append("                self = .\(camelCase(variant.name))(v)")
+                    lines.append("                self = .\(variantCaseName(variant))(v)")
                     lines.append("                return")
                 }
                 lines.append("            } else {")
@@ -1166,7 +1166,7 @@ public struct SwiftCodeGenerator {
         lines.append("    public func encode(to encoder: Encoder) throws {")
         lines.append("        switch self {")
         for variant in variants {
-            let caseName = camelCase(variant.name)
+            let caseName = variantCaseName(variant)
             let hasSynthBody = !variant.fields.isEmpty
                 || variant.additionalPropertiesType != nil
                 || variant.embeddedUnion != nil
@@ -1192,7 +1192,7 @@ public struct SwiftCodeGenerator {
             lines.append("        var lastError: Error?")
         }
         for variant in variants {
-            let caseName = camelCase(variant.name)
+            let caseName = variantCaseName(variant)
             let hasSynthBody = !variant.fields.isEmpty
                 || variant.additionalPropertiesType != nil
                 || variant.embeddedUnion != nil
@@ -1201,7 +1201,7 @@ public struct SwiftCodeGenerator {
             }
         }
         if let fieldlessFirst {
-            lines.append("        self = .\(camelCase(fieldlessFirst.name))")
+            lines.append("        self = .\(variantCaseName(fieldlessFirst))")
         } else {
             let errDesc = "No \(name) variant matched"
             lines.append(

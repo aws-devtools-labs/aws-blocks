@@ -60,7 +60,7 @@ jobs:
         run: swift build
 
       - name: Run unit tests
-        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests"
+        run: swift test --filter "BlocksCodegenTests|BlocksRuntimeTests|BlocksGeneratedCodeTests|BlocksGeneratedMainActorTests|BlocksGeneratedNonIdentifierNamesTests"
 
       - name: Test the codegen configuration surface
         run: scripts/codegen-config.test.sh

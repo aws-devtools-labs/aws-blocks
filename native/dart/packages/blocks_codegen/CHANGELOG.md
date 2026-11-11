@@ -3,14 +3,16 @@
 - Sanitize every spec-derived identifier (type and variant class names, fields,
   parameters, methods, servers, enum values and discriminator keys): any
   character outside `[A-Za-z0-9_]` becomes `_`, and a name that would open with
-  a digit, or with an underscore the sanitizer put there, gains a leading `$`.
-  Keywords keep their trailing `$`, and an enum value that is a keyword, such
-  as `default`, now gains one too. The original key is still the JSON key, as
-  an escaped string literal. Two names that reduce to one identifier in the
-  same scope now throw a `NamingConflictException` naming both, and a boolean
-  discriminator value other than `true` or `false` is a spec error. Names that
-  held such characters change: a field `note$` generates `note_`, an enum value
-  `1st` generates `$1st` instead of `_1st`, and a discriminator tag `create$`
+  a digit or an underscore gains a leading `$`, so a spec name such as `_x`
+  generates `$_x` and stays public. Keywords keep their trailing `$`, and an
+  enum value that is a keyword, such as `default`, now gains one too. The
+  original key is still the JSON key, as an escaped string literal. Two names
+  that reduce to one identifier in the same scope now throw a
+  `NamingConflictException` naming both, as do two discriminator values whose
+  variant classes share a name (`Foo` and `foo`), and a boolean discriminator
+  value other than `true` or `false` is a spec error. Names that held such
+  characters change: a field `note$` generates `note_`, an enum value `1st`
+  generates `$1st` instead of `_1st`, and a discriminator tag `create$`
   generates `Create_Input`.
 - Ignore an `oidc/client` result's `x-blocks-type-args`, which
   `blocks-generate-spec` now fills with the app's provider names, so the

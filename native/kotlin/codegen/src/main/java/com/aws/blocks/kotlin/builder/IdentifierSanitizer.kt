@@ -114,7 +114,12 @@ internal object IdentifierSanitizer {
         is ResolvedType.TupleType -> type.copy(name = typeName(type.name), elements = type.elements.map(::type))
         is ResolvedType.Nullable -> type.copy(inner = type(type.inner))
         is ResolvedType.Union -> {
-            requireDistinct("union variant", "type '${type.name.forDiagnostic()}'", type.variants.map { it.name })
+            val scope = "type '${type.name.forDiagnostic()}'"
+            // A variant named from its discriminator value is already PascalCased, so two
+            // values (`a-b` and `a_b`, or `Foo` and `foo`) can arrive as one name. Check
+            // those by the values the spec spells, which the name check cannot tell apart.
+            type.discriminator?.let { d -> requireDistinctValues("union variant", scope, d.variants) }
+            requireDistinct("union variant", scope, type.variants.map { it.name })
             type.copy(
                 name = typeName(type.name),
                 variants = type.variants.map { variant(type.name, it) },
@@ -131,6 +136,25 @@ internal object IdentifierSanitizer {
 
     /** An unnamed type, such as a narrowed type argument nothing named yet, stays unnamed. */
     private fun typeName(name: String): String = if (name.isEmpty()) name else identifier(name)
+
+    /**
+     * Fails when two different spec values in [scope] name variants that reduce to one
+     * identifier. [variants] maps each value as the spec spells it to the variant name derived
+     * from it, which may already be the same name for two different values.
+     */
+    private fun requireDistinctValues(kind: String, scope: String, variants: Map<String, String>) {
+        variants.entries
+            .groupBy({ typeName(it.value) }, { it.key })
+            .filterValues { it.size > 1 }
+            .entries
+            .firstOrNull()
+            ?.let { (identifier, clashing) ->
+                throw IdentifierCollisionException(
+                    "The ${kind}s ${clashing.joinToString { "'${it.forDiagnostic()}'" }} in $scope all " +
+                        "generate the identifier '$identifier'. Rename one in the spec.",
+                )
+            }
+    }
 
     /**
      * Fails when two different [names] in [scope] reduce to one identifier through [toIdentifier],

@@ -119,6 +119,14 @@ private val knownTransferableTags: Set<String> = knownTransferableBindings.keys
  */
 private val RESERVED_FILE_NAMES = setOf("Types", "Serializers", "Servers")
 
+/**
+ * Whether a class name would share its file with one in [RESERVED_FILE_NAMES]. The class name is
+ * also the file name, and on a case-insensitive file system `SeRvers.kt` and `Servers.kt` are one
+ * file, so the comparison ignores case.
+ */
+private fun isReservedFileName(name: String): Boolean =
+    RESERVED_FILE_NAMES.any { it.equals(name, ignoreCase = true) }
+
 private const val API_SUFFIX = "Api"
 
 private const val SCHEMA_VERSION = 1
@@ -209,9 +217,9 @@ class KotlinCodeGenerator(
 
         for (namespace in model.apiNamespaces) {
             val original = toPascalCase(namespace.name)
-            if (original in RESERVED_FILE_NAMES) {
+            if (isReservedFileName(original)) {
                 warnings.add(
-                    "The \"${namespace.name}\" namespace would be generated as $original.kt, which " +
+                    "The \"${namespace.wireName.forDiagnostic()}\" namespace would be generated as $original.kt, which " +
                         "this generator emits itself. Its API is generated as " +
                         "${apiClassName(namespace)} instead, reached through " +
                         "blocks.${apiPropertyName(namespace)}."
@@ -220,14 +228,16 @@ class KotlinCodeGenerator(
         }
 
         // Suffixing can itself collide, e.g. namespaces "types" and "typesApi". One file would
-        // silently replace the other, so refuse instead.
+        // silently replace the other, so refuse instead. The class name is also the file name, and
+        // `Foo.kt` and `FOO.kt` are one file on a case-insensitive file system, so group ignoring case.
         model.apiNamespaces
-            .groupBy { apiClassName(it) }
+            .groupBy { apiClassName(it).lowercase() }
             .filterValues { it.size > 1 }
-            .forEach { (className, namespaces) ->
+            .forEach { (_, namespaces) ->
                 error(
-                    "Namespaces ${namespaces.joinToString { "\"${it.name}\"" }} would all be " +
-                        "generated as $className. Rename one in the spec."
+                    "Namespaces ${namespaces.joinToString { "\"${it.wireName.forDiagnostic()}\"" }} would all be " +
+                        "generated as ${namespaces.map { apiClassName(it) }.distinct().joinToString(" / ")}. " +
+                        "Rename one in the spec."
                 )
             }
 
@@ -1242,13 +1252,13 @@ class KotlinCodeGenerator(
      */
     private fun apiClassName(namespace: ApiNamespace): String {
         val name = NamingUtils.safeIdentifier(toPascalCase(namespace.name))
-        return if (name in RESERVED_FILE_NAMES) name + API_SUFFIX else name
+        return if (isReservedFileName(name)) name + API_SUFFIX else name
     }
 
     /** The accessor name for a namespace, suffixed alongside [apiClassName] so the two match. */
     private fun apiPropertyName(namespace: ApiNamespace): String {
         val name = NamingUtils.safeIdentifier(toCamelCase(namespace.name))
-        return if (toPascalCase(namespace.name) in RESERVED_FILE_NAMES) name + API_SUFFIX else name
+        return if (isReservedFileName(toPascalCase(namespace.name))) name + API_SUFFIX else name
     }
 
     // ── Per-API-group file generation ─────────────────────────────────

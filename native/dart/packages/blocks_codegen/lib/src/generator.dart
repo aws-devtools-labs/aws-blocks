@@ -370,9 +370,9 @@ class DartCodeGenerator {
         ? value
         : _camelCaseEnumValue(value);
     // Whatever the separators leave goes through the same rule as every other
-    // identifier: only identifier characters reach code, a leading digit or an
-    // underscore the sanitizer put first gains a leading `$` (a leading `_`
-    // would make the constant library-private), and a keyword gains a
+    // identifier: only identifier characters reach code, a leading digit or
+    // underscore gains a leading `$` (a leading `_` would make the constant
+    // library-private), and a keyword gains a
     // trailing `$`.
     final ident = safeDartIdentifier(camel);
     return _dartKeywords.contains(ident) ? '$ident\$' : ident;

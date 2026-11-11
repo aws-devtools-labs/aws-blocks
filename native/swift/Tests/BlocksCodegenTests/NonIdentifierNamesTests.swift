@@ -167,6 +167,78 @@ final class NonIdentifierNamesTests: XCTestCase {
         XCTAssertTrue(output.api.contains("case plain\n"), "got:\n\(output.api)")
     }
 
+    /// A discriminated union whose tags are `default`, `self`, `class` and `type`, as a component
+    /// schema (`Shape`) and as an inline parameter. `Shape` also has a `text` tag, which names a
+    /// reserved type that a nested type may shadow.
+    private let keywordUnionSpec = """
+    {
+      "openrpc": "1.3.2",
+      "info": { "title": "test", "version": "1.0.0" },
+      "components": { "schemas": {
+        "Shape": { "oneOf": [
+          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["default"] } }, "required": ["kind"] },
+          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["self"] }, "a": { "type": "string" } }, "required": ["kind", "a"] },
+          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["class"] }, "b": { "type": "string" } }, "required": ["kind", "b"] },
+          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["type"] }, "c": { "type": "string" } }, "required": ["kind", "c"] },
+          { "type": "object", "properties": { "kind": { "type": "string", "enum": ["text"] }, "d": { "type": "string" } }, "required": ["kind", "d"] }
+        ]}
+      }},
+      "methods": [{
+        "name": "api.draw",
+        "params": [{ "name": "input", "required": true, "schema": { "oneOf": [
+          { "type": "object", "properties": { "op": { "type": "string", "enum": ["default"] } }, "required": ["op"] },
+          { "type": "object", "properties": { "op": { "type": "string", "enum": ["self"] }, "x": { "type": "string" } }, "required": ["op", "x"] },
+          { "type": "object", "properties": { "op": { "type": "string", "enum": ["class"] }, "y": { "type": "string" } }, "required": ["op", "y"] }
+        ]}}],
+        "result": { "name": "DrawResult", "schema": { "$ref": "#/components/schemas/Shape" } }
+      }]
+    }
+    """
+
+    func testKeywordDiscriminatorValuesGenerateBacktickedUnionCases() throws {
+        let output = try generate(keywordUnionSpec)
+
+        for expected in [
+            "case `default`\n",
+            "case selfValue(SelfValue)\n",
+            "case `class`(Class)\n",
+            "case typeValue(TypeValue)\n",
+            "case text(Text)\n",
+            "case .`default`:",
+            "case .`class`(let params):",
+            "case \"default\": self = .`default`\n",
+            "case \"self\": self = .selfValue(try SelfValue(from: decoder))",
+            "case \"class\": self = .`class`(try Class(from: decoder))",
+        ] {
+            XCTAssertTrue(output.models.contains(expected), "missing '\(expected)' in:\n\(output.models)")
+        }
+        for expected in [
+            "case `default`\n",
+            "case selfValue(SelfValue)\n",
+            "case `class`(Class)\n",
+            "case \"default\": self = .`default`\n",
+        ] {
+            XCTAssertTrue(output.api.contains(expected), "missing '\(expected)' in:\n\(output.api)")
+        }
+    }
+
+    /// Only `self` and `type` tags gain a `Value` suffix; a `text` tag keeps `Text`.
+    func testReservedDiscriminatorValuesGenerateSuffixedVariantStructs() throws {
+        let output = try generate(keywordUnionSpec)
+
+        XCTAssertTrue(output.models.contains("struct SelfValue: Codable {"), "got:\n\(output.models)")
+        XCTAssertTrue(output.models.contains("struct TypeValue: Codable {"), "got:\n\(output.models)")
+        XCTAssertTrue(output.models.contains("struct Class: Codable {"), "got:\n\(output.models)")
+        XCTAssertTrue(output.models.contains("struct Text: Codable {"), "got:\n\(output.models)")
+        XCTAssertFalse(output.models.contains("TextValue"), "got:\n\(output.models)")
+        XCTAssertTrue(output.api.contains("struct SelfValue: Codable {"), "got:\n\(output.api)")
+        for source in [output.models, output.api] {
+            for fragment in ["struct Self:", "struct Type:", "case self(", "case default", "case class(", "case type("] {
+                XCTAssertFalse(source.contains(fragment), "'\(fragment)' in:\n\(source)")
+            }
+        }
+    }
+
     func testTwoOperationsWhoseTypesNestInOneEnumFail() {
         let inlineResult = #"{ "type": "object", "properties": { "a": { "type": "string" } } }"#
         let spec = """

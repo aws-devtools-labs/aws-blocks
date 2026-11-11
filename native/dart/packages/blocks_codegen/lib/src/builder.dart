@@ -1068,7 +1068,28 @@ class CodegenModelBuilder {
         case EnumType():
           type.name = rename(type.name);
         case SealedClassType():
+          final unionName = type.name;
           type.name = rename(type.name);
+          // A variant's class name is derived from its discriminator value,
+          // and two different values can derive the same name (`Foo` and
+          // `foo` both capitalize to `Foo`). The name then has one spelling,
+          // so [claim] alone cannot tell the two apart; compare the values.
+          final variantValues = <String, String>{};
+          for (final v in type.variants) {
+            final identifier = safeDartIdentifier(v.className);
+            final prior = variantValues.putIfAbsent(
+              identifier,
+              () => v.discriminantValue,
+            );
+            if (prior != v.discriminantValue) {
+              throw NamingConflictException(
+                "The discriminator values '${escapeForDiagnostic(prior)}' and "
+                "'${escapeForDiagnostic(v.discriminantValue)}' in "
+                "'${escapeForDiagnostic(unionName)}' both generate the class "
+                "'$identifier'. Rename one in the spec.",
+              );
+            }
+          }
           for (var i = 0; i < type.variants.length; i++) {
             final v = type.variants[i];
             type.variants[i] = SealedVariant(

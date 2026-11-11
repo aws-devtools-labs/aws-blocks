@@ -114,6 +114,12 @@ extension SwiftCodeGenerator {
         escapedSwiftName(camelCase(value))
     }
 
+    /// The case a union variant generates, with a keyword such as `default` backticked. The
+    /// backticked form is valid both where the case is declared and where it is referenced.
+    func variantCaseName(_ variant: UnionVariant) -> String {
+        enumCaseName(variant.name)
+    }
+
     /// The declaration of the case an enum value generates. A value that is not the case's name
     /// as written keeps its wire spelling as the case's escaped raw value.
     func enumCaseDeclaration(_ value: String) -> String {

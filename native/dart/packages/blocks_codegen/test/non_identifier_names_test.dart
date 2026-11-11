@@ -72,8 +72,14 @@ void main() {
   group('safeDartIdentifier', () {
     test('leaves an identifier the spec already spells unchanged', () {
       expect(safeDartIdentifier('camelCase'), 'camelCase');
-      expect(safeDartIdentifier('_private'), '_private');
       expect(safeDartIdentifier('snake_case9'), 'snake_case9');
+    });
+
+    test('keeps a name the spec opens with an underscore public', () {
+      expect(safeDartIdentifier('_private'), r'$_private');
+      expect(safeDartIdentifier('_1'), r'$_1');
+      expect(safeDartIdentifier('_client'), r'$_client');
+      expect(safeDartIdentifier(r'$_x'), r'$__x');
     });
 
     test('maps every other character to an underscore', () {
@@ -168,6 +174,87 @@ void main() {
   });
 
   group('identifier collisions', () {
+    String unionSpec(List<String> values) => jsonEncode({
+      'openrpc': '1.3.2',
+      'info': {'title': 'test', 'version': '1.0.0'},
+      'methods': [
+        {
+          'name': 'api.op',
+          'params': [
+            {
+              'name': 'input',
+              'required': true,
+              'schema': {
+                'oneOf': [
+                  for (final v in values)
+                    {
+                      'type': 'object',
+                      'properties': {
+                        'kind': {
+                          'type': 'string',
+                          'enum': [v],
+                        },
+                        'n': {'type': 'string'},
+                      },
+                      'required': ['kind'],
+                    },
+                ],
+              },
+            },
+          ],
+          'result': {
+            'name': 'OpResult',
+            'schema': {'type': 'boolean'},
+          },
+        },
+      ],
+    });
+
+    for (final (a, b) in [('Foo', 'foo'), ('a-b', 'a_b')]) {
+      test('discriminator values $a and $b fail generation', () {
+        expect(
+          () => _generate(unionSpec([a, b])),
+          throwsA(
+            isA<NamingConflictException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('discriminator values'),
+                contains("'$a'"),
+                contains("'$b'"),
+                contains('Rename'),
+              ),
+            ),
+          ),
+        );
+      });
+    }
+
+    test('discriminator values that stay distinct generate', () {
+      final source = _generate(unionSpec(['foo', 'bar']));
+      expect(source, contains("case 'foo':"));
+      expect(source, contains("case 'bar':"));
+    });
+
+    test('a field the spec opens with _ collides with its sanitized twin', () {
+      expect(
+        () => _generate(_recordSpec(['_x', '-x'])),
+        throwsA(
+          isA<NamingConflictException>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains("'_x'"), contains("'-x'"), contains(r"'$_x'")),
+          ),
+        ),
+      );
+    });
+
+    test(r'fields _x and $_x generate distinct public identifiers', () {
+      final source = _generate(_recordSpec(['_x', r'$_x']));
+      expect(source, contains(r'final String? $_x;'));
+      expect(source, contains(r'final String? $__x;'));
+    });
+
     test('two fields that reduce to one identifier fail generation', () {
       expect(
         () => _generate(_recordSpec(['a-b', 'a_b'])),
