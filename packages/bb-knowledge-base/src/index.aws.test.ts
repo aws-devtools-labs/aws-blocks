@@ -1349,4 +1349,24 @@ describe('asAgentTool()', () => {
 			cleanup();
 		}
 	});
+
+	test('does not call Bedrock when the filter callback returns null, {} or a missing equals', async () => {
+		const cleanup = setKbEnv('TEST', 'TOOL3');
+		let calls = 0;
+		mockRuntimeSend(() => { calls++; return { retrievalResults: [] }; });
+		try {
+			const kb = new KnowledgeBase({ id: 'test' }, 'tool3', { source: './knowledge' });
+			for (const value of [null, {}, { tenant: { equals: undefined } }]) {
+				const tool = kb.asAgentTool({ filter: () => value as never });
+				await assert.rejects(
+					tool.handler({ input: { query: 'docs' }, context: {} }),
+					(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+					`expected a ValidationError for ${JSON.stringify(value)}`,
+				);
+			}
+			assert.strictEqual(calls, 0);
+		} finally {
+			cleanup();
+		}
+	});
 });

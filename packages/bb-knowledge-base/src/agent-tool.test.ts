@@ -41,6 +41,7 @@ describe('asAgentTool()', () => {
 		assert.deepStrictEqual(Object.keys(tool.parameters.shape), ['query']);
 		assert.ok(tool.parameters.safeParse({ query: 'gold tier' }).success);
 		assert.ok(!tool.parameters.safeParse({ query: '' }).success, 'an empty query is rejected');
+		assert.ok(!tool.parameters.safeParse({ query: '   ' }).success, 'a whitespace-only query is rejected by the schema');
 		// The model can't smuggle a filter in: unknown keys are stripped from the parsed input.
 		const parsed = tool.parameters.parse({ query: 'gold', filter: { folder: { equals: 'tenant-b' } } });
 		assert.deepStrictEqual(parsed, { query: 'gold' });
@@ -91,6 +92,44 @@ describe('asAgentTool()', () => {
 			},
 		});
 		await assert.rejects(tool.handler({ input: { query: 'gold' }, context: {} }), /no tenant on the session/);
+	});
+
+	test('fails closed when the filter callback returns something that would widen the search', async () => {
+		const kb = newKb();
+		let calls = 0;
+		const spy = kb.retrieve.bind(kb);
+		kb.retrieve = (...args) => { calls++; return spy(...args); };
+		const bad: unknown[] = [null, '', 0, false, {}, [], { folder: { equals: undefined } }, { folder: { equals: '' } }, { folder: {} }, { folder: 'tenant-a' }, { folder: null }];
+		for (const value of bad) {
+			const tool = kb.asAgentTool({ filter: () => value as never });
+			await assert.rejects(
+				tool.handler({ input: { query: 'gold tier pricing plan' }, context: {} }),
+				(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+				`expected a ValidationError for ${JSON.stringify(value)}`,
+			);
+		}
+		assert.strictEqual(calls, 0, 'no search runs on an invalid filter');
+	});
+
+	test('validates maxResults when the tool is defined', () => {
+		const kb = newKb();
+		for (const bad of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+			assert.throws(
+				() => kb.asAgentTool({ filter: () => undefined, maxResults: bad }),
+				(err: unknown) => isBlocksError(err, KnowledgeBaseErrors.ValidationError),
+				`expected a ValidationError for maxResults ${bad}`,
+			);
+		}
+	});
+
+	test('a null maxResults falls back to the tool default of 5', async () => {
+		const kb = newKb();
+		let seen: number | undefined;
+		const spy = kb.retrieve.bind(kb);
+		kb.retrieve = (query, options) => { seen = options?.maxResults; return spy(query, options); };
+		const tool = kb.asAgentTool({ filter: () => undefined, maxResults: null as unknown as number });
+		await tool.handler({ input: { query: 'gold' }, context: {} });
+		assert.strictEqual(seen, 5);
 	});
 
 	test('rejects a missing or non-function filter at definition time', () => {

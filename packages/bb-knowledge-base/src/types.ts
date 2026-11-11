@@ -168,11 +168,14 @@ export interface KnowledgeBaseAgentToolOptions<TContext> {
 	/**
 	 * **Required.** Derives the metadata filter for every search from the per-call tool context,
 	 * which your server code fills from the authenticated session (for example
-	 * `context: { tenantId: user.tenantId }` in `agent.stream()`). The model never sees or sets
-	 * the filter: the tool's only input is `query`.
+	 * `context: { tenantId }` in `agent.stream()`, with a tenant id your app looks up for the
+	 * signed-in user). The model never sees or sets the filter: the tool's only input is `query`.
 	 *
 	 * Return `undefined` to search the whole knowledge base. That choice is explicit on purpose:
-	 * pass `filter: () => undefined` only when every caller may read every document.
+	 * pass `filter: () => undefined` only when every caller may read every document. Any other
+	 * result must narrow the search: `null`, an empty object, or a key whose `equals` is missing
+	 * or an empty string fails the tool call with `KnowledgeBaseErrors.ValidationError` instead
+	 * of running a wider search.
 	 *
 	 * Throw (for example when the session carries no tenant) to fail the tool call rather than
 	 * run an unscoped search. May be async.
@@ -188,7 +191,10 @@ export interface KnowledgeBaseAgentToolOptions<TContext> {
 	 * description that includes the knowledge base's own `description` when it has one.
 	 */
 	description?: string;
-	/** Maximum results per search, same rules as `RetrieveOptions.maxResults`. Default: 5. */
+	/**
+	 * Maximum results per search, same rules as `RetrieveOptions.maxResults`. Default: 5.
+	 * Checked when the tool is defined: a non-integer throws from `asAgentTool()`.
+	 */
 	maxResults?: number;
 }
 

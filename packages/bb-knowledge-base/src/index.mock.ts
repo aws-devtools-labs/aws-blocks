@@ -277,9 +277,11 @@ export class KnowledgeBase extends Scope {
 	 *   optional `description` and `maxResults` (default 5).
 	 * @returns A plain tool definition (`description`, `parameters`, `untrustedOutput: true`,
 	 *   `handler`) for the Agent's `tool()` factory. The handler returns plain JSON search hits.
-	 * @throws {KnowledgeBaseValidationError} If `options.filter` is not a function. When the tool
-	 *   runs, an error thrown by `filter` fails the call (no unscoped search), and `retrieve()`
-	 *   errors propagate.
+	 * @throws {KnowledgeBaseValidationError} If `options.filter` is not a function, or
+	 *   `options.maxResults` is not an integer. When the tool runs, an error thrown by `filter`
+	 *   fails the call (no unscoped search), and so does a `filter` result other than `undefined`
+	 *   that isn't a non-empty filter with a non-empty string `equals` per key (`null`, `{}`,
+	 *   `{ tenant: { equals: undefined } }`); `retrieve()` errors propagate.
 	 *
 	 * @example
 	 * ```typescript
@@ -293,9 +295,10 @@ export class KnowledgeBase extends Scope {
 	 *   }),
 	 * });
 	 *
-	 * // In an API method: the scope comes from the authenticated session.
+	 * // In an API method: the scope comes from the authenticated session. The built-in auth
+	 * // blocks' users carry no tenant, so look it up (`tenantOf` is your own helper).
 	 * const user = await auth.requireAuth(context);
-	 * await agent.stream(message, { userId: user.userId, context: { tenantId: user.tenantId } });
+	 * await agent.stream(message, { userId: user.userId, context: { tenantId: await tenantOf(user.userId) } });
 	 * ```
 	 */
 	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {

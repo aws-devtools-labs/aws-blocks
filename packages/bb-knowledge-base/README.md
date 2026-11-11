@@ -171,11 +171,11 @@ const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 
 const agent = new Agent(scope, 'assistant', {
   systemPrompt: 'Answer questions from the documentation.',
-  toolContextSchema: z.object({ tenantId: z.string() }),
+  toolContextSchema: z.object({ ownerId: z.string() }),
   tools: (tool) => ({
     // `context` is typed from toolContextSchema.
     searchDocs: tool(kb.asAgentTool({
-      filter: (context) => ({ tenant: { equals: context.tenantId } }),
+      filter: (context) => ({ owner: { equals: context.ownerId } }),
     })),
   }),
 });
@@ -183,8 +183,11 @@ const agent = new Agent(scope, 'assistant', {
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async ask(message: string) {
     const user = await auth.requireAuth(context);
-    // The tool context, and so the search scope, comes from the session (one tenant per user here).
-    const result = await agent.stream(message, { userId: user.userId, context: { tenantId: user.userId } });
+    // The tool context, and so the search scope, comes from the session: each document carries
+    // an `owner` metadata value, and a user searches only their own. For per-tenant scoping, put a
+    // tenant id your app looks up for the user in the context instead (the built-in auth users
+    // carry only `userId`, `username` and `createdAt`).
+    const result = await agent.stream(message, { userId: user.userId, context: { ownerId: user.userId } });
     return { channelId: result.channelId };
   },
 }));
@@ -192,9 +195,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `filter` | `(context) => MetadataFilter \| undefined` (may be async) | (required) | Derives the filter for every search from the tool context. Return `undefined` to search everything: write `filter: () => undefined` only when every caller may read every document. Throw to fail the call instead of running an unscoped search. |
+| `filter` | `(context) => MetadataFilter \| undefined` (may be async) | (required) | Derives the filter for every search from the tool context. Return `undefined` to search everything: write `filter: () => undefined` only when every caller may read every document. Throw to fail the call instead of running an unscoped search. Any other result must narrow the search: `null`, `{}` or a missing or empty `equals` fails the call with `ValidationError`. |
 | `description` | `string` | generic, includes the KB `description` | Tool description shown to the model. |
-| `maxResults` | `number` | `5` | Results per search (same rules as `retrieve()`). |
+| `maxResults` | `number` | `5` | Results per search (same rules as `retrieve()`). A non-integer throws from `asAgentTool()`. |
 
 The tool returns plain JSON hits (`text`, `score`, `source`, `metadata`). Retrieval is read-only, so the tool doesn't ask for approval; set `needsApproval: true` on the agent's tools that have side effects. Spread the definition to add agent-side fields: `tool({ ...kb.asAgentTool({ filter }), cannedExamples: { query: 'refund policy' } })`. `asAgentTool()` can be called at module top level (it's synth-safe); the search runs only when the agent calls the tool.
 
@@ -202,7 +205,7 @@ The tool returns plain JSON hits (`text`, `score`, `source`, `metadata`). Retrie
 
 A knowledge base is one index, not one per user or tenant, and `retrieve()` returns whatever matches. Two consequences:
 
-- **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: user.tenantId } }`). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
+- **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: tenantId } }` with a tenant id you look up for the authenticated user). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
 - **Indexed text is untrusted.** If a source can receive content you don't write yourself, for example an `s3://` source that is a `FileBucket` your users upload to, that content reaches anyone who retrieves it. When results go to an agent, they can carry instructions that try to make it misuse its tools (indirect prompt injection). Use [`asAgentTool()`](#use-as-an-agent-tool), or mark the agent tool that calls `retrieve()` with `untrustedOutput: true`, and see [Retrieved content is untrusted](../bb-agent/README.md#retrieved-content-is-untrusted) in the Agent docs.
 
 ## Error Handling
