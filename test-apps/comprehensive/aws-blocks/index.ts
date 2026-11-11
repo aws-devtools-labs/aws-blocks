@@ -2389,6 +2389,104 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       .execute();
   },
 
+  // Issue #904: A must roll back even when another transaction or an ordinary
+  // query is submitted while its callback is paused. All signals are local to
+  // this request, so the same reproduction also works in a deployed Lambda.
+  async dbOverlappingTransactions(prefix: string, second: 'transaction' | 'query' | 'execute') {
+    interface Schema {
+      test_items: { id: string; name: string; value: number; category: string };
+    }
+    const kysely = createKyselyAdapter<Schema>(db);
+    let signalInserted!: () => void;
+    let release!: () => void;
+    const inserted = new Promise<void>((resolve) => { signalInserted = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const abort = new Error('intentional rollback A');
+    async function settle(work: Promise<unknown>) {
+      try {
+        await work;
+        return { ok: true, error: undefined };
+      } catch (error) {
+        return { ok: false, error };
+      }
+    }
+    const a = settle(kysely.transaction().execute(async (tx) => {
+      await tx.insertInto('test_items').values({ id: `${prefix}-a`, name: 'A', value: 1, category: 'general' }).execute();
+      signalInserted();
+      await released;
+      throw abort;
+    }));
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([inserted, (async () => {
+        const result = await a;
+        throw result.error ?? new Error('A finished before inserting');
+      })()]);
+      const b = settle((async () => {
+        if (second === 'transaction') {
+          await kysely.transaction().execute(async (tx) => {
+            await tx.insertInto('test_items').values({ id: `${prefix}-b`, name: 'B', value: 2, category: 'general' }).execute();
+          });
+        } else if (second === 'query') {
+          await kysely.insertInto('test_items').values({ id: `${prefix}-b`, name: 'B', value: 2, category: 'general' }).execute();
+        } else {
+          await db.execute(sql`INSERT INTO test_items (id, name, value) VALUES (${`${prefix}-b`}, 'B', 2)`);
+        }
+      })());
+      // Allow the broken implementation to finish B first. A serial engine
+      // instead waits until this bounded fallback releases A; neither deadlocks.
+      await Promise.race([b, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2_000); })]);
+      clearTimeout(timer);
+      release();
+      const [aResult, bResult] = await Promise.all([a, b]);
+      if (aResult.ok || aResult.error !== abort) throw new Error('Unexpected A outcome');
+      if (!bResult.ok) throw bResult.error;
+      return await kysely.selectFrom('test_items').select('id')
+        .where('id', 'in', [`${prefix}-a`, `${prefix}-b`]).orderBy('id').execute();
+    } finally {
+      clearTimeout(timer);
+      release();
+      await a;
+      await kysely.destroy();
+    }
+  },
+
+  // Issue #904 (reverse case): A commits after an overlapping transaction B
+  // rolls back. B's ROLLBACK must not discard A's write while A still reports
+  // success.
+  async dbOverlappingRollback(prefix: string) {
+    let signalInserted!: () => void;
+    let release!: () => void;
+    const inserted = new Promise<void>((resolve) => { signalInserted = resolve; });
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const a = db.transaction(async (tx) => {
+      await tx.execute(sql`INSERT INTO test_items (id, name, value) VALUES (${`${prefix}-a`}, 'A', 1)`);
+      signalInserted();
+      await released;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([inserted, a.then(() => { throw new Error('A finished before inserting'); })]);
+      const b = db.transaction(async () => {
+        throw new Error('intentional rollback B');
+      }).then(() => 'committed' as const, () => 'rejected' as const);
+      // The broken implementation runs B immediately; a serial engine makes B
+      // wait for A, so release A after a bounded fallback instead of deadlocking.
+      await Promise.race([b, new Promise<void>((resolve) => { timer = setTimeout(resolve, 2_000); })]);
+      clearTimeout(timer);
+      release();
+      await a;
+      if (await b !== 'rejected') throw new Error('Unexpected B outcome');
+      return await db.query<{ id: string }>(
+        sql`SELECT id FROM test_items WHERE id = ${`${prefix}-a`}`
+      );
+    } finally {
+      clearTimeout(timer);
+      release();
+      await a.catch(() => {});
+    }
+  },
+
   // ------------------------------------------------------------------------
   // DSQL Database Tests
   // ------------------------------------------------------------------------

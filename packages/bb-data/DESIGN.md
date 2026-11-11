@@ -31,8 +31,29 @@ bb-data (this package)
 
 - WASM PostgreSQL via `@electric-sql/pglite`
 - Data persists in `.bb-data/{fullId}/`
-- Single-connection (no real concurrency)
+- Single-connection; transactions and ordinary queries are serialized
 - Translates pg error codes to `DatabaseErrors` names
+
+`PgliteTransaction` from `@aws-blocks/data-common/internal` bridges PGlite's
+callback-based transaction API to the existing `DatabaseEngine` handle API.
+`beginTransaction()` resolves after the callback starts, and the callback stays
+open until commit or rollback is requested. PGlite's own lock excludes other
+transactions and ordinary client queries for that whole interval. Transaction
+queries use the callback's session, and commit/rollback wait for the enclosing
+PGlite transaction promise to settle, including commit-time errors.
+
+Handles belong to one engine and reject queries or commits after completion.
+Rollback on a completed handle is harmless: Kysely and `DatabaseBase` perform
+cleanup after a failed commit, potentially after another transaction has begun.
+Sending a new `ROLLBACK` to the shared client at that point would abort the wrong
+transaction. Initialization retry, process-exit cleanup, and error translation
+remain in `PGliteEngine`; the shared bridge has no runtime PGlite dependency.
+
+This gives the whole-transaction serialization requested in #904 and used by
+the proposed `bb-database` in #774. It does not add ambient transaction joining:
+existing `bb-data` callbacks must use the supplied transaction object, just as
+they do with the AWS engines. The bridge can be reused by other local engines
+without adopting `bb-database`'s schema routing or DSQL-specific behavior.
 
 ### DataApiEngine (AWS Runtime)
 
@@ -181,7 +202,7 @@ The Aurora path above runs `.sql` migrations from an **in-VPC Lambda CustomResou
 |------------|--------|------------|
 | No Data API request limits | Mock has no per-request throttling; the AWS Data API enforces request-rate/size limits | Sandbox testing |
 | No VPC isolation | Network access control not enforced locally | Infrastructure concern |
-| PGlite is single-connection | No concurrent transaction behavior | Document; load test in sandbox |
+| PGlite is single-connection | Transactions and ordinary queries wait for the active transaction; no concurrent-session lock conflicts | Use the callback's transaction object; load test in sandbox |
 | No cold start penalty | Aurora 0-ACU cold start not simulated | Latency is a production concern |
 | TLS cert verification default (`fromExisting` connection string) | Mock defaults to `rejectUnauthorized: false` (local/self-signed DBs); AWS runtime defaults to verifying (`PgClientEngine` → `rejectUnauthorized: true`) | Intentional. Pass `ssl` to override either layer; the `db pull`-generated wiring sets `ssl: resolveDbSsl()` for both, so the generated path is consistent. A hand-written `fromExisting({ connectionString })` with no `ssl` passes locally but verifies in AWS (pin a provider CA via `ssl.ca`). The mock warns once when `ssl` is omitted so this dev/prod gap surfaces locally. |
 | External migration *apply* | n/a — build/deploy lifecycle step, not a runtime method | No mock needed (intentional; see Schema Migrations above) |

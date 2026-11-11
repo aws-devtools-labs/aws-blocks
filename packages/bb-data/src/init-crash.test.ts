@@ -49,6 +49,9 @@ export class PGlite {
     return { rows: [], fields: [], affectedRows: 0 };
   }
   async exec() { return [{ rows: [], fields: [], affectedRows: 0 }]; }
+  async transaction(callback) {
+    return callback({ query: this.query.bind(this), rollback: async () => {} });
+  }
   async close() {}
 }
 `;
