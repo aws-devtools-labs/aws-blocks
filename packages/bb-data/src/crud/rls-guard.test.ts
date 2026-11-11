@@ -22,6 +22,8 @@ import { sql } from '@aws-blocks/data-common';
 import { createLambdaHandler } from '@aws-blocks/core/lambda-handler';
 import { Database, DatabaseErrors } from '../index.mock.js';
 import type { DatabaseOptions } from '../types.js';
+import type { RLSEnabledDatabase } from '../database.js';
+import { assertCrudRowLevelSecurity } from './rls-guard.js';
 import type { TableSchema } from './types.js';
 
 // Each Database persists to `.bb-data/{fullId}` under the cwd. Test files run
@@ -209,4 +211,67 @@ test('the refusal crosses the RPC wire as a named error, and only the server log
   const logged = error.mock.calls.map(c => String(c.arguments[0])).join('\n');
   assert.match(logged, /"notes"/, 'the server log names the table');
   assert.match(logged, /ENABLE ROW LEVEL SECURITY/, 'the server log shows the fix');
+});
+
+test("rlsPolicy 'enforce': a table the authenticated role owns through an inherited role membership is refused", async () => {
+  const db = newDb(legacyMeta, { rlsPolicy: 'enforce' });
+  await seed(db, { rls: true });
+  // Postgres skips RLS for members of the owning role (INHERIT) too, not only
+  // for the owner itself, so this table is unscoped for CRUD.
+  await db.execute(sql`CREATE ROLE app_owner NOLOGIN`);
+  await db.execute(sql`ALTER TABLE notes OWNER TO app_owner`);
+  await db.execute(sql`GRANT app_owner TO authenticated`);
+  // Precondition: the authenticated role really does see every row.
+  const seen = await db.transaction(async tx => {
+    await tx.execute(sql`SET LOCAL ROLE authenticated`);
+    await tx.execute(sql`SELECT set_config('request.jwt.claims', '{"sub":"alice"}', true)`);
+    return tx.query<{ id: string }>(sql`SELECT id FROM notes ORDER BY id`);
+  });
+  assert.deepStrictEqual(seen.map(r => r.id), ['a1', 'b1']);
+
+  await assert.rejects(crudFor(db, 'alice').listNotes(), isRlsRequired);
+});
+
+test("rlsPolicy 'enforce': a missing table is refused rather than queried", async () => {
+  mock.method(console, 'error', () => {});
+  const db = newDb(legacyMeta, { rlsPolicy: 'enforce' });
+  await db.execute(sql`SELECT 1`);
+  await assert.rejects(crudFor(db, 'alice').listNotes(), isRlsRequired);
+});
+
+test("rlsPolicy 'enforce': enabling RLS after a refusal takes effect on the next call, on the same connection", async () => {
+  mock.method(console, 'error', () => {});
+  const db = newDb(legacyMeta, { rlsPolicy: 'enforce' });
+  await seed(db, { rls: false });
+  const crud = crudFor(db, 'alice');
+  await assert.rejects(crud.listNotes(), isRlsRequired);
+
+  // The fix the refusal log points to.
+  await db.execute(sql`ALTER TABLE notes ENABLE ROW LEVEL SECURITY`);
+  await db.execute(sql`CREATE POLICY own_notes ON notes FOR ALL TO authenticated
+    USING (user_id = (current_setting('request.jwt.claims', true)::json->>'sub'))`);
+
+  const rows = await crud.listNotes();
+  assert.deepStrictEqual(rows.map(r => r.id), ['a1']);
+});
+
+test('compatibility path: a failed catalog read still serves the call', async () => {
+  const fakeDb = {
+    queryRaw: async () => {
+      throw new Error('catalog read failed');
+    },
+  } as unknown as RLSEnabledDatabase;
+  await assertCrudRowLevelSecurity(fakeDb, 'notes', legacyMeta.notes, {}, new Set());
+});
+
+test('a failed catalog read under enforce is not swallowed', async () => {
+  const fakeDb = {
+    queryRaw: async () => {
+      throw new Error('catalog read failed');
+    },
+  } as unknown as RLSEnabledDatabase;
+  await assert.rejects(
+    assertCrudRowLevelSecurity(fakeDb, 'notes', legacyMeta.notes, { rlsPolicy: 'enforce' }, new Set()),
+    /catalog read failed/,
+  );
 });

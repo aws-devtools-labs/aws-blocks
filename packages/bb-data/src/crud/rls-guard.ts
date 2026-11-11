@@ -21,8 +21,13 @@
  *   checked and a warning is logged when RLS is not in effect, but the call
  *   still runs (unchanged behavior for existing metadata).
  *
- * The live check reads `pg_class` once per table per database connection
- * and caches the answer.
+ * The live check reads `pg_class` and caches only an `enforced` answer, once
+ * per table per database connection. A refused table is read again on the
+ * next call, so enabling RLS takes effect right away; a table that was
+ * enforced keeps being served on a warm connection until it is recycled, even
+ * if RLS is disabled on it in the meantime. On the compatibility path the
+ * other answers are cached too, since they only drive a once-per-table
+ * warning.
  *
  * @module
  */
@@ -40,8 +45,9 @@ export interface CrudRlsConfig {
  * How RLS applies to a table for the `authenticated` role that CRUD runs as:
  * - `enforced`: RLS is on and nothing exempts the role.
  * - `disabled`: RLS is off for the table.
- * - `exempt`: RLS is on, but the role skips it (it owns the table without
- *   `FORCE ROW LEVEL SECURITY`, or it is a superuser / has `BYPASSRLS`).
+ * - `exempt`: RLS is on, but the role skips it (it owns the table, directly
+ *   or through role membership, without `FORCE ROW LEVEL SECURITY`, or it is
+ *   a superuser / has `BYPASSRLS`).
  * - `missing`: the table could not be found.
  */
 type RlsState = 'enforced' | 'disabled' | 'exempt' | 'missing';
@@ -51,10 +57,12 @@ const CRUD_ROLE = 'authenticated';
 
 const RLS_STATE_SQL =
   'SELECT c.relrowsecurity AS "rls", c.relforcerowsecurity AS "forced", ' +
-  `(o.rolname = '${CRUD_ROLE}') AS "owned", ` +
+  // Postgres exempts the owner and every role that inherits the owner's
+  // privileges; `pg_has_role(..., 'USAGE')` follows INHERIT the same way. The
+  // `r.oid` guard keeps it from erroring when the role doesn't exist.
+  '(r.oid IS NOT NULL AND pg_has_role(r.oid, c.relowner, \'USAGE\')) AS "owned", ' +
   'COALESCE(r.rolsuper OR r.rolbypassrls, false) AS "bypass" ' +
   'FROM pg_class c ' +
-  'JOIN pg_roles o ON o.oid = c.relowner ' +
   `LEFT JOIN pg_roles r ON r.rolname = '${CRUD_ROLE}' ` +
   'WHERE c.oid = to_regclass($1)';
 
@@ -84,8 +92,12 @@ async function queryRlsState(db: RLSEnabledDatabase, table: string): Promise<Rls
   return 'enforced';
 }
 
-/** Read (and cache) the table's RLS state. A missing table or a failed read is not cached. */
-function rlsState(db: RLSEnabledDatabase, table: string): Promise<RlsState> {
+/**
+ * Read the table's RLS state, caching it per connection. `enforced` is always
+ * cached; the other states only when `cacheUnscoped` is set (the compatibility
+ * path). A missing table or a failed read is never cached.
+ */
+function rlsState(db: RLSEnabledDatabase, table: string, cacheUnscoped: boolean): Promise<RlsState> {
   let tables = stateCache.get(db);
   if (!tables) {
     tables = new Map();
@@ -97,7 +109,7 @@ function rlsState(db: RLSEnabledDatabase, table: string): Promise<RlsState> {
   tables.set(table, pending);
   pending.then(
     state => {
-      if (state === 'missing') tables.delete(table);
+      if (state === 'missing' || (state !== 'enforced' && !cacheUnscoped)) tables.delete(table);
     },
     () => tables.delete(table),
   );
@@ -109,7 +121,7 @@ function describe(state: RlsState): string {
     case 'disabled':
       return 'row-level security is not enabled on it';
     case 'exempt':
-      return `row-level security is enabled but the '${CRUD_ROLE}' role is exempt from it (it owns the table without FORCE ROW LEVEL SECURITY, or has BYPASSRLS)`;
+      return `row-level security is enabled but the '${CRUD_ROLE}' role is exempt from it (it owns the table, directly or through role membership, without FORCE ROW LEVEL SECURITY, or has BYPASSRLS)`;
     case 'missing':
       return 'the table could not be found, so its row-level security could not be verified';
     default:
@@ -152,7 +164,7 @@ export async function assertCrudRowLevelSecurity(
 
   const required = config.rlsPolicy === 'enforce' || meta.rowLevelSecurity === true;
   if (required) {
-    const state = await rlsState(db, table);
+    const state = await rlsState(db, table, false);
     if (state !== 'enforced') refuse(table, describe(state));
     return;
   }
@@ -161,10 +173,13 @@ export async function assertCrudRowLevelSecurity(
   // no `rlsPolicy`. Keep serving, but say loudly when the table is unscoped.
   let state: RlsState;
   try {
-    state = await rlsState(db, table);
+    state = await rlsState(db, table, true);
   } catch {
     return;
   }
+  // A missing table isn't warned about here: the guard defers to the query
+  // itself, which fails with the database's "relation does not exist" error.
+  // (Under enforce the same state is refused, because RLS can't be verified.)
   if (state === 'enforced' || state === 'missing') return;
   let seen = warned.get(db);
   if (!seen) {
