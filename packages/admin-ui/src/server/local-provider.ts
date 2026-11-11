@@ -424,13 +424,24 @@ export class LocalDataProvider implements DataProvider {
 		}
 		const records: DeploymentRecord[] = [];
 		for (const stage of STAGES) {
-			const stackName = this.resolveStackName(stage);
-			if (!stackName) continue;
+			// Through the same resolution every other path uses, so the stack and
+			// its REGION come from the stage outputs. Deriving the name locally and
+			// querying without a region sent the call to the profile's default
+			// region, so a stack deployed elsewhere showed no backfilled history,
+			// and a missing sandbox-id.txt yielded no name at all.
+			const target = this.resolveStackTarget(stage);
+			if (!target.stackName) continue;
 			try {
-				const events = await this.fetchEvents(stackName);
-				records.push(...reconstructDeployments(events, stackName, stage));
-			} catch {
-				// No credentials, stack deleted, or API error — skip this stage.
+				const events = await this.fetchEvents(target.stackName, target.region);
+				records.push(...reconstructDeployments(events, target.stackName, stage));
+			} catch (error) {
+				// Best-effort by design: the primary history still renders. But say
+				// why on the server log rather than dropping it, because "no history"
+				// and "history we could not read" look identical in the UI.
+				console.warn(
+					`[blocks-dashboard] no backfilled history for ${stage} stack ${target.stackName}` +
+						`${target.region ? ` in ${target.region}` : ''}: ${error instanceof Error ? error.message : String(error)}`,
+				);
 			}
 		}
 		this.backfillCache = { at: Date.now(), records };

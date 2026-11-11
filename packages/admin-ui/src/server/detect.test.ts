@@ -58,14 +58,21 @@ describe('resolveLocalPort', () => {
 		assert.deepStrictEqual(resolveLocalPort(root), { port: 4321, source: 'server-script' });
 	});
 
-	it('falls back to the default with source "default" when server.ts names no port', () => {
+	/**
+	 * A script that EXISTS but names no literal port leaves the real port unknown,
+	 * which is not the same as defaulted: `port: Number(process.env.PORT) || 3001`
+	 * is a dev server this probe would miss entirely, and a missed dev server makes
+	 * "not running" a wrong answer that the local write path acts on. Raised in
+	 * review on #843.
+	 */
+	it('reports source "indeterminate" when server.ts exists but names no port', () => {
 		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ backendPath: x });\n' });
-		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'default' });
+		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' });
 	});
 
-	it('falls back when the port value is out of range', () => {
+	it('reports source "indeterminate" when the port value is out of range', () => {
 		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ port: 99999 });\n' });
-		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'default' });
+		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' });
 	});
 
 	it('falls back when there is no server.ts at all, and does not throw', () => {

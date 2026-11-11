@@ -35,8 +35,13 @@ export interface LocalDevServerStatus {
 	/** Base URL probed, so the report can name what it tried. */
 	serverUrl: string;
 	port: number;
-	/** Whether `port` was discovered or is just the default. */
-	portSource: 'server-script' | 'default';
+	/**
+	 * Whether `port` was discovered, is just the default, or could not be
+	 * determined at all — `indeterminate` means a server script exists but
+	 * states no literal port, so a server on a computed port cannot be ruled out
+	 * and a `serverUp: false` on this port is not trustworthy.
+	 */
+	portSource: 'server-script' | 'default' | 'indeterminate';
 	/** API namespaces the running server reported, `[]` when unknown. */
 	namespaces: string[];
 	/** `.bb-data` exists — local data has been generated at least once. */
@@ -57,7 +62,10 @@ const MAX_PORT = 65535;
  * alone, and a report that cannot tell them apart sends people to look at the
  * wrong thing.
  */
-export function resolveLocalPort(projectRoot: string): { port: number; source: 'server-script' | 'default' } {
+export function resolveLocalPort(projectRoot: string): {
+	port: number;
+	source: 'server-script' | 'default' | 'indeterminate';
+} {
 	try {
 		const script = readFileSync(join(projectRoot, 'aws-blocks', 'scripts', 'server.ts'), 'utf-8');
 		const match = PORT_PATTERN.exec(script);
@@ -67,6 +75,11 @@ export function resolveLocalPort(projectRoot: string): { port: number; source: '
 				return { port, source: 'server-script' };
 			}
 		}
+		// The script EXISTS but states no literal port, so the real port is
+		// unknown rather than defaulted: `port: Number(process.env.PORT) || 3001`
+		// is a dev server this probe would otherwise miss entirely, and a missed
+		// dev server turns "not running" into a wrong answer that callers act on.
+		return { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' };
 	} catch {
 		// No server.ts, or unreadable — the default is the honest answer.
 	}

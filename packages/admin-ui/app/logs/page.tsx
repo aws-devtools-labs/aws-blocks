@@ -66,9 +66,14 @@ export default function LogsPage() {
 	});
 
 	const { data: search, isFetching: searching, error: searchError } = useQuery({
-		queryKey: ['log-search', submitted],
+		// The stage belongs in the key, and the query only runs while the submitted
+		// search still matches the selected stage. Keyed on `submitted` alone,
+		// sandbox results stayed on screen after switching the header to production,
+		// with nothing saying which stage they came from, and a window refocus
+		// re-ran the sandbox query — which is billable.
+		queryKey: ['log-search', cloudStage, submitted],
 		queryFn: () => apiGet<LogSearchResponse>(`/api/v1/logs/search?${new URLSearchParams(submitted).toString()}`),
-		enabled: ready && cloudStage !== undefined && submitted !== undefined,
+		enabled: ready && cloudStage !== undefined && submitted !== undefined && submitted.stage === cloudStage,
 	});
 
 	const runSearch = (group = selectedGroup) => {

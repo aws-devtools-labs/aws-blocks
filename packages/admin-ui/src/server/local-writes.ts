@@ -122,15 +122,30 @@ function messageOf(error: unknown): string {
  */
 async function refuseWhenDevServerUp(context: LocalWriteContext): Promise<LocalWriteResult | undefined> {
 	const probe = context.detectDevServer ?? detectLocalDevServerImpl;
+	let status: Awaited<ReturnType<typeof detectLocalDevServerImpl>> | undefined;
 	let serverUp = false;
 	try {
-		serverUp = (await probe(context.projectRoot)).serverUp;
+		status = await probe(context.projectRoot);
+		serverUp = status.serverUp;
 	} catch {
 		// The real probe cannot throw — it reports a stopped server as data. A
 		// throwing seam is a caller bug, and treating "could not tell" as "up"
 		// would make a broken probe look like a running server, which is a worse
 		// lie than the TOCTOU window we already accept.
 		serverUp = false;
+	}
+	// A dev server whose port the probe could not determine answers "not
+	// running" on the wrong port. Writing then races the running app's in-memory
+	// store, which flushes over the edit on its next write — silently. So the
+	// write is refused rather than the probe's answer being trusted.
+	if (!serverUp && status?.portSource === 'indeterminate') {
+		return refuse(
+			'LOCAL_SERVER_RUNNING',
+			`Could not determine the local dev server's port: aws-blocks/scripts/server.ts states no literal ` +
+				`port, so a server on a computed port (for example \`Number(process.env.PORT) || 3001\`) cannot be ` +
+				`ruled out. A write now could be overwritten by the running app. Stop the dev server, or make the ` +
+				'change through the RPC playground, then retry.',
+		);
 	}
 	if (!serverUp) return undefined;
 	return refuse(
@@ -174,7 +189,23 @@ function openPairStore(context: LocalWriteContext): OpenPairStore | LocalWriteRe
 		}
 		store = requested;
 	} else {
-		store = stores[0];
+		// With no store named, write ONLY the block's own store. The candidate list
+		// also holds siblings whose name starts with `<fullId>-`, which is how a
+		// block's composed child stores are found (AuthBasic writes `<fullId>-users`).
+		// A separately DECLARED block can carry that shape too: with tables `orders`
+		// and `orders-archive`, the archive matches `orders-`, and while `orders` had
+		// no data it became the first candidate, so a dashboard edit on `orders`
+		// landed in the archive table's file. Taking `stores[0]` cannot tell a child
+		// store from another block; the block's own id can.
+		const own = stores.find((candidate) => candidate.id === context.blockFullId);
+		if (own === undefined) {
+			return refuse(
+				'STORE_NOT_FOUND',
+				`Block "${context.blockFullId}" has no store of its own in .bb-data yet, so there is nothing ` +
+					`to write without naming a store. Name one of: ${stores.map((candidate) => `"${candidate.id}"`).join(', ')}.`,
+			);
+		}
+		store = own;
 	}
 
 	// `store.file` is already realpath-resolved and containment-checked by the

@@ -341,7 +341,53 @@ export function sandboxFailureRecoveryHint(
   ].join("\n");
 }
 
+/** One terminal deploy-history record per sandbox run, whoever reports it first. */
+interface SandboxHistory {
+  fail(error: unknown): void;
+  succeed(): void;
+}
+
+/**
+ * Starts a sandbox, recording the run in `.blocks/deploy-history.jsonl`.
+ *
+ * The recorder starts HERE, before any work, as `deploy()` does. It used to be
+ * created just before the CDK deploy, after credential and bootstrap preflight,
+ * secret provisioning, external migrations and client generation — so a sandbox
+ * that failed in any of those left no record at all, and CloudFormation
+ * backfill could not recover it either because nothing reached CloudFormation.
+ * Those pre-CloudFormation failures are the reason first-party history exists.
+ *
+ * Terminal states are recorded once: the recorder appends on every call, and
+ * both the CDK-deploy catch and the guard here can reach `fail`. Recording
+ * success at CloudFormation success rather than at return is deliberate, so a
+ * later failure parsing outputs does not retroactively fail a deploy that
+ * actually happened.
+ */
 export async function startSandbox(options: SandboxOptions) {
+  const recorder = createDeployRecorder(process.cwd(), 'sandbox');
+  recorder.start();
+  let done = false;
+  const history: SandboxHistory = {
+    fail(error) {
+      if (done) return;
+      done = true;
+      recorder.fail(error);
+    },
+    succeed() {
+      if (done) return;
+      done = true;
+      recorder.succeed();
+    },
+  };
+  try {
+    return await runStartSandbox(options, history);
+  } catch (error) {
+    history.fail(error);
+    throw error;
+  }
+}
+
+async function runStartSandbox(options: SandboxOptions, history: SandboxHistory) {
   const {
     backendPath,
     outDir = ".blocks-sandbox",
@@ -447,12 +493,6 @@ export async function startSandbox(options: SandboxOptions) {
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
 
-  // Structured deploy history (.blocks/deploy-history.jsonl): records the
-  // explicit sandbox deploy. Later `cdk watch` hot-swaps are not recorded,
-  // they have no clean deploy boundary. Best-effort, never fails the deploy.
-  const recorder = createDeployRecorder(process.cwd(), 'sandbox');
-  recorder.start();
-
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
     // deployed (not on local state that may be missing — a fresh clone, a
@@ -480,7 +520,7 @@ export async function startSandbox(options: SandboxOptions) {
     );
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
-    recorder.fail(error);
+    history.fail(error);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
@@ -497,7 +537,7 @@ export async function startSandbox(options: SandboxOptions) {
 
   // The CloudFormation deploy itself succeeded; output parsing below is a
   // separate concern and doesn't retroactively fail the deployment record.
-  recorder.succeed();
+  history.succeed();
 
   const outputs = JSON.parse(readFileSync(outputsFileIn(outDir, 'sandbox'), "utf-8"));
   // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /

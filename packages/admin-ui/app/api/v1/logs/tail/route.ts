@@ -69,6 +69,14 @@ export async function GET(request: NextRequest): Promise<Response> {
 
 	try {
 		const discovery = await getDataProvider().listLogGroups(stage);
+		// Checked after EVERY await in startup. The abort listener is only attached
+		// once the stream starts, so an abort that fired during discovery, STS or
+		// StartLiveTail would never reach `finish`: the tail kept its session slot
+		// and billed to the 15-minute cap, and two such clicks exhausted the cap.
+		if (request.signal.aborted) {
+			releaseSlot();
+			return singleMessage({ type: 'end', reason: 'client-disconnect' }, 200);
+		}
 		if (discovery.groupsSource === 'unavailable' || discovery.groups.length === 0) {
 			releaseSlot();
 			const code =
@@ -83,6 +91,10 @@ export async function GET(request: NextRequest): Promise<Response> {
 
 		const region = discovery.awsContext?.region;
 		const accountId = await fetchAccountId(region);
+		if (request.signal.aborted) {
+			releaseSlot();
+			return singleMessage({ type: 'end', reason: 'client-disconnect' }, 200);
+		}
 		// Only groups that exist can be tailed; prefer confirmed ones (see search).
 		const confirmed = discovery.groups.filter((g) => g.retentionDays !== undefined || g.storedBytes !== undefined);
 		const groupNames = (confirmed.length > 0 ? confirmed : discovery.groups).slice(0, MAX_TAIL_GROUPS).map((g) => g.name);
@@ -93,6 +105,14 @@ export async function GET(request: NextRequest): Promise<Response> {
 			filterPattern: buildTailFilterPattern({ level, text }),
 			region,
 		});
+		// The tail now holds a session slot, so an abort already fired has to close
+		// it here: nothing downstream will, because the listener below is attached
+		// after this point.
+		if (request.signal.aborted) {
+			tail.close();
+			releaseSlot();
+			return singleMessage({ type: 'end', reason: 'client-disconnect' }, 200);
+		}
 
 		const stream = new ReadableStream<Uint8Array>({
 			start(controller) {

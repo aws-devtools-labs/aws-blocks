@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { TOKEN_ENV_VAR, isAuthorized } from './auth.js';
 import { PROFILE_ENV_VAR, REGION_ENV_VAR } from './aws-config.js';
 import { ALLOWED_ORIGIN_ENV_VAR } from './http-guards.js';
-import { PROJECT_ROOT_ENV_VAR } from './provider-registry.js';
+import { PROJECT_ROOT_ENV_VAR, setDataProvider } from './provider-registry.js';
 
 export interface DashboardServerOptions {
 	/** Root of the Blocks app the dashboard inspects. */
@@ -62,17 +62,29 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
 	process.env[TOKEN_ENV_VAR] = options.token;
 	process.env[PROJECT_ROOT_ENV_VAR] = options.projectRoot;
 
-	// Same deal for the AWS identity (see aws-config.ts). Only set when a real
-	// value was passed: assigning an empty string would shadow the ambient
-	// AWS_PROFILE / AWS_REGION with a blank, which is worse than not setting it.
+	// The provider is cached per process and rooted at the variable above, so a
+	// second start in one process would otherwise keep serving the first
+	// project. Dropping it here makes the documented contract hold for a
+	// programmatic caller, not just for the CLI's one-start-per-process.
+	setDataProvider(undefined);
+
+	// Same deal for the AWS identity (see aws-config.ts). Set only from a real
+	// value — assigning an empty string would shadow the ambient config with a
+	// blank, which is worse than not setting it — and DELETED when omitted,
+	// because the contract above says an omitted value leaves the ambient config
+	// in force, and a value left over from a previous start in this process is
+	// not the ambient config.
 	if (options.profile?.trim()) process.env[PROFILE_ENV_VAR] = options.profile.trim();
+	else delete process.env[PROFILE_ENV_VAR];
 	if (options.region?.trim()) process.env[REGION_ENV_VAR] = options.region.trim();
+	else delete process.env[REGION_ENV_VAR];
 
 	// Same again for the declared origins, joined because the guard reads one
 	// comma-separated variable. Blank entries are dropped here rather than
 	// shipped for the reader to ignore.
 	const declaredOrigins = (options.allowedOrigins ?? []).map((origin) => origin.trim()).filter(Boolean);
 	if (declaredOrigins.length > 0) process.env[ALLOWED_ORIGIN_ENV_VAR] = declaredOrigins.join(',');
+	else delete process.env[ALLOWED_ORIGIN_ENV_VAR];
 
 	// The Next app lives at this package's root (app/, .next/).
 	const appDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -119,6 +131,10 @@ export async function startDashboardServer(options: DashboardServerOptions): Pro
 		port,
 		close: () =>
 			new Promise<void>((resolve, reject) => {
+				// Idle keep-alive sockets would hold this open, and an in-flight
+				// Live Tail response holds it for up to its 15-minute cap, keeping
+				// the process and the AWS session alive long after Ctrl+C.
+				server.closeAllConnections();
 				server.close((err) => (err ? reject(err) : resolve()));
 			}),
 	};
