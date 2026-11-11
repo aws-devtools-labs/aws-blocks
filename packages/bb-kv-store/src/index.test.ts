@@ -5,8 +5,10 @@ import assert from 'node:assert';
 import { readFileSync, rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
 import { ApiError, isBlocksError, Scope } from '@aws-blocks/core';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { z } from 'zod';
 import { KVStore, KVStoreErrors } from './index.mock.js';
+import { probeKeyType } from './item.js';
 
 // Clean mock data between tests to avoid cross-contamination
 beforeEach(() => {
@@ -536,6 +538,54 @@ describe('a store with a declared key', () => {
 		);
 	});
 
+	test('a key field takes only the type that its schema states', async () => {
+		const store = new KVStore(testScope(), 'readings', {
+			schema: z.object({ deviceId: z.number(), room: z.string(), celsius: z.number() }),
+			key: { partitionKey: 'deviceId', sortKey: 'room' },
+		});
+		await rejects(
+			store.get({ deviceId: '7', room: 'a' } as never),
+			KVStoreErrors.InvalidQuery,
+			/'deviceId' must be a number \(received string\)/,
+		);
+		await rejects(
+			store.put({ deviceId: 7, room: 1 } as never, { celsius: 20 }),
+			KVStoreErrors.InvalidQuery,
+			/'room' must be a string \(received number\)/,
+		);
+	});
+
+	test('a refined number key field is a number key: the probe tries 0, 1 and -1', async () => {
+		const store = new KVStore(testScope(), 'ledger', {
+			schema: z.object({ account: z.number().positive(), delta: z.number().negative(), note: z.string() }),
+			key: { partitionKey: 'account', sortKey: 'delta' },
+		});
+		await store.put({ account: 3, delta: -2 }, { note: 'n' });
+		assert.deepStrictEqual(await store.get({ account: 3, delta: -2 }), { account: 3, delta: -2, note: 'n' });
+		await rejects(
+			store.get({ account: '3', delta: -2 } as never),
+			KVStoreErrors.InvalidQuery,
+			/'account' must be a number/,
+		);
+		await rejects(
+			store.get({ account: 3, delta: '-2' } as never),
+			KVStoreErrors.InvalidQuery,
+			/'delta' must be a number/,
+		);
+	});
+
+	test('a schema that accepts every value makes a key field a number key, as the CDK layer provisions it', async () => {
+		const anything: StandardSchemaV1<{ id: string; label: string }> = {
+			'~standard': {
+				version: 1,
+				vendor: 'test',
+				validate: (value: unknown) => ({ value: value as { id: string; label: string } }),
+			},
+		};
+		const store = new KVStore(testScope(), 'loose', { schema: anything, key: { partitionKey: 'id' } });
+		await rejects(store.get({ id: 'a' }), KVStoreErrors.InvalidQuery, /'id' must be a number/);
+	});
+
 	test('batch calls', async () => {
 		const store = orders();
 		await store.putBatch([
@@ -999,6 +1049,49 @@ describe('readValidation', () => {
 		for (const mode of ['off', 'coerce', 'strict'] as const) {
 			assert.strictEqual(await (await legacyRow(mode)).get({ id: 'missing' }), null);
 		}
+	});
+});
+
+// ── The key type probe ──────────────────────────────────────────────────────
+
+describe('the key type probe', () => {
+	test('a field is a number if the schema accepts 0, 1 or -1 for it; in all other cases it is a string', () => {
+		const schema = z.object({
+			text: z.string(),
+			uuid: z.string().uuid(),
+			choice: z.enum(['a', 'b']),
+			count: z.number(),
+			positive: z.number().positive(),
+			negative: z.number().negative(),
+			either: z.union([z.string(), z.number()]),
+			atLeastFive: z.number().min(5),
+		});
+		const types = Object.fromEntries(
+			Object.keys(schema.shape).map((field) => [field, probeKeyType(schema, field)]),
+		);
+		assert.deepStrictEqual(types, {
+			text: 'S',
+			uuid: 'S',
+			choice: 'S',
+			count: 'N',
+			positive: 'N',
+			negative: 'N',
+			either: 'N',
+			// A number field that rejects all three samples reads as a string (see DESIGN.md, D-KV-17).
+			atLeastFive: 'S',
+		});
+	});
+
+	test('no schema gives a string; a schema that validates asynchronously gives a number', () => {
+		assert.strictEqual(probeKeyType(undefined, 'id'), 'S');
+		const asyncSchema: StandardSchemaV1<{ id: string }> = {
+			'~standard': {
+				version: 1,
+				vendor: 'test',
+				validate: async () => ({ issues: [{ message: 'id must be a string', path: ['id'] }] }),
+			},
+		};
+		assert.strictEqual(probeKeyType(asyncSchema, 'id'), 'N');
 	});
 });
 

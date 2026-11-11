@@ -16,6 +16,7 @@ import { ApiGatewayManagementApiClient } from '@aws-sdk/client-apigatewaymanagem
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Scope, isBlocksError } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
+import { connectionsSchema, connectionsTableOptions } from './connections.js';
 import { Realtime, RealtimeErrors } from './index.aws.js';
 import type { GetChannelOptions } from './index.aws.js';
 
@@ -38,26 +39,12 @@ const originalCallbackUrl = process.env.BLOCKS_RT_CALLBACK_URL;
 const scope = new Scope(`rt-ws-${Math.random().toString(36).slice(2)}`);
 const rt = new Realtime(scope, 'rt', { namespaces: { chat: Realtime.namespace(anySchema) } });
 
-// The mock connections table the handler writes to.
-interface ConnectionRecord {
-	connectionId: string;
-	channel: string;
-	expiresAt: number;
-}
-const connectionRecordSchema: StandardSchemaV1<ConnectionRecord> = {
-	'~standard': { version: 1, vendor: 'test', validate: (value: unknown) => ({ value: value as ConnectionRecord }) },
-};
 /**
  * A fresh view of the handler's connections table: same fullId, so the same
  * `.bb-data/` file. The mock loads the file when constructed, so build one per read.
  */
 const connectionsOnDisk = () =>
-	new KVStore(rt, 'connections', {
-		schema: connectionRecordSchema,
-		key: { partitionKey: 'connectionId', sortKey: 'channel' } as const,
-		indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } } as const,
-		ttl: 'expiresAt',
-	});
+	new KVStore(rt, 'connections', connectionsTableOptions);
 
 function wsHandler(): (event: unknown) => Promise<{ statusCode: number }> {
 	const handlers: Map<string, (event: unknown) => Promise<{ statusCode: number }>> =
@@ -253,5 +240,36 @@ describe('WebSocket handler: unsubscribe', () => {
 		}
 		assert.deepStrictEqual(deletedFor, []);
 		assert.deepStrictEqual(await channelRecords(connectionId), ['__connection__']);
+	});
+});
+
+describe('connections table: one schema for synth and run time', () => {
+	const issuePaths = (value: unknown) => {
+		const result = connectionsSchema['~standard'].validate(value) as { issues?: Array<{ path?: unknown[] }> };
+		return (result.issues ?? []).map((issue) => issue.path);
+	};
+
+	it('rejects a number in a string field and a string in a number field, at the path of the field', () => {
+		// KVStore reads the DynamoDB type of a key field from these issues, in every layer.
+		assert.deepStrictEqual(issuePaths({ connectionId: 0 }), [['connectionId']]);
+		assert.deepStrictEqual(issuePaths({ channel: 1 }), [['channel']]);
+		assert.deepStrictEqual(issuePaths({ expiresAt: 'soon' }), [['expiresAt']]);
+		assert.deepStrictEqual(issuePaths({ connectionId: 'c', channel: 'ch', expiresAt: 1 }), []);
+	});
+
+	it('the store refuses a number where the table has a string key', async () => {
+		const store = connectionsOnDisk();
+		await assert.rejects(
+			store.get({ connectionId: 1, channel: 'ch' } as never),
+			(e: Error) => e.name === 'InvalidQueryException' && /'connectionId' must be a string/.test(e.message),
+		);
+	});
+
+	it('the options name the key, the index and the expiry field that the CDK entry provisions', () => {
+		assert.deepStrictEqual(connectionsTableOptions.key, { partitionKey: 'connectionId', sortKey: 'channel' });
+		assert.deepStrictEqual(connectionsTableOptions.indexes, {
+			'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' },
+		});
+		assert.strictEqual(connectionsTableOptions.ttl, 'expiresAt');
 	});
 });

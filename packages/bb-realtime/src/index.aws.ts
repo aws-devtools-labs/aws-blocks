@@ -27,6 +27,7 @@ import {
 } from '@aws-sdk/client-apigatewaymanagementapi';
 import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { KVStore } from '@aws-blocks/bb-kv-store';
+import { type ConnectionRecord, connectionsTableOptions } from './connections.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
 	GetChannelOptions,
@@ -55,26 +56,6 @@ export type {
 	DisconnectReason,
 	RealtimeChannelDescriptor,
 } from './types.js';
-
-// ── Connection record type ──────────────────────────────────────────────────
-
-interface ConnectionRecord {
-	connectionId: string;
-	channel: string;
-	expiresAt: number;
-	connectedAt?: number;
-	lastTtlSweep?: number;
-}
-
-// ── Connections table schema (runtime validation — accepts anything) ────────
-
-const connectionsSchema: StandardSchemaV1<ConnectionRecord> = {
-	'~standard': {
-		version: 1,
-		vendor: 'blocks',
-		validate: (value: unknown) => ({ value: value as ConnectionRecord }),
-	},
-};
 
 // ── Constants (all values in seconds) ───────────────────────────────────────
 
@@ -142,8 +123,8 @@ function getApigw(endpoint?: string, customUserAgent?: [string, string][]): ApiG
 let _connectionsTable: KVStore<
 	ConnectionRecord,
 	ConnectionRecord,
-	{ partitionKey: 'connectionId'; sortKey: 'channel' },
-	{ 'channel-index': { partitionKey: 'channel'; sortKey: 'connectionId' } }
+	(typeof connectionsTableOptions)['key'],
+	(typeof connectionsTableOptions)['indexes']
 > | null = null;
 
 function connectionsTable() {
@@ -349,12 +330,7 @@ export const Realtime: {
 
 		// Initialize the connections KVStore for connection tracking (shared across instances)
 		if (!_connectionsTable) {
-			_connectionsTable = new KVStore(this, 'connections', {
-				schema: connectionsSchema,
-				key: { partitionKey: 'connectionId', sortKey: 'channel' } as const,
-				indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } } as const,
-				ttl: 'expiresAt',
-			});
+			_connectionsTable = new KVStore(this, 'connections', connectionsTableOptions);
 		}
 
 		// Initialize the token secret via frameworkKey (shared across instances).

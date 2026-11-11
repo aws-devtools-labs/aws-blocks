@@ -39,3 +39,15 @@ export const agentStreamChunkSchema = z.object({
 		totalTokens: z.number(),
 	}).optional(),
 });
+
+/** Options of the conversation metadata store, shared by the runtime and the CDK entry points. */
+export const conversationsTableOptions = {
+	schema: conversationSchema,
+	key: { partitionKey: 'userId', sortKey: 'conversationId' },
+} as const;
+
+/** Options of the message history store, shared by the runtime and the CDK entry points. */
+export const messagesTableOptions = {
+	schema: messageSchema,
+	key: { partitionKey: 'conversationId', sortKey: 'messageId' },
+} as const;

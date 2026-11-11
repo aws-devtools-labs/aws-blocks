@@ -106,6 +106,30 @@ test('CDK: a key with one field has no sort key', () => {
 	});
 });
 
+test('CDK: a refined number key field and index field are numbers: the probe tries 0, 1 and -1', () => {
+	const { stack, parent } = setup();
+	new KVStore(parent, 'ledger', {
+		schema: z.object({
+			account: z.number().positive(),
+			delta: z.number().negative(),
+			owner: z.string().uuid(),
+			rank: z.number().positive(),
+		}),
+		key: { partitionKey: 'account', sortKey: 'delta' },
+		indexes: { byOwner: { partitionKey: 'owner', sortKey: 'rank' } },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::DynamoDB::Table', {
+		AttributeDefinitions: Match.arrayWith([
+			{ AttributeName: 'account', AttributeType: 'N' },
+			{ AttributeName: 'delta', AttributeType: 'N' },
+		]),
+	});
+	template.hasResourceProperties('AWS::CloudFormation::CustomResource', {
+		Indexes: { byOwner: { partitionKey: 'owner', sortKey: 'rank', partitionKeyType: 'S', sortKeyType: 'N' } },
+	});
+});
+
 // ── TTL ─────────────────────────────────────────────────────────────────────
 
 test('CDK: TTL is always on, on _bkv_ttl by default', () => {

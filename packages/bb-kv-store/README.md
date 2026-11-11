@@ -78,7 +78,7 @@ const store = new KVStore(scope, id, options?)
 | Option | Type | Description |
 |--------|------|-------------|
 | `schema` | `StandardSchemaV1` | Validates every `put` and sets the value types. Required for `key`, `indexes`, and `ttl`. |
-| `key` | `{ partitionKey, sortKey? }` | Names the fields of the value that form the key. Each field is required in the schema and holds a string or a number. Without `key`, the key is a string. |
+| `key` | `{ partitionKey, sortKey? }` | Names the fields of the value that form the key. Each field is required in the schema and holds a string or a number. The schema must state which: a field that accepts a number is a number key, and any other field is a string key. Without `key`, the key is a string. |
 | `indexes` | `Record<string, { partitionKey, sortKey? }>` | Secondary indexes over fields of the value. |
 | `ttl` | field name | Names the number field of the value that holds the expiry, in Unix epoch seconds. Without `ttl`, the block keeps the expiry outside the value. |
 | `readValidation` | `'off' \| 'coerce' \| 'strict'` | How a read reconciles a stored value with `schema`. Defaults to `'coerce'`. See [Reads and schema changes](#reads-and-schema-changes). |
@@ -304,7 +304,7 @@ A cursor holds key values in a readable encoding. It is not a secret and not a p
 
 An index reads the same items by other fields of the value. `indexes` needs a `schema`.
 
-- An index field holds a string or a number.
+- An index field holds a string or a number. The schema states which, as for a key field.
 - An index holds an item only when each indexed field is present, is not an empty string, and has the declared type. `put` rejects an empty string in an indexed field.
 - A read from an index is eventually consistent.
 - A store can have up to 20 indexes.

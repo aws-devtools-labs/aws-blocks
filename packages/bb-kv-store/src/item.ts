@@ -80,16 +80,15 @@ export interface KeyModel {
 	/** The schema of the store, if it has one. */
 	readonly schema: StandardSchemaV1 | undefined;
 	/**
-	 * The DynamoDB attribute type of each table key field, `'S'` or `'N'`,
-	 * probed from the schema on first use (see {@link keyType}). `undefined`
-	 * when the schema does not tell the two apart (a pass-through validator);
-	 * such a field accepts a string or a number.
+	 * The DynamoDB attribute type of each key field, `'S'` or `'N'`, probed from
+	 * the schema on first use (see {@link probeKeyType}) and then kept, so a
+	 * store that is never read by key does not probe its schema.
 	 */
-	readonly keyTypes: Map<string, 'S' | 'N' | undefined>;
+	readonly keyTypes: Map<string, 'S' | 'N'>;
 }
 
 /** Whether `schema` accepts `probe` as the value of `field`. A schema that validates asynchronously cannot be probed. */
-export function schemaAccepts(schema: StandardSchemaV1, field: string, probe: unknown): boolean | undefined {
+function schemaAccepts(schema: StandardSchemaV1, field: string, probe: unknown): boolean | undefined {
 	const result = schema['~standard'].validate({ [field]: probe });
 	if (result instanceof Promise) return undefined;
 	if (!result.issues) return true;
@@ -102,26 +101,38 @@ function pathKey(segment: unknown): unknown {
 		: segment;
 }
 
+/** The number samples that {@link probeKeyType} puts in a field. */
+const NUMBER_SAMPLES = [0, 1, -1];
+
 /**
- * The attribute type of a table key field, `'S'` or `'N'`, from the schema.
- * Probes `validate({ [field]: 0 })` and `validate({ [field]: 'x' })`: a schema
- * that accepts one and rejects the other names the type (the CDK layer
- * provisions the table from the same `0` probe). A schema that accepts both,
- * such as a pass-through validator, or that validates asynchronously, gives
- * `undefined`. The result is cached in the model, so a store that is never
- * read by key does not probe its schema.
+ * The DynamoDB attribute type of a key field or an index field, `'S'` or
+ * `'N'`, from the schema. This is the one rule of the block: the CDK layer
+ * provisions the attribute with this type, and the runtimes accept only this
+ * type for the field.
+ *
+ * The field is a number if the schema accepts one of the samples `0`, `1`,
+ * `-1` as its value, which means `validate({ [field]: sample })` reports no
+ * issue at the path of the field. In all other cases the field is a string.
+ * Three samples, so a refined number such as `z.number().positive()` is a
+ * number. A store with no schema has string fields. A schema that validates
+ * asynchronously cannot be probed, and its field counts as a number.
+ *
+ * A schema that accepts every value, such as a pass-through validator, makes
+ * each field a number. A schema must state the type of a key field.
  */
-function keyType(model: KeyModel, field: string): 'S' | 'N' | undefined {
-	if (!model.keyTypes.has(field)) {
-		let type: 'S' | 'N' | undefined = 'S';
-		if (model.schema) {
-			const number = schemaAccepts(model.schema, field, 0);
-			const string = schemaAccepts(model.schema, field, 'x');
-			type = number === true && string === false ? 'N' : string === true && number === false ? 'S' : undefined;
-		}
+export function probeKeyType(schema: StandardSchemaV1 | undefined, field: string): 'S' | 'N' {
+	if (!schema) return 'S';
+	return NUMBER_SAMPLES.some((sample) => schemaAccepts(schema, field, sample) !== false) ? 'N' : 'S';
+}
+
+/** The type of a key field of the model: {@link probeKeyType}, probed on first use and then kept in the model. */
+function keyType(model: KeyModel, field: string): 'S' | 'N' {
+	let type = model.keyTypes.get(field);
+	if (type === undefined) {
+		type = probeKeyType(model.schema, field);
 		model.keyTypes.set(field, type);
 	}
-	return model.keyTypes.get(field);
+	return type;
 }
 
 /** Build the key model from the constructor options. */
@@ -150,17 +161,18 @@ function describe(value: unknown): string {
 }
 
 /**
- * Check one key attribute value: a non-empty string or a finite number.
+ * Check one key attribute value: a non-empty string for a string field, a
+ * finite number for a number field.
  *
- * @throws {KVStoreErrors.InvalidQuery} If the value is not a string or a number.
+ * @throws {KVStoreErrors.InvalidQuery} If the value does not have the type of the field.
  * @throws {KVStoreErrors.ValidationFailed} If the value is an empty string.
  */
-function checkKeyValue(field: string, value: unknown, type: 'S' | 'N' | undefined): KeyValue {
-	if (type !== 'N' && typeof value === 'string') {
+function checkKeyValue(field: string, value: unknown, type: 'S' | 'N'): KeyValue {
+	if (type === 'S' && typeof value === 'string') {
 		if (value === '') throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.emptyKeyField(field));
 		return value;
 	}
-	if (type !== 'S' && typeof value === 'number' && Number.isFinite(value)) return value;
+	if (type === 'N' && typeof value === 'number' && Number.isFinite(value)) return value;
 	throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyFieldType(field, type, describe(value)));
 }
 

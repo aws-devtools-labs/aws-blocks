@@ -43,35 +43,7 @@ export type {
 	RealtimeChannelDescriptor,
 } from './types.js';
 import { BB_NAME } from './version.js';
-
-// ── Minimal schema for the connections table (CDK synth-time only) ──────────
-
-/** The connection record the runtime stores; only the field names and key types matter at synth. */
-interface ConnectionRecord {
-	connectionId: string;
-	channel: string;
-	expiresAt: number;
-	connectedAt?: number;
-	lastTtlSweep?: number;
-}
-
-const connectionsSchema: StandardSchemaV1<ConnectionRecord> = {
-	'~standard': {
-		version: 1,
-		vendor: 'blocks',
-		validate: (value: unknown) => {
-			// Return type issues for numeric probes so CDK detects all fields as strings.
-			if (typeof value === 'object' && value !== null) {
-				for (const v of Object.values(value as Record<string, unknown>)) {
-					if (typeof v === 'number') {
-						return { issues: [{ message: 'expected string', path: [Object.keys(value as any).find(k => (value as any)[k] === v)!] }] };
-					}
-				}
-			}
-			return { value: value as ConnectionRecord };
-		},
-	},
-};
+import { connectionsTableOptions } from './connections.js';
 
 // ── Shared infrastructure (one per backend root) ─────────────────────────────
 
@@ -95,12 +67,8 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 		frameworkKey(parent, 'token-secret');
 
 		// ── DynamoDB connections table via KVStore ───────────────────────────
-		new KVStore(parent, 'connections', {
-			schema: connectionsSchema,
-			key: { partitionKey: 'connectionId', sortKey: 'channel' },
-			indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },
-			ttl: 'expiresAt',
-		});
+		// The options are the ones the runtime entry constructs its store with.
+		new KVStore(parent, 'connections', connectionsTableOptions);
 
 		// ── WebSocket API — all routes point at the Blocks handler Lambda ──────
 		const wsApi = new WebSocketApi(root, 'BlocksRtWebSocket', {

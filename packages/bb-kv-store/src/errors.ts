@@ -150,8 +150,8 @@ export const KVStoreMessages = {
 	bothValueChecks: 'pass either ifFieldEquals or ifValueEquals, not both',
 	keyMustBeString: (received: string) => `this store takes a string key (received ${received})`,
 	keyMustBeObject: (fields: string[]) => `this store takes a key object with exactly the fields ${fields.join(', ')}`,
-	keyFieldType: (field: string, type: 'S' | 'N' | undefined, received: string) =>
-		`key field '${field}' must be a ${type === 'N' ? 'number' : type === 'S' ? 'string' : 'string or a number'} (received ${received})`,
+	keyFieldType: (field: string, type: 'S' | 'N', received: string) =>
+		`key field '${field}' must be a ${type === 'N' ? 'number' : 'string'} (received ${received})`,
 	emptyKeyField: (field: string) => `key field '${field}' cannot be an empty string`,
 	emptyIndexField: (field: string, index: string) =>
 		`indexed field '${field}' (index '${index}') cannot be an empty string`,

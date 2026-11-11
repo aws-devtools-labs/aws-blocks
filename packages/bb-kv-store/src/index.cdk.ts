@@ -12,7 +12,7 @@ import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { looseOptions, resolveKeyModel, schemaAccepts } from './item.js';
+import { looseOptions, probeKeyType, resolveKeyModel } from './item.js';
 import type { ExternalKmsKeyRef, ExternalTableRef, IndexConfig, KeyConfig, KVStoreOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -109,13 +109,15 @@ export class KVStore<
 		const isSandbox = isSandboxContext(this);
 		const { schema } = config;
 
-		// Probe the schema's validate() to determine if a key field is numeric.
-		// Sends a test value of 0 for the field — if validation doesn't flag it,
-		// the field accepts numbers. Uses only the StandardSchemaV1 interface. A
-		// schema that validates asynchronously cannot be probed at synth, and its
-		// field counts as numeric, as before.
+		// Probe the schema's validate() to determine if a key field or an index
+		// field is numeric. `probeKeyType` sends the test values 0, 1 and -1 for
+		// the field — if validation doesn't flag one of them, the field accepts
+		// numbers. Uses only the StandardSchemaV1 interface. A schema that
+		// validates asynchronously cannot be probed at synth, and its field counts
+		// as numeric, as before. The runtimes call the same function, so they
+		// accept exactly the type that this construct provisions.
 		const getDdbType = (fieldName: string): AttributeType =>
-			schema && schemaAccepts(schema, fieldName, 0) !== false ? AttributeType.NUMBER : AttributeType.STRING;
+			probeKeyType(schema, fieldName) === 'N' ? AttributeType.NUMBER : AttributeType.STRING;
 
 		// Secure-by-default durability & encryption.
 		// The posture — removal policy, deletion protection, PITR — comes from the
@@ -220,12 +222,8 @@ export class KVStore<
 				indexesWithTypes[indexName] = {
 					partitionKey: indexConfig.partitionKey,
 					sortKey: indexConfig.sortKey,
-					partitionKeyType: getDdbType(indexConfig.partitionKey) === AttributeType.NUMBER ? 'N' : 'S',
-					sortKeyType: indexConfig.sortKey
-						? getDdbType(indexConfig.sortKey) === AttributeType.NUMBER
-							? 'N'
-							: 'S'
-						: undefined,
+					partitionKeyType: probeKeyType(schema, indexConfig.partitionKey),
+					sortKeyType: indexConfig.sortKey ? probeKeyType(schema, indexConfig.sortKey) : undefined,
 				};
 			}
 

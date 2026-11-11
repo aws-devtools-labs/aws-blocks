@@ -13,7 +13,7 @@ import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { Agent as StrandsAgent, SnapshotStorage } from '@strands-agents/sdk';
 import type { z } from 'zod';
 import { createStrandsModel, checkModelHealth } from './model-factory.js';
-import { messageSchema, conversationSchema, agentStreamChunkSchema } from './schemas.js';
+import { type messageSchema, type conversationSchema, agentStreamChunkSchema, conversationsTableOptions, messagesTableOptions } from './schemas.js';
 import type { AgentConfig, AgentStreamChunk, AgentStreamResult, StreamOptions, Message, Conversation, TokenUsage, ConversationManagerConfig, ModelConfig, JSONValue, InterruptResponse, DefaultToolContext, AgentTool, ToolDefinition, ToolHandlerArgs, CannedToolHints } from './types.js';
 import { AgentErrors, agentErrorFromChunk, blocksAgentError, brandedModelUnavailableMessage, classifyModelAccessError, InterruptError, walkCauseChain } from './errors.js';
 import { createUntrustedNonce, untrustedDataInstructions, wrapUntrustedToolError, wrapUntrustedToolOutput } from './untrusted.js';
@@ -211,13 +211,13 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 	private conversations?: KVStore<
 		z.input<typeof conversationSchema>,
 		z.infer<typeof conversationSchema>,
-		{ partitionKey: 'userId'; sortKey: 'conversationId' }
+		(typeof conversationsTableOptions)['key']
 	>;
 	/** Message history table. */
 	private messages?: KVStore<
 		z.input<typeof messageSchema>,
 		z.infer<typeof messageSchema>,
-		{ partitionKey: 'conversationId'; sortKey: 'messageId' }
+		(typeof messagesTableOptions)['key']
 	>;
 	/** Realtime pub/sub — streams chunks to browser. */
 	private rt: InstanceType<typeof Realtime>;
@@ -254,14 +254,8 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 		this.snapshotStorage = createSnapshotStorage(this.sessionBucket, this.log);
 
 		if (!config.inferenceOnly) {
-			this.conversations = new KVStore(this, 'convos', {
-				schema: conversationSchema,
-				key: { partitionKey: 'userId', sortKey: 'conversationId' },
-			});
-			this.messages = new KVStore(this, 'messages', {
-				schema: messageSchema,
-				key: { partitionKey: 'conversationId', sortKey: 'messageId' },
-			});
+			this.conversations = new KVStore(this, 'convos', conversationsTableOptions);
+			this.messages = new KVStore(this, 'messages', messagesTableOptions);
 		}
 
 		this.rt = new Realtime(this, 'rt', {

@@ -145,6 +145,29 @@ describe('AWS put writes the flat item layout', () => {
 	});
 });
 
+// ── Key types ───────────────────────────────────────────────────────────────
+
+describe('a key field has one type in both runtimes', () => {
+	test('both runtimes reject a key of the other type with the same message, before any call', async () => {
+		const options = {
+			schema: z.object({ id: z.number().positive(), label: z.string() }),
+			key: { partitionKey: 'id' },
+		};
+		const aws = awsStore('typed', options);
+		const mock = mockStore('typed', options);
+		const messages: string[] = [];
+		for (const store of [aws.store, mock]) {
+			messages.push((await rejects(store.get({ id: '1' }), KVStoreErrors.InvalidQuery)).message);
+		}
+		assert.equal(messages[0], messages[1]);
+		assert.match(messages[0], /'id' must be a number \(received string\)/);
+		assert.equal(aws.sent.length, 0);
+
+		await aws.store.put({ id: 1 }, { label: 'l' });
+		assert.deepEqual(aws.input().Item, { id: 1, label: 'l' });
+	});
+});
+
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 describe('AWS get', () => {
