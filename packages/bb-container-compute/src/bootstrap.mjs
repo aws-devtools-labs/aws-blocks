@@ -190,7 +190,7 @@ async function main() {
 	mkdirSync(APP_DIR, { recursive: true });
 	const creds = await getTaskCredentials();
 
-	// Fetch each bundle by its exact S3 key and write it under /app with the name
+	// Fetch each bundle by its exact S3 key and write it under APP_DIR with the name
 	// main.js runtime expects (BLOCKS_JOB_WORKER_ENTRY points at <APP_DIR>/worker.js).
 	for (const { name, key } of files) {
 		const body = await s3Get(bucket, key, region, creds);
