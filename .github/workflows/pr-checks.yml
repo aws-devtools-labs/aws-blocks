@@ -300,6 +300,11 @@ jobs:
       - name: Test workflow secret handling and OIDC scope
         run: node --test scripts/ci/workflow-secrets.test.mjs
 
+      # No value is interpolated unescaped into a RegExp, a shell command, a
+      # workflow run: script, generated Kotlin/Swift/Dart source or HTML.
+      - name: Check injection sink guards
+        run: node --test scripts/sink-guards/regex.test.mjs scripts/sink-guards/shell.test.mjs scripts/sink-guards/workflows.test.mjs scripts/sink-guards/codegen.test.mjs scripts/sink-guards/html.test.mjs
+
       # Deletes the stacks a cancelled or crashed E2E job leaves behind.
       - name: Test the E2E teardown
         run: node --test scripts/ci/e2e-teardown.test.mjs scripts/ci/e2e-stack-wait.test.mjs
