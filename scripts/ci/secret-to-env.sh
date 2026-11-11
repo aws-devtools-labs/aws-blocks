@@ -12,8 +12,9 @@
 # matches a single line, so each line of each value is masked separately (as in
 # publish-kotlin-maven.yml). All values are masked before the first one is
 # written. Each value is written as a KEY<<DELIM block with a random delimiter,
-# so a multi-line value keeps its newlines and can't add a variable of its own.
-# The script never prints a value or its input outside a mask command.
+# so a multi-line value keeps its newlines (trailing ones included) and can't
+# add a variable of its own. The script never prints a value or its input
+# outside a mask command.
 #
 # Tested by scripts/ci/workflow-secrets.test.mjs. SECRET_TO_ENV_TRACE=1 makes it
 # report the size of $GITHUB_ENV at each mask on stderr, for that test.
@@ -39,11 +40,22 @@ fi
 mask() {
 	# GitHub masks match only one line. Never echo the whole value: a
 	# multi-line value would print every line after the first.
+	#
+	# Empty and whitespace-only lines are skipped on purpose: the runner
+	# refuses to mask them ("Can't add secret mask for empty string"), and
+	# there is nothing in them to hide.
+	#
+	# The runner unescapes %25, %0D and %0A in the command data before it
+	# registers the mask, so escape them first (as @actions/core's escapeData
+	# does); otherwise a value containing "%25" would register a different
+	# string from the one written to the env, and print unmasked.
 	while IFS= read -r line; do
-		if [ -n "$line" ]; then
+		if [[ $line = *[![:space:]]* ]]; then
 			if [ -n "${SECRET_TO_ENV_TRACE:-}" ]; then
 				echo "trace: mask $(wc -c < "$GITHUB_ENV" | tr -d ' ')" >&2
 			fi
+			line=${line//'%'/'%25'}
+			line=${line//$'\r'/'%0D'}
 			printf '::add-mask::%s\n' "$line"
 		fi
 	done <<< "$1"
@@ -51,7 +63,7 @@ mask() {
 }
 
 value_of() {
-	jq -r --arg k "$1" '.[$k] | if type == "string" then . else tojson end' <<< "$secret"
+	jq -j --arg k "$1" '.[$k] | if type == "string" then . else tojson end' <<< "$secret"
 }
 
 mapfile -t keys < <(jq -r 'keys_unsorted[]' <<< "$secret")
@@ -61,9 +73,21 @@ for key in "${keys[@]}"; do
 done
 
 for key in "${keys[@]}"; do
-	value=$(value_of "$key")
-	delim="EOF_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
-	if grep -qxF "$delim" <<< "$value"; then
+	# Command substitution strips trailing newlines; the sentinel keeps them.
+	value=$(value_of "$key"; printf x)
+	value=${value%x}
+	# A random delimiter that is also a line of the value would end the block
+	# early. With 16 random bytes that is practically unreachable, but pick
+	# again a few times rather than fail the job.
+	delim=
+	for _ in 1 2 3 4 5; do
+		candidate="EOF_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+		if ! grep -qxF "$candidate" <<< "$value"; then
+			delim=$candidate
+			break
+		fi
+	done
+	if [ -z "$delim" ]; then
 		echo "::error::Could not pick a delimiter for $key; re-run the job."
 		exit 1
 	fi

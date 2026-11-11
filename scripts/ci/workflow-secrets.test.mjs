@@ -65,11 +65,41 @@ function parseEnvFile(text) {
 	return vars;
 }
 
+/**
+ * Unescapes workflow-command data the way the runner does before it registers a
+ * mask (ActionCommand.UnescapeData in actions/runner: %0D, then %0A, then %25).
+ */
+const unescapeData = (data) => data.replaceAll('%0D', '\r').replaceAll('%0A', '\n').replaceAll('%25', '%');
+
+/** The masks the runner registers from the script's stdout. */
 const masks = (stdout) =>
 	stdout
 		.split('\n')
 		.filter((l) => l.startsWith('::add-mask::'))
-		.map((l) => l.slice('::add-mask::'.length));
+		.map((l) => unescapeData(l.slice('::add-mask::'.length)));
+
+/**
+ * A directory with an `od` stub that prints each of `outputs` in turn (the last
+ * one from then on), so a test controls the delimiter the script picks.
+ */
+function stubOd(outputs) {
+	const dir = mkdtempSync(join(tmp, 'od-'));
+	const counter = join(dir, 'count');
+	writeFileSync(counter, '0');
+	const cases = outputs.map((o, i) => `\t${i}) echo ' ${o}' ;;`).join('\n');
+	const script = [
+		'#!/usr/bin/env bash',
+		`n=$(cat '${counter}')`,
+		`echo $((n + 1)) > '${counter}'`,
+		'case $n in',
+		cases,
+		`\t*) echo ' ${outputs.at(-1)}' ;;`,
+		'esac',
+		'',
+	].join('\n');
+	writeFileSync(join(dir, 'od'), script, { mode: 0o755 });
+	return { PATH: `${dir}:${process.env.PATH}`, count: () => Number(readFileSync(counter, 'utf8')) };
+}
 
 describe('secret-to-env.sh', () => {
 	const PEM = '-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ\nZm9vYmFy\n-----END CERTIFICATE-----';
@@ -125,6 +155,52 @@ describe('secret-to-env.sh', () => {
 		const vars = parseEnvFile(r.written);
 		assert.deepEqual(Object.keys(vars).sort(), ['A', 'B']);
 		assert.equal(vars.A, 'x\nNODE_OPTIONS=--require=/tmp/evil.js');
+	});
+
+	it('masks the exact line when a value contains workflow-command escape sequences', () => {
+		// The runner unescapes %25, %0D and %0A in the mask before it registers
+		// it, so the script has to escape them for the mask to match the value.
+		const value = 'postgres://u:p%25ss@h%0D%0A:5432/db\rtail';
+		const r = run(JSON.stringify({ SUPABASE_DB_URL: value }));
+		assert.equal(r.status, 0, r.stderr);
+		assert.equal(parseEnvFile(r.written).SUPABASE_DB_URL, value);
+		assert.deepEqual(masks(r.stdout), [value]);
+	});
+
+	it('skips empty and whitespace-only lines, which the runner refuses to mask', () => {
+		const r = run(JSON.stringify({ A: 'first\n\n   \n\t\nlast' }));
+		assert.equal(r.status, 0, r.stderr);
+		assert.deepEqual(masks(r.stdout), ['first', 'last']);
+		assert.equal(parseEnvFile(r.written).A, 'first\n\n   \n\t\nlast');
+	});
+
+	it('keeps trailing newlines of a value', () => {
+		const values = { CERT: `${PEM}\n`, TWO: 'x\n\n', ONLY: '\n' };
+		const r = run(JSON.stringify(values));
+		assert.equal(r.status, 0, r.stderr);
+		assert.deepEqual(parseEnvFile(r.written), values);
+	});
+
+	it('picks a new delimiter when a value contains the first one', () => {
+		const first = 'aa'.repeat(16);
+		const second = 'bb'.repeat(16);
+		const od = stubOd([first, second]);
+		const value = `x\nEOF_${first}\ny`;
+		const r = run(JSON.stringify({ A: value }), { env: { PATH: od.PATH } });
+		assert.equal(r.status, 0, r.stderr);
+		assert.equal(od.count(), 2);
+		assert.ok(r.written.startsWith(`A<<EOF_${second}\n`), r.written);
+		assert.deepEqual(parseEnvFile(r.written), { A: value });
+	});
+
+	it('fails without writing when every delimiter it tries collides', () => {
+		const hex = 'cc'.repeat(16);
+		const od = stubOd([hex]);
+		const r = run(JSON.stringify({ A: `EOF_${hex}` }), { env: { PATH: od.PATH } });
+		assert.notEqual(r.status, 0);
+		assert.equal(r.written, '');
+		assert.match(r.stdout, /::error::/);
+		assert.equal(od.count(), 5);
 	});
 
 	it('writes non-string values as JSON', () => {
