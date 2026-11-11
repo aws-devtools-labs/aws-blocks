@@ -231,8 +231,9 @@ export interface FileBucketOptions {
 	 *   size;
 	 * - `put()` rejects a body above the limit.
 	 *
-	 * A rejection throws `ValidationFailed` (HTTP 400). Must be a positive integer;
-	 * anything else is rejected at synth (and by the mock at construction).
+	 * A rejection throws `ValidationFailed` (HTTP 400). Must be a positive safe
+	 * integer (at most `Number.MAX_SAFE_INTEGER`); anything else is rejected at
+	 * synth (and by the mock at construction).
 	 * Enforced by the mock and the AWS runtime identically, including for a
 	 * bucket wrapped with `bucket`.
 	 *
@@ -313,11 +314,12 @@ export interface PutUrlOptions {
 	/**
 	 * Exact size of the upload, in bytes. When set, it is signed into the URL and
 	 * S3 (and the local dev server) only accepts a body of exactly this size.
-	 * Browsers set `Content-Length` from the body automatically.
+	 * Browsers set `Content-Length` from the body automatically. `0` is a valid
+	 * size and signs a zero-byte upload.
 	 *
 	 * Required when the bucket sets `maxUploadBytes`, and must not exceed it.
 	 *
-	 * @throws `ValidationFailed` when not a non-negative integer, missing while
+	 * @throws `ValidationFailed` when not a non-negative safe integer, missing while
 	 *   `maxUploadBytes` is set, or above `maxUploadBytes`.
 	 */
 	contentLength?: number;
