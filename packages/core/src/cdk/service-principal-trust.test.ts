@@ -108,9 +108,9 @@ describe('service-principal trust check', () => {
 		assert.throws(
 			() => app.synth(),
 			(err: Error) =>
-				err.message.includes('TrustCheckStack/Unconditioned/Resource') &&
-				err.message.includes('bedrock.amazonaws.com') &&
-				err.message.includes('aws:SourceAccount'),
+				/IAM role TrustCheckStack\/Unconditioned\/Resource trusts the service principal bedrock\.amazonaws\.com without an aws:SourceAccount or aws:SourceArn condition/.test(
+					err.message,
+				),
 		);
 	});
 
@@ -166,8 +166,9 @@ describe('service-principal trust check', () => {
 		assert.throws(
 			() => app.synth(),
 			(err: Error) =>
-				err.message.includes('TrustCheckBlocksStack/LateUnconditioned/Resource') &&
-				err.message.includes('glue.amazonaws.com'),
+				/IAM role TrustCheckBlocksStack\/LateUnconditioned\/Resource trusts the service principal glue\.amazonaws\.com /.test(
+					err.message,
+				),
 		);
 	});
 });
