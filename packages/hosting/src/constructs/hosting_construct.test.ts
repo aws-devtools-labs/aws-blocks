@@ -11,7 +11,12 @@ import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
-import { SSR_CACHE_GUARD_FILE, SSR_CACHE_GUARD_NODE_OPTION } from './ssr_cache_guard.js';
+import {
+  SSR_CACHE_GUARD_FILE,
+  SSR_CACHE_GUARD_HANDLER,
+  SSR_CACHE_GUARD_HANDLER_FILE,
+  SSR_CACHE_GUARD_NODE_OPTION,
+} from './ssr_cache_guard.js';
 
 // ---- Helpers ----
 
@@ -305,6 +310,49 @@ void describe('HostingConstruct — SSR mode', () => {
     assert.match(guardFor({ kind: 'stackedRouter' }), /^const ALL_COOKIES_KEYED = true;$/m);
     assert.match(guardFor(undefined), /^const ALL_COOKIES_KEYED = false;$/m);
     assert.match(guardFor({ kind: 'alb' }), /^const ALL_COOKIES_KEYED = false;$/m);
+  });
+
+  void it('installs the SSR cache guard on every regional compute a route targets, not on the image function', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const splitDir = path.join(tmpDir, 'split');
+    const imageDir = path.join(tmpDir, 'image');
+    for (const dir of [splitDir, imageDir]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'index.mjs'), 'export const handler = async () => {};');
+    }
+    const manifest = ssrManifest(staticDir, bundleDir);
+    const regional = { type: 'handler', handler: 'index.handler', placement: 'regional', streaming: true, runtime: 'nodejs24.x' } as const;
+    manifest.compute.fnApi = { ...regional, bundle: splitDir };
+    manifest.compute['image-optimization'] = { ...regional, bundle: imageDir, streaming: false };
+    manifest.routes = [{ pattern: '/api/*', target: 'fnApi' }, { pattern: '/_next/image', target: 'image-optimization' }, ...manifest.routes];
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
+
+    assert.ok(fs.existsSync(path.join(splitDir, SSR_CACHE_GUARD_HANDLER_FILE)));
+    assert.equal(fs.existsSync(path.join(imageDir, SSR_CACHE_GUARD_FILE)), false);
+    const handlers = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')).map(
+      (r) => r.Properties.Handler,
+    );
+    assert.equal(handlers.filter((h) => h === SSR_CACHE_GUARD_HANDLER).length, 2);
+    Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('SsrCacheGuardNotInstalled'));
+  });
+
+  void it('warns instead of installing the guard for a routed compute that shares the server bundle with another handler', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    fs.writeFileSync(path.join(bundleDir, 'other.mjs'), 'export const handler = async () => {};');
+    const manifest = ssrManifest(staticDir, bundleDir);
+    manifest.compute.fnApi = { ...manifest.compute.default, handler: 'other.handler' };
+    manifest.routes = [{ pattern: '/api/*', target: 'fnApi' }, ...manifest.routes];
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
+
+    Annotations.fromStack(stack).hasWarning(
+      '*',
+      Match.stringLikeRegexp("not installed in front of compute 'fnApi'.*shares its bundle with compute 'default'"),
+    );
+    assert.match(fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_HANDLER_FILE), 'utf-8'), /from "\.\/index\.mjs"/);
   });
 
   void it('accepts compute.timeout as a plain number (seconds) and coerces to Duration', () => {

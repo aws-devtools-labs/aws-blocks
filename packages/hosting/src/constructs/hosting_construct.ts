@@ -767,6 +767,9 @@ export class HostingConstruct extends Construct {
   /** The constructs the door's `onUpload` declared; each runs after every upload (see {@link addBuildAssetDependency}). */
   private readonly postUploadConstructs: IConstruct[] = [];
 
+  /** The bundles the SSR cache guard was installed in, by the first compute that installed it. */
+  private readonly ssrCacheGuardBundles = new Map<string, { name: string; key: string }>();
+
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
    */
@@ -906,6 +909,12 @@ export class HostingConstruct extends Construct {
       defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
       allCookiesKeyed: stackedRouter,
     };
+    // The computes the manifest routes requests to, other than the image
+    // function: they render server responses (e.g. a Next.js split function
+    // built regional), so they get the SSR cache guard too.
+    const serverRouteComputes = new Set(
+      manifest.routes.map((r) => r.target).filter((t) => t !== 'static' && t !== 's3' && t !== 'image-optimization'),
+    );
 
     for (const [name, resource] of computeEntries) {
       if (resource.type === 'edge') {
@@ -927,8 +936,12 @@ export class HostingConstruct extends Construct {
       // Function URL. Image-opt etc. keep OAC + Function URL.
       // `default` and `server` are the reserved manifest names of the SSR
       // server compute (ComputeResource has no role field); only these get
-      // the SSR cache guard, other computes are deployed without it.
+      // the SSR server settings. The SSR cache guard goes in front of these
+      // and of every other regional compute a route targets (see
+      // serverRouteComputes); computes no route targets (image optimization,
+      // revalidation) are deployed without it.
       const isSsrCompute = name === 'default' || name === 'server';
+      const servesServerRoutes = isSsrCompute || serverRouteComputes.has(name);
 
       // Web Functions host the SSR server only; auxiliary compute (image
       // optimization, revalidation, edge) stays on Lambda.
@@ -949,8 +962,8 @@ export class HostingConstruct extends Construct {
 
       // The SSR cache guard goes in front of the server first, so a door shim
       // (which converts the door's event shape) wraps the guarded handler.
-      const guarded = isSsrCompute ? this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'lambda') : undefined;
-      const ssrResource = guarded ? withDoorEventShim(guarded.resource, props.frontDoor) : resource;
+      const guarded = servesServerRoutes ? this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'lambda') : undefined;
+      const ssrResource = !guarded ? resource : isSsrCompute ? withDoorEventShim(guarded.resource, props.frontDoor) : guarded.resource;
       // `compute.environment` is applied over the manifest's environment, so a
       // NODE_OPTIONS set there must keep loading the guard.
       const computeEnvironment =
@@ -2591,7 +2604,16 @@ export class HostingConstruct extends Construct {
     config: SsrCacheGuardConfig,
     host: 'lambda' | 'web-function',
   ): { resource: ComputeResource; installed: boolean } {
-    const result = withSsrCacheGuard(resource, config, host);
+    // The guard's files have fixed names in the bundle, so two computes that
+    // share a bundle can share them only when they wrap the same handler.
+    const bundle = path.resolve(resource.bundle);
+    const key = `${host}:${resource.type}:${resource.handler ?? ''}:${resource.serverEntry ?? ''}`;
+    const sharing = this.ssrCacheGuardBundles.get(bundle);
+    const result: { resource: ComputeResource; skipped?: string } =
+      sharing && sharing.key !== key
+        ? { resource, skipped: `it shares its bundle with compute '${sharing.name}', which runs a different server` }
+        : withSsrCacheGuard(resource, config, host);
+    if (result.resource !== resource && !sharing) this.ssrCacheGuardBundles.set(bundle, { name, key });
     if (result.skipped !== undefined) {
       Annotations.of(this).addWarningV2(
         '@aws-blocks/hosting:SsrCacheGuardNotInstalled',
