@@ -235,6 +235,22 @@ function mergeKeyIntoValue(model: KeyModel, keyAttrs: Record<string, KeyValue>, 
 	return { ...value, ...keyAttrs };
 }
 
+/** The field name that DynamoDB cannot store. */
+const UNSTORABLE_FIELD = '__proto__';
+
+/**
+ * Whether a value has, at any depth, a field with a name that DynamoDB cannot
+ * store. The one such name is `__proto__`: the DynamoDB document client drops
+ * the field without an error, so an item would lose it on AWS and keep it in
+ * the mock. An object that `JSON.parse` built can have a field of that name;
+ * an object literal `{ __proto__: x }` sets the prototype and has no such field.
+ */
+function hasUnstorableField(value: unknown): boolean {
+	if (Array.isArray(value)) return value.some(hasUnstorableField);
+	if (!isPlainObject(value)) return false;
+	return Object.keys(value).some((field) => field === UNSTORABLE_FIELD || hasUnstorableField(value[field]));
+}
+
 /**
  * Build the stored item for a write: the key attributes, the value laid out
  * flat (an object) or in `_bkv_value` (anything else), and the expiry.
@@ -242,8 +258,9 @@ function mergeKeyIntoValue(model: KeyModel, keyAttrs: Record<string, KeyValue>, 
  * `value` is the merged value from {@link mergeKeyIntoValue} for a declared-key
  * store, or the raw value for a string store.
  *
- * @throws {KVStoreErrors.ValidationFailed} If an object value has a top-level field that starts with
- *   `_bkv_`, or an empty string in an indexed field.
+ * @throws {KVStoreErrors.ValidationFailed} If the value has a field named `__proto__` at any depth
+ *   (a field name that DynamoDB cannot store), or if an object value has a top-level field that
+ *   starts with `_bkv_`, or an empty string in an indexed field.
  */
 function buildItem(
 	model: KeyModel,
@@ -251,6 +268,9 @@ function buildItem(
 	value: unknown,
 	expiresAt: number | undefined,
 ): Item {
+	if (hasUnstorableField(value)) {
+		throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.unstorableField(UNSTORABLE_FIELD));
+	}
 	let item: Item;
 	if (isPlainObject(value)) {
 		for (const field of Object.keys(value)) {
@@ -283,7 +303,8 @@ function buildItem(
  *
  * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape.
  * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema, disagrees with its key, has a
- *   reserved field, or has an empty string in a key field or an indexed field; or if the expiry is not usable.
+ *   reserved field, has a field name that DynamoDB cannot store, or has an empty string in a key field
+ *   or an indexed field; or if the expiry is not usable.
  */
 export async function prepareItem(
 	model: KeyModel,
@@ -314,12 +335,10 @@ export interface ReadEntry {
 function readValue(item: Item): unknown {
 	if (VALUE_ATTRIBUTE in item) return item[VALUE_ATTRIBUTE];
 	const value: Item = {};
+	// No field here is named `__proto__`: a write rejects that name, and the
+	// mock does not load an item that has it.
 	for (const field of Object.keys(item)) {
-		if (field.startsWith(RESERVED_PREFIX)) continue;
-		// A plain assignment to `__proto__` would set the prototype of the value;
-		// define it, so the field stays an ordinary own field.
-		if (field === '__proto__') Object.defineProperty(value, field, { value: item[field], enumerable: true });
-		else value[field] = item[field];
+		if (!field.startsWith(RESERVED_PREFIX)) value[field] = item[field];
 	}
 	return value;
 }

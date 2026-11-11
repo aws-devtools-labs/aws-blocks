@@ -18,6 +18,7 @@ What moved over from `DistributedTable`: `query({ index?, where, limit?, order?,
 What is new:
 
 - Items are stored flat: one attribute per top-level field of an object value; any other value in `_bkv_value`; the expiry in `_bkv_ttl` unless `ttl: '<numberField>'` names a field of the value. The string key lives in `_bkv_pk`. Top-level value fields that start with the reserved prefix `_bkv_` are rejected.
+- A field name that DynamoDB cannot store is rejected: a value with a field named `__proto__`, at any depth, fails with `ValidationFailedException` in both runtimes.
 - Every call is key first: `put(key, value, options)`, `putBatch([{ key, value }])`. On a declared-key store, `put` writes the key fields from the key; a value whose key field disagrees is rejected.
 - `query` and `scan` return a `Results` object: an async iterable of `{ key, value, expiresAt? }` entries with a `cursor` property. Pass `limit` and the `cursor` of an earlier call to read the next page, in this request or a later one. A cursor is checked against the store's key schema, the call's index and the call's partition before use.
 - `get` is strongly consistent by default; `consistentRead: false` opts out.

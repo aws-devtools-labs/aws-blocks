@@ -146,7 +146,7 @@ const todo = await todos.get({ userId: 'alice', todoId: '001' });
 // { userId: 'alice', todoId: '001', title: 'Write the README', done: false, version: 1 }
 ```
 
-The block stores each top-level field of an object value as one DynamoDB attribute. Field names that start with `_bkv_` belong to the block, and `put` rejects a value that has one. An item can hold up to 400 KB.
+The block stores each top-level field of an object value as one DynamoDB attribute. Field names that start with `_bkv_` belong to the block, and `put` rejects a value that has one. `put` also rejects a value that has a field named `__proto__`, at any depth: DynamoDB cannot store that field name. An item can hold up to 400 KB.
 
 ## Expiry
 
@@ -348,7 +348,7 @@ Match an error by name with `isBlocksError`.
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|
 | `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409. |
-| `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
+| `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
 | `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where`, an unknown index, a bad `limit`, a bad cursor, or `ifValueEquals` with an object. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
 | `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |

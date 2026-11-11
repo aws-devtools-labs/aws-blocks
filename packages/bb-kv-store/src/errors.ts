@@ -33,9 +33,10 @@ export const KVStoreErrors = {
 	ConditionalCheckFailed: 'ConditionalCheckFailedException',
 	/**
 	 * A value fails the schema, disagrees with its key, has a top-level field
-	 * that starts with the reserved prefix `_bkv_`, or has an empty string in a
-	 * key field or an indexed field. Also a bad expiry (`ttlSeconds` together
-	 * with `expiresAt`, or a time that is not usable).
+	 * that starts with the reserved prefix `_bkv_`, has a field named
+	 * `__proto__` at any depth (a field name that DynamoDB cannot store), or has
+	 * an empty string in a key field or an indexed field. Also a bad expiry
+	 * (`ttlSeconds` together with `expiresAt`, or a time that is not usable).
 	 */
 	ValidationFailed: 'ValidationFailedException',
 	/**
@@ -156,6 +157,8 @@ export const KVStoreMessages = {
 	emptyIndexField: (field: string, index: string) =>
 		`indexed field '${field}' (index '${index}') cannot be an empty string`,
 	reservedField: (field: string) => `value field '${field}' uses the reserved prefix '_bkv_'`,
+	unstorableField: (field: string) =>
+		`a value cannot have a field named '${field}', at any depth: DynamoDB cannot store that field name`,
 	keyValueDisagree: (field: string) => `value field '${field}' does not equal the key`,
 	valueMustBeObject: 'a store with a declared key takes an object value',
 	limitInvalid: (received: string) => `limit must be a positive integer (received ${received})`,

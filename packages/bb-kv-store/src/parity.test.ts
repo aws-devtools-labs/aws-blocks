@@ -125,7 +125,7 @@ describe('AWS put writes the flat item layout', () => {
 		assert.deepEqual(named.input(1).Item, { id: 's', expiresAt: 1800000005 });
 	});
 
-	test('both runtimes reject a reserved field, an empty key field, an empty indexed field, and a disagreeing key', async () => {
+	test('both runtimes reject a reserved field, a field name that DynamoDB cannot store, an empty key field, an empty indexed field, and a disagreeing key', async () => {
 		const options = {
 			schema: z.object({ pk: z.string(), email: z.string(), note: z.string().optional() }),
 			key: { partitionKey: 'pk' },
@@ -135,6 +135,13 @@ describe('AWS put writes the flat item layout', () => {
 		const { store: aws, sent } = awsStore('t', options);
 		for (const s of [mock, aws]) {
 			await rejects(s.put({ pk: 'a' }, { email: 'e', _bkv_x: 1 }), KVStoreErrors.ValidationFailed);
+			for (const json of [
+				'{"email":"e","__proto__":{"x":1}}',
+				'{"email":"e","extra":[{"deep":{"__proto__":1}}]}',
+			]) {
+				const e = await rejects(s.put({ pk: 'a' }, JSON.parse(json)), KVStoreErrors.ValidationFailed);
+				assert.match(e.message, /a field named '__proto__'/);
+			}
 			await rejects(s.put({ pk: '' }, { email: 'e' }), KVStoreErrors.ValidationFailed);
 			await rejects(s.put({ pk: 'a' }, { email: '' }), KVStoreErrors.ValidationFailed);
 			await rejects(s.put({ pk: 'a' }, { pk: 'b', email: 'e' }), KVStoreErrors.ValidationFailed);

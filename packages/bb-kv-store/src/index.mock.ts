@@ -163,7 +163,8 @@ export class KVStore<
 	 * @param value - The value to store. An object is stored as one attribute per top-level field.
 	 * @param options - Optional write conditions and expiry (`ttlSeconds` / `expiresAt`).
 	 * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema, disagrees with its key, has a
-	 *   top-level field that starts with `_bkv_`, or has an empty string in a key field or an indexed field.
+	 *   top-level field that starts with `_bkv_`, has a field named `__proto__` at any depth (DynamoDB cannot
+	 *   store that field name), or has an empty string in a key field or an indexed field.
 	 * @throws {KVStoreErrors.ItemTooLarge} If the serialized item exceeds the 400 KB DynamoDB per-item size limit.
 	 * @throws {KVStoreErrors.InvalidQuery} If `ifValueEquals` is given an object, or `ifFieldEquals` is empty.
 	 * @throws {KVStoreErrors.ConditionalCheckFailed} If `ifNotExists` is set (alone) and the key already exists.

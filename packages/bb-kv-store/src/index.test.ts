@@ -161,14 +161,35 @@ describe('a store with no options (string key, string value)', () => {
 		assert.strictEqual(await store.get('a'), null);
 	});
 
-	test('a field named __proto__ round-trips as an own field and does not change the prototype of the value', async () => {
-		const store = new KVStore<Record<string, unknown>>(testScope(), 'kv');
-		await store.put('a', JSON.parse('{"__proto__":{"admin":true},"name":"A"}'));
-		const got = await store.get('a');
-		assert.ok(got);
-		assert.strictEqual(Object.getPrototypeOf(got), Object.prototype);
-		assert.strictEqual(got.admin, undefined);
-		assert.deepStrictEqual(Object.keys(got).sort(), ['__proto__', 'name']);
+	test('a field named __proto__ is rejected at any depth: DynamoDB cannot store that field name', async () => {
+		const objects = new KVStore<Record<string, unknown>>(testScope(), 'kv');
+		for (const json of [
+			'{"__proto__":{"admin":true},"name":"A"}',
+			'{"name":"A","nested":{"list":[{"__proto__":1}]}}',
+		]) {
+			await rejects(
+				objects.put('a', JSON.parse(json)),
+				KVStoreErrors.ValidationFailed,
+				/a field named '__proto__'/,
+			);
+		}
+		assert.strictEqual(await objects.get('a'), null);
+
+		const lists = new KVStore<unknown[]>(testScope(), 'kv');
+		await rejects(
+			lists.put('a', JSON.parse('[1, {"__proto__":1}]')),
+			KVStoreErrors.ValidationFailed,
+			/a field named '__proto__'/,
+		);
+		await rejects(
+			lists.putBatch([{ key: 'a', value: JSON.parse('[{"deep":{"__proto__":1}}]') }]),
+			KVStoreErrors.ValidationFailed,
+		);
+		assert.strictEqual(await lists.get('a'), null);
+
+		// A value with no such field is stored as before.
+		await objects.put('a', { name: 'A', nested: { list: [{ proto: 1 }] } });
+		assert.deepStrictEqual(await objects.get('a'), { name: 'A', nested: { list: [{ proto: 1 }] } });
 	});
 
 	test('put rejects items exceeding 400 KB with ItemTooLarge', async () => {

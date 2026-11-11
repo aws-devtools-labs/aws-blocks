@@ -30,6 +30,8 @@ A read reverses the layout. `_bkv_pk` becomes the string key; the declared key f
 
 The block owns every top-level attribute name that starts with `_bkv_` ("Blocks key-value"). `put` rejects an object value that has such a field with `ValidationFailedException`, so a value an app builds from request input cannot set the key or the expiry of an item.
 
+`put` also rejects a value that has a field named `__proto__`, at any depth, with `ValidationFailedException`. DynamoDB cannot store that field name: the DynamoDB document client drops the field without an error, so the mock would keep a field that the AWS runtime loses. Both runtimes reject it in `buildItem`, before any I/O, so the same value gives the same stored item or the same error in both.
+
 The layout is implemented once, in `src/item.ts`, and both runtimes call it: `normalizeKey`, `mergeKeyIntoValue`, `buildItem`, `readItem`, the condition planners, and the cursor codec. The mock persists the exact DynamoDB item shape to `.bb-data/{fullId}/store.json`, keyed by the serialized table key, so a mock file shows what DynamoDB would hold.
 
 ## Key model
@@ -271,7 +273,7 @@ Durability posture is resolved from the stack-wide `BlocksDefaults` (`BlocksPres
 
 ### D-KV-15: Runtime checks for what the compiler cannot see
 
-**Decision:** Both runtimes reject, before any I/O: a key of the wrong shape or type (`InvalidQuery`), a key/value disagreement, a reserved field, an empty string in a key or indexed field, and a value that fails the schema (`ValidationFailed`); `ifValueEquals` with an object, an empty `ifFieldEquals`, and a bad cursor (`InvalidQuery`). The checks live in `src/item.ts` and the messages in `src/errors.ts`, shared by both runtimes.
+**Decision:** Both runtimes reject, before any I/O: a key of the wrong shape or type (`InvalidQuery`), a key/value disagreement, a reserved field, a field name that DynamoDB cannot store (`__proto__`, at any depth of the value), an empty string in a key or indexed field, and a value that fails the schema (`ValidationFailed`); `ifValueEquals` with an object, an empty `ifFieldEquals`, and a bad cursor (`InvalidQuery`). The checks live in `src/item.ts` and the messages in `src/errors.ts`, shared by both runtimes.
 
 **Rationale:** The type system enforces these for TypeScript callers; JavaScript callers, casts, and request-shaped values reach the runtime unchecked. Doing the checks in shared code keeps the mock and AWS runtime byte-for-byte aligned on what they accept and on the error they throw, which the parity tests assert. A key-type mismatch is caught with the type that the CDK layer provisions (D-KV-17), because DynamoDB's own error for it does not name the cause.
 
