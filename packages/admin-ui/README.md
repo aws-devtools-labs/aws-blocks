@@ -30,7 +30,14 @@ The SPA never talks to AWS directly. The HTTP contract lives in `src/contract/v1
 ## Development
 
 ```bash
-npm run dev    # next dev on port 4400 (no token required in development)
+# next dev on 127.0.0.1:4400. Reads need no token, but only with the opt-in below:
+# the gate is default-deny and is NOT inferred from NODE_ENV.
+BLOCKS_DASHBOARD_ALLOW_UNAUTHENTICATED_READS=1 npm run dev
+
 npm run build  # tsc server build + next build
 npm test       # node --test on the compiled server modules
 ```
+
+The dev server binds loopback on purpose. With the read opt-in set there is no
+authentication at all, and every read queries AWS with your own credentials, so it
+must not be reachable from another machine. Writes never take the opt-in.

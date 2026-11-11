@@ -14,6 +14,19 @@ import { timingSafeEqual } from 'node:crypto';
 
 export const TOKEN_ENV_VAR = 'BLOCKS_DASHBOARD_TOKEN';
 
+/**
+ * Opt-in that allows unauthenticated READS when no session token is configured,
+ * for developing the UI with a plain `next dev` and no CLI.
+ *
+ * Purpose-named and default-deny, deliberately. Authentication must not be
+ * decided by an ambient variable: `NODE_ENV=development` is set by test
+ * runners, editors and toolchains that have no opinion about this gate, so
+ * keying on it disables authentication as a side effect of something else.
+ * This variable does nothing but disable the read gate, so setting it is a
+ * choice someone made on purpose.
+ */
+export const UNAUTHENTICATED_READS_ENV_VAR = 'BLOCKS_DASHBOARD_ALLOW_UNAUTHENTICATED_READS';
+
 /** Extracts the bearer token from an Authorization header value, if any. */
 export function parseBearerToken(authorizationHeader: string | null | undefined): string | undefined {
 	if (!authorizationHeader) return undefined;
@@ -34,22 +47,30 @@ export function isValidToken(presented: string | undefined, expected: string | u
  * Checks an Authorization header against the process-level session token.
  *
  * When no token is configured — plain `next dev` without the CLI, which is how
- * the UI is developed — reads are allowed in development mode so the pages work
- * without a token to present. This fallback is the one condition under which the
- * dashboard has no auth at all, so it is deliberately narrow: use
- * {@link isAuthorizedToMutate} for anything that writes, which never takes it.
+ * the UI is developed — reads are allowed only if
+ * {@link UNAUTHENTICATED_READS_ENV_VAR} is explicitly set, so the pages work
+ * without a token to present. That fallback is the one condition under which the
+ * dashboard has no auth at all, so it is deliberately narrow in two ways: it is
+ * opt-in rather than inferred from the environment, and it covers reads only.
+ * Use {@link isAuthorizedToMutate} for anything that writes, which never takes
+ * it.
+ *
+ * The opt-in does not make the dashboard safe to expose. The server this package
+ * ships binds to 127.0.0.1 (see `start.ts`), and the `dev` script passes
+ * `-H 127.0.0.1` for the same reason: with the gate open, every reader on the
+ * interface would be querying AWS with the developer's own credentials.
  */
 export function isAuthorized(authorizationHeader: string | null | undefined): boolean {
 	const expected = process.env[TOKEN_ENV_VAR];
-	if (!expected) return process.env.NODE_ENV === 'development';
+	if (!expected) return process.env[UNAUTHENTICATED_READS_ENV_VAR] === '1';
 	return isValidToken(parseBearerToken(authorizationHeader), expected);
 }
 
 /**
  * As {@link isAuthorized}, but a real token is ALWAYS required.
  *
- * The development fallback exists so `next dev` can render pages with no token
- * to present. Extending it to writes would mean that in dev mode — with the
+ * The read fallback exists so `next dev` can render pages with no token to
+ * present. Extending it to writes would mean that with the opt-in set — and the
  * developer's real AWS credentials in the environment — `POST /writes/unlock`
  * and a cloud record delete are reachable by any local process, and by any
  * same-origin script, with no credential at all. Reading local state without a

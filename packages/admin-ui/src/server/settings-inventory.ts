@@ -10,6 +10,7 @@ import type {
 	SettingEntry,
 	SettingValueKind,
 } from '../contract/v1.js';
+import { REDACTED, displayTextOrRedacted } from './redact.js';
 import type { RawTemplate } from './resources.js';
 
 /**
@@ -237,7 +238,14 @@ export function templateHandlerEnvironment(template: RawTemplate): DeployOwnedVa
 			// are dropped. Listing one key N times would read as N settings.
 			if (seen.has(key)) continue;
 			seen.add(key);
-			found.push(typeof value === 'string' ? { key, value, deployTime: false } : { key, deployTime: true });
+			if (typeof value !== 'string') {
+				found.push({ key, deployTime: true });
+				continue;
+			}
+			// Through the same authority every other read path uses. A literal
+			// environment variable can hold a token nobody declared as a secret,
+			// and this response is rendered straight onto the settings page.
+			found.push({ key, value: displayTextOrRedacted(value) ?? REDACTED, deployTime: false });
 		}
 	}
 	return found.sort((left, right) => left.key.localeCompare(right.key));

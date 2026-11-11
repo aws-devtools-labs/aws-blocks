@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { SettingVersion } from '../contract/v1.js';
 import { awsClientConfig } from './aws-config.js';
+import { REDACTED, displayTextOrRedacted } from './redact.js';
 import { decodeSettingValue } from './settings-inventory.js';
 
 /**
@@ -193,7 +194,10 @@ export async function fetchParameterHistory(
 			if (entry.LastModifiedDate) version.lastModified = entry.LastModifiedDate.toISOString();
 			if (entry.LastModifiedUser) version.modifiedBy = entry.LastModifiedUser;
 			if (!secret && entry.Type !== 'SecureString' && entry.Value !== undefined) {
-				version.display = String(decodeSettingValue(entry.Value).value);
+				// Through the same authority the current value uses: a token pasted
+				// into a non-secret setting is a credential the declaration knows
+				// nothing about, and history must not hand it back verbatim.
+				version.display = displayTextOrRedacted(decodeSettingValue(entry.Value).value) ?? REDACTED;
 			}
 			versions.push(version);
 		}

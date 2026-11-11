@@ -229,3 +229,23 @@ export function redactRecordValue(recordKey: string, value: unknown): RedactionR
 export function isAncillaryStoreName(name: string): boolean {
 	return /-(?:codes|sessions|tokens|challenges|cache)$/i.test(name);
 }
+
+/**
+ * A stored value as display text, or `undefined` when its SHAPE is a credential.
+ *
+ * The one authority for turning a stored value into something displayable, so
+ * that every read path agrees. A value masked on the settings list and returned
+ * verbatim by version history is the same leak with extra steps, which is what
+ * happened: history and Lambda environment values bypassed this and were copied
+ * out raw. Raised in review on #843.
+ *
+ * Structured values are JSON-encoded rather than passed through `String()`,
+ * which renders an object as `[object Object]` and an array as comma-joined
+ * text. Neither round-trips back through a JSON editor, so restoring such a
+ * version produced a value the save path then rejected as invalid JSON.
+ */
+export function displayTextOrRedacted(value: unknown): string | undefined {
+	const redaction = redactValue(value);
+	if (redaction.redacted) return undefined;
+	return typeof redaction.value === 'string' ? redaction.value : JSON.stringify(redaction.value);
+}

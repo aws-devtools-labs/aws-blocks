@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { SettingEntry, SettingValueView } from '../contract/v1.js';
-import { REDACTED, redactValue } from './redact.js';
+import { REDACTED, displayTextOrRedacted, redactValue } from './redact.js';
 import { decodeSettingValue, type SettingRow } from './settings-inventory.js';
 import type { StoredParameter } from './settings-store.js';
 
@@ -108,12 +108,9 @@ export function storedView(value: unknown, secret: boolean): SettingValueView {
  * same authority every data-browser read already passes through.
  */
 function displayValue(value: unknown, stored: StoredParameter | undefined): SettingValueView {
-	const redaction = redactValue(value);
-	if (redaction.redacted) return maskedView(stored);
-	const view: SettingValueView = {
-		display: typeof redaction.value === 'string' ? redaction.value : JSON.stringify(redaction.value),
-		masked: false,
-	};
+	const display = displayTextOrRedacted(value);
+	if (display === undefined) return maskedView(stored);
+	const view: SettingValueView = { display, masked: false };
 	if (stored?.version !== undefined) view.version = stored.version;
 	if (stored?.lastModified !== undefined) view.lastModified = stored.lastModified;
 	return view;

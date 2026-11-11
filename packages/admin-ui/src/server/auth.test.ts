@@ -3,7 +3,14 @@
 
 import assert from 'node:assert';
 import { afterEach, describe, it } from 'node:test';
-import { TOKEN_ENV_VAR, isAuthorized, isAuthorizedToMutate, isValidToken, parseBearerToken } from './auth.js';
+import {
+	TOKEN_ENV_VAR,
+	UNAUTHENTICATED_READS_ENV_VAR,
+	isAuthorized,
+	isAuthorizedToMutate,
+	isValidToken,
+	parseBearerToken,
+} from './auth.js';
 
 describe('parseBearerToken', () => {
 	it('extracts the token from a Bearer header', () => {
@@ -41,11 +48,14 @@ describe('isAuthorized', () => {
 	// Next's types mark NODE_ENV readonly; tests legitimately mutate it.
 	const env = process.env as Record<string, string | undefined>;
 	const originalToken = env[TOKEN_ENV_VAR];
+	const originalOptIn = env[UNAUTHENTICATED_READS_ENV_VAR];
 	const originalNodeEnv = env.NODE_ENV;
 
 	afterEach(() => {
 		if (originalToken === undefined) delete env[TOKEN_ENV_VAR];
 		else env[TOKEN_ENV_VAR] = originalToken;
+		if (originalOptIn === undefined) delete env[UNAUTHENTICATED_READS_ENV_VAR];
+		else env[UNAUTHENTICATED_READS_ENV_VAR] = originalOptIn;
 		if (originalNodeEnv === undefined) delete env.NODE_ENV;
 		else env.NODE_ENV = originalNodeEnv;
 	});
@@ -61,23 +71,36 @@ describe('isAuthorized', () => {
 		assert.strictEqual(isAuthorized(undefined), false);
 	});
 
-	it('denies by default when no token is configured outside development', () => {
+	it('denies by default when no token is configured and nothing opted in', () => {
 		delete env[TOKEN_ENV_VAR];
-		env.NODE_ENV = 'production';
+		delete env[UNAUTHENTICATED_READS_ENV_VAR];
 		assert.strictEqual(isAuthorized('Bearer anything'), false);
 	});
 
-	it('allows unauthenticated access only under NODE_ENV=development', () => {
+	it('allows unauthenticated reads only under the explicit opt-in', () => {
 		delete env[TOKEN_ENV_VAR];
-		env.NODE_ENV = 'development';
+		env[UNAUTHENTICATED_READS_ENV_VAR] = '1';
 		assert.strictEqual(isAuthorized(undefined), true);
+	});
+
+	/**
+	 * Regression guard: an ambient variable must not decide authentication. This
+	 * gate used to read `NODE_ENV === 'development'`, which test runners, editors
+	 * and toolchains set for their own reasons, so the dashboard opened as a side
+	 * effect of something that has no opinion about it. Raised in review on #843.
+	 */
+	it('is not opened by NODE_ENV=development alone', () => {
+		delete env[TOKEN_ENV_VAR];
+		delete env[UNAUTHENTICATED_READS_ENV_VAR];
+		env.NODE_ENV = 'development';
+		assert.strictEqual(isAuthorized(undefined), false);
 	});
 });
 
-describe('isAuthorizedToMutate — the development fallback never covers a write', () => {
+describe('isAuthorizedToMutate — the read opt-in never covers a write', () => {
 	/**
 	 * Flagged independently by two audits. `isAuthorized` allows unauthenticated
-	 * access when nothing is configured and NODE_ENV is development, so that a
+	 * reads when nothing is configured and the read opt-in is set, so that a
 	 * plain `next dev` renders pages with nothing to present. Under that same
 	 * condition every write route was reachable with no credential at all —
 	 * including unlocking cloud writes and then deleting from a deployed stack,
@@ -89,18 +112,18 @@ describe('isAuthorizedToMutate — the development fallback never covers a write
 	 */
 	const env = process.env as Record<string, string | undefined>;
 	const originalToken = env[TOKEN_ENV_VAR];
-	const originalNodeEnv = env.NODE_ENV;
+	const originalOptIn = env[UNAUTHENTICATED_READS_ENV_VAR];
 
 	afterEach(() => {
 		if (originalToken === undefined) delete env[TOKEN_ENV_VAR];
 		else env[TOKEN_ENV_VAR] = originalToken;
-		if (originalNodeEnv === undefined) delete env.NODE_ENV;
-		else env.NODE_ENV = originalNodeEnv;
+		if (originalOptIn === undefined) delete env[UNAUTHENTICATED_READS_ENV_VAR];
+		else env[UNAUTHENTICATED_READS_ENV_VAR] = originalOptIn;
 	});
 
-	it('refuses when nothing is configured, even in development', () => {
+	it('refuses when nothing is configured, even with the read opt-in set', () => {
 		delete env[TOKEN_ENV_VAR];
-		env.NODE_ENV = 'development';
+		env[UNAUTHENTICATED_READS_ENV_VAR] = '1';
 		// The read path deliberately still allows this — that is the convenience.
 		assert.strictEqual(isAuthorized(undefined), true);
 		// The write path must not.
@@ -108,15 +131,15 @@ describe('isAuthorizedToMutate — the development fallback never covers a write
 		assert.strictEqual(isAuthorizedToMutate('Bearer anything'), false);
 	});
 
-	it('refuses when nothing is configured outside development', () => {
+	it('refuses when nothing is configured and nothing opted in', () => {
 		delete env[TOKEN_ENV_VAR];
-		env.NODE_ENV = 'production';
+		delete env[UNAUTHENTICATED_READS_ENV_VAR];
 		assert.strictEqual(isAuthorizedToMutate(undefined), false);
 	});
 
-	it('accepts the configured value, in development as anywhere else', () => {
+	it('accepts the configured value, with the read opt-in set as without it', () => {
 		env[TOKEN_ENV_VAR] = 'tok';
-		env.NODE_ENV = 'development';
+		env[UNAUTHENTICATED_READS_ENV_VAR] = '1';
 		assert.strictEqual(isAuthorizedToMutate('Bearer tok'), true);
 		assert.strictEqual(isAuthorizedToMutate('Bearer nope'), false);
 		assert.strictEqual(isAuthorizedToMutate(undefined), false);

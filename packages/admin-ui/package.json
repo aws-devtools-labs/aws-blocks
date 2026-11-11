@@ -43,7 +43,7 @@
   },
   "scripts": {
     "prebuild": "node ../../scripts/generate-block-catalog.mjs",
-    "dev": "node ../../scripts/generate-block-catalog.mjs && tsc -p tsconfig.server.json && next dev --port 4400",
+    "dev": "node ../../scripts/generate-block-catalog.mjs && tsc -p tsconfig.server.json && next dev -H 127.0.0.1 --port 4400",
     "build": "tsc -p tsconfig.server.json && next build",
     "test": "node --test 'dist/**/*.test.js'"
   },

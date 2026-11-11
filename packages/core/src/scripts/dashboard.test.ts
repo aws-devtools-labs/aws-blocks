@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 
-import { buildDashboardUrl, parseDashboardArgs, resolveAdminUi } from './dashboard.js';
+import { buildDashboardUrl, buildRedirectDocument, parseDashboardArgs, resolveAdminUi } from './dashboard.js';
 
 describe('parseDashboardArgs', () => {
 	it('defaults to open with no port', () => {
@@ -196,5 +196,26 @@ describe('resolveAdminUi', () => {
 		mkdirSync(tmpDir, { recursive: true });
 		writeFileSync(join(tmpDir, 'package.json'), JSON.stringify({ name: 'empty-app' }));
 		await assert.rejects(() => resolveAdminUi(tmpDir), /npm install --save-dev @aws-blocks\/admin-ui/);
+	});
+});
+
+describe('buildRedirectDocument', () => {
+	/**
+	 * The token used to reach the browser as an argv element of `xdg-open`, where
+	 * any other user on a shared host could read it from `/proc/<pid>/cmdline` and
+	 * replay it against the loopback API. It now travels in this document inside a
+	 * 0700 directory, so the opener only sees a path. Raised in review on #843.
+	 */
+	it('carries the token URL for the browser to follow', () => {
+		const doc = buildRedirectDocument('http://127.0.0.1:4400/#token=abc123');
+		assert.match(doc, /http:\/\/127\.0\.0\.1:4400\/#token=abc123/);
+		assert.match(doc, /http-equiv="refresh"/);
+	});
+
+	it('escapes a URL so it cannot break out of the attribute', () => {
+		const doc = buildRedirectDocument('http://127.0.0.1:4400/#token=a"><script>x</script>&b');
+		assert.ok(!doc.includes('<script>'), 'a quote must not end the attribute and open a tag');
+		assert.match(doc, /&quot;/);
+		assert.match(doc, /&amp;b/);
 	});
 });

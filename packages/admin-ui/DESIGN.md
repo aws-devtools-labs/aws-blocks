@@ -317,8 +317,9 @@ the user did not ask for individually. Here the user has named one method and as
 masking part of the answer would corrupt the thing being inspected and make the playground useless for
 debugging an auth or token flow.
 
-**D29 — The development auth fallback covers reads only.** `isAuthorized` allows unauthenticated
-access when no session token is configured and `NODE_ENV=development`, so that a plain `next dev`
+**D29 — The read auth fallback is opt-in, and covers reads only.** `isAuthorized` allows
+unauthenticated access when no session token is configured and
+`BLOCKS_DASHBOARD_ALLOW_UNAUTHENTICATED_READS=1` is set, so that a plain `next dev`
 renders pages with nothing to present. That fallback is the one condition in which the dashboard has no
 auth at all, and it originally covered *writes* too: in dev mode, with the developer's real AWS
 credentials in the environment, `POST /api/v1/writes/unlock` and a cloud record delete were reachable

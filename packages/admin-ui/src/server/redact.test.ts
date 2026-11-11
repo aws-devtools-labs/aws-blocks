@@ -4,6 +4,7 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
 import {
+	displayTextOrRedacted,
 	isAncillaryStoreName,
 	LONG_STRING_THRESHOLD,
 	looksSecret,
@@ -416,5 +417,36 @@ describe('redactRecordValue — the record key is a field name', () => {
 		const value = { id: 'u1' };
 		redactRecordValue('sessionSecret', value);
 		assert.deepStrictEqual(value, { id: 'u1' });
+	});
+});
+
+describe('displayTextOrRedacted', () => {
+	/**
+	 * The one authority every settings read path goes through. Version history
+	 * (`settings-store.ts`) and Lambda environment values
+	 * (`settings-inventory.ts`) used to bypass it, so a credential masked in the
+	 * settings list came back verbatim from `GET /api/v1/settings/history`.
+	 * Raised in review on #843.
+	 */
+	it('withholds a value whose shape is a credential', () => {
+		const jwt = `eyJhbGciOiJIUzI1NiJ9.${'a'.repeat(40)}.${'b'.repeat(40)}`;
+		assert.strictEqual(displayTextOrRedacted(jwt), undefined);
+		assert.strictEqual(displayTextOrRedacted('AKIAIOSFODNN7EXAMPLE'), undefined);
+	});
+
+	it('returns a plain value unchanged', () => {
+		assert.strictEqual(displayTextOrRedacted('eu-west-1'), 'eu-west-1');
+		assert.strictEqual(displayTextOrRedacted(42), '42');
+	});
+
+	/**
+	 * `String(...)` rendered an object as `[object Object]` and an array as
+	 * comma-joined text, so restoring such a version put text into a JSON editor
+	 * that the save path then rejected as invalid JSON.
+	 */
+	it('JSON-encodes a structured value so it round-trips through a JSON editor', () => {
+		assert.strictEqual(displayTextOrRedacted({ a: 1 }), '{"a":1}');
+		assert.strictEqual(displayTextOrRedacted([1, 2]), '[1,2]');
+		assert.deepStrictEqual(JSON.parse(displayTextOrRedacted({ a: 1 }) as string), { a: 1 });
 	});
 });

@@ -3,7 +3,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { pathToFileURL } from 'node:url';
@@ -137,6 +139,54 @@ function parseValueFlag(flag: string, value: string | undefined): string {
 /** Builds the URL handed to the browser: token travels in the fragment only. */
 export function buildDashboardUrl(baseUrl: string, token: string): string {
 	return `${baseUrl}/#token=${token}`;
+}
+
+/**
+ * The redirect document that carries the token URL to the browser.
+ *
+ * Exported for the test: the URL sits in an HTML attribute, so a quote or an
+ * ampersand in it must not be able to break out of that attribute.
+ */
+export function buildRedirectDocument(url: string): string {
+	const escaped = url.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+	return `<!doctype html><meta http-equiv="refresh" content="0;url=${escaped}">\n`;
+}
+
+/**
+ * Opens the dashboard without putting the session token on a command line.
+ *
+ * {@link openInBrowser} hands its argument to `xdg-open`/`open`/`start` as an
+ * argv element, and that opener hands it to the browser it launches. On a shared
+ * host any other user can then read the token out of `ps` or
+ * `/proc/<pid>/cmdline` and replay it against the loopback API, which holds this
+ * developer's AWS credentials and permits cloud writes once unlocked. The token
+ * is the layer meant to stop exactly that, and the URL fragment keeps it off the
+ * wire but not out of argv.
+ *
+ * So the token travels in a redirect document inside a `mkdtemp` directory,
+ * which is created 0700, and the opener only ever sees that file's path. The
+ * browser runs as this same user, so it can read the document; nobody else can.
+ *
+ * The fallback is NOT to pass the token on the command line after all: the URL
+ * is printed to this terminal anyway, so a failure here asks the developer to
+ * open it instead. For a shared host where even that is unwanted, `--no-open`
+ * starts the server and prints the URL without launching anything.
+ */
+function openDashboardUrl(url: string): void {
+	let dir: string | undefined;
+	try {
+		dir = mkdtempSync(join(tmpdir(), 'blocks-dashboard-'));
+		const redirect = join(dir, 'open.html');
+		writeFileSync(redirect, buildRedirectDocument(url), { mode: 0o600 });
+		openInBrowser(pathToFileURL(redirect).href);
+		// The browser reads the document as it navigates; keeping it on disk only
+		// widens the window, so drop it once a cold browser start has had time.
+		const sweep = setTimeout(() => rmSync(dir as string, { recursive: true, force: true }), 60_000);
+		sweep.unref();
+	} catch {
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		console.log('(Could not hand the URL to a browser safely — open the URL above manually.)');
+	}
 }
 
 interface AdminUiServerModule {
@@ -347,7 +397,7 @@ export async function dashboard(options: DashboardOptions = {}) {
 		const url = buildDashboardUrl(server.url, token);
 		console.log(`Blocks dashboard running at ${server.url} (bound to 127.0.0.1)`);
 		console.log(url);
-		if (open) openInBrowser(url);
+		if (open) openDashboardUrl(url);
 		console.log('Press Ctrl+C to stop.');
 	});
 
