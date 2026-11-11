@@ -9,21 +9,12 @@
 import { RawRoute, type BlocksContext, ApiError, isWireSafeError } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { AuthOIDC } from './auth-oidc.js';
-import type { ProviderConfig, StubProvider } from './types.js';
+import type { ProviderConfig } from './types.js';
 import type { AuthorizeParamsRequest } from './engine.js';
 import { InvalidRelayError, AuthOIDCErrors } from './errors.js';
-import {
-	handleDiscovery,
-	handleJwks,
-	handleAuthorize,
-	handleAuthorizeSubmit,
-	handleToken,
-	handleUserInfo,
-	handleRevoke,
-	stubIssuerPath,
-	deriveStubCodeKey,
-	type StubIdpHandlerOptions,
-} from './engines/stub-idp.js';
+
+// The stub IdP routes (`mountStubIdpRoutes`) live in `stub-routes.ts`, so this
+// module has no import path to the stub IdP engine (`engines/stub-idp.ts`).
 
 /** Minimum acceptable length of the SDK-generated `csrf` value. */
 const CSRF_MIN_LENGTH = 32;
@@ -325,81 +316,4 @@ export function mountAuthRoutes(auth: AuthOIDC<readonly ProviderConfig[]>, log: 
 			},
 		});
 	}
-}
-
-/** Options for {@link mountStubIdpRoutes}. */
-export interface MountStubIdpRoutesOptions {
-	/**
-	 * The instance's cookie-signing secret, or a resolver for it. The stub
-	 * IdP derives its per-provider code-signing key from this value (see
-	 * `deriveStubCodeKey`), so it must be the same persistent per-deployment
-	 * secret the instance signs cookies with.
-	 */
-	codeSecret: string | (() => string | Promise<string>);
-	/** Directory holding the stub `users.json` (local mock only). */
-	dataDir?: string;
-}
-
-/** Mount stub IdP routes for a single provider. */
-export function mountStubIdpRoutes(
-	parent: AuthOIDC<readonly ProviderConfig[]>,
-	provider: StubProvider,
-	options: MountStubIdpRoutesOptions,
-): void {
-	const base = stubIssuerPath(provider.name);
-	const { codeSecret, dataDir } = options;
-
-	// Derive the code-signing key once per mount and reuse it. A failed
-	// resolution is not cached, so a later request retries it.
-	let codeKeyPromise: Promise<Buffer> | undefined;
-	const codeKey = (): Promise<Buffer> => {
-		if (!codeKeyPromise) {
-			codeKeyPromise = (async () => {
-				const secret = typeof codeSecret === 'function' ? await codeSecret() : codeSecret;
-				return deriveStubCodeKey(secret, provider.name);
-			})();
-			// Retry-reset, not error suppression: drop the memoized promise on failure so the
-			// next request re-derives; the awaiting caller still sees the rejection.
-			codeKeyPromise.catch(() => { codeKeyPromise = undefined; });
-		}
-		return codeKeyPromise;
-	};
-	const handlerOptions: StubIdpHandlerOptions = { codeKey, dataDir };
-	const routeId = (suffix: string) => `stub-${provider.name}-${suffix}`;
-
-	new RawRoute(parent, routeId('discovery'), {
-		method: 'GET',
-		path: `${base}/.well-known/openid-configuration`,
-		handler: (ctx) => handleDiscovery(provider.name, ctx),
-	});
-	new RawRoute(parent, routeId('jwks'), {
-		method: 'GET',
-		path: `${base}/jwks.json`,
-		handler: (ctx) => handleJwks(provider.name, ctx),
-	});
-	new RawRoute(parent, routeId('authorize'), {
-		method: 'GET',
-		path: `${base}/authorize`,
-		handler: (ctx) => handleAuthorize(provider, ctx, handlerOptions),
-	});
-	new RawRoute(parent, routeId('authorize-submit'), {
-		method: 'POST',
-		path: `${base}/authorize`,
-		handler: (ctx) => handleAuthorizeSubmit(provider, ctx, handlerOptions),
-	});
-	new RawRoute(parent, routeId('token'), {
-		method: 'POST',
-		path: `${base}/token`,
-		handler: (ctx) => handleToken(provider.name, ctx, handlerOptions),
-	});
-	new RawRoute(parent, routeId('userinfo'), {
-		method: 'GET',
-		path: `${base}/userinfo`,
-		handler: (ctx) => handleUserInfo(provider.name, ctx),
-	});
-	new RawRoute(parent, routeId('revoke'), {
-		method: 'POST',
-		path: `${base}/revoke`,
-		handler: (ctx) => handleRevoke(provider.name, ctx),
-	});
 }

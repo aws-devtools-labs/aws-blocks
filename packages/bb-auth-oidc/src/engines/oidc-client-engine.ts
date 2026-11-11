@@ -141,6 +141,21 @@ export interface OidcClientEngineOptions {
 	 */
 	allowInsecureIssuers: boolean;
 	/**
+	 * Whether `stubIdp()` providers (`kind === 'stub'`) are usable on this
+	 * engine. `true` for the mock runtime; on the AWS runtime, `true` only in a
+	 * sandbox deployment (the only deployment that mounts the stub IdP routes).
+	 *
+	 * When `false`, stub providers are left out of the engine's provider table:
+	 * sign-in, authorize-params, callback, and exchange answer
+	 * `ProviderNotConfiguredException` for them; `refreshBearerTokens` returns
+	 * `null`; a session cookie naming a stub provider is not honoured by
+	 * `verifySession` / `refreshSession` (both return `null`); sign-out clears
+	 * the local session without an upstream revoke; a bearer token whose `iss`
+	 * names a stub issuer is never matched; and no issuer discovery is run for
+	 * them. A stub provider then behaves like an unavailable provider.
+	 */
+	trustStubProviders: boolean;
+	/**
 	 * How long to treat a `state: 'refreshing'` row as owned before
 	 * reclaiming it via CAS. Default: 30 seconds.
 	 */
@@ -161,6 +176,8 @@ const ALLOWED_ALGORITHMS = ['RS256', 'RS384', 'RS512', 'ES256', 'ES384', 'ES512'
 const JWKS_CACHE_MAX_SIZE = 20;
 
 export class OidcClientEngine implements AuthEngine {
+	/** Providers this engine serves: the configured list minus stubs when `trustStubProviders` is `false`. */
+	private readonly providers: readonly ProviderConfig[];
 	private readonly providerByName: Map<string, ProviderConfig>;
 	private readonly clientIdResolvers: Map<string, () => Promise<string>>;
 	private readonly clientSecretResolvers: Map<string, () => Promise<string>>;
@@ -171,12 +188,19 @@ export class OidcClientEngine implements AuthEngine {
 	private readonly jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 
 	constructor(private readonly options: OidcClientEngineOptions) {
-		this.providerByName = new Map(options.providers.map((p) => [p.name, p]));
+		// Every provider lookup below goes through `this.providers` /
+		// `providerByName`, so dropping untrusted stubs here is what keeps them
+		// out of sign-in, callback, exchange, refresh, revoke, and bearer-token
+		// matching alike.
+		this.providers = options.trustStubProviders
+			? options.providers
+			: options.providers.filter((p) => p.kind !== 'stub');
+		this.providerByName = new Map(this.providers.map((p) => [p.name, p]));
 		this.clientIdResolvers = new Map(
-			options.providers.map((p) => [p.name, memoizedSecretResolver(p.clientId)]),
+			this.providers.map((p) => [p.name, memoizedSecretResolver(p.clientId)]),
 		);
 		this.clientSecretResolvers = new Map(
-			options.providers.map((p) => [p.name, memoizedSecretResolver(p.clientSecret)]),
+			this.providers.map((p) => [p.name, memoizedSecretResolver(p.clientSecret)]),
 		);
 		this.sessionManager = new SessionManager({
 			sessionStore: options.sessionStore,
@@ -185,6 +209,11 @@ export class OidcClientEngine implements AuthEngine {
 			cookieAttributes: options.cookieAttributes,
 			staleLockTimeoutMs: options.staleLockTimeoutMs,
 		});
+	}
+
+	/** `false` for a configured stub provider when `trustStubProviders` is `false`. */
+	hasProvider(name: string): boolean {
+		return this.providerByName.has(name);
 	}
 
 	async buildSignInUrl(input: BuildSignInUrlInput): Promise<BuildSignInUrlOutput> {
@@ -452,7 +481,7 @@ export class OidcClientEngine implements AuthEngine {
 
 			let matchedProvider: ProviderConfig | undefined;
 			let resolvedIssuerUrl: string | undefined;
-			for (const provider of this.options.providers) {
+			for (const provider of this.providers) {
 				if (provider.kind === 'oidc-builtin' || provider.kind === 'oidc-custom') {
 					const issuerUrl = (provider as { issuerUrl: string }).issuerUrl;
 					if (unverifiedIss === issuerUrl || unverifiedIss === issuerUrl + '/') {
@@ -462,6 +491,8 @@ export class OidcClientEngine implements AuthEngine {
 					}
 				} else if (provider.kind === 'stub') {
 					// Stubs derive their issuer URL from the request context.
+					// Only reached when `trustStubProviders` is set: otherwise
+					// stubs are not in `this.providers`.
 					const issuerUrl = this.options.resolveIssuerUrl(provider, ctx);
 					if (unverifiedIss === issuerUrl || unverifiedIss === issuerUrl + '/') {
 						matchedProvider = provider;
@@ -510,14 +541,30 @@ export class OidcClientEngine implements AuthEngine {
 	}
 
 	async verifySession(ctx: BlocksContext): Promise<OIDCUser | null> {
-		return this.sessionManager.verifyStatefulSession(ctx, (refreshToken, providerName) =>
+		const user = await this.sessionManager.verifyStatefulSession(ctx, (refreshToken, providerName) =>
 			this.callTokenRefreshForProvider(refreshToken, providerName, ctx),
 		);
+		// The session manager does not consult the provider table, so a
+		// session minted by a stub provider is dropped here.
+		return user && this.isUntrustedStub(user.provider) ? null : user;
 	}
 
 	async refreshSession(ctx: BlocksContext): Promise<OIDCUser | null> {
-		return this.sessionManager.forceRefresh(ctx, (refreshToken, providerName) =>
+		const user = await this.sessionManager.forceRefresh(ctx, (refreshToken, providerName) =>
 			this.callTokenRefreshForProvider(refreshToken, providerName, ctx),
+		);
+		return user && this.isUntrustedStub(user.provider) ? null : user;
+	}
+
+	/**
+	 * Whether `name` is a configured stub provider this engine does not serve.
+	 * Checks the configured stubs rather than `providerByName`, so a session for
+	 * a provider that was renamed or removed from the config is not affected.
+	 */
+	private isUntrustedStub(name: string): boolean {
+		return (
+			!this.options.trustStubProviders &&
+			this.options.providers.some((p) => p.name === name && p.kind === 'stub')
 		);
 	}
 
@@ -586,6 +633,11 @@ export class OidcClientEngine implements AuthEngine {
 	}
 
 	private async loadConfig(provider: ProviderConfig, ctx: BlocksContext): Promise<Configuration> {
+		// Second check behind the provider table: never resolve or discover an
+		// issuer for a stub provider this engine does not serve.
+		if (provider.kind === 'stub' && !this.options.trustStubProviders) {
+			throw providerNotConfigured(provider.name);
+		}
 		const issuerUrl = this.options.resolveIssuerUrl(provider, ctx);
 		const cacheKey = `${provider.name}::${issuerUrl}`;
 		let cached = this.configCache.get(cacheKey);

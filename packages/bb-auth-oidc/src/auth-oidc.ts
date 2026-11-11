@@ -30,6 +30,12 @@ export const DEFAULT_CALLBACK_PATH = `${BLOCKS_AUTH_PREFIX}/callback`;
 export const DEFAULT_SIGNOUT_PATH = `${BLOCKS_AUTH_PREFIX}/signout`;
 export const DEFAULT_POST_SIGNIN_PATH = '/';
 
+// Non-stub provider names already warned about as not served by the engine, so
+// the warning logs once per provider per process rather than once per request.
+// Bounded by the app's distinct provider names (a small fixed set); entries are
+// never removed because the dedupe must persist for the life of the process.
+const warnedUnservedProviders = new Set<string>();
+
 /** Sign-in kickoff base for a callback path: its parent with `/signin` appended. */
 export function signInBasePathFor(callbackPath: string): string {
 	return `${callbackPath.slice(0, callbackPath.lastIndexOf('/'))}/signin`;
@@ -482,7 +488,11 @@ export class AuthOIDC<
 			 */
 			getClient: async (): Promise<OIDCClient<ProviderName<P>>> => {
 				const providerConfigs: Record<string, { authorizeUrl: string; clientId: string; scopes: string[]; kind: string }> = {};
-				for (const name of this.providers) {
+				// Only providers the engine serves: a configured provider the
+				// engine does not serve (e.g. a stub outside a sandbox) would
+				// make `getAuthorizeParams` throw and fail the whole handle.
+				const servedProviders = this.servedProviderNames();
+				for (const name of servedProviders) {
 					const params = await this.engine.getAuthorizeParams(name, ctx);
 					providerConfigs[name] = {
 						authorizeUrl: params.authorizeUrl,
@@ -493,7 +503,7 @@ export class AuthOIDC<
 				}
 				const basePath = this.callbackPath.slice(0, this.callbackPath.lastIndexOf('/'));
 				const config = {
-					providers: [...this.providers],
+					providers: servedProviders,
 					providerConfigs,
 					callbackPath: this.callbackPath,
 					exchangePath: `${basePath}/exchange`,
@@ -515,11 +525,41 @@ export class AuthOIDC<
 	}
 
 	/**
-	 * Compose the `signedOut` state. Each provider becomes an external
-	 * `AuthAction` pointing at the sign-in kickoff route.
+	 * Configured providers the engine serves, in configuration order.
+	 * Excludes providers the engine treats as unavailable (e.g. a stub
+	 * provider outside a sandbox deployment, or a non-Cognito provider next
+	 * to `cognitoFederated()`). The single place that decides which providers
+	 * the client handle and the signed-out sign-in actions list.
+	 *
+	 * Logs a warning, once per provider name per process, for a configured
+	 * non-stub provider the engine does not serve. Unserved stub providers
+	 * are not logged here: the runtime entry already warns when it does not
+	 * mount their routes.
+	 */
+	private servedProviderConfigs(): P[number][] {
+		return this.options.providers.filter((p) => {
+			if (this.engine.hasProvider(p.name)) return true;
+			if (p.kind !== 'stub' && !warnedUnservedProviders.has(p.name)) {
+				warnedUnservedProviders.add(p.name); // dedupe: warn once per provider per process
+				console.warn(
+					`AuthOIDC: provider '${p.name}' (${p.kind}) is not served by the configured auth engine and is left out of getClient() and the sign-in actions.`,
+				);
+			}
+			return false;
+		});
+	}
+
+	/** Names of {@link servedProviderConfigs}, in configuration order. */
+	private servedProviderNames(): ProviderName<P>[] {
+		return this.servedProviderConfigs().map((p) => p.name as ProviderName<P>);
+	}
+
+	/**
+	 * Compose the `signedOut` state. Each provider the engine serves becomes
+	 * an external `AuthAction` pointing at the sign-in kickoff route.
 	 */
 	protected signedOutState(_ctx: BlocksContext): AuthState {
-		const actions: AuthAction[] = this.options.providers.map((p) => ({
+		const actions: AuthAction[] = this.servedProviderConfigs().map((p) => ({
 			name: p.name,
 			label: `Sign in with ${formatProviderLabel(p.name)}`,
 			fields: [],

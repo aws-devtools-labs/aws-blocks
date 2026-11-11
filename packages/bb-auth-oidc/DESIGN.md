@@ -439,6 +439,33 @@ output and deployed code drift apart:
   AWS entry is also imported during client code generation outside compute,
   where the type is `'local'`. The mock runtime (`npm run dev`) always mounts
   them.
+- **Engine trust.** `index.aws.ts` builds `OidcClientEngine` with
+  `trustStubProviders: getDeploymentType() === 'sandbox'`, read once alongside
+  the mount decision. When it is `false` the engine drops stub providers from
+  its provider table: sign-in, authorize-params, callback, and exchange answer
+  `ProviderNotConfiguredException` for them, `refreshBearerTokens` returns
+  `null`, `verifySession` / `refreshSession` return `null` for a session cookie
+  naming a configured stub provider, sign-out skips the upstream revoke, a
+  bearer token whose `iss` names a stub issuer is never matched, and no issuer
+  discovery runs. A stub provider is then just an unavailable provider. The
+  mock runtime passes `true`. `AuthOIDC` asks the engine `hasProvider(name)` and
+  leaves providers the engine does not serve out of `getClient()` and the
+  signed-out sign-in actions, so a client never sees a sign-in option that
+  cannot complete. This also applies to a non-Cognito provider configured next
+  to `cognitoFederated()`, which the Cognito federation engine does not serve;
+  `AuthOIDC` logs a warning once per such provider.
+- **Engine loading.** The AWS entry has no static import path to the stub IdP
+  engine (`engines/stub-idp.ts`). The issuer helpers that `utils.ts` and the
+  route table need live in `engines/stub-issuer.ts`, and the stub routes live in
+  `stub-routes.ts`, which loads the engine with a dynamic `import()` on the first
+  request a mounted stub route receives. The routes themselves are registered
+  synchronously, because core locks the RawRoute registry once the backend
+  module has loaded. The engine may still be shipped in a bundle (esbuild CJS
+  bundles inline a dynamically imported module as a lazily-evaluated wrapper),
+  but is not evaluated unless a stub route is called in a sandbox deployment.
+  Outside a sandbox the routes are not mounted. `stub-loading.test.ts` checks
+  the static import graph of the compiled output (every import kind except
+  `dynamic-import` counts as static).
 
 `getDeploymentType()` reports the same value at synth and runtime, so an app
 that branches on it (`'production'` → real providers, otherwise `stubIdp()`)

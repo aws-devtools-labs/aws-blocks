@@ -16,7 +16,14 @@ import { dirname, join } from 'node:path';
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const backendPath = join(__dirname, '..', 'aws-blocks', 'index.cdk.ts');
-const outputsPath = join(__dirname, '..', '.blocks-sandbox', 'outputs.json');
+// Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
+// production run must not read the sandbox's.
+const outputsPath = join(
+  __dirname,
+  '..',
+  '.blocks-sandbox',
+  ENV === 'production' ? 'outputs.production.json' : 'outputs.json',
+);
 
 let apiUrl: string;
 
