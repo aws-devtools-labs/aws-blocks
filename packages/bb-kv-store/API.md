@@ -25,9 +25,6 @@ export type ConditionalWriteOptions<T = unknown> = {
 } & ValueCheck<T>;
 
 // @public
-export type DeleteOptions<T = unknown> = ConditionalDeleteOptions<T>;
-
-// @public
 export interface Entry<T, K> {
     // (undocumented)
     expiresAt?: number;
@@ -63,6 +60,9 @@ export interface ExternalTableRef {
 }
 
 // @public
+export type FieldIf<P, Value, Kind, Stored> = [Value] extends [Kind] ? ([Value] extends [Stored] ? P : never) : never;
+
+// @public
 export type FieldsOf<C> = C extends {
     partitionKey: infer P;
     sortKey: infer S;
@@ -83,8 +83,8 @@ export interface IndexConfig<In, Out> {
 
 // @public
 export type IndexField<In, Out> = IsRecord<Out> extends true ? {
-    [P in keyof Out & string]-?: [NonNullable<Out[P]>] extends [string | number] ? P extends keyof In ? [NonNullable<Out[P]>] extends [NonNullable<In[P]>] ? P : never : never : never;
-}[keyof Out & string] : never;
+    [P in SharedField<In, Out>]-?: FieldIf<P, NonNullable<Out[P]>, string | number, NonNullable<In[P]>>;
+}[SharedField<In, Out>] : never;
 
 // @public
 export type IsRecord<T> = T extends readonly unknown[] ? false : T extends object ? true : false;
@@ -97,8 +97,8 @@ export interface KeyConfig<In, Out> {
 
 // @public
 export type KeyField<In, Out> = IsRecord<Out> extends true ? {
-    [P in keyof Out & string]-?: [Out[P]] extends [string | number] ? P extends keyof In ? [Out[P]] extends [NonNullable<In[P]>] ? P : never : never : never;
-}[keyof Out & string] : never;
+    [P in SharedField<In, Out>]-?: FieldIf<P, Out[P], string | number, NonNullable<In[P]>>;
+}[SharedField<In, Out>] : never;
 
 // @public
 export type KeyOf<T, K> = [K] extends [undefined] ? string : {
@@ -144,8 +144,8 @@ export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = Table
 
 // @public
 export type NumberField<In, Out> = IsRecord<Out> extends true ? {
-    [P in keyof Out & string]-?: [NonNullable<Out[P]>] extends [number] ? P extends keyof In ? [NonNullable<In[P]>] extends [number] ? P : never : never : never;
-}[keyof Out & string] : never;
+    [P in SharedField<In, Out>]-?: FieldIf<P, NonNullable<Out[P]> | NonNullable<In[P]>, number, number>;
+}[SharedField<In, Out>] : never;
 
 // @public
 export type OneOf<M> = {
@@ -218,6 +218,9 @@ export interface SchemaOptions<In, Out, K, I> {
     schema: StandardSchemaV1<In, Out>;
     ttl?: NumberField<In, Out>;
 }
+
+// @public
+export type SharedField<In, Out> = keyof Out & keyof In & string;
 
 // @public
 export type SortCondition<V> = OneOf<{

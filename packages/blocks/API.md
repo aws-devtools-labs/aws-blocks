@@ -92,6 +92,7 @@ import { EmailErrors } from '@aws-blocks/bb-email-client';
 import { EmailMessage } from '@aws-blocks/bb-email-client';
 import { EmailOptions } from '@aws-blocks/bb-email-client';
 import { EmitOptions } from '@aws-blocks/bb-metrics';
+import { Entry } from '@aws-blocks/bb-kv-store';
 import { ExternalDatabaseRef } from '@aws-blocks/bb-data';
 import { ExternalKmsKeyRef } from '@aws-blocks/bb-kv-store';
 import { ExternalMetricsRef } from '@aws-blocks/bb-metrics';
@@ -108,6 +109,7 @@ import { FileContent } from '@aws-blocks/bb-file-bucket';
 import { FileInfo } from '@aws-blocks/bb-file-bucket';
 import { fromExisting } from '@aws-blocks/bb-data';
 import { GetChannelOptions } from '@aws-blocks/bb-realtime';
+import { GetOptions } from '@aws-blocks/bb-kv-store';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { github } from '@aws-blocks/bb-auth-oidc';
 import { google } from '@aws-blocks/bb-auth-oidc';
@@ -121,11 +123,7 @@ import { KnowledgeBaseAgentToolOptions } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseAgentToolResult } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
-import { Entry as KVEntry } from '@aws-blocks/bb-kv-store';
-import { GetOptions as KVGetOptions } from '@aws-blocks/bb-kv-store';
 import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
-import { QueryOptions as KVQueryOptions } from '@aws-blocks/bb-kv-store';
-import { Results as KVResults } from '@aws-blocks/bb-kv-store';
 import { ScanOptions as KVScanOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
@@ -157,6 +155,7 @@ import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
 import { PutBatchEntry } from '@aws-blocks/bb-kv-store';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
+import { QueryOptions } from '@aws-blocks/bb-kv-store';
 import { ReadValidationMode } from '@aws-blocks/bb-kv-store';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
@@ -164,6 +163,7 @@ import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
 import { RelayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { relayOrigin } from '@aws-blocks/bb-auth-oidc';
 import { ResetPasswordResult } from '@aws-blocks/bb-auth-cognito';
+import { Results } from '@aws-blocks/bb-kv-store';
 import { RetrieveOptions } from '@aws-blocks/bb-knowledge-base';
 import { RetrieveResult } from '@aws-blocks/bb-knowledge-base';
 import { ScalingSignal } from '@aws-blocks/core';
@@ -384,6 +384,8 @@ export { EmailOptions }
 
 export { EmitOptions }
 
+export { Entry }
+
 export { ExternalDatabaseRef }
 
 export { ExternalKmsKeyRef }
@@ -415,6 +417,8 @@ export { FileInfo }
 export { fromExisting }
 
 export { GetChannelOptions }
+
+export { GetOptions }
 
 // @public
 export function getSdkIdentifiers(bb: KVStore<any, any, any, any>): {
@@ -525,15 +529,7 @@ export { KnowledgeBaseErrors }
 
 export { KnowledgeBaseOptions }
 
-export { KVEntry }
-
-export { KVGetOptions }
-
 export { KVPutOptions }
-
-export { KVQueryOptions }
-
-export { KVResults }
 
 export { KVScanOptions }
 
@@ -597,6 +593,8 @@ export { PutBatchEntry }
 
 export { PutUrlOptions }
 
+export { QueryOptions }
+
 export { ReadValidationMode }
 
 export { Realtime }
@@ -610,6 +608,8 @@ export { RelayOrigin }
 export { relayOrigin }
 
 export { ResetPasswordResult }
+
+export { Results }
 
 export { RetrieveOptions }
 
