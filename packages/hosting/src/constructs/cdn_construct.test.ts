@@ -3689,6 +3689,40 @@ void describe('CdnConstruct', () => {
       });
     });
 
+    void it('SSR 5xx responses are never cached, keeping their pages; 501 gets a TTL-only entry', () => {
+      const stack = createStack();
+      const bucket = new Bucket(stack, 'Bucket');
+      const policy = createSecurityHeadersPolicy(stack, 'SH', {});
+      const { fn, fnUrl } = createSsrFunction(stack);
+
+      new CdnConstruct(stack, 'Cdn', {
+        bucket,
+        manifest: ssrManifest,
+        securityHeadersPolicy: policy,
+        computeFunctionUrls: new Map([['default', fnUrl]]),
+        computeFunctions: new Map([['default', fn]]),
+      });
+
+      const dist = Template.fromStack(stack).findResources('AWS::CloudFront::Distribution');
+      const errors = Object.values(dist)[0].Properties.DistributionConfig.CustomErrorResponses as Array<{
+        ErrorCode: number;
+        ErrorCachingMinTTL?: number;
+        ResponseCode?: number;
+        ResponsePagePath?: string;
+      }>;
+      for (const code of [500, 502, 503, 504]) {
+        const entry = errors.find((e) => e.ErrorCode === code);
+        assert.equal(entry?.ErrorCachingMinTTL, 0, String(code));
+        assert.equal(entry?.ResponseCode, code, String(code));
+        assert.equal(entry?.ResponsePagePath, `/builds/${ssrManifest.buildId}/_error.html`, String(code));
+      }
+      assert.deepEqual(
+        errors.find((e) => e.ErrorCode === 501),
+        { ErrorCode: 501, ErrorCachingMinTTL: 0 },
+      );
+      assert.equal(errors.filter((e) => e.ErrorCode === 501).length, 1);
+    });
+
     void it('error page path pattern includes buildId for atomic deploys', () => {
       const customBuildId = 'my-custom-build-42';
       const stack = createStack();

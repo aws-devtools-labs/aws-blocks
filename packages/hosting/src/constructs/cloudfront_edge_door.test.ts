@@ -232,6 +232,19 @@ describe('cloudFrontEdgeDoor — behaviors, caching, rules', () => {
     assert.equal(server.MaxTTL, 86400);
   });
 
+  it("a server's 5xx is never cached; a site without a server keeps the default error caching", () => {
+    const { config } = edgeFor('SrvErr', serverPlan([{ pattern: '/*', kind: 'server' }]), { server: true });
+    const errors = (config.CustomErrorResponses ?? []) as Array<{ ErrorCode: number; ErrorCachingMinTTL?: number; ResponsePagePath?: string }>;
+    for (const code of [500, 501, 502, 503, 504]) {
+      const entry = errors.find((e) => e.ErrorCode === code);
+      assert.equal(entry?.ErrorCachingMinTTL, 0, String(code));
+      assert.equal(entry?.ResponsePagePath, undefined, String(code));
+    }
+    assert.equal(errors.some((e) => e.ErrorCode === 404), false);
+    const { config: staticConfig } = edgeFor('StaticErr', { ...plan, release: { buildId: 'b8' } }, {});
+    assert.equal(staticConfig.CustomErrorResponses, undefined);
+  });
+
   it("the app's header rules run on the S3 behaviors and the router behaviors alike", () => {
     const { t, config, behaviors, s3Id } = edgeFor(
       'Hdr',

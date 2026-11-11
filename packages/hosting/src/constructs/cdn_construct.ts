@@ -57,7 +57,7 @@ import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
-import { customErrorResponses } from './error_responses.js';
+import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
@@ -1419,6 +1419,7 @@ export class CdnConstruct extends Construct {
             // 500: Don't cache Lambda 500s — they're likely transient.
             // Image-opt Lambda returns 500 for missing images; caching
             // that error would serve stale errors to all users.
+            // 502/503/504: not cached either (see withServerErrorsNotCached).
             {
               httpStatus: 500,
               responseHttpStatus: 500,
@@ -1429,19 +1430,19 @@ export class CdnConstruct extends Construct {
               httpStatus: 502,
               responseHttpStatus: 502,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
             {
               httpStatus: 503,
               responseHttpStatus: 503,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
             {
               httpStatus: 504,
               responseHttpStatus: 504,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
           ]
         : []),
@@ -1452,6 +1453,9 @@ export class CdnConstruct extends Construct {
     // For compute (SSR) stacks, the default 502/503/504 error pages are
     // already wired above; only 500 gets the custom page.
     errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
+    // A server's 5xx is never cached: the error caching minimum TTL is 0 for
+    // 500-504, keeping each response's page (see withServerErrorsNotCached).
+    const distributionErrorResponses = hasCompute ? withServerErrorsNotCached(errorResponses) : errorResponses;
 
 
     // ---- Distribution ----
@@ -1491,7 +1495,7 @@ export class CdnConstruct extends Construct {
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }
         : {}),
-      errorResponses: errorResponses.length > 0 ? errorResponses : undefined,
+      errorResponses: distributionErrorResponses.length > 0 ? distributionErrorResponses : undefined,
     });
 
     // ---- Standard logging v2 (opt-in) ----

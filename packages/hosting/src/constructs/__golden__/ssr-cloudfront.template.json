@@ -1371,22 +1371,26 @@
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 502,
               "ResponseCode": 502,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 503,
               "ResponseCode": 503,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 504,
               "ResponseCode": 504,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            },
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 501
             }
           ],
           "DefaultCacheBehavior": {
