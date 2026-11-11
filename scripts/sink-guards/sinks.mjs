@@ -173,6 +173,34 @@ function calleeName(call) {
 	return undefined;
 }
 
+const BB_UTILS = /^@aws-blocks\/core\/bb-utils$/;
+
+/** The module a namespace import binds `id` to (`import * as u from '…'`), if any. */
+function namespaceImportSource(id) {
+	for (const st of id.getSourceFile().statements) {
+		const b = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : undefined;
+		if (b && ts.isNamespaceImport(b) && b.name.text === id.text && ts.isStringLiteral(st.moduleSpecifier)) return st.moduleSpecifier.text;
+	}
+	return undefined;
+}
+
+/**
+ * The name an escape-helper call is trusted under. The guards trust
+ * `escapeRegExp`/`escapeRegex`/`escapeHtml`/`escapeAttr`/`esc` by name, which is
+ * only sound because `findWeakEscapeHelpers` checks every declaration of those
+ * names in the tree. So only a bare call (`esc(x)`) or a call on a namespace
+ * import of `@aws-blocks/core/bb-utils` (`u.escapeHtml(x)`) counts: a method
+ * (`util.esc(x)`) can resolve to code the integrity check never sees.
+ */
+function trustedCallName(call) {
+	const e = unwrap(call.expression);
+	if (ts.isIdentifier(e)) return e.text;
+	if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && BB_UTILS.test(namespaceImportSource(e.expression) ?? '')) {
+		return e.name.text;
+	}
+	return undefined;
+}
+
 // The hand-written regex escape: `s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')`.
 // The character class must hold every metacharacter (`-` is optional).
 const REGEX_META = ['\\\\', '^', '$', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|'];
@@ -231,7 +259,8 @@ function isConstant(node, ctx, depth = 0) {
 	if (ts.isArrayLiteralExpression(n)) return n.elements.every((e) => isConstant(e, ctx, depth + 1));
 	if (ts.isCallExpression(n)) {
 		const name = calleeName(n);
-		if (name && ctx.safeCalls.test(name)) return true;
+		const trusted = trustedCallName(n);
+		if (trusted && ctx.safeCalls.test(trusted)) return true;
 		if (ctx.inlineEscape?.(n)) return true;
 		const receiver = ts.isPropertyAccessExpression(unwrap(n.expression)) ? unwrap(n.expression).expression : undefined;
 		if (name === 'join' && receiver) {
@@ -308,13 +337,62 @@ function childProcessBindings(sf) {
 	return { named, namespaces };
 }
 
+// Programs that parse their own argument as a command line, and the flag that
+// makes them do it (`sh -c '…'`, `cmd /c …`, `powershell -Command …`).
+const SHELL_PROGRAMS = /^(?:.*[\\/])?(?:sh|bash|zsh|dash|ksh|fish|cmd|cmd\.exe|powershell|powershell\.exe|pwsh|pwsh\.exe)$/i;
+const SHELL_COMMAND_FLAG = /^(?:-c|\/c|\/k|-command|-encodedcommand|-e|-ec)$/i;
+const ARGV_FNS = new Set(['execFile', 'execFileSync', 'spawn', 'spawnSync']);
+
 /**
- * Two shapes run a string through a shell:
+ * The object literal an options argument is, resolving a `const` bound to one.
+ * Returns `undefined` for a value the scan can't see into.
+ */
+function optionsLiteral(arg, depth = 0) {
+	const a = unwrap(arg);
+	if (ts.isObjectLiteralExpression(a)) return a;
+	if (depth < 4 && ts.isIdentifier(a)) {
+		const d = resolve(a, a.text);
+		if (d?.kind === 'const') return optionsLiteral(d.init, depth + 1);
+	}
+	return undefined;
+}
+
+/** `shell` sites in an options object: a `shell` property that isn't `false`, or a spread the scan can't see into. */
+function shellOptionSites(obj, depth = 0) {
+	const out = [];
+	for (const prop of obj.properties) {
+		if (ts.isSpreadAssignment(prop)) {
+			const inner = optionsLiteral(prop.expression);
+			if (inner && depth < 4) out.push(...shellOptionSites(inner, depth + 1));
+			else out.push({ node: prop, kind: 'shell-option-spread' });
+			continue;
+		}
+		const isShell =
+			(ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) &&
+			prop.name &&
+			(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) &&
+			prop.name.text === 'shell';
+		if (!isShell) continue;
+		const value = ts.isPropertyAssignment(prop) ? unwrap(prop.initializer) : undefined;
+		if (value && value.kind === ts.SyntaxKind.FalseKeyword) continue;
+		out.push({ node: prop, kind: 'shell-option' });
+	}
+	return out;
+}
+
+/**
+ * Three shapes run a string through a shell:
  * - `exec(cmd)` / `execSync(cmd)` from `child_process`, where `cmd` isn't a
  *   constant string;
+ * - `execFile`/`execFileSync`/`spawn`/`spawnSync` from `child_process` that
+ *   start a shell program (`sh`, `bash`, `zsh`, `cmd`, `powershell`, `pwsh`, …)
+ *   with its command flag (`-c`, `/c`, `-Command`), where an argument after the
+ *   flag isn't a constant, or where argv isn't an array literal the scan can see;
  * - any call passed an options object with a `shell` property that isn't the
  *   literal `false` (`spawn(cmd, { shell: true })`, `execFileSync(f, args, { shell: isWin })`),
- *   because then the arguments are joined into one shell command line.
+ *   because then the arguments are joined into one shell command line. An
+ *   options `const` is resolved to its object literal, and a spread the scan
+ *   can't see into (`{ ...opts }`) is reported too, since it may carry `shell`.
  */
 export function findShellSinks(file, text) {
 	const sf = parseSource(file, text);
@@ -336,19 +414,33 @@ export function findShellSinks(file, text) {
 				return;
 			}
 		}
+		if (exported && ARGV_FNS.has(exported)) {
+			const program = node.arguments[0] && unwrap(node.arguments[0]);
+			const programText = program && (ts.isStringLiteral(program) || ts.isNoSubstitutionTemplateLiteral(program)) ? program.text : undefined;
+			if (programText && SHELL_PROGRAMS.test(programText)) {
+				const argv = node.arguments[1] && unwrap(node.arguments[1]);
+				let raw = !argv || !ts.isArrayLiteralExpression(argv);
+				if (!raw) {
+					const flag = argv.elements.findIndex((e) => {
+						const u = unwrap(e);
+						return (ts.isStringLiteral(u) || ts.isNoSubstitutionTemplateLiteral(u)) && SHELL_COMMAND_FLAG.test(u.text);
+					});
+					raw = flag >= 0 && argv.elements.slice(flag + 1).some((e) => ts.isSpreadElement(e) || !isConstant(e, ctx));
+				}
+				if (raw) {
+					found.push({ file, line: lineOf(sf, node), kind: 'shell-program-argv', text: snippet(sf, node) });
+					return;
+				}
+			}
+		}
 		for (const arg of node.arguments) {
 			const a = unwrap(arg);
-			if (!ts.isObjectLiteralExpression(a)) continue;
-			for (const prop of a.properties) {
-				const isShell =
-					(ts.isPropertyAssignment(prop) || ts.isShorthandPropertyAssignment(prop)) &&
-					prop.name &&
-					(ts.isIdentifier(prop.name) || ts.isStringLiteral(prop.name)) &&
-					prop.name.text === 'shell';
-				if (!isShell) continue;
-				const value = ts.isPropertyAssignment(prop) ? unwrap(prop.initializer) : undefined;
-				if (value && value.kind === ts.SyntaxKind.FalseKeyword) continue;
-				found.push({ file, line: lineOf(sf, prop), kind: 'shell-option', text: snippet(sf, prop) });
+			// Only literal options objects, plus a `const` options identifier passed to child_process.
+			const obj = ts.isObjectLiteralExpression(a) ? a : exported ? optionsLiteral(a) : undefined;
+			if (!obj) continue;
+			for (const site of shellOptionSites(obj)) {
+				if (site.kind === 'shell-option-spread' && !exported) continue;
+				found.push({ file, line: lineOf(sf, site.node), kind: site.kind, text: snippet(sf, site.node) });
 			}
 		}
 	});
@@ -398,7 +490,8 @@ function isHtmlSafe(expr, ctx, depth = 0) {
 	if (ts.isPropertyAccessExpression(n) && /^(?:length|size|byteLength)$/.test(n.name.text)) return true;
 	if (ts.isCallExpression(n)) {
 		const name = calleeName(n);
-		if (name && HTML_SAFE_CALLS.test(name)) return true;
+		const trusted = trustedCallName(n);
+		if (trusted && HTML_SAFE_CALLS.test(trusted)) return true;
 		// A same-file helper that returns markup or escaped text (its own templates are checked where they are).
 		const fn = localFunction(n);
 		if (fn && !ctx.seen.has(fn)) {
@@ -430,16 +523,58 @@ function isHtmlSafe(expr, ctx, depth = 0) {
 		if (op === ts.SyntaxKind.PlusToken || op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken || op === ts.SyntaxKind.AmpersandAmpersandToken) {
 			return isHtmlSafe(n.left, ctx, depth + 1) && isHtmlSafe(n.right, ctx, depth + 1);
 		}
-		// Arithmetic and comparisons produce numbers and booleans.
-		return op !== ts.SyntaxKind.CommaToken && op !== ts.SyntaxKind.EqualsToken;
+		// Arithmetic and comparisons produce numbers and booleans. An assignment
+		// (`=`, `+=`, `||=`, `??=`, …) yields its right-hand value, and a comma its
+		// last operand, so neither is a number.
+		const assignment = op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment;
+		return !assignment && op !== ts.SyntaxKind.CommaToken;
 	}
 	if (ts.isPrefixUnaryExpression(n)) return true;
 	return false;
 }
 
+// The literal text before an interpolation ends inside the value of an
+// attribute that HTML escaping doesn't make safe: an event handler (script), a
+// URL (`javascript:`), `srcdoc` (a whole document) or `style` (more CSS
+// declarations). `escapeHtml` keeps a value inside the quotes, not out of the
+// script, URL or CSS parsed from them.
+const RISKY_ATTRIBUTE = /[\s"'/](on[a-z]+|href|src|srcdoc|formaction|action|xlink:href|style)\s*=\s*(?:"[^"]*|'[^']*|[^\s"'>`=]*)$/i;
+const URL_ATTRIBUTE = /^(?:href|src|formaction|action|xlink:href)$/i;
+
+/** The risky attribute the interpolation after `prefix` lands in, if any. */
+function riskyAttribute(prefix) {
+	return RISKY_ATTRIBUTE.exec(prefix)?.[1];
+}
+
+/**
+ * Whether `expr` is a JavaScript string literal made safe for an event-handler
+ * attribute: an HTML escape of `JSON.stringify(…)` (`escapeHtml(JSON.stringify(id))`),
+ * or a same-file helper that only returns one (`jsArg(id)`). JSON makes it a JS
+ * literal; the escape keeps it inside the attribute quotes.
+ */
+function isJsLiteralArg(expr, seen = new Set()) {
+	const n = unwrap(expr);
+	if (!ts.isCallExpression(n)) return false;
+	const trusted = trustedCallName(n);
+	if (trusted && HTML_SAFE_CALLS.test(trusted) && trusted !== 'encodeURIComponent' && n.arguments.length === 1) {
+		const inner = unwrap(n.arguments[0]);
+		const callee = ts.isCallExpression(inner) ? unwrap(inner.expression) : undefined;
+		return !!callee && ts.isPropertyAccessExpression(callee) && callee.getText() === 'JSON.stringify';
+	}
+	const fn = localFunction(n);
+	if (!fn || seen.has(fn)) return false;
+	seen.add(fn);
+	const returns = returnedExpressions(fn);
+	return returns.length > 0 && returns.every((r) => r && isJsLiteralArg(r, seen));
+}
+
 /**
  * A template literal whose text contains an HTML tag and that interpolates a
- * value which isn't a constant or an `escapeHtml(...)`-style call.
+ * value which isn't a constant or an `escapeHtml(...)`-style call. Inside an
+ * `on*=`, URL (`href=`, `src=`, `formaction=`, `action=`), `srcdoc=` or
+ * `style=` value an escape helper isn't enough: only a constant passes (or,
+ * in a URL attribute, `encodeURIComponent(...)`, which encodes the `:` of a
+ * scheme), and anything else needs an allowlist entry.
  */
 export function findHtmlSinks(file, text) {
 	const sf = parseSource(file, text);
@@ -451,10 +586,21 @@ export function findHtmlSinks(file, text) {
 		if (ts.isTaggedTemplateExpression(node.parent)) return;
 		const parts = [node.head.text, ...node.templateSpans.map((s) => s.literal.text)];
 		if (!parts.some((t) => HTML_TAG.test(t))) return;
-		for (const span of node.templateSpans) {
-			if (isHtmlSafe(span.expression, ctx)) continue;
+		node.templateSpans.forEach((span, i) => {
+			// The text before this span, with earlier interpolations as a placeholder.
+			const attr = riskyAttribute(parts.slice(0, i + 1).join('x'));
+			if (attr) {
+				const safeCalls = URL_ATTRIBUTE.test(attr) ? /^encodeURIComponent$/ : /^$/;
+				if (isConstant(span.expression, { seen: new Set(), safeCalls })) return;
+				// An unquoted JS literal argument: `onclick="go(${jsArg(id)})"`.
+				const before = parts[i];
+				if (/^on/i.test(attr) && !/['"`]\s*$/.test(before) && isJsLiteralArg(span.expression)) return;
+				found.push({ file, line: lineOf(sf, span.expression), kind: 'html-attribute', text: `${attr}=: ${snippet(sf, span.expression)}` });
+				return;
+			}
+			if (isHtmlSafe(span.expression, ctx)) return;
 			found.push({ file, line: lineOf(sf, span.expression), kind: 'html', text: snippet(sf, span.expression) });
-		}
+		});
 	});
 	return found;
 }
@@ -648,14 +794,27 @@ export function findCodegenSinks(file, text) {
 
 const HTML_REFERENCES = [/&amp;/, /&lt;/, /&gt;/, /&quot;|&#34;|&#x22;/i, /&#39;|&#x27;|&apos;/i];
 
-/** Functions declared with `name` in a file: `function name(…)` and `const name = (…) =>`. */
+function declaredName(name) {
+	return name && (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isPrivateIdentifier(name)) ? name.text.replace(/^#/, '') : undefined;
+}
+
+/**
+ * Functions declared with `name` in a file: `function name(…)`,
+ * `const name = (…) =>`, an object or class method `name(…) {}`, and a property
+ * or class field holding a function (`{ name: (…) => … }`, `name = (…) => …`).
+ */
 function functionsNamed(sf, test) {
 	const out = [];
 	walk(sf, (node) => {
 		if (ts.isFunctionDeclaration(node) && node.name && test(node.name.text)) out.push({ name: node.name.text, fn: node });
-		if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && test(node.name.text) && node.initializer) {
+		if (ts.isMethodDeclaration(node)) {
+			const name = declaredName(node.name);
+			if (name && test(name)) out.push({ name, fn: node });
+		}
+		if ((ts.isVariableDeclaration(node) || ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) && node.initializer) {
+			const name = declaredName(node.name);
 			const init = unwrap(node.initializer);
-			if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) out.push({ name: node.name.text, fn: init });
+			if (name && test(name) && (ts.isArrowFunction(init) || ts.isFunctionExpression(init))) out.push({ name, fn: init });
 		}
 	});
 	return out;
@@ -684,7 +843,7 @@ export function findWeakEscapeHelpers(file, text) {
 		let inlineRegex = false;
 		walk(fn.body ?? fn, (node) => {
 			if (!ts.isCallExpression(node)) return;
-			const callee = calleeName(node);
+			const callee = trustedCallName(node);
 			if (callee && callee !== name && (REGEX_SAFE_CALLS.test(callee) || HTML_SAFE_CALLS.test(callee))) delegates = true;
 			if (isInlineRegexEscape(node)) inlineRegex = true;
 		});

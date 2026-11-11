@@ -43,7 +43,9 @@ const HTML_ESCAPES: Record<string, string> = {
  * Use it for every value that you interpolate into an HTML template literal
  * and that isn't markup you wrote yourself: a file path, an error message, a
  * user name, a value read from a request. Non-string values are converted with
- * `String(value)` first.
+ * `String(value)` first. The backtick isn't needed for those two contexts; it
+ * is escaped defensively, because some old browsers accepted it as an
+ * attribute-value quote.
  *
  * It does not make a value safe inside a `<script>` or `<style>` element, an
  * unquoted attribute, an event-handler attribute (`onclick`) or a URL

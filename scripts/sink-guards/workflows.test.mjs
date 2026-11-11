@@ -8,6 +8,11 @@
 // content, an input, a dynamic matrix entry) becomes code. Pass such values
 // through `env:` and quote them as shell variables ("$VERSION"). A heredoc in a
 // `run:` script uses a quoted delimiter (<<'EOF'), so its body isn't expanded.
+// That heredoc rule is hygiene, not a sink: an unquoted heredoc that only
+// expands env vars is safe (the shell doesn't re-parse an expanded value, and a
+// `${{ }}` inside one is already caught by the expression rule). It keeps every
+// body literal so a reader never has to check which case a heredoc is; passing
+// values through `env:` stays the safe pattern.
 //
 // Contexts that carry no contributor text (run ids, the commit SHA, the event
 // name, runner paths, job results, a static matrix) are allowed inline.

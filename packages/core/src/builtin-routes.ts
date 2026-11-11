@@ -10,11 +10,16 @@ import { getRegisteredRoutes, registerRoute } from './raw-route.js';
 /**
  * Open `filePath` in the OS default app. `execFile` with an argument array — no
  * shell, no string interpolation.
+ *
+ * On Windows it starts `explorer.exe` with the path rather than `cmd /c start`:
+ * `cmd.exe` re-parses its command line, so a project directory name holding
+ * `&` or `|` (and no space, which is when Node leaves the argument unquoted)
+ * would split into a second command.
  */
 function defaultOpenInEditor(filePath: string): void {
 	const onError = () => {};
 	if (process.platform === 'darwin') execFile('open', [filePath], onError);
-	else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', filePath], onError);
+	else if (process.platform === 'win32') execFile('explorer.exe', [filePath], onError);
 	else execFile('xdg-open', [filePath], onError);
 }
 
