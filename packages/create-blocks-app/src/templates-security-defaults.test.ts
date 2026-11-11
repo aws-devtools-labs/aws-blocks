@@ -536,18 +536,20 @@ function ungatedPresignedUrlCalls(file: string, allowed: Record<string, string>)
 // mints one lets anyone on the internet read or write that key. Checked across
 // every template, so a new template (or a new method) can't ship one signed out.
 describe('create-blocks-app template methods that return a presigned URL require auth', () => {
-  let checked = 0;
+  // Counted when the tests are registered, not inside them, so the guard below
+  // holds under --test-name-pattern / --test-only too.
+  const callsPerTemplate: Record<string, number> = {};
   for (const name of templateNames) {
     const dir = join(TEMPLATES_DIR, name, 'aws-blocks');
     if (!existsSync(dir)) continue;
     const files = readdirSync(dir, { recursive: true, encoding: 'utf-8' })
       .filter((f) => f.endsWith('.ts') && !f.split(/[\\/]/).includes('node_modules'))
       .map((f) => join(dir, f));
+    callsPerTemplate[name] = files.reduce((total, file) => total + presignedUrlCalls(file).length, 0);
 
     it(`template "${name}" signs URLs only inside API methods that gate first`, () => {
       const allowed = UNGATED[name] ?? {};
       for (const file of files) {
-        checked += presignedUrlCalls(file).length;
         assert.deepStrictEqual(
           ungatedPresignedUrlCalls(file, allowed),
           [],
@@ -558,9 +560,11 @@ describe('create-blocks-app template methods that return a presigned URL require
   }
 
   // Guards against the check passing because it found nothing to check.
-  it('finds the presigned-URL methods the templates ship', () => {
-    assert.ok(checked >= 4, `expected the api-only and demo presigned-URL calls, found ${checked}`);
-  });
+  for (const name of ['api-only', 'demo']) {
+    it(`finds the presigned-URL calls template "${name}" ships`, () => {
+      assert.ok((callsPerTemplate[name] ?? 0) > 0, `${name}: expected at least one presigned-URL call, found none`);
+    });
+  }
 });
 
 describe('ungatedPresignedUrlCalls', () => {
