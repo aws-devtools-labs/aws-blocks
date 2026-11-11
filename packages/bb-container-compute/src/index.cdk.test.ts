@@ -3,7 +3,7 @@
 
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 /**
@@ -397,8 +397,31 @@ describe('ContainerCompute — the default image runs as a non-root user', () =>
 	});
 
 	test('the parent entry points the job worker at the boot directory', () => {
-		const entry = containerMainEntry('/app/backend.js');
-		assert.match(entry, /process\.env\.BLOCKS_JOB_WORKER_ENTRY = \(process\.env\.BLOCKS_APP_DIR \|\| '\/app'\) \+ '\/worker\.js';/);
+		// Run the generated entry against stub modules and read the path it sets,
+		// rather than matching its source text.
+		const dir = join(tmpDir, 'entry-run');
+		const coreDir = join(dir, 'node_modules', '@aws-blocks', 'core');
+		mkdirSync(coreDir, { recursive: true });
+		writeFileSync(join(coreDir, 'package.json'), '{"name":"@aws-blocks/core","type":"module","main":"index.js"}');
+		writeFileSync(
+			join(coreDir, 'index.js'),
+			'export const loadConfigToProcessEnv = async () => {};\n' +
+				'export const runContainer = async () => { console.log(process.env.BLOCKS_JOB_WORKER_ENTRY); };\n',
+		);
+		const backend = join(dir, 'backend.mjs');
+		writeFileSync(backend, 'export default {};\n');
+		const entryFile = join(dir, 'entry.mjs');
+		writeFileSync(entryFile, containerMainEntry(backend));
+
+		const workerEntry = (appDir?: string) => {
+			const env: NodeJS.ProcessEnv = { PATH: process.env.PATH };
+			if (appDir !== undefined) env.BLOCKS_APP_DIR = appDir;
+			const result = spawnSync(process.execPath, [entryFile], { cwd: dir, encoding: 'utf8', env });
+			assert.strictEqual(result.status, 0, result.stderr);
+			return result.stdout.trim();
+		};
+		assert.strictEqual(workerEntry('/home/node/app'), '/home/node/app/worker.js');
+		assert.strictEqual(workerEntry(), '/app/worker.js', 'falls back to /app when BLOCKS_APP_DIR is unset');
 	});
 
 	test('bootstrap.mjs creates the boot directory from BLOCKS_APP_DIR before fetching anything', () => {
