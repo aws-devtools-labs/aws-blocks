@@ -128,6 +128,10 @@ describe('findUnpinned', () => {
 			'      - { "uses"\n          : actions/checkout@v7 }',
 			'      - { uses\n          : actions/checkout@v7 }',
 			'    steps: [\n      uses: actions/checkout@v7 ]',
+			'      - !!map {\n          uses\n          : actions/checkout@v7 }',
+			'      - !<tag:yaml.org,2002:map> {\n          uses\n          : actions/checkout@v7 }',
+			'      - &a {\n          uses\n          : actions/checkout@v7 }',
+			'      - !!map &a [\n          uses: actions/checkout@v7 ]',
 		];
 		for (const yml of forms) assert.equal(findUnpinned(yml)[0]?.line, 1, yml);
 		const [v] = findUnpinned('      - { uses\n          : actions/checkout@v7 }');

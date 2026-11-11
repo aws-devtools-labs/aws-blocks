@@ -40,6 +40,8 @@ const LINE_START = /^[ \t]*(?:-(?:[ \t]+|$))*/;
 // Node properties (`!tag`, verbatim `!<tag>`, `&anchor`) that may precede a key or value.
 // The verbatim form is matched first because it may contain `,`.
 const PROPS = /^(?:(?:!<[^>]*>|[!&][^\s,[\]{}]*)[ \t]+)*/;
+// One node property token, as `PROPS` reads it but without the trailing blank.
+const PROP = /^(?:!<[^>]*>|[!&][^\s,[\]{}]*)/;
 const ALIAS_KEY = /^\*[^\s,[\]{}]+[ \t]*:(?=[\s,[\]{}]|$)/;
 const DQ_KEY = /^"((?:[^"\\]|\\.)*)"[ \t]*:/;
 const SQ_KEY = /^'((?:[^']|'')*)'[ \t]*:/;
@@ -127,13 +129,16 @@ function readValue(lines, i, at, flow, keyCol) {
  * plain scalar may contain them) and whether a flow collection opened on this line is
  * still open at its end, i.e. spans lines. A quote only opens a string where YAML starts
  * a node: at line start, after `{`/`[`/`,` inside a flow collection, or after `:`/`-`/`?`
- * and a blank. Anywhere else it is read as plain text and scanned, which is the safe side.
+ * and a blank. A node property (`!tag`, `!<tag>`, `&anchor`) in one of those places is
+ * skipped and the node still starts after it, so `- !!map {` opens a collection too.
+ * Anywhere else it is read as plain text and scanned, which is the safe side.
  */
 function flowTokens(ln) {
 	const starts = [];
 	let depth = 0;
 	let prev = '';
 	let blank = true;
+	let afterProp = false;
 	for (let j = 0; j < ln.length; j++) {
 		const c = ln[j];
 		if (c === ' ' || c === '\t') {
@@ -141,7 +146,16 @@ function flowTokens(ln) {
 			continue;
 		}
 		if (c === '#' && blank) break;
-		const nodeStart = prev === '' || (depth > 0 && '{[,'.includes(prev)) || (blank && ':-?'.includes(prev));
+		const nodeStart =
+			afterProp || prev === '' || (depth > 0 && '{[,'.includes(prev)) || (blank && ':-?'.includes(prev));
+		afterProp = false;
+		if ((c === '!' || c === '&') && nodeStart) {
+			j += PROP.exec(ln.slice(j))[0].length - 1;
+			prev = ln[j];
+			blank = false;
+			afterProp = true;
+			continue;
+		}
 		if ((c === '"' || c === "'") && nodeStart) {
 			const m = (c === '"' ? /^"(?:[^"\\]|\\.)*"/ : /^'(?:[^']|'')*'/).exec(ln.slice(j));
 			if (!m) return { starts, spans: depth > 0 };
