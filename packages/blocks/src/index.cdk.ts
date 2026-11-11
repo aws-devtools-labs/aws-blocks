@@ -192,22 +192,25 @@ export type {
 	WaitUntilSyncedOptions,
 } from '@aws-blocks/bb-knowledge-base';
 export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
+// A type keeps its own name. It gets the block prefix only when another block
+// in this file exports a type with the same name (`PutOptions` and
+// `ScanOptions` are also names of `FileBucket`).
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
-	Entry as KVEntry,
+	Entry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
-	GetOptions as KVGetOptions,
+	GetOptions,
 	IndexConfig,
 	KeyConfig,
 	KeyOf,
 	KVStoreOptions,
 	PutBatchEntry,
 	PutOptions as KVPutOptions,
-	QueryOptions as KVQueryOptions,
+	QueryOptions,
 	ReadValidationMode,
-	Results as KVResults,
+	Results,
 	ScanOptions as KVScanOptions,
 	SortCondition,
 	ValueOf,
