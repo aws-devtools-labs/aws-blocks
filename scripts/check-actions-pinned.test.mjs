@@ -116,6 +116,7 @@ describe('findUnpinned', () => {
 			'      - !!binary dXNlcw==: actions/checkout@v7',
 			'      - ? uses\n        : actions/checkout@v7',
 			'      - ?\n          uses\n        : actions/checkout@v7',
+			'      - !<tag:yaml.org,2002:str> uses: actions/checkout@v7',
 		];
 		for (const yml of forms) assert.equal(findUnpinned(yml).length, 1, yml);
 	});

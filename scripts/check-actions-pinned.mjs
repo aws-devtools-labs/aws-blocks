@@ -19,7 +19,7 @@
 // scripts) and comments. It fails closed: any `uses` it cannot read off one line
 // (value on the next line, block scalar, alias, tag, anchor, multi-line string,
 // plain scalar that continues) and any key it cannot resolve (alias or tagged key,
-// explicit `?` key) is reported as a violation. Write `uses` the canonical way —
+// including a verbatim `!<…>` tag, explicit `?` key) is reported as a violation. Write `uses` the canonical way —
 // `uses: owner/repo@<sha> # vX` on one line — and it passes.
 //
 // It uses Node built-ins only, so the guard itself installs no third-party code.
@@ -35,8 +35,9 @@ const DIGEST_PINNED = /@sha256:[0-9a-f]{64}$/;
 
 // Start of a block node on a line: indentation plus any `- ` sequence indicators.
 const LINE_START = /^[ \t]*(?:-(?:[ \t]+|$))*/;
-// Node properties (`!tag`, `&anchor`) that may precede a key or value.
-const PROPS = /^(?:[!&][^\s,[\]{}]*[ \t]+)*/;
+// Node properties (`!tag`, verbatim `!<tag>`, `&anchor`) that may precede a key or value.
+// The verbatim form is matched first because it may contain `,`.
+const PROPS = /^(?:(?:!<[^>]*>|[!&][^\s,[\]{}]*)[ \t]+)*/;
 const ALIAS_KEY = /^\*[^\s,[\]{}]+[ \t]*:(?=[\s,[\]{}]|$)/;
 const DQ_KEY = /^"((?:[^"\\]|\\.)*)"[ \t]*:/;
 const SQ_KEY = /^'((?:[^']|'')*)'[ \t]*:/;
