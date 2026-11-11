@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-kv-store": major
-"@aws-blocks/blocks": major
+"@aws-blocks/bb-kv-store": minor
+"@aws-blocks/blocks": minor
 ---
 
 feat(bb-kv-store): one KVStore block (folds DistributedTable in)
