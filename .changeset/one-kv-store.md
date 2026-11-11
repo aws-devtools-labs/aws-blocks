@@ -37,4 +37,6 @@ Migration for a `DistributedTable` app: `new KVStore(scope, id, { schema, key, i
 
 Migration for a `KVStore` app: drop `ttl: true`, replace `removalPolicy`/`deletionProtection` with `protection`, and replace `ifValueEquals` on an object value with `ifFieldEquals`. The stored item format changed (`pk` + JSON `value` became `_bkv_pk` + flat attributes), so a deployed table cannot stay in place: for a sandbox, destroy the stack and deploy again; for data you must keep, give the new store a new id, deploy, copy the items, and remove the old store.
 
+Local development data: the mock data file `.bb-data/{fullId}/store.json` now has a version (`{ "version": 2, "items": [...] }`). The mock converts the `store.json` of the earlier `KVStore` and the `data.json` of `DistributedTable` the first time it loads them, so local data stays after the upgrade. A file that the mock cannot read is renamed to a `.bak` file and reported with a warning; the mock does not write over it.
+
 The umbrella `@aws-blocks/blocks` no longer exports `DistributedTable`, `DistributedTableErrors`, or the `DT*` option types. It exports the KVStore types `KeyConfig`, `IndexConfig`, `KeyOf`, `ValueOf`, `KVEntry`, `KVResults`, `KVQueryOptions`, `KVScanOptions`, `KVGetOptions`, `PutBatchEntry`, `SortCondition`, `Where` and `ReadValidationMode` alongside the existing ones.

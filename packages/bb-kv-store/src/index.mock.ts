@@ -1,14 +1,12 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
-import { blocksError, conditionalCheckFailed, isPlainObject, KVStoreErrors, KVStoreMessages } from './errors.js';
+import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
 	compareKeyValues,
 	createReader,
@@ -16,7 +14,6 @@ import {
 	deleteCondition,
 	encodeCursor,
 	type Item,
-	itemExpired,
 	type KeyModel,
 	type KeyValue,
 	keyFields,
@@ -34,6 +31,7 @@ import {
 	serializeKey,
 	valueCheckHolds,
 } from './item.js';
+import { loadMockFile, saveMockFile } from './mock-file.js';
 import { nowEpochSeconds } from './ttl.js';
 import type {
 	ConditionalDeleteOptions,
@@ -113,7 +111,7 @@ export class KVStore<
 	// biome-ignore lint/complexity/noBannedTypes: `{}` is the empty index map; `keyof {}` is `never`, so a store without indexes accepts no index name
 	I extends Record<string, IndexConfig<In, Out>> = {},
 > extends Scope {
-	private filePath: string;
+	private dataDir: string;
 	private data: Map<string, Item>;
 	private model: KeyModel;
 	private reader: Reader<Out, Entry<Out, K>>;
@@ -128,10 +126,15 @@ export class KVStore<
 		// raw-fallback warning actually surfaces — it's the only log the block
 		// emits, so this doesn't add noise. Callers can pass their own logger.
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
-		this.filePath = join(getMockDataDir(this), 'store.json');
+		this.dataDir = getMockDataDir(this);
 		this.model = resolveKeyModel(options);
 		this.reader = createReader(this.model, options?.readValidation ?? 'coerce', this.log, { store: this.fullId });
-		this.data = this.loadFromDisk();
+		const loaded = loadMockFile(this.dataDir, this.model, this.log, { store: this.fullId });
+		this.data = new Map(loaded.items.map((item) => [serializeKey(this.model, item), item]));
+		// A load that converted a file of an earlier format, or that left entries
+		// out, writes the file in the current format now, so the next load reads
+		// it as it is.
+		if (loaded.rewrite) this.flushToDisk();
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
 	}
 
@@ -427,28 +430,6 @@ export class KVStore<
 
 	// ── Disk persistence ──────────────────────────────────────────────────
 
-	private loadFromDisk(): Map<string, Item> {
-		if (!existsSync(this.filePath)) return new Map();
-		try {
-			const obj = JSON.parse(readFileSync(this.filePath, 'utf8')) as Record<string, unknown>;
-			const entries = new Map<string, Item>();
-			if (!isPlainObject(obj)) return entries;
-			const now = nowEpochSeconds();
-			for (const [key, stored] of Object.entries(obj)) {
-				// Skip anything that is not an item (a corrupt or legacy entry).
-				if (!isPlainObject(stored) || !keyFields(this.model.table).every((f) => f in stored)) continue;
-				// Drop an item whose expiry has passed, as DynamoDB does in the
-				// background. Without this the file only grows, and every write
-				// rewrites the dead rows.
-				if (itemExpired(this.model, stored, now)) continue;
-				entries.set(key, stored);
-			}
-			return entries;
-		} catch {
-			return new Map();
-		}
-	}
-
 	/** Every item in base-key order. A full sort for each `scan` is wasted work when nothing was written in between. */
 	private inBaseKeyOrder(compare: (a: Item, b: Item) => number): Item[] {
 		if (!this.sorted) this.sorted = [...this.data.values()].sort(compare);
@@ -457,9 +438,7 @@ export class KVStore<
 
 	private flushToDisk(): void {
 		this.sorted = undefined;
-		const obj: Record<string, Item> = {};
-		for (const [key, item] of this.data) obj[key] = item;
-		writeFileSync(this.filePath, JSON.stringify(obj, null, 2));
+		saveMockFile(this.dataDir, this.data.values());
 	}
 }
 

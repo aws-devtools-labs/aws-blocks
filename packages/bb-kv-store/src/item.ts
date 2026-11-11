@@ -346,8 +346,45 @@ export async function prepareItem(
 	const expiresAt = resolveTtlEpochSeconds(expiry);
 	const full = fullValue(model, keyAttrs, value, expiresAt);
 	await validateSchema(model.schema, full);
-	// A named `ttl` field holds the expiry already; `_bkv_ttl` is set by buildItem.
-	return { keyAttrs, item: buildItem(model, keyAttrs, full, model.ttlInValue ? undefined : expiresAt) };
+	return { keyAttrs, item: itemOfFullValue(model, keyAttrs, full, expiresAt) };
+}
+
+/** The stored item of a full value. A named `ttl` field of an object value holds the expiry already; any other expiry is set by {@link buildItem}. */
+function itemOfFullValue(
+	model: KeyModel,
+	keyAttrs: Record<string, KeyValue>,
+	full: unknown,
+	expiresAt: number | undefined,
+): Item {
+	return buildItem(model, keyAttrs, full, model.ttlInValue && isPlainObject(full) ? undefined : expiresAt);
+}
+
+/**
+ * Lay out an item the way a write does, without the schema: the key checks,
+ * the full value, and the layout checks of {@link buildItem}.
+ * {@link prepareItem} is these steps plus schema validation.
+ *
+ * The mock calls this when it converts a data file of an earlier format. It
+ * loads its file in the constructor, which cannot wait for a schema that
+ * validates asynchronously; a read reconciles a converted item with the schema
+ * (`readValidation`).
+ *
+ * @throws The errors of {@link prepareItem}, except those of the schema.
+ */
+export function layoutItem(model: KeyModel, key: unknown, value: unknown, expiresAt: number | undefined): Item {
+	const keyAttrs = normalizeKey(model, key);
+	return itemOfFullValue(model, keyAttrs, fullValue(model, keyAttrs, value, expiresAt), expiresAt);
+}
+
+/**
+ * Whether a parsed entry of a mock data file is an item of this store: an
+ * object that holds the table key fields and has no field name that a write
+ * refuses.
+ */
+export function isStoredItem(model: KeyModel, entry: unknown): entry is Item {
+	return (
+		isPlainObject(entry) && keyFields(model.table).every((field) => field in entry) && !hasUnstorableField(entry)
+	);
 }
 
 // ── Call options ────────────────────────────────────────────────────────────

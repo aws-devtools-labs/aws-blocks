@@ -495,4 +495,4 @@ const audit = new KVStore(scope, 'audit', {
 
 ## Local development
 
-The mock keeps data on disk in `.bb-data/{fullId}/`, so data stays across restarts of the dev server. Delete it with `rm -rf .bb-data`. The mock applies the schema, the conditions, expiry, the 400 KB limit, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.
+The mock keeps data on disk in `.bb-data/{fullId}/`, so data stays across restarts of the dev server. Delete it with `rm -rf .bb-data`. The data file is `store.json`, with a version field. The mock converts the file of an earlier release (`store.json` of `KVStore`, `data.json` of `DistributedTable`) when it first loads it. It renames a file that it cannot read to `store.json.bak` and logs a warning; it does not write over it. The mock applies the schema, the conditions, expiry, the 400 KB limit, and the cursor checks as AWS does. It runs an index query in memory, so the result is correct and the speed differs from DynamoDB. The mock has no throughput limits and no IAM.

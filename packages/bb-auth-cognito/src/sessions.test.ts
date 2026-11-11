@@ -104,10 +104,12 @@ function recordFor(username: string): SessionRecord {
 
 /** Raw mock-store contents, so tests assert the persisted attribute directly. */
 function storedItems(storeId: string): Record<string, any> {
-	return JSON.parse(readFileSync(storePath(storeId), 'utf8'));
+	// The mock data file is `{ version, items }`; each item is the exact DynamoDB item.
+	const file = JSON.parse(readFileSync(storePath(storeId), 'utf8'));
+	return Object.fromEntries(file.items.map((item: Record<string, any>) => [itemKey(item._bkv_pk), item]));
 }
 
-/** The mock keys its on-disk items by the serialized table key. */
+/** These helpers key the on-disk items by the serialized table key. */
 function itemKey(sessionId: string): string {
 	return JSON.stringify([sessionId]);
 }
@@ -125,7 +127,7 @@ function storePath(storeId: string): string {
 function rewriteTtl(storeId: string, sessionId: string, ttl: number): void {
 	const items = storedItems(storeId);
 	items[itemKey(sessionId)] = { ...items[itemKey(sessionId)], _bkv_ttl: ttl };
-	writeFileSync(storePath(storeId), JSON.stringify(items));
+	writeFileSync(storePath(storeId), JSON.stringify({ version: 2, items: Object.values(items) }));
 }
 
 function nowSeconds(): number {

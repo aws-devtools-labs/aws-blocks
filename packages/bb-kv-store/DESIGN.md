@@ -32,7 +32,7 @@ The block owns every top-level attribute name that starts with `_bkv_` ("Blocks 
 
 `put` also rejects a value that has a field named `__proto__`, at any depth, with `ValidationFailedException`. DynamoDB cannot store that field name: the DynamoDB document client drops the field without an error, so the mock would keep a field that the AWS runtime loses. Both runtimes reject it in `buildItem`, before any I/O, so the same value gives the same stored item or the same error in both.
 
-The layout is implemented once, in `src/item.ts`, and both runtimes call it: `normalizeKey`, `mergeKeyIntoValue`, `buildItem`, `readItem`, the condition planners, and the cursor codec. The mock persists the exact DynamoDB item shape to `.bb-data/{fullId}/store.json`, keyed by the serialized table key, so a mock file shows what DynamoDB would hold.
+The layout is implemented once, in `src/item.ts`, and both runtimes call it: `normalizeKey`, `mergeKeyIntoValue`, `buildItem`, `readItem`, the condition planners, and the cursor codec. The mock persists the exact DynamoDB items to `.bb-data/{fullId}/store.json`, in a file with a version (`{ "version": 2, "items": [...] }`), so a mock file shows what DynamoDB would hold.
 
 ## Key model
 
@@ -161,7 +161,10 @@ Point-in-Time Recovery resolves from the per-block option first and then the sta
 
 ## Mock Implementation
 
-- Data stored in `.bb-data/{scope.fullId}/store.json` via `getMockDataDir()` from core, as a JSON object keyed by the serialized table key whose values are the exact DynamoDB items. An entry that is not an item (a corrupt or pre-merge entry) is skipped on load.
+- Data stored in `.bb-data/{scope.fullId}/store.json` via `getMockDataDir()` from core, as `{ "version": 2, "items": [...] }`, where each entry of `items` is the exact DynamoDB item. The file format and its loader are in `src/mock-file.ts` (D-KV-19).
+- The loader converts the two earlier formats. Version 1 is the `store.json` of `KVStore` before the merge: an object of key to JSON string, or of key to `{ value, ttl }`. The other is the `data.json` of `DistributedTable`, which the loader reads when the directory has no `store.json`. A conversion uses the layout of a write and is all or nothing. The store then writes `store.json` in the current format; a `data.json` stays where it is.
+- An entry of a current-format file that is not an item of the store (a corrupt entry) is left out. The mock keeps a copy of the file as `store.json.bak` and reports it once at warn level.
+- A file in any other shape is renamed to a `.bak` file and reported once at warn level, and the store starts empty. The mock does not write over a file that it cannot read.
 - Data persists across dev server restarts. Customers can wipe with `rm -rf .bb-data`.
 - An item whose expiry has passed is dropped when the mock loads its file, in place of DynamoDB's background reaper, so the file does not grow with dead rows.
 - `scan` sorts the items by base key once and reuses that order until the next write.
@@ -300,3 +303,9 @@ Durability posture is resolved from the stack-wide `BlocksDefaults` (`BlocksPres
 **Rationale:** JSON has no `undefined`. An API method that forwards its arguments into the options of a store (`store.scan({ limit, cursor })`) can get `null` for an argument that the client left out. The RPC client of `@aws-blocks/core` leaves trailing `undefined` arguments out of a request, which covers the usual case; this rule covers an `undefined` before a later argument, and a caller that is not that client. Before, `cursor`, `limit` and `index` each had their own check and the other options had none: `expiresAt: null` was an error. One function gives one rule.
 
 The value checks are excluded because they guard a write. `get` returns `null` for a missing key, so `put(key, next, { ifValueEquals: await store.get(key) })` must be a conflict for a missing key. If `null` counted as absent there, the write would run with no condition.
+
+### D-KV-19: A mock data file with a version, and conversion of the earlier formats
+
+**Decision:** The mock writes `{ "version": 2, "items": [...] }`. On load it converts a version 1 `store.json` (the `KVStore` format before the merge, which has no version field) and, when the directory has no `store.json`, the `data.json` of `DistributedTable`. A conversion puts each entry through `layoutItem`, the layout of a write without the schema, and is all or nothing. A corrupt entry in a current-format file is left out, with a copy of the file kept as `.bak`. A file in any other shape is renamed to `.bak`. Both are reported once at warn level. "A corrupt entry" and "an earlier format" are separate cases with separate tests (`src/mock-file.test.ts`).
+
+**Rationale:** The merge changed the shape of the mock data file. With no version, the loader read a file of the earlier `KVStore` as a list of corrupt entries, loaded an empty store, and the next write replaced the file; the `data.json` of `DistributedTable` was left behind. The local data of an app went away on upgrade with no message. A version field lets the loader tell a file of an earlier format from a damaged file, and lets a later change of the format do the same. A conversion goes through the layout of a write, so a converted item is the item that a `put` of the same value gives. Schema validation is not part of it: the mock loads its file in the constructor, which cannot wait for a schema that validates asynchronously, and `readValidation` reconciles a converted item with the schema on read. A file that the mock cannot read stays on disk under a `.bak` name, because only the developer knows if the data matters.

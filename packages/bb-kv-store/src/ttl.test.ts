@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { beforeEach, describe, test } from 'node:test';
 import { isBlocksError } from '@aws-blocks/core';
 import { KVStore as AwsKVStore } from './index.aws.js';
@@ -129,20 +129,7 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 		const store = new KVStore(testScope(), 'kv');
 		await store.put('a', 'x', { expiresAt: 1_800_000_000 });
 		const stored = JSON.parse(readFileSync(`.bb-data/${store.fullId}/store.json`, 'utf8'));
-		assert.equal(Object.values<any>(stored)[0][TTL_ATTRIBUTE], 1_800_000_000);
-	});
-
-	test('a corrupt entry is dropped rather than crashing the load', async () => {
-		const scope = testScope();
-		const store = new KVStore(scope, 'kv');
-		await store.put('a', 'x');
-		const path = `.bb-data/${store.fullId}/store.json`;
-		const stored = JSON.parse(readFileSync(path, 'utf8'));
-		stored.junk = 'not an item';
-		stored.legacy = { value: '"old format"' };
-		writeFileSync(path, JSON.stringify(stored));
-		const reloaded = new KVStore(scope, 'kv');
-		assert.deepEqual(await Array.fromAsync(reloaded.scan()), [{ key: 'a', value: 'x' }]);
+		assert.equal(stored.items[0][TTL_ATTRIBUTE], 1_800_000_000);
 	});
 });
 
