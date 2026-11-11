@@ -21,6 +21,26 @@ export const SERVICE_PRINCIPAL_TRUST_WARNING_ID = '@aws-blocks/core:serviceRoleT
  */
 const UNCONDITIONED_SERVICES: ReadonlySet<string> = new Set(['lambda.amazonaws.com', 'edgelambda.amazonaws.com']);
 
+/**
+ * Construct id of the account-level API Gateway CloudWatch Logs role that
+ * `ensureApiGatewayAccount` creates at stack scope (in `@aws-blocks/core` and,
+ * under the same id, in `@aws-blocks/hosting`).
+ */
+const APIGATEWAY_CLOUDWATCH_ROLE_ID = 'BlocksApiGatewayCloudWatchRole';
+
+/**
+ * Whether `service` on `role` is the `apigateway.amazonaws.com` trust of the
+ * stack-level API Gateway CloudWatch Logs role, which stays unconditioned: API
+ * Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers
+ * logs with this role, so either condition stops log delivery. Only that
+ * principal on that role is exempt.
+ */
+function isApiGatewayCloudWatchTrust(role: cdk.CfnResource, service: string): boolean {
+	if (service !== 'apigateway.amazonaws.com') return false;
+	const l2 = role.node.scope;
+	return l2?.node.id === APIGATEWAY_CLOUDWATCH_ROLE_ID && l2.node.scope === cdk.Stack.of(role);
+}
+
 /** Condition keys that scope a service-principal trust to this account's resources (compared case-insensitively). */
 const SOURCE_KEYS: ReadonlySet<string> = new Set(['aws:sourceaccount', 'aws:sourcearn']);
 
@@ -76,6 +96,7 @@ function unconditionedTrusts(role: cdk.CfnResource): UnconditionedTrust[] {
 		if (hasSourceCondition(statement.Condition)) return;
 		for (const service of asArray(statement.Principal.Service)) {
 			if (typeof service === 'string' && UNCONDITIONED_SERVICES.has(service)) continue;
+			if (typeof service === 'string' && isApiGatewayCloudWatchTrust(role, service)) continue;
 			const name = describe(service);
 			if (!found.some((f) => f.service === name)) found.push({ service: name, statement: index });
 		}
@@ -86,7 +107,8 @@ function unconditionedTrusts(role: cdk.CfnResource): UnconditionedTrust[] {
 /**
  * The service principals in `role`'s trust policy that `Allow` an assume-role
  * action with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition,
- * other than the Lambda execution principals ({@link UNCONDITIONED_SERVICES}).
+ * other than the Lambda execution principals ({@link UNCONDITIONED_SERVICES})
+ * and the API Gateway CloudWatch Logs role's trust ({@link isApiGatewayCloudWatchTrust}).
  *
  * @internal
  */

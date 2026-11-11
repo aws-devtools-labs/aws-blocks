@@ -127,16 +127,11 @@ export const ensureApiGatewayAccount = (stack: Stack): CfnAccount => {
   const registry = stack as unknown as Record<symbol, CfnAccount | undefined>;
   const existing = registry[ACCOUNT_KEY];
   if (existing) return existing;
-  // Same trust as `@aws-blocks/core`'s role under this id: API Gateway resource
-  // ARNs carry no account segment, so aws:SourceAccount pins the account and
-  // aws:SourceArn the partition and region.
+  // Same trust as `@aws-blocks/core`'s role under this id. No
+  // aws:SourceAccount/aws:SourceArn condition: API Gateway does not send either
+  // key when it delivers logs with this role, so a condition stops log delivery.
   const role = new iam.Role(stack, 'BlocksApiGatewayCloudWatchRole', {
-    assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com', {
-      conditions: {
-        StringEquals: { 'aws:SourceAccount': stack.account },
-        ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:apigateway:${stack.region}::*` },
-      },
-    }),
+    assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
     managedPolicies: [
       iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs'),
     ],

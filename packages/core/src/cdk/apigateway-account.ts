@@ -5,7 +5,6 @@ import type * as cdk from 'aws-cdk-lib';
 import { CfnAccount } from 'aws-cdk-lib/aws-apigateway';
 import { ManagedPolicy, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { markBlocksOwned } from './blocks-roles.js';
-import { sourceScopedConditions } from './service-principal-trust.js';
 
 /**
  * Global registry key for the per-stack API Gateway CloudWatch Logs account
@@ -50,13 +49,11 @@ export function ensureApiGatewayAccount(stack: cdk.Stack): CfnAccount {
 	const existing = (stack as unknown as Record<symbol, CfnAccount | undefined>)[ACCOUNT_KEY];
 	if (existing) return existing;
 
-	// API Gateway assumes this role for every API in the account and region. Its
-	// resource ARNs carry no account segment (`arn:<partition>:apigateway:<region>::/…`),
-	// so aws:SourceAccount pins the account and aws:SourceArn the partition and region.
+	// No aws:SourceAccount/aws:SourceArn condition: API Gateway does not send
+	// either key when it delivers logs with this role, so a condition stops log
+	// delivery. The service-principal trust check exempts this principal on this role.
 	const role = new Role(stack, 'BlocksApiGatewayCloudWatchRole', {
-		assumedBy: new ServicePrincipal('apigateway.amazonaws.com', {
-			conditions: sourceScopedConditions(stack, 'apigateway', '*', { accountInArn: false }),
-		}),
+		assumedBy: new ServicePrincipal('apigateway.amazonaws.com'),
 		managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs')],
 	});
 	// Created at stack scope on a block's behalf (Realtime, the shared gateway).

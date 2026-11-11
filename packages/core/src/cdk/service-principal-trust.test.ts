@@ -10,7 +10,9 @@ import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
 import * as lambda from 'aws-cdk-lib/aws-lambda-nodejs';
+import { Construct } from 'constructs';
 import type { ScopeParent } from '../common/index.js';
+import { ensureApiGatewayAccount } from './apigateway-account.js';
 import { BlocksPresets } from './blocks-defaults.js';
 import { coverBlocksRoot } from './blocks-roles.js';
 import { ComputeBase } from './compute/compute.js';
@@ -179,6 +181,38 @@ describe('service-principal trust check', () => {
 			),
 		});
 		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('passes for the API Gateway CloudWatch Logs role ensureApiGatewayAccount creates', () => {
+		const { app, stack } = checkedStack();
+		ensureApiGatewayAccount(stack);
+		assert.doesNotThrow(() => app.synth());
+	});
+
+	test('exempts only apigateway.amazonaws.com, and only on the stack-level CloudWatch Logs role', () => {
+		const { app, stack } = checkedStack();
+		// Another principal on the CloudWatch Logs role id is still reported.
+		const cloudWatchRole = new iam.Role(stack, 'BlocksApiGatewayCloudWatchRole', {
+			assumedBy: new iam.CompositePrincipal(
+				new iam.ServicePrincipal('apigateway.amazonaws.com'),
+				new iam.ServicePrincipal('glue.amazonaws.com'),
+			),
+		});
+		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(cloudWatchRole)), ['glue.amazonaws.com']);
+		// API Gateway on any other role, or on the same id below stack scope, is reported.
+		const other = new iam.Role(stack, 'OtherApiGatewayRole', {
+			assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+		});
+		const nested = new iam.Role(new Construct(stack, 'Nested'), 'BlocksApiGatewayCloudWatchRole', {
+			assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+		});
+		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(other)), ['apigateway.amazonaws.com']);
+		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(nested)), ['apigateway.amazonaws.com']);
+		assertSynthErrors(app, [
+			trustError('TrustCheckStack/BlocksApiGatewayCloudWatchRole/Resource', 'glue.amazonaws.com'),
+			trustError('TrustCheckStack/OtherApiGatewayRole/Resource', 'apigateway.amazonaws.com'),
+			trustError('TrustCheckStack/Nested/BlocksApiGatewayCloudWatchRole/Resource', 'apigateway.amazonaws.com'),
+		]);
 	});
 
 	test('fails synth for an unconditioned non-Lambda service role, naming the role path and principal', () => {

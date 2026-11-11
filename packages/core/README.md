@@ -808,10 +808,10 @@ jq -e '[.roles[] | select(.permissionsBoundary == null or ([.tags[] | select(.Ke
 
 Every IAM role AWS Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
 
-- **Roles AWS Blocks creates** — under a Building Block or a compute, the backend's own roles, and the stack-level roles created on a block's behalf (custom-resource providers, the API Gateway CloudWatch role, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal. On an embedded `BlocksBackend` this is its whole subtree.
+- **Roles AWS Blocks creates** — under a Building Block or a compute, the backend's own roles, and the stack-level roles created on a block's behalf (custom-resource providers, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal. On an embedded `BlocksBackend` this is its whole subtree.
 - **Roles your app adds to a `BlocksStack`** — your own constructs at stack scope, in the backend module or after `BlocksStack.create()`, and the roles CDK creates inside them (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a **synth warning** instead, and the deploy goes ahead.
 
-Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are.
+Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are. So is the `apigateway.amazonaws.com` trust of the account-level API Gateway CloudWatch Logs role (`BlocksApiGatewayCloudWatchRole`, created at stack scope when access logging is on): API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
 
 **Resolving the warning.** Add both conditions to the trust statement. For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`):
 

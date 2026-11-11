@@ -31,34 +31,20 @@ function accountResources(ensure: EnsureApiGatewayAccount, env?: cdk.Environment
 }
 
 describe('ensureApiGatewayAccount', () => {
-	test('the CloudWatch role trusts API Gateway with aws:SourceAccount and aws:SourceArn', () => {
+	// API Gateway does not send aws:SourceAccount/aws:SourceArn when it
+	// delivers logs with this role, so the trust carries no condition.
+	test('the CloudWatch role trusts API Gateway without a condition', () => {
 		const stack = new cdk.Stack(new cdk.App(), 'ApiGatewayAccountStack');
 		ensureApiGatewayAccount(stack);
 		Template.fromStack(stack).hasResourceProperties('AWS::IAM::Role', {
 			AssumeRolePolicyDocument: {
 				Statement: [
-					Match.objectLike({
+					{
 						Effect: 'Allow',
 						Action: 'sts:AssumeRole',
 						Principal: { Service: 'apigateway.amazonaws.com' },
-						Condition: {
-							StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
-							ArnLike: {
-								'aws:SourceArn': {
-									'Fn::Join': [
-										'',
-										[
-											'arn:',
-											{ Ref: 'AWS::Partition' },
-											':apigateway:',
-											{ Ref: 'AWS::Region' },
-											'::*',
-										],
-									],
-								},
-							},
-						},
-					}),
+						Condition: Match.absent(),
+					},
 				],
 			},
 		});

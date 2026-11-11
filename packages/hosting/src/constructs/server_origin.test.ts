@@ -248,24 +248,17 @@ void describe('server origin lock-down', () => {
       template.resourceCountIs('AWS::ApiGateway::Account', 1);
     });
 
-    void it('the account-level CloudWatch role trusts API Gateway with aws:SourceAccount and aws:SourceArn', () => {
+    void it('the account-level CloudWatch role trusts API Gateway without a condition', () => {
       const { template } = synth({ props: { serverOrigin: { accessLogging: true } } });
       template.hasResourceProperties('AWS::IAM::Role', {
         AssumeRolePolicyDocument: {
           Statement: [
-            Match.objectLike({
+            {
               Effect: 'Allow',
               Action: 'sts:AssumeRole',
               Principal: { Service: 'apigateway.amazonaws.com' },
-              Condition: {
-                StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
-                ArnLike: {
-                  'aws:SourceArn': {
-                    'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':apigateway:', { Ref: 'AWS::Region' }, '::*']],
-                  },
-                },
-              },
-            }),
+              Condition: Match.absent(),
+            },
           ],
         },
       });
