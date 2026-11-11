@@ -30,6 +30,29 @@ export function _setEditorOpenerForTest(opener: (filePath: string) => void): voi
 	openInEditor = opener;
 }
 
+/**
+ * The per-request local-dev signal for the settings route: the request comes from
+ * the developer, not from another site. A page on another site can make the
+ * browser send a GET to the dev server (`<img src="http://localhost:3000/aws-blocks/settings">`),
+ * so opening the editor needs, on the request itself:
+ *
+ * - `Sec-Fetch-Site` absent (a non-browser client), `none` (a typed-in URL or a
+ *   bookmark) or `same-origin` (a link in the app). `cross-site` and `same-site`
+ *   are refused;
+ * - `Origin` absent, or the request's own origin.
+ */
+function isSameOriginRequest(ctx: BlocksContext): boolean {
+	const site = ctx.request.headers.get('sec-fetch-site');
+	if (site !== null && site !== 'none' && site !== 'same-origin') return false;
+	const origin = ctx.request.headers.get('origin');
+	if (origin === null) return true;
+	try {
+		return new URL(origin).origin === new URL(ctx.request.url).origin;
+	} catch {
+		return false; // `null` or another value that isn't a URL
+	}
+}
+
 export interface BuiltinRoutesOptions {
 	/**
 	 * `true` only when called by the LOCAL dev server. Enables the convenience of
@@ -37,6 +60,10 @@ export interface BuiltinRoutesOptions {
 	 * `GET /aws-blocks/settings`. Every other caller — the deployed Lambda, CDK
 	 * synth — leaves it unset, so an anonymous GET can never spawn a process
 	 * there.
+	 *
+	 * Registration alone doesn't open the editor: each request must also come
+	 * from the developer (no cross-site `Sec-Fetch-Site`, no foreign `Origin`), or
+	 * it gets a `403` and nothing is opened.
 	 */
 	localDev?: boolean;
 }
@@ -78,6 +105,12 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 						ctx.response.status = 200;
 						ctx.response.headers.set('Content-Type', 'text/html');
 						ctx.response.send('<!DOCTYPE html><html><head><title>Settings</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}</style></head><body><h1>Settings</h1><p>No settings console is configured for this deployment.</p></body></html>');
+						return;
+					}
+					if (!isSameOriginRequest(ctx)) {
+						ctx.response.status = 403;
+						ctx.response.headers.set('Content-Type', 'text/plain; charset=utf-8');
+						ctx.response.send('Forbidden: open /aws-blocks/settings from the app or the address bar.\n');
 						return;
 					}
 					const settingsPath = join(process.cwd(), '.bb-data', 'settings.json');

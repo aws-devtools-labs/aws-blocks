@@ -18,12 +18,15 @@ import { clearRouteRegistry, matchRoute } from './raw-route.js';
 
 type Sent = { status: number; body: string };
 
-async function getSettings(): Promise<Sent> {
+async function getSettings(
+  headers: Record<string, string> = {},
+  url = 'http://localhost:3000/aws-blocks/settings',
+): Promise<Sent> {
   const match = matchRoute('GET', '/aws-blocks/settings');
   assert.ok(match, 'settings route registered');
   const sent: Sent = { status: 0, body: '' };
   const ctx = {
-    request: { headers: new Headers(), url: 'http://x/aws-blocks/settings', params: {} },
+    request: { headers: new Headers(headers), url: new URL(url), params: {} },
     response: {
       headers: new Headers(),
       set status(code: number) { sent.status = code; },
@@ -79,4 +82,44 @@ describe('built-in /aws-blocks/settings route', () => {
       assert.ok(res.body.includes('app&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'), res.body);
     },
   );
+
+  // A page on another site can make the browser send a GET to the dev server
+  // (`<img src="http://localhost:3000/aws-blocks/settings">`). Opening the editor
+  // needs the local-dev signal on the request itself, not only at registration.
+  it('local dev server: refuses a cross-site request without opening the editor', async () => {
+    registerBuiltinRoutes({ localDev: true });
+    for (const site of ['cross-site', 'same-site']) {
+      const res = await getSettings({ 'Sec-Fetch-Site': site });
+      assert.strictEqual(res.status, 403, `Sec-Fetch-Site: ${site}`);
+      assert.ok(!res.body.includes(process.cwd()), 'a refused request must not disclose the working directory');
+    }
+    assert.deepStrictEqual(opened, [], 'a cross-site request must never open the editor');
+  });
+
+  it('local dev server: refuses a request whose Origin is another origin', async () => {
+    registerBuiltinRoutes({ localDev: true });
+    for (const origin of ['https://evil.example', 'null', 'http://localhost:5173']) {
+      const res = await getSettings({ Origin: origin });
+      assert.strictEqual(res.status, 403, `Origin: ${origin}`);
+    }
+    assert.deepStrictEqual(opened, []);
+  });
+
+  it('local dev server: opens the editor for a typed-in URL or a same-origin link', async () => {
+    registerBuiltinRoutes({ localDev: true });
+    for (const site of ['none', 'same-origin']) {
+      const res = await getSettings({ 'Sec-Fetch-Site': site });
+      assert.strictEqual(res.status, 200, `Sec-Fetch-Site: ${site}`);
+    }
+    const sameOrigin = await getSettings({ Origin: 'http://localhost:3000' });
+    assert.strictEqual(sameOrigin.status, 200, 'a same-origin Origin is the dev server itself');
+    assert.strictEqual(opened.length, 3);
+  });
+
+  it('deployed (default): a cross-site request still gets the plain page, never the editor', async () => {
+    registerBuiltinRoutes();
+    const res = await getSettings({ 'Sec-Fetch-Site': 'cross-site' });
+    assert.strictEqual(res.status, 200);
+    assert.deepStrictEqual(opened, []);
+  });
 });
