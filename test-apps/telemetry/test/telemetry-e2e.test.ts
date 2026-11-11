@@ -37,6 +37,8 @@ import { join, dirname } from 'node:path';
 import { tmpdir, homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as sleep } from 'node:timers/promises';
+// Core's bound on its destroy retries, from the built package (as BLOCKS_TELEMETRY_CLI below).
+import { maxDestroyRetryMs } from '../../../packages/core/dist/scripts/destroy-retry-budget.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = join(__dirname, '..');
@@ -376,39 +378,55 @@ async function spaceRestApiCall(kind: 'create' | 'delete'): Promise<void> {
 }
 
 /**
+ * The longest one failed `cdk destroy` attempt on this app's stack takes. An
+ * attempt that API Gateway throttles (DeleteRestApi 429, which other runs in
+ * the account can cause) ends after about 5 min: the failed attempts in this
+ * job's CI logs took 2.5–5 min.
+ */
+const DESTROY_ATTEMPT_MS = 6 * 60_000;
+
+/**
+ * What a destroy spends besides its attempts: the synth and credential
+ * pre-flight before the first one (up to about 1 min in CI) and the checks
+ * after each failed one (a few seconds each).
+ */
+const DESTROY_OVERHEAD_MS = 2 * 60_000;
+
+/**
  * How long a `destroy` or `sandbox:destroy` whose telemetry a case asserts may
  * run before the test stops it. A destroy stopped while it is still retrying
  * never writes its event, and the case fails with "telemetry file not written.
  * exit=null".
  *
  * Both commands retry in core's `runDestroyWithRetries`
- * (packages/core/src/scripts/sandbox.ts). An attempt that fails on an API
- * Gateway throttle (DeleteRestApi 429, which other runs in the account can
- * cause) is retried after a jittered wait of at most 1 min, then 2, then 4,
- * and a throttled attempt on this app's stack takes about 5 min. So 20 min
- * covers the first attempt and two throttle retries (5 + 1 + 5 + 2 + 5 min,
- * plus the retries' own calls); the throttled destroys this app has finished
- * in CI mostly took well under that. It does not cover every retry core may
- * make: core schedules no further throttle retry whose wait would end more
- * than 20 min after the first failure, but the last retry can finish after
- * that, and core sets no hard limit on the command's total time. The job's
- * AWS session lasts 1 h, so the suite has to end well within that (see
- * SUITE_TIMEOUT_MS).
+ * (packages/core/src/scripts/sandbox.ts), so this is core's own bound on that
+ * loop ({@link maxDestroyRetryMs}) for attempts of up to DESTROY_ATTEMPT_MS,
+ * plus DESTROY_OVERHEAD_MS: the case then sees the command's own SUCCESS or
+ * FAIL. Core measures its 20 min throttle budget from the first failure and
+ * still runs the attempt after the last wait, so a destroy that keeps being
+ * throttled can legitimately take the first attempt, those 20 min, a 2 min
+ * wait and one more attempt (34 min with 6 min attempts, 36 min here). A
+ * budget equal to core's 20 min stopped such destroys while core was still
+ * waiting to retry. The job's AWS session lasts 1 h, so the suite has to end
+ * well within that (see SUITE_TIMEOUT_MS).
  *
  * The cleanup destroys that only remove a case's stack keep a shorter limit.
  * The job's "Cleanup stacks" step retries any stack they leave, best-effort,
  * in whatever job time is left.
  */
-const DESTROY_TIMEOUT_MS = 20 * 60_000;
+const DESTROY_TIMEOUT_MS = maxDestroyRetryMs(DESTROY_ATTEMPT_MS) + DESTROY_OVERHEAD_MS;
 
 /**
  * The suite's timeout: the test runner cancels the cases still running once
- * it passes. The sandbox group, the longer AWS group, has taken 10–21 min in
- * CI when it passed; this leaves room for one destroy in it to use its whole
- * DESTROY_TIMEOUT_MS, and stays below the 1 h AWS session of the
- * `e2e-telemetry` job in .github/workflows/pr-checks.yml (60 min
- * `timeout-minutes`). Cancelling a case does not stop the command it spawned
- * ({@link runCommand} stops it only at its own `timeoutMs`).
+ * it passes. In passing CI runs the sandbox group, the longer AWS group,
+ * spent at most 18 min (6 min median) on its cases other than the
+ * `sandbox:destroy` SUCCESS case, which deploys (at most 5 min) before its
+ * destroy. So a destroy there that uses its whole DESTROY_TIMEOUT_MS still
+ * ends within this in a typical run, though not in the slowest ones, and the
+ * suite stays below the 1 h AWS session of the `e2e-telemetry` job in
+ * .github/workflows/pr-checks.yml (60 min `timeout-minutes`, about 3 min of
+ * it before this suite starts). Cancelling a case does not stop the command
+ * it spawned ({@link runCommand} stops it only at its own `timeoutMs`).
  */
 const SUITE_TIMEOUT_MS = 50 * 60_000;
 
