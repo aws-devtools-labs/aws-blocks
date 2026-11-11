@@ -134,4 +134,18 @@ describe('replay', () => {
 		assert.equal(r.hostingDelta, 0); // c still ends last
 		assert.equal(r.gateDelta, 0);
 	});
+
+	it('queues each account offset on its own quota', () => {
+		// b (110) is in another account, so it doesn't wait behind a (100). c (120)
+		// queues behind a and c's earlier delete (105, at 130), so it goes at 160.
+		const r = replay({ ...run, legs: { ...run.legs, c: leg(100, [20], [T0 + 105]) } }, {}, { b: 1 });
+		assert.deepEqual(
+			r.waits.map((w) => [w.leg, w.wait]),
+			[
+				['a', 0],
+				['b', 0],
+				['c', 40],
+			],
+		);
+	});
 });
