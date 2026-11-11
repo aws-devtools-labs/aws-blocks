@@ -4,7 +4,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -91,6 +91,30 @@ function readStatus(projectRoot: string, env: Record<string, string>): { enabled
   });
   assert.strictEqual(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
+}
+
+// Runs `telemetry({ argv: [..., '--disable'] })` with `getTelemetryStatus` mocked to report
+// telemetry as still enabled, so the read-back check fails independently of the writer.
+const STALE_READ_BACK_CHILD = `
+import { mock } from 'node:test';
+const [consentUrl, telemetryUrl] = process.argv.slice(1);
+const real = await import(consentUrl + '?real');
+mock.module(consentUrl, {
+  namedExports: { ...real, getTelemetryStatus: (root) => ({ ...real.getTelemetryStatus(root), enabled: true }) },
+});
+const { telemetry } = await import(telemetryUrl);
+await telemetry({ argv: ['node', 'blocks-telemetry', '--disable'] });
+`;
+
+function runDisableWithStaleReadBack(options: { cwd: string; env: Record<string, string> }): { stdout: string; stderr: string; exitCode: number } {
+  const consentUrl = new URL('../telemetry/consent.js', import.meta.url).href;
+  const telemetryUrl = new URL('./telemetry.js', import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    ['--experimental-test-module-mocks', '--no-warnings', '--input-type=module', '-e', STALE_READ_BACK_CHILD, consentUrl, telemetryUrl],
+    { cwd: options.cwd, encoding: 'utf-8', timeout: 30_000, env: { ...process.env, ...options.env } },
+  );
+  return { stdout: result.stdout || '', stderr: result.stderr || '', exitCode: result.status ?? 1 };
 }
 
 /** An app layout (`package.json` + `aws-blocks/`) with a nested `src/sub`; returns the real paths. */
@@ -287,19 +311,18 @@ describe('telemetry CLI', () => {
   });
 
   describe('--disable verifies the effect before reporting success', () => {
-    // A config.json that swallows writes: the write succeeds but reads back empty, so the
-    // opt-out never reaches the send gate. POSIX-only (needs /dev/null and symlinks).
-    it('prints no success line when the opt-out does not read back', { skip: process.platform === 'win32' }, () => {
+    // The read-back is stubbed to report "still enabled" so the failure branch is reached
+    // however `writeConfigTelemetry` writes the file. Runs `telemetry()` in a child so HOME
+    // is redirected and `process.exit` ends the child, not the test runner.
+    it('prints no success line when the opt-out does not read back', () => {
       const { root } = createAppProject(tmpProject);
-      mkdirSync(join(root, '.blocks'));
-      symlinkSync('/dev/null', join(root, '.blocks', 'config.json'));
       const env = { HOME: tmpHome, USERPROFILE: tmpHome, ...NO_CI_ENV };
 
-      const result = runCli(['--disable'], { cwd: root, env });
+      const result = runDisableWithStaleReadBack({ cwd: root, env });
       assert.notStrictEqual(result.exitCode, 0, result.stdout + result.stderr);
       assert.ok(!result.stdout.includes('✅'), `must not claim success, got:\n${result.stdout}`);
       assert.ok(result.stderr.includes('still enabled'), result.stderr);
-      assert.strictEqual(runGate({ cwd: root, env }), true);
+      assert.ok(result.stderr.includes(join(root, '.blocks', 'config.json')), result.stderr);
     });
 
     it('prints the success line once the opt-out reads back disabled', () => {
