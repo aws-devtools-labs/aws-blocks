@@ -166,5 +166,6 @@ describe('repo .github tree', () => {
 		assert.match(wf, /^ {4}name: Require SHA-pinned actions$/m);
 		assert.doesNotMatch(wf, /continue-on-error/);
 		assert.match(wf, /run: node scripts\/check-actions-pinned\.mjs$/m);
+		assert.match(wf, /run: node --test scripts\/check-actions-pinned\.test\.mjs$/m);
 	});
 });
