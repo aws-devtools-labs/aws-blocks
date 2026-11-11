@@ -374,6 +374,7 @@ export class ContainerCompute extends ComputeBase {
 			stopTimeout: cdk.Duration.seconds(STOP_TIMEOUT_SECONDS),
 		});
 		this.container.addEnvironment('BLOCKS_DRAIN_GRACE_SECONDS', String(DRAIN_GRACE_SECONDS));
+		this.scopeExecutionRoleTrust(this.taskDefinition);
 
 		// Leave DesiredCount out of the template when autoscaling owns the task
 		// count. CloudFormation sends a declared DesiredCount on every update of the
@@ -857,6 +858,24 @@ export class ContainerCompute extends ComputeBase {
 			}),
 		);
 		roleAny[KEY] = true;
+	}
+
+	/**
+	 * Scope the trust of the task execution role CDK creates for `taskDefinition`
+	 * (image pull and log delivery; it exists once a container with a log driver
+	 * is added) the same way as the task-role trust in {@link appendEcsTrustOnce}:
+	 * `aws:SourceAccount` + an `arn:<partition>:ecs:<region>:<account>:*`
+	 * `aws:SourceArn`. CDK renders that role with a single `ecs-tasks` trust
+	 * statement and no prop to shape it, so its condition is set by override.
+	 */
+	private scopeExecutionRoleTrust(taskDefinition: ecs.FargateTaskDefinition): void {
+		const cfnRole = taskDefinition.executionRole?.node.defaultChild;
+		if (!cfnRole || !cdk.CfnResource.isCfnResource(cfnRole)) return;
+		const stack = cdk.Stack.of(taskDefinition);
+		cfnRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition', {
+			StringEquals: { 'aws:SourceAccount': stack.account },
+			ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:ecs:${stack.region}:${stack.account}:*` },
+		});
 	}
 
 	/**

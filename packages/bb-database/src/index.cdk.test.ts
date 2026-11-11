@@ -95,6 +95,31 @@ describe('Database (CDK)', () => {
 		assert.doesNotMatch(policies, /arn:aws:dsql/);
 	});
 
+	test('the migration provider waiter role trusts Step Functions with aws:SourceAccount and aws:SourceArn', () => {
+		const { stack, parent } = setup();
+		new Database(parent, 'db');
+		Template.fromStack(stack).hasResourceProperties('AWS::IAM::Role', {
+			AssumeRolePolicyDocument: {
+				Statement: [
+					Match.objectLike({
+						Principal: { Service: 'states.amazonaws.com' },
+						Condition: {
+							StringEquals: { 'aws:SourceAccount': '123456789012' },
+							ArnLike: {
+								'aws:SourceArn': {
+									'Fn::Join': [
+										'',
+										['arn:', { Ref: 'AWS::Partition' }, ':states:us-east-1:123456789012:stateMachine:*'],
+									],
+								},
+							},
+						},
+					}),
+				],
+			},
+		});
+	});
+
 	test('blocks on a shared DSQL cluster share one cluster resource and one pair of migration Lambdas', () => {
 		const { stack, parent } = setup();
 		const shared = new DatabaseCluster(parent, 'shared', { type: 'dsql', removalPolicy: 'retain' });

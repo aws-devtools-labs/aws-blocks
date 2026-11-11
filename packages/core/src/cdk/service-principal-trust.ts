@@ -96,3 +96,23 @@ export function addServicePrincipalTrustCheck(root: Construct): void {
 		});
 	});
 }
+
+/**
+ * Scope the trust of the waiter state machine role that a
+ * `custom_resources.Provider` with an `isCompleteHandler` creates: CDK builds
+ * that role trusting `states.amazonaws.com` with no condition and offers no prop
+ * to shape it, so its single trust statement gets `aws:SourceAccount` (the stack
+ * account) and `aws:SourceArn` (`arn:<partition>:states:<region>:<account>:stateMachine:*`)
+ * by property override. No-op for a provider without a waiter.
+ *
+ * @internal
+ */
+export function scopeProviderWaiterTrust(provider: Construct): void {
+	const role = provider.node.tryFindChild('waiter-state-machine')?.node.tryFindChild('Role')?.node.defaultChild;
+	if (!role || !cdk.CfnResource.isCfnResource(role)) return;
+	const stack = cdk.Stack.of(provider);
+	role.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition', {
+		StringEquals: { 'aws:SourceAccount': stack.account },
+		ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:states:${stack.region}:${stack.account}:stateMachine:*` },
+	});
+}

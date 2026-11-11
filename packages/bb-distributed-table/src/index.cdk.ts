@@ -12,7 +12,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { BuildingBlockScope, synthGuard, DEFAULT_NODE_RUNTIME, isSandboxContext } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaCode } from '@aws-blocks/core/cdk/internal';
-import { resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
+import { resolveDynamoDbProtection, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ExternalTableRef, ExternalKmsKeyRef } from './types.js';
 import { BB_NAME } from './version.js';
@@ -328,6 +328,7 @@ function getOrCreateGsiProvider(stack: cdk.Stack, logRetention: RetentionDays): 
 		queryInterval: Duration.seconds(10),
 		totalTimeout: Duration.hours(2),
 	});
+	scopeProviderWaiterTrust(provider);
 
 	const shared: SharedGsiProvider = {
 		serviceToken: provider.serviceToken,
