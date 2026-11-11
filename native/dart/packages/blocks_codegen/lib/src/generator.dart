@@ -311,14 +311,26 @@ class DartCodeGenerator {
     if (emitted.contains(enumType.name)) return '';
     emitted.add(enumType.name);
     final buf = StringBuffer();
+    // Sanitize each value once; the distinctness check and the `_jsonMap`
+    // decision both read this result instead of re-deriving it.
+    final sanitized = enumType.values.map(_sanitizeEnumValue).toList();
+    final identifierOf = {
+      for (var i = 0; i < enumType.values.length; i++)
+        enumType.values[i]: sanitized[i],
+    };
     _requireDistinct(
       'enum value',
       'enum ${enumType.name}',
       enumType.values.toSet(),
-      _sanitizeEnumValue,
+      (v) => identifierOf[v]!,
     );
-    final sanitized = enumType.values.map(_sanitizeEnumValue).toList();
-    final needsMap = enumType.values.any((v) => v != _sanitizeEnumValue(v));
+    var needsMap = false;
+    for (var i = 0; i < enumType.values.length; i++) {
+      if (enumType.values[i] != sanitized[i]) {
+        needsMap = true;
+        break;
+      }
+    }
     buf.writeln('enum ${enumType.name} {');
     buf.writeln(sanitized.map((v) => '  $v').join(',\n'));
     buf.writeln(';');
