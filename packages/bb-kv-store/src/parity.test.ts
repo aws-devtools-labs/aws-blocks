@@ -2,384 +2,584 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Regression tests for KVStore mock/browser parity and conditional operation correctness.
+ * Mock/AWS parity: the AWS runtime is driven through a fake DocumentClient so
+ * the commands it builds (item layout, condition expressions, query shape,
+ * cursors, batch retries) can be asserted next to the mock's behaviour for the
+ * same inputs, without touching the network.
  */
-
-import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
-import { isBlocksError } from '@aws-blocks/core';
-import { KVStore, KVStoreErrors } from './index.mock.js';
-import { KVStore as AwsKVStore } from './index.aws.js';
-import { TTL_ATTRIBUTE, nowEpochSeconds } from './ttl.js';
+import { beforeEach, describe, test } from 'node:test';
+import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { z } from 'zod';
+import { KVStore as AwsKVStore } from './index.aws.js';
+import { KVStore, KVStoreErrors } from './index.mock.js';
 
 beforeEach(() => {
-	try { rmSync('.bb-data', { recursive: true, force: true }); } catch {}
+	try {
+		rmSync('.bb-data', { recursive: true, force: true });
+	} catch {}
 });
 
-// Browser entry must export error constants for client-side error handling
+let scopeN = 0;
+function testScope() {
+	return { id: `kv-parity-${++scopeN}-${Date.now()}` } as any;
+}
+
+/**
+ * An AWS-runtime KVStore wired to a fake doc client. `send` receives each SDK
+ * command and returns the simulated DynamoDB response; every command input is
+ * recorded so the test can assert its shape. `input(i)` strips `TableName`
+ * (the store's fullId, unique per test) so expectations can be literal.
+ */
+function awsStore(id: string, options?: any, respond: (command: any) => any = () => ({})) {
+	const store = new AwsKVStore(testScope(), id, options as never) as any;
+	const sent: any[] = [];
+	store.docClient = {
+		send: async (command: any) => {
+			sent.push(command);
+			const out = respond(command);
+			if (out instanceof Error) throw out;
+			return out ?? {};
+		},
+	};
+	const input = (i = 0) => {
+		const { TableName: _table, ...rest } = sent[i].input;
+		return rest;
+	};
+	return { store, sent, input, tableName: store.fullId as string };
+}
+
+/** A mock store with loosely typed options, for the parity cases driven by plain JavaScript values. */
+function mockStore(id: string, options?: any): any {
+	return new KVStore(testScope(), id, options as never);
+}
+
+/** The one table a batch command addresses, and its requests. */
+function batchOf(command: any): { table: string; requests: any } {
+	const table = Object.keys(command.input.RequestItems)[0];
+	return { table, requests: command.input.RequestItems[table] };
+}
+
+async function rejects(promise: Promise<unknown> | (() => unknown), name: string): Promise<Error> {
+	try {
+		await (typeof promise === 'function' ? promise() : promise);
+	} catch (e) {
+		assert.ok(isBlocksError(e, name), `expected ${name}, got ${(e as Error).name}: ${(e as Error).message}`);
+		return e as Error;
+	}
+	assert.fail(`expected ${name}`);
+}
+
+const ddbError = (name: string, message = name) => {
+	const e = new Error(message);
+	e.name = name;
+	return e;
+};
+
+// ── Browser entry ───────────────────────────────────────────────────────────
 
 describe('browser entry exports error constants', () => {
 	test('browser entry exports KVStoreErrors matching the mock', async () => {
 		const browser = await import('./index.browser.js');
-		assert.deepStrictEqual(
-			(browser as any).KVStoreErrors,
-			KVStoreErrors,
-		);
+		assert.deepEqual(browser.KVStoreErrors, KVStoreErrors);
 	});
 });
 
-// Schema validation must run before conditional checks to match AWS behavior.
-// The AWS entry validates client-side before sending to DynamoDB, so the mock
-// must do the same — otherwise error-handling code written against the mock
-// handles the wrong exception type in production.
+// ── Item layout ─────────────────────────────────────────────────────────────
 
-describe('schema validation runs before conditional checks', () => {
-	test('invalid value + ifNotExists on existing key throws ValidationFailed', async () => {
-		
-		const schema = z.object({ name: z.string().min(3) });
-		const store = new KVStore({ id: 'root' } as any, 'val-order-1', { schema });
-
-		await store.put('key1', { name: 'valid' } as any);
-
-		await assert.rejects(
-			() => store.put('key1', { name: 'x' } as any, { ifNotExists: true }),
-			(err: any) => {
-				assert.strictEqual(err.name, 'ValidationFailedException',
-					'Schema validation must run first — invalid data should never reach the condition check');
-				return true;
-			},
-		);
+describe('AWS put writes the flat item layout', () => {
+	test('a string value goes in _bkv_value under _bkv_pk', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', 'hello');
+		assert.deepEqual(input(), { Item: { _bkv_pk: 'a', _bkv_value: 'hello' } });
 	});
 
-	test('invalid value + ifValueEquals mismatch throws ValidationFailed', async () => {
-		
-		const schema = z.object({ count: z.number().min(0) });
-		const store = new KVStore({ id: 'root' } as any, 'val-order-2', { schema });
-
-		await store.put('counter', { count: 5 } as any);
-
-		await assert.rejects(
-			() => store.put('counter', { count: -1 } as any, { ifValueEquals: { count: 999 } as any }),
-			(err: any) => {
-				assert.strictEqual(err.name, 'ValidationFailedException');
-				return true;
-			},
-		);
+	test('an object value is one attribute per field, plus _bkv_pk', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', { name: 'A', n: 1 });
+		assert.deepEqual(input().Item, { name: 'A', n: 1, _bkv_pk: 'a' });
 	});
 
-	test('valid value + failing condition still throws ConditionalCheckFailed', async () => {
-		
-		const schema = z.object({ name: z.string().min(3) });
-		const store = new KVStore({ id: 'root' } as any, 'val-order-3', { schema });
-
-		await store.put('key1', { name: 'valid' } as any);
-
-		await assert.rejects(
-			() => store.put('key1', { name: 'also-valid' } as any, { ifNotExists: true }),
-			(err: any) => {
-				assert.strictEqual(err.name, KVStoreErrors.ConditionalCheckFailed);
-				return true;
-			},
-		);
-	});
-});
-
-// Passing { ifValueEquals: undefined } must be treated as "no condition".
-// Using `'ifValueEquals' in obj` is true for explicit undefined, which causes
-// a false ConditionalCheckFailed (mock) or SDK marshalling error (AWS).
-
-describe('ifValueEquals: undefined is treated as no-op', () => {
-	test('put with ifValueEquals: undefined overwrites normally', async () => {
-		const store = new KVStore({ id: 'root' } as any, 'undef-put');
-		await store.put('key1', 'hello');
-
-		await store.put('key1', 'updated', { ifValueEquals: undefined } as any);
-		assert.strictEqual(await store.get('key1'), 'updated');
+	test('a declared key writes the key fields into the item and nothing else of the block', async () => {
+		const { store, input } = awsStore('orders', {
+			schema: z.object({ userId: z.string(), orderId: z.string(), total: z.number() }),
+			key: { partitionKey: 'userId', sortKey: 'orderId' },
+		});
+		await store.put({ userId: 'alice', orderId: '001' }, { total: 12 });
+		assert.deepEqual(input().Item, { userId: 'alice', orderId: '001', total: 12 });
 	});
 
-	test('put with ifValueEquals: undefined on new key succeeds', async () => {
-		const store = new KVStore({ id: 'root' } as any, 'undef-put-new');
-
-		await store.put('newkey', 'value', { ifValueEquals: undefined } as any);
-		assert.strictEqual(await store.get('newkey'), 'value');
+	test('an expiry goes in _bkv_ttl, or in the ttl field when one is named', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', 'x', { expiresAt: 1800000000 });
+		assert.equal(input().Item._bkv_ttl, 1800000000);
+		const named = awsStore('sessions', {
+			schema: z.object({ id: z.string(), expiresAt: z.number() }),
+			key: { partitionKey: 'id' },
+			ttl: 'expiresAt',
+		});
+		await named.store.put({ id: 's' }, { expiresAt: 1800000000 });
+		assert.deepEqual(named.input().Item, { id: 's', expiresAt: 1800000000 });
+		await named.store.put({ id: 's' }, { expiresAt: 1 }, { expiresAt: 1800000005 });
+		assert.deepEqual(named.input(1).Item, { id: 's', expiresAt: 1800000005 });
 	});
 
-	test('delete with ifValueEquals: undefined removes the key', async () => {
-		const store = new KVStore({ id: 'root' } as any, 'undef-del');
-		await store.put('key1', 'hello');
-
-		await store.delete('key1', { ifValueEquals: undefined } as any);
-		assert.strictEqual(await store.get('key1'), null);
-	});
-
-	test('delete with ifValueEquals: undefined on missing key succeeds silently', async () => {
-		const store = new KVStore({ id: 'root' } as any, 'undef-del-new');
-		await store.delete('nonexistent', { ifValueEquals: undefined } as any);
+	test('both runtimes reject a reserved field, an empty key field, an empty indexed field, and a disagreeing key', async () => {
+		const options = {
+			schema: z.object({ pk: z.string(), email: z.string(), note: z.string().optional() }),
+			key: { partitionKey: 'pk' },
+			indexes: { byEmail: { partitionKey: 'email' } },
+		};
+		const mock = mockStore('t', options);
+		const { store: aws, sent } = awsStore('t', options);
+		for (const s of [mock, aws]) {
+			await rejects(s.put({ pk: 'a' }, { email: 'e', _bkv_x: 1 }), KVStoreErrors.ValidationFailed);
+			await rejects(s.put({ pk: '' }, { email: 'e' }), KVStoreErrors.ValidationFailed);
+			await rejects(s.put({ pk: 'a' }, { email: '' }), KVStoreErrors.ValidationFailed);
+			await rejects(s.put({ pk: 'a' }, { pk: 'b', email: 'e' }), KVStoreErrors.ValidationFailed);
+			await rejects(s.get('a'), KVStoreErrors.InvalidQuery);
+			await rejects(s.get({ pk: 'a', extra: 1 }), KVStoreErrors.InvalidQuery);
+		}
+		assert.equal(sent.length, 0, 'every rejection happens before a DynamoDB call');
 	});
 });
 
-// TTL parity. DynamoDB's reaper is asynchronous, so an expired item can still
-// be physically present; both runtimes must therefore hide expired items on
-// read, and neither may write the `ttl` attribute unless asked. Divergence here
-// means code that self-expires sessions locally silently retains them in AWS.
+// ── Reads ───────────────────────────────────────────────────────────────────
 
-/**
- * Capture what the AWS runtime would send to DynamoDB and control what it reads
- * back, without touching the network. Real `KVStore`, real `PutCommand`.
- */
-function captureAws(id: string, respond: () => any = () => ({})): {
-	store: AwsKVStore<string>;
-	items: () => any[];
-} {
-	const store = new AwsKVStore<string>({ id: 'root' } as any, id);
-	const sent: any[] = [];
-	(store as any).docClient.middlewareStack.add(
-		(_next: any) => async (args: any) => {
-			sent.push(args.input);
-			return { output: respond() };
-		},
-		{ step: 'initialize', name: 'kv-parity-intercept', override: true },
-	);
-	return { store, items: () => sent };
-}
-
-describe('TTL parity between mock and AWS runtimes', () => {
-	test('neither runtime writes a ttl attribute when none is requested', async () => {
-		const mock = new KVStore({ id: 'root' } as any, 'parity-no-ttl');
-		await mock.put('k', 'v');
-		assert.strictEqual(await mock.get('k'), 'v');
-
-		const { store, items } = captureAws('parity-no-ttl-aws');
-		await store.put('k', 'v');
-		assert.ok(!(TTL_ATTRIBUTE in items()[0].Item));
+describe('AWS get', () => {
+	test('is strongly consistent by default and opts out with consistentRead: false', async () => {
+		const { store, input } = awsStore('kv');
+		await store.get('a');
+		assert.deepEqual(input(), { Key: { _bkv_pk: 'a' }, ConsistentRead: true });
+		await store.get('a', { consistentRead: false });
+		assert.equal(input(1).ConsistentRead, false);
 	});
 
-	test('both runtimes hide an item whose expiry has passed', async () => {
-		const expired = nowEpochSeconds() - 1;
+	test('reads the value back out of the flat layout and hides an expired item', async () => {
+		let item: any;
+		const { store } = awsStore('kv', undefined, () => ({ Item: item }));
+		item = { _bkv_pk: 'a', name: 'A', _bkv_ttl: 1800000000 };
+		assert.deepEqual(await store.get('a'), { name: 'A' });
+		item = { _bkv_pk: 'a', _bkv_value: 'hello' };
+		assert.deepEqual(await store.get('a'), 'hello');
+		item = { _bkv_pk: 'a', _bkv_value: 'hello', _bkv_ttl: 1 };
+		assert.equal(await store.get('a'), null);
+		item = undefined;
+		assert.equal(await store.get('a'), null);
+	});
+});
 
-		const mock = new KVStore({ id: 'root' } as any, 'parity-expired');
-		await mock.put('k', 'v', { expiresAt: expired });
-		assert.strictEqual(await mock.get('k'), null);
+// ── Conditions ──────────────────────────────────────────────────────────────
 
-		const { store } = captureAws('parity-expired-aws', () => ({
-			Item: { pk: 'k', value: JSON.stringify('v'), [TTL_ATTRIBUTE]: expired },
-		}));
-		assert.strictEqual(await store.get('k'), null);
+describe('conditional-write composition (AWS PutCommand shape)', () => {
+	test('ifNotExists alone → attribute_not_exists(#pk) on _bkv_pk', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', 'x', { ifNotExists: true });
+		assert.equal(input().ConditionExpression, 'attribute_not_exists(#pk)');
+		assert.deepEqual(input().ExpressionAttributeNames, { '#pk': '_bkv_pk' });
+		assert.equal(input().ExpressionAttributeValues, undefined);
 	});
 
-	test('both runtimes still return an item whose expiry is in the future', async () => {
-		const future = nowEpochSeconds() + 600;
-
-		const mock = new KVStore({ id: 'root' } as any, 'parity-live');
-		await mock.put('k', 'v', { expiresAt: future });
-		assert.strictEqual(await mock.get('k'), 'v');
-
-		const { store } = captureAws('parity-live-aws', () => ({
-			Item: { pk: 'k', value: JSON.stringify('v'), [TTL_ATTRIBUTE]: future },
-		}));
-		assert.strictEqual(await store.get('k'), 'v');
+	test('ifValueEquals alone → #value = :expected on _bkv_value, with the raw value', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', 2, { ifValueEquals: 1 });
+		assert.equal(input().ConditionExpression, '#value = :expected');
+		assert.deepEqual(input().ExpressionAttributeNames, { '#value': '_bkv_value' });
+		assert.deepEqual(input().ExpressionAttributeValues, { ':expected': 1 });
 	});
 
-	test('both runtimes skip expired items during scan', async () => {
-		const expired = nowEpochSeconds() - 1;
-
-		const mock = new KVStore({ id: 'root' } as any, 'parity-scan');
-		await mock.put('live', 'a');
-		await mock.put('dead', 'b', { expiresAt: expired });
-		const mockKeys: string[] = [];
-		for await (const { key } of mock.scan()) mockKeys.push(key);
-		assert.deepStrictEqual(mockKeys, ['live']);
-
-		const { store } = captureAws('parity-scan-aws', () => ({
-			Items: [
-				{ pk: 'live', value: JSON.stringify('a') },
-				{ pk: 'dead', value: JSON.stringify('b'), [TTL_ATTRIBUTE]: expired },
-			],
-		}));
-		const awsKeys: string[] = [];
-		for await (const { key } of store.scan()) awsKeys.push(key);
-		assert.deepStrictEqual(awsKeys, mockKeys);
+	test('ifNotExists + ifValueEquals → OR', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', 'x', { ifNotExists: true, ifValueEquals: 'old' });
+		assert.equal(input().ConditionExpression, 'attribute_not_exists(#pk) OR #value = :expected');
 	});
 
-	test('both runtimes yield expired items during scan({ includeExpired })', async () => {
-		const expired = nowEpochSeconds() - 1;
-
-		const mock = new KVStore({ id: 'root' } as any, 'parity-scan-include');
-		await mock.put('live', 'a');
-		await mock.put('dead', 'b', { expiresAt: expired });
-		const mockKeys: string[] = [];
-		for await (const { key } of mock.scan({ includeExpired: true })) mockKeys.push(key);
-		assert.deepStrictEqual(mockKeys.sort(), ['dead', 'live']);
-
-		const { store } = captureAws('parity-scan-include-aws', () => ({
-			Items: [
-				{ pk: 'live', value: JSON.stringify('a') },
-				{ pk: 'dead', value: JSON.stringify('b'), [TTL_ATTRIBUTE]: expired },
-			],
-		}));
-		const awsKeys: string[] = [];
-		for await (const { key } of store.scan({ includeExpired: true })) awsKeys.push(key);
-		assert.deepStrictEqual(awsKeys.sort(), mockKeys.sort());
+	test('ifFieldEquals → one clause per field, AND inside, and OR with ifNotExists', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', { v: 2, name: 'B' }, { ifFieldEquals: { v: 1 } });
+		assert.equal(input().ConditionExpression, '#field0 = :val0');
+		assert.deepEqual(input().ExpressionAttributeNames, { '#field0': 'v' });
+		assert.deepEqual(input().ExpressionAttributeValues, { ':val0': 1 });
+		await store.put('a', { v: 3, name: 'C' }, { ifNotExists: true, ifFieldEquals: { v: 2, name: 'B' } });
+		assert.equal(
+			input(1).ConditionExpression,
+			'attribute_not_exists(#pk) OR (#field0 = :val0 AND #field1 = :val1)',
+		);
 	});
 
-	test('both runtimes reject the same invalid TTL options with the same error name', async () => {
-		const bad = [
-			{ ttlSeconds: 60, expiresAt: 123456 },
-			{ ttlSeconds: 0 },
-			{ ttlSeconds: -1 },
-			{ expiresAt: Date.now() },
-		] as const;
+	test('a declared key names its partition field in attribute_not_exists', async () => {
+		const { store, input } = awsStore('jobs', {
+			schema: z.object({ jobId: z.string(), state: z.string() }),
+			key: { partitionKey: 'jobId' },
+		});
+		await store.put({ jobId: 'j' }, { state: 'q' }, { ifNotExists: true });
+		assert.deepEqual(input().ExpressionAttributeNames, { '#pk': 'jobId' });
+	});
 
-		const mock = new KVStore({ id: 'root' } as any, 'parity-invalid');
-		const { store } = captureAws('parity-invalid-aws');
+	test('no conditions → no ConditionExpression; ifValueEquals: undefined is a no-op; null is a real condition', async () => {
+		const { store, input } = awsStore('kv');
+		await store.put('a', 'x');
+		assert.equal(input().ConditionExpression, undefined);
+		await store.put('a', 'x', { ifValueEquals: undefined });
+		assert.equal(input(1).ConditionExpression, undefined);
+		await store.put('a', 'x', { ifValueEquals: null });
+		assert.deepEqual(input(2).ExpressionAttributeValues, { ':expected': null });
+	});
 
-		for (const options of bad) {
-			const label = JSON.stringify(options);
-			await assert.rejects(() => mock.put('k', 'v', options as any), (err: any) => {
-				assert.strictEqual(err.name, KVStoreErrors.ValidationFailed, `mock: ${label}`);
-				return true;
-			});
-			await assert.rejects(() => store.put('k', 'v', options as any), (err: any) => {
-				assert.strictEqual(err.name, KVStoreErrors.ValidationFailed, `aws: ${label}`);
-				return true;
-			});
+	test('both runtimes reject ifValueEquals with an object, an empty ifFieldEquals, and both checks together', async () => {
+		const mock = mockStore('kv');
+		const { store: aws, sent } = awsStore('kv');
+		for (const s of [mock, aws]) {
+			await rejects(s.put('k', { a: 2 }, { ifValueEquals: { a: 1 } }), KVStoreErrors.InvalidQuery);
+			await rejects(s.put('k', { a: 2 }, { ifFieldEquals: {} }), KVStoreErrors.InvalidQuery);
+			await rejects(s.put('k', { a: 2 }, { ifFieldEquals: { a: undefined } }), KVStoreErrors.InvalidQuery);
+			await rejects(
+				s.put('k', { a: 2 }, { ifFieldEquals: { a: 1 }, ifValueEquals: 1 }),
+				KVStoreErrors.InvalidQuery,
+			);
+			await rejects(s.delete('k', { ifFieldEquals: {} }), KVStoreErrors.InvalidQuery);
+		}
+		assert.equal(sent.length, 0);
+	});
+
+	test('a rejected conditional write maps to a 409 ApiError with the same retriable flag as the mock', async () => {
+		const { store } = awsStore('kv', undefined, () => ddbError('ConditionalCheckFailedException'));
+		const mock = new KVStore(testScope(), 'kv');
+		await mock.put('a', 'x');
+		const cases: [any, boolean][] = [
+			[{ ifNotExists: true }, false],
+			[{ ifValueEquals: 'stale' }, true],
+			[{ ifNotExists: true, ifValueEquals: 'stale' }, true],
+		];
+		for (const [options, retriable] of cases) {
+			for (const s of [store, mock]) {
+				try {
+					await s.put('a', 'y', options);
+					assert.fail('expected a conflict');
+				} catch (e) {
+					assert.ok(e instanceof ApiError);
+					assert.equal(e.status, 409);
+					assert.equal(e.name, KVStoreErrors.ConditionalCheckFailed);
+					assert.equal(e.retriable, retriable, `${JSON.stringify(options)} retriable`);
+				}
+			}
 		}
 	});
 });
 
-// Conditional-write composition parity: the AWS runtime must emit an OR-composed
-// ConditionExpression when both ifNotExists and ifValueEquals are set, matching
-// the mock's behavior. A typo in the join or a missing name/value would slip
-// past the mock-only tests.
-describe('conditional-write composition (AWS PutCommand shape)', () => {
-	test('both conditions → attribute_not_exists(#pk) OR #value = :expected', () => {
-		const { store, items } = captureAws('parity-compose-both');
-		return store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk) OR #value = :expected');
-			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk', '#value': 'value' });
-			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
-		});
+describe('conditional-delete composition (AWS DeleteCommand shape)', () => {
+	test('ifExists + ifValueEquals compose with AND; a conflict carries the retriable flag the mock derives', async () => {
+		const { store, input } = awsStore('kv', undefined, (c) =>
+			c.input.ConditionExpression ? ddbError('ConditionalCheckFailedException') : {},
+		);
+		await store.delete('a');
+		assert.equal(input().ConditionExpression, undefined);
+		assert.deepEqual(input().Key, { _bkv_pk: 'a' });
+		const cases: [any, boolean][] = [
+			[{ ifExists: true }, false],
+			[{ ifValueEquals: 'stale' }, true],
+			[{ ifExists: true, ifValueEquals: 'stale' }, false],
+		];
+		for (const [options, retriable] of cases) {
+			const e = (await rejects(store.delete('a', options), KVStoreErrors.ConditionalCheckFailed)) as ApiError;
+			assert.equal(e.status, 409);
+			assert.equal(e.retriable, retriable, `aws ${JSON.stringify(options)}`);
+		}
 	});
 
-	test('ifNotExists alone → attribute_not_exists(#pk), no value attrs', () => {
-		const { store, items } = captureAws('parity-compose-absent');
-		return store.put('k', 'v', { ifNotExists: true }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, 'attribute_not_exists(#pk)');
-			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk' });
-			assert.strictEqual(input.ExpressionAttributeValues, undefined);
-		});
-	});
-
-	test('ifValueEquals alone → #value = :expected, no #pk', () => {
-		const { store, items } = captureAws('parity-compose-value');
-		return store.put('k', 'v', { ifValueEquals: 'prev' }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, '#value = :expected');
-			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#value': 'value' });
-			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': JSON.stringify('prev') });
-		});
-	});
-
-	test('no conditions → no ConditionExpression', () => {
-		const { store, items } = captureAws('parity-compose-none');
-		return store.put('k', 'v').then(() => {
-			assert.strictEqual(items()[0].ConditionExpression, undefined);
-		});
-	});
-
-	test('explicit ifValueEquals: undefined is a no-op (matches the mock)', () => {
-		const { store, items } = captureAws('parity-compose-undef');
-		return store.put('k', 'v', { ifValueEquals: undefined }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, undefined);
-			assert.strictEqual(input.ExpressionAttributeValues, undefined);
-		});
-	});
-
-	test('ifValueEquals: null is a real condition → :expected = "null"', () => {
-		const { store, items } = captureAws('parity-compose-null');
-		return store.put('k', 'v', { ifValueEquals: null as unknown as string }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, '#value = :expected');
-			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': 'null' });
-		});
-	});
-
-	test('a rejected conditional write maps to KVStoreErrors.ConditionalCheckFailed', async () => {
-		// Stub DynamoDB to reject like a real failed condition; the compose path must
-		// surface the mapped, isBlocksError-matchable error (not the mock — the real client).
-		const { store } = captureAws('parity-compose-reject', () => {
-			const err = new Error('The conditional request failed');
-			err.name = 'ConditionalCheckFailedException';
-			throw err;
-		});
-		await assert.rejects(
-			() => store.put('k', 'next', { ifNotExists: true, ifValueEquals: 'prev' }),
-			(err: Error) => isBlocksError(err, KVStoreErrors.ConditionalCheckFailed),
+	test('the delete expressions', async () => {
+		const { store, sent } = awsStore('kv');
+		await store.delete('a', { ifExists: true });
+		await store.delete('a', { ifValueEquals: 'v' });
+		await store.delete('a', { ifExists: true, ifValueEquals: 'v' });
+		assert.deepEqual(
+			sent.map((c) => c.input.ConditionExpression),
+			['attribute_exists(#pk)', '#value = :expected', 'attribute_exists(#pk) AND #value = :expected'],
 		);
 	});
 });
 
-// The AWS `delete` path detected `ifValueEquals` with `'ifValueEquals' in
-// conditions` (presence) while the mock and `put` use `!== undefined`, and its
-// `if/else if` dropped the value check when `ifExists` was also set. These
-// assert the DeleteCommand shape matches the mock's conjunctive semantics.
-describe('conditional-delete composition (AWS DeleteCommand shape)', () => {
-	test('ifValueEquals alone → #value = :expected, no #pk', () => {
-		const { store, items } = captureAws('parity-del-value');
-		return store.delete('k', { ifValueEquals: 'prev' }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, '#value = :expected');
-			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': '"prev"' });
-			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#value': 'value' });
+// ── Query and scan ──────────────────────────────────────────────────────────
+
+describe('AWS query', () => {
+	const options = {
+		schema: z.object({ pk: z.string(), sk: z.number(), n: z.string() }),
+		key: { partitionKey: 'pk', sortKey: 'sk' },
+		indexes: { byN: { partitionKey: 'n', sortKey: 'sk' } },
+	};
+
+	test('builds the KeyConditionExpression, index, order and limit', async () => {
+		const { store, input } = awsStore('t', options, () => ({ Items: [] }));
+		await Array.fromAsync(
+			store.query({
+				index: 'byN',
+				where: { n: { equals: 'x' }, sk: { between: [1, 5] } },
+				order: 'desc',
+				limit: 10,
+			}),
+		);
+		assert.deepEqual(input(), {
+			IndexName: 'byN',
+			KeyConditionExpression: '#pk = :pkval AND #sk BETWEEN :skval1 AND :skval2',
+			ExpressionAttributeNames: { '#pk': 'n', '#sk': 'sk' },
+			ExpressionAttributeValues: { ':pkval': 'x', ':skval1': 1, ':skval2': 5 },
+			ExclusiveStartKey: undefined,
+			Limit: 10,
+			ScanIndexForward: false,
 		});
 	});
 
-	test('ifExists alone → attribute_exists(#pk), no values', () => {
-		const { store, items } = captureAws('parity-del-exists');
-		return store.delete('k', { ifExists: true }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, 'attribute_exists(#pk)');
-			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+	test('an empty sort condition issues a partition-only expression with no #sk', async () => {
+		const { store, input } = awsStore('t', options, () => ({ Items: [] }));
+		await Array.fromAsync(store.query({ where: { pk: { equals: 'p' }, sk: {} } }));
+		assert.equal(input().KeyConditionExpression, '#pk = :pkval');
+		assert.deepEqual(input().ExpressionAttributeNames, { '#pk': 'pk' });
+	});
+
+	test('two sort conditions, a bad where and an unknown index are rejected before any call', async () => {
+		const { store: s, sent } = awsStore('t', options);
+		await rejects(
+			() => s.query({ where: { pk: { equals: 'p' }, sk: { greaterThan: 1, lessThan: 2 } } }),
+			KVStoreErrors.InvalidQuery,
+		);
+		await rejects(() => s.query({ where: { pk: 'p' } }), KVStoreErrors.InvalidQuery);
+		await rejects(() => s.query({ index: 'nope', where: { pk: { equals: 'p' } } }), KVStoreErrors.InvalidQuery);
+		assert.equal(sent.length, 0);
+	});
+
+	test('follows LastEvaluatedKey, hides expired items, and yields the entry shape', async () => {
+		const pages = [
+			{
+				Items: [
+					{ pk: 'p', sk: 1, n: 'a', _bkv_ttl: 1 },
+					{ pk: 'p', sk: 2, n: 'b' },
+				],
+				LastEvaluatedKey: { pk: 'p', sk: 2 },
+			},
+			{ Items: [{ pk: 'p', sk: 3, n: 'c', _bkv_ttl: 1800000000 }] },
+		];
+		const { store, sent } = awsStore('t', options, () => pages.shift());
+		const results = store.query({ where: { pk: { equals: 'p' } } });
+		assert.deepEqual(await Array.fromAsync(results), [
+			{ key: { pk: 'p', sk: 2 }, value: { pk: 'p', sk: 2, n: 'b' } },
+			{ key: { pk: 'p', sk: 3 }, value: { pk: 'p', sk: 3, n: 'c' }, expiresAt: 1800000000 },
+		]);
+		assert.equal(sent[1].input.ExclusiveStartKey.sk, 2);
+		assert.equal(results.cursor, undefined);
+	});
+
+	test('stops at limit with a cursor for the last entry, and a cursor becomes ExclusiveStartKey', async () => {
+		// Every page says more may follow; the loop must stop at `limit`, not at the end of the data.
+		const { store, input } = awsStore('t', options, (c) =>
+			c.input.ExclusiveStartKey
+				? { Items: [] }
+				: {
+						Items: [
+							{ pk: 'p', sk: 1, n: 'a' },
+							{ pk: 'p', sk: 2, n: 'b' },
+							{ pk: 'p', sk: 3, n: 'c' },
+						],
+						LastEvaluatedKey: { pk: 'p', sk: 3 },
+					},
+		);
+		const first = store.query({ where: { pk: { equals: 'p' } }, limit: 2 });
+		assert.equal((await Array.fromAsync(first)).length, 2);
+		assert.equal(input().Limit, 2);
+		assert.deepEqual(JSON.parse(Buffer.from(first.cursor, 'base64url').toString()), {
+			v: 1,
+			index: null,
+			key: { pk: 'p', sk: 2 },
+		});
+		await Array.fromAsync(store.query({ where: { pk: { equals: 'p' } }, cursor: first.cursor }));
+		assert.deepEqual(input(1).ExclusiveStartKey, { pk: 'p', sk: 2 });
+		// An index cursor carries the index key and the table key.
+		const indexed = store.query({ index: 'byN', where: { n: { equals: 'a' } }, limit: 1 });
+		await Array.fromAsync(indexed);
+		assert.deepEqual(JSON.parse(Buffer.from(indexed.cursor, 'base64url').toString()).key, {
+			pk: 'p',
+			sk: 1,
+			n: 'a',
 		});
 	});
 
-	test('ifExists + ifValueEquals compose with AND (value check is NOT dropped)', () => {
-		const { store, items } = captureAws('parity-del-both');
-		return store.delete('k', { ifExists: true, ifValueEquals: 'prev' }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, 'attribute_exists(#pk) AND #value = :expected');
-			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': '"prev"' });
-			assert.deepStrictEqual(input.ExpressionAttributeNames, { '#pk': 'pk', '#value': 'value' });
-		});
+	test('the mock and AWS produce the same cursor for the same item', async () => {
+		const mock = mockStore('t', options);
+		await mock.put({ pk: 'p', sk: 1 }, { n: 'a' });
+		const m = mock.query({ where: { pk: { equals: 'p' } }, limit: 1 });
+		await Array.fromAsync(m);
+		const { store } = awsStore('t', options, () => ({
+			Items: [{ pk: 'p', sk: 1, n: 'a' }],
+			LastEvaluatedKey: { pk: 'p', sk: 1 },
+		}));
+		const a = store.query({ where: { pk: { equals: 'p' } }, limit: 1 });
+		await Array.fromAsync(a);
+		assert.equal(a.cursor, m.cursor);
 	});
 
-	test('no conditions → no ConditionExpression', () => {
-		const { store, items } = captureAws('parity-del-none');
-		return store.delete('k').then(() => {
-			assert.strictEqual(items()[0].ConditionExpression, undefined);
+	test('both runtimes reject a cursor of another partition or index with the same name', async () => {
+		const mock = mockStore('t', options);
+		const { store: aws } = awsStore('t', options);
+		const foreign = Buffer.from(JSON.stringify({ v: 1, index: null, key: { pk: 'other', sk: 1 } })).toString(
+			'base64url',
+		);
+		for (const s of [mock, aws]) {
+			await rejects(
+				() => s.query({ where: { pk: { equals: 'p' } }, cursor: foreign }),
+				KVStoreErrors.InvalidQuery,
+			);
+			await rejects(
+				() => s.query({ index: 'byN', where: { n: { equals: 'x' } }, cursor: foreign }),
+				KVStoreErrors.InvalidQuery,
+			);
+			await rejects(() => s.scan({ cursor: 'garbage' }), KVStoreErrors.InvalidQuery);
+		}
+	});
+});
+
+describe('AWS scan', () => {
+	test('passes Limit, follows LastEvaluatedKey, filters expired unless includeExpired', async () => {
+		const page = {
+			Items: [
+				{ _bkv_pk: 'a', _bkv_value: 1, _bkv_ttl: 1 },
+				{ _bkv_pk: 'b', _bkv_value: 2 },
+			],
+		};
+		const { store, input } = awsStore('kv', undefined, () => page);
+		assert.deepEqual(await Array.fromAsync(store.scan({ limit: 5 })), [{ key: 'b', value: 2 }]);
+		assert.equal(input().Limit, 5);
+		assert.deepEqual(
+			(await Array.fromAsync(store.scan({ includeExpired: true }))).map((e: any) => e.key),
+			['a', 'b'],
+		);
+	});
+});
+
+// ── Batches ─────────────────────────────────────────────────────────────────
+
+describe('AWS batch calls retry unprocessed entries', () => {
+	const options = { schema: z.object({ id: z.string(), value: z.number() }), key: { partitionKey: 'id' } };
+
+	test('getBatch resubmits only the unprocessed keys, merges results, and hides expired items', async () => {
+		let attempt = 0;
+		const { store, sent } = awsStore('t', options, (c) => {
+			attempt++;
+			const { table, requests } = batchOf(c);
+			if (attempt === 1) {
+				return {
+					Responses: { [table]: [{ id: 'a', value: 1 }] },
+					UnprocessedKeys: { [table]: { Keys: requests.Keys.slice(1) } },
+				};
+			}
+			return {
+				Responses: {
+					[table]: [
+						{ id: 'b', value: 2 },
+						{ id: 'c', value: 3, _bkv_ttl: 1 },
+					],
+				},
+			};
 		});
+		store.backoff = async () => {};
+		const got = await store.getBatch([{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]);
+		assert.deepEqual(got, [{ id: 'a', value: 1 }, { id: 'b', value: 2 }, null, null]);
+		assert.equal(sent.length, 2);
+		assert.deepEqual(batchOf(sent[1]).requests.Keys, [{ id: 'b' }, { id: 'c' }, { id: 'd' }]);
 	});
 
-	test('explicit ifValueEquals: undefined is a no-op (matches the mock)', () => {
-		const { store, items } = captureAws('parity-del-undef');
-		return store.delete('k', { ifValueEquals: undefined }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, undefined);
-			assert.strictEqual(input.ExpressionAttributeValues, undefined);
+	test('getBatch throws BatchIncomplete when keys never resolve', async () => {
+		const { store } = awsStore('t', options, (c) => {
+			const { table, requests } = batchOf(c);
+			return { UnprocessedKeys: { [table]: { Keys: requests.Keys } } };
 		});
+		store.backoff = async () => {};
+		await rejects(store.getBatch([{ id: 'a' }]), KVStoreErrors.BatchIncomplete);
 	});
 
-	test('ifValueEquals: null is a real condition → :expected = "null"', () => {
-		const { store, items } = captureAws('parity-del-null');
-		return store.delete('k', { ifValueEquals: null as unknown as string }).then(() => {
-			const input = items()[0];
-			assert.strictEqual(input.ConditionExpression, '#value = :expected');
-			assert.deepStrictEqual(input.ExpressionAttributeValues, { ':expected': 'null' });
+	test('putBatch writes flat items and resubmits only the unprocessed requests', async () => {
+		let attempt = 0;
+		const { store, sent } = awsStore('t', options, (c) => {
+			attempt++;
+			const { table, requests } = batchOf(c);
+			return attempt === 1 ? { UnprocessedItems: { [table]: requests.slice(1) } } : {};
 		});
+		store.backoff = async () => {};
+		await store.putBatch([
+			{ key: { id: 'a' }, value: { value: 1 } },
+			{ key: { id: 'b' }, value: { value: 2 }, expiresAt: 1800000000 },
+		]);
+		assert.deepEqual(batchOf(sent[0]).requests, [
+			{ PutRequest: { Item: { id: 'a', value: 1 } } },
+			{ PutRequest: { Item: { id: 'b', value: 2, _bkv_ttl: 1800000000 } } },
+		]);
+		assert.deepEqual(batchOf(sent[1]).requests, [
+			{ PutRequest: { Item: { id: 'b', value: 2, _bkv_ttl: 1800000000 } } },
+		]);
+	});
+
+	test('deleteBatch resubmits only the unprocessed deletes and throws when they never complete', async () => {
+		let attempt = 0;
+		const { store, sent } = awsStore('t', options, (c) => {
+			attempt++;
+			const { table, requests } = batchOf(c);
+			return attempt === 1 ? { UnprocessedItems: { [table]: requests.slice(1) } } : {};
+		});
+		store.backoff = async () => {};
+		await store.deleteBatch([{ id: 'a' }, { id: 'b' }]);
+		assert.deepEqual(batchOf(sent[1]).requests, [{ DeleteRequest: { Key: { id: 'b' } } }]);
+		const stuck = awsStore('t', options, (c) => {
+			const { table, requests } = batchOf(c);
+			return { UnprocessedItems: { [table]: requests } };
+		});
+		stuck.store.backoff = async () => {};
+		await rejects(stuck.store.deleteBatch([{ id: 'a' }]), KVStoreErrors.BatchIncomplete);
+	});
+});
+
+// ── Errors ──────────────────────────────────────────────────────────────────
+
+describe('the 400 KB overflow is a distinct ItemTooLarge error', () => {
+	test("AWS: put re-maps DynamoDB's oversized ValidationException to ItemTooLarge; an unrelated one passes through", async () => {
+		const big = awsStore('kv', undefined, () =>
+			ddbError('ValidationException', 'Item size has exceeded the maximum allowed size'),
+		);
+		const e = await rejects(big.store.put('a', 'x'), KVStoreErrors.ItemTooLarge);
+		assert.match(e.message, /400 KB/);
+		const other = awsStore('kv', undefined, () => ddbError('ValidationException', 'Something else'));
+		try {
+			await other.store.put('a', 'x');
+			assert.fail('expected a throw');
+		} catch (err) {
+			assert.equal((err as Error).name, 'ValidationException');
+		}
+	});
+
+	test('mock: put rejects an oversized item with ItemTooLarge', async () => {
+		const mock = new KVStore(testScope(), 'kv');
+		await rejects(mock.put('a', 'x'.repeat(400 * 1024 + 1)), KVStoreErrors.ItemTooLarge);
+	});
+});
+
+describe('readValidation behaves identically on the mock and the AWS runtime', () => {
+	const v2 = z.object({ id: z.string(), total: z.number(), currency: z.string().default('USD') });
+	const legacy = { id: 'o1', total: 10, extra: 'kept' };
+
+	test("'coerce' fills the default and keeps unknown keys on both", async () => {
+		const { store } = awsStore('t', { schema: v2, key: { partitionKey: 'id' } }, () => ({ Item: { ...legacy } }));
+		assert.deepEqual(await store.get({ id: 'o1' }), { id: 'o1', total: 10, extra: 'kept', currency: 'USD' });
+		const scope = testScope();
+		await new KVStore<any>(scope, 't').put('o1', legacy);
+		assert.deepEqual(await new KVStore(scope, 't', { schema: v2 }).get('o1'), { ...legacy, currency: 'USD' });
+	});
+
+	test("'off' returns the raw row; 'strict' throws on both", async () => {
+		const off = awsStore('t', { schema: v2, key: { partitionKey: 'id' }, readValidation: 'off' }, () => ({
+			Item: { ...legacy },
+		}));
+		assert.deepEqual(await off.store.get({ id: 'o1' }), legacy);
+		const strict = awsStore('t', { schema: v2, key: { partitionKey: 'id' }, readValidation: 'strict' }, () => ({
+			Item: { id: 'o1', total: 'x' },
+		}));
+		await rejects(strict.store.get({ id: 'o1' }), KVStoreErrors.ValidationFailed);
 	});
 });

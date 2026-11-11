@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import assert from 'node:assert';
 /**
  * Unit tests for the GSI manager custom-resource handlers, driven the way the
  * CDK Provider framework drives them: `handler` (onEvent) once, then
@@ -15,7 +16,6 @@
  * the table no longer existed.
  */
 import { afterEach, beforeEach, mock, test } from 'node:test';
-import assert from 'node:assert';
 import { CloudFormationClient, DescribeStacksCommand, GetTemplateCommand } from '@aws-sdk/client-cloudformation';
 import { DescribeTableCommand, DynamoDBClient, UpdateTableCommand } from '@aws-sdk/client-dynamodb';
 import { handler, isCompleteHandler } from './gsi-manager-lambda.js';
