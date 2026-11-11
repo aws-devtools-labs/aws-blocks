@@ -197,11 +197,13 @@ export interface FileBucketOptions {
 	 * Each entry is an exact media type (`'application/pdf'`) or a `type/*`
 	 * wildcard (`'image/*'`), without parameters. Matching ignores case and
 	 * parameters, so `text/plain; charset=utf-8` matches `'text/plain'` or
-	 * `'text/*'`. A wildcard matches every subtype of its type: `'image/*'`
-	 * includes `image/svg+xml`, which a browser runs as a page (scripts included)
-	 * when it displays the file inline. To serve uploads inline, list exact raster
-	 * types (`'image/png'`, `'image/jpeg'`), or download them with `getUrl()`'s
-	 * `attachment` option.
+	 * `'text/*'`. A wildcard matches every subtype of its type except the types
+	 * a browser can display as a page (scripts included) or run as a script:
+	 * `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`,
+	 * `application/xml` and `text/javascript`. So `'image/*'` does not accept
+	 * `image/svg+xml`, and `'text/*'` does not accept `text/html`. To accept one
+	 * of these, list it exactly (`['image/*', 'image/svg+xml']`), and serve its
+	 * downloads with `getUrl()`'s `attachment` option.
 	 *
 	 * Checked by `put()`, `putUrl()` and `createUploadHandle()` against the
 	 * effective content type — the caller's `contentType`, or

@@ -40,7 +40,7 @@ const bucket = new FileBucket(scope, id, options?)
 | `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.storageAccessLogging`, then `BlocksDefaults.accessLogging`)** when omitted — so a stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
 | `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. Any other value (e.g. a typo from untyped JavaScript or config) fails the synth with an error listing the valid values, rather than falling back to SSE-S3. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
 | `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can be added to a deployed bucket, but can't be turned off once on. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
-| `allowedContentTypes` | `string[]` | Content types the bucket accepts on upload. **Default: any.** Entries are exact media types (`'application/pdf'`) or `type/*` wildcards (`'image/*'`), without parameters; matching ignores case and parameters. Checked by `put()`, `putUrl()` and `createUploadHandle()` against the effective content type (`application/octet-stream` when the caller passes none — list it to accept those uploads). An unlisted type throws `ValidationFailed`. Must be a non-empty array of `type/subtype` or `type/*` strings (checked at synth). See [Upload constraints](#upload-constraints). |
+| `allowedContentTypes` | `string[]` | Content types the bucket accepts on upload. **Default: any.** Entries are exact media types (`'application/pdf'`) or `type/*` wildcards (`'image/*'`), without parameters; matching ignores case and parameters. A wildcard does not match `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml` and `text/javascript`; list one exactly to accept it. Checked by `put()`, `putUrl()` and `createUploadHandle()` against the effective content type (`application/octet-stream` when the caller passes none — list it to accept those uploads). An unlisted type throws `ValidationFailed`. Must be a non-empty array of `type/subtype` or `type/*` strings (checked at synth). See [Upload constraints](#upload-constraints). |
 | `maxUploadBytes` | `number` | Largest upload, in bytes. **Default: no limit.** When set, `putUrl()` / `createUploadHandle()` require `contentLength` and reject one above the limit, and `put()` rejects a larger body (`ValidationFailed`). Must be a positive integer (checked at synth). See [Upload constraints](#upload-constraints). |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
@@ -66,14 +66,14 @@ The S3 bucket name is derived from the scope chain: the FileBucket id joined to 
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `contentType` | `string` | Content type of the upload. **Default: `application/octet-stream`.** Always signed into the URL: the upload must send exactly this `Content-Type` header, or S3 rejects it with `403 SignatureDoesNotMatch`. `createUploadHandle().upload()` sends it for you. |
+| `contentType` | `string` | Content type of the upload. **Default: `application/octet-stream`.** Always signed into the URL: the upload must send exactly this `Content-Type` header, or S3 rejects it with `403 SignatureDoesNotMatch`. `createUploadHandle().upload()` sends it for you, whatever the uploaded file's own type; to store a browser `File`'s type, pass `contentType: file.type`. |
 | `contentLength` | `number` | Exact size of the upload in bytes. When set, it is signed into the URL and S3 only accepts a body of exactly this size (browsers set `Content-Length` from the body). Required when the bucket sets `maxUploadBytes`. |
 
 `getUrl` and `getFileHandle` also accept:
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `attachment` | `boolean \| string` | Make the browser download the file instead of displaying it. **Default: off** (the file is displayed inline when the browser can render it). `true` signs `Content-Disposition: attachment` into the URL; a filename (e.g. `'report.pdf'`) also suggests that name. See [Serving user uploads](#serving-user-uploads). |
+| `attachment` | `boolean \| string` | Make the browser download the file instead of displaying it. **Default: off** (the file is displayed inline when the browser can render it). `true` signs `Content-Disposition: attachment` into the URL; a filename (e.g. `'report.pdf'`) also suggests that name. Control characters and directional formatting characters are removed from the filename, and `/` and `\` are replaced with `_`. See [Serving user uploads](#serving-user-uploads). |
 
 ### CorsRule
 
@@ -195,15 +195,16 @@ await slot.upload(file);
 ```
 
 - `allowedContentTypes` entries are exact media types or `type/*` wildcards. Matching ignores case and parameters (`text/plain; charset=utf-8` matches `text/plain`). The default `application/octet-stream` is only accepted when listed.
-- A wildcard matches every subtype of its type: `image/*` includes `image/svg+xml`, which can run script when displayed inline (see [Serving user uploads](#serving-user-uploads)). Prefer exact raster types (`image/png`, `image/jpeg`, `image/webp`), or serve downloads with `attachment`.
+- A wildcard matches every subtype of its type except the types a browser can display as a page or run as a script: `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml` and `text/javascript`. These can run script when displayed inline (see [Serving user uploads](#serving-user-uploads)), so `image/*` does not accept `image/svg+xml` and `text/*` does not accept `text/html`. To accept one, list it exactly (`allowedContentTypes: ['image/*', 'image/svg+xml']`), and serve its downloads with `attachment`.
 - A `contentType` must be a single media type — `type/subtype` with optional `; name=value` parameters, ASCII only. A comma-separated list, control characters or an empty value throws `ValidationFailed`, with or without `allowedContentTypes`.
+- The content type is signed, stored and returned in canonical form: each parameter as `; name=value`, with one space after `;` and none around `=` (`text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`). Quoted parameter values are kept as written. An upload to a `putUrl()` URL must send that canonical value; `createUploadHandle().upload()` and the native clients send it for you.
 - With `maxUploadBytes`, `putUrl()` and `createUploadHandle()` require `contentLength` and sign it, so S3 only accepts a body of exactly that size. `put()` checks the body size directly.
 - An upload to a URL or handle signed with `contentLength` must send exactly that many bytes with a `Content-Length` header. Browsers and `fetch` set it from the body. With the native Kotlin client, pass the same `contentLength` to `uploadFrom(source, contentLength)`: without it the stream is sent with no `Content-Length` and the upload is rejected. The native Swift `uploadFrom(fileURL:)` sends the file's size, so the file must be exactly `contentLength` bytes.
 - The checks run in the API method, before a URL is signed, identically in local dev and on AWS — including for a bucket wrapped with `FileBucket.fromExisting`. The local dev server also rejects an upload whose `Content-Type` or size differs from the signed values with `403`, as S3 does.
 
 ## Serving user uploads
 
-A presigned download URL serves the file with its stored content type, and the browser displays it inline when it can render it. **A file displayed inline can run as a page:** an uploaded HTML or SVG file executes script in the origin that serves it. For user-uploaded content, either restrict uploads to safe types with `allowedContentTypes` (exact raster types such as `image/png` — note that `image/*` includes `image/svg+xml`), or make downloads attachments:
+A presigned download URL serves the file with its stored content type, and the browser displays it inline when it can render it. **A file displayed inline can run as a page:** an uploaded HTML or SVG file executes script in the origin that serves it. For user-uploaded content, either restrict uploads to safe types with `allowedContentTypes` (for example `image/*`, which does not accept `image/svg+xml` unless you list it exactly — see [Upload constraints](#upload-constraints)), or make downloads attachments:
 
 ```typescript
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -461,9 +462,10 @@ Object Lock can be added to a bucket that is already deployed, but S3 can't turn
 
 Keys are validated identically in local dev and on AWS. A key that breaks any of these rules throws `ValidationFailed` (HTTP 400):
 
-- not empty, and no leading `/`;
+- not empty, and at most 1,024 bytes once UTF-8 encoded (S3's key limit);
+- no leading `/`;
 - no empty segment (`a//b`) or trailing `/`;
-- no `.` or `..` segment, including one spelled with `%2e` / `%2E` (`a/%2e%2e/b`) — other `%` sequences, such as `100%done.txt`, are allowed;
+- no `.` or `..` segment, including one spelled with `%2e`, `%2f` or `%5c` in either case (`a/%2e%2e/b`, `a/..%2f../b`, `a/%2e%2e%2fb`) — other `%` sequences, such as `100%done.txt`, are allowed;
 - no backslash (`\`);
 - no control characters (U+0000–U+001F, U+007F–U+009F), line or paragraph separators (U+2028, U+2029), or bidirectional formatting characters (U+202A–U+202E, U+2066–U+2069).
 
