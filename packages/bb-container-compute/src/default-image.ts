@@ -25,7 +25,10 @@
  * `node` user) and boots from {@link DEFAULT_CONTAINER_APP_DIR}, which that user
  * owns, starting in {@link DEFAULT_CONTAINER_WORKDIR}. When bumping the digest,
  * confirm the image still ships `node` as uid/gid 1000 with `/home/node` as its
- * home directory.
+ * home directory. Nothing at synth can check this (the image config doesn't
+ * name the user; it lives in `/etc/passwd` inside a layer); the guard is the
+ * `E2E Compute Smoke` pull request check, which deploys the default image, so a
+ * bump that breaks it crash-loops there before merge.
  *
  * **Bumping it.** Dependabot doesn't track this constant. To pick up a newer
  * `24-slim` (security patches, Node minor releases), run
