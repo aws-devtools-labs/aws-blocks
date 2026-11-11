@@ -367,10 +367,11 @@ export type HostingProps = {
      * the browser cache only should send `private, max-age=…`, which the
      * guard leaves unchanged.
      *
-     * Any SSR response that sets cookies (`Set-Cookie`) is always sent with
-     * `Cache-Control: private, no-store`: CloudFront stores `Set-Cookie`
-     * with a cached object and replays it on every hit. Edge TTLs of SSR
-     * responses are clamped to at most 1 day.
+     * Any SSR response that sets cookies (`Set-Cookie`) is sent with
+     * `Cache-Control: private, no-store` unless it is already `private` or
+     * `no-store`: CloudFront stores `Set-Cookie` with a cached object and
+     * replays it on every hit. Edge TTLs of SSR responses are clamped to at
+     * most 1 day.
      * @default Duration.seconds(0) — no caching unless the origin opts in.
      */
     ssrDefaultTtl?: Duration;

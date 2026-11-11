@@ -1284,8 +1284,9 @@ warning and that server's responses are cached as its `Cache-Control` says. The
 guard sends `Cache-Control: private, no-store` instead of the origin's value
 when:
 
-- the response sets cookies (`Set-Cookie`), whatever else it says — CloudFront
-  stores `Set-Cookie` with a cached object and replays it on every hit; or
+- the response sets cookies (`Set-Cookie`) and is not already `private` or
+  `no-store` — CloudFront stores `Set-Cookie` with a cached object and replays
+  it on every hit; or
 - the request carries `Authorization` (unless `'authorization'` is in
   `cacheKeyHeaders`) or a cookie whose name is not in the cache key (the Next.js
   preview cookies, the skew-protection `__dpl` cookie and `cacheKeyCookies`),

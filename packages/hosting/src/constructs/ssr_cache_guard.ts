@@ -18,7 +18,8 @@
  * CloudFront stores a response's `Set-Cookie` with the object and replays it
  * on every hit. The guard rewrites `Cache-Control` to `private, no-store`:
  *
- *   - on every response that carries `Set-Cookie`;
+ *   - on every response that carries `Set-Cookie` and is not already
+ *     `private` or `no-store`;
  *   - on a shared-cacheable response to a request that carries
  *     `Authorization` (unless `authorization` is a configured cache-key
  *     header) or a cookie whose name is not in the cache key.
@@ -195,7 +196,13 @@ function sharedCacheable(cacheControl, expires, statusCode) {
  * response: { cacheControl: string | undefined, expires?: string, setCookie: boolean, statusCode?: number }.
  */
 export function guardCacheControl(request, response) {
-  if (response.setCookie) return response.cacheControl === PRIVATE ? null : PRIVATE;
+  // A response that sets cookies is never stored by a shared cache: it is
+  // left alone when it is already private or no-store (keeping its browser
+  // caching), else made private, no-store.
+  if (response.setCookie) {
+    const names = String(response.cacheControl ?? '').split(',').map((d) => d.split('=')[0].trim().toLowerCase());
+    return names.includes('private') || names.includes('no-store') ? null : PRIVATE;
+  }
   if (!request) return null;
   const credentialed =
     (request.authorization && !KEY_HEADERS.has('authorization')) ||

@@ -93,11 +93,13 @@ void describe('guardCacheControl', () => {
     assert.equal(guard.guardCacheControl({ authorization: false, cookies }, shared), null);
   });
 
-  void it('makes any response with Set-Cookie private, even for an anonymous request', () => {
+  void it('makes a response with Set-Cookie private, even for an anonymous request, unless it is already private or no-store', () => {
     assert.equal(guard.guardCacheControl(anon, { cacheControl: 'public, s-maxage=300', setCookie: true }), PRIVATE);
-    assert.equal(guard.guardCacheControl(anon, { cacheControl: 'private, max-age=60', setCookie: true }), PRIVATE);
+    assert.equal(guard.guardCacheControl(anon, { cacheControl: 'no-cache', setCookie: true }), PRIVATE);
     assert.equal(guard.guardCacheControl(anon, { cacheControl: undefined, setCookie: true }), PRIVATE);
-    assert.equal(guard.guardCacheControl(anon, { cacheControl: PRIVATE, setCookie: true }), null);
+    for (const cacheControl of [PRIVATE, 'private, max-age=600', 'Private', 'no-store', 'public, NO-STORE', 'private="set-cookie"']) {
+      assert.equal(guard.guardCacheControl(anon, { cacheControl, setCookie: true }), null, cacheControl);
+    }
   });
 
   void it('leaves already-private, no-store and no-cache responses alone', () => {
@@ -749,6 +751,10 @@ void describe('Node HTTP server (writeHead)', () => {
         res.setHeader('Set-Cookie', []);
         res.writeHead(200, { 'cache-control': 'public, s-maxage=300' });
         res.end('g');
+      } else if (req.url === '/set-cookie-private') {
+        res.setHeader('Cache-Control', 'private, max-age=600');
+        res.setHeader('Set-Cookie', 'v=1; Path=/');
+        res.end('h');
       } else if (req.url === '/set-cookie') {
         res.setHeader('Cache-Control', 'public, s-maxage=300');
         res.setHeader('Set-Cookie', 'v=1; Path=/');
@@ -805,6 +811,7 @@ void describe('Node HTTP server (writeHead)', () => {
 
   void it('makes a response with Set-Cookie private', async () => {
     assert.equal((await get('/set-cookie')).headers.get('cache-control'), PRIVATE);
+    assert.equal((await get('/set-cookie-private')).headers.get('cache-control'), 'private, max-age=600');
   });
 
   void it('leaves an already-private response alone', async () => {
