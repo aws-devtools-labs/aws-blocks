@@ -28,25 +28,26 @@ import { describe, it } from 'node:test';
 import { compareWithAllowlist, findCodegenSinks, listCodegenFiles, report, scan } from './sinks.mjs';
 
 const SWIFT_TYPE_NAME =
-	'Decoding error text built from the generated Swift type name, which the same output declares as a type, so it must be an identifier; turning spec names into identifiers is open PR #1417, which owns this file.';
+	'Decoding error text built from the generated Swift type name, which swiftIdentifier() has reduced to identifier characters, so it holds no quote, backslash or interpolation.';
+const SWIFT_CONSTANT_TEXT = 'Decoding error text that is a fixed string plus a runtime interpolation of the decoded tag; no spec value reaches it.';
 const EMITTER_BODY = "The literal emitter's own return: the value has just been escaped by the lines above it.";
 
 const ALLOWLIST = [
 	{
-		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:538',
+		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:580',
 		reason: 'Import URI package:<name>/<library>; the parser accepts only ^[a-z_][a-z0-9_]*$ names and [a-z_]-led path segments.',
 	},
-	{ at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1404', reason: EMITTER_BODY },
+	{ at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1464', reason: EMITTER_BODY },
 	{
-		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1491',
+		at: 'native/dart/packages/blocks_codegen/lib/src/generator.dart:1551',
 		reason: 'classLabel is _dartStringLiteral(className) with its quotes stripped, so it is already escaped literal text.',
 	},
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:457', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:468', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:516', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1146', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1156', reason: SWIFT_TYPE_NAME },
-	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1211', reason: SWIFT_TYPE_NAME },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:481', reason: SWIFT_TYPE_NAME },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:492', reason: SWIFT_CONSTANT_TEXT },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:540', reason: SWIFT_TYPE_NAME },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1165', reason: SWIFT_TYPE_NAME },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1175', reason: SWIFT_CONSTANT_TEXT },
+	{ at: 'native/swift/Sources/BlocksCodegen/SwiftCodeGenerator.swift:1230', reason: SWIFT_TYPE_NAME },
 	{ at: 'native/swift/Sources/BlocksCodegen/TransferableEmission.swift:104', reason: EMITTER_BODY },
 	{ at: 'native/swift/Sources/BlocksCodegen/TransferableEmission.swift:116', reason: EMITTER_BODY },
 ];
