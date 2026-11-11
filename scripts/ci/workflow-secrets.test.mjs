@@ -289,6 +289,10 @@ describe('workflow secrets', () => {
 		);
 	});
 
+	// A regression check for the old inline pattern, not a general guarantee: it
+	// only sees a step that both fetches from Secrets Manager and mentions
+	// GITHUB_ENV in the same `run`. A fetch that writes to $GITHUB_OUTPUT, or to
+	// a file that a later step appends to $GITHUB_ENV, is not caught.
 	it(`writes secret values to $GITHUB_ENV only through ${HELPER}`, () => {
 		for (const { file, job, index, step } of fetchers) {
 			if (!/GITHUB_ENV/.test(step.run)) continue;
