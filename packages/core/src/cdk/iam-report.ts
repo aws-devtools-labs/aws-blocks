@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { join, relative } from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { Construct, IConstruct } from 'constructs';
 import { finalizeBlocksRoles } from './blocks-roles.js';
+import { cdkVersion } from './cdk-version.js';
 
 /** One statement on the shared execution role, normalized for diffing. */
 interface ReportStatement {
@@ -72,15 +72,6 @@ function renderedProperties(role: cdk.CfnResource): Record<string, unknown> {
 	return entry.Properties ?? {};
 }
 
-/** The installed aws-cdk-lib version, or `undefined` if it can't be read. */
-function cdkVersion(): string | undefined {
-	try {
-		return (createRequire(import.meta.url)('aws-cdk-lib/package.json') as { version?: string }).version;
-	} catch {
-		return undefined;
-	}
-}
-
 /**
  * The error {@link renderedProperties} throws when CDK's internal rendering
  * changed. The original error, if any, is kept as a non-enumerable `cause`
@@ -101,11 +92,22 @@ const asArray = <T>(v: T | T[] | undefined): T[] | undefined =>
 const sortJson = <T>(values: T[]): T[] =>
 	[...values].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
 
+/**
+ * A Building Block that owns resources the role's statements reference: its
+ * `fullId` and its construct path.
+ *
+ * @internal
+ */
+export interface OwningBlock {
+	fullId: string;
+	path: string;
+}
+
 /** The nearest construct between `node` and `root` (exclusive) that is a Blocks Scope (has a string `fullId`). */
-function owningBlock(node: IConstruct, root: Construct): string | undefined {
+function owningBlock(node: IConstruct, root: Construct): OwningBlock | undefined {
 	for (let current: IConstruct | undefined = node; current && current !== root; current = current.node.scope) {
 		const fullId = (current as { fullId?: unknown }).fullId;
-		if (typeof fullId === 'string') return fullId;
+		if (typeof fullId === 'string') return { fullId, path: current.node.path };
 	}
 	return undefined;
 }
@@ -125,22 +127,40 @@ function referencedLogicalIds(value: unknown, out = new Set<string>()): Set<stri
 }
 
 /**
- * Build the composed-policy report for `root`'s shared execution role: every
- * statement on every inline/managed policy attached to it, the managed policy
- * ARNs and the boundary as the template carries them, and an inventory of every
- * role AWS Blocks created for `root` (each with its boundary and tags as
- * rendered), so a pipeline can verify both from this one file. Values are CloudFormation-resolved (`Ref` / `Fn::GetAtt` stay
- * as objects) and sorted, so the output is stable across synths.
+ * One statement on a role's policies, CloudFormation-resolved, with the policy it
+ * lives in and the Building Blocks that own the resources it references.
  *
- * Must run after aspects and before the template is final — i.e. from a custom
- * synthesis hook (see {@link attachIamReport}).
+ * @internal
  */
-function buildReport(root: Construct, role: iam.Role) {
+export interface AttributedStatement {
+	/** Logical id of the policy (inline or managed) the statement lives in. */
+	policy: string;
+	/** The statement as the template carries it (`Ref` / `Fn::GetAtt` stay as objects). */
+	statement: Record<string, unknown>;
+	/**
+	 * Building Blocks owning the resources the statement references (via `Ref` /
+	 * `Fn::GetAtt` in `Resource`, `NotResource` or `Condition`), one entry per
+	 * `fullId`. Empty when the statement only names literal ARNs or `*`.
+	 */
+	blocks: OwningBlock[];
+}
+
+/**
+ * Every statement on every policy attached to `role` (the `AWS::IAM::Policy` and
+ * `AWS::IAM::ManagedPolicy` resources in the role's stack that list it in `Roles`,
+ * plus the role's own inline `Policies`), each attributed to the Building Blocks
+ * under `root` that own the resources it references. Used by the IAM report and
+ * by the managed-policy quota error (role-policy-packing.ts). Must run after
+ * aspects, so it sees the final policies.
+ *
+ * @internal
+ */
+export function attributeRoleStatements(root: Construct, role: iam.Role): AttributedStatement[] {
 	const stack = cdk.Stack.of(role);
 	const roleCfn = role.node.defaultChild as iam.CfnRole;
 	const roleId = stack.resolve(roleCfn.logicalId) as string;
 
-	const owners = new Map<string, string>();
+	const owners = new Map<string, OwningBlock>();
 	const policies: { id: string; document: unknown }[] = [];
 	const attachedToRole = (roles: unknown) =>
 		(asArray(stack.resolve(roles)) ?? []).some((r) => JSON.stringify(r) === JSON.stringify({ Ref: roleId }));
@@ -162,29 +182,54 @@ function buildReport(root: Construct, role: iam.Role) {
 		policies.push({ id: `${roleId}.${policyName}`, document: policyDocument });
 	}
 
-	const statements: ReportStatement[] = [];
+	const statements: AttributedStatement[] = [];
 	for (const { id, document } of policies) {
 		const resolved = stack.resolve(document) as { Statement?: Record<string, unknown>[] } | undefined;
 		for (const s of resolved?.Statement ?? []) {
-			const blocks = [...referencedLogicalIds([s.Resource, s.NotResource, s.Condition])]
-				.map((lid) => owners.get(lid))
-				.filter((b): b is string => b !== undefined);
-			const actions = asArray(s.Action as string | string[] | undefined);
-			const notActions = asArray(s.NotAction as string | string[] | undefined);
-			const resources = asArray(s.Resource);
-			const notResources = asArray(s.NotResource);
-			statements.push({
-				...(s.Sid !== undefined ? { sid: s.Sid as string } : {}),
-				effect: s.Effect as string,
-				...(actions ? { actions: [...actions].sort() } : {}),
-				...(notActions ? { notActions: [...notActions].sort() } : {}),
-				...(resources ? { resources: sortJson(resources) } : {}),
-				...(notResources ? { notResources: sortJson(notResources) } : {}),
-				...(s.Condition !== undefined ? { condition: s.Condition } : {}),
-				policy: id,
-				blocks: [...new Set(blocks)].sort(),
-			});
+			const blocks = new Map<string, OwningBlock>();
+			for (const lid of referencedLogicalIds([s.Resource, s.NotResource, s.Condition])) {
+				const owner = owners.get(lid);
+				if (owner) blocks.set(owner.fullId, owner);
+			}
+			statements.push({ policy: id, statement: s, blocks: [...blocks.values()] });
 		}
+	}
+	return statements;
+}
+
+/**
+ * Build the composed-policy report for `root`'s shared execution role: every
+ * statement on every inline/managed policy attached to it, the managed policy
+ * ARNs and the boundary as the template carries them, and an inventory of every
+ * role AWS Blocks created for `root` (each with its boundary and tags as
+ * rendered), so a pipeline can verify both from this one file. Values are CloudFormation-resolved (`Ref` / `Fn::GetAtt` stay
+ * as objects) and sorted, so the output is stable across synths.
+ *
+ * Must run after aspects and before the template is final — i.e. from a custom
+ * synthesis hook (see {@link attachIamReport}).
+ */
+function buildReport(root: Construct, role: iam.Role) {
+	const stack = cdk.Stack.of(role);
+	const roleCfn = role.node.defaultChild as iam.CfnRole;
+	const roleId = stack.resolve(roleCfn.logicalId) as string;
+
+	const statements: ReportStatement[] = [];
+	for (const { policy, statement: s, blocks } of attributeRoleStatements(root, role)) {
+		const actions = asArray(s.Action as string | string[] | undefined);
+		const notActions = asArray(s.NotAction as string | string[] | undefined);
+		const resources = asArray(s.Resource);
+		const notResources = asArray(s.NotResource);
+		statements.push({
+			...(s.Sid !== undefined ? { sid: s.Sid as string } : {}),
+			effect: s.Effect as string,
+			...(actions ? { actions: [...actions].sort() } : {}),
+			...(notActions ? { notActions: [...notActions].sort() } : {}),
+			...(resources ? { resources: sortJson(resources) } : {}),
+			...(notResources ? { notResources: sortJson(notResources) } : {}),
+			...(s.Condition !== undefined ? { condition: s.Condition } : {}),
+			policy,
+			blocks: blocks.map((b) => b.fullId).sort(),
+		});
 	}
 
 	// Every role AWS Blocks created for this root — the same set the permissions

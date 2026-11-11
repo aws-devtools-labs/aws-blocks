@@ -31,6 +31,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { enableRolePolicyPacking } from './role-policy-packing.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
@@ -233,6 +234,12 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 				: []),
 		],
 	});
+	// When `@aws-blocks/core:mergeExecutionRolePolicies` is on, merge combinable
+	// statements before CDK packs any overflow into managed policies; either way,
+	// fail synth with a fix if the role would exceed the managed-policies-per-role
+	// quota. With the key unset the role is exactly what CDK produces
+	// (role-policy-packing.ts).
+	enableRolePolicyPacking(executionRole, scope);
 
 	// ── Permissions boundary + IAM report ─────────────────────────────────
 	// Cover every role AWS Blocks creates for this root (blocks-roles.ts — an

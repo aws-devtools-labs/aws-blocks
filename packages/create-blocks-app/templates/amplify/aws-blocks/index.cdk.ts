@@ -28,6 +28,9 @@ export async function createBlocksBackend(stack: Stack, sandboxMode: boolean) {
   // cdk.json templates, so a new Amplify project encrypts Database storage by
   // default. Set unconditionally (not only in sandbox) so production deploys get it too.
   stack.node.setContext('@aws-blocks/bb-data:encryptStorageByDefault', true);
+  // Likewise for the execution-role statement merging that the cdk.json templates
+  // turn on with `@aws-blocks/core:mergeExecutionRolePolicies`.
+  stack.node.setContext('@aws-blocks/core:mergeExecutionRolePolicies', true);
 
   const blocks = await BlocksBackend.create(stack, 'blocks', {
     backendHandlerPath: join(__dirname, 'index.handler.ts'),
