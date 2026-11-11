@@ -39,6 +39,7 @@ const kb = new KnowledgeBase(scope, id, options)
 |--------|---------|-------------|
 | `retrieve(query, options?)` | `Promise<RetrieveResult[]>` | Search for relevant document chunks. Returns results ranked by relevance score. |
 | `isSynced()` | `Promise<boolean>` | Whether the KB is synced with your latest data. `true` once the latest ingestion job is `COMPLETE` (or there is no BB-managed data source to track). Reports data *freshness*, not availability — `retrieve()` is always callable and serves the prior snapshot while a re-ingestion is in flight. Throws `IngestionFailed` if the latest job failed. |
+| `asAgentTool(options)` | `KnowledgeBaseAgentTool` | A tool definition for an Agent's `tools` callback. The model supplies only the query; the metadata filter is derived from the per-call tool context by your required `filter` callback. Marked `untrustedOutput: true`. See [Use as an Agent tool](#use-as-an-agent-tool). |
 | `waitUntilSynced(options?)` | `Promise<void>` | Poll `isSynced()` until the KB is synced with your latest data or the timeout elapses. Throws `Timeout` if it does not sync in time. Accepts an optional `AbortSignal` to cancel the wait. |
 
 ### Options
@@ -150,12 +151,62 @@ const results = await kb.retrieve('pricing', {
 
 Subfolder paths automatically populate the `folder` metadata key. For example, a file at `./knowledge/faq/billing.md` gets `metadata.folder = 'faq'`.
 
+## Use as an Agent tool
+
+`asAgentTool()` returns a tool definition you pass to the `tool()` factory of an `Agent` (`@aws-blocks/bb-agent`). It encodes the two rules in [Trust Boundary](#trust-boundary) so you don't have to remember them:
+
+- **The filter comes from your server code.** The tool's only input is `query`. The required `filter` callback derives the metadata filter from the per-call tool context, which you set from the authenticated session when you call `agent.stream()`. The model can't see or change it.
+- **Results are untrusted.** The tool is marked `untrustedOutput: true`, so the agent wraps the retrieved text in an untrusted-data block and tells the model to treat it as data.
+
+```typescript
+import { Scope, ApiNamespace } from '@aws-blocks/core';
+import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Agent } from '@aws-blocks/bb-agent';
+import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { z } from 'zod';
+
+const scope = new Scope('my-app');
+const auth = new AuthBasic(scope, 'auth');
+const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
+
+const agent = new Agent(scope, 'assistant', {
+  systemPrompt: 'Answer questions from the documentation.',
+  toolContextSchema: z.object({ ownerId: z.string() }),
+  tools: (tool) => ({
+    // `context` is typed from toolContextSchema.
+    searchDocs: tool(kb.asAgentTool({
+      filter: (context) => ({ owner: { equals: context.ownerId } }),
+    })),
+  }),
+});
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async ask(message: string) {
+    const user = await auth.requireAuth(context);
+    // The tool context, and so the search scope, comes from the session: each document carries
+    // an `owner` metadata value, and a user searches only their own. For per-tenant scoping, put a
+    // tenant id your app looks up for the user in the context instead (the built-in auth users
+    // carry only `userId`, `username` and `createdAt`).
+    const result = await agent.stream(message, { userId: user.userId, context: { ownerId: user.userId } });
+    return { channelId: result.channelId };
+  },
+}));
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `filter` | `(context) => MetadataFilter \| undefined` (may be async) | (required) | Derives the filter for every search from the tool context. Return `undefined` to search everything: write `filter: () => undefined` only when every caller may read every document. Throw to fail the call instead of running an unscoped search. Any other result must narrow the search: `null`, `{}` or a missing or empty `equals` fails the call with `ValidationError`. |
+| `description` | `string` | generic, includes the KB `description` | Tool description shown to the model. |
+| `maxResults` | `number` | `5` | Results per search (same rules as `retrieve()`). A non-integer throws from `asAgentTool()`. |
+
+The tool returns plain JSON hits (`text`, `score`, `source`, `metadata`). Retrieval is read-only, so the tool doesn't ask for approval; set `needsApproval: true` on the agent's tools that have side effects. Spread the definition to add agent-side fields: `tool({ ...kb.asAgentTool({ filter }), cannedExamples: { query: 'refund policy' } })`. `asAgentTool()` can be called at module top level (it's synth-safe); the search runs only when the agent calls the tool.
+
 ## Trust Boundary
 
 A knowledge base is one index, not one per user or tenant, and `retrieve()` returns whatever matches. Two consequences:
 
-- **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: user.tenantId } }`). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
-- **Indexed text is untrusted.** If a source can receive content you don't write yourself, for example an `s3://` source that is a `FileBucket` your users upload to, that content reaches anyone who retrieves it. When results go to an agent, they can carry instructions that try to make it misuse its tools (indirect prompt injection). Mark the agent tool that calls `retrieve()` with `untrustedOutput: true`, and see [Retrieved content is untrusted](../bb-agent/README.md#retrieved-content-is-untrusted) in the Agent docs.
+- **A filter is a query scope, not an access control.** If you keep several users' or tenants' documents in one knowledge base, set the filter in your server code from the authenticated caller (for example `filter: { tenant: { equals: tenantId } }` with a tenant id you look up for the authenticated user). Never take it from the request body or from an agent tool's input, or a caller can read other tenants' documents by changing it.
+- **Indexed text is untrusted.** If a source can receive content you don't write yourself, for example an `s3://` source that is a `FileBucket` your users upload to, that content reaches anyone who retrieves it. When results go to an agent, they can carry instructions that try to make it misuse its tools (indirect prompt injection). Use [`asAgentTool()`](#use-as-an-agent-tool), or mark the agent tool that calls `retrieve()` with `untrustedOutput: true`, and see [Retrieved content is untrusted](../bb-agent/README.md#retrieved-content-is-untrusted) in the Agent docs.
 
 ## Error Handling
 

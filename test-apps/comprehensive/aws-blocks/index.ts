@@ -821,6 +821,23 @@ const kb = new KnowledgeBase(scope, 'docs', {
   source: './aws-blocks/knowledge',
 });
 
+// KnowledgeBase as an Agent tool. The search scope comes from the per-call tool context, which
+// server code sets from the authenticated session; the model only supplies the query.
+const kbToolAgent = new Agent(scope, 'kbtool', {
+  removalPolicy: 'destroy',
+  inferenceOnly: true,
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'Answer questions from the documentation.',
+  toolContextSchema: z.object({ folder: z.string() }),
+  tools: (tool) => ({
+    searchDocs: tool({
+      ...kb.asAgentTool({ filter: (context) => ({ folder: { equals: context.folder } }), maxResults: 10 }),
+      // Canned provider only: search for a query that matches the docs instead of a placeholder.
+      cannedExamples: { query: 'Building Blocks Scope' },
+    }),
+  }),
+});
+
 // Tracer - Distributed tracing backed by X-Ray
 const tracer = new Tracer(scope, 'tracer');
 const disabledTracer = new Tracer(scope, 'tracer-disabled', { enabled: false });
@@ -2810,6 +2827,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async kbWaitUntilSynced(options?: WaitUntilSyncedOptions) {
     await kb.waitUntilSynced(options);
     return { success: true };
+  },
+
+  async kbAgentToolSearch(message: string) {
+    // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
+    // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
+    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const done = await result.complete();
+    return { text: done.text ?? '' };
   },
 
   // ------------------------------------------------------------------------
