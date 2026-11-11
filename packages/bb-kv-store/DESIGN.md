@@ -272,7 +272,7 @@ Durability posture is resolved from the stack-wide `BlocksDefaults` (`BlocksPres
 
 **Decision:** Both runtimes reject, before any I/O: a key of the wrong shape or type (`InvalidQuery`), a key/value disagreement, a reserved field, an empty string in a key or indexed field, and a value that fails the schema (`ValidationFailed`); `ifValueEquals` with an object, an empty `ifFieldEquals`, and a bad cursor (`InvalidQuery`). The checks live in `src/item.ts` and the messages in `src/errors.ts`, shared by both runtimes.
 
-**Rationale:** The type system enforces these for TypeScript callers; JavaScript callers, casts, and request-shaped values reach the runtime unchecked. Doing the checks in shared code keeps the mock and AWS runtime byte-for-byte aligned on what they accept and on the error they throw, which the parity tests assert. A key-type mismatch is caught where the schema names the type (D-KV-15 probe), because DynamoDB's own error for it does not name the cause.
+**Rationale:** The type system enforces these for TypeScript callers; JavaScript callers, casts, and request-shaped values reach the runtime unchecked. Doing the checks in shared code keeps the mock and AWS runtime byte-for-byte aligned on what they accept and on the error they throw, which the parity tests assert. A key-type mismatch is caught where the schema names the type (see Key model), because DynamoDB's own error for it does not name the cause.
 
 ### D-KV-16: No guard for a `ttl` change on a deployed store (deferred)
 

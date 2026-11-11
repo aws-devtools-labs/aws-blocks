@@ -663,7 +663,7 @@ Most validators discard unrecognized keys when they produce their output (Zod `.
 ### References
 
 - Issue #1007; PR #283 (this change), review threads from @soberm and @sarayev.
-- Per-BB mechanics: `packages/bb-kv-store/DESIGN.md`; user-facing modes in `packages/bb-kv-store/README.md` ("Reads and schema changes").
+- Per-BB mechanics: `packages/bb-kv-store/DESIGN.md` (D-KV-10); user-facing modes in `packages/bb-kv-store/README.md` ("Reads and schema changes").
 - Code: `packages/bb-kv-store/src/{types.ts, errors.ts, index.aws.ts, index.mock.ts}`.
 
 ## D-016: Off-region CloudFront alarm is always-on, with warn-and-skip when the account is unresolved
