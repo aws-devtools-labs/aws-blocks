@@ -138,6 +138,16 @@ describe('a store with no options (string key, string value)', () => {
 		assert.strictEqual(await store.get('a'), null);
 	});
 
+	test('a field named __proto__ round-trips as an own field and does not change the prototype of the value', async () => {
+		const store = new KVStore<Record<string, unknown>>(testScope(), 'kv');
+		await store.put('a', JSON.parse('{"__proto__":{"admin":true},"name":"A"}'));
+		const got = await store.get('a');
+		assert.ok(got);
+		assert.strictEqual(Object.getPrototypeOf(got), Object.prototype);
+		assert.strictEqual(got.admin, undefined);
+		assert.deepStrictEqual(Object.keys(got).sort(), ['__proto__', 'name']);
+	});
+
 	test('put rejects items exceeding 400 KB with ItemTooLarge', async () => {
 		const store = new KVStore(testScope(), 'kv');
 		await rejects(store.put('big', 'x'.repeat(400 * 1024 + 1)), KVStoreErrors.ItemTooLarge, /400 KB/);

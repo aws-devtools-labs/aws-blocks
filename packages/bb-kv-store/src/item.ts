@@ -281,11 +281,12 @@ export function readItem(model: KeyModel, item: Item): ReadEntry {
 			? { key, value: item[VALUE_ATTRIBUTE] }
 			: { key, value: item[VALUE_ATTRIBUTE], expiresAt };
 	}
-	const value: Item = {};
-	for (const [field, v] of Object.entries(item)) {
-		if (field.startsWith(RESERVED_PREFIX)) continue;
-		value[field] = v;
-	}
+	// Build the value with data properties only (`Object.fromEntries` defines, it
+	// never assigns), so a stored attribute whose name is special on a plain
+	// object, such as `__proto__`, stays an ordinary own field of the value.
+	const value: Item = Object.fromEntries(
+		Object.entries(item).filter(([field]) => !field.startsWith(RESERVED_PREFIX)),
+	);
 	return expiresAt === undefined ? { key, value } : { key, value, expiresAt };
 }
 
