@@ -41,6 +41,7 @@ import {
 	getVpcContext,
 	initializeVpc,
 	registerVpcRequirements,
+	sourceScopedConditions,
 } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
@@ -851,10 +852,7 @@ export class ContainerCompute extends ComputeBase {
 				effect: cdk.aws_iam.Effect.ALLOW,
 				principals: [new ServicePrincipal('ecs-tasks.amazonaws.com')],
 				actions: ['sts:AssumeRole'],
-				conditions: {
-					StringEquals: { 'aws:SourceAccount': stack.account },
-					ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:ecs:${stack.region}:${stack.account}:*` },
-				},
+				conditions: sourceScopedConditions(stack, 'ecs', '*'),
 			}),
 		);
 		roleAny[KEY] = true;
@@ -872,10 +870,10 @@ export class ContainerCompute extends ComputeBase {
 		const cfnRole = taskDefinition.executionRole?.node.defaultChild;
 		if (!cfnRole || !cdk.CfnResource.isCfnResource(cfnRole)) return;
 		const stack = cdk.Stack.of(taskDefinition);
-		cfnRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition', {
-			StringEquals: { 'aws:SourceAccount': stack.account },
-			ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:ecs:${stack.region}:${stack.account}:*` },
-		});
+		cfnRole.addPropertyOverride(
+			'AssumeRolePolicyDocument.Statement.0.Condition',
+			sourceScopedConditions(stack, 'ecs', '*'),
+		);
 	}
 
 	/**

@@ -10,6 +10,7 @@ import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
 import { createAgentTool } from './agent-tool.js';
@@ -292,14 +293,7 @@ export class KnowledgeBase extends BuildingBlockScope {
 		const stack = cdk.Stack.of(this);
 		const bedrockRole = new iam.Role(this, 'BedrockRole', {
 			assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
-				conditions: {
-					StringEquals: {
-						'aws:SourceAccount': stack.account,
-					},
-					ArnLike: {
-						'aws:SourceArn': `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:knowledge-base/*`,
-					},
-				},
+				conditions: sourceScopedConditions(stack, 'bedrock', 'knowledge-base/*'),
 			}),
 		});
 
