@@ -24,7 +24,8 @@ import type { AuthEngine } from './engine.js';
 import { OidcClientEngine } from './engines/oidc-client-engine.js';
 import { CognitoFederationEngine } from './engines/cognito-federation-engine.js';
 import { SessionManager } from './engines/session-manager.js';
-import { mountAuthRoutes, mountStubIdpRoutes } from './routes.js';
+import { mountAuthRoutes } from './routes.js';
+import { mountStubIdpRoutes } from './stub-routes.js';
 import { resolveProviderIssuerUrl } from './utils.js';
 import type { AuthOIDCOptions, ProviderConfig, SessionRow } from './types.js';
 import { BB_NAME, BB_VERSION } from './version.js';
@@ -185,6 +186,8 @@ export class AuthOIDC<
 				postSignInPath: options.postSignInPath ?? '/',
 				resolveIssuerUrl: resolveProviderIssuerUrl,
 				allowInsecureIssuers: true,
+				// The mock runtime always mounts the stub IdP (local dev only).
+				trustStubProviders: true,
 				allowedRelayOrigins: options.allowedRelayOrigins,
 			});
 		}

@@ -96,6 +96,15 @@ export interface BuildSignInUrlOutput {
 
 /** Minimal interface implemented by every engine. */
 export interface AuthEngine {
+	/**
+	 * Whether this engine serves the named provider. A configured provider can
+	 * still be unserved — e.g. a `stubIdp()` provider outside a sandbox
+	 * deployment, or a non-Cognito provider on the Cognito federation engine.
+	 * `AuthOIDC` uses this to leave unserved providers out of the client
+	 * handle and the signed-out sign-in actions.
+	 */
+	hasProvider(name: string): boolean;
+
 	buildSignInUrl(input: BuildSignInUrlInput): Promise<BuildSignInUrlOutput>;
 
 	/**
