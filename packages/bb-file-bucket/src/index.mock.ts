@@ -185,13 +185,13 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 		const versionId = (options as any)?.versionId as string | undefined;
 		if (versionId && this.versioned) {
 			const vPath = versionContentPath(this.dataDir, path, versionId);
-			if (!existsSync(vPath)) return null;
+			if (!statSync(vPath, { throwIfNoEntry: false })?.isFile()) return null;
 			const body = readFileSync(vPath);
 			const meta = this.readVersionMeta(path, versionId);
 			return { body, contentType: meta.contentType, metadata: meta.metadata, size: body.length };
 		}
 		const filePath = contentPath(this.dataDir, path);
-		if (!existsSync(filePath)) return null;
+		if (!statSync(filePath, { throwIfNoEntry: false })?.isFile()) return null;
 		// Check for delete marker
 		if (this.versioned && existsSync(deleteMarkerPath(this.dataDir, path))) return null;
 
@@ -487,7 +487,7 @@ export class FileBucket<O extends FileBucketOptions = FileBucketOptions> extends
 	async restoreVersion(path: string, versionId: string): Promise<void> {
 		this.validateKey(path);
 		const vPath = versionContentPath(this.dataDir, path, versionId);
-		if (!existsSync(vPath)) {
+		if (!statSync(vPath, { throwIfNoEntry: false })?.isFile()) {
 			throw blocksError(FileBucketErrors.VersionNotFound, `Version "${versionId}" does not exist for "${path}"`);
 		}
 		const body = readFileSync(vPath);
