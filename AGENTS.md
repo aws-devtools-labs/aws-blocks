@@ -120,11 +120,12 @@ packages/bb-{name}/
     version.ts         # GENERATED (prebuild) — BB_NAME, BB_VERSION
     types.ts           # TYPES ONLY — `import type` only; no const/function/class
     errors.ts          # XxxErrors as-const + blocksError() (brand via core's brandBlocksError so the name crosses the wire)
+    validation.ts      # caller-input checks, imported and called by BOTH index.mock.ts and index.aws.ts
     index.mock.ts      # default + types entry
     index.aws.ts       # aws-runtime entry
     index.cdk.ts       # cdk entry
     index.browser.ts   # browser stub: re-exports types + error constants; methods are server-side (throw)
-    index.test.ts  parity.test.ts  index.cdk.test.ts
+    index.test.ts  parity.test.ts  index.cdk.test.ts   # parity.test.ts: same cases, mock vs AWS with the SDK stubbed
 ```
 
 **The non-obvious bits of the three layers:**
@@ -160,6 +161,7 @@ get(..._a: unknown[]): never { return synthGuard('Thing', 'get'); }      // stub
 - conditional exports across all entry points + `prebuild` version script
 - `types.ts` types-only
 - every named runtime export in `index.mock.ts` exists in the `cdk` and `aws-runtime` entries, and so does every public method of each exported class; under `cdk` each runtime-only method must throw via `synthGuard` (all enforced by `conditional-exports.test.ts` in `packages/blocks`; a method that must work at synth goes in its `SYNTH_SAFE_METHODS`); `browser` entries are intentionally narrower and are outside this full-export parity check, but every BB with `*Errors` constants needs one that re-exports them from `errors.js` (same values; also enforced by `conditional-exports.test.ts`)
+- mock↔AWS validation parity: caller-input validation lives in `src/validation.ts` and is called by **both** `index.mock.ts` and `index.aws.ts` at the same point in each method, throwing the same branded error; a `src/parity.test.ts` runs one table of cases against the mock and the AWS entry (SDK stubbed) and asserts the same named error or success, plus the captured SDK input on success. Enforced by `mock-aws-parity.test.ts` in `packages/blocks` (see [validation parity](docs/reference/building-block-structure.md#mock-and-aws-validation-parity)); never validate on only one side
 - ship `README.md` + `DESIGN.md` via `package.json` `"files"`
 - register in the umbrella `packages/blocks` exactly like an existing BB (add dependency + a catalog/README row + re-export from its `index.ts` **and** `index.cdk.ts`)
 - add to the root `workspaces`

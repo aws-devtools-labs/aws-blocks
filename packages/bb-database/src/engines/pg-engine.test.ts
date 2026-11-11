@@ -7,7 +7,7 @@ import { ApiError, isBlocksError } from '@aws-blocks/core';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 import { DatabaseErrors } from '../errors.js';
-import { DsqlEngine, type DsqlPool, type DsqlPoolClient, dsqlTypeParsers, parseInt8 } from './dsql-engine.js';
+import { PgEngine, type PgPool, type PgPoolClient, parseInt8, pgTypeParsers } from './pg-engine.js';
 
 describe('DSQL result types match the local engine', () => {
 	test('bigint is a number when it is a safe integer and a BigInt otherwise, as PGlite returns it', async () => {
@@ -18,7 +18,7 @@ describe('DSQL result types match the local engine', () => {
 			)
 		).rows[0];
 		await local.close();
-		const parse = dsqlTypeParsers.getTypeParser(20);
+		const parse = pgTypeParsers.getTypeParser(20);
 		assert.strictEqual(parse('42'), row.small);
 		assert.strictEqual(parse('9007199254740993'), row.big);
 		assert.strictEqual(parse('-7'), row.negative);
@@ -34,7 +34,7 @@ function serverError(code: string, message: string): pg.DatabaseError {
 	return Object.assign(new pg.DatabaseError(message, message.length, 'error'), { code });
 }
 
-class StubClient implements DsqlPoolClient {
+class StubClient implements PgPoolClient {
 	readonly statements: string[] = [];
 	readonly releases: (Error | undefined)[] = [];
 	/** Statement text → the error its next run throws, once. */
@@ -56,9 +56,9 @@ class StubClient implements DsqlPoolClient {
 }
 
 // One client, handed out again on every connect(): what pg-pool does with a released client.
-class StubPool implements DsqlPool {
+class StubPool implements PgPool {
 	readonly client = new StubClient();
-	async connect(): Promise<DsqlPoolClient> {
+	async connect(): Promise<PgPoolClient> {
 		return this.client;
 	}
 	query(sql: string): Promise<pg.QueryResult> {
@@ -67,9 +67,15 @@ class StubPool implements DsqlPool {
 	async end(): Promise<void> {}
 }
 
-function stubbedEngine(): { engine: DsqlEngine; client: StubClient } {
+function stubbedEngine(): { engine: PgEngine; client: StubClient } {
 	const pool = new StubPool();
-	const engine = new DsqlEngine({ endpoint: 'stub', role: 'app', getAuthToken: async () => 'token', pool });
+	const engine = new PgEngine({
+		kind: 'dsql',
+		endpoint: 'stub',
+		role: 'app',
+		getAuthToken: async () => 'token',
+		pool,
+	});
 	return { engine, client: pool.client };
 }
 
@@ -118,7 +124,9 @@ describe('DSQL transaction handle lifecycle', () => {
 	test('a BEGIN that fails hands the client back to the pool with the error, so the pool discards it', async () => {
 		const { engine, client } = stubbedEngine();
 		client.failOn.set('BEGIN', new Error('Connection terminated unexpectedly'));
-		await assert.rejects(engine.beginTransaction(), (e: unknown) => isBlocksError(e, DatabaseErrors.QueryFailed));
+		await assert.rejects(engine.beginTransaction(), (e: unknown) =>
+			isBlocksError(e, DatabaseErrors.ConnectionFailed),
+		);
 		assert.strictEqual(client.releases.length, 1);
 		assert.ok(client.releases[0] instanceof Error);
 	});
@@ -128,7 +136,7 @@ describe('DSQL transaction handle lifecycle', () => {
 		client.failOn.set('COMMIT', new Error('Connection terminated unexpectedly'));
 		const handle = await engine.beginTransaction();
 		await assert.rejects(engine.commitTransaction(handle), (e: unknown) =>
-			isBlocksError(e, DatabaseErrors.QueryFailed),
+			isBlocksError(e, DatabaseErrors.ConnectionFailed),
 		);
 		assert.ok(client.releases[0] instanceof Error);
 		await engine.rollbackTransaction(handle);
@@ -170,6 +178,24 @@ describe('DSQL stale schema cache', () => {
 				isBlocksError(e, DatabaseErrors.SerializationFailure) && e instanceof ApiError && e.retriable,
 		);
 		assert.deepStrictEqual(client.statements, ['BEGIN', 'SELECT 1'], 'no retry on the aborted transaction');
+	});
+});
+
+describe('socket errors without a SQLSTATE', () => {
+	test('a dead idle client surfaces as a code-less error; the autocommit statement is run once more', async () => {
+		const { engine, client } = stubbedEngine();
+		client.failOn.set('SELECT 1', new Error('Connection terminated unexpectedly'));
+		assert.deepStrictEqual(await engine.query('SELECT 1'), []);
+		assert.deepStrictEqual(client.statements, ['SELECT 1', 'SELECT 1']);
+	});
+
+	test('a connect that timed out is ConnectionFailed and is not run again', async () => {
+		const { engine, client } = stubbedEngine();
+		client.failOn.set('SELECT 1', new Error('timeout exceeded when trying to connect'));
+		await assert.rejects(engine.query('SELECT 1'), (e: unknown) =>
+			isBlocksError(e, DatabaseErrors.ConnectionFailed),
+		);
+		assert.deepStrictEqual(client.statements, ['SELECT 1']);
 	});
 });
 

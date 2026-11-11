@@ -22,14 +22,15 @@ export const DatabaseErrors = {
 	ResultValidationFailed: 'ResultValidationFailedException',
 } as const;
 
-// Local mock only: deployed DSQL raises SQLSTATE 42501 (→ QueryFailed) for DDL on the app role, so this
+// Local mock only: a deployed cluster raises SQLSTATE 42501 (→ QueryFailed) for DDL on the app role, so this
 // name is not on the public DatabaseErrors.
-export const DSQL_PERMISSION_ERROR_NAME = 'DsqlPermissionException';
+export const PERMISSION_ERROR_NAME = 'DatabasePermissionException';
 
 export const DSQL_VALIDATION_ERROR_NAME = 'DsqlValidationError';
 
-// A migration file dsql-lint rejects; thrown at construction (local) and at synth (CDK), before anything runs.
-export const DSQL_MIGRATION_VALIDATION_ERROR_NAME = 'DsqlMigrationValidationError';
+// A migration file the cluster cannot run (dsql-lint on dsql; a DSQL-only form on aurora); thrown at construction
+// (local) and at synth (CDK), before anything runs.
+export const MIGRATION_VALIDATION_ERROR_NAME = 'MigrationValidationError';
 
 // A migration step that failed on the cluster; the runner resumes at it on the next deploy.
 export const MIGRATION_FAILED_ERROR_NAME = 'MigrationFailedException';
@@ -38,6 +39,9 @@ export const PG_SERIALIZATION_FAILURE = '40001';
 const PG_UNIQUE_VIOLATION = '23505';
 const PG_CONNECTION_EXCEPTION_CLASS = '08';
 const PG_ADMIN_SHUTDOWN = '57P01';
+// A socket that died surfaces from pg with no SQLSTATE; a connect that timed out likewise.
+const PG_SOCKET_ERROR_MESSAGE = /Connection terminated|ECONNRESET|EPIPE|ECONNREFUSED|ENOTFOUND|socket hang up/i;
+const PG_CONNECT_TIMEOUT_MESSAGE = /timeout exceeded when trying to connect/i;
 const PG_PROGRAM_LIMIT_EXCEEDED = '54000';
 const DSQL_STALE_SCHEMA_CACHE = 'OC001';
 const DSQL_STALE_SCHEMA_CACHE_MESSAGE = /\bOC001\b/;
@@ -132,9 +136,8 @@ export function translatePgError(raw: unknown, engineName: string): never {
 	if (code === PG_UNIQUE_VIOLATION) throw uniqueConstraintConflict(e);
 	if (isKnownDatabaseErrorName(e.name)) throw e;
 	if (isDsqlTransactionLimit(e)) throw reTagged(DatabaseErrors.TransactionRowLimitExceeded, e);
-	const name = code?.startsWith(PG_CONNECTION_EXCEPTION_CLASS)
-		? DatabaseErrors.ConnectionFailed
-		: DatabaseErrors.QueryFailed;
+	const name =
+		isConnectionLost(e) || isConnectTimeout(e) ? DatabaseErrors.ConnectionFailed : DatabaseErrors.QueryFailed;
 	console.debug(`[${engineName}] ${name}`, { code });
 	throw reTagged(name, e);
 }
@@ -153,10 +156,19 @@ export function isStaleSchemaCache(e: unknown): boolean {
 	return isStaleSchemaCacheError(e) || isStaleSchemaCacheError(cause);
 }
 
-/** The connection is gone (SQLSTATE class 08) or the server ended it (57P01); the pool replaces it on the next checkout. */
+/**
+ * The connection is gone: SQLSTATE class 08, the server ended it (57P01), or the socket died without a SQLSTATE;
+ * the pool replaces it on the next checkout. A connect that timed out is not a lost connection (`isConnectTimeout`).
+ */
 export function isConnectionLost(e: unknown): boolean {
 	const code = pgErrorCode(e);
-	return code === PG_ADMIN_SHUTDOWN || (code?.startsWith(PG_CONNECTION_EXCEPTION_CLASS) ?? false);
+	if (code !== undefined) return code === PG_ADMIN_SHUTDOWN || code.startsWith(PG_CONNECTION_EXCEPTION_CLASS);
+	return e instanceof Error && PG_SOCKET_ERROR_MESSAGE.test(e.message);
+}
+
+/** pg gave up waiting for a connection (`connectionTimeoutMillis`): the cluster is resuming or unreachable. */
+export function isConnectTimeout(e: unknown): boolean {
+	return e instanceof Error && PG_CONNECT_TIMEOUT_MESSAGE.test(e.message);
 }
 
 export function isSerializationConflict(e: unknown): boolean {
