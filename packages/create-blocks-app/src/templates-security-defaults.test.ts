@@ -492,17 +492,25 @@ const PRESIGNING_METHODS = ['getUrl', 'putUrl', 'getFileHandle', 'createUploadHa
  * Every `<x>.getUrl|putUrl|getFileHandle|createUploadHandle(…)` call in `file`,
  * with the API method it sits in (`undefined` when it is outside every
  * ApiNamespace method, e.g. in a module-level helper).
+ *
+ * Matches on the method name, whatever the receiver, as `<bucket>.<method>(…)`
+ * or `<bucket>['<method>'](…)`. Templates must call the FileBucket presign
+ * methods that way: a destructured or `bind`-aliased call
+ * (`const { getUrl } = files`) is not seen by this check.
  */
 function presignedUrlCalls(file: string): { call: string; method?: TemplateMethod }[] {
   const methods = apiMethods(file);
   const sourceFile = ts.createSourceFile(file, readFileSync(file, 'utf-8'), ts.ScriptTarget.Latest, true);
   const calls: { call: string; method?: TemplateMethod }[] = [];
+  const presignedName = (callee: ts.Expression): string | undefined => {
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    if (ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)) {
+      return callee.argumentExpression.text;
+    }
+    return undefined;
+  };
   const visit = (node: ts.Node) => {
-    if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      PRESIGNING_METHODS.includes(node.expression.name.text)
-    ) {
+    if (ts.isCallExpression(node) && PRESIGNING_METHODS.includes(presignedName(node.expression) ?? '')) {
       // Offsets match across parses of the same text, so the enclosing method is the one whose body spans the call.
       const method = methods.find((m) => m.body.pos <= node.pos && node.end <= m.body.end);
       calls.push({ call: node.expression.getText(sourceFile), method });
@@ -569,6 +577,7 @@ describe('ungatedPresignedUrlCalls', () => {
         async late(path: string) { const url = await files.createUploadHandle(path); await auth.requireAuth(context); return url; },
         async listed(path: string) { await auth.requireAuth(context); return files.getUrl(path); },
         async publicSigner(path: string) { return files.putUrl(path); },
+        async indexed(path: string) { return files['getFileHandle'](path); },
       }));`,
     );
     try {
@@ -579,6 +588,7 @@ describe('ungatedPresignedUrlCalls', () => {
         'api.listed → files.getUrl (listed in UNGATED)',
         // Listed and ungated: the fix is to drop it from UNGATED (and gate it), so name the listing.
         'api.publicSigner → files.putUrl (listed in UNGATED)',
+        "api.indexed → files['getFileHandle'] (does not start with requireAuth/requireRole)",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
