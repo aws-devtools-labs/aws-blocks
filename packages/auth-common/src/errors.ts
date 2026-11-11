@@ -51,6 +51,13 @@ export const AuthErrors = {
 	TokenExpired: 'TokenExpiredException',
 	/** The session is valid but too old for an operation that requires a recent sign-in. */
 	ReauthenticationRequired: 'ReauthenticationRequiredException',
+	/**
+	 * Sign-out cleared the session cookie but could not delete the server-side
+	 * session (a transient session-store failure, or the session secret could
+	 * not be resolved to identify it); HTTP 503. This device is signed out, but a
+	 * copy of the cookie keeps authenticating until the session ends on its own.
+	 */
+	SignOutIncomplete: 'SignOutIncompleteException',
 
 	// ── sign-up / users ───────────────────────────────────────────────────────
 	/** A user with this username already exists. */

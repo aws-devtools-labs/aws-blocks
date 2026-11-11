@@ -35,7 +35,7 @@
 
 import crypto from 'node:crypto';
 import { ApiError, type BlocksContext } from '@aws-blocks/core';
-import { constantTimeEquals } from '@aws-blocks/core/bb-utils';
+import { constantTimeEquals, getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
 import { createRemoteJWKSet, type JWTPayload, jwtVerify } from 'jose';
 import { AuthErrors } from '../errors.js';
 import { safeRedirectPath, signInRedirectPath } from '../redirect-path.js';
@@ -165,8 +165,10 @@ export { isSafeRedirectPath } from '../redirect-path.js';
 /**
  * The absolute `redirect_uri` for this request. Prefers the deploy-time
  * `BLOCKS_PUBLIC_ORIGIN` (the CloudFront / custom-domain origin, which the
- * Lambda never sees in `Host`), else the request's origin plus any API Gateway
- * stage prefix before `/aws-blocks` (sandbox / local) — `AuthOIDC`'s rule.
+ * Lambda never sees in `Host`), else the request's base URL: its origin plus any
+ * API Gateway stage (`getRequestBaseUrl()`; sandbox / local, or a deploy reached
+ * at the gateway URL itself) — `AuthOIDC`'s rule. `ctx.request.url` is the route
+ * path and never has the stage, so the base comes from `getRequestBaseUrl()`.
  */
 export function computeCallbackUrl(ctx: BlocksContext, callbackPath: string): string {
 	const publicOrigin = process.env.BLOCKS_PUBLIC_ORIGIN;
@@ -178,10 +180,7 @@ export function computeCallbackUrl(ctx: BlocksContext, callbackPath: string): st
 export function appBaseUrl(ctx: BlocksContext): string {
 	const publicOrigin = process.env.BLOCKS_PUBLIC_ORIGIN;
 	if (publicOrigin) return stripSlash(publicOrigin);
-	const { url } = ctx.request;
-	const routeStart = url.pathname.search(/\/aws-blocks\b/);
-	const stagePrefix = routeStart > 0 ? url.pathname.slice(0, routeStart) : '';
-	return `${url.protocol}//${url.host}${stagePrefix}`;
+	return stripSlash(getRequestBaseUrl(ctx));
 }
 
 /** Group names from `claims[groupsClaim]`: a string array, or a single string. */

@@ -64,12 +64,16 @@ const rt = new Realtime(scope, 'live', {
   },
 });
 
+// One channel per user. encodeURIComponent keeps a user id from adding `/`
+// segments, so one user's channel can never sit under another's.
+const todosChannel = (userSub: string) => encodeURIComponent(userSub);
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async subscribeTodos() {
     const user = await auth.requireAuth(context);
-    return rt.getChannel('todos', user.userSub);
+    return rt.getChannel('todos', todosChannel(user.userSub));
   },
 
   async createTodo(title: string, priority: number = 2) {
@@ -85,7 +89,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       createdAt: Date.now(),
     };
     await todos.put(todo);
-    await rt.publish('todos', user.userSub, { action: 'created' as const, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'created' as const, todoId });
     return todo;
   },
 
@@ -116,7 +120,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       { ...todo, completed: !todo.completed, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
     );
-    await rt.publish('todos', user.userSub, { action: 'updated' as const, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'updated' as const, todoId });
     return { success: true };
   },
 
@@ -129,7 +133,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       { ...todo, priority, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
     );
-    await rt.publish('todos', user.userSub, { action: 'updated' as const, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'updated' as const, todoId });
     return { success: true };
   },
 
@@ -137,7 +141,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async deleteTodo(todoId: string) {
     const user = await auth.requireAuth(context);
     await todos.delete({ userSub: user.userSub, todoId });
-    await rt.publish('todos', user.userSub, { action: 'deleted' as const, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'deleted' as const, todoId });
     return { success: true };
   },
 }));

@@ -18,7 +18,7 @@
  * |---|---|---|---|
  * | `auth-signin-<id>` | GET | `<base>/signin/<id>` | `302` to the IdP + pending cookie; a provider unavailable in this runtime answers `501` — JSON, or an explanatory HTML page for a browser navigation without `?format=json` |
  * | `auth-callback` | GET | `<base>/callback` | the {@link dispatchCallback} → `302` landing / relay, or 4xx JSON |
- * | `auth-signout` | POST | `<base>/signout` | ends the session; a browser form gets `303` to the IdP logout (or `postSignOutPath`), an API client `204` (`?format=json`: `200 { logoutUrl? }`) |
+ * | `auth-signout` | POST | `<base>/signout` | ends the session; a browser form gets `303` to the IdP logout (or `postSignOutPath`), an API client `204` (`?format=json`: `200 { logoutUrl? }`), or `503 { error, name }` when the server-side session could not be invalidated (`SignOutIncompleteException`) |
  * | `auth-signout-landing` | GET | `<base>/signout` | where Cognito's `/logout` returns (with a GET): `302` to `postSignOutPath`; changes no state |
  * | `auth-exchange` | POST | `<base>/exchange` | browser-PKCE / native code exchange → `{ user, …tokens }` (no tokens when the body says `tokens: false`) |
  * | `auth-session` | GET | `<base>/session` | the signed-in user (`{ user }`, as `getAuthState()` sends it) or `401` — for the browser redirect client |
@@ -81,7 +81,7 @@ import type {
 import { AuthErrors } from './errors.js';
 import { providerDisplayName } from './provider-names.js';
 import { safeRedirectPath } from './redirect-path.js';
-import { validateRelay } from './relay.js';
+import { backendHostsFor, validateRelay } from './relay.js';
 import type { ResolvedAuthOptions } from './resolve-options.js';
 import { decodeState, encodeState, relayStateKey, type StatePayload } from './state-envelope.js';
 import type { AuthenticatedUser, BrowserUser, SignInUrlOptions } from './types.js';
@@ -374,6 +374,10 @@ export async function dispatchCallback(host: FederationRouteHost, ctx: BlocksCon
 	const validation = validateRelay(payload.relay, {
 		allowList: host.options.redirects?.allowedRelayOrigins ?? [],
 		sameOrigin: ctx.request.url,
+		// Same-origin covers every host the backend serves, not only this
+		// callback's: the sign-in may have started on another of them (see
+		// `backendHostsFor`).
+		backendHosts: backendHostsFor(ctx.request),
 	});
 	if (!validation.allowed) {
 		return {
@@ -595,14 +599,22 @@ function mountRoutes(host: FederationRouteHost, paths: FederationRoutePaths): vo
 		path: paths.signOut,
 		handler: async (ctx) => {
 			let logoutUrl: string | undefined;
+			let incomplete: ApiError | undefined;
 			try {
 				logoutUrl = await host.signOut(ctx);
 			} catch (e) {
 				host.log.warn('[bb-auth] sign-out failed; the session cookie is cleared anyway', {
 					error: e instanceof Error ? e.name : typeof e,
 				});
+				// The cookie is gone but the server-side session is not: a fetch caller
+				// is told (503), so it can tell the user; see `AuthErrors.SignOutIncomplete`.
+				if (e instanceof ApiError && e.name === AuthErrors.SignOutIncomplete) incomplete = e;
 			}
 			clearPendingAuth(ctx, scope.fullId, crossDomain);
+			if (incomplete && !isFormNavigation(ctx)) {
+				sendJson(ctx, incomplete.status, { error: incomplete.message, name: incomplete.name });
+				return;
+			}
 			if (isFormNavigation(ctx)) {
 				// Follow the IdP's logout so its own session cannot silently sign
 				// the user back in; otherwise to `postSignOutPath`.

@@ -669,6 +669,22 @@ export function agentTests(getApi: () => typeof apiType) {
     });
 
     describe('HITL — Tool Approval (deterministic)', () => {
+      /**
+       * The paused turn's pending interrupts, read from history once its `interrupt` chunk has
+       * arrived. The turn publishes the chunk before it records the interrupt, so poll until the
+       * record is there instead of reading once, and fail on a timeout instead of returning none.
+       */
+      async function pendingInterruptsAfterChunk(api: typeof apiType, chunks: AgentStreamChunk[], conversationId: string) {
+        await waitUntil(() => chunks.some(c => c.type === 'interrupt'), 10_000, 'No interrupt chunk within 10s');
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
+          if (interrupts.length > 0) return interrupts;
+          if (Date.now() > deadline) throw new Error('No pending interrupt recorded within 5s of the interrupt chunk');
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
@@ -698,27 +714,25 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
         const { channel } = await api.cannedGetChannel(conversationId);
 
-        const chunks: any[] = [];
+        const chunks: AgentStreamChunk[] = [];
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
+          const sub = channel.subscribe((chunk) => {
             chunks.push(chunk);
             if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
           });
           sub.established.then(async () => {
             await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            // Wait for interrupt to arrive
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-            }
+            // Resume once the turn has paused, not after a fixed wait: a wait that ended before
+            // the interrupt was recorded skipped the resume, and the test then timed out on `done`.
+            const interrupts = await pendingInterruptsAfterChunk(api, chunks, conversationId);
+            await api.cannedResume(conversationId, interrupts.map(i => ({ interruptId: i.id, approved: true })), conversationId);
           }).catch(reject);
         });
 
         await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should have received done after resume');
+        assert.ok(chunks.some(c => c.type === 'interrupt'), 'should have received interrupt');
+        assert.ok(chunks.some(c => c.type === 'done'), 'should have received done after resume');
       });
 
       test('approval is persisted to conversation history', { timeout: 20_000 }, async () => {
@@ -752,26 +766,24 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
         const { channel } = await api.cannedGetChannel(conversationId);
 
-        const chunks: any[] = [];
+        const chunks: AgentStreamChunk[] = [];
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
+          const sub = channel.subscribe((chunk) => {
             chunks.push(chunk);
             if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
           });
           sub.established.then(async () => {
             await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: false })), conversationId);
-            }
+            // Resume once the turn has paused (see the approval test above).
+            const interrupts = await pendingInterruptsAfterChunk(api, chunks, conversationId);
+            await api.cannedResume(conversationId, interrupts.map(i => ({ interruptId: i.id, approved: false })), conversationId);
           }).catch(reject);
         });
 
         await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'agent should complete after denial');
+        assert.ok(chunks.some(c => c.type === 'interrupt'), 'should have received interrupt');
+        assert.ok(chunks.some(c => c.type === 'done'), 'agent should complete after denial');
         // After denial, conversation history should show the tool was cancelled (not executed successfully)
         const { messages } = await api.cannedGetConversation(conversationId);
         const toolResult = messages.find((m: any) => m.role === 'tool-result');

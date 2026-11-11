@@ -476,6 +476,80 @@ test.describe('SSR cache isolation (per-session cache key)', () => {
     // never exercise a cache entry.
     expect(resp.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
   });
+
+  // The hosting SSR cache guard runs in the deployed server only (local mode
+  // serves `next start`/`next dev` directly), so these assertions skip local.
+  // Each request carries its own query string, so it reaches the origin rather
+  // than an entry a previous attempt (or another test) cached.
+  test('a cookie outside the cache key makes the s-maxage response private (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const isolationUrl = `${hostingUrl}/cache-isolation`;
+    const resp = await request.get(`${isolationUrl}?probe=${randomBytes(4).toString('hex')}`, {
+      headers: { Cookie: `bb_other=${randomBytes(4).toString('hex')}` },
+    });
+    expect(resp.status()).toBe(200);
+    expect(resp.headers()['cache-control']).toBe('private, no-store');
+    // A request with only the cache-key cookie keeps the origin's value.
+    const keyed = await request.get(`${isolationUrl}?probe=${randomBytes(4).toString('hex')}`, {
+      headers: { Cookie: `bb_session=probe-${randomBytes(4).toString('hex')}` },
+    });
+    expect(keyed.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
+  });
+
+  // Cross-visitor isolation over the edge: each pair of requests shares one
+  // URL (the same `k`, fresh per run), so the second request reaches whatever
+  // the first one left in the cache.
+  test('a response rendered with a cookie outside the cache key is not served to another visitor (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const url = `${hostingUrl}/cache-isolation?k=${randomBytes(6).toString('hex')}`;
+    const marker = `marker-${randomBytes(6).toString('hex')}`;
+    const a = await request.get(url, { headers: { Cookie: `bb_other=${marker}` } });
+    expect(a.status()).toBe(200);
+    expect(await a.text()).toContain(`other=${marker}`);
+    // A visitor without the cookie, at the same URL: its own render, never A's.
+    for (let i = 0; i < 2; i++) {
+      const b = await request.get(url);
+      expect(b.status()).toBe(200);
+      const body = await b.text();
+      expect(body).not.toContain(marker);
+      expect(body).toContain('other=none');
+    }
+  });
+
+  test('a cookie-setting response is not replayed to the next request (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const url = `${hostingUrl}/cache-isolation/set-cookie?k=${randomBytes(6).toString('hex')}`;
+    const visit = async (): Promise<string | undefined> => {
+      const resp = await request.get(url);
+      expect(resp.status()).toBe(200);
+      return /bb_visit=([^;]+)/.exec(resp.headers()['set-cookie'] || '')?.[1];
+    };
+    const first = await visit();
+    const second = await visit();
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+  });
+
+  test('a response that sets a cookie is private (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const resp = await request.get(`${hostingUrl}/cache-isolation/set-cookie?probe=${randomBytes(4).toString('hex')}`);
+    expect(resp.status()).toBe(200);
+    expect(resp.headers()['set-cookie'] || '').toContain('bb_visit=');
+    expect(resp.headers()['cache-control']).toBe('private, no-store');
+  });
 });
 
 test.describe('Build cache infrastructure', () => {

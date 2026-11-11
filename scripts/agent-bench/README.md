@@ -335,7 +335,7 @@ omitted because Opus rejects it, so builder determinism (like the judge's) rests
 on the tool/loop structure. The judge (Opus 4.8) likewise omits `temperature`,
 resting on the structured-output schema + the deterministic hard caps. Model IDs
 are pinned snapshots (the Claude 4.x IDs carry no date suffix — the version *is* the
-snapshot). Playwright is pinned to `1.60.0` and runs with `retries: 0` — a retry
+snapshot). Playwright is pinned to `1.64.1` and runs with `retries: 0` — a retry
 would mask realtime-propagation flake, and the bench wants an honest pass/fail
 for the judge. A run-stable `RUN_ID` seeds the specs' unique-but-deterministic
 data so identifiers stay collision-free across a spec's internal navigation.

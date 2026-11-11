@@ -6,6 +6,13 @@
 333333333333
 123456789012
 
+# Another dummy account number, already on main in
+# packages/blocks/src/cli/commands.test.ts (NOT introduced by this change). The
+# pre-commit hook scans the whole content of every staged file, not just its
+# diff, so `account: '210987654321'` there matches the account-id pattern and
+# blocks any commit that touches that file. Synthetic value, already public.
+210987654321
+
 # Pre-existing transitive dependency (@graphql-tools, already on main — NOT
 # introduced by this change) whose package name trips the internal-tooling
 # "[aA]pollo" guard. git-secrets' pre-commit hook scans staged lockfile

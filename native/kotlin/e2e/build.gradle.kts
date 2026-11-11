@@ -7,6 +7,13 @@ plugins {
 }
 
 kotlin {
+    compilerOptions {
+        // Blocks.clearStoredState() is internal API. It is the only way these tests can start from
+        // a clean slate on iOS, where storage is Keychain-backed and cannot be pointed at a
+        // disposable location the way the JVM's can.
+        optIn.add("com.aws.blocks.kotlin.InternalBlocksApi")
+    }
+
     jvm()
 
     iosSimulatorArm64 {

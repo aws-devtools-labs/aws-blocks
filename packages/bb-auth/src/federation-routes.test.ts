@@ -678,6 +678,21 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		assert.deepStrictEqual(await browser.json(), {}, 'no provider session to end without a sign-in');
 	});
 
+	test('POST sign-out: 503 { error, name } when the server-side session could not be invalidated', async () => {
+		const auth = new Auth(unique(), 'auth', { store: 'builtin', providers: { corp: stubIdp() } });
+		const incomplete = new ApiError('Sign-out could not be completed', 503, { name: AuthErrors.SignOutIncomplete });
+		// The route signs out through the block; make its server-side delete fail.
+		Reflect.set(auth, 'signOut', async () => {
+			throw incomplete;
+		});
+		const json = { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' };
+		for (const path of ['/aws-blocks/auth/signout', '/aws-blocks/auth/signout?format=json']) {
+			const res = await fetch(`${server.origin}${path}`, { ...json, redirect: 'manual' });
+			assert.strictEqual(res.status, 503, path);
+			assert.deepStrictEqual(await res.json(), { error: incomplete.message, name: AuthErrors.SignOutIncomplete }, path);
+		}
+	});
+
 	test('GET on the sign-out path is the sign-out landing: 302 to postSignOutPath, no state change', async () => {
 		new Auth(unique(), 'auth', {
 			store: 'builtin',
@@ -688,5 +703,37 @@ describe('per-provider engines — a mixed configuration (two blocks) reaches ev
 		assert.strictEqual(res.status, 302);
 		assert.strictEqual(res.headers.get('location'), '/bye');
 		assert.deepStrictEqual(res.headers.getSetCookie(), [], 'no cookie is touched');
+	});
+});
+
+describe("relay re-check: a same-origin relay survives a callback on another of the backend's hosts", () => {
+	const savedHosts = process.env.BLOCKS_PUBLIC_HOSTS;
+	afterEach(() => {
+		if (savedHosts === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+		else process.env.BLOCKS_PUBLIC_HOSTS = savedHosts;
+	});
+
+	test('validateRelay allows an HTTPS relay to any host in backendHosts, exact or a wildcard subdomain', () => {
+		const opts = { allowList: [], sameOrigin: new URL('https://abc123.execute-api.us-east-1.amazonaws.com/aws-blocks/auth/callback') };
+		const backendHosts = ['d111.cloudfront.net', '*.example.com'];
+		assert.deepStrictEqual(validateRelay('https://d111.cloudfront.net/done', { ...opts, backendHosts }), { allowed: true });
+		assert.deepStrictEqual(validateRelay('https://app.eu.example.com/done', { ...opts, backendHosts }), { allowed: true });
+		// The wildcard covers subdomains, not the apex; a port or plain HTTP is not a served host.
+		for (const relay of ['https://example.com/done', 'https://d111.cloudfront.net:8443/done', 'https://other.net/done']) {
+			assert.strictEqual(validateRelay(relay, { ...opts, backendHosts }).allowed, false, relay);
+		}
+		// Without backendHosts, only the callback's own origin is same-origin.
+		assert.strictEqual(validateRelay('https://d111.cloudfront.net/done', opts).allowed, false);
+	});
+
+	test("backendHostsFor: the CloudFront doors' hosts, plus the execute-api Host of an HTTPS request", async () => {
+		const { backendHostsFor } = await import('./relay.js');
+		process.env.BLOCKS_PUBLIC_HOSTS = 'D111.cloudfront.net, *.example.com,';
+		const gateway = 'abc123.execute-api.us-east-1.amazonaws.com';
+		const https = { url: new URL(`https://${gateway}/aws-blocks/auth/callback`), headers: new Headers({ host: gateway }) };
+		assert.deepStrictEqual(backendHostsFor(https), ['d111.cloudfront.net', '*.example.com', gateway]);
+		// Local dev: the client picks Host, so it never counts.
+		const local = { url: new URL('http://localhost:3000/aws-blocks/auth/callback'), headers: new Headers({ host: gateway }) };
+		assert.deepStrictEqual(backendHostsFor(local), ['d111.cloudfront.net', '*.example.com']);
 	});
 });

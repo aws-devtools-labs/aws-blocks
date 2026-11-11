@@ -442,6 +442,81 @@ describe('shared gateway routes namespaces by export name (create())', () => {
 	});
 });
 
+describe('defaults.strictNamespacePlacement (create())', () => {
+	// The namespace-routing fixture: `api` on the default compute, `shop` on
+	// OrdersCompute. Synth must put the placement map in the environment of both
+	// functions, so a change rolls each of them, and the compute id on OrdersCompute only.
+	const WARNING_ID = 'blocks:apigateway:bare-endpoint-serves-placed-namespaces';
+	before(() => {
+		(globalThis as Record<string, unknown>).__BLOCKS_TEST_MAKE_COMPUTE__ = (parent: ScopeParent, id: string) =>
+			new StubLambdaCompute(parent, id);
+	});
+
+	const create = {
+		BlocksStack: (strict: boolean) =>
+			BlocksStack.create(new cdk.App(), `StrictPlacementStack${strict ? 'On' : 'Off'}`, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: namespaceRoutingBackendPath,
+				defaults: { ...BlocksPresets.production, strictNamespacePlacement: strict },
+				defaultComputeFactory: stubComputeFactory,
+			}).then((stack) => ({ stack, owner: stack as Construct })),
+		BlocksBackend: async (strict: boolean) => {
+			const stack = new cdk.Stack(new cdk.App(), `StrictPlacementParent${strict ? 'On' : 'Off'}`);
+			// A backend id of its own: create() caches the backend module per id.
+			const owner = await BlocksBackend.create(stack, `StrictPlacement${strict ? 'On' : 'Off'}`, {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: namespaceRoutingBackendPath,
+				defaults: { ...BlocksPresets.production, strictNamespacePlacement: strict },
+				defaultComputeFactory: stubComputeFactory,
+			});
+			return { stack, owner: owner as Construct };
+		},
+	};
+
+	const envOf = (stack: cdk.Stack, compute: StubLambdaCompute): Record<string, unknown> => {
+		const id = stack.getLogicalId(compute.fn.node.defaultChild as cdk.CfnElement);
+		const fn = Template.fromStack(stack).toJSON().Resources[id] as {
+			Properties: { Environment?: { Variables?: Record<string, unknown> } };
+		};
+		return fn.Properties.Environment?.Variables ?? {};
+	};
+
+	const computesOf = (owner: Construct) => {
+		const all = getComputes(owner) as StubLambdaCompute[];
+		const orders = all.find((c) => c.node.id === 'OrdersCompute');
+		const defaultCompute = all.find((c) => c.node.id === 'DefaultCompute');
+		assert.ok(orders && defaultCompute);
+		return { orders, defaultCompute };
+	};
+
+	for (const entry of ['BlocksStack', 'BlocksBackend'] as const) {
+		test(`${entry}: on, every API function's environment carries the placement map`, async () => {
+			const { stack, owner } = await create[entry](true);
+			const { orders, defaultCompute } = computesOf(owner);
+			const expected = JSON.stringify({ shop: orders.fullId });
+			const onDefault = envOf(stack, defaultCompute);
+			const onOrders = envOf(stack, orders);
+			assert.strictEqual(onDefault.BLOCKS_API_NAMESPACE_COMPUTES, expected);
+			assert.strictEqual(onDefault.BLOCKS_API_COMPUTE_ID, undefined, 'the default compute carries no id');
+			assert.strictEqual(onOrders.BLOCKS_API_NAMESPACE_COMPUTES, expected);
+			assert.strictEqual(onOrders.BLOCKS_API_COMPUTE_ID, orders.fullId);
+			Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp(WARNING_ID));
+		});
+
+		test(`${entry}: off, no function carries the map and synth warns until acknowledged`, async () => {
+			const { stack, owner } = await create[entry](false);
+			const { orders, defaultCompute } = computesOf(owner);
+			for (const compute of [defaultCompute, orders]) {
+				assert.strictEqual(envOf(stack, compute).BLOCKS_API_NAMESPACE_COMPUTES, undefined);
+				assert.strictEqual(envOf(stack, compute).BLOCKS_API_COMPUTE_ID, undefined);
+			}
+			Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp(`shop.*${WARNING_ID}`));
+			cdk.Annotations.of(owner).acknowledgeWarning(WARNING_ID, 'raw callers still use the bare endpoint');
+			Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp(WARNING_ID));
+		});
+	}
+});
+
 describe('a namespace bound to another backend is not routed (multi-backend synth)', () => {
 	// create() re-runs only the top-level backend module per backend; a namespace
 	// from a cached sub-module stays bound to the first backend. A second backend

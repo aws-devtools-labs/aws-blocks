@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
 import { Construct, type IDependable } from 'constructs';
-import { Annotations, CfnOutput, Duration, Fn, Stack, Token } from 'aws-cdk-lib';
+import { Annotations, CfnOutput, Duration, Fn, RemovalPolicy, Stack, Token } from 'aws-cdk-lib';
+import { LogGroup } from 'aws-cdk-lib/aws-logs';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import {
   AllowedMethods,
@@ -45,8 +45,10 @@ import {
 import type { ICertificate } from 'aws-cdk-lib/aws-certificatemanager';
 import type { CfnWebACL } from 'aws-cdk-lib/aws-wafv2';
 import {
+  AccessLogFormat as ApiAccessLogFormat,
   EndpointType,
   LambdaIntegration,
+  LogGroupLogDestination,
   ResponseTransferMode,
   RestApi,
 } from 'aws-cdk-lib/aws-apigateway';
@@ -55,7 +57,8 @@ import { prependBasePath } from '../adapters/shared/basepath.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
-import { customErrorResponses } from './error_responses.js';
+import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
+import { assertCacheGuardIgnoredCookies } from './ssr_cache_guard.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
@@ -70,6 +73,17 @@ import {
 import { buildHostingPlan } from '../plan/hosting-plan.js';
 import { KvKeys } from './kv_keys.js';
 import type { WebFunctionConstruct } from './web_function_construct.js';
+import { type HostingServerOriginConfig, validateVerifySecretRotation } from './front_door_options.js';
+import {
+  SERVER_ORIGIN_LOG_RETENTION,
+  SERVER_ORIGIN_MARKER_HEADER,
+  ServerOriginWaf,
+  createOriginVerifySecret,
+  ensureApiGatewayAccount,
+  legacyOriginVerifyValue,
+  originVerifyPolicy,
+  serverOriginMarkerValue,
+} from './server_origin.js';
 import {
   type AccessLogFormat,
   type AccessLogPartitioning,
@@ -197,11 +211,37 @@ export type CdnConstructProps = {
   /**
    * Default TTL for SSR/compute cache behaviors when the origin doesn't
    * set Cache-Control. Enables CDN caching of dynamic responses.
+   *
+   * ⚠️ SECURITY: enabling this makes SSR responses without an explicit
+   * `Cache-Control` header shared at the CloudFront edge. Because the SSR
+   * cache key does NOT include Authorization or session cookies by default,
+   * one cached response would answer requests regardless of their
+   * credentials. CloudFront ignores `Vary`. Before enabling, set
+   * {@link cacheKeyCookies} and/or {@link cacheKeyHeaders} to include
+   * credentials in the cache key, or ensure personalized routes emit
+   * `Cache-Control: private`. Synth fails closed if this resolves to > 0 and
+   * neither is set.
+   *
+   * At runtime, the SSR server's responses pass through the SSR cache guard:
+   * a response that sets cookies (`Set-Cookie`), and a shared-cacheable
+   * response (`s-maxage`, `public`, `max-age` without `private`, or no
+   * `Cache-Control` while this TTL is positive) to a request carrying
+   * `Authorization` or a cookie that is not in the cache key, are sent with
+   * `Cache-Control: private, no-store`. Listing the credential in
+   * {@link cacheKeyCookies}/{@link cacheKeyHeaders} keeps those responses
+   * cacheable, keyed per credential. Edge TTLs are clamped to at most 1 day.
+   * See HostingProps.cdn.ssrDefaultTtl.
    * @default Duration.seconds(0)
    */
   ssrDefaultTtl?: Duration;
   /** Cookie names to add to the SSR cache key. See HostingProps.cdn.cacheKeyCookies. */
   cacheKeyCookies?: string[];
+  /**
+   * Cookie names that never affect the rendered output; never in the SSR
+   * cache key (a name may not also be in {@link cacheKeyCookies}). See
+   * HostingProps.cdn.cacheGuardIgnoredCookies.
+   */
+  cacheGuardIgnoredCookies?: string[];
   /** Header names to add to the SSR cache key. See HostingProps.cdn.cacheKeyHeaders. */
   cacheKeyHeaders?: string[];
   /**
@@ -216,6 +256,20 @@ export type CdnConstructProps = {
    * increase AWS has actually granted — see {@link QuotaOverrides}.
    */
   quotas?: QuotaOverrides;
+  /**
+   * The server (SSR) origin's REST API settings: access logs, origin-verify
+   * secret rotation, the one-deploy upgrade from the earlier derived secret.
+   * See {@link HostingServerOriginConfig}.
+   */
+  serverOrigin?: HostingServerOriginConfig;
+  /**
+   * Rate limit of the distribution's Blocks-managed web ACL (requests per
+   * 5-minute window per IP). When set, each server-origin REST API stage gets
+   * a REGIONAL web ACL with the same rules and this limit, with its logs in
+   * CloudWatch Logs. `HostingConstruct` sets it when `waf.enabled` builds a
+   * web ACL for the distribution.
+   */
+  originWafRateLimit?: number;
 };
 
 // ---- Construct ----
@@ -332,6 +386,8 @@ export class CdnConstruct extends Construct {
       );
     }
 
+    assertCacheGuardIgnoredCookies(props.cacheKeyCookies, props.cacheGuardIgnoredCookies);
+
     // ---- Lambda@Edge function-count validation ----
     // The KVS single-behavior model removed the per-route cache-behavior and
     // response-headers-policy caps that used to need running-total accounting,
@@ -441,71 +497,116 @@ export class CdnConstruct extends Construct {
         : undefined;
     const ssrWebFunction = ssrComputeName ? props.computeWebFunctions?.get(ssrComputeName) : undefined;
 
-    // Hoisted out of the SSR branch so the IPX image Lambda can share the SAME
-    // API Gateway (see the image-origin wiring below). `restApi`/`apiHostname`
-    // are set only when an SSR compute exists; `originVerifySecret` is the
-    // deterministic CloudFront→APIGW auth token both integrations reuse.
-    let restApi: RestApi | undefined;
-    let apiHostname: string | undefined;
-    // Origin verification secret — prevents direct APIGW access bypassing
-    // CloudFront's security headers (CSP/HSTS). Requests without this
-    // header are rejected by the APIGW resource policy.
-    // Deterministic: derived from stack + construct path to avoid
-    // CloudFormation churn on every deploy. Bump the version suffix to rotate.
-    const originVerifySecret = createHash('sha256')
-      .update(Stack.of(this).stackName)
-      .update(this.node.path)
-      .update('origin-verify-v1')
-      .digest('hex');
+    // Origin verification — prevents direct APIGW access bypassing
+    // CloudFront's security headers (CSP/HSTS), WAF, geo restriction and
+    // access logs. Each REST API's resource policy rejects any request whose
+    // `Referer` isn't the secret CloudFront injects as an origin custom header.
+    //
+    // The secret is random, generated once per deployment by Secrets Manager,
+    // and read at deploy time through a `{{resolve:secretsmanager:…}}` dynamic
+    // reference by both the policy and the CloudFront origin — it is in no
+    // template and not derivable from the stack name or construct path. The
+    // SSR and IPX origins each get their own secret on their own REST API, so
+    // one origin's value can't reach the other's Lambda.
+    // `serverOrigin.verifySecretRotation` replaces both secrets (see
+    // `createOriginVerifySecret`); the policy change is part of the RestApi
+    // template, so CDK's deployment hash redeploys the stage with it.
+    const serverOriginOpts = props.serverOrigin ?? {};
+    const rotation = serverOriginOpts.verifySecretRotation ?? 0;
+    validateVerifySecretRotation(rotation, 'frontDoor.features.serverOrigin');
+    // The upgrade deploy from the earlier releases' derived value
+    // (`acceptLegacyVerifyHeader`). For this one deploy the Lambda SSR REST
+    // API keeps what edges on the previous distribution config rely on: the
+    // derived value next to the new secret, and (with IPX) the image routes.
+    // Its stage web ACL waits for the next deploy, once every edge sends the
+    // marker the rate rule exempts. (A REST API new in this release, such as
+    // the IPX one, only gets requests from edges on the new config.)
+    const acceptLegacy = serverOriginOpts.acceptLegacyVerifyHeader === true;
+    if (acceptLegacy) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:AcceptLegacyVerifyHeader',
+        'Remove frontDoor.features.serverOrigin.acceptLegacyVerifyHeader after this deploy. While it is set, the ' +
+          'server origin also accepts the origin-verify value derived from the stack name and construct path, and ' +
+          'the SSR REST API stage gets no web ACL until the next deploy.',
+      );
+    }
+    const logRetention = serverOriginOpts.logRetention ?? SERVER_ORIGIN_LOG_RETENTION;
+    // Origin custom headers CloudFront adds to every server-origin request:
+    // the secret, and the marker the stage web ACL's rate rule exempts. The
+    // marker is sent with or without a web ACL, so turning `waf` on later (or
+    // removing `acceptLegacyVerifyHeader`) attaches the ACL to a stage every
+    // edge already marks its requests for.
+    const verifyHeaders = (secret: string): Record<string, string> => ({
+      // CloudFront's customHeaders OVERWRITE any same-named viewer
+      // header (documented), so a client sending `Referer:` cannot
+      // reach the API GW with their own value here.
+      Referer: secret,
+      [SERVER_ORIGIN_MARKER_HEADER]: serverOriginMarkerValue(this),
+    });
+
+    // Stage access logs (opt-in) share one log group across the server-origin
+    // REST APIs; the stage waits for the account-level CloudWatch role.
+    let accessLogGroup: LogGroup | undefined;
+    const accessLogOptions = (): Record<string, unknown> => {
+      if (!serverOriginOpts.accessLogging) return {};
+      accessLogGroup ??= new LogGroup(this, 'ServerOriginAccessLogs', {
+        retention: logRetention,
+        removalPolicy: RemovalPolicy.DESTROY,
+      });
+      return {
+        accessLogDestination: new LogGroupLogDestination(accessLogGroup),
+        accessLogFormat: ApiAccessLogFormat.jsonWithStandardFields(),
+      };
+    };
+    // A REGIONAL web ACL on each server-origin stage, mirroring the
+    // distribution's Blocks-managed web ACL (set only when it has one).
+    let originWaf: ServerOriginWaf | undefined;
+    const protectStage = (api: RestApi, deferWaf: boolean): void => {
+      if (serverOriginOpts.accessLogging) {
+        api.deploymentStage.node.addDependency(ensureApiGatewayAccount(Stack.of(this)));
+      }
+      if (props.originWafRateLimit !== undefined && !deferWaf) {
+        originWaf ??= new ServerOriginWaf(this, 'ServerOriginWaf', {
+          rateLimit: props.originWafRateLimit,
+          logRetention,
+        });
+        originWaf.associate(api.deploymentStage);
+      }
+    };
 
     // REGIONAL: CloudFront is already in front; edge-optimized would
     // double-proxy and cap streaming idle timeout at 30s.
-    const createOriginRestApi = (): RestApi =>
-      new RestApi(this, 'SsrRestApi', {
+    const createOriginRestApi = (id: string, verifySecret: string, legacyVerify: readonly string[] = []): RestApi => {
+      const api = new RestApi(this, id, {
         endpointTypes: [EndpointType.REGIONAL],
-        deployOptions: { stageName: 'prod' },
-        // No per-stack CloudWatch role / AWS::ApiGateway::Account. The stage
-        // doesn't enable execution or access logging, so the role is unused,
-        // and CDK RETAINs it by default — every `cdk destroy` would orphan
-        // one IAM role and eventually exhaust the account's role quota.
-        // (Matches bb-lambda-compute's RestApi.) If stage logging is ever added
-        // here, provision the account role through core's
-        // `ensureApiGatewayAccount` (so the stack keeps ONE shared
-        // ApiGateway::Account) and depend the stage on it — don't re-enable
-        // `cloudWatchRole`.
+        deployOptions: { stageName: 'prod', ...accessLogOptions() },
+        // No per-stack CloudWatch role from CDK. CDK RETAINs it by default —
+        // every `cdk destroy` would orphan one IAM role and eventually exhaust
+        // the account's role quota. (Matches bb-lambda-compute's RestApi.)
+        // When `serverOriginOpts.accessLogging` is on, the account role comes from
+        // `ensureApiGatewayAccount` (ONE shared ApiGateway::Account per stack,
+        // the same one core's access logging uses) and the stage depends on it.
         cloudWatchRole: false,
         // Treat all bodies as binary. Without this, API Gateway base64-encodes
         // request bodies (Lambda then sees 2× size) and re-encodes responses,
         // breaking binary uploads, downloads, and streaming.
         binaryMediaTypes: ['*/*'],
         // Resource policy: ALLOW everything (CloudFront origin reach
-        // hits this), DENY anything missing the deterministic Referer
+        // hits this), DENY anything missing the origin-verify Referer
         // secret CloudFront injects on every origin request. Direct
         // hits to the stage URL surface as 403 from API GW before the
         // Lambda is invoked.
-        policy: new iam.PolicyDocument({
-          statements: [
-            new iam.PolicyStatement({
-              effect: iam.Effect.ALLOW,
-              principals: [new iam.AnyPrincipal()],
-              actions: ['execute-api:Invoke'],
-              resources: ['execute-api:/*'],
-            }),
-            new iam.PolicyStatement({
-              effect: iam.Effect.DENY,
-              principals: [new iam.AnyPrincipal()],
-              actions: ['execute-api:Invoke'],
-              resources: ['execute-api:/*'],
-              conditions: {
-                StringNotEquals: {
-                  [`aws:Referer`]: originVerifySecret,
-                },
-              },
-            }),
-          ],
-        }),
+        policy: originVerifyPolicy([verifySecret, ...legacyVerify]),
       });
+      // The API that still accepts the legacy value still gets requests from
+      // edges that send no marker, so its web ACL waits for the next deploy.
+      protectStage(api, legacyVerify.length > 0);
+      return api;
+    };
 
+    // The Lambda SSR REST API, which also carries the IPX routes during an
+    // `acceptLegacyVerifyHeader` upgrade (see the image wiring below).
+    let ssrRestApi: RestApi | undefined;
     if (ssrWebFunction && ssrComputeName) {
       // Web Function SSR: CloudFront signs every origin request with the
       // function's OAC (IamAuth endpoint); the resource policy granting this
@@ -520,7 +621,20 @@ export class CdnConstruct extends Construct {
         props.computeAliases?.get(ssrComputeName) ??
         props.computeFunctions.get(ssrComputeName)!;
 
-      restApi = createOriginRestApi();
+      const ssrVerify = createOriginVerifySecret(
+        this,
+        'SsrOriginVerifySecret',
+        'The Referer header value CloudFront sends to the server (SSR) origin REST API.',
+        rotation,
+      ).value;
+      // Edges on the previous distribution config still send the derived
+      // value to this API, so it alone accepts it during the upgrade.
+      const restApi = createOriginRestApi(
+        'SsrRestApi',
+        ssrVerify,
+        acceptLegacy ? [legacyOriginVerifyValue(this)] : [],
+      );
+      ssrRestApi = restApi;
       const integration = new LambdaIntegration(ssrFn, {
         proxy: true,
         responseTransferMode: ResponseTransferMode.STREAM,
@@ -533,17 +647,12 @@ export class CdnConstruct extends Construct {
 
       // restApi.url is "https://{id}.execute-api.{region}.amazonaws.com/{stage}/";
       // HttpOrigin needs the bare host.
-      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
+      const apiHostname = Fn.select(2, Fn.split('/', restApi.url));
       computeOrigins.set(
         ssrComputeName,
         new HttpOrigin(apiHostname, {
           originPath: `/${restApi.deploymentStage.stageName}`,
-          // CloudFront's customHeaders OVERWRITE any same-named viewer
-          // header (documented), so a client sending `Referer:` cannot
-          // reach the API GW with their own value here.
-          customHeaders: {
-            Referer: originVerifySecret,
-          },
+          customHeaders: verifyHeaders(ssrVerify),
         }),
       );
     }
@@ -560,31 +669,26 @@ export class CdnConstruct extends Construct {
       }
     }
 
-    // ---- IPX image Lambda on the SHARED SSR API Gateway (issue #2) ----
+    // ---- IPX image Lambda on its own API Gateway (issue #2) ----
     // The Nuxt IPX optimizer embeds a REMOTE source as an unencoded path
     // segment (`/_ipx/s_256x256/https://host/…`). An OAC Function URL signs
     // SigV4 over the canonical path; the literal `://` canonicalizes
     // differently on CloudFront vs the Function URL, so the signatures diverge
     // and the Lambda is never invoked (403 InvalidSignatureException). API
     // Gateway authorizes with the origin-verify Referer header instead of a
-    // path signature, so a `://` in the path is inert. Attach the IPX Lambda
-    // as a dedicated `<baseURL>/{proxy+}` resource on the SAME RestApi the SSR
-    // Lambda already uses (no new API GW), and point the image origin at that
-    // shared host. Scoped to IPX only: detected by `imageOptimization.baseURL`
+    // path signature, so a `://` in the path is inert. The IPX Lambda gets a
+    // dedicated REST API with its OWN origin-verify secret (so the SSR value
+    // can't invoke it, nor the IPX value the SSR Lambda), wired as
+    // `<baseURL>` + `<baseURL>/{proxy+}`, and the image origin points at that
+    // host. Scoped to IPX only: detected by `imageOptimization.baseURL`
     // (Nuxt sets it; Next's OpenNext image bundle does not and speaks Function
     // URL v2 events, so it stays on its Function URL). Requires an SSR compute
-    // (hence a RestApi) — a static-only Nuxt deploy keeps the Function URL.
+    // (Lambda or Web Function) — a static-only Nuxt deploy keeps the Function URL.
     const ipxBaseUrl = manifest.imageOptimization?.baseURL;
     const ipxFn = props.computeFunctions?.get('image-optimization');
-    if (ipxBaseUrl && ipxFn && ssrWebFunction && !restApi) {
-      // Web Function SSR needs no API Gateway, but the IPX Lambda still does
-      // (see above) — give it a REST API of its own.
-      restApi = createOriginRestApi();
-      apiHostname = Fn.select(2, Fn.split('/', restApi.url));
-    }
-    if (ipxBaseUrl && ipxFn && (!restApi || !apiHostname)) {
-      // IPX is configured but there's no SSR compute (hence no shared RestApi)
-      // to ride — a static-only Nuxt deploy. The IPX Lambda stays on its OAC
+    if (ipxBaseUrl && ipxFn && !ssrComputeName) {
+      // IPX is configured but there's no SSR compute to ride — a static-only
+      // Nuxt deploy. The IPX Lambda stays on its OAC
       // Function URL, where an unencoded `://` in a remote source path can
       // recur as a SigV4 403 (issue #2). Nudge at build time so the operator
       // isn't left debugging a non-obvious runtime 403.
@@ -592,31 +696,44 @@ export class CdnConstruct extends Construct {
         `⚠️  imageOptimization.baseURL (${ipxBaseUrl}) is set but no SSR compute ` +
           `exists — the IPX image Lambda will use a Function URL origin, where ` +
           `remote sources with reserved chars can hit a SigV4 403 (issue #2). ` +
-          `Deploy with SSR compute to route IPX through the shared API Gateway.\n`,
+          `Deploy with SSR compute to route IPX through its own API Gateway.\n`,
       );
     }
-    if (ipxBaseUrl && ipxFn && restApi && apiHostname) {
+    if (ipxBaseUrl && ipxFn && ssrComputeName) {
+      const ipxVerify = createOriginVerifySecret(
+        this,
+        'ImageOriginVerifySecret',
+        'The Referer header value CloudFront sends to the image (IPX) origin REST API.',
+        rotation,
+      ).value;
+      const ipxApi = createOriginRestApi('ImageRestApi', ipxVerify);
       const ipxIntegration = new LambdaIntegration(ipxFn, { proxy: true });
       // e.g. baseURL '/_ipx' → resource path segments ['_ipx'] + '{proxy+}'.
-      // API Gateway matches this more-specific resource ahead of the SSR
-      // root `{proxy+}`, so `/_ipx/...` hits the IPX Lambda and everything
-      // else falls through to the SSR Lambda.
       const segments = ipxBaseUrl.split('/').filter(Boolean);
-      let node = restApi.root;
-      for (const seg of segments) {
-        node = node.getResource(seg) ?? node.addResource(seg);
-      }
-      // The IPX Lambda needs the prefix itself (it matches `/_ipx`), so wire
-      // ANY on both the prefix root and its `{proxy+}` catch-all.
-      node.addMethod('ANY', ipxIntegration);
-      node.addResource('{proxy+}').addMethod('ANY', ipxIntegration);
+      const addIpxRoutes = (api: RestApi): void => {
+        let node = api.root;
+        for (const seg of segments) {
+          node = node.getResource(seg) ?? node.addResource(seg);
+        }
+        // The IPX Lambda needs the prefix itself (it matches `/_ipx`), so wire
+        // ANY on both the prefix root and its `{proxy+}` catch-all.
+        node.addMethod('ANY', ipxIntegration);
+        node.addResource('{proxy+}').addMethod('ANY', ipxIntegration);
+      };
+      addIpxRoutes(ipxApi);
+      // Earlier releases served IPX from the SSR REST API. During the
+      // `acceptLegacyVerifyHeader` upgrade, edges still on the previous origin
+      // config send `<baseURL>/...` there, so keep those routes for this one
+      // deploy; otherwise its `{proxy+}` would hand image requests to the SSR
+      // Lambda. API Gateway matches the more specific `<baseURL>` resource first.
+      if (acceptLegacy && ssrRestApi) addIpxRoutes(ssrRestApi);
 
-      // Override the image origin (was the Function URL) to the shared API GW.
+      // Override the image origin (was the Function URL) to the IPX API GW.
       computeOrigins.set(
         'image-optimization',
-        new HttpOrigin(apiHostname, {
-          originPath: `/${restApi.deploymentStage.stageName}`,
-          customHeaders: { Referer: originVerifySecret },
+        new HttpOrigin(Fn.select(2, Fn.split('/', ipxApi.url)), {
+          originPath: `/${ipxApi.deploymentStage.stageName}`,
+          customHeaders: verifyHeaders(ipxVerify),
         }),
       );
     }
@@ -800,8 +917,12 @@ export class CdnConstruct extends Construct {
     //   (preserves the safe default; SSR routes that forget to set
     //   Cache-Control still don't accidentally cache personalized
     //   responses)
-    // - maxTtl: 1 year — clamps any wild origin values (e.g. corrupted
-    //   Cache-Control: s-max-age=999999999) to at most a year.
+    // - maxTtl: 1 day — clamps any wild origin values (e.g. corrupted
+    //   Cache-Control: s-max-age=999999999, or a framework's 1-year
+    //   `s-maxage` on prerendered HTML) to at most a day, which bounds how
+    //   long any one edge entry can be served. Frameworks revalidate in the
+    //   background (stale-while-revalidate), so a shorter clamp costs an
+    //   origin request per object per day at most.
     //
     // Content negotiation is handled by enableAcceptEncodingBrotli/Gzip
     // flags — CloudFront normalizes the Accept-Encoding header into
@@ -822,7 +943,7 @@ export class CdnConstruct extends Construct {
             'SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers',
           minTtl: Duration.seconds(0),
           defaultTtl: props.ssrDefaultTtl ?? Duration.seconds(0),
-          maxTtl: Duration.days(365),
+          maxTtl: Duration.days(1),
           headerBehavior: CacheHeaderBehavior.allowList(
             'rsc',
             'next-router-prefetch',
@@ -1307,6 +1428,7 @@ export class CdnConstruct extends Construct {
             // 500: Don't cache Lambda 500s — they're likely transient.
             // Image-opt Lambda returns 500 for missing images; caching
             // that error would serve stale errors to all users.
+            // 502/503/504: not cached either (see withServerErrorsNotCached).
             {
               httpStatus: 500,
               responseHttpStatus: 500,
@@ -1317,19 +1439,19 @@ export class CdnConstruct extends Construct {
               httpStatus: 502,
               responseHttpStatus: 502,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
             {
               httpStatus: 503,
               responseHttpStatus: 503,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
             {
               httpStatus: 504,
               responseHttpStatus: 504,
               responsePagePath: `/builds/${buildId}/${ERROR_PAGE_KEY}`,
-              ttl: Duration.seconds(10),
+              ttl: Duration.seconds(0),
             },
           ]
         : []),
@@ -1340,6 +1462,9 @@ export class CdnConstruct extends Construct {
     // For compute (SSR) stacks, the default 502/503/504 error pages are
     // already wired above; only 500 gets the custom page.
     errorResponses.push(...customErrorResponses(props.customErrorPages, { pathPrefix: `/builds/${buildId}`, hasCompute }));
+    // A server's 5xx is never cached: the error caching minimum TTL is 0 for
+    // 500-504, keeping each response's page (see withServerErrorsNotCached).
+    const distributionErrorResponses = hasCompute ? withServerErrorsNotCached(errorResponses) : errorResponses;
 
 
     // ---- Distribution ----
@@ -1379,7 +1504,7 @@ export class CdnConstruct extends Construct {
                 : GeoRestriction.denylist(...props.geoRestriction.countries),
           }
         : {}),
-      errorResponses: errorResponses.length > 0 ? errorResponses : undefined,
+      errorResponses: distributionErrorResponses.length > 0 ? distributionErrorResponses : undefined,
     });
 
     // ---- Standard logging v2 (opt-in) ----

@@ -14,11 +14,43 @@ self-starts the SQS pollers for the event handlers assigned to it.
   must be arm64-compatible.
 - **Task role.** The shared Blocks execution role, so every Building Block grant
   reaches the container exactly as it reaches the Lambda handler. The `ecs-tasks`
-  trust principal is appended to that role once per stack. The task role is also
+  trust principal is appended to that role once per role, scoped with
+  `aws:SourceAccount` (this account) and `aws:SourceArn`
+  (`arn:<partition>:ecs:<region>:<account>:*`) so only ECS tasks in this account
+  and region can assume it — the
+  [recommended task-role trust](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html)
+  (ECS does not support naming a specific cluster in `aws:SourceArn`). The
+  role's Lambda trust is unchanged. The task role is also
   granted read on the code asset (below) so the boot script can fetch it.
 - **Image & code delivery (no local Docker).** The task runs a **stock public
   Node image** — `public.ecr.aws/docker/library/node:24-slim` by default, or the
-  customer's `image` — **verbatim via `fromRegistry`**. Blocks builds **no**
+  customer's `image` — **verbatim via `fromRegistry`**. The default is pinned by
+  its multi-arch index digest (`DEFAULT_CONTAINER_IMAGE` in
+  `src/default-image.ts`), so every task start pulls the same image; a unit test
+  fails if it isn't a digest reference (it checks the reference shape only, not
+  that the digest is the multi-arch index). `scripts/container-default-image-digest.mjs`
+  checks the registry: it prints the tag's current index digest (refusing a
+  response that isn't an image index) and verifies the pinned digest resolves to
+  an image index that lists linux/arm64. Bump with it (Dependabot doesn't track
+  it). The `Container default image digest` workflow runs it on every pull
+  request that changes the pin, so a typo'd or single-platform digest fails
+  before merge, and weekly to open a tracking issue when the pin is behind.
+  The customer's `image` is never rewritten.
+  **Container user.** The default image runs as its unprivileged `node` user:
+  the container definition sets `user: '1000:1000'` (`DEFAULT_CONTAINER_USER`)
+  and `BLOCKS_APP_DIR=/home/node/app` (`DEFAULT_CONTAINER_APP_DIR`), a
+  directory that user owns, since the root-owned `/app` isn't writable by it.
+  The image sets no `WorkingDir`, so the container definition also sets
+  `workingDirectory: '/home/node'` (`DEFAULT_CONTAINER_WORKDIR`): relative
+  writes land in the user's home, not the root-owned `/`. It isn't the boot dir
+  itself because that dir doesn't exist at container start, and a working
+  directory the runtime has to create may be created as root.
+  Nothing else needs root: the API and readiness ports (8080/8081) aren't
+  privileged. A custom `image` gets no `user` or `workingDirectory` (its own
+  `USER` and `WORKDIR` apply) and keeps
+  `BLOCKS_APP_DIR=/app`, so an image that needs root, or that prepared `/app`
+  for its own user, behaves as before; setting `image` explicitly is the opt-out
+  for root. Blocks builds **no**
   container image, so `cdk deploy` never needs a local Docker daemon. The app
   code is co-bundled with esbuild (a `main.js` parent + a `worker.js` per-job
   worker, same bundle as the Lambda handler path) and shipped as an **S3 asset**
@@ -26,7 +58,7 @@ self-starts the SQS pollers for the event handlers assigned to it.
   (`node -e …`) inlines a dependency-free bootstrap (`bootstrap.mjs`) that, at
   every container start, reads the task-role credentials from the ECS container
   credentials endpoint, SigV4-fetches `main.js`/`worker.js` from the asset's S3
-  location, writes them to `/app`, and execs `node /app/main.js`. This is the
+  location, writes them to `BLOCKS_APP_DIR` (above), and execs `node <dir>/main.js`. This is the
   sanctioned ECS pattern of a generic image + an entrypoint/command override that
   pulls what it needs with the task role — see
   [container credentials](https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html)
@@ -112,8 +144,9 @@ with readiness on port **8081** (503 while draining).
   gets the gateway's `Host` and the stage in its API Gateway event. So the
   gateway stamps its public host and stage (`x-blocks-forwarded-host` /
   `x-blocks-forwarded-stage`, from its request context, overwriting any client
-  value), and the container builds `ctx.request.url` from them: the same URL
-  the Lambda handler reports. A request whose stamped headers aren't one
+  value), and the container builds `ctx.request.url` from the host and
+  `getRequestBaseUrl()` from the host and stage: the same values the Lambda
+  handler reports, so the stage is never in the path. A request whose stamped headers aren't one
   well-formed value each — a client copy under another letter case, say — is
   refused with a 400.
 - **CloudFront front doors.** On the `apiFrontDoor: 'cloudfront'` tier, the
@@ -141,9 +174,18 @@ with readiness on port **8081** (503 while draining).
     `x-blocks-forwarded-stage`, overwriting client values. It also drops a
     client-sent `x-forwarded-host`, which the container would take ahead of the
     stamped host when it is a loopback value (the local-dev path): `ctx.request.url`
-    is the public URL, custom domain included. (A namespace on a Lambda compute,
-    which CloudFront reaches through the gateway, reports the gateway's
-    `execute-api` URL instead.)
+    is the public URL, custom domain included.
+  - The door's behaviors to the gateway stamp the viewer host too, as
+    `x-blocks-public-host` (the gateway overwrites `x-blocks-forwarded-host` with
+    its own, so it needs a header of its own). A Lambda handler, and a container
+    the gateway proxies to, take it when it is one of the backend's front-door
+    hosts (`BLOCKS_PUBLIC_HOSTS`, which each CloudFront door registers): a
+    container namespace and a Lambda one behind the same door report the same
+    URL, while `getRequestBaseUrl()` stays the gateway's host and stage. The
+    gateway is reachable directly, so the header alone proves nothing; a
+    forged value can only name another of the app's own domains. These behaviors
+    keep the client's `x-forwarded-host`: the sandbox dev server proxies through
+    the distribution and names its loopback origin there.
   - The load balancer admits CloudFront's origin-facing prefix list on the
     listener range in one rule — the prefix list is looked up at deploy time (a
     custom resource, created with the gateway) because its id differs per region.

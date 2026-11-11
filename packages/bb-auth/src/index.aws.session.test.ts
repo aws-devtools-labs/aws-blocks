@@ -18,10 +18,12 @@ import assert from 'node:assert';
 import crypto from 'node:crypto';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
+import type { AuthStateApi } from '@aws-blocks/auth-common';
 import type { BlocksContext } from '@aws-blocks/core';
 import { isBlocksError } from '@aws-blocks/core';
 import { signSessionId } from './cookies.js';
 import { AuthErrors } from './index.aws.js';
+import type { SessionStore } from './sessions.js';
 import {
 	Browser,
 	cognitoError,
@@ -44,6 +46,16 @@ async function signedInWithExpiredAccess(opts: { refreshToken?: string | null } 
 	const tokens = h.idp.authResult('alice', { accessExpIn: -60, refreshToken: opts.refreshToken });
 	const sid = await signInAs(h, b, 'alice', tokens);
 	return { h, b, sid, tokens };
+}
+
+/** The pool session row for a Cognito `AuthenticationResult` (as sign-in and refresh store it). */
+function tokensRow(tokens: { IdToken: string; AccessToken: string; RefreshToken?: string }) {
+	return { idToken: tokens.IdToken, accessToken: tokens.AccessToken, refreshToken: tokens.RefreshToken ?? '' };
+}
+
+/** The block's session store, for writing a row as a concurrent request would. */
+function sessionsOf(h: ReturnType<typeof makeAwsAuth>): SessionStore {
+	return Reflect.get(h.auth, 'sessions');
 }
 
 /** A token-bearing call: Cognito's `ChangePassword` with the session's access token. */
@@ -151,7 +163,8 @@ describe('AWS session refresh (expired access token)', () => {
 				refreshToken: tokens.RefreshToken,
 				issuedAt,
 			},
-			options: { ttlSeconds: DEFAULT_TTL },
+			// Conditional on the row this request read, so a concurrent sign-out or refresh wins.
+			options: { ttlSeconds: DEFAULT_TTL, ifValueEquals: { ...tokensRow(tokens), issuedAt } },
 		});
 	});
 
@@ -179,6 +192,46 @@ describe('AWS session refresh (expired access token)', () => {
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
 		await b.request((ctx) => h.auth.getCurrentUser(ctx));
 		assert.deepStrictEqual(h.sentNames(), ['InitiateAuthCommand']);
+	});
+
+	test('a refresh that completes after sign-out does not restore the session', async () => {
+		const { h, b, sid } = await signedInWithExpiredAccess();
+		h.on('InitiateAuthCommand', async () => {
+			// signOut() on another request deletes the session while this refresh is in flight.
+			await h.deleteSession(sid);
+			return { AuthenticationResult: h.idp.authResult('alice') };
+		});
+		assert.strictEqual(await b.request((ctx) => h.auth.getCurrentUser(ctx)), null);
+		assert.strictEqual(await h.lookupSession(sid), null, 'the signed-out session stays deleted');
+		assert.ok(setCookieFor(b.lastSetCookies, h.cookieName)?.includes('Max-Age=0'), 'the cookie is cleared');
+		assert.strictEqual(b.jar.get(h.cookieName), undefined);
+	});
+
+	test('a rejected refresh never deletes the session a concurrent request just refreshed', async () => {
+		const { h, b, sid } = await signedInWithExpiredAccess();
+		const concurrent = h.idp.authResult('alice', { claims: { email: 'concurrent@example.com' } });
+		h.on('InitiateAuthCommand', async () => {
+			// Another request refreshes the same session first...
+			await sessionsOf(h).replace(sid, tokensRow(concurrent));
+			// ...and this request's own refresh is rejected (its refresh token was rotated away).
+			throw cognitoError('NotAuthorizedException', 'Refresh Token has been revoked');
+		});
+		const user = await b.request((ctx) => h.auth.getCurrentUser(ctx));
+		assert.deepStrictEqual(user?.attributes, { email: 'concurrent@example.com' }, 'served the concurrent refresh');
+		assert.deepStrictEqual(await h.lookupSession(sid), tokensRow(concurrent), 'the refreshed session is kept');
+		assert.ok(b.jar.get(h.cookieName), 'the cookie is kept');
+	});
+
+	test('a refresh whose write loses to a concurrent refresh serves the concurrent one and writes nothing', async () => {
+		const { h, b, sid } = await signedInWithExpiredAccess();
+		const concurrent = h.idp.authResult('alice', { claims: { email: 'concurrent@example.com' } });
+		h.on('InitiateAuthCommand', async () => {
+			await sessionsOf(h).replace(sid, tokensRow(concurrent));
+			return { AuthenticationResult: h.idp.authResult('alice', { claims: { email: 'mine@example.com' } }) };
+		});
+		const user = await b.request((ctx) => h.auth.getCurrentUser(ctx));
+		assert.deepStrictEqual(user?.attributes, { email: 'concurrent@example.com' });
+		assert.deepStrictEqual(await h.lookupSession(sid), tokensRow(concurrent), 'the losing write changed nothing');
 	});
 
 	test('a rejected refresh → signed out, record deleted, cookie cleared', async () => {
@@ -501,5 +554,58 @@ describe('AWS session cookie parse/verify — bad cookies mean signed-out, never
 			await b.request((ctx) => other.auth.getCurrentUser(ctx), b.context(`${other.cookieName}=${good}`)),
 			null,
 		);
+	});
+});
+
+describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', () => {
+	/** An SDK-shaped store failure whose text names an account and a table. */
+	const STORE_FAILURE = 'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
+
+	/** Make the session store's deletes fail, as a transient DynamoDB fault would. */
+	function failSessionDeletes(h: ReturnType<typeof makeAwsAuth>): void {
+		const kv = Reflect.get(sessionsOf(h), 'kv');
+		kv.delete = async () => {
+			throw new Error(STORE_FAILURE);
+		};
+	}
+
+	test('a failed session delete clears the cookie and rejects with a 503 SignOutIncompleteException', async () => {
+		const h = makeAwsAuth();
+		const b = new Browser();
+		const sid = await signInAs(h, b, 'alice');
+		failSessionDeletes(h);
+		await assert.rejects(
+			() => b.request((ctx) => h.auth.signOut(ctx)),
+			(e: Error & { status?: number }) => {
+				assert.strictEqual(e.status, 503);
+				assert.ok(isBlocksError(e, AuthErrors.SignOutIncomplete), String(e));
+				assert.ok(!e.message.includes('123456789012'), 'no store detail on the wire');
+				return true;
+			},
+		);
+		assert.strictEqual(b.jar.get(h.cookieName), undefined, 'this device is signed out anyway');
+		assert.ok(await h.lookupSession(sid), 'the server-side session was not deleted');
+	});
+
+	test("setAuthState({ action: 'signOut' }) reports it on a signed-out state", async () => {
+		const h = makeAwsAuth();
+		const b = new Browser();
+		await signInAs(h, b, 'alice');
+		failSessionDeletes(h);
+		const state = await b.request((ctx) =>
+			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({ action: 'signOut' }),
+		);
+		assert.strictEqual(state.state, 'signedOut');
+		assert.strictEqual(state.errorName, AuthErrors.SignOutIncomplete);
+		assert.strictEqual(b.jar.get(h.cookieName), undefined);
+	});
+
+	test('a sign-out whose session delete works reports success', async () => {
+		const h = makeAwsAuth();
+		const b = new Browser();
+		const sid = await signInAs(h, b, 'alice');
+		await b.request((ctx) => h.auth.signOut(ctx));
+		assert.strictEqual(await h.lookupSession(sid), null);
+		assert.strictEqual(b.jar.get(h.cookieName), undefined);
 	});
 });

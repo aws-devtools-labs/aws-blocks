@@ -413,6 +413,9 @@ describe('generateMigrationGuide', () => {
 		assert.ok(output.includes('**migration_test_todos**'));
 		assert.ok(output.includes('`email`'));
 		assert.ok(output.includes('`app_metadata`'));
+		// Same answer as Limitations: the token Auth verifies, not always the access token.
+		assert.ok(output.includes('include these claims in the token Auth verifies'));
+		assert.ok(!output.includes('include these claims in access tokens'));
 	});
 
 	test('includes userId-vs-sub note', () => {

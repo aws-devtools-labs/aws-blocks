@@ -90,10 +90,14 @@ import { FileBucketOptions } from '@aws-blocks/bb-file-bucket';
 import { FileContent } from '@aws-blocks/bb-file-bucket';
 import { FileInfo } from '@aws-blocks/bb-file-bucket';
 import { fromExisting } from '@aws-blocks/bb-data';
+import { GetChannelOptions } from '@aws-blocks/bb-realtime';
 import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { github } from '@aws-blocks/bb-auth';
 import { isAuthError } from '@aws-blocks/bb-auth';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
+import { KnowledgeBaseAgentTool } from '@aws-blocks/bb-knowledge-base';
+import { KnowledgeBaseAgentToolOptions } from '@aws-blocks/bb-knowledge-base';
+import { KnowledgeBaseAgentToolResult } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
 import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
@@ -333,6 +337,8 @@ export { FileInfo }
 
 export { fromExisting }
 
+export { GetChannelOptions }
+
 // @public
 export function getSdkIdentifiers(bb: KVStore<any>): {
     tableName: string;
@@ -426,6 +432,12 @@ export { github }
 export { isAuthError }
 
 export { KnowledgeBase }
+
+export { KnowledgeBaseAgentTool }
+
+export { KnowledgeBaseAgentToolOptions }
+
+export { KnowledgeBaseAgentToolResult }
 
 export { KnowledgeBaseErrors }
 

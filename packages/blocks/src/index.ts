@@ -281,6 +281,9 @@ export { FileBucket, FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 export type {
 	ChunkingConfig,
 	ChunkingStrategy,
+	KnowledgeBaseAgentTool,
+	KnowledgeBaseAgentToolOptions,
+	KnowledgeBaseAgentToolResult,
 	KnowledgeBaseOptions,
 	MetadataFilter,
 	RetrieveOptions,
@@ -360,6 +363,7 @@ export type {
 export { Metrics, MetricsErrors } from '@aws-blocks/bb-metrics';
 export type {
 	DisconnectReason,
+	GetChannelOptions,
 	RealtimeChannel,
 	RealtimeSubscription,
 	SubscribeOptions,

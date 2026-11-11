@@ -14,6 +14,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
+import { outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -224,7 +225,7 @@ export function buildSandboxWatchArgs({ outDir, projectRoot, backendPath }: Sand
   return [
     "cdk", "watch",
     "--hotswap-fallback",
-    "--outputs-file", `${outDir}/outputs.json`,
+    "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     "--app", `npm exec tsx -- -C cdk ${quoteCdkAppPath(backendPath)}`,
@@ -299,7 +300,7 @@ export function buildSandboxDeployArgs({
     "--method", "direct",
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
-    "--outputs-file", `${outDir}/outputs.json`,
+    "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
     ...(preview ? ["--context", `${PREVIEW_MODE_CONTEXT}=true`] : []),
@@ -424,7 +425,7 @@ export async function startSandbox(options: SandboxOptions) {
   // A preview re-deploy hotswaps (see SandboxOptions.preview). A previous
   // deploy wrote `<outDir>/outputs.json`, so the stack exists; if it was
   // destroyed since, `--hotswap-fallback` falls back to a full deploy.
-  const previousOutputs = join(process.cwd(), outDir, "outputs.json");
+  const previousOutputs = join(process.cwd(), outputsFileIn(outDir, 'sandbox'));
   const hotswap = preview && existsSync(previousOutputs);
 
   const removalWarning = previewRemovalWarning(previousOutputs, preview, previewInvocation);
@@ -486,7 +487,7 @@ export async function startSandbox(options: SandboxOptions) {
 
   registerFrameworkFromSink(frameworkSink);
 
-  const outputs = JSON.parse(readFileSync(`${outDir}/outputs.json`, "utf-8"));
+  const outputs = JSON.parse(readFileSync(outputsFileIn(outDir, 'sandbox'), "utf-8"));
   // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /
   // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
   // on the outputs file's write order; fall back to the first group so a
@@ -907,6 +908,24 @@ export function isThrottleReason(reason: string | undefined): boolean {
 	);
 }
 
+/**
+ * Whether `error`, thrown by an AWS SDK call, is a throttle: CloudFormation's
+ * `Throttling: Rate exceeded`, a `ThrottlingException`,
+ * `TooManyRequestsException`, EC2 `RequestLimitExceeded`, S3 `SlowDown`, an
+ * HTTP 429, or a message {@link isThrottleReason} matches.
+ */
+function isThrottlingError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const metadata = '$metadata' in error ? error.$metadata : undefined;
+	const status =
+		metadata && typeof metadata === 'object' && 'httpStatusCode' in metadata ? metadata.httpStatusCode : undefined;
+	return (
+		/^(Throttling|ThrottlingException|TooManyRequestsException|RequestLimitExceeded|SlowDown)$/.test(error.name) ||
+		status === 429 ||
+		isThrottleReason(error.message)
+	);
+}
+
 /** Clock skew allowed between this machine and CloudFormation event timestamps. */
 const EVENT_CLOCK_SKEW_MS = 60_000;
 /** DescribeStackEvents pages read per stack before giving up on finding this attempt's start. */
@@ -924,7 +943,8 @@ const MAX_EVENT_PAGES = 30;
  * throttle. A stack that no longer exists is skipped; any other error (or
  * every stack missing, e.g. stacks in another Region) is thrown after checking
  * the remaining stacks, so the caller can warn and fall back to the ordinary
- * retry schedule.
+ * retry schedule, or, when the error is itself a throttle (CloudFormation's
+ * `Rate exceeded`), treat the delete as throttled.
  *
  * `cfn` is one client for every stack, or a client per Region: then each
  * stack given as an {@link AssemblyStack} is looked up in its own Region (the
@@ -1100,9 +1120,21 @@ export interface DestroyRetryDeps {
 	 * when the previous attempt failed (events up to then belong to it, not to
 	 * this attempt), undefined on the first attempt. A throttled failure is
 	 * retried with {@link throttleBackoff} instead of `retryDelays`; a rejection
-	 * is logged and treated as "not throttled". Default: never throttled.
+	 * is logged and treated as "not throttled", unless the rejection is itself
+	 * a throttle (e.g. CloudFormation `Throttling: Rate exceeded`, HTTP 429):
+	 * the account is then under the same API pressure, so the failure is
+	 * treated as throttled. Not called when {@link attemptOutput} already names
+	 * a throttle. Default: never throttled.
 	 */
 	isThrottled?: (stacks: AssemblyStack[], attemptStartedAt: number, previousFailureAt?: number) => Promise<boolean>;
+	/**
+	 * The output the failed attempt printed, as far as it was captured (the
+	 * lines `cdk-output.ts` retains at `BLOCKS_LOG_LEVEL=quiet|normal`). A line
+	 * {@link isThrottleReason} matches (`Too Many Requests`, `Status Code: 429`,
+	 * `Rate exceeded`, ...) marks the failure as throttled without calling
+	 * {@link isThrottled}. Default: nothing captured.
+	 */
+	attemptOutput?: () => readonly string[];
 	/** Backoff for throttled failures. Default: randomized waits of up to 1min, 2min, 4min, then 5min, within 20min of the first failure. */
 	throttleBackoff?: ThrottleBackoff;
 	/** Jitter source in [0, 1). Default: `Math.random`. */
@@ -1147,6 +1179,9 @@ export interface DestroyRetryDeps {
  * throttle schedule too: it is retried later, not hidden, and still fails the
  * call once the budget is spent. With 5-minute attempts a call can run for
  * about 30 minutes before it fails (about 18 with the ordinary schedule alone).
+ * The attempt's captured CDK output (`attemptOutput`) is read for a throttle
+ * first, so no extra API call is made when it already names one; a throttle
+ * check that is itself throttled counts as a throttle.
  *
  * A Lambda@Edge function can only be deleted once CloudFront has removed its
  * replicas, which takes a few hours after its distribution is deleted. So when
@@ -1189,14 +1224,25 @@ export async function runDestroyWithRetries(deps: DestroyRetryDeps): Promise<voi
 				);
 				throw error;
 			}
-			let throttled = false;
-			try {
-				throttled = await isThrottled(stacks, attemptStartedAt, previousFailureAt);
-			} catch (e) {
-				log.warn(
-					`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
-				);
-				log.debugError(e);
+			let throttled = (deps.attemptOutput?.() ?? []).some(isThrottleReason);
+			if (!throttled) {
+				try {
+					throttled = await isThrottled(stacks, attemptStartedAt, previousFailureAt);
+				} catch (e) {
+					if (isThrottlingError(e)) {
+						// The check's own API call was throttled: the account is under the
+						// same API pressure that most likely failed the delete.
+						throttled = true;
+						log.warn(
+							`  ⚠️  the throttle check was itself throttled; treating the delete as throttled: ${(e as Error).message}`,
+						);
+					} else {
+						log.warn(
+							`  ⚠️  could not tell whether the delete was throttled; using the ordinary retry schedule: ${(e as Error).message}`,
+						);
+					}
+					log.debugError(e);
+				}
 			}
 			let delayMs: number | undefined;
 			const throttleBudgetSpent = throttleRetries > 0 && now() - firstFailureAt > budgetMs;
@@ -1328,6 +1374,7 @@ export function sandboxDestroyDeps(
   return {
     runDestroy: () => cdkOutput.run('npm', cdkArgs, { env: cdkEnv }),
     printRetainedOutput: () => cdkOutput.printRetained(),
+    attemptOutput: () => cdkOutput.lastRunOutput(),
     listStacks: () => listDestroyedStacks(SANDBOX_DESTROY_ASSEMBLY_DIR),
     emptyBuckets: (stacks) => emptySandboxBuckets(stacks, clients),
     isThrottled: (stacks, since, previous) => destroyWasThrottled(stacks, since, previous, clients.cfnFor),

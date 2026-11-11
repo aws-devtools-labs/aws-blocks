@@ -30,7 +30,7 @@ internal const val CLOSED_MESSAGE: String =
  */
 class BlocksClient internal constructor(
     internal val server: BlocksServer,
-    internal val httpClient: HttpClient = defaultHttpClient(),
+    internal val httpClient: HttpClient,
 ) {
 
     private var closed = false
@@ -42,16 +42,6 @@ class BlocksClient internal constructor(
     internal fun close() {
         closed = true
         httpClient.close()
-    }
-
-    companion object {
-        /**
-         * Clears all persisted cookies (e.g. session tokens).
-         * Call this to ensure a fully logged-out state across app restarts.
-         */
-        suspend fun clearCookies() {
-            sharedCookiesStorage.clear()
-        }
     }
 
     /**

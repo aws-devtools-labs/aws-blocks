@@ -28,60 +28,22 @@ dependencies {
 }
 ```
 
-## Configuration
-
-All properties are optional. Override them in the `awsBlocks` block if the defaults don't fit your project:
+### 3. Point at your spec
 
 ```kotlin
-import com.aws.blocks.plugin.GeneratedVisibility
-
 awsBlocks {
-    // Path to the generated spec file (defaults to rootProject.file("blocks.spec.json"))
-    apiSpec = rootProject.file("path/to/your/blocks.spec.json")
-
-    // Package name for generated code (defaults to "com.aws.blocks.generated")
-    packageName = "com.example.myapp.generated"
-
-    // Visibility of generated types: Public (default) or Internal
-    visibility = GeneratedVisibility.Internal
-
-    // Override or add server URLs (optional)
-    servers {
-        local("http://10.0.2.2:3001")
-        sandbox("https://sandbox.example.com")
-        prod("https://api.example.com")
-        custom("staging", "https://staging.example.com")
-    }
-
-    // Logical identities from x-blocks-native-packages that keep the
-    // UnknownTransferable fallback instead of a declared type (optional).
-    // An identity the spec does not declare only warns, as AWSBLOCKS-NATIVE-006
-    excludeNativePackages = setOf("example-iot-native")
-
-    // Only needed to use the OIDC client on Android or iOS, where the relay scheme is
-    // registered with the operating system. Must match an entry in the backend's
-    // allowedRelayOrigins. JVM binds a loopback address per sign-in and ignores this.
-    oidc {
-        relayTo = "com.yourcompany.yourapp://auth/callback"
-    }
+    apiSpec = rootProject.file("aws-blocks/blocks.spec.json") // default: rootProject.file("blocks.spec.json")
+    packageName = "com.example.myapp.generated" // default: "com.aws.blocks.generated"
 }
 ```
 
-Servers defined in the `servers` block override entries from the spec file that share the same name. New names are added alongside the spec's servers.
+See the [Gradle plugin reference](docs/gradle-plugin.md) for full configuration options.
 
-On iOS, declare the same `relayTo` scheme in the app's `Info.plist` under `CFBundleURLTypes` — the Gradle plugin cannot reach an Xcode project. Android needs nothing further; the plugin injects the scheme into the merged manifest.
+### 4. Call your backend
 
-## Using the Generated Code
+Codegen runs as part of compilation, so building the module is all it takes to get the client.
 
 ```kotlin
-import com.aws.blocks.kotlin.Blocks
-import com.example.myapp.generated.Api.ListTodos
-import com.example.myapp.generated.Api.UpdateTodo
-import com.example.myapp.generated.Todo
-import com.example.myapp.generated.api
-import com.example.myapp.generated.authApi
-import com.example.myapp.generated.invoke
-
 val blocks = Blocks()
 
 suspend fun todos() {
@@ -99,33 +61,13 @@ suspend fun todos() {
 }
 ```
 
-`Blocks()` follows the spec's first server, so regenerating against a different backend leaves the
-call site alone — the `invoke` import is what brings it into scope, and without it the compiler
-reports a missing `server` argument. Name a server to pin one: `Blocks(Servers.sandbox)`.
+Building the instance — which server it reaches, the imports the generated accessors need, and
+closing the engine it owns — is covered in
+[runtime configuration](docs/runtime-configuration.md#building-an-instance).
 
-Every RPC call and every OIDC client share the one HTTP engine the instance owns; file handles and
-realtime channels still open their own. `close()` shuts that engine down, after which calls through
-the instance report it rather than failing inside the HTTP client.
+> **On JVM and desktop, give the client an [`applicationId`](docs/runtime-configuration.md#identifying-your-application)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
-The accessors and `Blocks()` are extensions on the runtime's `Blocks`, so one spec is assumed per
-compilation scope. Two generated packages visible in the same file make `Blocks()` ambiguous, and
-an accessor imported from one while `Blocks()` comes from the other would send its calls to the
-wrong backend. A module that generates a client for its own use should set its own `packageName`
-and `visibility = GeneratedVisibility.Internal`, so that its accessors stay out of its consumers'
-scope and its generated types do not share fully qualified names with another module's — two
-modules both left on the default `packageName` ship the same ones.
-
-### Transferable Results
-
-When a method returns a transferable whose tag has no runtime binding, the generated client returns `UnknownTransferable`, a carrier for the raw `tag` and `descriptor`, instead of failing code generation. Only bare direct results are covered; a nullable unbound result still fails code generation.
-
-When `x-blocks-native-bindings` binds the tag and its package has an `android` field, the client returns the declared type, hydrated through `<Type>.fromBlocksDescriptor` after the descriptor is checked against the tag. A nullable bound result returns null for a JSON-null body.
-
-A nullable built-in result now returns null for a JSON-null body as well, where it previously threw.
-
-The factory a declared package must expose is specified in [the schema generation guide](../../docs/native-clients/schema-generation-guide-for-devs.md#x-blocks-native-bindings-document-root).
-
-A transferable the runtime binds (a realtime channel, a file handle, an OIDC client) hydrates into its live object wherever it appears: returned directly, inside a list or map, in a property of a model, or in the messages of a realtime channel (`RealtimeChannel<List<FileDownloadHandle>>`, or a channel whose message model holds one). An OIDC client needs the calling client and the configured `oidc { relayTo }`, so a model that holds one decodes through its generated operation; to decode one yourself, use `OidcClient.json(blocksClient, relayTo).decodeFromJsonElement<LoginMenu>(json)`. A transferable is sent back as its `{ "__blocks": … }` descriptor (its `toJson()`), so an operation can take one as a parameter, directly, in a list or map, or in a model (a model holding an OIDC client encodes with `OidcClient.json`, as the generated operation does).
+## Generated types
 
 A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
 
@@ -133,158 +75,28 @@ A union (`anyOf` / `oneOf`) generates a sealed class with one subclass per arm, 
 
 Generated names follow the spec, and the wire keeps the spec's names. A property, parameter or operation keeps its spec name, escaped with backticks where Kotlin needs it (`` `class` ``, `` `content-type` ``). A name Kotlin can't declare even in backticks (one holding `.`, `;`, `[`, `]`, `/`, `<`, `>`, `:`, `\`, a backtick or a control character such as a line break) becomes its words in camelCase: a key `back\slash` is the property `backSlash` with `@SerialName("back\\slash")`, and the method `a.b.ping` is `A.bPing()`, which still calls `a.b.ping`. Types, enum constants and union subclasses are PascalCase. When two names land on one Kotlin name in the same scope (properties `user_name` and `userName` with inline object types, discriminator values `in-progress` and `in_progress`), the first keeps it and the next gets `_2`, then `_3`, and so on; so does a nested type named like a property of its class (`Meta: Meta_2`). Enum constants that meet are numbered without the underscore (`InProgress`, `InProgress2`). Generated names step aside for yours: an operation with a parameter named `client`, `request`, `args`, `result` or `json` keeps that parameter name, and the generated code around it adapts.
 
-## Signing In With `Auth`
+## Documentation
 
-An AWS Blocks `Auth` block serves its OIDC sign-in routes at fixed paths, so the OIDC client is built from the server and the provider ids, with no backend call:
-
-```kotlin
-import com.aws.blocks.kotlin.Blocks
-import com.aws.blocks.kotlin.oidc.OidcClient
-import com.aws.blocks.kotlin.oidc.signIn
-import com.example.myapp.generated.Servers
-
-val blocks = Blocks(Servers.local) // or Blocks() for the spec's default server
-val oidc = OidcClient.forAuth(
-    blocks.client(),
-    providers = listOf("google"), // the keys of the backend's providers
-    relayTo = "com.yourcompany.yourapp://auth/callback", // as in oidc { relayTo } above
-)
-
-val user = oidc.signIn("google") // opens the browser; oidc.authState follows along
-oidc.signOut()
-```
-
-The client is an `OidcClient<AnyProvider>`: its providers are the ids you pass, not names a spec declared, so it signs in by id. That `signIn(String)` is an extension on `OidcClient<AnyProvider>`, hence the `signIn` import (see [Typed OIDC Providers](#typed-oidc-providers)).
-
-Sign-in stores the backend's session cookie, which every generated API client sends, so methods the backend gates with `requireAuth` work after it. If the backend moves its routes with `redirects.callbackPath`, pass that path's directory as `basePath`.
-
-### JVM Landing Pages
-
-On the JVM target the system browser is left open on a loopback address once sign-in finishes,
-so the runtime serves a page there. By default that is a built-in styled page. An app can
-replace it per outcome, from a JVM source set:
-
-```kotlin
-oidc.signIn(
-    provider = "google",
-    options = OidcSignInOptions(
-        OidcSignInPlatformOptions(
-            // Send the browser to your own page, so the user ends on a real domain.
-            successPage = OidcLandingPage.Redirect("https://app.example.com/signed-in"),
-            // Or serve your own markup, with nothing to host.
-            errorPage = OidcLandingPage.Html(myLocalizedFailurePage),
-        ),
-    ),
-)
-```
-
-`OidcSignInPlatformOptions` has a different shape on each target, so it is only constructible
-where it applies — from `jvmMain` or `desktopMain`, not from `commonMain`. Shared code that
-calls `signIn(provider)` with no options needs no platform code and gets the built-in pages.
-
-| `OidcLandingPage` | Effect |
+| Guide | Covers |
 |---|---|
-| `BuiltIn` (default) | The runtime's own page. The failure variant shows the provider's error, HTML-escaped. |
-| `Redirect(url)` | A 302 to `url`. Requires `https`, except on a loopback host for local development. |
-| `Html(document)` | `document` served verbatim. Must be a complete HTML document. |
+| [Gradle plugin](docs/gradle-plugin.md) | the full `awsBlocks { }` block, tasks, and multi-module setups |
+| [Runtime configuration](docs/runtime-configuration.md) | `BlocksConfig`, per-target configuration, where the session is stored, signing out |
+| [OIDC](docs/oidc.md) | sign-in, relay scheme registration, JVM landing pages, typed providers |
+| [Transferables](docs/transferables.md) | results that are live objects rather than data |
 
-A `Redirect` is sent a clean URL: the callback query is dropped on success, so the
-authorization code and `state` are not appended to it, and on failure only `error` and
-`error_description` are. An `Html` page receives nothing, so use `Redirect` if you need the
-provider's reason.
+## Example apps
 
-`error` is the provider's own code when the provider reported the failure. When it did not,
-it names the step that failed instead, so a page can tell the cases apart:
-
-| `error` | Meaning |
-|---|---|
-| `invalid_callback` | The callback arrived but was rejected — a missing or mismatched `state`, or a bad CSRF value. |
-| `exchange_failed` | The code could not be exchanged, including a backend that could not be reached. |
-| `cancelled` | The caller stopped waiting, such as a screen that was closed mid-flow. |
-
-`error_description` is only set for failures the runtime itself describes; a message from a
-transport or parser is omitted rather than shown to the user.
-
-`BuiltIn` and `Html` are served as the response to the callback itself, so the callback query
-stays in the address bar and in `document.location` while that page is open. Markup you supply
-through `Html` can therefore read the authorization code; prefer `Redirect` if the page runs
-anything you would not want to see it, such as third-party analytics.
-
-Android and iOS have no options to set — their in-app browser dismisses itself.
-
-Bringing your window to the front after sign-in is the app's job; `signIn` returning is the
-signal.
-
-### Typed OIDC Providers
-
-`OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. A client
-from `forAuth` is an `OidcClient<AnyProvider>`, as above. When a method of the spec returns an OIDC
-client (`getClient()`) and the spec names that client's providers, the method's object gets a `Provider` enum that implements
-`OidcProvider`, whose constants carry the names the backend knows them by, and `getClient()`
-returns a client typed by it:
-
-```kotlin
-val client = blocks.authApi.getClient()        // OidcClient<AuthApi.GetClient.Provider>
-val user = client.signIn(AuthApi.GetClient.Provider.Google)
-
-// A sign-in screen. `entries` is what the spec named when it was generated; `client.providers` is
-// what the deployed backend reports now, so the screen shows the providers both agree on.
-AuthApi.GetClient.Provider.entries
-    .filter { it.providerName in client.providers }
-    .forEach { provider ->
-        Button(onClick = { scope.launch { client.signIn(provider) } }) {
-            Text("Sign in with ${provider.providerName}")
-        }
-    }
-```
-
-A provider name that is not a legal identifier is still spelled as one, and keeps the name it
-signs in with: `login.gov` becomes `LoginGov("login.gov")`. Because the constant's name is rebuilt
-from the value, `valueOf` can't find one by the name the backend uses — the generated
-`fromProviderName` does:
-
-```kotlin
-// Restoring a provider read from a saved session, or off a deep-link callback
-val provider = AuthApi.GetClient.Provider.fromProviderName(saved) ?: return
-client.signIn(provider)
-```
-
-When the spec does not name them — the providers resolved to plain strings — `getClient()` returns
-`OidcClient<AnyProvider>`, whose `signIn` and `exchange` take a provider name, as before:
-
-```kotlin
-// Signing in by name is an extension on this one instantiation, so it needs importing.
-import com.aws.blocks.kotlin.oidc.signIn
-
-val client = blocks.authApi.getClient()        // OidcClient<AnyProvider>
-val user = client.signIn("google")
-```
-
-Without that import the call resolves to the member that takes a provider, and the compiler reports
-an `AnyProvider` was expected rather than a missing import.
-
-When the method's object already uses the name `Provider`, the enum is `ResultProvider` and codegen
-prints a `kotlin:` warning that names it.
-
-## Gradle Tasks
-
-| Task | Description |
-|------|-------------|
-| `awsBlocksCodegen<Variant>` | Generates Kotlin sources for the given Android variant (e.g. `awsBlocksCodegenDebug`) |
-| `awsBlocksCodegen` | Generates Kotlin sources (KMP projects: into `commonMain`, JVM projects: into `main`) |
-| `awsBlocksDumpModel` | Parses the spec and dumps the intermediate model for debugging |
-
-## Example
-
-See the [`example/android`](example/android) directory for a complete Android app, or [`example/kmp`](example/kmp) for a Kotlin Multiplatform (Compose) app that uses the plugin with a todo + auth API.
+See [`example/android`](example/android) for a complete Android app, or [`example/kmp`](example/kmp)
+for a Kotlin Multiplatform (Compose) app that uses the plugin with a todo + auth API across Android,
+iOS and desktop.
 
 ## Supported Platforms
 
-| Platform | Engine | Cookie Storage |
-|----------|--------|----------------|
-| Android | OkHttp | EncryptedSharedPreferences |
-| iOS | Darwin (URLSession) | Keychain Services |
-| JVM | OkHttp | AES-256-GCM encrypted files |
+| Platform | Engine | Cookie Storage                                                                                                          |
+|----------|--------|-------------------------------------------------------------------------------------------------------------------------|
+| Android | OkHttp | EncryptedSharedPreferences, in the app's sandbox                                                                        |
+| iOS | Darwin (URLSession) | Keychain Services, scoped to the app                                                                                    |
+| JVM | OkHttp | AES-256-GCM encrypted files under [`~/.blocks/<applicationId>`](docs/runtime-configuration.md#identifying-your-application) — in memory if no id is set |
 
 ## Support by Target
 

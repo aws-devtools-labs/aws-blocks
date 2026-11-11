@@ -98,6 +98,27 @@ export interface AgentConfig<TContext = DefaultToolContext> {
 	 * The agent does inference + tools only — no conversation history.
 	 */
 	inferenceOnly?: boolean;
+	/**
+	 * How an `inferenceOnly` agent keys the session a `conversationId` selects.
+	 *
+	 * - `'shared'` (default): the session is keyed by the `conversationId` alone. Anyone who
+	 *   passes the same id continues (or `resume()`s) that session and receives its channel,
+	 *   so don't let callers choose the id.
+	 * - `'user'`: the session is keyed by the `userId` together with the `conversationId`, and the
+	 *   Realtime channel is scoped to the `userId`. A caller who passes another user's
+	 *   `conversationId` gets a separate, empty session of their own and never sees the other
+	 *   user's chunks. `stream()`, `resume()` and `getChannel()` then require `options.userId`
+	 *   (take it from the authenticated session) and throw `AgentErrors.InvalidUsage` without it.
+	 *
+	 * Switching an existing agent from `'shared'` to `'user'` starts new sessions: sessions stored
+	 * under the bare `conversationId` are not resumed.
+	 *
+	 * Ignored when persistence is enabled (`inferenceOnly` unset or `false`): those agents always
+	 * check that the `userId` owns the conversation and scope channels to the user.
+	 *
+	 * @default 'shared'
+	 */
+	sessionScope?: 'shared' | 'user';
 	model?: {
 		/** Model(s) for AWS deployment. Tries candidates in order; throws if all fail. Defaults to BedrockModels.BALANCED. */
 		deployed?: ModelConfig | ModelConfig[];
@@ -267,6 +288,11 @@ export interface ToolDefinition<TContext = DefaultToolContext, TParams extends z
 	 * The result is serialized to text inside the block: a string is kept as-is, and a
 	 * structured (object or array) result is presented to the model as JSON text rather than
 	 * as a structured tool result.
+	 *
+	 * If the handler throws, the error message reaches the model inside the same block (an error
+	 * can echo upstream content too). The content is NFKC-normalized and stripped of invisible
+	 * characters (zero-width, bidirectional controls, Unicode tags) before delimiter-shaped text
+	 * is neutralized, so lookalike delimiters can't close the block early.
 	 *
 	 * @example
 	 * ```ts
@@ -448,6 +474,11 @@ export interface AgentStreamChunk {
 	toolName?: string;
 	input?: JSONValue;
 	usage?: TokenUsage;
+	/**
+	 * Set on an `error` chunk. The message of a branded Building Block error, or `'Internal error'`
+	 * for any other failure (raw model/SDK/storage text never reaches the client; it is logged
+	 * server-side).
+	 */
 	error?: string;
 	/**
 	 * On an `error` chunk, the `AgentErrors` name the failure was classified as (for example
@@ -465,6 +496,10 @@ export interface MessageMetadata {
 	toolOutput?: JSONValue;
 	usage?: TokenUsage;
 	latencyMs?: number;
+	/**
+	 * Why a turn ended early: a cap's stop reason, or a failed turn's client-safe message (a branded
+	 * Building Block error's message, or `'Internal error'`).
+	 */
 	error?: string;
 	/**
 	 * On a row where the turn errored, the `AgentErrors` name the failure was classified as (for

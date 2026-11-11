@@ -11,7 +11,8 @@ import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import type { KnowledgeBaseOptions, ChunkingConfig } from './types.js';
+import type { KnowledgeBaseOptions, ChunkingConfig, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
+import { createAgentTool } from './agent-tool.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -21,6 +22,8 @@ export type {
 	ChunkingConfig, ChunkingStrategy,
 	RetrieveOptions, RetrieveResult,
 	MetadataFilter, WaitUntilSyncedOptions,
+	IngestionFailureCause,
+	KnowledgeBaseAgentToolOptions, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolResult,
 } from './types.js';
 import { BB_NAME } from './version.js';
 export { KnowledgeBaseErrors } from './errors.js';
@@ -189,8 +192,11 @@ function generateMetadataSidecars(sourceDir: string): string | undefined {
  * @param options - Knowledge base configuration (source, chunking, embedding dimensions, description).
  */
 export class KnowledgeBase extends BuildingBlockScope {
+	private readonly kbDescription?: string;
+
 	constructor(scope: ScopeParent, id: string, options: KnowledgeBaseOptions) {
 		super(id, { parent: scope, bbName: BB_NAME, vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.BEDROCK_RUNTIME] } });
+		this.kbDescription = options.description;
 
 		const dimensions = options.embeddingDimensions ?? 1024;
 
@@ -494,6 +500,53 @@ export class KnowledgeBase extends BuildingBlockScope {
 	// top-level (which runs during synth) would otherwise fail with a cryptic
 	// `X is not a function`; these stubs turn that into an actionable message.
 	retrieve(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'retrieve'); }
+	/**
+	 * Expose this knowledge base as an Agent tool whose search scope comes from your server code,
+	 * not from the model.
+	 *
+	 * Pass the result to the `tool()` factory in an Agent's `tools` callback. The tool takes one
+	 * input, `query`; the metadata filter is derived on every call by `options.filter` from the
+	 * per-call tool context, which you fill from the authenticated session in `agent.stream()`.
+	 * The tool is marked `untrustedOutput: true`, so the agent wraps retrieved text in an
+	 * untrusted-data block and tells the model to treat it as data, never instructions.
+	 *
+	 * Retrieval is read-only, so the tool doesn't set `needsApproval`. Set `needsApproval` on the
+	 * agent's tools that have side effects.
+	 *
+	 * Synth-safe: you can declare the tool at module top level. The search itself runs only at
+	 * runtime; under CDK synth the returned handler throws the usual synth-time error.
+	 *
+	 * @param options - `filter` (required) derives the metadata filter from the tool context;
+	 *   optional `description` and `maxResults` (default 5).
+	 * @returns A plain tool definition (`description`, `parameters`, `untrustedOutput: true`,
+	 *   `handler`) for the Agent's `tool()` factory. The handler returns plain JSON search hits.
+	 * @throws {KnowledgeBaseValidationError} If `options.filter` is not a function, or
+	 *   `options.maxResults` is not an integer. When the tool runs, an error thrown by `filter`
+	 *   fails the call (no unscoped search), and so does a `filter` result other than `undefined`
+	 *   that isn't a non-empty filter with a non-empty string `equals` per key (`null`, `{}`,
+	 *   `{ tenant: { equals: undefined } }`); `retrieve()` errors propagate.
+	 *
+	 * @example
+	 * ```typescript
+	 * const agent = new Agent(scope, 'assistant', {
+	 *   systemPrompt: 'Answer questions from the tenant documents.',
+	 *   toolContextSchema: z.object({ tenantId: z.string() }),
+	 *   tools: (tool) => ({
+	 *     searchDocs: tool(kb.asAgentTool({
+	 *       filter: (context) => ({ tenant: { equals: context.tenantId } }),
+	 *     })),
+	 *   }),
+	 * });
+	 *
+	 * // In an API method: the scope comes from the authenticated session. The built-in auth
+	 * // blocks' users carry no tenant, so look it up (`tenantOf` is your own helper).
+	 * const user = await auth.requireAuth(context);
+	 * await agent.stream(message, { userId: user.userSub, context: { tenantId: await tenantOf(user.userSub) } });
+	 * ```
+	 */
+	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {
+		return createAgentTool(async (query, options) => this.retrieve(query, options), options, this.kbDescription);
+	}
 	isSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'isSynced'); }
 	waitUntilSynced(..._args: unknown[]): never { return synthGuard('KnowledgeBase', 'waitUntilSynced'); }
 }

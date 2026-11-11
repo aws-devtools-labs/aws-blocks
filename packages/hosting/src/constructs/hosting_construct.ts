@@ -44,7 +44,7 @@ import { Provider } from 'aws-cdk-lib/custom-resources';
 import { Construct, type IConstruct, type IDependable } from 'constructs';
 import { ERROR_PAGE_KEY, generateBuildId, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { HostingError } from '../hosting_error.js';
-import type { DeployManifest } from '../manifest/types.js';
+import type { ComputeResource, DeployManifest } from '../manifest/types.js';
 import {
   type EnvValue,
   type KindStoreOptions,
@@ -69,6 +69,14 @@ import {
   generateAlbEventShimCode,
   generateForwardedHostShimCode,
 } from './alb_lambda_event.js';
+import {
+  assertCacheGuardIgnoredCookies,
+  isDefaultTtlPositive,
+  type SsrCacheGuardConfig,
+  withSsrCacheGuard,
+  withSsrCacheGuardNodeOption,
+} from './ssr_cache_guard.js';
+import { resolveHandlerModule } from './handler_module.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
@@ -95,7 +103,7 @@ import { DEFAULT_NODE_RUNTIME } from './node_runtime.js';
 import type { QuotaOverrides } from './quota_budget.js';
 import { createManagedEquivalentSecurityHeadersPolicy, createSecurityHeadersPolicy } from './security_headers.js';
 import { StorageConstruct, DEFAULT_BUILD_RETENTION_DAYS } from './storage_construct.js';
-import { WafConstruct } from './waf_construct.js';
+import { DEFAULT_WAF_RATE_LIMIT, WafConstruct } from './waf_construct.js';
 import { WEB_FUNCTION_INTERNAL_HEADERS, WebFunctionConstruct, type WebFunctionOptions } from './web_function_construct.js';
 
 // Re-export build ID helpers for public API + tests
@@ -278,6 +286,14 @@ export type HostingConstructProps = {
      * @deprecated Use `frontDoor.features.cacheKeyCookies`.
      */
     cacheKeyCookies?: string[];
+    /**
+     * Cookie names that never affect the rendered output (e.g. `_ga`,
+     * `_gid`, `_fbp`, a consent cookie): the SSR cache guard ignores them, as
+     * it does the `__dpl` build pin, and they are not in the cache key.
+     * @see HostingProps.cdn.cacheGuardIgnoredCookies for the full note.
+     * @deprecated Use `frontDoor.features.cacheGuardIgnoredCookies`.
+     */
+    cacheGuardIgnoredCookies?: string[];
     /**
      * Header names to include in the SSR cache key (e.g. `'authorization'`).
      * Use to vary cached SSR responses by credential-bearing headers.
@@ -760,6 +776,9 @@ export class HostingConstruct extends Construct {
   /** The constructs the door's `onUpload` declared; each runs after every upload (see {@link addBuildAssetDependency}). */
   private readonly postUploadConstructs: IConstruct[] = [];
 
+  /** The bundles the SSR cache guard was installed in, by the first compute that installed it. */
+  private readonly ssrCacheGuardBundles = new Map<string, { name: string; key: string }>();
+
   /**
    * Creates the hosting infrastructure from a framework-agnostic deploy manifest.
    */
@@ -889,6 +908,27 @@ export class HostingConstruct extends Construct {
     // built: a door that invokes it without streaming gets a buffered server.
     const serverResponse = serverResponseFor(props.frontDoor);
     this.serverResponse = serverResponse;
+    // The SSR cache guard (see ssr_cache_guard.ts) needs the same cache-key
+    // names the selected door's server-route cache policy keys on, and
+    // whether a response with no Cache-Control is edge-cached. The
+    // CloudFront-over-ALB door's server-route policy keys on every cookie.
+    assertCacheGuardIgnoredCookies(f.cacheKeyCookies, f.cacheGuardIgnoredCookies);
+    const ssrCacheGuardConfig: SsrCacheGuardConfig = {
+      cacheKeyCookies: f.cacheKeyCookies,
+      ignoredCookies: f.cacheGuardIgnoredCookies,
+      cacheKeyHeaders: f.cacheKeyHeaders,
+      defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
+      allCookiesKeyed: stackedRouter,
+    };
+    // The computes the manifest routes requests to, other than the image
+    // function: they render server responses (e.g. a Next.js split function
+    // built regional), so they get the SSR cache guard too. A route's fallback
+    // compute serves the same requests, so it counts as well.
+    const serverRouteComputes = new Set(
+      manifest.routes
+        .flatMap((r) => (r.fallback ? [r.target, r.fallback] : [r.target]))
+        .filter((t) => t !== 'static' && t !== 's3' && t !== 'image-optimization'),
+    );
 
     for (const [name, resource] of computeEntries) {
       if (resource.type === 'edge') {
@@ -908,7 +948,14 @@ export class HostingConstruct extends Construct {
 
       // SSR compute is fronted by REST API (cdn_construct.ts), not by a
       // Function URL. Image-opt etc. keep OAC + Function URL.
+      // `default` and `server` are the reserved manifest names of the SSR
+      // server compute (ComputeResource has no role field); only these get
+      // the SSR server settings. The SSR cache guard goes in front of these
+      // and of every other regional compute a route targets (see
+      // serverRouteComputes); computes no route targets (image optimization,
+      // revalidation) are deployed without it.
       const isSsrCompute = name === 'default' || name === 'server';
+      const servesServerRoutes = isSsrCompute || serverRouteComputes.has(name);
 
       // Web Functions host the SSR server only; auxiliary compute (image
       // optimization, revalidation, edge) stays on Lambda.
@@ -916,7 +963,7 @@ export class HostingConstruct extends Construct {
         this.warnInapplicableWebFunctionOptions(props.compute);
         const webFunction = new WebFunctionConstruct(this, `WebCompute-${name}`, {
           name,
-          computeResource: resource,
+          computeResource: this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'web-function').resource,
           timeout: computeTimeout,
           logRetention: props.compute.logRetention,
           skipRegionValidation: props.skipRegionValidation,
@@ -927,9 +974,22 @@ export class HostingConstruct extends Construct {
         continue;
       }
 
+      // The SSR cache guard goes in front of the server first, so a door shim
+      // (which converts the door's event shape) wraps the guarded handler.
+      const guarded = servesServerRoutes ? this.withSsrCacheGuard(name, resource, ssrCacheGuardConfig, 'lambda') : undefined;
+      const ssrResource = !guarded ? resource : isSsrCompute ? withDoorEventShim(guarded.resource, props.frontDoor) : guarded.resource;
+      // `compute.environment` is applied over the manifest's environment, so a
+      // NODE_OPTIONS set there must keep loading the guard.
+      const computeEnvironment =
+        guarded?.installed && ssrResource.type === 'http-server' && props.compute?.environment?.NODE_OPTIONS !== undefined
+          ? {
+              ...props.compute.environment,
+              NODE_OPTIONS: withSsrCacheGuardNodeOption(props.compute.environment.NODE_OPTIONS),
+            }
+          : props.compute?.environment;
       const computeConstruct = new ComputeConstruct(this, `Compute-${name}`, {
         name,
-        computeResource: isSsrCompute ? withDoorEventShim(resource, props.frontDoor) : resource,
+        computeResource: ssrResource,
         memorySize: props.compute?.memorySize,
         timeout: computeTimeout,
         reservedConcurrency: props.compute?.reservedConcurrency,
@@ -941,7 +1001,7 @@ export class HostingConstruct extends Construct {
         logRetention: props.compute?.logRetention,
         skipRegionValidation: props.skipRegionValidation,
         skipFunctionUrl: isSsrCompute,
-        environment: props.compute?.environment,
+        environment: computeEnvironment,
         ...(isSsrCompute && serverResponse === 'buffered' ? { responseMode: 'buffered' as const } : {}),
       });
 
@@ -1600,9 +1660,15 @@ export class HostingConstruct extends Construct {
         skewProtection: f.skewProtection ?? { enabled: true },
         ssrDefaultTtl: f.ssrDefaultTtl,
         cacheKeyCookies: f.cacheKeyCookies,
+        cacheGuardIgnoredCookies: f.cacheGuardIgnoredCookies,
         cacheKeyHeaders: f.cacheKeyHeaders,
         webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
         quotas: f.quotas,
+        serverOrigin: f.serverOrigin,
+        // The Blocks-managed web ACL's rules also run on the server origin's
+        // REST API stage (a REGIONAL web ACL with the same rate limit), so a
+        // call made straight to `execute-api` meets them too.
+        originWafRateLimit: this.webAcl ? (f.waf?.rateLimit ?? DEFAULT_WAF_RATE_LIMIT) : undefined,
         customErrorPages: props.errorPages
           ? {
               notFound: !!props.errorPages.notFound,
@@ -2542,6 +2608,39 @@ export class HostingConstruct extends Construct {
   }
 
   /**
+   * Put the SSR cache guard in front of an SSR server (see ssr_cache_guard.ts),
+   * and warn when it cannot be installed: that server's responses are then
+   * cached exactly as its own `Cache-Control` says.
+   */
+  private withSsrCacheGuard(
+    name: string,
+    resource: ComputeResource,
+    config: SsrCacheGuardConfig,
+    host: 'lambda' | 'web-function',
+  ): { resource: ComputeResource; installed: boolean } {
+    // The guard's files have fixed names in the bundle, so two computes that
+    // share a bundle can share them only when they wrap the same handler.
+    const bundle = path.resolve(resource.bundle);
+    const key = `${host}:${resource.type}:${resource.handler ?? ''}:${resource.serverEntry ?? ''}`;
+    const sharing = this.ssrCacheGuardBundles.get(bundle);
+    const result: { resource: ComputeResource; skipped?: string } =
+      sharing && sharing.key !== key
+        ? { resource, skipped: `it shares its bundle with compute '${sharing.name}', which runs a different server` }
+        : withSsrCacheGuard(resource, config, host);
+    if (result.resource !== resource && !sharing) this.ssrCacheGuardBundles.set(bundle, { name, key });
+    if (result.skipped !== undefined) {
+      Annotations.of(this).addWarningV2(
+        '@aws-blocks/hosting:SsrCacheGuardNotInstalled',
+        `The SSR cache guard is not installed in front of compute '${name}': ${result.skipped}. ` +
+          'Its responses are cached as their Cache-Control says, so routes that set cookies or depend on ' +
+          "the request's cookies or Authorization should send `Cache-Control: private`, or list those " +
+          'credentials in cdn.cacheKeyCookies/cdn.cacheKeyHeaders.',
+      );
+    }
+    return { resource: result.resource, installed: result.resource !== resource };
+  }
+
+  /**
    * Lambda-only knobs have no Web Function equivalent — warn instead of
    * silently ignoring them (an app switching `compute.type` often keeps its
    * existing `memorySize`).
@@ -2667,6 +2766,7 @@ const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingF
     geoRestriction: { value: cdn?.geoRestriction, prop: 'cdn.geoRestriction' },
     ssrDefaultTtl: { value: cdn?.ssrDefaultTtl, prop: 'cdn.ssrDefaultTtl' },
     cacheKeyCookies: { value: cdn?.cacheKeyCookies, prop: 'cdn.cacheKeyCookies' },
+    cacheGuardIgnoredCookies: { value: cdn?.cacheGuardIgnoredCookies, prop: 'cdn.cacheGuardIgnoredCookies' },
     cacheKeyHeaders: { value: cdn?.cacheKeyHeaders, prop: 'cdn.cacheKeyHeaders' },
     responseHeadersPolicy: { value: cdn?.responseHeadersPolicy, prop: 'cdn.responseHeadersPolicy' },
     quotas: { value: cdn?.quotas, prop: 'cdn.quotas' },
@@ -2910,15 +3010,8 @@ const withDoorEventShim = (
   const isAlb = kind !== 'apiGateway';
   if (isAlb && resource.streaming === true) return resource; // fails synth (assertServerReachableByDoor)
   if (!isAlb && !forwardedHostFromHost) return resource;
-  const handler = resource.handler ?? 'index.handler';
-  const dot = handler.lastIndexOf('.');
-  if (dot <= 0) return resource;
-  const moduleBase = handler.substring(0, dot);
-  const exportName = handler.substring(dot + 1);
-  const moduleFile = ['.mjs', '.js', '.cjs']
-    .map((ext) => `${moduleBase}${ext}`)
-    .find((file) => fs.existsSync(path.join(resource.bundle, file)));
-  if (!moduleFile) return resource;
+  const { exportName, moduleFile } = resolveHandlerModule(resource.bundle, resource.handler ?? 'index.handler') ?? {};
+  if (!moduleFile || exportName === undefined) return resource;
   const [shimFile, shimHandler, code] = isAlb
     ? [ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode(`./${moduleFile}`, exportName, { forwardedHostFromHost })]
     : [FORWARDED_HOST_SHIM_FILE, FORWARDED_HOST_SHIM_HANDLER, generateForwardedHostShimCode(`./${moduleFile}`, exportName)];

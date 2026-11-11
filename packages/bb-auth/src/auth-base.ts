@@ -61,6 +61,7 @@ import type {
 } from './engines/types.js';
 import { fabricateCodeDelivery, isAccountStateAnswer } from './enumeration.js';
 import {
+	CLIENT_ERROR_MESSAGES,
 	type ErrorFlow,
 	passwordPolicyMessage,
 	toAuthApiError,
@@ -318,6 +319,13 @@ function credentialIdOf(credential: string): string {
 
 function poolTokensOf(record: PoolSessionRecord): PoolTokens {
 	return { idToken: record.idToken, accessToken: record.accessToken, refreshToken: record.refreshToken };
+}
+
+/** The branded 503 sign-out reports when the server-side session was not invalidated. */
+function signOutIncomplete(): ApiError {
+	return new ApiError(CLIENT_ERROR_MESSAGES[AuthErrors.SignOutIncomplete], 503, {
+		name: AuthErrors.SignOutIncomplete,
+	});
 }
 
 function notAuthenticated(): ApiError {
@@ -601,12 +609,46 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * user's sessions on every other device. For a federated session whose
 	 * provider keeps its own session, the provider's logout URL is recorded for
 	 * the sign-out route to redirect to.
+	 *
+	 * The cookie is cleared first, so this device is signed out even when the
+	 * server-side session can't be deleted. Deleting the session row is what
+	 * stops a replayed copy of the cookie from authenticating, so a failure there
+	 * is reported rather than swallowed.
+	 *
+	 * @throws {AuthErrors.SignOutIncomplete} (503) If the session row could not be
+	 * deleted (e.g. a transient session-store failure), or the session secret could
+	 * not be resolved to identify it: the cookie was cleared, but the server-side
+	 * session was NOT invalidated, so a copy of the cookie keeps authenticating
+	 * until the session ends on its own. `setAuthState({ action: 'signOut' })`
+	 * reports it as a signed-out state with `errorName: 'SignOutIncompleteException'`,
+	 * and the sign-out route answers `503` with `{ error, name }`.
 	 */
 	async signOut(context: BlocksContext, options?: SignOutOptions): Promise<void> {
 		const raw = readSessionCookie(context, this.fullId);
-		const sessionId = raw ? verifySessionId(raw, await this.sessionSecret()) : null;
-		const record = sessionId ? await this.sessions.lookup(sessionId) : null;
-		if (sessionId && record) {
+		clearSessionCookie(context, this.fullId, this.crossDomain);
+		if (!raw) return;
+		let secret: string;
+		try {
+			secret = await this.sessionSecret();
+		} catch (e) {
+			this.log.error('[bb-auth] sign-out: the session secret is unavailable; the session was not invalidated', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			throw signOutIncomplete();
+		}
+		const sessionId = verifySessionId(raw, secret);
+		if (!sessionId) return;
+		let record: SessionRecord | null = null;
+		try {
+			record = await this.sessions.lookup(sessionId);
+		} catch (e) {
+			// The delete below still invalidates the session; only `onSignOut` and
+			// upstream revocation are skipped.
+			this.log.warn('[bb-auth] sign-out: the session read failed; upstream sign-out skipped', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+		}
+		if (record) {
 			if (this.config.onSignOut) {
 				try {
 					await this.config.onSignOut(this.toUser(identityOf(record)), context);
@@ -625,8 +667,14 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				});
 			}
 		}
-		if (sessionId) await this.sessions.delete(sessionId);
-		clearSessionCookie(context, this.fullId, this.crossDomain);
+		try {
+			await this.sessions.delete(sessionId);
+		} catch (e) {
+			this.log.error('[bb-auth] sign-out: the session delete failed; the session was not invalidated', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			throw signOutIncomplete();
+		}
 	}
 
 	/**
@@ -1809,6 +1857,15 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 *   that issued it; rejected → the row is deleted and the cookie cleared;
 	 *   refreshed → the row is replaced and the cookie re-issued (sliding expiry).
 	 *
+	 * Several requests can refresh one session at once (parallel calls when the
+	 * access token expires, possibly on different Lambda instances), and
+	 * `signOut` can delete it mid-refresh. Both refresh writes are therefore
+	 * conditional on the row this request read, so the outcome doesn't depend on
+	 * which request lands last ({@link AuthBase.sessionAfterLostWrite}): a
+	 * refresh that finishes after sign-out never restores the session, and a
+	 * request whose refresh was rejected never deletes the session another
+	 * request has just refreshed.
+	 *
 	 * Throws only for infrastructure failures (store, secret) or a transient
 	 * refresh failure — never for anything the client sent.
 	 */
@@ -1820,11 +1877,12 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
 		}
-		const record = await this.sessions.lookup(sessionId);
-		if (!record) {
+		const read = await this.sessions.read(sessionId);
+		if (!read) {
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 			return null;
 		}
+		const { record, row } = read;
 		if (await this.sessions.isRevoked(record)) {
 			await this.sessions.delete(sessionId);
 			clearSessionCookie(context, this.fullId, this.crossDomain);
@@ -1844,15 +1902,20 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			throw this.mapError(e);
 		}
 		if (!refreshed) {
-			await this.sessions.delete(sessionId);
-			clearSessionCookie(context, this.fullId, this.crossDomain);
-			return null;
+			// Rejected: end the session, unless a concurrent request replaced it first.
+			if (await this.sessions.deleteIfUnchanged(sessionId, row)) {
+				clearSessionCookie(context, this.fullId, this.crossDomain);
+				return null;
+			}
+			return this.sessionAfterLostWrite(context, sessionId);
 		}
 		// Keep the sign-in time across the refresh, so a later reset still ends the session.
 		if (!('kind' in refreshed) && !('kind' in record) && record.issuedAt !== undefined) {
 			refreshed = { ...refreshed, issuedAt: record.issuedAt };
 		}
-		await this.sessions.replace(sessionId, refreshed);
+		if (!(await this.sessions.replaceIfUnchanged(sessionId, row, refreshed))) {
+			return this.sessionAfterLostWrite(context, sessionId);
+		}
 		setSessionCookie(
 			context,
 			this.fullId,
@@ -1861,6 +1924,23 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			this.crossDomain,
 		);
 		return { sessionId, record: refreshed, identity: identityOf(refreshed) };
+	}
+
+	/**
+	 * This request's conditional refresh write lost: the session changed after
+	 * it was read. Serve the session a concurrent refresh wrote if it is still
+	 * live. If the session was deleted (`signOut`, revoke), clear the cookie — it
+	 * stays signed out. Anything else leaves the session alone and answers this
+	 * request as unauthenticated.
+	 */
+	private async sessionAfterLostWrite(context: BlocksContext, sessionId: string): Promise<ResolvedSession | null> {
+		const current = await this.sessions.lookup(sessionId);
+		if (!current) {
+			clearSessionCookie(context, this.fullId, this.crossDomain);
+			return null;
+		}
+		const identity = identityOf(current);
+		return identity.expiresAt > Date.now() ? { sessionId, record: current, identity } : null;
 	}
 
 	/** Refresh through the engine that issued the session. `null` = signed out. */

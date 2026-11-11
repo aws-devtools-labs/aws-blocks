@@ -38,8 +38,8 @@
 import crypto from 'node:crypto';
 import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { KVStore } from '@aws-blocks/bb-kv-store';
-import type { ScopeParent } from '@aws-blocks/core';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+import { isBlocksError, type ScopeParent } from '@aws-blocks/core';
 import { type SignInMode, sameSignInName, signsInWithAttribute } from './sign-in-mode.js';
 import type { JWT } from './types.js';
 
@@ -467,9 +467,55 @@ export class SessionStore {
 		return parseSessionRecord(await this.kv.get(sessionId));
 	}
 
+	/**
+	 * The session together with the row exactly as stored, for a write that is
+	 * conditional on it ({@link replaceIfUnchanged}, {@link deleteIfUnchanged}).
+	 * `null` where {@link lookup} returns `null`.
+	 */
+	async read(sessionId: string): Promise<{ record: SessionRecord; row: unknown } | null> {
+		const row = await this.kv.get(sessionId);
+		const record = parseSessionRecord(row);
+		return record ? { record, row } : null;
+	}
+
 	/** Replace a session's row (sliding its TTL forward). */
 	async replace(sessionId: string, record: SessionRecord): Promise<void> {
 		await this.kv.put(sessionId, record, this.writeOptions());
+	}
+
+	/**
+	 * Write `next` only if the session still holds `row` — the row the caller
+	 * read with {@link read} (compare-and-swap, sliding the TTL forward). Returns
+	 * `true` when `next` was written; `false` (nothing written) when the session
+	 * was deleted (sign-out, revoke) or replaced by a concurrent writer since
+	 * `row` was read. A stale writer therefore never recreates a deleted session
+	 * or overwrites a newer one.
+	 */
+	async replaceIfUnchanged(sessionId: string, row: unknown, next: SessionRecord): Promise<boolean> {
+		try {
+			await this.kv.put(sessionId, next, { ...this.writeOptions(), ifValueEquals: row });
+			return true;
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
+			throw e;
+		}
+	}
+
+	/**
+	 * Delete a session only if it still holds `row` — the row the caller read
+	 * with {@link read}. Returns `true` when it was deleted; `false` (nothing
+	 * deleted) when it was already deleted or was replaced since `row` was read
+	 * (for example by a concurrent refresh), so a decision made on stale data
+	 * never removes a newer session.
+	 */
+	async deleteIfUnchanged(sessionId: string, row: unknown): Promise<boolean> {
+		try {
+			await this.kv.delete(sessionId, { ifValueEquals: row });
+			return true;
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
+			throw e;
+		}
 	}
 
 	/** Delete a session. Silent no-op if it does not exist. */

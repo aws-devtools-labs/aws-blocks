@@ -464,7 +464,8 @@ require \`pg_dump\`.
   concurrency cap below the pooler limit during coexistence.
 
 - **Non-standard JWT claims.** RLS policies that reference JWT claims beyond \`sub\` and \`role\` require your OIDC
-  provider to include those claims in the access token. If your policies return zero
+  provider to include those claims in the token \`Auth\` verifies: the ID token for
+  browser sessions, or the access token for \`Authorization: Bearer\` API callers. If your policies return zero
   rows after migration, check which claims your RLS policies read and ensure your
   OIDC provider emits them.
 `;

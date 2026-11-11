@@ -547,6 +547,9 @@ const SYNTH_SAFE_METHODS = new Set([
 	'Logger.prototype.warn',
 	'Logger.prototype.error',
 	'Logger.prototype.child',
+	// Pure: builds a tool definition for an Agent's `tools` callback, which may be declared at
+	// module top level; its handler calls `retrieve`, which stays guarded.
+	'KnowledgeBase.prototype.asAgentTool',
 ]);
 
 /** Instance methods of the cdk entry's constructs that must throw `synthGuard`'s error. */

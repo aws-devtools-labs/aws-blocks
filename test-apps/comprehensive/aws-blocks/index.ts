@@ -218,6 +218,26 @@ const authCrossDomain = new Auth(scope, 'auth-cross-domain', {
 const cookieAuth = { 'auth-same-origin': authSameOrigin, 'auth-cross-domain': authCrossDomain };
 type CookieAuthId = keyof typeof cookieAuth;
 
+// An `Auth` block whose `codeDelivery` fails, to pin what a client sees when a
+// sign-up hits a backend fault. A `raw-` username throws the kind of error an
+// email provider SDK raises (message embeds an account id and ARN), which must
+// reach the client only as a generic message. An `api-` username throws an
+// ApiError, whose message is intentional and must reach the client unchanged.
+// Local only: deployed, Cognito sends the code and `codeDelivery` is not called.
+const RAW_BACKEND_ERROR = 'User: arn:aws:sts::111122223333:assumed-role/e2e-role/x is not authorized to perform: ses:SendEmail';
+const authDeliveryFails = new Auth(scope, 'auth-delivery-fails', {
+  users: { signInWith: ['email'] },
+  emailPassword: {
+    passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
+  },
+  codeDelivery: async (username) => {
+    if (username.startsWith('api-')) {
+      throw new ApiError('That address cannot receive email', 400, { name: 'UndeliverableAddressException' });
+    }
+    throw new Error(RAW_BACKEND_ERROR);
+  },
+});
+
 /** Narrow an over-the-wire instance id; anything else is a 400. */
 function cookieAuthFor(id: string): typeof authSameOrigin | typeof authCrossDomain {
   if (!Object.hasOwn(cookieAuth, id)) throw new ApiError(`Unknown cookie auth instance "${id}"`, 400);
@@ -483,6 +503,31 @@ async function idTokenSubject(instance: typeof oidcAuth | typeof oidcAuthExtras,
     iss: typeof payload.iss === 'string' ? payload.iss : null,
   };
 }
+
+// A `store: 'builtin'` block whose `onSignIn` hook fails. Signing in with
+// `hookfail-raw` throws an SDK-shaped error (account id + ARN in its message),
+// which the callback must answer with a generic 500. Signing in with
+// `hookfail-api` throws an ApiError, whose status, name and message must reach
+// the client unchanged.
+new Auth(scope, 'oidc-auth-hookfail', {
+  store: 'builtin',
+  providers: stubsAllowed
+    ? {
+        'hookfail-raw': stubIdp({ onAuthorize: (req) => req.users[0] }),
+        'hookfail-api': stubIdp({ onAuthorize: (req) => req.users[0] }),
+      }
+    : { 'hookfail-raw': { type: 'oidc', issuer: 'https://accounts.google.com', clientId: 'e2e-placeholder' } },
+  redirects: {
+    callbackPath: '/aws-blocks/auth/hookfail/callback',
+    signOutPath: '/aws-blocks/auth/hookfail/signout',
+  },
+  onSignIn: async (user) => {
+    if (user.signInProvider === 'hookfail-api') {
+      throw new ApiError('Sign-in is disabled for this account', 403, { name: 'SignInBlockedException' });
+    }
+    throw new Error(RAW_BACKEND_ERROR);
+  },
+});
 
 // DistributedTable - Structured data with indexes
 const itemSchema = z.object({
@@ -967,6 +1012,23 @@ const kb = new KnowledgeBase(scope, 'docs', {
   source: './aws-blocks/knowledge',
 });
 
+// KnowledgeBase as an Agent tool. The search scope comes from the per-call tool context, which
+// server code sets from the authenticated session; the model only supplies the query.
+const kbToolAgent = new Agent(scope, 'kbtool', {
+  removalPolicy: 'destroy',
+  inferenceOnly: true,
+  model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+  systemPrompt: 'Answer questions from the documentation.',
+  toolContextSchema: z.object({ folder: z.string() }),
+  tools: (tool) => ({
+    searchDocs: tool({
+      ...kb.asAgentTool({ filter: (context) => ({ folder: { equals: context.folder } }), maxResults: 10 }),
+      // Canned provider only: search for a query that matches the docs instead of a placeholder.
+      cannedExamples: { query: 'Building Blocks Scope' },
+    }),
+  }),
+});
+
 // Tracer - Distributed tracing backed by X-Ray
 const tracer = new Tracer(scope, 'tracer');
 const disabledTracer = new Tracer(scope, 'tracer-disabled', { enabled: false });
@@ -1081,12 +1143,13 @@ new RawRoute(scope, 'GreetRoute', {
   },
 });
 
-// Wildcard — captures everything after /files/ as context.request.params['*']
+// Wildcard — captures everything after /files/ as context.request.params['*'].
+// Also echoes the URL's pathname, which must be the route path on every stage.
 new RawRoute(scope, 'FilesRoute', {
   method: 'GET',
   path: '/files/*',
   handler: async (context) => {
-    context.response.send({ path: context.request.params['*'] });
+    context.response.send({ path: context.request.params['*'], pathname: context.request.url.pathname });
   },
 });
 
@@ -1855,6 +1918,19 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // so a `refresh` callback can spread this cast-free without overriding channel.
     const descriptor: { channel: string; [key: string]: unknown } = { ...rest, channel: raw.channel as string };
     return descriptor;
+  },
+
+  async realtimeGetExactChannel(subChannel: string) {
+    return realtime.getChannel('cursors', subChannel, { scope: 'exact' });
+  },
+
+  async realtimeGetChildOfChannel(subChannel: string, scope: 'exact' | 'subtree') {
+    // A handle for `<subChannel>/child` that carries the token minted for
+    // `<subChannel>`: what a client holding the parent handle could send.
+    const ch = await realtime.getChannel('cursors', subChannel, { scope });
+    const descriptor = ch.toJSON() as Record<string, unknown>;
+    descriptor.channel = `${String(descriptor.channel)}/child`;
+    return descriptor as unknown as typeof ch;
   },
 
   async realtimeGetPoisonedChannel(subChannel: string) {
@@ -2811,6 +2887,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
+  async kbAgentToolSearch(message: string) {
+    // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
+    // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
+    const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
+    const done = await result.complete();
+    return { text: done.text ?? '' };
+  },
+
   // ------------------------------------------------------------------------
   // EmailClient Tests
   // ------------------------------------------------------------------------
@@ -3071,6 +3155,7 @@ export const isolatedApi = new ApiNamespace(scope, 'isolated', () => ({
 
 // Export auth state machine API
 export const authApi = auth.createApi();
+export const authDeliveryFailsApi = authDeliveryFails.createApi();
 export const authCApi = authC.createApi();
 // TOTP enrolment through the state machine (`setUpTotp`, `verifyTotpSetup`, …).
 export const authCMfaApi = authCMfa.createApi();

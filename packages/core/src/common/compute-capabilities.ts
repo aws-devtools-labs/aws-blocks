@@ -167,9 +167,18 @@ export interface ContainerComputeOptions {
 	 * need (e.g. image/video tooling). Use this to add such libraries — otherwise
 	 * omit it.
 	 *
+	 * ECS pulls the image at every task start, and the container runs with the
+	 * stack's shared execution role, so pin a custom image by digest
+	 * (`registry/repo@sha256:<digest>`) rather than a tag that can be
+	 * re-pushed. Blocks uses this value verbatim.
+	 *
 	 * @default `public.ecr.aws/docker/library/node:24-slim` — a stock, public,
 	 * AWS-hosted Node 24 image. Must be arm64-compatible (Blocks runs Fargate on
-	 * Graviton); multi-arch images resolve automatically.
+	 * Graviton); multi-arch images resolve automatically. The default is pinned
+	 * by digest, so it doesn't change between deploys. The default image runs
+	 * as its unprivileged `node` user (uid/gid 1000), not root; a custom image
+	 * runs as its own default user, so set `image` explicitly (for example to
+	 * the same Node image) if your handlers need root.
 	 */
 	image?: string;
 }

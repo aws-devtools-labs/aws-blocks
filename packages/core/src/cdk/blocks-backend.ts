@@ -7,6 +7,7 @@ import type * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnGroup } from 'aws-cdk-lib/aws-resourcegroups';
 import { Construct } from 'constructs';
+import { API_COMPUTE_ID_KEY, API_NAMESPACE_COMPUTES_KEY, MAX_API_NAMESPACE_COMPUTES_BYTES } from '../api-placement.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
 import { addOrphanedBaselineCheck } from './baselines.js';
 import type { BlocksDefaults } from './blocks-defaults.js';
@@ -351,9 +352,11 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 	}
 	// createSharedGateway guards that the default compute exposes an apiHandler().
 	const cloudfront = resolveApiFrontDoor(owner._apiFrontDoorTier) === 'cloudfront';
+	// Keyed by export name, resolved from the imported backend module.
+	const namespaceRoutes = resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner));
+	applyStrictNamespacePlacement(owner, defaultCompute, namespaceRoutes);
 	const sharedGateway = createSharedGateway(defaultCompute, {
-		// Keyed by export name, resolved from the imported backend module.
-		namespaceRoutes: resolveNamespaceRoutes(backendModule, defaultCompute, getComputes(owner)),
+		namespaceRoutes,
 		defaultCompute,
 		defaults: owner.defaults,
 		regionalEndpoint: cloudfront,
@@ -371,6 +374,77 @@ export function buildSharedGateway(owner: SharedGatewayOwner, backendModule: obj
 	for (const { ingress } of owner._apiDirectRoutes) admitCloudFront(ingress.loadBalancer);
 	scheduleApiFrontDoor(owner, cloudfront, sharedGateway.apiUrl, sharedGateway.restApi.deploymentStage);
 	return sharedGateway;
+}
+
+/**
+ * Tell each compute which API namespaces it serves when
+ * `defaults.strictNamespacePlacement` is on, or warn that the bare endpoint serves
+ * every namespace when it is off.
+ *
+ * On: sets the placement map (namespace export name → compute `fullId`, for
+ * every namespace on a non-default compute) as the `BLOCKS_API_NAMESPACE_COMPUTES`
+ * environment variable of every API compute, the default one included, and
+ * stamps each non-default one with its own id (`BLOCKS_API_COMPUTE_ID`). The
+ * dispatcher (see `apiNamespaceFilterFromEnv`) then refuses, on the default
+ * compute, a namespace placed elsewhere — including on the bare
+ * `/aws-blocks/api` endpoint — and, on a non-default compute, every namespace
+ * that isn't its own. Nothing is set when no namespace has its own compute: the
+ * default compute serves them all either way.
+ *
+ * The map goes in each compute's environment, not through `registerConfig()`
+ * (AGENTS.md rule 3), on purpose. A compute reads `blocks-config.json` once, at
+ * Lambda init or container boot, and a config change doesn't change the
+ * compute's own definition, so warm Lambda environments and running tasks would
+ * keep the old map until they happen to recycle. An environment change is part
+ * of the function and task definition, so turning the option on or moving a
+ * namespace rolls every API compute. The map is small (a few bytes per placed
+ * namespace), and synth refuses one over {@link MAX_API_NAMESPACE_COMPUTES_BYTES},
+ * far under Lambda's 4 KB environment limit.
+ *
+ * @throws {Error} When the encoded map is larger than {@link MAX_API_NAMESPACE_COMPUTES_BYTES}.
+ * @internal
+ */
+export function applyStrictNamespacePlacement(
+	owner: SharedGatewayOwner,
+	defaultCompute: ComputeBase,
+	namespaceRoutes: ReadonlyMap<ComputeBase, readonly string[]>,
+): void {
+	if (namespaceRoutes.size === 0) return;
+	if (!owner.defaults.strictNamespacePlacement) {
+		const placed = [...namespaceRoutes.values()].flat();
+		cdk.Annotations.of(defaultCompute).addWarningV2(
+			'blocks:apigateway:bare-endpoint-serves-placed-namespaces',
+			`API namespaces on their own compute (${placed.join(', ')}) can also be called through the bare ` +
+				'/aws-blocks/api endpoint, which runs them on the default compute instead. To serve each namespace ' +
+				"only on its own compute, add `strictNamespacePlacement: true` to the stack's `defaults` (keep the " +
+				'preset you already use); the typed clients already call each namespace at its own path. If raw ' +
+				'callers still need the bare endpoint for these namespaces, acknowledge this warning by calling ' +
+				"`Annotations.of(stack).acknowledgeWarning('blocks:apigateway:bare-endpoint-serves-placed-namespaces')` " +
+				'on the stack or backend returned by `create()`.',
+		);
+		return;
+	}
+	const entries: Array<[string, string]> = [];
+	for (const [compute, exportNames] of namespaceRoutes) {
+		for (const name of exportNames) entries.push([name, compute.fullId]);
+	}
+	// Sorted, so reordering the backend's exports doesn't change (and roll) every compute.
+	entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+	const encoded = JSON.stringify(Object.fromEntries(entries));
+	const bytes = Buffer.byteLength(encoded, 'utf8');
+	if (bytes > MAX_API_NAMESPACE_COMPUTES_BYTES) {
+		throw new Error(
+			`[Blocks] strictNamespacePlacement: the ${API_NAMESPACE_COMPUTES_KEY} placement map for ${entries.length} ` +
+				`API namespaces is ${bytes} bytes, over the ${MAX_API_NAMESPACE_COMPUTES_BYTES}-byte limit for a value ` +
+				"in each compute's environment (Lambda allows 4 KB for all of them). Place fewer namespaces on their " +
+				'own compute, or give the namespaces and computes shorter ids.',
+		);
+	}
+	defaultCompute.setEnv(API_NAMESPACE_COMPUTES_KEY, encoded);
+	for (const compute of namespaceRoutes.keys()) {
+		compute.setEnv(API_NAMESPACE_COMPUTES_KEY, encoded);
+		compute.setEnv(API_COMPUTE_ID_KEY, compute.fullId);
+	}
 }
 
 /**

@@ -19,6 +19,7 @@
  */
 
 import { BLOCKS_AUTH_PREFIX, type BlocksContext, RawRoute, RawRouteErrors, type Scope } from '@aws-blocks/core';
+import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
 
 /** Root under which every stub issuer is mounted (inside the reserved auth subtree). */
 export const STUB_ROOT = `${BLOCKS_AUTH_PREFIX}/idp`;
@@ -29,9 +30,11 @@ export function stubIssuerPath(providerId: string): string {
 }
 
 /**
- * The absolute issuer URL of a provider's stub for this request: the request's
- * origin (or the deploy-injected `BLOCKS_API_URL`, which the server can reach
- * itself) plus any stage prefix before `/aws-blocks` — `bb-auth-oidc`'s rule.
+ * The absolute issuer URL of a provider's stub for this request: the
+ * deploy-injected `BLOCKS_API_URL` (which the server can reach itself) with any
+ * stage prefix before `/aws-blocks`, else the request's base URL, origin plus any
+ * API Gateway stage (`getRequestBaseUrl()`; `ctx.request.url` is the route path
+ * and never has the stage) — `bb-auth-oidc`'s rule.
  *
  * `apiUrl` overrides `BLOCKS_API_URL`: the deployed stub passes the gateway URL
  * the CDK layer registered (`stubIdpConfigKeys`), so its issuer is always the
@@ -43,7 +46,8 @@ export function stubIssuerUrl(
 	ctx: { request: { url: URL } },
 	apiUrl: string | undefined = process.env.BLOCKS_API_URL,
 ): string {
-	const url = apiUrl ? new URL(apiUrl) : ctx.request.url;
+	if (!apiUrl) return `${getRequestBaseUrl(ctx).replace(/\/+$/, '')}${stubIssuerPath(providerId)}`;
+	const url = new URL(apiUrl);
 	const routeStart = url.pathname.search(/\/aws-blocks\b/);
 	const stagePrefix = routeStart > 0 ? url.pathname.slice(0, routeStart) : '';
 	return `${url.protocol}//${url.host}${stagePrefix}${stubIssuerPath(providerId)}`;

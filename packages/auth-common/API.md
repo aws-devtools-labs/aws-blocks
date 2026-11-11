@@ -129,6 +129,7 @@ export const AuthErrors: {
     readonly PasswordResetRequired: "PasswordResetRequiredException";
     readonly TokenExpired: "TokenExpiredException";
     readonly ReauthenticationRequired: "ReauthenticationRequiredException";
+    readonly SignOutIncomplete: "SignOutIncompleteException";
     readonly UserAlreadyExists: "UsernameExistsException";
     readonly UserNotConfirmed: "UserNotConfirmedException";
     readonly UserNotFound: "UserNotFoundException";

@@ -31,10 +31,13 @@ function toRuntimeSessionId(base: string): string {
  * without a conversation has no state to keep, so it gets a fresh session of its own
  * (`turn-<uuid>`, 41 characters, never a UUID) instead of the bare channelId: the channelId is
  * caller-chosen, so it could otherwise equal another user's conversation id and land the turn
- * in that user's session.
+ * in that user's session. `sessionId` is the conversation's Strands session id (the
+ * conversationId, or the owner-scoped key of an `inferenceOnly` agent with
+ * `sessionScope: 'user'`), so two users who pass the same conversationId to such an agent
+ * route to different runtime sessions.
  */
-function runtimeSessionIdFor(payload: { conversationId?: string }): string {
-	if (payload.conversationId) return toRuntimeSessionId(payload.conversationId);
+function runtimeSessionIdFor(payload: { conversationId?: string }, sessionId?: string): string {
+	if (payload.conversationId) return toRuntimeSessionId(sessionId ?? payload.conversationId);
 	return `turn-${randomUUID()}`;
 }
 
@@ -122,7 +125,7 @@ export class Agent<TContext = DefaultToolContext> extends AgentBase<TContext> {
 		await this._agentCore.send(
 			new InvokeAgentRuntimeCommand({
 				agentRuntimeArn: runtimeArn,
-				runtimeSessionId: runtimeSessionIdFor(payload),
+				runtimeSessionId: runtimeSessionIdFor(payload, payload.conversationId ? this.sessionIdFor(payload.conversationId, payload.userId) : undefined),
 				contentType: 'application/json',
 				accept: 'application/json',
 				payload: new TextEncoder().encode(JSON.stringify(body)),

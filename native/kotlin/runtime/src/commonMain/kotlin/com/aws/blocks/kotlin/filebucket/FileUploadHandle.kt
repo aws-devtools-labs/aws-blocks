@@ -22,6 +22,7 @@ import kotlinx.serialization.json.put
 class FileUploadHandle(
     val url: String,
     private val fileContentType: String? = null,
+    // No cookie jar: [url] is pre-authorized, so it carries its own credential.
     private val httpClient: HttpClient = defaultHttpClient()
 ) {
 

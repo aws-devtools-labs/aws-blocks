@@ -18,7 +18,8 @@ export { AuthErrors, isAuthError } from '@aws-blocks/auth-common';
  * The HTTP status `Auth` uses for each error name. Carried over from
  * `AuthCognito` (401 / 404 / 409 / 429 / 500, 400 otherwise), plus the names
  * that are new in `Auth` (`ReauthenticationRequired` 401, the four mode gates
- * 409: email + password, federation, passkeys and MFA).
+ * 409: email + password, federation, passkeys and MFA) and `AuthOIDC`'s
+ * `SignOutIncomplete` (503).
  *
  * Pure and dependency-free (browser-safe). Not exported from any entry point.
  *
@@ -47,6 +48,9 @@ export function statusForAuthError(name: string): number {
 		// A service-side fault: report it as the upstream failure it is, not a 400.
 		case AuthErrors.InternalError:
 			return 500;
+		// Sign-out could not invalidate the server-side session (a transient store fault).
+		case AuthErrors.SignOutIncomplete:
+			return 503;
 		default:
 			return 400;
 	}

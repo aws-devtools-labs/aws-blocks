@@ -6,9 +6,11 @@
  * every `fetch` to `<origin>/<stage>/…` — from the test, and from the code
  * under test (the direct engine's discovery, token and JWKS calls) — is
  * dispatched to the process's registered `RawRoute`s the way the Lambda
- * handler does it: the route is matched on the path **without** the stage, and
- * `ctx.request.url` is the full external URL **with** it (core's
- * `buildEventUrl`). Anything else goes to the real `fetch`.
+ * handler does it: the route is matched on the path **without** the stage,
+ * `ctx.request.url` is the request URL on that route path (also without the
+ * stage, as core's `buildEventUrl` builds it), and the handler runs with the
+ * stage-bearing base `<origin>/<stage>` as its `getRequestBaseUrl()`. Anything
+ * else goes to the real `fetch`.
  *
  * So an HTTPS-only engine (the AWS entry) can be driven end to end with no
  * network and no AWS account.
@@ -16,7 +18,13 @@
  * @internal
  */
 
+import type { AsyncLocalStorage } from 'node:async_hooks';
 import { type BlocksContext, matchRoute } from '@aws-blocks/core';
+import { getRequestBaseUrl } from '@aws-blocks/core/bb-utils';
+
+// Importing core registers the per-request base-URL store the transports fill.
+void getRequestBaseUrl;
+const baseUrlStore = Reflect.get(globalThis, '__BLOCKS_REQUEST_BASE_URL_STORE__') as AsyncLocalStorage<string>;
 
 /** An installed fake gateway. */
 export interface FakeGateway {
@@ -48,13 +56,15 @@ export function installFakeGateway(host = 'gw0test.execute-api.us-east-1.amazona
 		headers.set('host', host);
 		let body: unknown = '';
 		const responseHeaders = new Headers();
+		const routeUrl = new URL(url);
+		routeUrl.pathname = path;
 		const ctx: BlocksContext = {
 			request: {
 				headers,
 				body: null,
 				json: async () => JSON.parse(text),
 				text: async () => text,
-				url,
+				url: routeUrl,
 				params: match.params,
 			},
 			response: {
@@ -66,7 +76,7 @@ export function installFakeGateway(host = 'gw0test.execute-api.us-east-1.amazona
 			},
 		};
 		try {
-			await match.route.handler(ctx);
+			await baseUrlStore.run(base, () => match.route.handler(ctx));
 		} catch (e) {
 			// Like the real gateway: the error goes to the log (here, the test's stderr), never to the client.
 			console.error(e);

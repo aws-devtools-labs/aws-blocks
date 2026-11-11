@@ -211,6 +211,7 @@ export const CLIENT_ERROR_MESSAGES: Readonly<Record<AuthErrorName, string>> = {
 	[AuthErrors.PasswordResetRequired]: 'Password reset required',
 	[AuthErrors.TokenExpired]: 'Session expired, sign in again',
 	[AuthErrors.ReauthenticationRequired]: 'Please sign in again to continue.',
+	[AuthErrors.SignOutIncomplete]: 'Sign-out could not be completed: the server-side session was not invalidated',
 	[AuthErrors.UserAlreadyExists]: 'User already exists',
 	[AuthErrors.UserNotConfirmed]: 'User not confirmed',
 	[AuthErrors.UserNotFound]: 'User not found',
