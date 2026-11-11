@@ -66,6 +66,7 @@ const ESCAPES = {
 	P: '\u2029',
 };
 const HEX_LEN = { x: 2, u: 4, U: 8 };
+const HEX_RE = { x: /^[0-9a-fA-F]{2}$/, u: /^[0-9a-fA-F]{4}$/, U: /^[0-9a-fA-F]{8}$/ };
 
 /** Decode the body of a YAML double-quoted scalar; `null` if it uses an unknown escape. */
 function decodeDouble(body) {
@@ -78,7 +79,7 @@ function decodeDouble(body) {
 		const e = body[++i];
 		if (e in HEX_LEN) {
 			const hex = body.slice(i + 1, i + 1 + HEX_LEN[e]);
-			if (!new RegExp(`^[0-9a-fA-F]{${HEX_LEN[e]}}$`).test(hex)) return null;
+			if (!HEX_RE[e].test(hex)) return null;
 			out += String.fromCodePoint(Number.parseInt(hex, 16));
 			i += HEX_LEN[e];
 		} else if (e in ESCAPES) out += ESCAPES[e];
