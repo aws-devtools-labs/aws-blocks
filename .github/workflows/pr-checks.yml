@@ -318,6 +318,11 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      # The wait the hosting E2E suites run between deploy and their first test
+      # (scripts/ci/hosting-ready.ts).
+      - name: Test the hosting readiness wait
+        run: npx tsx --test scripts/ci/hosting-ready.test.ts
+
       - name: Test the E2E cleanup wrapper
         run: node --test scripts/ci/e2e-cleanup.test.mjs
 
