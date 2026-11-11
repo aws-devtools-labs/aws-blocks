@@ -462,6 +462,32 @@ describe('AWS query', () => {
 		assert.equal(a.cursor, m.cursor);
 	});
 
+	test('both runtimes reject a partition value, a sort operand and a cursor key value that fail the key check, with the same error', async () => {
+		const mock = mockStore('t', options);
+		const { store: aws, sent } = awsStore('t', options);
+		const badCursor = Buffer.from(JSON.stringify({ v: 1, index: null, key: { pk: 'p', sk: '1' } })).toString(
+			'base64url',
+		);
+		const pk = { equals: 'p' };
+		const calls: Array<[object, string]> = [
+			[{ where: { pk: { equals: 1 } } }, KVStoreErrors.InvalidQuery],
+			[{ where: { pk: { equals: '' } } }, KVStoreErrors.ValidationFailed],
+			[{ where: { pk, sk: { greaterThan: '1' } } }, KVStoreErrors.InvalidQuery],
+			[{ where: { pk, sk: { between: [1] } } }, KVStoreErrors.InvalidQuery],
+			[{ where: { pk, sk: { beginsWith: '1' } } }, KVStoreErrors.InvalidQuery],
+			[{ where: { pk, sk: { like: 1 } } }, KVStoreErrors.InvalidQuery],
+			[{ where: { pk, sk: 1 } }, KVStoreErrors.InvalidQuery],
+			[{ index: 'byN', where: { n: { equals: 5 } } }, KVStoreErrors.InvalidQuery],
+			[{ where: { pk }, cursor: badCursor }, KVStoreErrors.InvalidQuery],
+		];
+		for (const [call, name] of calls) {
+			const fromMock = await rejects(() => mock.query(call), name);
+			const fromAws = await rejects(() => aws.query(call), name);
+			assert.equal(fromAws.message, fromMock.message);
+		}
+		assert.equal(sent.length, 0, 'every rejection happens before a DynamoDB call');
+	});
+
 	test('both runtimes reject a cursor of another partition or index with the same name', async () => {
 		const mock = mockStore('t', options);
 		const { store: aws } = awsStore('t', options);

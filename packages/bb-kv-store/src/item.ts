@@ -80,9 +80,10 @@ export interface KeyModel {
 	/** The schema of the store, if it has one. */
 	readonly schema: StandardSchemaV1 | undefined;
 	/**
-	 * The DynamoDB attribute type of each key field, `'S'` or `'N'`, probed from
-	 * the schema on first use (see {@link probeKeyType}) and then kept, so a
-	 * store that is never read by key does not probe its schema.
+	 * The DynamoDB attribute type of each key field of the table and of the
+	 * indexes, `'S'` or `'N'`, probed from the schema on first use (see
+	 * {@link probeKeyType}) and then kept, so a store that is never read by key
+	 * does not probe its schema.
 	 */
 	readonly keyTypes: Map<string, 'S' | 'N'>;
 }
@@ -125,7 +126,7 @@ export function probeKeyType(schema: StandardSchemaV1 | undefined, field: string
 	return NUMBER_SAMPLES.some((sample) => schemaAccepts(schema, field, sample) !== false) ? 'N' : 'S';
 }
 
-/** The type of a key field of the model: {@link probeKeyType}, probed on first use and then kept in the model. */
+/** The type of a key field of the table or of an index: {@link probeKeyType}, probed on first use and then kept in the model. */
 function keyType(model: KeyModel, field: string): 'S' | 'N' {
 	let type = model.keyTypes.get(field);
 	if (type === undefined) {
@@ -164,7 +165,13 @@ function describe(value: unknown): string {
  * Check one key attribute value: a non-empty string for a string field, a
  * finite number for a number field.
  *
- * @throws {KVStoreErrors.InvalidQuery} If the value does not have the type of the field.
+ * This is the one gate for a key value, wherever a call passes one: the
+ * fields of a key, the partition value of a `query`, the operands of a sort
+ * condition, and the key values inside a cursor. The same value fails the
+ * same way in each place (a cursor reports it as a cursor error).
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the value does not have the type of the field (this
+ *   includes `NaN` and an infinite number).
  * @throws {KVStoreErrors.ValidationFailed} If the value is an empty string.
  */
 function checkKeyValue(field: string, value: unknown, type: 'S' | 'N'): KeyValue {
@@ -644,6 +651,10 @@ const SORT_CONDITIONS = {
 
 type SortOp = keyof typeof SORT_CONDITIONS;
 
+function isSortOp(op: string): op is SortOp {
+	return Object.hasOwn(SORT_CONDITIONS, op);
+}
+
 /** A query, resolved and checked: which key to read, the partition value, the sort condition, and the page. */
 export interface QueryPlan {
 	indexName: string | undefined;
@@ -671,9 +682,11 @@ interface LooseQueryOptions {
  * both runtimes.
  *
  * @throws {KVStoreErrors.InvalidQuery} If `index` is unknown, if the store has no declared key and no
- *   `index` is given, if `where` is missing or lacks `{ equals }` on the partition field, if more
- *   than one sort-key condition is given, if `limit` is not a positive integer, or if the cursor
- *   does not belong to this store, index, and partition.
+ *   `index` is given, if `where` is missing or lacks `{ equals }` on the partition field, if the
+ *   partition value or a sort operand does not have the type of its field, if the sort condition
+ *   is not one known condition, if `limit` is not a positive integer, or if the cursor does not
+ *   belong to this store, index, and partition.
+ * @throws {KVStoreErrors.ValidationFailed} If the partition value or a sort operand is an empty string.
  */
 export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 	const options = (queryOptions ?? {}) as LooseQueryOptions;
@@ -690,15 +703,15 @@ export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.whereRequired(key.partitionKey));
 	}
 	const pkCondition = options.where[key.partitionKey];
-	const pkValue = isPlainObject(pkCondition) ? pkCondition.equals : undefined;
-	if (pkValue === undefined || (typeof pkValue !== 'string' && typeof pkValue !== 'number')) {
+	if (!isPlainObject(pkCondition) || pkCondition.equals === undefined) {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.partitionKeyEqualsRequired(key.partitionKey));
 	}
+	const pkValue = checkKeyValue(key.partitionKey, pkCondition.equals, keyType(model, key.partitionKey));
 	return {
 		indexName,
 		key,
 		pkValue,
-		sort: key.sortKey ? planSort(options.where[key.sortKey]) : undefined,
+		sort: key.sortKey ? planSort(model, key.sortKey, options.where[key.sortKey]) : undefined,
 		limit: normalizeLimit(options.limit),
 		order: options.order === 'desc' ? 'desc' : 'asc',
 		startKey: decodeCursor(model, options.cursor, indexName, { field: key.partitionKey, value: pkValue }),
@@ -708,16 +721,35 @@ export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 /**
  * Normalize the sort-key condition up front — before any data is read — so a
  * present-but-empty condition becomes "no filter" and multiple conditions are
- * rejected eagerly, even on an empty table.
+ * rejected eagerly, even on an empty table. Each operand passes
+ * {@link checkKeyValue} with the type of the sort field.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the condition is not an object, has more than one
+ *   condition, names a condition that does not exist, gives `between` anything but two
+ *   operands, uses `beginsWith` on a number field, or has an operand of the wrong type.
+ * @throws {KVStoreErrors.ValidationFailed} If an operand is an empty string.
  */
-function planSort(condition: unknown): QueryPlan['sort'] {
-	const normalized = normalizeSortKeyCondition(condition as Record<string, unknown> | undefined);
+function planSort(model: KeyModel, field: string, condition: unknown): QueryPlan['sort'] {
+	if (condition === undefined) return undefined;
+	if (!isPlainObject(condition)) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.sortConditionNotObject(field));
+	}
+	const normalized = normalizeSortKeyCondition(condition);
 	if (!normalized) return undefined;
-	const op = Object.keys(normalized).find((k) => normalized[k] !== undefined);
-	if (op === undefined || !Object.hasOwn(SORT_CONDITIONS, op)) return undefined;
+	const [op] = Object.keys(normalized).filter((k) => normalized[k] !== undefined);
+	if (!isSortOp(op)) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.unknownSortCondition(op));
+	const type = keyType(model, field);
 	const operand = normalized[op];
-	if (op !== 'between') return { op: op as SortOp, operands: [operand as KeyValue] };
-	return Array.isArray(operand) ? { op, operands: operand as KeyValue[] } : undefined;
+	if (op === 'between') {
+		if (!Array.isArray(operand) || operand.length !== 2) {
+			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.betweenNeedsTwoValues(field));
+		}
+		return { op, operands: operand.map((value) => checkKeyValue(field, value, type)) };
+	}
+	if (op === 'beginsWith' && type !== 'S') {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.beginsWithOnNumberField(field));
+	}
+	return { op, operands: [checkKeyValue(field, operand, type)] };
 }
 
 /** Whether a sort-key value satisfies the sort condition of a query (the mock's counterpart to {@link keyCondition}). */
@@ -810,9 +842,9 @@ export function encodeCursor(model: KeyModel, indexName: string | undefined, ite
  * options at the method entry.
  *
  * The cursor must decode, must name the same index as the call, must hold
- * exactly the key attributes of that table or index (each a non-empty string
- * or a finite number), and — for a query — its partition value must match
- * `where`.
+ * exactly the key attributes of that table or index (each one a value that
+ * {@link checkKeyValue} accepts for its field), and — for a query — its
+ * partition value must match `where`.
  *
  * @throws {KVStoreErrors.InvalidQuery} If any check fails.
  */
@@ -846,11 +878,12 @@ export function decodeCursor(
 	}
 	const key: Record<string, KeyValue> = {};
 	for (const field of expected) {
-		const value = payload.key[field];
-		if (!(typeof value === 'string' && value !== '') && !(typeof value === 'number' && Number.isFinite(value))) {
+		try {
+			key[field] = checkKeyValue(field, payload.key[field], keyType(model, field));
+		} catch {
+			// A bad key value inside a cursor is a bad cursor, whatever the value is.
 			throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.cursorKeyMismatch(expected));
 		}
-		key[field] = value;
 	}
 	if (partition && key[partition.field] !== partition.value) {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.cursorPartitionMismatch(partition.field));

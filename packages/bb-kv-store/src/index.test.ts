@@ -736,6 +736,44 @@ describe('query', () => {
 		);
 	});
 
+	test('the partition value and the sort operands pass the same check as a key', async () => {
+		const store = await seeded();
+		const read = (where: object, index?: string) => () => store.query({ where, index } as never);
+		const { InvalidQuery, ValidationFailed } = KVStoreErrors;
+
+		// The partition value: the type of the field, and no empty string.
+		await rejects(read({ pk: { equals: 1 } }), InvalidQuery, /'pk' must be a string \(received number\)/);
+		await rejects(read({ pk: { equals: Number.NaN } }), InvalidQuery, /'pk' must be a string/);
+		await rejects(read({ pk: { equals: null } }), InvalidQuery, /received null/);
+		await rejects(read({ pk: { equals: '' } }), ValidationFailed, /'pk' cannot be an empty string/);
+		// An index field has a type too.
+		await rejects(read({ name: { equals: 7 } }, 'byName'), InvalidQuery, /'name' must be a string/);
+
+		// The sort operands.
+		const pk = { equals: 'p' };
+		await rejects(
+			read({ pk, at: { greaterThan: '1000' } }),
+			InvalidQuery,
+			/'at' must be a number \(received string\)/,
+		);
+		await rejects(read({ pk, at: { equals: Number.NaN } }), InvalidQuery, /'at' must be a number/);
+		await rejects(read({ pk, at: { lessThan: null } }), InvalidQuery, /'at' must be a number/);
+		await rejects(read({ pk, at: { between: [1000, '2000'] } }), InvalidQuery, /'at' must be a number/);
+		await rejects(read({ pk, path: { beginsWith: 5 } }, 'byPath'), InvalidQuery, /'path' must be a string/);
+		await rejects(
+			read({ pk, path: { beginsWith: '' } }, 'byPath'),
+			ValidationFailed,
+			/'path' cannot be an empty string/,
+		);
+
+		// The shape of the sort condition.
+		await rejects(read({ pk, at: { between: [1000] } }), InvalidQuery, /two values/);
+		await rejects(read({ pk, at: { between: 1000 } }), InvalidQuery, /two values/);
+		await rejects(read({ pk, at: { beginsWith: '1' } }), InvalidQuery, /'beginsWith' needs a string field/);
+		await rejects(read({ pk, at: { startsWith: 1 } }), InvalidQuery, /'startsWith' is not a sort condition/);
+		await rejects(read({ pk, at: 1000 }), InvalidQuery, /must be an object/);
+	});
+
 	test('a present-but-empty sort condition is no filter', async () => {
 		const store = await seeded();
 		assert.deepStrictEqual(
@@ -871,6 +909,38 @@ describe('pages', () => {
 			'base64url',
 		);
 	}
+
+	test('a cursor whose key values fail the key check is InvalidQuery', async () => {
+		const store = await seeded();
+		const cursorOf = (key: object, index: string | null = null) =>
+			Buffer.from(JSON.stringify({ v: 1, index, key })).toString('base64url');
+		// A string in a number field, null (what JSON makes of NaN), an empty string, a number in a string field.
+		for (const key of [
+			{ pk: 'p', sk: '1' },
+			{ pk: 'p', sk: null },
+			{ pk: '', sk: 1 },
+			{ pk: 1, sk: 1 },
+		]) {
+			const cursor = cursorOf(key);
+			await rejects(
+				() => store.query({ where: { pk: { equals: 'p' } }, cursor }),
+				KVStoreErrors.InvalidQuery,
+				/exactly the key attributes/,
+			);
+			await rejects(() => store.scan({ cursor }), KVStoreErrors.InvalidQuery, /exactly the key attributes/);
+		}
+		// The index field of an index cursor has the type of that field.
+		await rejects(
+			() =>
+				store.query({
+					index: 'byN',
+					where: { n: { equals: 'x' } },
+					cursor: cursorOf({ pk: 'p', sk: 1, n: 5 }, 'byN'),
+				}),
+			KVStoreErrors.InvalidQuery,
+			/exactly the key attributes/,
+		);
+	});
 
 	test('a null cursor, limit or index counts as absent (a JSON transport sends null for an argument left out)', async () => {
 		const store = await seeded();

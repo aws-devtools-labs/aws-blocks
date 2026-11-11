@@ -251,7 +251,10 @@ export class KVStore<
 	 *   declared key and no `index` is given, the `where` clause is missing, the partition key is
 	 *   not given as `{ equals: value }`, more than one sort-key condition is supplied (DynamoDB
 	 *   allows only one per query — use `between` for ranges), or the cursor does not belong to
-	 *   this store, index, and partition, or `limit` is not a positive integer.
+	 *   this store, index, and partition, or `limit` is not a positive integer. Also if the
+	 *   partition value or a sort value does not have the type of its field, or if the sort
+	 *   condition is not one of the conditions above.
+	 * @throws {KVStoreErrors.ValidationFailed} If the partition value or a sort value is an empty string.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
 		const plan = planQuery(this.model, presentOptions(options));

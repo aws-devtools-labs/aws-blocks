@@ -42,8 +42,9 @@ export const KVStoreErrors = {
 	/**
 	 * The call has the wrong shape and was rejected before reaching DynamoDB: a
 	 * key of the wrong shape, a missing `where` clause, a partition key not
-	 * given as `{ equals: value }`, an unknown index, a `limit` that is not a positive integer, more than one sort-key
-	 * condition, an empty `ifFieldEquals`, `ifValueEquals` with an object value,
+	 * given as `{ equals: value }`, a partition value or a sort operand of the
+	 * wrong type, an unknown index, a `limit` that is not a positive integer, more than one sort-key
+	 * condition, a sort condition that does not exist, an empty `ifFieldEquals`, `ifValueEquals` with an object value,
 	 * or a cursor that does not decode or belongs to another store, index, or
 	 * partition. These are all caller bugs — something the caller can fix by
 	 * correcting the call. Catchable via `isBlocksError(e, KVStoreErrors.InvalidQuery)`.
@@ -142,6 +143,12 @@ export const KVStoreMessages = {
 	multipleSortKeyConditions: (conditionKeys: string[]) =>
 		`Only one sort key condition is allowed per query (DynamoDB limitation). ` +
 		`Got: ${conditionKeys.join(', ')}. Use "between" for range queries.`,
+	sortConditionNotObject: (field: string) =>
+		`the sort condition on '${field}' must be an object with one condition, for example { greaterThan: value }`,
+	unknownSortCondition: (condition: string) =>
+		`'${condition}' is not a sort condition; use equals, greaterThan, greaterThanOrEqual, lessThan, lessThanOrEqual, between, or beginsWith`,
+	betweenNeedsTwoValues: (field: string) => `'between' on '${field}' takes an array of two values: [low, high]`,
+	beginsWithOnNumberField: (field: string) => `'beginsWith' needs a string field; '${field}' holds a number`,
 	queryNeedsKeyOrIndex:
 		'query() without `index` needs a store with a declared `key`; pass `index` or declare a `key`',
 	emptyIfFieldEquals: 'ifFieldEquals must contain at least one field with a non-undefined value',
@@ -186,6 +193,9 @@ export const KVStoreMessages = {
  * - **Exactly one defined field** → returns the condition unchanged.
  * - **More than one defined field** → throws `InvalidQuery`, because DynamoDB allows
  *   only one sort-key condition per `KeyConditionExpression` (use `between` for ranges).
+ *
+ * The caller ({@link planSort} in `item.ts`) then checks the one condition
+ * that is left: its name and its operands.
  *
  * @throws {KVStoreErrors.InvalidQuery} If more than one sort-key field is defined.
  */

@@ -253,7 +253,7 @@ const matches = await Array.fromAsync(
 | `order` | No | `'asc'` or `'desc'` on the sort field. Defaults to `'asc'`. |
 | `cursor` | No | The position to start after. See [Pages](#pages). |
 
-The sort field takes one of `equals`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `between`, or `beginsWith`. `beginsWith` is for a string field only.
+The sort field takes one of `equals`, `greaterThan`, `greaterThanOrEqual`, `lessThan`, `lessThanOrEqual`, `between`, or `beginsWith`. `beginsWith` is for a string field only. The partition value and each sort value pass the same check as a key: the value has the type of its field, and it is not an empty string or `NaN`.
 
 A sort field can hold a number. Use a number for time order.
 
@@ -351,7 +351,7 @@ Match an error by name with `isBlocksError`.
 |----------|--------------|-------------|
 | `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, has a `__proto__` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
-| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where`, an unknown index, a bad `limit`, a bad cursor, or `ifValueEquals` with an object. |
+| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where` (this includes a partition value or a sort value of the wrong type, and a sort condition that does not exist), an unknown index, a bad `limit`, a bad cursor, or `ifValueEquals` with an object. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
 | `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
 
