@@ -42,6 +42,44 @@ export function isStandardAttribute(name: string): boolean {
 	return STANDARD_ATTRIBUTES.has(name);
 }
 
+/**
+ * Standard attributes an end user must never set: they record that Cognito
+ * verified a contact, so only Cognito (or an admin) may write them.
+ */
+const VERIFICATION_ATTRIBUTES = new Set(['email_verified', 'phone_number_verified']);
+
+/**
+ * Map attributes supplied by an END USER (self sign-up, `updateUserAttributes`)
+ * to their Cognito names, keeping only the ones an end user may write:
+ * standard attributes other than the `*_verified` flags, and declared custom
+ * attributes not marked `userWritable: false`. Everything else — an undeclared
+ * `custom:*` key, an unknown key, a verification flag — is returned in
+ * `refused` so the caller can reject the request instead of forwarding it.
+ *
+ * @internal
+ */
+export function endUserWritableAttributes(
+	attrs: Partial<Record<string, string>>,
+	declared: readonly UserAttribute[],
+): { attributes: Record<string, string>; refused: string[] } {
+	const writable = new Set(declared.filter((a) => a.userWritable !== false).map((a) => a.name));
+	const attributes: Record<string, string> = {};
+	const refused: string[] = [];
+	for (const [key, value] of Object.entries(attrs)) {
+		if (value === undefined) continue;
+		const prefixed = key.startsWith('custom:');
+		if (!prefixed && isStandardAttribute(key)) {
+			if (VERIFICATION_ATTRIBUTES.has(key)) refused.push(key);
+			else attributes[key] = value;
+			continue;
+		}
+		const name = prefixed ? key.slice('custom:'.length) : key;
+		if (writable.has(name)) attributes[`custom:${name}`] = value;
+		else refused.push(key);
+	}
+	return { attributes, refused };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // signedOut
 // ─────────────────────────────────────────────────────────────────────────────

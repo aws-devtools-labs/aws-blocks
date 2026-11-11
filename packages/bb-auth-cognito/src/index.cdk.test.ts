@@ -251,6 +251,32 @@ describe('AuthCognito (CDK) — user pool client', () => {
 			assert.strictEqual(Properties.AllowedOAuthFlows, undefined);
 		}
 	});
+
+	test('write attributes exclude *_verified flags and userWritable: false custom attributes', () => {
+		const template = synth((stack) => {
+			new AuthCognito(scope(stack), 'auth', {
+				userAttributes: [{ name: 'department' }, { name: 'role', userWritable: false }],
+			});
+		});
+		const [client] = Object.values(template.findResources('AWS::Cognito::UserPoolClient'));
+		const write: string[] = client.Properties.WriteAttributes;
+		assert.ok(write.includes('email') && write.includes('name') && write.includes('phone_number'));
+		assert.ok(write.includes('custom:department'));
+		for (const refused of ['email_verified', 'phone_number_verified', 'custom:role']) {
+			assert.ok(!write.includes(refused), `${refused} must not be client-writable`);
+		}
+	});
+
+	test('a required attribute cannot be userWritable: false', () => {
+		assert.throws(
+			() => synth((stack) => {
+				new AuthCognito(scope(stack), 'auth', {
+					userAttributes: [{ name: 'role', required: true, userWritable: false }],
+				});
+			}),
+			/cannot be both required and userWritable: false/,
+		);
+	});
 });
 
 // ─── UserPoolDomain ─────────────────────────────────────────────────────────

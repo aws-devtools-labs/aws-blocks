@@ -96,6 +96,7 @@ import {
 	confirmingPasswordReset,
 	confirmingSignIn,
 	confirmingSignUp,
+	endUserWritableAttributes,
 	isStandardAttribute,
 	managingPasskeys,
 	registeringPasskey,
@@ -1069,7 +1070,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		options?: SignUpOptions<O>,
 		context?: BlocksContext,
 	): Promise<SignUpResult> {
-		const attrs = this.prefixCustomAttrs(options?.attributes ?? {});
+		const attrs = this.endUserAttrs(options?.attributes ?? {});
 		try {
 			const resp = await this.client.send(new SignUpCommand({
 				ClientId: getSdkIdentifiers(this).clientId,
@@ -1833,7 +1834,7 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		attributes: Partial<Record<AttrOf<O>, string>>,
 	): Promise<Partial<Record<AttrOf<O>, UpdateAttributeOutcome>>> {
 		const token = await this.requireAccessToken(context);
-		const prefixed = this.prefixCustomAttrs(attributes);
+		const prefixed = this.endUserAttrs(attributes);
 		try {
 			const resp = await this.client.send(new UpdateUserAttributesCommand({
 				AccessToken: token,
@@ -2429,6 +2430,21 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 			else out[key] = value;
 		}
 		return out;
+	}
+
+	/**
+	 * Attributes an end user is writing (sign-up, `updateUserAttributes`),
+	 * restricted to the ones they may write. Rejects the whole request rather
+	 * than forwarding or silently dropping a refused attribute.
+	 */
+	private endUserAttrs(attrs: Partial<Record<string, string>>): Record<string, string> {
+		const { attributes, refused } = endUserWritableAttributes(attrs, this.options.userAttributes ?? []);
+		if (refused.length > 0) {
+			throw new ApiError('One or more attributes cannot be set by the user', 400, {
+				name: AuthCognitoErrors.InvalidParameter,
+			});
+		}
+		return attributes;
 	}
 
 	private async getSessionSecret(): Promise<string> {

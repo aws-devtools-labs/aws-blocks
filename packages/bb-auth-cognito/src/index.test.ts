@@ -103,6 +103,22 @@ describe('signUp / confirmSignUp / resendSignUpCode', () => {
 		assert.ok(r.userId);
 	});
 
+	test('signUp rejects attributes an end user may not write', async () => {
+		const auth = new AuthCognito(ROOT, unique('signup-attrs'), {
+			passwordPolicy: { minLength: 8 },
+			userAttributes: [{ name: 'department' }, { name: 'role', userWritable: false }],
+		});
+		for (const extra of [{ 'custom:tier': 'x' }, { role: 'x' }, { 'custom:role': 'x' }, { tenant: 'x' }, { email_verified: 'true' }]) {
+			await assert.rejects(
+				() => auth.signUp(uniqueId(), 'Password!1', { attributes: { email: 'a@x.com', ...extra } as never }),
+				(e: Error) => isBlocksError(e, AuthCognitoErrors.InvalidParameter),
+				JSON.stringify(extra),
+			);
+		}
+		const ok = await auth.signUp('dana', 'Password!1', { attributes: { email: 'd@x.com', department: 'eng' } });
+		assert.ok(ok.userId);
+	});
+
 	test('signUp rejects duplicate username', async () => {
 		const auth = new AuthCognito(ROOT, unique('signup-2'), { passwordPolicy: { minLength: 8 } });
 		await auth.signUp('bob', 'Password!1', { attributes: { email: 'b@x.com' } });

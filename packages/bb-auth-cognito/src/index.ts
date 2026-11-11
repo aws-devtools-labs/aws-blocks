@@ -40,6 +40,7 @@ import {
 	confirmingPasswordReset,
 	confirmingSignIn,
 	confirmingSignUp,
+	endUserWritableAttributes,
 	isStandardAttribute,
 	managingPasskeys,
 	registeringPasskey,
@@ -513,7 +514,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			throw new ApiError('User already exists', 409, { name: AuthCognitoErrors.UserAlreadyExists });
 		}
 		this.enforcePasswordPolicy(password);
-		const attrs = this.prefixCustomAttrs(options?.attributes);
+		const attrs = this.endUserAttrs(options?.attributes ?? {});
 		const userSub = crypto.randomUUID();
 
 		// Cognito alias resolution. When the pool is configured with
@@ -1359,7 +1360,7 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 	): Promise<Partial<Record<AttrOf<O>, UpdateAttributeOutcome>>> {
 		const signed = await this.requireAuth(context);
 		const user = this.requireUser(signed.username);
-		const prefixed = this.prefixCustomAttrs(attributes);
+		const prefixed = this.endUserAttrs(attributes);
 		const result: Record<string, UpdateAttributeOutcome> = {};
 		for (const [name, value] of Object.entries(prefixed)) {
 			user.attributes[name] = value;
@@ -1949,6 +1950,17 @@ export class AuthCognito<const O extends AuthCognitoMockOptions = AuthCognitoMoc
 			else out[key] = value;
 		}
 		return out;
+	}
+
+	/** Mirrors the AWS runtime: end-user writes are limited to user-writable attributes. */
+	private endUserAttrs(attrs: Partial<Record<string, string>>): Record<string, string> {
+		const { attributes, refused } = endUserWritableAttributes(attrs, this.options.userAttributes ?? []);
+		if (refused.length > 0) {
+			throw new ApiError('One or more attributes cannot be set by the user', 400, {
+				name: AuthCognitoErrors.InvalidParameter,
+			});
+		}
+		return attributes;
 	}
 
 	private async generateCode(

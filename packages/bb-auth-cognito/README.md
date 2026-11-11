@@ -563,6 +563,20 @@ AWS Blocks auth follows the BFF pattern: the browser sends `{username, password}
 
 The user pool client sets `PreventUserExistenceErrors: ENABLED`, so sign-in and forgot-password responses return a uniform error whether or not the username exists — closing the account-enumeration oracle Cognito exposes by default.
 
+### Attributes used for authorization
+
+Self sign-up is anonymous, so an end user chooses the values of every attribute they are allowed to write. `signUp` and `updateUserAttributes` accept only standard attributes (never `email_verified` / `phone_number_verified`) and declared `userAttributes`; anything else is rejected with `InvalidParameterException` before Cognito is called. The app client's write attributes are restricted to the same set, so Cognito refuses the write too.
+
+**Never authorize on an attribute an end user can write.** Declare a role, tenant id, plan tier or similar with `userWritable: false` and set it server-side: `auth.admin.createUser(username, { attributes })`, or Cognito's `AdminUpdateUserAttributes` from your own backend code. Consider `mutable: false` as well when the value must never change after creation.
+
+```typescript
+userAttributes: [
+  { name: 'department' },                                  // end users may set it
+  { name: 'role', userWritable: false },                   // admin-only
+  { name: 'tenantId', userWritable: false, mutable: false }, // admin-only, set once
+],
+```
+
 See the auth-cognito technical design (see source repo) for the full architecture and mock-vs-AWS parity notes.
 
 ## Cookies and sessions

@@ -258,6 +258,10 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 				adminUserPassword: false,
 				user: enableUserAuth,
 			},
+			// Cognito's default lets the app client write EVERY attribute,
+			// including custom ones and the `*_verified` flags. Restrict it to
+			// what end users may set; the runtime enforces the same set.
+			writeAttributes: endUserWriteAttributes(opts.userAttributes),
 		});
 
 		// USER_AUTH first-factor list + passkey relying-party config flow
@@ -492,12 +496,50 @@ function mapCustomAttributes(
 	if (!attrs || attrs.length === 0) return undefined;
 	const out: Record<string, cognito.ICustomAttribute> = {};
 	for (const attr of attrs) {
+		if (attr.required && attr.userWritable === false) {
+			throw new Error(
+				`AuthCognito: userAttribute '${attr.name}' cannot be both required and userWritable: false — users could not sign up.`,
+			);
+		}
 		const mutable = attr.mutable ?? true;
 		out[attr.name] = attr.type === 'Number'
 			? new cognito.NumberAttribute({ mutable })
 			: new cognito.StringAttribute({ mutable });
 	}
 	return out;
+}
+
+/**
+ * The app client's write attributes: every standard attribute except the
+ * `*_verified` flags, plus declared custom attributes not marked
+ * `userWritable: false`. Mirrors `endUserWritableAttributes` in the runtime.
+ *
+ * @internal
+ */
+function endUserWriteAttributes(attrs?: readonly UserAttribute[]): cognito.ClientAttributes {
+	return new cognito.ClientAttributes()
+		.withStandardAttributes({
+			address: true,
+			birthdate: true,
+			email: true,
+			emailVerified: false,
+			familyName: true,
+			gender: true,
+			givenName: true,
+			locale: true,
+			middleName: true,
+			fullname: true,
+			nickname: true,
+			phoneNumber: true,
+			phoneNumberVerified: false,
+			profilePicture: true,
+			preferredUsername: true,
+			profilePage: true,
+			lastUpdateTime: true,
+			website: true,
+			timezone: true,
+		})
+		.withCustomAttributes(...(attrs ?? []).filter((a) => a.userWritable !== false).map((a) => a.name));
 }
 
 /**

@@ -544,3 +544,78 @@ describe('setAuthState error redaction (aws runtime)', () => {
 		assert.ok(next.error && next.error !== 'Internal error' && !next.error.includes('raw sdk text'), `got ${next.error}`);
 	});
 });
+
+// The anonymous `setAuthState({ action: 'signUp' })` path is reachable by
+// anyone. It may only write the attributes an end user is allowed to set:
+// standard profile attributes and declared custom attributes that are not
+// marked `userWritable: false`. Anything else — an undeclared `custom:*` key,
+// an unknown key, a Cognito `*_verified` flag — must be rejected before
+// Cognito is called.
+describe('setAuthState signUp attribute allowlist (aws runtime)', () => {
+	type Sent = { constructor: { name: string }; input: { UserAttributes?: { Name?: string; Value?: string }[] } };
+
+	function setup(): { api: AuthStateApi; sent: Sent[] } {
+		const auth = new AuthCognito(new Scope(`aws-signup-allow-${Math.random().toString(36).slice(2, 8)}`), 'auth', {
+			selfSignUp: true,
+			userAttributes: [
+				{ name: 'department' },
+				{ name: 'role', userWritable: false },
+			],
+		});
+		const sent: Sent[] = [];
+		(auth as unknown as { client: { send: (cmd: Sent) => Promise<unknown> } }).client.send = async (cmd) => {
+			sent.push(cmd);
+			return { UserConfirmed: false, UserSub: 'sub-1' };
+		};
+		const ctx = {
+			request: { headers: new Headers(), body: null, json: async () => ({}), text: async () => '', url: new URL('http://localhost:3000/'), params: {} },
+			response: { headers: new Headers(), status: 200, send: () => {} },
+		} as unknown as BlocksContext;
+		return { api: (auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx), sent };
+	}
+
+	const base = { action: 'signUp', username: 'alice', password: 'Password!1', autoSignIn: 'false' } as const;
+
+	test('forwards standard and user-writable declared attributes', async () => {
+		const { api, sent } = setup();
+		const next = await api.setAuthState({ ...base, email: 'a@example.com', name: 'Alice', department: 'eng' } as never);
+		assert.strictEqual(next.state, 'confirmingSignUp');
+		assert.strictEqual(sent.length, 1);
+		assert.deepStrictEqual(
+			Object.fromEntries((sent[0].input.UserAttributes ?? []).map((a) => [a.Name, a.Value])),
+			{ email: 'a@example.com', name: 'Alice', 'custom:department': 'eng' },
+		);
+	});
+
+	for (const [label, extra] of [
+		['an undeclared custom: attribute', { 'custom:tier': 'x' }],
+		['a declared attribute marked userWritable: false (bare name)', { role: 'x' }],
+		['a declared attribute marked userWritable: false (custom: prefix)', { 'custom:role': 'x' }],
+		['an unknown attribute', { tenant: 'x' }],
+		['email_verified', { email_verified: 'true' }],
+		['phone_number_verified', { phone_number_verified: 'true' }],
+	] as const) {
+		test(`rejects ${label} without calling Cognito`, async () => {
+			const { api, sent } = setup();
+			const next = await api.setAuthState({ ...base, email: 'a@example.com', ...extra } as never);
+			assert.strictEqual(next.state, 'signedOut');
+			assert.ok(next.error, 'an error is returned');
+			assert.strictEqual(sent.length, 0, 'Cognito SignUp must not be called');
+		});
+	}
+
+	test('updateUserAttributes rejects a userWritable: false attribute without calling Cognito', async () => {
+		const auth = new AuthCognito(new Scope(`aws-update-allow-${Math.random().toString(36).slice(2, 8)}`), 'auth', {
+			userAttributes: [{ name: 'role', userWritable: false }],
+		});
+		let calls = 0;
+		(auth as unknown as { client: { send: () => Promise<unknown> } }).client.send = async () => { calls++; return {}; };
+		mock.method(auth as unknown as { requireAccessToken: () => Promise<string> }, 'requireAccessToken', async () => 'token');
+		await assert.rejects(
+			() => auth.updateUserAttributes({} as BlocksContext, { role: 'admin' } as never),
+			(e: unknown) => e instanceof ApiError && e.status === 400,
+		);
+		assert.strictEqual(calls, 0);
+		mock.restoreAll();
+	});
+});

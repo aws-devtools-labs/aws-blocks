@@ -108,6 +108,19 @@ export interface UserAttribute {
 	mutable?: boolean;
 	/** Whether the attribute is required at sign-up. Default: false. */
 	required?: boolean;
+	/**
+	 * Whether end users may set this attribute themselves — at self sign-up
+	 * and through `updateUserAttributes`. Default: true.
+	 *
+	 * Set `false` for any attribute your app uses for authorization (a role,
+	 * a tenant id, a plan tier). The app client then excludes it from its
+	 * write attributes, so Cognito refuses end-user writes, and the runtime
+	 * rejects it before calling Cognito. Set it server-side instead
+	 * (`admin.createUser`, or Cognito's `AdminUpdateUserAttributes`).
+	 * Cannot be combined with `required: true`, since a required attribute
+	 * must be supplied by the user at sign-up.
+	 */
+	userWritable?: boolean;
 }
 
 /**
