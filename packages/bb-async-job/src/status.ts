@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { isBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
@@ -134,7 +134,7 @@ function expiresAt(): number {
 /**
  * Records and reads AsyncJob state transitions.
  *
- * Backed by a nested {@link DistributedTable}, provisioned as a child scope so
+ * Backed by a nested {@link KVStore} with a declared key, provisioned as a child scope so
  * it becomes its own DynamoDB table in AWS and a JSON file locally. The same
  * code path runs in both runtimes.
  *
@@ -146,15 +146,11 @@ function expiresAt(): number {
  * @internal
  */
 export class JobStatusTracker {
-	private table: DistributedTable<StatusRecord, { partitionKey: 'jobId' }>;
+	private table: KVStore<StatusRecord, StatusRecord, { readonly partitionKey: 'jobId' }>;
 	private log?: ChildLogger;
 
 	constructor(scope: ScopeParent, log?: ChildLogger) {
-		this.table = new DistributedTable<StatusRecord, { partitionKey: 'jobId' }>(
-			scope,
-			STATUS_TABLE_ID,
-			statusTableOptions as never,
-		);
+		this.table = new KVStore(scope, STATUS_TABLE_ID, statusTableOptions);
 		this.log = log;
 	}
 
@@ -194,10 +190,10 @@ export class JobStatusTracker {
 	 */
 	async recordQueued(jobId: string, submittedAt: string): Promise<void> {
 		try {
-			await this.table.put(this.queuedRecord(jobId, submittedAt), { ifNotExists: true });
+			await this.table.put({ jobId }, this.queuedRecord(jobId, submittedAt), { ifNotExists: true });
 			return;
 		} catch (err: unknown) {
-			if (!isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed)) throw err;
+			if (!isBlocksError(err, KVStoreErrors.ConditionalCheckFailed)) throw err;
 		}
 
 		try {
@@ -252,10 +248,10 @@ export class JobStatusTracker {
 			};
 
 			try {
-				await this.table.put(next, { ifFieldEquals: { version: existing.version } });
+				await this.table.put({ jobId }, next, { ifFieldEquals: { version: existing.version } });
 				return;
 			} catch (err: unknown) {
-				const lostRace = isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed);
+				const lostRace = isBlocksError(err, KVStoreErrors.ConditionalCheckFailed);
 				if (!lostRace || cas >= MAX_CAS_ATTEMPTS) throw err;
 				await sleep(jitterInterval(CAS_BACKOFF_MS));
 			}
@@ -326,12 +322,13 @@ export class JobStatusTracker {
 
 			try {
 				await this.table.put(
+					{ jobId },
 					next,
 					existing ? { ifFieldEquals: { version: existing.version } } : { ifNotExists: true },
 				);
 				return;
 			} catch (err: unknown) {
-				const lostRace = isBlocksError(err, DistributedTableErrors.ConditionalCheckFailed);
+				const lostRace = isBlocksError(err, KVStoreErrors.ConditionalCheckFailed);
 				if (!lostRace || cas >= MAX_CAS_ATTEMPTS) throw err;
 				await sleep(jitterInterval(CAS_BACKOFF_MS));
 			}

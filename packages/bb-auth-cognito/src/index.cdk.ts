@@ -285,12 +285,16 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 		// no env var is needed.
 		new AppSetting(this, 'session-secret', { secret: true });
 
-		// 5. Session store (KVStore). Propagate `removalPolicy` so retain-mode
-		// customers don't lose live sessions on stack delete. TTL is enabled so
-		// session records — which hold live Cognito refresh tokens — expire with
-		// the session instead of accumulating forever; the runtime stamps each
-		// write with `now + sessionTtlSeconds`.
-		this.sessions = new KVStore(this, 'sessions', { removalPolicy: opts.removalPolicy, ttl: true });
+		// 5. Session store (KVStore). Map `removalPolicy` onto the store's
+		// `protection` so retain-mode customers don't lose live sessions on stack
+		// delete. DynamoDB TTL is always on for the table, so session records —
+		// which hold live Cognito refresh tokens — expire with the session instead
+		// of accumulating forever; the runtime stamps each write with
+		// `now + sessionTtlSeconds`.
+		this.sessions = new KVStore(this, 'sessions', {
+			protection:
+				opts.removalPolicy === 'retain' ? 'retained' : opts.removalPolicy === 'destroy' ? 'disposable' : undefined,
+		});
 
 		// 6. Env vars + IAM
 		registerConfig(this, env.USER_POOL_ID, this.userPool.userPoolId);

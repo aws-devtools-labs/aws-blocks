@@ -322,7 +322,7 @@ export class SessionManager {
 			refreshingSince: Date.now(),
 		};
 		try {
-			await this.options.sessionStore.put(sessionId, lockedRow, { ifValueEquals: row });
+			await this.options.sessionStore.put(sessionId, lockedRow, { ifFieldEquals: row });
 		} catch {
 			// CAS failed — someone else took the lock. Re-read and use their
 			// result. Do not call the token endpoint.
@@ -349,7 +349,7 @@ export class SessionManager {
 				refreshingSince: undefined,
 			};
 			try {
-				await this.options.sessionStore.put(sessionId, expiredRow, { ifValueEquals: lockedRow });
+				await this.options.sessionStore.put(sessionId, expiredRow, { ifFieldEquals: lockedRow });
 			} catch {
 			}
 			return null;
@@ -363,7 +363,7 @@ export class SessionManager {
 			state: 'ready',
 		};
 		try {
-			await this.options.sessionStore.put(sessionId, newRow, { ifValueEquals: lockedRow });
+			await this.options.sessionStore.put(sessionId, newRow, { ifFieldEquals: lockedRow });
 		} catch {
 			// Unexpected — lost the row between acquire and write. Re-read to
 			// surface whatever state actually won.

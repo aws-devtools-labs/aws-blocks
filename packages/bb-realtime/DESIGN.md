@@ -194,7 +194,7 @@ Each `postToConnection` takes ~5-10ms with TCP keep-alive. The SDK retries trans
 | `BLOCKS_RT_CALLBACK_URL` | `https://api-id.execute-api.region.amazonaws.com/rt` |
 | `BLOCKS_SSM_PARAM_TOKEN_SECRET` | SSM parameter name (set by AppSetting) |
 
-The connections table is provisioned by the nested `DistributedTable`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
+The connections table is provisioned by the nested `KVStore`, which manages its own table-name configuration — Realtime does not set a separate table-name environment variable.
 
 ### Channel Path Mapping
 

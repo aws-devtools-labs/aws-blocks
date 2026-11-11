@@ -5,7 +5,7 @@
  * @aws-blocks/bb-realtime — CDK construct.
  *
  * Provisions a shared API Gateway WebSocket API with a DynamoDB connections
- * table (via DistributedTable) for channel-based pub/sub. All WebSocket
+ * table (via KVStore) for channel-based pub/sub. All WebSocket
  * routes ($connect, $disconnect, $default) are handled by the existing Blocks
  * handler Lambda — no separate Lambdas are created.
  *
@@ -23,7 +23,7 @@ import { BuildingBlockScope, synthGuard, ensureApiGatewayAccount, blocksError, g
 import { registerConfig } from '@aws-blocks/core/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { NamespaceConfig, NamespaceDefs, RealtimeOptions } from './types.js';
@@ -46,7 +46,16 @@ import { BB_NAME } from './version.js';
 
 // ── Minimal schema for the connections table (CDK synth-time only) ──────────
 
-const connectionsSchema: StandardSchemaV1<any> = {
+/** The connection record the runtime stores; only the field names and key types matter at synth. */
+interface ConnectionRecord {
+	connectionId: string;
+	channel: string;
+	expiresAt: number;
+	connectedAt?: number;
+	lastTtlSweep?: number;
+}
+
+const connectionsSchema: StandardSchemaV1<ConnectionRecord> = {
 	'~standard': {
 		version: 1,
 		vendor: 'blocks',
@@ -59,7 +68,7 @@ const connectionsSchema: StandardSchemaV1<any> = {
 					}
 				}
 			}
-			return { value };
+			return { value: value as ConnectionRecord };
 		},
 	},
 };
@@ -84,8 +93,8 @@ function getOrCreateSharedInfra(handler: cdk.aws_lambda.IFunction, parent: Build
 		// ── Token secret via AppSetting ─────────────────────────────────────
 		new AppSetting(parent, 'token-secret', { secret: true });
 
-		// ── DynamoDB connections table via DistributedTable ──────────────────
-		new DistributedTable(parent, 'connections', {
+		// ── DynamoDB connections table via KVStore ───────────────────────────
+		new KVStore(parent, 'connections', {
 			schema: connectionsSchema,
 			key: { partitionKey: 'connectionId', sortKey: 'channel' },
 			indexes: { 'channel-index': { partitionKey: 'channel', sortKey: 'connectionId' } },

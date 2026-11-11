@@ -320,7 +320,7 @@ export interface SessionStore {
 	put(
 		key: string,
 		value: SessionRow,
-		conditions?: { ifNotExists?: boolean; ifValueEquals?: SessionRow },
+		conditions?: { ifNotExists?: boolean; ifFieldEquals?: SessionRow },
 	): Promise<void>;
 	delete(key: string): Promise<void>;
 }

@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 
-/** Schema for conversation metadata stored in DistributedTable (Table 1). */
+/** Schema for conversation metadata stored in a KVStore (Table 1). */
 export const conversationSchema = z.object({
 	userId: z.string(),
 	conversationId: z.string(),
@@ -12,7 +12,7 @@ export const conversationSchema = z.object({
 	updatedAt: z.number(),
 });
 
-/** Schema for messages stored in DistributedTable (Table 2). */
+/** Schema for messages stored in a KVStore (Table 2). */
 export const messageSchema = z.object({
 	conversationId: z.string(),
 	messageId: z.string(),

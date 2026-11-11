@@ -107,14 +107,24 @@ function storedItems(storeId: string): Record<string, any> {
 	return JSON.parse(readFileSync(storePath(storeId), 'utf8'));
 }
 
+/** The mock keys its on-disk items by the serialized table key. */
+function itemKey(sessionId: string): string {
+	return JSON.stringify([sessionId]);
+}
+
+/** One persisted item: the flat record plus the block's `_bkv_` attributes. */
+function storedItem(storeId: string, sessionId: string): Record<string, any> {
+	return storedItems(storeId)[itemKey(sessionId)];
+}
+
 function storePath(storeId: string): string {
 	return join('.bb-data', `${ROOT.id}-${storeId}`, 'store.json');
 }
 
-/** Overwrite a stored item's `ttl` to simulate the passage of time. */
+/** Overwrite a stored item's `_bkv_ttl` to simulate the passage of time. */
 function rewriteTtl(storeId: string, sessionId: string, ttl: number): void {
 	const items = storedItems(storeId);
-	items[sessionId] = { ...items[sessionId], ttl };
+	items[itemKey(sessionId)] = { ...items[itemKey(sessionId)], _bkv_ttl: ttl };
 	writeFileSync(storePath(storeId), JSON.stringify(items));
 }
 
@@ -123,7 +133,7 @@ function nowSeconds(): number {
 }
 
 /**
- * These tests assert on the mock store's persisted `ttl` attribute, so they
+ * These tests assert on the mock store's persisted `_bkv_ttl` attribute, so they
  * wipe its data root between cases. The mock resolves that root from
  * `process.cwd()`, and the test runner executes files concurrently by default —
  * so wiping the shared `.bb-data` would delete directories a sibling test file
@@ -153,13 +163,13 @@ describe('SessionStore TTL', () => {
 		const before = nowSeconds();
 		const id = await store.createSession(recordFor('alice'));
 
-		const item = storedItems('create-ttl')[id];
-		assert.strictEqual(typeof item, 'object', 'expected a TTL-bearing entry, not a bare value');
-		assert.strictEqual(typeof item.ttl, 'number');
-		assert.ok(Number.isInteger(item.ttl), 'DynamoDB TTL must be an integer');
+		const item = storedItem('create-ttl', id);
+		assert.strictEqual(typeof item, 'object', 'expected a stored item');
+		assert.strictEqual(typeof item._bkv_ttl, 'number');
+		assert.ok(Number.isInteger(item._bkv_ttl), 'DynamoDB TTL must be an integer');
 		assert.ok(
-			item.ttl >= before + ttlSeconds && item.ttl <= nowSeconds() + ttlSeconds + 1,
-			`ttl ${item.ttl} outside [now+${ttlSeconds}] window`,
+			item._bkv_ttl >= before + ttlSeconds && item._bkv_ttl <= nowSeconds() + ttlSeconds + 1,
+			`ttl ${item._bkv_ttl} outside [now+${ttlSeconds}] window`,
 		);
 	});
 
@@ -173,7 +183,7 @@ describe('SessionStore TTL', () => {
 	test('refresh (updateSession) slides the ttl forward', async () => {
 		const store = new SessionStore(ROOT, 'refresh-ttl', 3600);
 		const id = await store.createSession(recordFor('alice'));
-		const initial = storedItems('refresh-ttl')[id].ttl;
+		const initial = storedItem('refresh-ttl', id)._bkv_ttl;
 
 		// Rewind the persisted expiry to prove the next write recomputes it
 		// rather than leaving the original stamp in place.
@@ -182,7 +192,7 @@ describe('SessionStore TTL', () => {
 		const reopened = new SessionStore(ROOT, 'refresh-ttl', 3600);
 		await reopened.updateSession(id, { accessToken: jwtWith({ token_use: 'access', rotated: true }) });
 
-		const updated = storedItems('refresh-ttl')[id].ttl;
+		const updated = storedItem('refresh-ttl', id)._bkv_ttl;
 		assert.ok(updated > initial - 1200, `expected the ttl to move forward, got ${updated}`);
 		assert.ok(updated >= nowSeconds() + 3600 - 1, `expected ~now+3600, got ${updated}`);
 	});
@@ -202,7 +212,7 @@ describe('SessionStore TTL', () => {
 		const store = new SessionStore(ROOT, 'default-ttl', defaultTtl);
 		const id = await store.createSession(recordFor('alice'));
 
-		const ttl = storedItems('default-ttl')[id].ttl;
+		const ttl = storedItem('default-ttl', id)._bkv_ttl;
 		assert.ok(ttl > nowSeconds(), 'ttl must be in the future');
 		assert.ok(ttl <= nowSeconds() + defaultTtl + 1, 'ttl must not exceed the session lifetime');
 	});
@@ -211,8 +221,8 @@ describe('SessionStore TTL', () => {
 		const store = new SessionStore(ROOT, 'no-ttl');
 		const id = await store.createSession(recordFor('alice'));
 
-		const item = storedItems('no-ttl')[id];
-		assert.strictEqual(typeof item, 'string', 'expected the bare serialized value, with no ttl attribute');
+		const item = storedItem('no-ttl', id);
+		assert.ok(!('_bkv_ttl' in item), 'expected no ttl attribute');
 		assert.ok(await store.lookupSession(id));
 	});
 
@@ -221,7 +231,7 @@ describe('SessionStore TTL', () => {
 			const store = new SessionStore(ROOT, storeId, ttlSeconds);
 			const id = await store.createSession(recordFor('alice'));
 
-			assert.strictEqual(typeof storedItems(storeId)[id], 'string', `${storeId}: expected no ttl attribute`);
+			assert.ok(!('_bkv_ttl' in storedItem(storeId, id)), `${storeId}: expected no ttl attribute`);
 			assert.ok(await store.lookupSession(id), `${storeId}: session must remain readable`);
 		}
 	});
@@ -247,15 +257,15 @@ describe('SessionStore TTL', () => {
 		const bob = await store.createSession(recordFor('bob'));
 
 		rewriteTtl('delete-expired', stale, nowSeconds() - 60);
-		assert.ok(stale in storedItems('delete-expired'), 'row is still on disk — this is the case under test');
+		assert.ok(itemKey(stale) in storedItems('delete-expired'), 'row is still on disk — this is the case under test');
 
 		const reopened = new SessionStore(ROOT, 'delete-expired', 3600);
 		assert.strictEqual(await reopened.deleteByUsername('alice'), 2, 'revoke must count the expired row too');
 
 		const remaining = storedItems('delete-expired');
-		assert.ok(!(stale in remaining), 'expired row must be physically deleted, not left holding a refresh token');
-		assert.ok(!(live in remaining));
-		assert.ok(bob in remaining, "bob's session must survive");
+		assert.ok(!(itemKey(stale) in remaining), 'expired row must be physically deleted, not left holding a refresh token');
+		assert.ok(!(itemKey(live) in remaining));
+		assert.ok(itemKey(bob) in remaining, "bob's session must survive");
 	});
 });
 

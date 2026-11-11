@@ -22,7 +22,7 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { Realtime } from './index.cdk.js';
 
 test('CDK: calling a runtime method throws an actionable error (not a cryptic TypeError)', () => {
-	// Unlike KVStore/DistributedTable tests which instantiate the construct directly,
+	// Unlike the KVStore tests which instantiate the construct directly,
 	// Realtime's constructor requires complex shared infrastructure (WebSocket API,
 	// DynamoDB connections table, AppSetting) that is impractical to stand up in a
 	// unit test. We access the prototype directly instead — the synth-guard stubs

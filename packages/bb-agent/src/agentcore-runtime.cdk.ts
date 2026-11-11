@@ -78,7 +78,7 @@ export class AgentCoreRuntime extends Scope {
 		// misbehaves). These are identical for every agent — Bedrock models and the runtime-ARN
 		// wildcard are stack-scoped — so doing it once covers every agent's container. (Realtime
 		// publish, the session bucket, and the conversation/message tables are already granted to the
-		// shared role by the Realtime BB's handler wiring and the Agent's FileBucket/DistributedTable
+		// shared role by the Realtime BB's handler wiring and the Agent's FileBucket/KVStore
 		// children, so they're not repeated here — the loop inherits them by running as the role.)
 		//
 		// Keyed on the backend ROOT, not `cdk.Stack.of(this)`: the grants target THIS backend's shared

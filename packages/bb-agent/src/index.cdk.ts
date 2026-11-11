@@ -3,7 +3,7 @@
 
 import { BuildingBlockScope, synthGuard } from '@aws-blocks/core/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
+import { KVStore } from '@aws-blocks/bb-kv-store';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import * as cdk from 'aws-cdk-lib';
@@ -24,7 +24,7 @@ export class Agent extends BuildingBlockScope {
 	/**
 	 * CDK layer for the Agent BB.
 	 *
-	 * Provisions the session FileBucket, the conversation + message DistributedTables, the
+	 * Provisions the session FileBucket, the conversation + message KVStores, the
 	 * Realtime BB used to stream chunks to the browser, and the AgentCore Runtime that hosts
 	 * the streaming agent loop. All AgentCore-specific provisioning (co-bundle, runtime role
 	 * and its grants, container env, and the handler's invoke permission) lives in the
@@ -48,11 +48,11 @@ export class Agent extends BuildingBlockScope {
 		// Conversation metadata + message history. These grant read/write to the shared execution
 		// role, which the AgentCore Runtime then runs as — so the loop can persist history.
 		if (!config?.inferenceOnly) {
-			new DistributedTable(this, 'convos', {
+			new KVStore(this, 'convos', {
 				schema: conversationSchema,
 				key: { partitionKey: 'userId', sortKey: 'conversationId' },
 			});
-			new DistributedTable(this, 'messages', {
+			new KVStore(this, 'messages', {
 				schema: messageSchema,
 				key: { partitionKey: 'conversationId', sortKey: 'messageId' },
 			});

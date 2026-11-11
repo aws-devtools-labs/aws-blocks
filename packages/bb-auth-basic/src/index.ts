@@ -298,12 +298,13 @@ export class AuthBasic extends Scope implements BlocksAuth {
 		this.metrics = options?.metrics;
 		this.users = new KVStore(this, 'users');
 		this.jwtSecret = new AppSetting(this, 'jwt-secret', { secret: true });
-		// `ttl: true` lets DynamoDB physically reap expired entries. The store
-		// holds short-lived verification codes and sign-out revocation markers
-		// (both written with `expiresAt`), so reaping keeps it from growing with
-		// dead rows. Reads filter expired items regardless, so correctness does
-		// not depend on the reaper — this is storage hygiene.
-		this.codes = new KVStore(this, 'codes', { ttl: true });
+		// DynamoDB TTL is always on for a KVStore table, so it physically reaps
+		// expired entries. The store holds short-lived verification codes and
+		// sign-out revocation markers (both written with `expiresAt`), so reaping
+		// keeps it from growing with dead rows. Reads filter expired items
+		// regardless, so correctness does not depend on the reaper — this is
+		// storage hygiene.
+		this.codes = new KVStore(this, 'codes');
 		this.sessionDuration = options?.sessionDuration ?? 86400;
 		this.passwordPolicy = options?.passwordPolicy ?? {};
 		this.codeDelivery = options?.codeDelivery;

@@ -125,17 +125,14 @@ console.log('__TABLES__' + JSON.stringify(tables));
 // ─── Standalone session retention ───────────────────────────────────────────
 
 describe('SessionStore (CDK) — retention', () => {
-	test('a positive session lifetime enables DynamoDB TTL on the standalone table', () => {
-		const tables = synthUnderCdkConditions({ ttlSeconds: 3600 });
-		assert.strictEqual(tables.length, 1);
-		assert.deepStrictEqual(tables[0].timeToLive, { AttributeName: 'ttl', Enabled: true });
-	});
-
-	for (const ttlSeconds of [undefined, 0, -1]) {
-		test(`session lifetime ${ttlSeconds} leaves DynamoDB TTL disabled`, () => {
+	// KVStore keeps DynamoDB TTL on for every table it creates (on its own
+	// `_bkv_ttl` attribute), so the session lifetime only decides whether a
+	// record carries an expiry — never whether the table can reap one.
+	for (const ttlSeconds of [3600, undefined, 0, -1]) {
+		test(`session lifetime ${ttlSeconds} keeps DynamoDB TTL enabled on the standalone table`, () => {
 			const tables = synthUnderCdkConditions({ ttlSeconds });
 			assert.strictEqual(tables.length, 1);
-			assert.strictEqual(tables[0].timeToLive, undefined);
+			assert.deepStrictEqual(tables[0].timeToLive, { AttributeName: '_bkv_ttl', Enabled: true });
 		});
 	}
 });
@@ -320,7 +317,7 @@ describe('AuthCognito (CDK) — session store', () => {
 		assert.strictEqual(tables.length, 1, `expected exactly one DynamoDB table, got ${JSON.stringify(tables)}`);
 		assert.deepStrictEqual(
 			tables[0].timeToLive,
-			{ AttributeName: 'ttl', Enabled: true },
+			{ AttributeName: '_bkv_ttl', Enabled: true },
 			'the sessions table must expire session records instead of retaining refresh tokens forever',
 		);
 	});

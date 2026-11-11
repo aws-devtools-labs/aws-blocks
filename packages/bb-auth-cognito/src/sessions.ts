@@ -238,13 +238,12 @@ export class SessionStore {
 	 * retaining Cognito refresh tokens at rest forever. Callers pass the session
 	 * lifetime, keeping the record's ceiling aligned with the session cookie's
 	 * `Max-Age`. Authorization itself is still decided by token revalidation on
-	 * every request — this only bounds retention.
-	 * Positive values also enable DynamoDB TTL on the backing table; omitted or
-	 * non-positive values leave table TTL disabled.
+	 * every request — this only bounds retention. DynamoDB TTL is always on for
+	 * the backing table; omitted or non-positive values write no expiry.
 	 */
 	constructor(scope: ScopeParent, id = 'sessions', ttlSeconds?: number) {
 		this.ttlSeconds = ttlSeconds !== undefined && ttlSeconds > 0 ? ttlSeconds : undefined;
-		this.kv = new KVStore<SessionRecord>(scope, id, { ttl: this.ttlSeconds !== undefined });
+		this.kv = new KVStore<SessionRecord>(scope, id);
 	}
 
 	/**
@@ -281,11 +280,11 @@ export class SessionStore {
 	 * never removes a newer session.
 	 *
 	 * Pass the record exactly as {@link lookupSession} returned it: the
-	 * comparison is on the serialized value.
+	 * comparison is field by field on the stored record.
 	 */
 	async deleteSessionIfUnchanged(sessionId: string, expected: SessionRecord): Promise<boolean> {
 		try {
-			await this.kv.delete(sessionId, { ifValueEquals: expected });
+			await this.kv.delete(sessionId, { ifFieldEquals: expected });
 			return true;
 		} catch (e) {
 			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
@@ -315,11 +314,11 @@ export class SessionStore {
 	 * overwrites a newer one.
 	 *
 	 * Pass `expected` exactly as {@link lookupSession} returned it: the
-	 * comparison is on the serialized value.
+	 * comparison is field by field on the stored record.
 	 */
 	async replaceSession(sessionId: string, expected: SessionRecord, next: SessionRecord): Promise<boolean> {
 		try {
-			await this.kv.put(sessionId, next, { ...this.writeOptions(), ifValueEquals: expected });
+			await this.kv.put(sessionId, next, { ...this.writeOptions(), ifFieldEquals: expected });
 			return true;
 		} catch (e) {
 			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
