@@ -27,8 +27,9 @@ package com.aws.blocks.kotlin
  *   directory, which reads as the user being signed out.
  *
  *   On desktop the stored session is encrypted with a key kept in a file beside it, protected only
- *   by owner-only file permissions. That does not protect it from other processes running as the
- *   same OS user; leave this unset to keep the session in memory only.
+ *   by file permissions (owner-only on Linux and macOS; on Windows, the user profile's inherited
+ *   access control list, which also lets administrators read it). That does not protect it from
+ *   other processes running as the same OS user; leave this unset to keep the session in memory only.
  */
 data class BlocksConfig(
     val server: BlocksServer,

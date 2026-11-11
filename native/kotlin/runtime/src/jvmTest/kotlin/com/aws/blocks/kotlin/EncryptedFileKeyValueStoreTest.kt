@@ -204,8 +204,9 @@ class EncryptedFileKeyValueStoreTest {
                 PosixFilePermissions.fromString("rwx------")
             Files.getPosixFilePermissions(File(storageDir, ".key").toPath()) shouldBe
                 PosixFilePermissions.fromString("rw-------")
-            // Entries are written through a temporary file and renamed into place, so the
-            // permissions they end up with are the temporary file's.
+            // Entries are created through Files.createTempFile, which is rw------- on POSIX, and
+            // renamed into place. This pins the outcome; it does not on its own exercise
+            // restrictToOwner, since the temporary file already has these permissions.
             val entries = storageDir.listFiles { file -> file.name != ".key" }!!.toList()
             entries.shouldNotBeEmpty()
             entries.forEach { entry ->

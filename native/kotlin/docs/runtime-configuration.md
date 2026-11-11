@@ -95,12 +95,14 @@ configures it once with no platform-specific source sets — see [`example/kmp`]
 | JVM | AES-256-GCM encrypted files under `~/.blocks/<applicationId>`, or memory if no id is set |
 
 On the JVM the encryption key is stored in a file next to the encrypted entries, and both are
-protected only by file permissions: owner-only (`rwx------` for the directory, `rw-------` for the
-files) on a POSIX filesystem, and the platform's owner-only file flags elsewhere. That keeps other
-OS users out, but it does not protect the session from other processes running as the same OS
-user, or from anyone who can read a backup or copy of the directory. If that is not acceptable for
-your application, leave `applicationId` unset: the session is then held in memory only and never
-written to disk.
+protected only by file permissions. On a POSIX filesystem (Linux, macOS) they are owner-only
+(`rwx------` for the directory, `rw-------` for the files), which keeps other OS users out. On
+Windows the runtime cannot set owner-only permissions, so the files keep the access control list
+they inherit from your user profile (`%USERPROFILE%\.blocks\...`): by default that keeps other
+standard users out, but administrators and the system account can still read them. In either case
+the session is not protected from other processes running as the same OS user, or from anyone who
+can read a backup or copy of the directory. If that is not acceptable for your application, leave
+`applicationId` unset: the session is then held in memory only and never written to disk.
 
 The JVM path is one location on every desktop OS, in the manner of `~/.aws` or `~/.gradle`. An id
 is reduced to characters a directory name can hold; when that reduction changes anything, a digest

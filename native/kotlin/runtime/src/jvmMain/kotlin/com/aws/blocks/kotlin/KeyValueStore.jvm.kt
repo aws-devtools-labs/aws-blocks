@@ -38,9 +38,11 @@ internal actual fun platformKeyValueStore(name: String, applicationId: String?):
  *
  * The key file sits unencrypted next to the entries it decrypts, and is protected only by file
  * permissions: on a POSIX filesystem the store directory is `rwx------` and the key and entry
- * files `rw-------`; elsewhere the store falls back to the coarser [File] owner-only flags. That
- * keeps other OS users out, but any process running as the same OS user can read the key and
- * decrypt the entries, and so can anything with access to a backup or copy of the directory. The
+ * files `rw-------`, which keeps other OS users out. Elsewhere the store falls back to the [File]
+ * owner-only flags, which on Windows have no effect on who can read a file: there the key and
+ * entries keep the access control list inherited from the user profile, which by default keeps
+ * other standard users out but lets administrators and the system account read them. In every
+ * case any process running as the same OS user can read the key and decrypt the entries, and so can anything with access to a backup or copy of the directory. The
  * encryption guards against casual inspection of the files, not against those readers. An
  * application that needs more than this should leave `applicationId` unset, so the session is held
  * in memory for the life of the process and never written to disk.
