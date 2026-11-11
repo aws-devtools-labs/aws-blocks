@@ -463,13 +463,18 @@ describe('contentType must be a single well-formed media type in both runtimes',
 		'text/',
 		'/plain',
 	];
-	const VALID = [
-		'text/plain; charset=utf-8',
-		'multipart/form-data; boundary="a b"',
-		'text/plain;charset=utf-8',
-		'text/plain ; charset = utf-8',
-		'application/vnd.api+json',
-		'text/plain; a="x, y"; b="esc\\"aped"',
+	// [caller value, canonical value signed and returned]
+	const VALID: ReadonlyArray<[string, string]> = [
+		['text/plain; charset=utf-8', 'text/plain; charset=utf-8'],
+		['multipart/form-data; boundary="a b"', 'multipart/form-data; boundary="a b"'],
+		['text/plain;charset=utf-8', 'text/plain; charset=utf-8'],
+		['text/plain;  charset=UTF-8', 'text/plain; charset=UTF-8'],
+		['text/plain ; charset = utf-8', 'text/plain; charset=utf-8'],
+		['text/plain\t;\tcharset\t=\tutf-8', 'text/plain; charset=utf-8'],
+		['application/vnd.api+json', 'application/vnd.api+json'],
+		['Text/Plain;A=B', 'Text/Plain; A=B'],
+		['text/plain; a="x, y";b="esc\\"aped"', 'text/plain; a="x, y"; b="esc\\"aped"'],
+		['text/plain;a="  ;  =  "', 'text/plain; a="  ;  =  "'],
 	];
 	for (const [label, make] of runtimes) {
 		test(`${label}: rejects malformed values with or without allowedContentTypes`, async () => {
@@ -487,22 +492,56 @@ describe('contentType must be a single well-formed media type in both runtimes',
 				}
 			}
 		});
-		test(`${label}: accepts well-formed values and signs them unchanged`, async () => {
+		test(`${label}: accepts well-formed values and signs them in canonical form`, async () => {
 			const bucket = make();
-			for (const contentType of VALID) {
-				assert.strictEqual((await bucket.createUploadHandle('a', { contentType })).toJSON().contentType, contentType);
+			for (const [contentType, canonical] of VALID) {
+				assert.strictEqual((await bucket.createUploadHandle('a', { contentType })).toJSON().contentType, canonical);
 				assert.ok(await bucket.putUrl('a', { contentType }), contentType);
 				await bucket.put('a', 'x', { contentType });
 			}
 		});
 		test(`${label}: a type/* wildcard matches the type part exactly`, async () => {
 			const bucket = make({ allowedContentTypes: ['image/*', 'text/plain', 'multipart/form-data'] });
-			for (const contentType of ['image/png', 'IMAGE/svg+xml', 'text/plain; charset=utf-8', 'multipart/form-data; boundary="a b"']) {
+			for (const contentType of ['image/png', 'IMAGE/webp', 'text/plain; charset=utf-8', 'multipart/form-data; boundary="a b"']) {
 				assert.ok(await bucket.putUrl('a', { contentType }), contentType);
 			}
 			for (const contentType of ['imagex/png', 'image-x/png', 'text/plainx']) {
 				await assert.rejects(() => bucket.putUrl('a', { contentType }), (err: unknown) =>
 					isValidation400(err) && (err as Error).message === 'ValidationFailed: The content type is not allowed for this bucket');
+			}
+		});
+	}
+});
+
+describe('a type/* wildcard does not match active document types in both runtimes', () => {
+	const ACTIVE = ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'text/xml', 'application/xml', 'text/javascript'];
+	const NOT_ALLOWED = 'ValidationFailed: The content type is not allowed for this bucket';
+	const runtimes = [
+		['mock', (o: FileBucketOptions) => new MockFileBucket(new Scope('root'), uniqueId(), o)],
+		['AWS', (o: FileBucketOptions) => awsSigningBucket(o).bucket],
+	] as const;
+	for (const [label, make] of runtimes) {
+		test(`${label}: text/*, image/* and application/* reject the active types`, async () => {
+			const bucket = make({ allowedContentTypes: ['text/*', 'image/*', 'application/*'] });
+			for (const contentType of [...ACTIVE, 'TEXT/HTML; charset=utf-8', 'Image/SVG+XML']) {
+				for (const call of [
+					() => bucket.putUrl('a', { contentType }),
+					() => bucket.createUploadHandle('a', { contentType }),
+					() => bucket.put('a', 'x', { contentType }),
+				]) {
+					await assert.rejects(call, (err: unknown) =>
+						isValidation400(err) && (err as Error).message === NOT_ALLOWED, contentType);
+				}
+			}
+			for (const contentType of ['text/plain', 'text/csv', 'image/png', 'application/json', 'application/pdf']) {
+				assert.ok(await bucket.putUrl('a', { contentType }), contentType);
+			}
+		});
+		test(`${label}: an active type listed exactly is accepted`, async () => {
+			const bucket = make({ allowedContentTypes: ['image/*', ...ACTIVE] });
+			for (const contentType of [...ACTIVE, 'IMAGE/SVG+XML', 'text/html; charset=utf-8']) {
+				assert.ok(await bucket.putUrl('a', { contentType }), contentType);
+				await bucket.put('a', 'x', { contentType });
 			}
 		});
 	}

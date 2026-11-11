@@ -251,6 +251,27 @@ describe('file-server: Content-Type signing parity', () => {
 		assert.strictEqual(file.contentType, 'image/jpeg');
 	});
 
+	test('a parameterized Content-Type is signed in canonical form, which a client re-rendering it sends unchanged', async () => {
+		// HTTP clients such as Ktor parse a Content-Type and re-render it as
+		// `type/subtype; name=value`. The signed value is already in that form,
+		// so the header such a client sends matches it byte-for-byte.
+		const bucket = new FileBucket(scope, 'fs-ct-canonical');
+		const handle = await bucket.createUploadHandle('notes.txt', { contentType: 'text/plain;charset=utf-8' });
+		assert.strictEqual(handle.toJSON().contentType, 'text/plain; charset=utf-8');
+		const adjusted = handle.getUrl().replace(/localhost:\d+/, `localhost:${port}`);
+
+		const res = await fetch(adjusted, {
+			method: 'PUT',
+			body: 'hello',
+			headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+		});
+		assert.strictEqual(res.status, 200, `Expected 200, got ${res.status}`);
+
+		const file = await bucket.get('notes.txt');
+		assert.ok(file);
+		assert.strictEqual(file.contentType, 'text/plain; charset=utf-8');
+	});
+
 	test('putUrl without contentType signs application/octet-stream, so another Content-Type returns 403', async () => {
 		// putUrl always signs a Content-Type (application/octet-stream when the
 		// caller names none), as the AWS runtime does, so the uploader can't

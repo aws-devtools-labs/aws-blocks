@@ -118,27 +118,74 @@ const UPLOAD_CONTENT_TYPE = new RegExp(
 	`^(${TOKEN})/(${TOKEN})(?:${OWS};${OWS}${TOKEN}${OWS}=${OWS}(?:${TOKEN}|${QUOTED_STRING}))*$`,
 );
 
-/**
- * Parse a caller-supplied `Content-Type` against {@link UPLOAD_CONTENT_TYPE}.
- *
- * @returns The lowercased type and subtype, or `undefined` when the whole value
- *   is not a single well-formed media type.
- */
-function parseUploadContentType(contentType: string): { type: string; subtype: string } | undefined {
-	const match = UPLOAD_CONTENT_TYPE.exec(contentType);
-	if (!match) return undefined;
-	return { type: match[1].toLowerCase(), subtype: match[2].toLowerCase() };
+/** One `; name=value` parameter of a value that matched {@link UPLOAD_CONTENT_TYPE}. Captures the name and value. */
+const UPLOAD_CONTENT_TYPE_PARAMETER = new RegExp(
+	`${OWS};${OWS}(${TOKEN})${OWS}=${OWS}(${TOKEN}|${QUOTED_STRING})`,
+	'g',
+);
+
+/** A caller-supplied `Content-Type`, parsed and re-rendered in canonical form. */
+interface ParsedUploadContentType {
+	/** The lowercased type. */
+	readonly type: string;
+	/** The lowercased subtype. */
+	readonly subtype: string;
+	/**
+	 * The value in canonical form: `type/subtype` as written, then each
+	 * parameter as `; name=value` — exactly one space after each `;` and none
+	 * around `=`. Names and token values keep their case; a quoted-string value
+	 * is kept byte-for-byte, quotes and escapes included.
+	 */
+	readonly normalized: string;
 }
 
 /**
+ * Parse a caller-supplied `Content-Type` against {@link UPLOAD_CONTENT_TYPE}.
+ *
+ * @returns The lowercased type and subtype plus the canonical value, or
+ *   `undefined` when the whole value is not a single well-formed media type.
+ */
+function parseUploadContentType(contentType: string): ParsedUploadContentType | undefined {
+	const match = UPLOAD_CONTENT_TYPE.exec(contentType);
+	if (!match) return undefined;
+	const [, type, subtype] = match;
+	// The full-value match above guarantees the remainder is a sequence of
+	// well-formed parameters, so a global scan from the end of the media type
+	// visits each one in order. A quoted-string is consumed whole by the
+	// pattern, so a `;` or `=` inside quotes is never taken for a separator.
+	let normalized = `${type}/${subtype}`;
+	const parameters = contentType.slice(type.length + 1 + subtype.length);
+	for (const [, name, value] of parameters.matchAll(UPLOAD_CONTENT_TYPE_PARAMETER)) {
+		normalized += `; ${name}=${value}`;
+	}
+	return { type: type.toLowerCase(), subtype: subtype.toLowerCase(), normalized };
+}
+
+/**
+ * Media types a browser can render as an active document (HTML, SVG, XML,
+ * XHTML) or run as a script. A `type/*` entry in `allowedContentTypes` does not
+ * match these; each is accepted only when `allowedContentTypes` lists it exactly.
+ */
+const ACTIVE_CONTENT_TYPES: ReadonlySet<string> = new Set([
+	'text/html',
+	'image/svg+xml',
+	'application/xhtml+xml',
+	'text/xml',
+	'application/xml',
+	'text/javascript',
+]);
+
+/**
  * True when the parsed media type matches an exact `type/subtype` entry, or a
- * `type/*` entry whose type part is exactly the parsed type.
+ * `type/*` entry whose type part is exactly the parsed type and the media type
+ * is not one of the {@link ACTIVE_CONTENT_TYPES}.
  */
 function isAllowedMediaType(allowed: readonly string[], mediaType: { type: string; subtype: string }): boolean {
+	const full = `${mediaType.type}/${mediaType.subtype}`;
 	return allowed.some((entry) =>
 		entry.endsWith('/*')
-			? entry.slice(0, -2) === mediaType.type
-			: entry === `${mediaType.type}/${mediaType.subtype}`,
+			? entry.slice(0, -2) === mediaType.type && !ACTIVE_CONTENT_TYPES.has(full)
+			: entry === full,
 	);
 }
 
@@ -150,13 +197,22 @@ function isAllowedMediaType(allowed: readonly string[], mediaType: { type: strin
  * The WHOLE caller-supplied value must be a single well-formed media type
  * (`type/subtype` plus optional `; name=value` parameters, ASCII only, no comma
  * outside a quoted string), whether or not the bucket sets
- * `allowedContentTypes`: the value is signed and stored unchanged, so it must be
- * exactly what was matched. Matching then ignores case and parameters:
- * `text/plain; charset=utf-8` matches an entry `text/plain` or `text/*`.
+ * `allowedContentTypes`: the value is signed and stored, so it must be exactly
+ * what was matched. Matching then ignores case and parameters:
+ * `text/plain; charset=utf-8` matches an entry `text/plain` or `text/*`. A
+ * `type/*` entry does not match the {@link ACTIVE_CONTENT_TYPES} (`text/html`,
+ * `image/svg+xml`, …); list one exactly to accept it.
+ *
+ * The returned value is the canonical rendering of the caller's value: the
+ * `type/subtype` as written, then each parameter as `; name=value` (one space
+ * after each `;`, none around `=`), with quoted-string values unchanged. That
+ * is the form HTTP clients such as Ktor re-render a parsed `Content-Type` in,
+ * so the header a client sends matches the signed value byte-for-byte.
+ * `text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`.
  *
  * @param constraints - The bucket's upload constraints.
  * @param contentType - The caller-supplied content type, if any.
- * @returns The effective content type (the caller's string unchanged, parameters included).
+ * @returns The effective content type, in canonical form, parameters included.
  * @throws {Error} `ValidationFailed` when the value is not a string, is not a single
  *   well-formed media type, or is not in `allowedContentTypes`.
  */
@@ -172,7 +228,7 @@ export function resolveUploadContentType(constraints: UploadConstraints, content
 	if (constraints.allowedContentTypes && !isAllowedMediaType(constraints.allowedContentTypes, mediaType)) {
 		throw validationFailed('The content type is not allowed for this bucket');
 	}
-	return effective;
+	return mediaType.normalized;
 }
 
 /**
@@ -215,7 +271,8 @@ export function resolvePresignedUpload(
  * @param constraints - The bucket's upload constraints.
  * @param contentType - The caller-supplied content type, if any.
  * @param byteLength - The body size in bytes.
- * @returns The effective content type to store.
+ * @returns The effective content type to store, in the canonical form
+ *   {@link resolveUploadContentType} returns.
  * @throws {Error} `ValidationFailed` when the content type is invalid or not allowed,
  *   or the body is larger than `maxUploadBytes`.
  */
