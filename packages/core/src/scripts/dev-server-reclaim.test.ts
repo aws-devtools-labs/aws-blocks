@@ -4,7 +4,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,7 +36,7 @@ import {
   type WindowsProcess,
   windowsProcesses,
 } from './process-tree.js';
-import { claimDevSession, pidCommand } from './dev-pidfile.js';
+import { claimDevSession, createFileExclusive, pidCommand, type PidfileClaim } from './dev-pidfile.js';
 
 function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -417,6 +417,39 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
     assert.deepStrictEqual(claim, { acquired: true, previous: null });
   });
 
+  it('without hard links, leaves a record that is still being written: A pauses inside its create, B claims', () => {
+    // A file system without hard links: a file appears empty, and gets its record afterwards. B must not
+    // take the empty pidfile for a corrupt one: it removed it, and both A and B then owned the port.
+    const inodes = new Map<string, { body: string }>();
+    const commands: Record<number, string> = { 3000: 'a3', 901: 'pa', 2000: 'b', 900: 'p' };
+    const deps = (paused?: () => void) => ({
+      createExclusive: (p: string, body: string) => {
+        if (inodes.has(p)) return false;
+        const inode = { body: '' };
+        inodes.set(p, inode);
+        if (p === path) paused?.();
+        inode.body = body; // lands in the file this start created, also once another start has unlinked it
+        return 'in-place' as const;
+      },
+      read: (p: string) => inodes.get(p)?.body ?? null,
+      replace: (p: string, body: string) => { inodes.set(p, { body }); },
+      remove: (p: string) => { inodes.delete(p); },
+      siblings: () => [],
+      peers: () => [],
+      isAlive: (pid: number) => pid in commands,
+      commandOf: (pid: number) => commands[pid] ?? '',
+      sleep: () => {},
+    });
+    const a: DevServerPidRecord = { pid: 3000, ppid: 901, port: 3000, command: 'a3', parentCommand: 'pa', token: 'a-token' };
+    const b: DevServerPidRecord = { ...self, token: 'b-token' };
+    const bClaims: PidfileClaim[] = [];
+    const aClaim = claimDevPidfile(path, a, deps(() => { bClaims.push(claimDevPidfile(path, b, deps())); }));
+    assert.deepStrictEqual(aClaim, { acquired: true, previous: null });
+    assert.deepStrictEqual(bClaims.map((c) => c.acquired), [false], 'B does not own the port beside A');
+    assert.strictEqual(inodes.get(path)?.body, JSON.stringify(a), "A's record is the pidfile");
+    assert.deepStrictEqual([...inodes.keys()], [path], 'no reap file is left');
+  });
+
   it('never moves or removes a live record: B pauses after judging the pidfile stale, A claims, C tries in the gap', async () => {
     // The interleaving that broke the rename-aside takeover: B moved A's live record away, C took the
     // empty path, and B's restore failed and deleted A's record, so A served on, invisible to `dev stop`.
@@ -587,6 +620,41 @@ describe('claimDevPidfile — exactly one start owns the port', () => {
       const claim = claimDevPidfile(path, self, { ...fs.deps, isAlive: (pid) => pid === 600, commandOf: () => 'bash' });
       assert.deepStrictEqual(claim, { acquired: true, previous: cli });
     });
+  });
+});
+
+describe('createFileExclusive — a file system without hard links', () => {
+  const noLinks = (): void => { throw Object.assign(new Error('EPERM: operation not permitted, link'), { code: 'EPERM' }); };
+
+  it('creates the file once, and says that it was written in place', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dev-pidfile-nolink-'));
+    try {
+      const file = join(dir, 'dev-server.3000.pid');
+      assert.strictEqual(createFileExclusive(file, 'first', noLinks), 'in-place');
+      assert.strictEqual(createFileExclusive(file, 'second', noLinks), false);
+      assert.strictEqual(readFileSync(file, 'utf-8'), 'first');
+      assert.deepStrictEqual(readdirSync(dir), ['dev-server.3000.pid'], 'no temp file is left');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a start beside an empty pidfile, and leaves it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dev-pidfile-nolink-'));
+    try {
+      const file = join(dir, 'dev-server.3000.pid');
+      writeFileSync(file, '');
+      const self: DevServerPidRecord = { pid: process.pid, ppid: process.ppid, port: 3000, token: 'self-token' };
+      const claim = claimDevPidfile(file, self, {
+        createExclusive: (p, body) => createFileExclusive(p, body, noLinks),
+        sleep: () => {},
+      });
+      assert.strictEqual(claim.acquired, false);
+      assert.strictEqual(readFileSync(file, 'utf-8'), '');
+      assert.deepStrictEqual(readdirSync(dir), ['dev-server.3000.pid'], 'no reap or temp file is left');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

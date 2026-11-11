@@ -221,8 +221,12 @@ export function evaluateSingleton(
 
 /** Injectable seams for {@link claimDevPidfile} (real file system and process table by default). */
 export interface ClaimPidfileDeps {
-  /** Create `path` holding `body` only if it doesn't exist; false when it does. Atomic: no reader sees it half-written. */
-  createExclusive: (path: string, body: string) => boolean;
+  /**
+   * Create `path` holding `body` only if it doesn't exist; false when it does. Atomic: no reader sees it half-written.
+   * `'in-place'` when it could only create the file first and write `body` afterwards (a file system
+   * without hard links): until then readers saw it empty, so files there may be records still on their way.
+   */
+  createExclusive: (path: string, body: string) => boolean | 'in-place';
   /** The file's body, or null when it doesn't exist. */
   read: (path: string) => string | null;
   /** Replace `path` with `body` in one step (temp file + rename): readers see the old body or the new one, never no file. */
@@ -255,12 +259,20 @@ export type PidfileClaim =
       port: number;
     };
 
-/** Write `body` to `path` only if `path` doesn't exist, atomically (temp file + hard link; `wx` where links fail). */
-function createFileExclusive(path: string, body: string): boolean {
+/**
+ * Write `body` to `path` only if `path` doesn't exist, atomically (temp file + hard link; `wx` where links fail).
+ * Where links fail the file exists, empty, before `body` is written: that is reported as `'in-place'`
+ * (see {@link ClaimPidfileDeps.createExclusive}).
+ */
+export function createFileExclusive(
+  path: string,
+  body: string,
+  link: (existing: string, created: string) => void = linkSync,
+): boolean | 'in-place' {
   const tmp = `${path}.${process.pid}.tmp`;
   writeFileSync(tmp, body);
   try {
-    linkSync(tmp, path);
+    link(tmp, path);
     return true;
   } catch (e) {
     const code = (e as NodeJS.ErrnoException).code;
@@ -268,7 +280,7 @@ function createFileExclusive(path: string, body: string): boolean {
     // A file system without hard links: fall back to an exclusive create.
     try {
       writeFileSync(path, body, { flag: 'wx' });
-      return true;
+      return 'in-place';
     } catch (e2) {
       if ((e2 as NodeJS.ErrnoException).code === 'EEXIST') return false;
       throw e2;
@@ -350,6 +362,15 @@ function defaultClaimDeps(): ClaimPidfileDeps {
 // owner of a stale X is dead), and nothing else can appear at P while X is
 // there (link fails). Hence a live record is never removed, and two live
 // sessions never both own P.
+//
+// Without hard links (FAT, exFAT, some shared folders) a file is created
+// exclusively and written afterwards (createFileExclusive), so it is empty
+// until its record is in. There an unreadable file may be the record of a live
+// process on its way, and nothing tells the two apart. So a holder whose own
+// reap file was created that way leaves an unreadable record alone
+// (`unreadable`), and a start is refused while one stays. A complete record
+// never changes in place, so the rules above hold for every readable record.
+// A file that a crash left unreadable there is deleted by hand.
 
 /** How many times {@link claimDevPidfile} retries when other starts keep changing the pidfile under it. */
 const CLAIM_ATTEMPTS = 40;
@@ -382,7 +403,8 @@ function reaperAlive(raw: string, d: Pick<ClaimPidfileDeps, 'isAlive' | 'command
  * Run `action` while holding the reap file of the record `inspected` at `path`,
  * and only if `path` still holds it (see the protocol above). `changed`: the
  * record or its reap file changed meanwhile, so look again; `busy`: another live
- * process holds the reap file.
+ * process holds the reap file; `unreadable`: the record, or its reap file, can't
+ * be read on a file system without hard links, where it may still be on its way.
  */
 function underRecordLock(
   d: ClaimPidfileDeps,
@@ -390,18 +412,22 @@ function underRecordLock(
   inspected: string,
   action: () => void,
   depth = 0,
-): 'done' | 'changed' | 'busy' {
+): 'done' | 'changed' | 'busy' | 'unreadable' {
   const lock = reapPath(path, inspected);
-  if (!d.createExclusive(lock, reaperRecord())) {
+  const created = d.createExclusive(lock, reaperRecord());
+  if (!created) {
     const other = d.read(lock);
     if (other === null) return 'changed'; // that holder finished
     if (reaperAlive(other, d)) return 'busy';
-    if (depth < MAX_REAP_DEPTH) underRecordLock(d, lock, other, () => d.remove(lock), depth + 1);
+    if (depth < MAX_REAP_DEPTH && underRecordLock(d, lock, other, () => d.remove(lock), depth + 1) === 'unreadable') {
+      return 'unreadable';
+    }
     return 'changed';
   }
   try {
     d.hook('takeover');
     if (d.read(path) !== inspected) return 'changed';
+    if (created === 'in-place' && parsePidRecord(inspected) === null) return 'unreadable';
     action();
     return 'done';
   } finally {
@@ -482,7 +508,9 @@ export function claimDevPidfile(
   const d = { ...defaultClaimDeps(), ...deps };
   const body = JSON.stringify(self);
   let previous: DevServerPidRecord | null = null;
+  let unreadable = false;
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+    unreadable = false;
     if (d.createExclusive(path, body)) {
       const peer = livePeer(d, path);
       if (peer) {
@@ -511,7 +539,14 @@ export function claimDevPidfile(
     // A live record goes to its successor in one step; a stale one is removed.
     const outcome = underRecordLock(d, path, text, () => (adopting || reloading ? d.replace(path, body) : d.remove(path)));
     if (outcome === 'done' && (adopting || reloading)) return { acquired: true, previous: existing };
-    if (outcome === 'busy') d.sleep(REAP_BACKOFF_MS);
+    unreadable = outcome === 'unreadable';
+    if (outcome === 'busy' || unreadable) d.sleep(REAP_BACKOFF_MS);
+  }
+  if (unreadable) {
+    const reason =
+      `${path}, or a .reap- file next to it, is unreadable, and this file system has no hard links to take it over safely` +
+      ' (if no dev server is starting, delete those files)';
+    return { acquired: false, reason, port: self.port };
   }
   return { acquired: false, reason: `other dev servers kept starting on :${self.port}`, port: self.port };
 }
@@ -589,7 +624,8 @@ export function releaseDevPidfile(path: string, owner: number, deps: Partial<Cla
 export function reapDevPidfile(path: string, inspected: string, deps: Partial<ClaimPidfileDeps> = {}): void {
   const d = { ...defaultClaimDeps(), ...deps };
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS && d.read(path) === inspected; attempt++) {
-    if (underRecordLock(d, path, inspected, () => d.remove(path)) === 'busy') d.sleep(REAP_BACKOFF_MS);
+    const outcome = underRecordLock(d, path, inspected, () => d.remove(path));
+    if (outcome === 'busy' || outcome === 'unreadable') d.sleep(REAP_BACKOFF_MS);
   }
 }
 
