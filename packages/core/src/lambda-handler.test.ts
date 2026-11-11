@@ -3,6 +3,7 @@
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { runInNewContext } from 'node:vm';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry, getRegisteredRoutes } from './raw-route.js';
@@ -574,6 +575,148 @@ describe('createLambdaHandler — RawRoute body handling', () => {
 
     assert.strictEqual(result.statusCode, 200);
     assert.strictEqual(capturedText, payload);
+  });
+
+  it('passes the exact bytes of a base64-encoded binary body to a RawRoute', async () => {
+    // Every byte value: invalid UTF-8 sequences must not be replaced with U+FFFD.
+    const payload = Buffer.from(Array.from({ length: 512 }, (_, i) => i & 0xff));
+    let streamed: Buffer | undefined;
+    let text = '';
+
+    registerRoute({
+      method: 'PUT',
+      path: '/upload',
+      handler: async (ctx) => {
+        streamed = Buffer.from(await new Response(ctx.request.body).arrayBuffer());
+        // The bytes stay readable after the stream is consumed.
+        text = await ctx.request.text();
+        ctx.response.send({ ok: true });
+      },
+    });
+
+    const result = await invoke({}, makeEvent({
+      httpMethod: 'PUT',
+      path: '/upload',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: payload.toString('base64'),
+      isBase64Encoded: true,
+    }));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.ok(streamed?.equals(payload), 'ctx.request.body must yield the bytes the client sent');
+    assert.strictEqual(text, payload.toString('utf-8'));
+  });
+
+  for (const [kind, toBody] of [
+    ['Buffer', (b: Buffer) => b],
+    ['Uint8Array', (b: Buffer) => new Uint8Array(b)],
+    ['ArrayBuffer', (b: Buffer) => new Uint8Array(b).buffer],
+    ['cross-realm ArrayBuffer', (b: Buffer) => runInNewContext('new Uint8Array(bytes).buffer', { bytes: [...b] })],
+  ] as const) {
+    it(`returns a RawRoute ${kind} response as base64 with isBase64Encoded`, async () => {
+      const bytes = Buffer.from([0x00, 0xff, 0x10, 0x80]);
+      registerRoute({
+        method: 'GET',
+        path: '/download',
+        handler: async (ctx) => {
+          ctx.response.headers.set('Content-Type', 'application/octet-stream');
+          ctx.response.send(toBody(bytes));
+        },
+      });
+
+      const result = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/download', body: null }));
+
+      assert.strictEqual(result.statusCode, 200);
+      assert.strictEqual(result.isBase64Encoded, true);
+      assert.ok(Buffer.from(result.body, 'base64').equals(bytes));
+    });
+  }
+
+  it('keeps string and JSON RawRoute responses as plain text', async () => {
+    registerRoute({ method: 'GET', path: '/text', handler: async (ctx) => ctx.response.send('plain') });
+    registerRoute({ method: 'GET', path: '/json', handler: async (ctx) => ctx.response.send({ a: 1 }) });
+
+    const text = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/text', body: null }));
+    const json = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/json', body: null }));
+
+    assert.strictEqual(text.body, 'plain');
+    assert.strictEqual(json.body, '{"a":1}');
+    assert.ok(!text.isBase64Encoded && !json.isBase64Encoded);
+  });
+
+  it('labels a RawRoute byte response application/octet-stream unless the handler set a Content-Type', async () => {
+    registerRoute({ method: 'GET', path: '/bytes', handler: async (ctx) => ctx.response.send(Buffer.from([1, 2, 3])) });
+    registerRoute({
+      method: 'GET',
+      path: '/png',
+      handler: async (ctx) => {
+        ctx.response.headers.set('Content-Type', 'image/png');
+        ctx.response.send(Buffer.from([1, 2, 3]));
+      },
+    });
+    registerRoute({ method: 'GET', path: '/json', handler: async (ctx) => ctx.response.send({ a: 1 }) });
+    registerRoute({
+      method: 'GET',
+      path: '/json-bytes',
+      handler: async (ctx) => {
+        // Pre-encoded JSON: an explicit type wins over the byte default.
+        ctx.response.headers.set('Content-Type', 'application/json');
+        ctx.response.send(Buffer.from('{"a":1}'));
+      },
+    });
+    registerRoute({ method: 'GET', path: '/boom', handler: async () => { throw new Error('boom'); } });
+
+    const typeOf = async (path: string) =>
+      (await invoke({}, makeEvent({ httpMethod: 'GET', path, body: null }))).headers['content-type'];
+    assert.strictEqual(await typeOf('/bytes'), 'application/octet-stream');
+    assert.strictEqual(await typeOf('/png'), 'image/png');
+    assert.strictEqual(await typeOf('/json'), 'application/json');
+    assert.strictEqual(await typeOf('/json-bytes'), 'application/json');
+    assert.strictEqual(await typeOf('/boom'), 'application/json');
+  });
+
+  it('sends a SharedArrayBuffer response as bytes, and a buffer changed after send() does not change the response', async () => {
+    const shared = new SharedArrayBuffer(2);
+    new Uint8Array(shared).set([0xab, 0xcd]);
+    registerRoute({ method: 'GET', path: '/shared', handler: async (ctx) => ctx.response.send(shared) });
+    registerRoute({
+      method: 'GET',
+      path: '/reused',
+      handler: async (ctx) => {
+        const buf = Buffer.from([1, 2, 3]);
+        ctx.response.send(buf);
+        buf.fill(0);
+      },
+    });
+
+    const sharedResult = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/shared', body: null }));
+    assert.strictEqual(sharedResult.isBase64Encoded, true);
+    assert.deepStrictEqual([...Buffer.from(sharedResult.body, 'base64')], [0xab, 0xcd]);
+    const reused = await invoke({}, makeEvent({ httpMethod: 'GET', path: '/reused', body: null }));
+    assert.deepStrictEqual([...Buffer.from(reused.body, 'base64')], [1, 2, 3]);
+  });
+
+  it('hands each read of ctx.request.body its own copy, so text() still sees the bytes the client sent', async () => {
+    let text = '';
+    registerRoute({
+      method: 'POST',
+      path: '/mutate',
+      handler: async (ctx) => {
+        const reader = ctx.request.body!.getReader();
+        const { value } = await reader.read();
+        value!.fill(0x41);
+        text = await ctx.request.text();
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, makeEvent({
+      httpMethod: 'POST',
+      path: '/mutate',
+      body: Buffer.from('hello').toString('base64'),
+      isBase64Encoded: true,
+    }));
+    assert.strictEqual(text, 'hello');
   });
 
   it('ctx.request.json() works for RawRoute POST with JSON body', async () => {

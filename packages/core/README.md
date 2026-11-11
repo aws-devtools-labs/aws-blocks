@@ -195,7 +195,8 @@ A deployed `BlocksStack` / `BlocksBackend` puts **one shared API Gateway REST AP
 - **Every path reaches your backend.** Catch-all proxy resources forward every method and path to the backend Lambda, which dispatches JSON-RPC and your `RawRoute`s, so adding a `RawRoute` creates no AWS resources. Each namespace also has its own path (`/aws-blocks/api/{namespace}`), so a namespace given its own compute (`new ApiNamespace(scope, name, handler, { compute })`, see `@aws-blocks/bb-compute`) is routed there without changing the app's endpoint.
 - **Container computes.** A namespace on a `container` compute is integrated through a VPC link to an internal Application Load Balancer that the compute provisions in the app's VPC; the load balancer forwards each namespace's path to its container's tasks. Namespaces without a compute, `RawRoute`s and the auth routes stay on the default compute. On the `cloudfront` tier, CloudFront reaches a container namespace straight from the distribution instead (see [API front door](#api-front-door)), so the gateway's throttling, access logs and limits don't apply to it.
 - **Throttling** is on by default from `defaults.throttling` (sandbox 200 requests/s with a 400 burst, production 1000/2000). **Structured JSON access logs** are opt-in via `defaults.accessLogging`; each entry records the matched route (`resourcePath`) — the route template, so requests served by the catch-all resources (every namespace on the default compute, every `RawRoute`) log as their `{proxy+}` resource rather than the path called.
-- **Limits:** the gateway times out a request after 29 seconds and caps payloads at 10 MB. Run longer work in an `AsyncJob`.
+- **Limits:** the gateway times out a request after 29 seconds. It accepts payloads up to 10 MB, but a Lambda invocation carries at most 6 MB and the gateway hands the Lambda every request body base64-encoded (see below), so a request body reaching a Lambda compute is limited to about 4.5 MB, and so is a byte response from a `RawRoute`. Run longer work in an `AsyncJob`, and move large files with `FileBucket`'s presigned `putUrl()`/`getUrl()`.
+- **Binary payloads.** The REST API sets `binaryMediaTypes: ['*/*']`, so `RawRoute` bodies keep their bytes in both directions. The setting is API-wide: an integration you add to `gateway` yourself receives every request body as binary too. A Lambda proxy integration gets it base64-encoded with `isBase64Encoded: true` (decode `event.body` when that flag is set); a non-proxy integration whose mapping template expects text needs `contentHandling: ContentHandling.CONVERT_TO_TEXT` (from `aws-cdk-lib/aws-apigateway`).
 - **WAF** is off by default. Turn it on with `apiWaf` on `BlocksStack` / `BlocksBackend`: `apiWaf: { enabled: true, rateLimit? }` creates a web ACL with the AWS managed Common rule set and Known Bad Inputs rule set, plus a per-IP rate limit (default 1000 requests per 5 minutes). The Common rule set's body rules (`SizeRestrictions_BODY`, `CrossSiteScripting_BODY`, `GenericLFI_BODY`, `GenericRFI_BODY`) only count, so normal RPC payloads, including user-written HTML or Markdown, pass. `apiWaf: { webAclArn }` attaches a web ACL you already have instead; its scope and region are checked at synth. It's attached as-is, so behind a `Hosting` door its IP rate rules count CloudFront edge or proxy IPs for browser traffic. The web ACL goes on whichever front door clients use:
   - `apiFrontDoor: 'apigateway'` — a `REGIONAL` web ACL on the gateway stage, in any region. If a `Hosting` door also forwards browser traffic to it, the rate rule adjusts so browser users aren't counted as one client: a CloudFront `Hosting` that claims the API sends a marker header the rate rule exempts, and behind any other door (ALB, API Gateway, your own, or a CloudFront edge over a router) the rate rule is left off and synth warns (`blocks:api-waf:no-rate-limit-behind-door`), so rate-limit on the door's own WAF. In both cases browser requests arriving through Hosting aren't rate-limited by `apiWaf`; turn on the door's own WAF (`frontDoor: { features: { waf: { enabled: true } } }`) to rate-limit them.
   - `apiFrontDoor: 'cloudfront'` — a `CLOUDFRONT` web ACL on the managed distribution, which also covers the container namespaces it routes straight to their load balancer. AWS only creates these in us-east-1, so in other regions pass `webAclArn` of one created there (`enabled: true` fails synth). Without one, synth warns that those container namespaces have no rate limit (`blocks:api:direct-routes-without-waf`).
@@ -355,7 +356,7 @@ The handler returns nothing; you write the response through `ctx.response`:
 | On `ctx.response` | Notes |
 |---|---|
 | `status: number` | Assignable. Defaults to `200`. |
-| `headers: Headers` | Standard `Headers`. Set `Content-Type` yourself; a string body is sent as-is, an object is serialized as JSON. |
+| `headers: Headers` | Standard `Headers`. Set `Content-Type` yourself; a string body is sent as-is, a `Buffer`/`Uint8Array`/`ArrayBuffer` as raw bytes, anything else as JSON. Without a `Content-Type`, a byte body is sent as `application/octet-stream` and anything else as `application/json`. |
 | `send(body)` | Call once with the body. `send('')` for an empty body (redirects, `204`). |
 
 And what you read from `ctx.request`:
@@ -365,7 +366,7 @@ And what you read from `ctx.request`:
 | `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
 | `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. `url.pathname` is the route path, the same under `npm run dev` and deployed: it never includes the API Gateway stage (`/prod`). Behind a front door such as `Hosting`, `url.origin` is the API Gateway host the backend received, not the browser's, so don't build public links from it. |
 | `headers` | Request `Headers`, including `cookie`. |
-| `json()` / `text()` / `body` | Body as parsed JSON, raw text, or a `ReadableStream`. |
+| `json()` / `text()` / `body` | Body as parsed JSON, UTF-8 text, or a `ReadableStream<Uint8Array>` of the exact bytes the client sent. |
 | `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
 
 Reading a path parameter and a query parameter:
@@ -381,6 +382,25 @@ new RawRoute(scope, 'user', {
 });
 // GET /users/42?q=hello → {"id":"42","q":"hello"}
 ```
+
+Binary bodies pass through unchanged, locally and on AWS: `ctx.request.body` yields the bytes the client sent (signed-webhook HMAC checks, uploads, protobuf), and a byte body sent through `send()` reaches the client as-is:
+
+```typescript
+import { createHash } from 'node:crypto';
+
+new RawRoute(scope, 'upload', {
+  method: 'PUT',
+  path: '/upload',
+  handler: async (ctx) => {
+    const bytes = new Uint8Array(await new Response(ctx.request.body).arrayBuffer());
+    ctx.response.headers.set('Content-Type', 'application/octet-stream');
+    // Send back the SHA-256 digest of the upload as 32 raw bytes.
+    ctx.response.send(createHash('sha256').update(bytes).digest());
+  },
+});
+```
+
+On AWS, API Gateway hands every request body to the Lambda base64-encoded, and a byte response goes back the same way, which adds a third to its size. Within Lambda's 6 MB payload limit, that leaves roughly 4.5 MB for a request body or a byte response. Move larger files directly to and from S3 with `FileBucket`'s presigned `putUrl()`/`getUrl()`.
 
 Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
 

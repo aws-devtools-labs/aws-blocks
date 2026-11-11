@@ -11,7 +11,8 @@ import { loadConfigToProcessEnv, isConfigResolved } from './common/config.js';
 import { errorResponse } from './rpc.js';
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher } from './dispatch.js';
-import type { DispatchRequest, DispatchResponse } from './dispatch.js';
+import type { DispatchRequest, DispatchRequestBody, DispatchResponse } from './dispatch.js';
+import { requestBodyFromBytes } from './http-body.js';
 import { PUBLIC_HOST_HEADER } from './constants.js';
 import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 
@@ -42,28 +43,16 @@ export const EventSourceMapping = {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Decode the Lambda event body and return both the raw string and a ReadableStream.
+ * Decode the Lambda event body into the bytes the client sent.
  *
- * Handles base64-encoded bodies (binary payloads forwarded by API Gateway)
- * and plain-text bodies.
+ * A base64-encoded body (API Gateway sends every body that way, since the
+ * shared REST API declares `binaryMediaTypes: ['*\/*']`) is decoded to its
+ * original bytes, which `ctx.request.body` yields unchanged; a plain-text body
+ * is UTF-8.
  */
-function decodeEventBody(event: any): { bodyText: string; bodyStream: ReadableStream<Uint8Array> | null } {
-  if (!event.body) {
-    return { bodyText: '', bodyStream: null };
-  }
-
-  const bodyText = event.isBase64Encoded
-    ? Buffer.from(event.body, 'base64').toString('utf-8')
-    : event.body;
-
-  const bodyStream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(bodyText));
-      controller.close();
-    },
-  });
-
-  return { bodyText, bodyStream };
+function decodeEventBody(event: any): DispatchRequestBody {
+  if (!event.body) return { text: '', stream: null };
+  return requestBodyFromBytes(Buffer.from(event.body, event.isBase64Encoded ? 'base64' : 'utf-8'));
 }
 
 /** The fields of an API Gateway Lambda event that its origin and stage are read from. */
@@ -577,10 +566,7 @@ function toDispatchRequest(event: any, signal?: AbortSignal): DispatchRequest {
     headers: () => new Headers(event.headers || {}),
     url: () => buildEventUrl(event),
     baseUrl: () => buildEventBaseUrl(event),
-    body: () => {
-      const { bodyText, bodyStream } = decodeEventBody(event);
-      return { text: bodyText, stream: bodyStream };
-    },
+    body: () => decodeEventBody(event),
     signal,
   };
 }
@@ -613,13 +599,21 @@ function cookieResponseFields(
  * setting several cookies keeps only one on AWS. RawRoute responses and RPC
  * method results always carry the cookie field; other responses only when there
  * is a cookie to deliver (an RPC error clearing a session).
+ *
+ * A byte body (a RawRoute that `send()`s a `Buffer`, `Uint8Array` or
+ * `ArrayBuffer`) goes out base64-encoded with `isBase64Encoded: true`; API
+ * Gateway decodes it back to the raw bytes, which the shared REST API's
+ * `binaryMediaTypes: ['*\/*']` allows.
  */
 function toApiGatewayResult(event: any, response: DispatchResponse) {
-  const { kind, status: statusCode, headers, cookies, body } = response;
+  const { kind, status: statusCode, headers, cookies } = response;
+  const body = typeof response.body === 'string'
+    ? { body: response.body }
+    : { body: response.body.toString('base64'), isBase64Encoded: true };
   if (kind === 'raw-route' || kind === 'rpc-result' || cookies.length > 0) {
-    return { statusCode, headers, ...cookieResponseFields(event, cookies), body };
+    return { statusCode, headers, ...cookieResponseFields(event, cookies), ...body };
   }
-  return { statusCode, headers, body };
+  return { statusCode, headers, ...body };
 }
 
 /**

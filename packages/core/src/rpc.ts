@@ -65,6 +65,13 @@ const VERSION = '2.0' as const;
  * Enforced in `parseRpcRequest`, the single choke point both the Lambda handler
  * and the dev server route through.
  *
+ * On a Lambda compute the body that actually gets through is smaller than this:
+ * a Lambda invocation carries at most 6 MB, and the shared REST API hands the
+ * Lambda every body base64-encoded (`binaryMediaTypes: ['*\/*']`, so RawRoute
+ * bodies keep their bytes), which leaves about 4.5 MB for a JSON-RPC body. A
+ * larger one is refused before the handler runs, so the dev server accepts
+ * bodies between about 4.5 MB and this limit that a Lambda compute does not.
+ *
  * Note: this value is the API Gateway limit, and every compute keeps it — one
  * constant in the compute-agnostic parser, so a call accepted on one compute is
  * accepted on every other. A Lambda compute is reached through the gateway,

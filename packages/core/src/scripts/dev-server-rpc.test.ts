@@ -318,6 +318,72 @@ export const testApi = { pingVoid: async () => undefined };
     assert.ok(!output.stderr.includes('RawRoute Error'), `Quiet mode should suppress the RawRoute error log: ${output.stderr}`);
   });
 
+  it('decodes multi-byte UTF-8 bodies split across request chunks intact (RPC and RawRoute)', async () => {
+    const port = await getAvailablePort();
+    writeFileSync(join(tempDir, 'backend.ts'), `
+import { RawRoute } from '${join(__dirname, '..', 'index.js').replace(/\\\\/g, '/')}';
+new RawRoute({ id: 'test' }, 'echo', {
+  method: 'POST',
+  path: '/echo',
+  handler: async (ctx) => { ctx.response.send({ text: await ctx.request.text() }); },
+});
+export const testApi = { echo: async (msg: string) => msg };
+`);
+    startDevProcess(port);
+
+    const rpcUrl = `http://127.0.0.1:${port}/aws-blocks/api`;
+    const rpcEcho = (msg: string) => ({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'testApi.echo', params: [msg], id: 1 }),
+    });
+    await (await fetchWhenReady(rpcUrl, rpcEcho('ready'))).arrayBuffer();
+
+    // ~600 KB of 3-byte characters: far beyond one ~64 KiB socket chunk, so
+    // some characters straddle chunk boundaries.
+    const text = '日'.repeat(200_000);
+    const rpc = await fetch(rpcUrl, rpcEcho(text));
+    const rpcPayload = await rpc.json() as { result?: string };
+    assert.strictEqual(rpcPayload.result?.length, text.length);
+    assert.ok(rpcPayload.result === text, 'RPC body was corrupted');
+
+    const raw = await fetch(`http://127.0.0.1:${port}/echo`, { method: 'POST', body: text });
+    const rawPayload = await raw.json() as { text: string };
+    assert.strictEqual(rawPayload.text.length, text.length);
+    assert.ok(rawPayload.text === text, 'RawRoute body was corrupted');
+  });
+
+  it('writes a RawRoute byte response unchanged, as application/octet-stream unless the handler sets a type', async () => {
+    const port = await getAvailablePort();
+    writeFileSync(join(tempDir, 'backend.ts'), `
+import { RawRoute } from '${join(__dirname, '..', 'index.js').replace(/\\\\/g, '/')}';
+new RawRoute({ id: 'test' }, 'bytes', {
+  method: 'GET',
+  path: '/bytes',
+  handler: async (ctx) => { ctx.response.send(new Uint8Array([0x00, 0xff, 0x10, 0x80])); },
+});
+new RawRoute({ id: 'test' }, 'png', {
+  method: 'GET',
+  path: '/png',
+  handler: async (ctx) => {
+    ctx.response.headers.set('Content-Type', 'image/png');
+    ctx.response.send(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  },
+});
+export const testApi = { pingVoid: async () => undefined };
+`);
+    startDevProcess(port);
+
+    const bytes = await fetchWhenReady(`http://127.0.0.1:${port}/bytes`, { method: 'GET' });
+    assert.strictEqual(bytes.status, 200);
+    assert.strictEqual(bytes.headers.get('content-type'), 'application/octet-stream');
+    assert.deepStrictEqual([...new Uint8Array(await bytes.arrayBuffer())], [0x00, 0xff, 0x10, 0x80]);
+
+    const png = await fetch(`http://127.0.0.1:${port}/png`);
+    assert.strictEqual(png.headers.get('content-type'), 'image/png');
+    assert.deepStrictEqual([...new Uint8Array(await png.arrayBuffer())], [0x89, 0x50, 0x4e, 0x47]);
+  });
+
   it('delivers only cookie deletions on an RPC error response; an error without cookies is unchanged', async () => {
     const port = await getAvailablePort();
     tempDir = join(tmpdir(), `dev-rpc-err-cookie-test-${process.pid}-${Date.now()}`);

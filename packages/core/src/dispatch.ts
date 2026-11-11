@@ -15,6 +15,7 @@ import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { buildCorsHeaders, CORS_MAX_AGE, corsRejection, getCorsPatterns, isOriginAllowed } from './cors.js';
 import { getLoadedCoreCopies, getRegisteredRoutes, matchRoute } from './raw-route.js';
 import type { RegisteredRoute } from './raw-route.js';
+import { binaryResponseBody } from './http-body.js';
 import { requestClientUserAgent, requestCookies } from './request-context.js';
 import {
   errorResponseFromCatch,
@@ -189,7 +190,11 @@ export interface DispatchResponse {
   headers: Record<string, string>;
   /** `Set-Cookie` values, one per cookie. */
   cookies: string[];
-  body: string;
+  /**
+   * The body: text, or the raw bytes a RawRoute sent with `send()` (a `Buffer`,
+   * `Uint8Array` or `ArrayBuffer`), which the transport writes unchanged.
+   */
+  body: string | Buffer;
 }
 
 /** @internal */
@@ -429,12 +434,16 @@ async function dispatchRawRoute(
   const { text: bodyText, stream: bodyStream } = request.body();
 
   let responseStatus = 200;
+  // No Content-Type yet: one the handler sets is kept; otherwise it is filled
+  // in once the handler returns (octet-stream for a byte body, else JSON).
   const responseHeaders = new Headers({
-    'Content-Type': 'application/json',
     ...corsHeaders,
     ...NO_STORE_HEADERS,
   });
   let responseBody: any;
+  // A byte body is copied when it is sent, as `new Response(bytes)` does, so a
+  // handler that reuses its buffer afterwards can't change the response.
+  let binaryBody: Buffer | undefined;
 
   const context = {
     request: {
@@ -450,23 +459,30 @@ async function dispatchRawRoute(
       headers: responseHeaders,
       get status() { return responseStatus; },
       set status(code: number) { responseStatus = code; },
-      send: (body: any) => { responseBody = body; },
+      send: (body: any) => {
+        responseBody = body;
+        binaryBody = binaryResponseBody(body);
+      },
     },
   };
 
   try {
     await route.handler(context);
 
+    if (!responseHeaders.has('Content-Type')) {
+      responseHeaders.set('Content-Type', binaryBody ? 'application/octet-stream' : 'application/json');
+    }
     return {
       kind: 'raw-route',
       status: responseStatus,
       headers: withoutSetCookie(responseHeaders),
       cookies: setCookiesOf(responseHeaders),
-      body: responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '',
+      body: binaryBody ?? (responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : ''),
     };
   } catch (error: unknown) {
     logHandlerError({ source: 'raw-route', error }, request, 'RawRoute Error:');
     const { status, body } = rawRouteErrorFromCatch(error);
+    if (!responseHeaders.has('Content-Type')) responseHeaders.set('Content-Type', 'application/json');
     return {
       kind: 'raw-route',
       status,

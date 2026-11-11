@@ -776,8 +776,11 @@ from a file bucket. The same limits bind everything else these doors carry:
 - ALB: a Lambda target's request body and response are each capped at 1 MB,
   for server-rendered pages and API calls alike. The API forwarder returns text
   as UTF-8 (no base64 inflation) and times out after 30 seconds.
-- API Gateway: a 10 MB request payload, a 6 MB Lambda response, and a 29-second
-  integration timeout.
+- API Gateway: a 29-second integration timeout, and a 6 MB Lambda invocation
+  each way. API Gateway accepts a 10 MB request, but a base64-encoded body takes
+  a third more of that 6 MB, and a REST API with `binaryMediaTypes: ['*/*']` (the
+  `rest` door and the backend API both set it) base64-encodes every body, so a
+  request body that reaches a function through one is limited to about 4.5 MB.
 
 **ALB listener rules.** Consecutive paths bound for the same target share a
 rule (up to five path values each, four beside the stacked router's header

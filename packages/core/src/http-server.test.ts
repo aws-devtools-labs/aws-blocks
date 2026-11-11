@@ -337,6 +337,13 @@ function registerRoutes() {
       ctx.response.send('');
     },
   });
+  registerRoute({
+    method: 'PUT',
+    path: '/bytes-echo',
+    handler: async (ctx) => {
+      ctx.response.send(new Uint8Array(await new Response(ctx.request.body).arrayBuffer()));
+    },
+  });
 }
 
 async function start(options: ServeHttpOptions = {}): Promise<HttpServerHandle> {
@@ -469,6 +476,34 @@ describe('serveHttp — parity with the Lambda handler', () => {
     assert.deepStrictEqual(viaLambda.multiValueHeaders?.['Set-Cookie'], ['gone=; Path=/; Max-Age=0']);
     assert.deepStrictEqual(viaHttp.headers['set-cookie'], ['gone=; Path=/; Max-Age=0']);
     assert.strictEqual(viaHttp.body, viaLambda.body);
+  });
+
+  it('round-trips a binary RawRoute body byte for byte, as the Lambda handler does', async () => {
+    // Every byte value, including sequences that are invalid UTF-8.
+    const payload = Buffer.from(Array.from({ length: 512 }, (_, i) => i & 0xff));
+    const viaLambda = await lambda({
+      ...lambdaEvent('PUT', '/bytes-echo', { 'Content-Type': 'application/octet-stream' }),
+      body: payload.toString('base64'),
+      isBase64Encoded: true,
+    });
+    const viaHttp = await new Promise<{ type: string | undefined; bytes: Buffer }>((resolve, reject) => {
+      const req = http.request(
+        { host: '127.0.0.1', port: server.port, method: 'PUT', path: '/bytes-echo', agent: false },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve({ type: res.headers['content-type'], bytes: Buffer.concat(chunks) }));
+        },
+      );
+      req.on('error', reject);
+      req.end(payload);
+    });
+
+    assert.strictEqual(viaLambda.isBase64Encoded, true);
+    assert.ok(Buffer.from(viaLambda.body, 'base64').equals(payload), 'the Lambda handler altered the bytes');
+    assert.ok(viaHttp.bytes.equals(payload), 'the HTTP server altered the bytes');
+    assert.strictEqual(viaHttp.type, 'application/octet-stream');
+    assert.strictEqual(viaLambda.headers['content-type'], 'application/octet-stream');
   });
 });
 

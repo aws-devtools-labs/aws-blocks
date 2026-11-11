@@ -24,6 +24,7 @@ import {
 import { buildCorsHeaders } from './cors.js';
 import { createDispatcher, rpcResponseHeaders } from './dispatch.js';
 import type { Dispatcher, DispatchRequest, DispatchResponse } from './dispatch.js';
+import { requestBodyFromBytes } from './http-body.js';
 import { lockRouteRegistry } from './raw-route.js';
 import { isLoopbackForwardedHost, trustedPublicHost } from './request-context.js';
 import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from './rpc.js';
@@ -434,7 +435,7 @@ export function toDispatchRequest(req: http.IncomingMessage, body: Buffer, init:
     headers: () => toHeaders(req),
     url: () => buildRequestUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
     baseUrl: () => buildRequestBaseUrl(req, init.publicOrigin, init.trustForwardedHeaders ?? false),
-    body: () => ({ text: body.toString('utf-8'), stream: body.length > 0 ? bytesStream(body) : null }),
+    body: () => requestBodyFromBytes(body),
     signal: init.signal,
     requestId: init.requestId,
   };
@@ -755,17 +756,4 @@ function toHeaders(req: http.IncomingMessage): Headers {
     for (const v of Array.isArray(value) ? value : [value]) headers.append(name, v);
   }
   return headers;
-}
-
-/** The raw body bytes as a stream, copied only when a handler reads it. */
-function bytesStream(bytes: Buffer): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>(
-    {
-      pull(controller) {
-        controller.enqueue(new Uint8Array(bytes));
-        controller.close();
-      },
-    },
-    { highWaterMark: 0 },
-  );
 }

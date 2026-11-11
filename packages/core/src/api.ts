@@ -4,8 +4,15 @@
 export type BlocksContext = {
   request: {
     headers: Headers;
+    /**
+     * The request body as a stream of the exact bytes the client sent, or
+     * `null` when there is none. Binary bodies (uploads, signed webhooks,
+     * protobuf) arrive unchanged, in local dev and on AWS.
+     */
     body: ReadableStream<Uint8Array> | null;
+    /** The request body parsed as JSON. Works after `body` has been read. */
     json: () => Promise<any>;
+    /** The request body decoded as UTF-8. Works after `body` has been read. */
     text: () => Promise<string>;
     /**
      * Absolute URL of the incoming request. Built from the request's `host`
@@ -66,6 +73,13 @@ export type BlocksContext = {
   response: {
     headers: Headers;
     status: number;
+    /**
+     * Set the response body. In a RawRoute, a string is sent as-is, a
+     * `Buffer`/`Uint8Array`/`ArrayBuffer` (any `ArrayBufferView`) as raw bytes,
+     * and anything else as JSON. Set `Content-Type` yourself; without one, a
+     * byte body is sent as `application/octet-stream` and anything else as
+     * `application/json`.
+     */
     send: (body: any) => void;
   };
 };
