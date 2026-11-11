@@ -14,48 +14,39 @@ import type { StandardSchemaV1 } from '@standard-schema/spec';
 export type IsRecord<T> = T extends readonly unknown[] ? false : T extends object ? true : false;
 
 /**
+ * `P` when `Value` is a `Kind` that the stored (input) type `Stored` can hold, and `never` otherwise.
+ * The one check behind {@link KeyField}, {@link IndexField} and {@link NumberField}.
+ */
+export type FieldIf<P, Value, Kind, Stored> = [Value] extends [Kind] ? ([Value] extends [Stored] ? P : never) : never;
+
+/** The field names that the input type and the output type of a schema share. */
+export type SharedField<In, Out> = keyof Out & keyof In & string;
+
+/**
  * Fields that can form a key. The field is required in the output type and holds a string or a number.
  * Its output type must be assignable to its input type, so a brand passes and a type change does not.
  */
 export type KeyField<In, Out> =
 	IsRecord<Out> extends true
 		? {
-				[P in keyof Out & string]-?: [Out[P]] extends [string | number]
-					? P extends keyof In
-						? [Out[P]] extends [NonNullable<In[P]>]
-							? P
-							: never
-						: never
-					: never;
-			}[keyof Out & string]
+				[P in SharedField<In, Out>]-?: FieldIf<P, Out[P], string | number, NonNullable<In[P]>>;
+			}[SharedField<In, Out>]
 		: never;
 
 /** Fields that can form an index key. As {@link KeyField}, but the field can be optional. An index skips an item that lacks it. */
 export type IndexField<In, Out> =
 	IsRecord<Out> extends true
 		? {
-				[P in keyof Out & string]-?: [NonNullable<Out[P]>] extends [string | number]
-					? P extends keyof In
-						? [NonNullable<Out[P]>] extends [NonNullable<In[P]>]
-							? P
-							: never
-						: never
-					: never;
-			}[keyof Out & string]
+				[P in SharedField<In, Out>]-?: FieldIf<P, NonNullable<Out[P]>, string | number, NonNullable<In[P]>>;
+			}[SharedField<In, Out>]
 		: never;
 
-/** Number fields. The `ttl` option names one of them. */
+/** Number fields. The `ttl` option names one of them. Both the value that is stored and the value that a read returns are numbers. */
 export type NumberField<In, Out> =
 	IsRecord<Out> extends true
 		? {
-				[P in keyof Out & string]-?: [NonNullable<Out[P]>] extends [number]
-					? P extends keyof In
-						? [NonNullable<In[P]>] extends [number]
-							? P
-							: never
-						: never
-					: never;
-			}[keyof Out & string]
+				[P in SharedField<In, Out>]-?: FieldIf<P, NonNullable<Out[P]> | NonNullable<In[P]>, number, number>;
+			}[SharedField<In, Out>]
 		: never;
 
 /**
@@ -228,9 +219,6 @@ export type ConditionalDeleteOptions<T = unknown> = {
 	/** Only delete if the key exists. Throws ConditionalCheckFailedException otherwise. */
 	ifExists?: boolean;
 } & ValueCheck<T>;
-
-/** Options accepted by `delete`. Alias of {@link ConditionalDeleteOptions}. */
-export type DeleteOptions<T = unknown> = ConditionalDeleteOptions<T>;
 
 /** One entry of a `putBatch`: the key (typed from the output type), the value (the input type), and an optional expiry. */
 export type PutBatchEntry<In, Out, K> = { key: KeyOf<Out, K>; value: ValueOf<In, K> } & Expiry;

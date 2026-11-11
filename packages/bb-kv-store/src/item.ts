@@ -13,23 +13,27 @@
  *   other value goes in `_bkv_value`.
  * - An expiry goes in `_bkv_ttl`, unless the `ttl` option names a field of the value.
  */
-import { blocksError, isPlainObject, KVStoreErrors, KVStoreMessages, normalizeSortKeyCondition } from './errors.js';
-import { isExpired, PK_ATTRIBUTE, RESERVED_PREFIX, TTL_ATTRIBUTE, VALUE_ATTRIBUTE } from './ttl.js';
-import type { SortCondition } from './types.js';
-
-/** The conditions of a write, as seen by the shared helpers (every typed form of the options narrows to this). */
-export interface WriteConditions {
-	ifNotExists?: boolean;
-	ifFieldEquals?: unknown;
-	ifValueEquals?: unknown;
-}
-
-/** The conditions of a delete, as seen by the shared helpers. */
-export interface DeleteConditions {
-	ifExists?: boolean;
-	ifFieldEquals?: unknown;
-	ifValueEquals?: unknown;
-}
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { StandardSchemaV1 } from '@standard-schema/spec';
+import {
+	applyReadValidation,
+	blocksError,
+	isPlainObject,
+	KVStoreErrors,
+	KVStoreMessages,
+	normalizeSortKeyCondition,
+	validateSchema,
+} from './errors.js';
+import {
+	isExpired,
+	nowEpochSeconds,
+	PK_ATTRIBUTE,
+	RESERVED_PREFIX,
+	resolveTtlEpochSeconds,
+	TTL_ATTRIBUTE,
+	VALUE_ATTRIBUTE,
+} from './ttl.js';
+import type { Expiry, ReadValidationMode, TableOptions } from './types.js';
 
 /** A stored item: one DynamoDB attribute per top-level field, plus the block's `_bkv_` attributes. */
 export type Item = Record<string, unknown>;
@@ -41,6 +45,24 @@ export type KeyValue = string | number;
 export interface KeyAttributes {
 	partitionKey: string;
 	sortKey?: string;
+}
+
+/**
+ * The constructor options as the shared code reads them: field names and a
+ * validator, not the value types the public signature infers. The one cast
+ * from the typed options is in {@link looseOptions}.
+ */
+export interface LooseOptions extends TableOptions {
+	schema?: StandardSchemaV1;
+	key?: KeyAttributes;
+	indexes?: Record<string, KeyAttributes>;
+	ttl?: string;
+	readValidation?: ReadValidationMode;
+}
+
+/** Read the typed constructor options of a store as {@link LooseOptions}. */
+export function looseOptions(options: unknown): LooseOptions {
+	return (options ?? {}) as LooseOptions;
 }
 
 /** The shape of the store, resolved once in a constructor. */
@@ -55,42 +77,23 @@ export interface KeyModel {
 	readonly ttlAttribute: string;
 	/** Whether the expiry lives in a field of the value (so a read keeps it in the value). */
 	readonly ttlInValue: boolean;
+	/** The schema of the store, if it has one. */
+	readonly schema: StandardSchemaV1 | undefined;
 	/**
 	 * The DynamoDB attribute type of each table key field, `'S'` or `'N'`,
-	 * probed from the schema the same way the CDK layer provisions it, so a key
-	 * value of the other type is rejected before DynamoDB would. `undefined`
+	 * probed from the schema on first use (see {@link keyType}). `undefined`
 	 * when the schema does not tell the two apart (a pass-through validator);
 	 * such a field accepts a string or a number.
 	 */
-	readonly keyTypes: Readonly<Record<string, 'S' | 'N' | undefined>>;
+	readonly keyTypes: Map<string, 'S' | 'N' | undefined>;
 }
-
-/** A schema's validate function, the only part of it the key model needs. */
-type Validator = { '~standard': { validate: (value: unknown) => unknown } };
 
 /** Whether `schema` accepts `probe` as the value of `field`. A schema that validates asynchronously cannot be probed. */
-function accepts(schema: Validator, field: string, probe: unknown): boolean | undefined {
+export function schemaAccepts(schema: StandardSchemaV1, field: string, probe: unknown): boolean | undefined {
 	const result = schema['~standard'].validate({ [field]: probe });
 	if (result instanceof Promise) return undefined;
-	const issues = (result as { issues?: { path?: unknown[] }[] }).issues;
-	if (!issues) return true;
-	return !issues.some((issue) => issue.path?.length === 1 && pathKey(issue.path[0]) === field);
-}
-
-/**
- * The attribute type of a key field, `'S'` or `'N'`, from the schema. Probes
- * `validate({ [field]: 0 })` and `validate({ [field]: 'x' })`: a schema that
- * accepts one and rejects the other names the type (the CDK layer provisions
- * the table from the same `0` probe). A schema that accepts both, such as a
- * pass-through validator, or that validates asynchronously, gives `undefined`.
- */
-function keyType(schema: Validator | undefined, field: string): 'S' | 'N' | undefined {
-	if (!schema) return 'S';
-	const number = accepts(schema, field, 0);
-	const string = accepts(schema, field, 'x');
-	if (number === true && string === false) return 'N';
-	if (string === true && number === false) return 'S';
-	return undefined;
+	if (!result.issues) return true;
+	return !result.issues.some((issue) => issue.path?.length === 1 && pathKey(issue.path[0]) === field);
 }
 
 function pathKey(segment: unknown): unknown {
@@ -99,32 +102,39 @@ function pathKey(segment: unknown): unknown {
 		: segment;
 }
 
+/**
+ * The attribute type of a table key field, `'S'` or `'N'`, from the schema.
+ * Probes `validate({ [field]: 0 })` and `validate({ [field]: 'x' })`: a schema
+ * that accepts one and rejects the other names the type (the CDK layer
+ * provisions the table from the same `0` probe). A schema that accepts both,
+ * such as a pass-through validator, or that validates asynchronously, gives
+ * `undefined`. The result is cached in the model, so a store that is never
+ * read by key does not probe its schema.
+ */
+function keyType(model: KeyModel, field: string): 'S' | 'N' | undefined {
+	if (!model.keyTypes.has(field)) {
+		let type: 'S' | 'N' | undefined = 'S';
+		if (model.schema) {
+			const number = schemaAccepts(model.schema, field, 0);
+			const string = schemaAccepts(model.schema, field, 'x');
+			type = number === true && string === false ? 'N' : string === true && number === false ? 'S' : undefined;
+		}
+		model.keyTypes.set(field, type);
+	}
+	return model.keyTypes.get(field);
+}
+
 /** Build the key model from the constructor options. */
-export function resolveKeyModel(options?: {
-	schema?: Validator;
-	key?: { partitionKey: string; sortKey?: string };
-	indexes?: Record<string, { partitionKey: string; sortKey?: string }>;
-	ttl?: string;
-}): KeyModel {
-	const key = options?.key;
-	const indexes: Record<string, KeyAttributes> = {};
-	for (const [name, config] of Object.entries(options?.indexes ?? {})) {
-		indexes[name] = { partitionKey: config.partitionKey, sortKey: config.sortKey };
-	}
-	const table: KeyAttributes = key
-		? { partitionKey: key.partitionKey, sortKey: key.sortKey }
-		: { partitionKey: PK_ATTRIBUTE };
-	const keyTypes: Record<string, 'S' | 'N' | undefined> = {};
-	for (const field of keyFields(table)) {
-		keyTypes[field] = key ? keyType(options?.schema, field) : 'S';
-	}
+export function resolveKeyModel(options: unknown): KeyModel {
+	const { schema, key, indexes, ttl } = looseOptions(options);
 	return {
-		table,
+		table: key ? { partitionKey: key.partitionKey, sortKey: key.sortKey } : { partitionKey: PK_ATTRIBUTE },
 		declared: key !== undefined,
-		indexes,
-		ttlAttribute: options?.ttl ?? TTL_ATTRIBUTE,
-		ttlInValue: options?.ttl !== undefined,
-		keyTypes,
+		indexes: indexes ?? {},
+		ttlAttribute: ttl ?? TTL_ATTRIBUTE,
+		ttlInValue: ttl !== undefined,
+		schema,
+		keyTypes: new Map(key ? [] : [[PK_ATTRIBUTE, 'S']]),
 	};
 }
 
@@ -179,7 +189,7 @@ export function normalizeKey(model: KeyModel, key: unknown): Record<string, KeyV
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyMustBeObject(fields));
 	}
 	const result: Record<string, KeyValue> = {};
-	for (const field of fields) result[field] = checkKeyValue(field, key[field], model.keyTypes[field]);
+	for (const field of fields) result[field] = checkKeyValue(field, key[field], keyType(model, field));
 	return result;
 }
 
@@ -195,12 +205,6 @@ export function keyOfItem(model: KeyModel, item: Item): Record<string, KeyValue>
 	return result;
 }
 
-/** Turn the key attributes of an item back into the key a caller sees: a string, or the key object. */
-export function publicKey(model: KeyModel, item: Item): unknown {
-	if (!model.declared) return item[PK_ATTRIBUTE];
-	return keyOfItem(model, item);
-}
-
 /**
  * Merge the key into the value and check that the two agree. Returns the full
  * value as the schema sees it (key fields included) — the thing to validate.
@@ -208,7 +212,7 @@ export function publicKey(model: KeyModel, item: Item): unknown {
  * @throws {KVStoreErrors.ValidationFailed} If a key field of the value differs from the key, or if a
  *   store with a declared key is given a value that is not an object.
  */
-export function mergeKeyIntoValue(model: KeyModel, keyAttrs: Record<string, KeyValue>, value: unknown): unknown {
+function mergeKeyIntoValue(model: KeyModel, keyAttrs: Record<string, KeyValue>, value: unknown): unknown {
 	if (!model.declared) return value;
 	if (!isPlainObject(value)) throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.valueMustBeObject);
 	for (const field of keyFields(model.table)) {
@@ -229,7 +233,7 @@ export function mergeKeyIntoValue(model: KeyModel, keyAttrs: Record<string, KeyV
  * @throws {KVStoreErrors.ValidationFailed} If an object value has a top-level field that starts with
  *   `_bkv_`, or an empty string in an indexed field.
  */
-export function buildItem(
+function buildItem(
 	model: KeyModel,
 	keyAttrs: Record<string, KeyValue>,
 	value: unknown,
@@ -260,6 +264,29 @@ export function buildItem(
 	return item;
 }
 
+/**
+ * Validate a write and build its stored item, the same way in both runtimes:
+ * the key checks, the merge of the key into the value, schema validation, and
+ * then the layout checks of {@link buildItem}.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape.
+ * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema, disagrees with its key, has a
+ *   reserved field, or has an empty string in a key field or an indexed field; or if the expiry is not usable.
+ */
+export async function prepareItem(
+	model: KeyModel,
+	key: unknown,
+	value: unknown,
+	expiry: Expiry | undefined,
+): Promise<{ keyAttrs: Record<string, KeyValue>; item: Item }> {
+	const keyAttrs = normalizeKey(model, key);
+	const full = mergeKeyIntoValue(model, keyAttrs, value);
+	await validateSchema(model.schema, full);
+	return { keyAttrs, item: buildItem(model, keyAttrs, full, resolveTtlEpochSeconds(expiry)) };
+}
+
+// ── Reads ───────────────────────────────────────────────────────────────────
+
 /** What a read yields: the key, the value, and the expiry when the item has one. */
 export interface ReadEntry {
 	key: unknown;
@@ -268,26 +295,32 @@ export interface ReadEntry {
 }
 
 /**
- * Turn a stored item back into `{ key, value, expiresAt }`. The block's own
- * attributes (`_bkv_pk`, `_bkv_ttl`) leave the value; the declared key fields
- * and a `ttl` field stay in it, because they are fields of the value.
+ * The value of a stored item. The block's own attributes (`_bkv_pk`,
+ * `_bkv_ttl`) leave the value; the declared key fields and a `ttl` field stay
+ * in it, because they are fields of the value.
  */
-export function readItem(model: KeyModel, item: Item): ReadEntry {
-	const key = publicKey(model, item);
-	const ttl = item[model.ttlAttribute];
-	const expiresAt = typeof ttl === 'number' && Number.isFinite(ttl) ? ttl : undefined;
-	if (VALUE_ATTRIBUTE in item) {
-		return expiresAt === undefined
-			? { key, value: item[VALUE_ATTRIBUTE] }
-			: { key, value: item[VALUE_ATTRIBUTE], expiresAt };
+function readValue(item: Item): unknown {
+	if (VALUE_ATTRIBUTE in item) return item[VALUE_ATTRIBUTE];
+	const value: Item = {};
+	for (const field of Object.keys(item)) {
+		if (field.startsWith(RESERVED_PREFIX)) continue;
+		// A plain assignment to `__proto__` would set the prototype of the value;
+		// define it, so the field stays an ordinary own field.
+		if (field === '__proto__') Object.defineProperty(value, field, { value: item[field], enumerable: true });
+		else value[field] = item[field];
 	}
-	// Build the value with data properties only (`Object.fromEntries` defines, it
-	// never assigns), so a stored attribute whose name is special on a plain
-	// object, such as `__proto__`, stays an ordinary own field of the value.
-	const value: Item = Object.fromEntries(
-		Object.entries(item).filter(([field]) => !field.startsWith(RESERVED_PREFIX)),
-	);
-	return expiresAt === undefined ? { key, value } : { key, value, expiresAt };
+	return value;
+}
+
+/** Turn a stored item back into `{ key, value, expiresAt }`. */
+function readItem(model: KeyModel, item: Item): ReadEntry {
+	const entry: ReadEntry = {
+		key: model.declared ? keyOfItem(model, item) : item[PK_ATTRIBUTE],
+		value: readValue(item),
+	};
+	const ttl = item[model.ttlAttribute];
+	if (typeof ttl === 'number' && Number.isFinite(ttl)) entry.expiresAt = ttl;
+	return entry;
 }
 
 /** Whether the item's expiry has passed. */
@@ -295,10 +328,63 @@ export function itemExpired(model: KeyModel, item: Item, nowSeconds?: number): b
 	return isExpired(item[model.ttlAttribute], nowSeconds);
 }
 
+/** The items of a page whose expiry has not passed, with the clock read once for the page. */
+export function liveItems(model: KeyModel, items: Item[]): Item[] {
+	const now = nowEpochSeconds();
+	return items.filter((item) => !itemExpired(model, item, now));
+}
+
+/**
+ * The read side of one store: turns a stored item into the value or the entry
+ * a caller sees. Whether a read reconciles with the schema is decided once,
+ * here, so a store with no schema (or `readValidation: 'off'`) does no
+ * per-item validation work.
+ */
+export interface Reader<V, E> {
+	/** The value of a live item; `null` for a missing or expired item. */
+	value(item: Item | undefined, nowSeconds?: number): Promise<V | null>;
+	/** The `{ key, value, expiresAt }` entry of an item. A promise only when the store reconciles reads. */
+	entry(item: Item): E | Promise<E>;
+}
+
+/** Build the {@link Reader} of a store. See `applyReadValidation` for the three `readValidation` modes. */
+export function createReader<V, E>(
+	model: KeyModel,
+	readValidation: ReadValidationMode,
+	log: Pick<ChildLogger, 'warn'>,
+	context: Record<string, unknown>,
+): Reader<V, E> {
+	const schema = model.schema;
+	const reconcile =
+		schema && readValidation !== 'off'
+			? (value: unknown) => applyReadValidation(readValidation, schema, value, log, context)
+			: undefined;
+	return {
+		async value(item, nowSeconds) {
+			if (!item || itemExpired(model, item, nowSeconds)) return null;
+			const value = readValue(item);
+			return (reconcile ? reconcile(value) : value) as V | null;
+		},
+		entry(item) {
+			const entry = readItem(model, item);
+			if (!reconcile) return entry as E;
+			return reconcile(entry.value).then((value) => ({ ...entry, value }) as E);
+		},
+	};
+}
+
 // ── Conditions ──────────────────────────────────────────────────────────────
 
+/** The conditions of a write or a delete, as the shared helpers read them (every typed form of the options narrows to this). */
+interface Conditions {
+	ifNotExists?: boolean;
+	ifExists?: boolean;
+	ifFieldEquals?: unknown;
+	ifValueEquals?: unknown;
+}
+
 /** A value check, normalized: the fields to compare, or the whole non-object value. */
-export type ValueCheckPlan =
+type ValueCheckPlan =
 	| { kind: 'fields'; entries: [string, unknown][] }
 	| { kind: 'value'; expected: unknown }
 	| undefined;
@@ -315,9 +401,7 @@ export type ValueCheckPlan =
  *
  * @throws {KVStoreErrors.InvalidQuery} For each rule above.
  */
-export function planValueCheck(
-	options: { ifFieldEquals?: unknown; ifValueEquals?: unknown } | undefined,
-): ValueCheckPlan {
+function planValueCheck(options: Conditions | undefined): ValueCheckPlan {
 	const fields = options?.ifFieldEquals;
 	const value = options?.ifValueEquals;
 	if (fields !== undefined && value !== undefined) {
@@ -338,28 +422,60 @@ export function planValueCheck(
 }
 
 /** A DynamoDB condition expression with its names and values. */
-export interface ConditionExpression {
+interface ConditionExpression {
 	ConditionExpression: string;
 	ExpressionAttributeNames: Record<string, string>;
 	ExpressionAttributeValues?: Record<string, unknown>;
 }
 
-function valueCheckExpression(
-	check: Exclude<ValueCheckPlan, undefined>,
-	names: Record<string, string>,
-	values: Record<string, unknown>,
-): string {
-	if (check.kind === 'value') {
+/** A condition, resolved: the DynamoDB expression for AWS, and the parts the mock evaluates itself. */
+export interface ConditionPlan {
+	/** The expression to send, or `undefined` when the call set no condition. */
+	expression: ConditionExpression | undefined;
+	/** Whether a failed condition is worth a re-read and a retry (see `conditionalCheckFailed`). */
+	retriable: boolean;
+	/** The value check, if the call set one. */
+	check: ValueCheckPlan;
+	/** Whether the call asserts existence: `ifNotExists` on a put, `ifExists` on a delete. */
+	existence: boolean;
+}
+
+/**
+ * Build a condition from an existence assertion and a value check, joined by
+ * `joiner`. A value check is one clause for `ifValueEquals`, or one clause per
+ * field of `ifFieldEquals` joined with AND.
+ */
+function buildCondition(
+	model: KeyModel,
+	existence: 'attribute_not_exists' | 'attribute_exists' | undefined,
+	check: ValueCheckPlan,
+	joiner: ' OR ' | ' AND ',
+): ConditionExpression | undefined {
+	const arms: string[] = [];
+	const names: Record<string, string> = {};
+	const values: Record<string, unknown> = {};
+	if (existence) {
+		arms.push(`${existence}(#pk)`);
+		names['#pk'] = model.table.partitionKey;
+	}
+	if (check?.kind === 'value') {
 		names['#value'] = VALUE_ATTRIBUTE;
 		values[':expected'] = check.expected;
-		return '#value = :expected';
+		arms.push('#value = :expected');
+	} else if (check) {
+		const parts = check.entries.map(([field, value], i) => {
+			names[`#field${i}`] = field;
+			values[`:val${i}`] = value;
+			return `#field${i} = :val${i}`;
+		});
+		arms.push(parts.length === 1 ? parts[0] : `(${parts.join(' AND ')})`);
 	}
-	const parts = check.entries.map(([field, value], i) => {
-		names[`#field${i}`] = field;
-		values[`:val${i}`] = value;
-		return `#field${i} = :val${i}`;
-	});
-	return parts.length === 1 ? parts[0] : `(${parts.join(' AND ')})`;
+	if (arms.length === 0) return undefined;
+	return {
+		ConditionExpression: arms.join(joiner),
+		ExpressionAttributeNames: names,
+		...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
+	};
 }
 
 /**
@@ -374,29 +490,15 @@ function valueCheckExpression(
  * key exists but its value differs, so a re-read and retry can succeed), `false`
  * for a pure `ifNotExists` existence assertion (a blind retry fails identically).
  */
-export function putCondition(
-	model: KeyModel,
-	options: WriteConditions | undefined,
-): { expression: ConditionExpression | undefined; retriable: boolean; check: ValueCheckPlan; wantAbsent: boolean } {
+export function putCondition(model: KeyModel, options: Conditions | undefined): ConditionPlan {
 	const check = planValueCheck(options);
-	const wantAbsent = options?.ifNotExists === true;
-	const arms: string[] = [];
-	const names: Record<string, string> = {};
-	const values: Record<string, unknown> = {};
-	if (wantAbsent) {
-		arms.push('attribute_not_exists(#pk)');
-		names['#pk'] = model.table.partitionKey;
-	}
-	if (check) arms.push(valueCheckExpression(check, names, values));
-	const expression: ConditionExpression | undefined =
-		arms.length === 0
-			? undefined
-			: {
-					ConditionExpression: arms.join(' OR '),
-					ExpressionAttributeNames: names,
-					...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
-				};
-	return { expression, retriable: check !== undefined, check, wantAbsent };
+	const existence = options?.ifNotExists === true;
+	return {
+		expression: buildCondition(model, existence ? 'attribute_not_exists' : undefined, check, ' OR '),
+		retriable: check !== undefined,
+		check,
+		existence,
+	};
 }
 
 /**
@@ -405,29 +507,15 @@ export function putCondition(
  * `ifExists`: the existence assertion wins, so a combined conflict is not
  * retriable.
  */
-export function deleteCondition(
-	model: KeyModel,
-	options: DeleteConditions | undefined,
-): { expression: ConditionExpression | undefined; retriable: boolean; check: ValueCheckPlan; wantPresent: boolean } {
+export function deleteCondition(model: KeyModel, options: Conditions | undefined): ConditionPlan {
 	const check = planValueCheck(options);
-	const wantPresent = options?.ifExists === true;
-	const arms: string[] = [];
-	const names: Record<string, string> = {};
-	const values: Record<string, unknown> = {};
-	if (wantPresent) {
-		arms.push('attribute_exists(#pk)');
-		names['#pk'] = model.table.partitionKey;
-	}
-	if (check) arms.push(valueCheckExpression(check, names, values));
-	const expression: ConditionExpression | undefined =
-		arms.length === 0
-			? undefined
-			: {
-					ConditionExpression: arms.join(' AND '),
-					ExpressionAttributeNames: names,
-					...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
-				};
-	return { expression, retriable: check !== undefined && !wantPresent, check, wantPresent };
+	const existence = options?.ifExists === true;
+	return {
+		expression: buildCondition(model, existence ? 'attribute_exists' : undefined, check, ' AND '),
+		retriable: check !== undefined && !existence,
+		check,
+		existence,
+	};
 }
 
 /**
@@ -437,7 +525,7 @@ export function deleteCondition(
  * `JSON.stringify` compare would wrongly treat them as different and fail the
  * condition. Arrays remain order-sensitive (DynamoDB Lists are ordered).
  */
-export function deepEqual(a: unknown, b: unknown): boolean {
+function deepEqual(a: unknown, b: unknown): boolean {
 	if (a === b) return true;
 	if (typeof a !== typeof b) return false;
 	if (a === null || b === null) return a === b;
@@ -470,14 +558,49 @@ export function valueCheckHolds(check: Exclude<ValueCheckPlan, undefined>, exist
 
 // ── Query ───────────────────────────────────────────────────────────────────
 
-/** A query, resolved and checked: which key to read, the partition value, and the sort condition. */
+/**
+ * The sort conditions of a query. Each one has the DynamoDB key-condition
+ * clause that AWS sends and the predicate that the mock applies, side by side,
+ * so the two cannot drift.
+ */
+const SORT_CONDITIONS = {
+	equals: { clause: '#sk = :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v === a },
+	greaterThan: { clause: '#sk > :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v > a },
+	greaterThanOrEqual: { clause: '#sk >= :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v >= a },
+	lessThan: { clause: '#sk < :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v < a },
+	lessThanOrEqual: { clause: '#sk <= :skval', matches: (v: KeyValue, [a]: KeyValue[]) => v <= a },
+	between: {
+		clause: '#sk BETWEEN :skval1 AND :skval2',
+		matches: (v: KeyValue, [lo, hi]: KeyValue[]) => v >= lo && v <= hi,
+	},
+	beginsWith: {
+		clause: 'begins_with(#sk, :skval)',
+		matches: (v: KeyValue, [prefix]: KeyValue[]) => typeof v === 'string' && v.startsWith(prefix as string),
+	},
+} as const;
+
+type SortOp = keyof typeof SORT_CONDITIONS;
+
+/** A query, resolved and checked: which key to read, the partition value, the sort condition, and the page. */
 export interface QueryPlan {
 	indexName: string | undefined;
 	key: KeyAttributes;
 	pkValue: KeyValue;
-	skCondition: SortCondition<KeyValue> | undefined;
+	/** The one sort condition of the query and its operands (two for `between`, one otherwise). */
+	sort: { op: SortOp; operands: KeyValue[] } | undefined;
 	limit: number | undefined;
 	order: 'asc' | 'desc';
+	/** The key to start after, decoded from the `cursor` option. */
+	startKey: Record<string, KeyValue> | undefined;
+}
+
+/** The query options as the shared code reads them. */
+interface LooseQueryOptions {
+	index?: string | null;
+	where?: Record<string, unknown>;
+	limit?: unknown;
+	order?: unknown;
+	cursor?: unknown;
 }
 
 /**
@@ -485,17 +608,17 @@ export interface QueryPlan {
  * both runtimes.
  *
  * @throws {KVStoreErrors.InvalidQuery} If `index` is unknown, if the store has no declared key and no
- *   `index` is given, if `where` is missing or lacks `{ equals }` on the partition field, or if more
- *   than one sort-key condition is given.
+ *   `index` is given, if `where` is missing or lacks `{ equals }` on the partition field, if more
+ *   than one sort-key condition is given, if `limit` is not a positive integer, or if the cursor
+ *   does not belong to this store, index, and partition.
  */
-export function planQuery(
-	model: KeyModel,
-	options: { index?: string; where?: Record<string, unknown>; limit?: number; order?: 'asc' | 'desc' },
-): QueryPlan {
+export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
+	const options = (queryOptions ?? {}) as LooseQueryOptions;
+	const indexName = options.index ?? undefined;
 	let key: KeyAttributes | undefined;
-	if (options.index !== undefined && options.index !== null) {
-		key = model.indexes[options.index];
-		if (!key) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.indexNotFound(options.index));
+	if (indexName !== undefined) {
+		key = model.indexes[indexName];
+		if (!key) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.indexNotFound(indexName));
 	} else {
 		if (!model.declared) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.queryNeedsKeyOrIndex);
 		key = model.table;
@@ -508,41 +631,60 @@ export function planQuery(
 	if (pkValue === undefined || (typeof pkValue !== 'string' && typeof pkValue !== 'number')) {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.partitionKeyEqualsRequired(key.partitionKey));
 	}
-	// Normalize the sort-key condition up front — before any data is read — so
-	// a present-but-empty condition becomes "no filter" and multiple conditions
-	// are rejected eagerly, even on an empty table.
-	const skCondition = key.sortKey
-		? normalizeSortKeyCondition(options.where[key.sortKey] as Record<string, unknown> | undefined)
-		: undefined;
 	return {
-		indexName: options.index ?? undefined,
+		indexName,
 		key,
 		pkValue,
-		skCondition: skCondition as SortCondition<KeyValue> | undefined,
+		sort: key.sortKey ? planSort(options.where[key.sortKey]) : undefined,
 		limit: normalizeLimit(options.limit),
 		order: options.order === 'desc' ? 'desc' : 'asc',
+		startKey: decodeCursor(model, options.cursor, indexName, { field: key.partitionKey, value: pkValue }),
 	};
 }
 
-/** The mock's per-item sort-key matcher. */
-export function matchesSortKeyCondition(value: unknown, condition: SortCondition<KeyValue>): boolean {
-	const c = condition as Record<string, unknown>;
-	const v = value as KeyValue;
-	if ('equals' in c && c.equals !== undefined && v !== c.equals) return false;
-	if ('greaterThan' in c && c.greaterThan !== undefined && !(v > (c.greaterThan as KeyValue))) return false;
-	if ('greaterThanOrEqual' in c && c.greaterThanOrEqual !== undefined && !(v >= (c.greaterThanOrEqual as KeyValue)))
-		return false;
-	if ('lessThan' in c && c.lessThan !== undefined && !(v < (c.lessThan as KeyValue))) return false;
-	if ('lessThanOrEqual' in c && c.lessThanOrEqual !== undefined && !(v <= (c.lessThanOrEqual as KeyValue)))
-		return false;
-	if ('between' in c && Array.isArray(c.between)) {
-		const [lo, hi] = c.between as [KeyValue, KeyValue];
-		if (!(v >= lo && v <= hi)) return false;
+/**
+ * Normalize the sort-key condition up front — before any data is read — so a
+ * present-but-empty condition becomes "no filter" and multiple conditions are
+ * rejected eagerly, even on an empty table.
+ */
+function planSort(condition: unknown): QueryPlan['sort'] {
+	const normalized = normalizeSortKeyCondition(condition as Record<string, unknown> | undefined);
+	if (!normalized) return undefined;
+	const op = Object.keys(normalized).find((k) => normalized[k] !== undefined);
+	if (op === undefined || !Object.hasOwn(SORT_CONDITIONS, op)) return undefined;
+	const operand = normalized[op];
+	if (op !== 'between') return { op: op as SortOp, operands: [operand as KeyValue] };
+	return Array.isArray(operand) ? { op, operands: operand as KeyValue[] } : undefined;
+}
+
+/** Whether a sort-key value satisfies the sort condition of a query (the mock's counterpart to {@link keyCondition}). */
+export function matchesSort(value: unknown, sort: QueryPlan['sort']): boolean {
+	return sort === undefined || SORT_CONDITIONS[sort.op].matches(value as KeyValue, sort.operands);
+}
+
+/** The DynamoDB key condition of a query: the partition key, and the sort condition when the query has one. */
+export function keyCondition(plan: QueryPlan): {
+	KeyConditionExpression: string;
+	ExpressionAttributeNames: Record<string, string>;
+	ExpressionAttributeValues: Record<string, unknown>;
+} {
+	const names: Record<string, string> = { '#pk': plan.key.partitionKey };
+	const values: Record<string, unknown> = { ':pkval': plan.pkValue };
+	let expression = '#pk = :pkval';
+	if (plan.key.sortKey && plan.sort) {
+		names['#sk'] = plan.key.sortKey;
+		expression += ` AND ${SORT_CONDITIONS[plan.sort.op].clause}`;
+		if (plan.sort.op === 'between') {
+			[values[':skval1'], values[':skval2']] = plan.sort.operands;
+		} else {
+			values[':skval'] = plan.sort.operands[0];
+		}
 	}
-	if ('beginsWith' in c && c.beginsWith !== undefined) {
-		if (typeof v !== 'string' || !v.startsWith(c.beginsWith as string)) return false;
-	}
-	return true;
+	return {
+		KeyConditionExpression: expression,
+		ExpressionAttributeNames: names,
+		ExpressionAttributeValues: values,
+	};
 }
 
 /** Compare two key values the way DynamoDB orders a sort key of that type. */
@@ -550,6 +692,21 @@ export function compareKeyValues(a: unknown, b: unknown): number {
 	const av = a as KeyValue;
 	const bv = b as KeyValue;
 	return av < bv ? -1 : av > bv ? 1 : 0;
+}
+
+/**
+ * Check a `limit` option. `undefined` and `null` both mean "no limit": a JSON
+ * transport turns an optional positional argument that the caller left out
+ * into `null`, so an API method that forwards its arguments passes `null` here.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the limit is not a positive integer.
+ */
+export function normalizeLimit(limit: unknown): number | undefined {
+	if (limit === undefined || limit === null) return undefined;
+	if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.limitInvalid(String(limit)));
+	}
+	return limit;
 }
 
 // ── Cursors ─────────────────────────────────────────────────────────────────
@@ -567,11 +724,10 @@ interface CursorPayload {
 }
 
 /** The attributes a `LastEvaluatedKey` holds for a read of the table or of an index. */
-export function cursorFields(model: KeyModel, indexName: string | undefined): string[] {
+function cursorFields(model: KeyModel, indexName: string | undefined): string[] {
 	const fields = keyFields(model.table);
 	if (indexName === undefined) return fields;
-	const index = model.indexes[indexName];
-	for (const f of keyFields(index)) if (!fields.includes(f)) fields.push(f);
+	for (const f of keyFields(model.indexes[indexName])) if (!fields.includes(f)) fields.push(f);
 	return fields;
 }
 
@@ -584,27 +740,33 @@ export function encodeCursor(model: KeyModel, indexName: string | undefined, ite
 }
 
 /**
- * Decode and check a cursor before it drives a read. The cursor must decode,
- * must name the same index as the call, must hold exactly the key attributes
- * of that table or index (each a non-empty string or a finite number), and —
- * for a query — its partition value must match `where`.
+ * Decode and check a `cursor` option before it drives a read, or return
+ * `undefined` when there is none. `undefined` and `null` both mean "start at
+ * the first entry" (see {@link normalizeLimit} for why `null` counts as
+ * absent), which any caller can already ask for by leaving the cursor out.
+ *
+ * The cursor must decode, must name the same index as the call, must hold
+ * exactly the key attributes of that table or index (each a non-empty string
+ * or a finite number), and — for a query — its partition value must match
+ * `where`.
  *
  * @throws {KVStoreErrors.InvalidQuery} If any check fails.
  */
 export function decodeCursor(
 	model: KeyModel,
-	cursor: string,
+	cursor: unknown,
 	indexName: string | undefined,
 	partition?: { field: string; value: KeyValue },
-): Record<string, KeyValue> {
-	if (typeof cursor !== 'string' || cursor === '') {
-		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.cursorInvalid);
-	}
+): Record<string, KeyValue> | undefined {
+	if (cursor === undefined || cursor === null) return undefined;
 	let payload: unknown;
 	try {
-		payload = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+		payload =
+			typeof cursor === 'string' &&
+			cursor !== '' &&
+			JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
 	} catch {
-		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.cursorInvalid);
+		payload = undefined;
 	}
 	if (!isPlainObject(payload) || payload.v !== 1 || !isPlainObject(payload.key)) {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.cursorInvalid);
@@ -632,95 +794,47 @@ export function decodeCursor(
 	return key;
 }
 
-/**
- * Check a `limit` option. `undefined` and `null` both mean "no limit": a JSON
- * transport turns an optional positional argument that the caller left out
- * into `null`, so an API method that forwards its arguments passes `null` here.
- *
- * @throws {KVStoreErrors.InvalidQuery} If the limit is not a positive integer.
- */
-export function normalizeLimit(limit: unknown): number | undefined {
-	if (limit === undefined || limit === null) return undefined;
-	if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
-		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.limitInvalid(String(limit)));
-	}
-	return limit;
-}
-
-/**
- * Decode and check a `cursor` option, or return `undefined` when there is
- * none. `undefined` and `null` both mean "start at the first entry" (see
- * {@link normalizeLimit} for why `null` counts as absent), which any caller
- * can already ask for by leaving the cursor out. Any other value goes through
- * {@link decodeCursor}.
- *
- * @throws {KVStoreErrors.InvalidQuery} If the cursor fails a check of {@link decodeCursor}.
- */
-export function decodeOptionalCursor(
-	model: KeyModel,
-	cursor: unknown,
-	indexName: string | undefined,
-	partition?: { field: string; value: KeyValue },
-): Record<string, KeyValue> | undefined {
-	if (cursor === undefined || cursor === null) return undefined;
-	return decodeCursor(model, cursor as string, indexName, partition);
-}
-
 // ── Results ─────────────────────────────────────────────────────────────────
 
-/** What a paged source yields: the entry, and the cursor for the position after it. */
-export interface Positioned<E> {
-	entry: E;
-	position: string;
-}
-
 /**
- * The object `query` and `scan` return. Iterates the source once, and exposes
- * `cursor`: the position after the last entry yielded when the read stopped
- * before the end (a `limit`, or a consumer that stopped early), `undefined`
- * when the read reached the end, and `undefined` before iteration starts.
+ * The object `query` and `scan` return. Iterates the pages of the source once
+ * per `for await`, and exposes `cursor`: the position after the last entry the
+ * iterator returned. It is `undefined` before the first entry and when the read
+ * reached the end, so it is set exactly when a `limit` or the consumer stopped
+ * the read early.
  *
- * The source generator returns `true` when more entries may follow the last one
- * it yielded (so the cursor is the last position) and `false` when it reached
- * the end.
+ * The source yields pages of live items in read order. The results object
+ * applies the `limit`, builds each entry, and keeps only the last item: the
+ * cursor is encoded when it is asked for, not for every entry.
  */
 export class PagedResults<E> implements AsyncIterable<E> {
-	private lastPosition: string | undefined;
-	private finished = false;
-	private more = false;
+	private last: Item | undefined;
 
-	constructor(private readonly source: () => AsyncGenerator<Positioned<E>, boolean>) {}
+	constructor(
+		private readonly pages: () => AsyncIterable<Item[]> | Iterable<Item[]>,
+		private readonly toEntry: (item: Item) => E | Promise<E>,
+		private readonly limit: number | undefined,
+		private readonly position: (item: Item) => string,
+	) {}
 
 	get cursor(): string | undefined {
-		if (!this.finished || !this.more) return undefined;
-		return this.lastPosition;
+		return this.last === undefined ? undefined : this.position(this.last);
 	}
 
 	async *[Symbol.asyncIterator](): AsyncIterator<E> {
-		this.finished = false;
-		this.more = false;
-		this.lastPosition = undefined;
-		const gen = this.source();
-		let completed = false;
-		try {
-			for (;;) {
-				const next = await gen.next();
-				if (next.done) {
-					this.more = next.value;
-					completed = true;
-					return;
-				}
-				this.lastPosition = next.value.position;
-				yield next.value.entry;
+		this.last = undefined;
+		let count = 0;
+		for await (const page of this.pages()) {
+			for (const item of page) {
+				const entry = this.toEntry(item);
+				const resolved = entry instanceof Promise ? await entry : entry;
+				// Set after the entry is built, so an entry that fails to build is
+				// not skipped by a later read that starts at the cursor.
+				this.last = item;
+				yield resolved;
+				if (this.limit !== undefined && ++count >= this.limit) return;
 			}
-		} finally {
-			if (!completed) {
-				// The consumer stopped early: the position after the last entry it
-				// saw is the cursor, and the source may still hold more.
-				this.more = this.lastPosition !== undefined;
-				await gen.return(false);
-			}
-			this.finished = true;
 		}
+		this.last = undefined;
 	}
 }

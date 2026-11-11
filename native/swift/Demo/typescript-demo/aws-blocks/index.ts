@@ -144,7 +144,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       ? todos.query({ index: indexMap[sortBy], where: { userId: { equals: user.username } } })
       : todos.scan();
     
-    return (await Array.fromAsync(iterator)).map((entry) => entry.value);
+    return await Array.fromAsync(iterator, (entry) => entry.value);
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {

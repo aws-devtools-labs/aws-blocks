@@ -4,7 +4,6 @@
 import type { ScopeParent } from '@aws-blocks/core';
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, isSandboxContext, synthGuard } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaCode, resolveDynamoDbProtection } from '@aws-blocks/core/cdk/internal';
-import type { StandardSchemaV1 } from '@standard-schema/spec';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, CustomResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import { AttributeType, BillingMode, type ITable, Table } from 'aws-cdk-lib/aws-dynamodb';
@@ -13,56 +12,13 @@ import { PolicyStatement } from 'aws-cdk-lib/aws-iam';
 import { Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
 import { LogGroup, type RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Provider } from 'aws-cdk-lib/custom-resources';
-import { PK_ATTRIBUTE, TTL_ATTRIBUTE } from './ttl.js';
-import type {
-	ExternalKmsKeyRef,
-	ExternalTableRef,
-	IndexConfig,
-	KeyConfig,
-	KVStoreOptions,
-	SchemaOptions,
-} from './types.js';
+import { looseOptions, resolveKeyModel, schemaAccepts } from './item.js';
+import type { ExternalKmsKeyRef, ExternalTableRef, IndexConfig, KeyConfig, KVStoreOptions } from './types.js';
 import { BB_NAME } from './version.js';
 
 // Re-export public types and errors (no runtime dependencies)
 export { KVStoreErrors } from './errors.js';
-export type {
-	AtLeastOne,
-	ConditionalDeleteOptions,
-	ConditionalWriteOptions,
-	DeleteOptions,
-	Entry,
-	Expiry,
-	ExternalKmsKeyRef,
-	ExternalTableRef,
-	FieldsOf,
-	GetOptions,
-	IndexConfig,
-	IndexField,
-	IsRecord,
-	KeyConfig,
-	KeyField,
-	KeyOf,
-	KVStoreOptions,
-	NumberField,
-	OneOf,
-	OtherPart,
-	Page,
-	PartitionCondition,
-	PutBatchEntry,
-	PutOptions,
-	QueryOptions,
-	ReadValidationMode,
-	RecordPart,
-	Results,
-	ScanOptions,
-	SchemaOptions,
-	SortCondition,
-	TableOptions,
-	ValueCheck,
-	ValueOf,
-	Where,
-} from './types.js';
+export type * from './types.js';
 
 const PROTECTION_VALUES = ['disposable', 'retained', 'locked'] as const;
 
@@ -114,12 +70,9 @@ export class KVStore<
 			vpc: { gatewayEndpoints: [ec2.GatewayVpcEndpointAwsService.DYNAMODB] },
 		});
 
-		// Read the schema-bound options through one loosely typed view: the
-		// construct provisions from field names, not from the inferred value types.
-		const config = (options ?? {}) as Partial<
-			SchemaOptions<unknown, unknown, KeyConfigLike, Record<string, KeyConfigLike>>
-		> &
-			Omit<KVStoreOptions, 'schema' | 'key' | 'indexes' | 'ttl' | 'readValidation'>;
+		// Read the options through the loosely typed view that the runtime shares:
+		// the construct provisions from field names, not from the inferred value types.
+		const config = looseOptions(options);
 
 		if (config.table) {
 			// `fromExisting`: don't provision; bind to the pre-existing table by name
@@ -154,24 +107,15 @@ export class KVStore<
 
 		const tableName = this.fullId.substring(0, 255);
 		const isSandbox = isSandboxContext(this);
-		const schema = config.schema as StandardSchemaV1 | undefined;
+		const { schema } = config;
 
 		// Probe the schema's validate() to determine if a key field is numeric.
 		// Sends a test value of 0 for the field — if validation doesn't flag it,
-		// the field accepts numbers. Uses only the StandardSchemaV1 interface.
-		const isNumericField = (fieldName: string): boolean => {
-			if (!schema) return false;
-			const probe = { [fieldName]: 0 };
-			const result = schema['~standard'].validate(probe);
-			// validate may return sync or async; at synth time schemas are sync
-			if (result && 'issues' in result && result.issues) {
-				return !result.issues.some((i) => i.path?.length === 1 && pathSegment(i.path[0]) === fieldName);
-			}
-			return true; // no issues for this field → numeric
-		};
-
+		// the field accepts numbers. Uses only the StandardSchemaV1 interface. A
+		// schema that validates asynchronously cannot be probed at synth, and its
+		// field counts as numeric, as before.
 		const getDdbType = (fieldName: string): AttributeType =>
-			isNumericField(fieldName) ? AttributeType.NUMBER : AttributeType.STRING;
+			schema && schemaAccepts(schema, fieldName, 0) !== false ? AttributeType.NUMBER : AttributeType.STRING;
 
 		// Secure-by-default durability & encryption.
 		// The posture — removal policy, deletion protection, PITR — comes from the
@@ -220,17 +164,19 @@ export class KVStore<
 
 		// The key schema: the declared key fields, or the block's own `_bkv_pk`
 		// string attribute. A store fixes its key when it creates its table.
-		const key = config.key;
+		const model = resolveKeyModel(options);
+		const keyAttribute = (name: string) => ({
+			name,
+			type: model.declared ? getDdbType(name) : AttributeType.STRING,
+		});
 		this.table = new Table(this, 'table', {
 			tableName,
-			partitionKey: key
-				? { name: key.partitionKey, type: getDdbType(key.partitionKey) }
-				: { name: PK_ATTRIBUTE, type: AttributeType.STRING },
-			sortKey: key?.sortKey ? { name: key.sortKey, type: getDdbType(key.sortKey) } : undefined,
+			partitionKey: keyAttribute(model.table.partitionKey),
+			sortKey: model.table.sortKey ? keyAttribute(model.table.sortKey) : undefined,
 			billingMode: BillingMode.PAY_PER_REQUEST,
 			// TTL is always on: on the named field of the value, or on `_bkv_ttl`.
 			// Every read hides an expired item regardless; this lets DynamoDB reap it.
-			timeToLiveAttribute: config.ttl ?? TTL_ATTRIBUTE,
+			timeToLiveAttribute: model.ttlAttribute,
 			pointInTimeRecoverySpecification: protection.pointInTimeRecoverySpecification,
 			deletionProtection,
 			removalPolicy,
@@ -327,19 +273,6 @@ export class KVStore<
 	deleteBatch(..._args: unknown[]): never {
 		return synthGuard('KVStore', 'deleteBatch');
 	}
-}
-
-/** The loosely typed key config the construct reads field names from. */
-interface KeyConfigLike {
-	partitionKey: string;
-	sortKey?: string;
-}
-
-/** A StandardSchemaV1 issue path segment: a key, or an object with a `key`. */
-function pathSegment(segment: unknown): unknown {
-	return typeof segment === 'object' && segment !== null && 'key' in segment
-		? (segment as { key: unknown }).key
-		: segment;
 }
 
 // ── Shared GSI Manager Provider (one per stack) ─────────────────────────────

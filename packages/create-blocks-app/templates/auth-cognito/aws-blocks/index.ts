@@ -148,9 +148,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
     const user = await auth.requireAuth(context);
-    const list = (await Array.fromAsync(
-      todos.query({ where: { userSub: { equals: user.userSub } } })
-    )).map((entry) => entry.value);
+    const list = await Array.fromAsync(
+      todos.query({ where: { userSub: { equals: user.userSub } } }),
+      (entry) => entry.value,
+    );
     // Sort in the API (not via a secondary index) — a per-user todo list is
     // small, so an in-memory sort is simpler and avoids provisioning GSIs.
     if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);

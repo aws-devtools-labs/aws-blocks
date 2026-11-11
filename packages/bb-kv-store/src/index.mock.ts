@@ -8,42 +8,31 @@ import { Logger } from '@aws-blocks/bb-logger';
 import type { ScopeParent } from '@aws-blocks/core';
 import { registerSdkIdentifiers, Scope } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
-import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { blocksError, conditionalCheckFailed, isPlainObject, KVStoreErrors, KVStoreMessages } from './errors.js';
 import {
-	applyReadValidation,
-	blocksError,
-	conditionalCheckFailed,
-	isPlainObject,
-	KVStoreErrors,
-	KVStoreMessages,
-	validateSchema,
-} from './errors.js';
-import {
-	buildItem,
 	compareKeyValues,
-	decodeOptionalCursor,
+	createReader,
+	decodeCursor,
 	deleteCondition,
 	encodeCursor,
 	type Item,
-	itemExpired,
 	type KeyModel,
 	type KeyValue,
 	keyFields,
-	matchesSortKeyCondition,
-	mergeKeyIntoValue,
+	liveItems,
+	matchesSort,
 	normalizeKey,
 	normalizeLimit,
 	PagedResults,
-	type Positioned,
 	planQuery,
+	prepareItem,
 	putCondition,
-	type ReadEntry,
-	readItem,
+	type Reader,
 	resolveKeyModel,
 	serializeKey,
 	valueCheckHolds,
 } from './item.js';
-import { nowEpochSeconds, resolveTtlEpochSeconds } from './ttl.js';
+import { nowEpochSeconds } from './ttl.js';
 import type {
 	ConditionalDeleteOptions,
 	Entry,
@@ -58,7 +47,6 @@ import type {
 	PutBatchEntry,
 	PutOptions,
 	QueryOptions,
-	ReadValidationMode,
 	Results,
 	ScanOptions,
 	ValueOf,
@@ -71,43 +59,7 @@ assertNotMockInDeployedEnv('bb-kv-store');
 // ── Public types ────────────────────────────────────────────────────────────
 
 export { KVStoreErrors } from './errors.js';
-export type {
-	AtLeastOne,
-	ConditionalDeleteOptions,
-	ConditionalWriteOptions,
-	DeleteOptions,
-	Entry,
-	Expiry,
-	ExternalKmsKeyRef,
-	ExternalTableRef,
-	FieldsOf,
-	GetOptions,
-	IndexConfig,
-	IndexField,
-	IsRecord,
-	KeyConfig,
-	KeyField,
-	KeyOf,
-	KVStoreOptions,
-	NumberField,
-	OneOf,
-	OtherPart,
-	Page,
-	PartitionCondition,
-	PutBatchEntry,
-	PutOptions,
-	QueryOptions,
-	ReadValidationMode,
-	RecordPart,
-	Results,
-	ScanOptions,
-	SchemaOptions,
-	SortCondition,
-	TableOptions,
-	ValueCheck,
-	ValueOf,
-	Where,
-} from './types.js';
+export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -161,9 +113,8 @@ export class KVStore<
 > extends Scope {
 	private filePath: string;
 	private data: Map<string, Item>;
-	private schema?: StandardSchemaV1<In, Out>;
 	private model: KeyModel;
-	private readValidation: ReadValidationMode;
+	private reader: Reader<Out, Entry<Out, K>>;
 	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
 
@@ -174,9 +125,8 @@ export class KVStore<
 		// emits, so this doesn't add noise. Callers can pass their own logger.
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		this.filePath = join(getMockDataDir(this), 'store.json');
-		this.schema = options?.schema;
-		this.model = resolveKeyModel(options as Parameters<typeof resolveKeyModel>[0]);
-		this.readValidation = options?.readValidation ?? 'coerce';
+		this.model = resolveKeyModel(options);
+		this.reader = createReader(this.model, options?.readValidation ?? 'coerce', this.log, { store: this.fullId });
 		this.data = this.loadFromDisk();
 		registerSdkIdentifiers(this.fullId, { tableName: `mock-${this.fullId}`.substring(0, 255) });
 	}
@@ -195,9 +145,7 @@ export class KVStore<
 	 * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape for this store.
 	 */
 	async get(key: KeyOf<Out, K>, _options?: GetOptions): Promise<Out | null> {
-		const item = this.data.get(serializeKey(this.model, normalizeKey(this.model, key)));
-		if (!item || itemExpired(this.model, item)) return null;
-		return this.reconcileRead(readItem(this.model, item).value);
+		return this.reader.value(this.data.get(serializeKey(this.model, normalizeKey(this.model, key))));
 	}
 
 	/**
@@ -232,9 +180,9 @@ export class KVStore<
 		// inputs (incl. the combined case). Conditions see an expired item until
 		// DynamoDB deletes it, as on AWS.
 		const condition = putCondition(this.model, options);
-		if (condition.wantAbsent || condition.check) {
+		if (condition.existence || condition.check) {
 			const existing = this.data.get(keyStr);
-			const absentOk = condition.wantAbsent && existing === undefined;
+			const absentOk = condition.existence && existing === undefined;
 			const valueOk = condition.check !== undefined && valueCheckHolds(condition.check, existing);
 			if (!absentOk && !valueOk) throw conditionalCheckFailed(condition.retriable);
 		}
@@ -258,7 +206,7 @@ export class KVStore<
 		// non-retriable even when combined with a value check.
 		const condition = deleteCondition(this.model, conditions);
 		const existing = this.data.get(keyStr);
-		if (condition.wantPresent && existing === undefined) throw conditionalCheckFailed(condition.retriable);
+		if (condition.existence && existing === undefined) throw conditionalCheckFailed(condition.retriable);
 		if (condition.check && !valueCheckHolds(condition.check, existing)) {
 			throw conditionalCheckFailed(condition.retriable);
 		}
@@ -300,51 +248,34 @@ export class KVStore<
 	 *   this store, index, and partition, or `limit` is not a positive integer.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
-		const plan = planQuery(this.model, options as Parameters<typeof planQuery>[1]);
-		const startAfter = decodeOptionalCursor(this.model, options.cursor, plan.indexName, {
-			field: plan.key.partitionKey,
-			value: plan.pkValue,
-		});
-		const model = this.model;
-		const reconcile = (value: unknown) => this.reconcileRead(value);
-		const data = this.data;
-		const dir = plan.order === 'desc' ? -1 : 1;
+		const plan = planQuery(this.model, options);
+		const { key } = plan;
+		const direction = plan.order === 'desc' ? -1 : 1;
 
 		// Compare by the queried sort key, then by the base-table key. On an
 		// index the sort key need not be unique, so equal sort-key values must NOT
 		// fall back to Map insertion order (which varies by write order / disk
 		// reload). DynamoDB orders index ties by the base-table key, and the whole
 		// index (ties included) reverses under `order: 'desc'`.
-		const compare = (a: Item, b: Item): number => {
-			let primary = 0;
-			if (plan.key.sortKey) primary = compareKeyValues(a[plan.key.sortKey], b[plan.key.sortKey]);
-			if (primary === 0) primary = compareByBaseKey(model, a, b);
-			return primary * dir;
-		};
+		const compare = (a: Item, b: Item): number =>
+			((key.sortKey ? compareKeyValues(a[key.sortKey], b[key.sortKey]) : 0) ||
+				compareByBaseKey(this.model, a, b)) * direction;
 
-		return new PagedResults<Entry<Out, K>>(async function* (): AsyncGenerator<Positioned<Entry<Out, K>>, boolean> {
-			const now = nowEpochSeconds();
-			const items: Item[] = [];
-			for (const item of data.values()) {
-				if (item[plan.key.partitionKey] !== plan.pkValue) continue;
-				if (plan.key.sortKey && !(plan.key.sortKey in item)) continue;
-				if (plan.skCondition && !matchesSortKeyCondition(item[plan.key.sortKey as string], plan.skCondition))
-					continue;
-				if (itemExpired(model, item, now)) continue;
-				items.push(item);
-			}
-			items.sort(compare);
-			let count = 0;
-			for (const item of items) {
-				if (startAfter && compare(item, startAfter as Item) <= 0) continue;
-				yield {
-					entry: toEntry(await reconcileEntry(reconcile, readItem(model, item))),
-					position: encodeCursor(model, plan.indexName, item),
-				};
-				if (plan.limit !== undefined && ++count >= plan.limit) return true;
-			}
-			return false;
-		});
+		return this.results(
+			() =>
+				[...this.data.values()]
+					.filter(
+						(item) =>
+							item[key.partitionKey] === plan.pkValue &&
+							(!key.sortKey || (key.sortKey in item && matchesSort(item[key.sortKey], plan.sort))),
+					)
+					.sort(compare),
+			compare,
+			plan.startKey,
+			plan.limit,
+			plan.indexName,
+			false,
+		);
 	}
 
 	/**
@@ -356,29 +287,17 @@ export class KVStore<
 	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this store, or `limit` is not a positive integer.
 	 */
 	scan(options?: ScanOptions): Results<Out, K> {
-		const startAfter = decodeOptionalCursor(this.model, options?.cursor, undefined);
-		const model = this.model;
-		const reconcile = (value: unknown) => this.reconcileRead(value);
-		const data = this.data;
-		const includeExpired = options?.includeExpired === true;
-		const limit = normalizeLimit(options?.limit);
-		return new PagedResults<Entry<Out, K>>(async function* (): AsyncGenerator<Positioned<Entry<Out, K>>, boolean> {
-			const now = nowEpochSeconds();
-			// Deterministic order by the base key, so a cursor resumes at the same
-			// position after a restart (Map order would follow write order).
-			const items = [...data.values()].sort((a, b) => compareByBaseKey(model, a, b));
-			let count = 0;
-			for (const item of items) {
-				if (startAfter && compareByBaseKey(model, item, startAfter as Item) <= 0) continue;
-				if (!includeExpired && itemExpired(model, item, now)) continue;
-				yield {
-					entry: toEntry(await reconcileEntry(reconcile, readItem(model, item))),
-					position: encodeCursor(model, undefined, item),
-				};
-				if (limit !== undefined && ++count >= limit) return true;
-			}
-			return false;
-		});
+		// Deterministic order by the base key, so a cursor resumes at the same
+		// position after a restart (Map order would follow write order).
+		const byBaseKey = (a: Item, b: Item) => compareByBaseKey(this.model, a, b);
+		return this.results(
+			() => [...this.data.values()].sort(byBaseKey),
+			byBaseKey,
+			decodeCursor(this.model, options?.cursor, undefined),
+			normalizeLimit(options?.limit),
+			undefined,
+			options?.includeExpired === true,
+		);
 	}
 
 	/**
@@ -393,11 +312,9 @@ export class KVStore<
 	async getBatch(keys: KeyOf<Out, K>[]): Promise<(Out | null)[]> {
 		const now = nowEpochSeconds();
 		return Promise.all(
-			keys.map((key) => {
-				const item = this.data.get(serializeKey(this.model, normalizeKey(this.model, key)));
-				if (!item || itemExpired(this.model, item, now)) return null;
-				return this.reconcileRead(readItem(this.model, item).value);
-			}),
+			keys.map((key) =>
+				this.reader.value(this.data.get(serializeKey(this.model, normalizeKey(this.model, key))), now),
+			),
 		);
 	}
 
@@ -465,10 +382,7 @@ export class KVStore<
 		value: unknown,
 		expiry: Expiry | undefined,
 	): Promise<{ keyStr: string; item: Item }> {
-		const keyAttrs = normalizeKey(this.model, key);
-		const full = mergeKeyIntoValue(this.model, keyAttrs, value);
-		await validateSchema(this.schema, full);
-		const item = buildItem(this.model, keyAttrs, full, resolveTtlEpochSeconds(expiry));
+		const { keyAttrs, item } = await prepareItem(this.model, key, value, expiry);
 		const bytes = Buffer.byteLength(JSON.stringify(item), 'utf8');
 		if (bytes > MAX_ITEM_BYTES) {
 			throw blocksError(KVStoreErrors.ItemTooLarge, KVStoreMessages.itemTooLarge(bytes));
@@ -477,13 +391,28 @@ export class KVStore<
 	}
 
 	/**
-	 * Reconcile a stored value with the schema per this store's `readValidation`
-	 * mode (`off` → raw, `coerce` → coerced output / raw+warn on failure, `strict`
-	 * → throw on mismatch). `null` (a missing item) passes straight through. See
-	 * {@link applyReadValidation}.
+	 * The `Results` of a read. `ordered` gives the matching items in read order;
+	 * the result hides expired items, starts after the cursor position, and
+	 * stops at `limit`. One page holds every item: the mock has no page size.
 	 */
-	private reconcileRead(value: unknown): Promise<Out | null> {
-		return applyReadValidation(this.readValidation, this.schema, value, this.log, { store: this.fullId });
+	private results(
+		ordered: () => Item[],
+		compare: (a: Item, b: Item) => number,
+		startAfter: Item | undefined,
+		limit: number | undefined,
+		indexName: string | undefined,
+		includeExpired: boolean,
+	): Results<Out, K> {
+		const model = this.model;
+		return new PagedResults<Entry<Out, K>>(
+			() => {
+				const items = includeExpired ? ordered() : liveItems(model, ordered());
+				return [startAfter ? items.filter((item) => compare(item, startAfter) > 0) : items];
+			},
+			this.reader.entry,
+			limit,
+			(item) => encodeCursor(model, indexName, item),
+		);
 	}
 
 	// ── Disk persistence ──────────────────────────────────────────────────
@@ -523,12 +452,4 @@ function compareByBaseKey(model: KeyModel, a: Item, b: Item): number {
 		if (c !== 0) return c;
 	}
 	return 0;
-}
-
-async function reconcileEntry(reconcile: (value: unknown) => Promise<unknown>, entry: ReadEntry): Promise<ReadEntry> {
-	return { ...entry, value: await reconcile(entry.value) };
-}
-
-function toEntry<Out, K>(entry: ReadEntry): Entry<Out, K> {
-	return entry as Entry<Out, K>;
 }

@@ -112,10 +112,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   /** List the caller's items. */
   async listItems() {
     const user = await auth.requireAuth(context);
-    const entries = await Array.fromAsync(
+    return await Array.fromAsync(
       items.query({ where: { owner: { equals: user.username } } }),
+      (entry) => entry.value,
     );
-    return entries.map((entry) => entry.value);
   },
 
   /** Fetch one of the caller's items by id. */

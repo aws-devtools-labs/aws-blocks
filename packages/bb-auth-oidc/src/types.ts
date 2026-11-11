@@ -8,6 +8,7 @@
 import type { BlocksContext } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import type { RelayOrigin } from './relay.js';
+import type { ConditionalWriteOptions } from '@aws-blocks/bb-kv-store';
 
 /**
  * A credential value, either inline or resolved lazily at runtime.
@@ -320,7 +321,7 @@ export interface SessionStore {
 	put(
 		key: string,
 		value: SessionRow,
-		conditions?: { ifNotExists?: boolean; ifFieldEquals?: SessionRow },
+		conditions?: ConditionalWriteOptions<SessionRow>,
 	): Promise<void>;
 	delete(key: string): Promise<void>;
 }

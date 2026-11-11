@@ -384,7 +384,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } else {
       iterator = todos.query({ where });
     }
-    return (await Array.fromAsync(iterator)).map((entry) => entry.value);
+    return await Array.fromAsync(iterator, (entry) => entry.value);
   },
 
   async getTodo(todoId: string): Promise<Todo | null> {

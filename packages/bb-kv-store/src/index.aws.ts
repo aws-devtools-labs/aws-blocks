@@ -16,44 +16,32 @@ import {
 	QueryCommand,
 	ScanCommand,
 } from '@aws-sdk/lib-dynamodb';
-import type { StandardSchemaV1 } from '@standard-schema/spec';
+import { blocksError, conditionalCheckFailed, KVStoreErrors, KVStoreMessages, remapItemTooLarge } from './errors.js';
 import {
-	applyReadValidation,
-	blocksError,
-	conditionalCheckFailed,
-	KVStoreErrors,
-	KVStoreMessages,
-	remapItemTooLarge,
-	validateSchema,
-} from './errors.js';
-import {
-	buildItem,
-	decodeOptionalCursor,
+	createReader,
+	decodeCursor,
 	deleteCondition,
 	encodeCursor,
 	type Item,
-	itemExpired,
 	type KeyModel,
 	type KeyValue,
+	keyCondition,
 	keyOfItem,
-	mergeKeyIntoValue,
+	liveItems,
 	normalizeKey,
 	normalizeLimit,
 	PagedResults,
-	type Positioned,
 	planQuery,
+	prepareItem,
 	putCondition,
-	type QueryPlan,
-	type ReadEntry,
-	readItem,
+	type Reader,
 	resolveKeyModel,
 	serializeKey,
 } from './item.js';
-import { resolveTtlEpochSeconds } from './ttl.js';
+import { nowEpochSeconds } from './ttl.js';
 import type {
 	ConditionalDeleteOptions,
 	Entry,
-	Expiry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
 	GetOptions,
@@ -64,7 +52,6 @@ import type {
 	PutBatchEntry,
 	PutOptions,
 	QueryOptions,
-	ReadValidationMode,
 	Results,
 	ScanOptions,
 	ValueOf,
@@ -73,43 +60,7 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors
 export { KVStoreErrors } from './errors.js';
-export type {
-	AtLeastOne,
-	ConditionalDeleteOptions,
-	ConditionalWriteOptions,
-	DeleteOptions,
-	Entry,
-	Expiry,
-	ExternalKmsKeyRef,
-	ExternalTableRef,
-	FieldsOf,
-	GetOptions,
-	IndexConfig,
-	IndexField,
-	IsRecord,
-	KeyConfig,
-	KeyField,
-	KeyOf,
-	KVStoreOptions,
-	NumberField,
-	OneOf,
-	OtherPart,
-	Page,
-	PartitionCondition,
-	PutBatchEntry,
-	PutOptions,
-	QueryOptions,
-	ReadValidationMode,
-	RecordPart,
-	Results,
-	ScanOptions,
-	SchemaOptions,
-	SortCondition,
-	TableOptions,
-	ValueCheck,
-	ValueOf,
-	Where,
-} from './types.js';
+export type * from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -178,9 +129,8 @@ export class KVStore<
 	I extends Record<string, IndexConfig<In, Out>> = {},
 > extends Scope {
 	readonly bbName = BB_NAME;
-	private schema?: StandardSchemaV1<In, Out>;
 	private model: KeyModel;
-	private readValidation: ReadValidationMode;
+	private reader: Reader<Out, Entry<Out, K>>;
 	private docClient: DynamoDBDocumentClient;
 	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
@@ -193,9 +143,8 @@ export class KVStore<
 		this.log = options?.logger ?? new Logger(this, 'logger', { level: 'warn' });
 		const tableName = options?.table ? options.table.tableName : this.fullId.substring(0, 255);
 		registerSdkIdentifiers(this.fullId, { tableName });
-		this.schema = options?.schema;
-		this.model = resolveKeyModel(options as Parameters<typeof resolveKeyModel>[0]);
-		this.readValidation = options?.readValidation ?? 'coerce';
+		this.model = resolveKeyModel(options);
+		this.reader = createReader(this.model, options?.readValidation ?? 'coerce', this.log, { store: this.fullId });
 		const client = new DynamoDBClient({
 			customUserAgent: this.buildUserAgentChain(),
 		});
@@ -228,9 +177,7 @@ export class KVStore<
 				ConsistentRead: options?.consistentRead !== false,
 			}),
 		);
-		const item = result.Item as Item | undefined;
-		if (!item || itemExpired(this.model, item)) return null;
-		return this.reconcileRead(readItem(this.model, item).value);
+		return this.reader.value(result.Item);
 	}
 
 	/**
@@ -255,7 +202,10 @@ export class KVStore<
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: KeyOf<Out, K>, value: ValueOf<In, K>, options?: PutOptions<Out>): Promise<void> {
-		const item = await this.prepareWrite(key, value, options);
+		// Schema validation and the layout checks run client-side, before any
+		// DynamoDB call. The 400 KB limit is DynamoDB's; its `ValidationException`
+		// is re-mapped on the way back.
+		const { item } = await prepareItem(this.model, key, value, options);
 
 		// `ifNotExists` and a value check compose with OR: write when the key is
 		// absent OR its current value matches — the optimistic "create it, or update
@@ -338,15 +288,21 @@ export class KVStore<
 	 *   this store, index, and partition, or `limit` is not a positive integer.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
-		const plan = planQuery(this.model, options as Parameters<typeof planQuery>[1]);
-		const startKey = decodeOptionalCursor(this.model, options.cursor, plan.indexName, {
-			field: plan.key.partitionKey,
-			value: plan.pkValue,
-		});
+		const plan = planQuery(this.model, options);
 		return this.page(
 			plan.limit,
-			startKey,
-			(exclusiveStartKey, limit) => this.docClient.send(this.buildQueryCommand(plan, exclusiveStartKey, limit)),
+			plan.startKey,
+			(exclusiveStartKey, limit) =>
+				this.docClient.send(
+					new QueryCommand({
+						TableName: getSdkIdentifiers(this).tableName,
+						IndexName: plan.indexName,
+						...keyCondition(plan),
+						ExclusiveStartKey: exclusiveStartKey,
+						Limit: limit,
+						ScanIndexForward: plan.order === 'desc' ? false : undefined,
+					}),
+				),
 			plan.indexName,
 			false,
 		);
@@ -362,10 +318,9 @@ export class KVStore<
 	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this store, or `limit` is not a positive integer.
 	 */
 	scan(options?: ScanOptions): Results<Out, K> {
-		const startKey = decodeOptionalCursor(this.model, options?.cursor, undefined);
 		return this.page(
 			normalizeLimit(options?.limit),
-			startKey,
+			decodeCursor(this.model, options?.cursor, undefined),
 			(exclusiveStartKey, limit) =>
 				this.docClient.send(
 					new ScanCommand({
@@ -406,12 +361,9 @@ export class KVStore<
 				return resp.UnprocessedKeys?.[tableName]?.Keys as Record<string, KeyValue>[] | undefined;
 			});
 		}
+		const now = nowEpochSeconds();
 		return Promise.all(
-			keyAttrs.map((attrs) => {
-				const item = results.get(serializeKey(this.model, attrs));
-				if (!item || itemExpired(this.model, item)) return null;
-				return this.reconcileRead(readItem(this.model, item).value);
-			}),
+			keyAttrs.map((attrs) => this.reader.value(results.get(serializeKey(this.model, attrs)), now)),
 		);
 	}
 
@@ -428,7 +380,7 @@ export class KVStore<
 	 */
 	async putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void> {
 		const items: Item[] = [];
-		for (const entry of entries) items.push(await this.prepareWrite(entry.key, entry.value, entry));
+		for (const entry of entries) items.push((await prepareItem(this.model, entry.key, entry.value, entry)).item);
 		const tableName = getSdkIdentifiers(this).tableName;
 
 		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
@@ -500,28 +452,6 @@ export class KVStore<
 	// ── Internal ────────────────────────────────────────────────────────────
 
 	/**
-	 * Validate a write and build its stored item. Schema validation runs
-	 * client-side before any DynamoDB call, then the layout checks. The 400 KB
-	 * limit is DynamoDB's; its `ValidationException` is re-mapped on the way back.
-	 */
-	private async prepareWrite(key: KeyOf<Out, K>, value: unknown, expiry: Expiry | undefined): Promise<Item> {
-		const keyAttrs = normalizeKey(this.model, key);
-		const full = mergeKeyIntoValue(this.model, keyAttrs, value);
-		await validateSchema(this.schema, full);
-		return buildItem(this.model, keyAttrs, full, resolveTtlEpochSeconds(expiry));
-	}
-
-	/**
-	 * Reconcile a stored value with the schema per this store's `readValidation`
-	 * mode (`off` → raw, `coerce` → coerced output / raw+warn on failure, `strict`
-	 * → throw on mismatch). `null` (a missing item) passes straight through. See
-	 * {@link applyReadValidation}.
-	 */
-	private reconcileRead(value: unknown): Promise<Out | null> {
-		return applyReadValidation(this.readValidation, this.schema, value, this.log, { store: this.fullId });
-	}
-
-	/**
 	 * Page through a Query or Scan: follow `LastEvaluatedKey` until `limit`
 	 * entries have been yielded or the read reaches the end, hiding expired
 	 * items. The cursor of the result is the position after the last entry
@@ -538,24 +468,25 @@ export class KVStore<
 		includeExpired: boolean,
 	): Results<Out, K> {
 		const model = this.model;
-		const reconcile = (value: unknown) => this.reconcileRead(value);
-		return new PagedResults<Entry<Out, K>>(async function* (): AsyncGenerator<Positioned<Entry<Out, K>>, boolean> {
-			let lastEvaluatedKey: Record<string, unknown> | undefined = startKey;
-			let count = 0;
-			do {
-				const result = await send(lastEvaluatedKey, limit === undefined ? undefined : limit - count);
-				for (const raw of result.Items ?? []) {
-					const item = raw as Item;
-					if (!includeExpired && itemExpired(model, item)) continue;
-					const read: ReadEntry = readItem(model, item);
-					const entry = { ...read, value: await reconcile(read.value) } as Entry<Out, K>;
-					yield { entry, position: encodeCursor(model, indexName, item) };
-					if (limit !== undefined && ++count >= limit) return true;
-				}
-				lastEvaluatedKey = result.LastEvaluatedKey;
-			} while (lastEvaluatedKey);
-			return false;
-		});
+		return new PagedResults<Entry<Out, K>>(
+			async function* () {
+				let exclusiveStartKey: Record<string, unknown> | undefined = startKey;
+				let count = 0;
+				do {
+					const result = await send(exclusiveStartKey, limit === undefined ? undefined : limit - count);
+					const items = (result.Items ?? []) as Item[];
+					// One page of DynamoDB items becomes one page of live items; the
+					// clock is read once for the page.
+					const live = includeExpired ? items : liveItems(model, items);
+					count += live.length;
+					yield live;
+					exclusiveStartKey = result.LastEvaluatedKey;
+				} while (exclusiveStartKey && (limit === undefined || count < limit));
+			},
+			this.reader.entry,
+			limit,
+			(item) => encodeCursor(model, indexName, item),
+		);
 	}
 
 	private backoff(attempt: number): Promise<void> {
@@ -601,54 +532,5 @@ export class KVStore<
 				KVStoreMessages.batchIncomplete(operation, pending.length, MAX_BATCH_ATTEMPTS),
 			);
 		}
-	}
-
-	private buildQueryCommand(
-		plan: QueryPlan,
-		exclusiveStartKey: Record<string, unknown> | undefined,
-		limit: number | undefined,
-	): QueryCommand {
-		let expr = '#pk = :pkval';
-		const names: Record<string, string> = { '#pk': plan.key.partitionKey };
-		const values: Record<string, unknown> = { ':pkval': plan.pkValue };
-
-		const sk = plan.skCondition as Record<string, unknown> | undefined;
-		if (plan.key.sortKey && sk) {
-			names['#sk'] = plan.key.sortKey;
-			if ('equals' in sk && sk.equals !== undefined) {
-				expr += ' AND #sk = :skval';
-				values[':skval'] = sk.equals;
-			} else if ('greaterThan' in sk && sk.greaterThan !== undefined) {
-				expr += ' AND #sk > :skval';
-				values[':skval'] = sk.greaterThan;
-			} else if ('greaterThanOrEqual' in sk && sk.greaterThanOrEqual !== undefined) {
-				expr += ' AND #sk >= :skval';
-				values[':skval'] = sk.greaterThanOrEqual;
-			} else if ('lessThan' in sk && sk.lessThan !== undefined) {
-				expr += ' AND #sk < :skval';
-				values[':skval'] = sk.lessThan;
-			} else if ('lessThanOrEqual' in sk && sk.lessThanOrEqual !== undefined) {
-				expr += ' AND #sk <= :skval';
-				values[':skval'] = sk.lessThanOrEqual;
-			} else if ('between' in sk && Array.isArray(sk.between)) {
-				expr += ' AND #sk BETWEEN :skval1 AND :skval2';
-				values[':skval1'] = sk.between[0];
-				values[':skval2'] = sk.between[1];
-			} else if ('beginsWith' in sk && sk.beginsWith !== undefined) {
-				expr += ' AND begins_with(#sk, :skval)';
-				values[':skval'] = sk.beginsWith;
-			}
-		}
-
-		return new QueryCommand({
-			TableName: getSdkIdentifiers(this).tableName,
-			IndexName: plan.indexName || undefined,
-			KeyConditionExpression: expr,
-			ExpressionAttributeNames: names,
-			ExpressionAttributeValues: values,
-			ExclusiveStartKey: exclusiveStartKey,
-			Limit: limit,
-			ScanIndexForward: plan.order === 'desc' ? false : undefined,
-		});
 	}
 }

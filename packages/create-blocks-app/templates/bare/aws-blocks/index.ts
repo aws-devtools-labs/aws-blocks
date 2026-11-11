@@ -72,7 +72,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 //   },
 //   async listItems() {
 //     const user = await auth.requireAuth(context);
-//     const entries = await Array.fromAsync(items.query({ where: { userId: { equals: user.username } } }));
-//     return entries.map((entry) => entry.value);
+//     return await Array.fromAsync(
+//       items.query({ where: { userId: { equals: user.username } } }),
+//       (entry) => entry.value,
+//     );
 //   },
 // }));
