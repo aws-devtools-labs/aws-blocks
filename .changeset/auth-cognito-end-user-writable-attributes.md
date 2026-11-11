@@ -1,6 +1,6 @@
 ---
-"@aws-blocks/bb-auth-cognito": patch
-"@aws-blocks/blocks": patch
+"@aws-blocks/bb-auth-cognito": minor
+"@aws-blocks/blocks": minor
 ---
 
 `AuthCognito` now limits which attributes end users can write at sign-up and through `updateUserAttributes`.

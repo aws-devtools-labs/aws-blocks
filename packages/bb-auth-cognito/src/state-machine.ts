@@ -73,6 +73,9 @@ export function endUserWritableAttributes(
 			else attributes[key] = value;
 			continue;
 		}
+		// A standard attribute name written with an explicit `custom:` prefix
+		// (e.g. `custom:email`) is refused on purpose: it is not the standard
+		// attribute, and it is only accepted when declared as a custom one.
 		const name = prefixed ? key.slice('custom:'.length) : key;
 		if (writable.has(name)) attributes[`custom:${name}`] = value;
 		else refused.push(key);

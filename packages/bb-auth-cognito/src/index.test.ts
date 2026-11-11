@@ -119,6 +119,16 @@ describe('signUp / confirmSignUp / resendSignUpCode', () => {
 		assert.ok(ok.userId);
 	});
 
+	test('signUp refuses a standard attribute written with a custom: prefix, accepts the bare name', async () => {
+		const auth = new AuthCognito(ROOT, unique('signup-custom-std'), { passwordPolicy: { minLength: 8 } });
+		await assert.rejects(
+			() => auth.signUp(uniqueId(), 'Password!1', { attributes: { 'custom:email': 'e@x.com' } as never }),
+			(e: Error) => isBlocksError(e, AuthCognitoErrors.InvalidParameter),
+		);
+		const ok = await auth.signUp(uniqueId(), 'Password!1', { attributes: { email: 'e@x.com' } });
+		assert.ok(ok.userId);
+	});
+
 	test('signUp rejects duplicate username', async () => {
 		const auth = new AuthCognito(ROOT, unique('signup-2'), { passwordPolicy: { minLength: 8 } });
 		await auth.signUp('bob', 'Password!1', { attributes: { email: 'b@x.com' } });

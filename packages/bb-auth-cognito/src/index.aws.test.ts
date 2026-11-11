@@ -604,6 +604,19 @@ describe('setAuthState signUp attribute allowlist (aws runtime)', () => {
 		});
 	}
 
+	test('refuses a standard attribute written with a custom: prefix, accepts the bare name', async () => {
+		const refused = setup();
+		const bad = await refused.api.setAuthState({ ...base, 'custom:email': 'a@example.com' } as never);
+		assert.strictEqual(bad.state, 'signedOut');
+		assert.ok(bad.error, 'an error is returned');
+		assert.strictEqual(refused.sent.length, 0, 'Cognito SignUp must not be called');
+
+		const accepted = setup();
+		const ok = await accepted.api.setAuthState({ ...base, email: 'a@example.com' } as never);
+		assert.strictEqual(ok.state, 'confirmingSignUp');
+		assert.strictEqual(accepted.sent.length, 1);
+	});
+
 	test('updateUserAttributes rejects a userWritable: false attribute without calling Cognito', async () => {
 		const auth = new AuthCognito(new Scope(`aws-update-allow-${Math.random().toString(36).slice(2, 8)}`), 'auth', {
 			userAttributes: [{ name: 'role', userWritable: false }],
