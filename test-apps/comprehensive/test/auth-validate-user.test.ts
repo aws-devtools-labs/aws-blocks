@@ -42,15 +42,20 @@ function cookiesOf(resp: Response): string[] {
     .filter((nv) => nv.includes('='));
 }
 
-/** A stack output of the deployed e2e build (`.blocks-sandbox/outputs.json`). */
+// Each stage writes its own CDK outputs document (core's `OUTPUTS_FILE`), so a
+// production run must not read the sandbox's.
+const OUTPUTS_FILE =
+  process.env.BLOCKS_TEST_ENV === 'production'
+    ? '.blocks-sandbox/outputs.production.json'
+    : '.blocks-sandbox/outputs.json';
+
+/** A stack output of the deployed e2e build (the stage's `OUTPUTS_FILE`). */
 function stackOutput(prefix: string): string {
-  const outputs: Record<string, Record<string, string>> = JSON.parse(
-    readFileSync('.blocks-sandbox/outputs.json', 'utf-8'),
-  );
+  const outputs: Record<string, Record<string, string>> = JSON.parse(readFileSync(OUTPUTS_FILE, 'utf-8'));
   const value = Object.values(outputs)
     .flatMap((stackOutputs) => Object.entries(stackOutputs))
     .find(([key]) => key.startsWith(prefix))?.[1];
-  if (!value) throw new Error(`${prefix}* not found in .blocks-sandbox/outputs.json`);
+  if (!value) throw new Error(`${prefix}* not found in ${OUTPUTS_FILE}`);
   return value;
 }
 
