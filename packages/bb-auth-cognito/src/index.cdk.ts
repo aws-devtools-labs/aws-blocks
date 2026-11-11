@@ -25,6 +25,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 
 import { BuildingBlockScope } from '@aws-blocks/core/cdk';
 import { registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
@@ -232,6 +233,8 @@ export class AuthCognito<const O extends AuthCognitoOptions = AuthCognitoOptions
 					? cdk.RemovalPolicy.RETAIN
 					: cdk.RemovalPolicy.DESTROY,
 			});
+
+		if (this.userPool instanceof cognito.UserPool) scopeSmsRoleTrust(this.userPool);
 
 		// 2. App client (no secret). Default flow is `USER_PASSWORD_AUTH` +
 		// `REFRESH_TOKEN_AUTH`. When `USER_AUTH` is picked we additionally
@@ -571,3 +574,23 @@ function mapAutoVerify(aliases: cognito.SignInAliases): cognito.AutoVerifiedAttr
 	};
 }
 
+/**
+ * Limit the trust of the SMS role CDK's `UserPool` creates (for phone sign-in /
+ * verification, or SMS MFA) to Cognito user pools in this account and region:
+ * `aws:SourceAccount` (the stack account) and `aws:SourceArn` matching
+ * `arn:<partition>:cognito-idp:<region>:<account>:userpool/*`, as the Cognito
+ * SMS settings documentation recommends. CDK renders that role with one
+ * `cognito-idp` trust statement whose only condition is the `sts:ExternalId`
+ * SMS needs and offers no prop to extend it, so the two keys are merged into
+ * that condition by property override; the external id is kept. The wildcard
+ * names no concrete pool, so the role does not depend on the pool that uses it.
+ * No-op when CDK created no SMS role.
+ */
+function scopeSmsRoleTrust(pool: cognito.UserPool): void {
+	const cfnRole = pool.node.tryFindChild('smsRole')?.node.defaultChild;
+	if (!cfnRole || !cdk.CfnResource.isCfnResource(cfnRole)) return;
+	const conditions = sourceScopedConditions(cdk.Stack.of(pool), 'cognito-idp', 'userpool/*');
+	const path = 'AssumeRolePolicyDocument.Statement.0.Condition';
+	cfnRole.addPropertyOverride(`${path}.StringEquals.aws:SourceAccount`, conditions.StringEquals['aws:SourceAccount']);
+	cfnRole.addPropertyOverride(`${path}.ArnLike.aws:SourceArn`, conditions.ArnLike['aws:SourceArn']);
+}
