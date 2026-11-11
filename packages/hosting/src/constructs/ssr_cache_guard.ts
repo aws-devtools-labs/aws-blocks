@@ -10,7 +10,9 @@
  * holds only the Next.js router headers, the preview cookies and the
  * configured `cacheKeyCookies`/`cacheKeyHeaders`. A response the origin marks
  * shared-cacheable (`s-maxage`, `public`, `max-age` without `private`, a
- * future `Expires`, or no caching headers while `ssrDefaultTtl > 0`) for a request whose credentials
+ * future `Expires`, no caching headers while `ssrDefaultTtl > 0`, or an error
+ * status CloudFront caches for its error caching minimum TTL without caching
+ * headers: 404, 414 and 500 to 504) for a request whose credentials
  * are NOT in that key would be stored once and answer every request with the
  * same key, whatever credentials they carry (CloudFront ignores `Vary`). And
  * CloudFront stores a response's `Set-Cookie` with the object and replays it
@@ -136,6 +138,9 @@ const DEFAULT_TTL_POSITIVE = ${config.defaultTtlPositive === true};
 const PRIVATE = ${JSON.stringify(SSR_CACHE_GUARD_PRIVATE)};
 const PRELUDE_TYPE = 'application/vnd.awslambda.http-integration-response';
 const INSTALLED = Symbol.for('aws-blocks.hosting.ssr-cache-guard');
+// The error statuses CloudFront caches from the origin for the error caching
+// minimum TTL even when the response has no caching headers.
+const ERROR_STATUSES_CACHED = new Set([404, 414, 500, 501, 502, 503, 504]);
 
 function cookieNames(value) {
   const names = [];
@@ -161,16 +166,17 @@ function expiresInFuture(expires) {
 // shared cache. private/no-store are never stored; s-maxage gives a shared TTL
 // even next to no-cache; no-cache alone means revalidate on every request (not
 // stored with a zero minimum TTL); public, max-age or a future Expires are
-// stored; anything else (or no header) falls back to the default TTL.
+// stored; anything else (or no header) falls back to the default TTL, or to
+// the error caching minimum TTL for an error status CloudFront caches.
 // CloudFront uses max-age as its own TTL when s-maxage is absent, so a bare
 // max-age is stored at the edge; a credentialed response meant for the browser
 // cache only sends private, max-age=..., which the guard leaves unchanged.
 // Directives are split on every comma, including one inside a quoted value
 // (e.g. no-cache="a, b"); a split there can only add directive names such as
 // private or no-store, so a mis-split errs toward not-cacheable.
-function sharedCacheable(cacheControl, expires) {
-  const future = expiresInFuture(expires);
-  if (cacheControl == null || String(cacheControl).trim() === '') return future || DEFAULT_TTL_POSITIVE;
+function sharedCacheable(cacheControl, expires, statusCode) {
+  const fallback = expiresInFuture(expires) || DEFAULT_TTL_POSITIVE || ERROR_STATUSES_CACHED.has(Number(statusCode));
+  if (cacheControl == null || String(cacheControl).trim() === '') return fallback;
   const directives = new Set();
   for (const part of String(cacheControl).split(',')) {
     const name = part.split('=')[0].trim().toLowerCase();
@@ -180,13 +186,13 @@ function sharedCacheable(cacheControl, expires) {
   if (directives.has('s-maxage')) return true;
   if (directives.has('no-cache')) return false;
   if (directives.has('public') || directives.has('max-age')) return true;
-  return future || DEFAULT_TTL_POSITIVE;
+  return fallback;
 }
 
 /**
  * The Cache-Control to send instead, or null to leave the response as is.
  * request: { authorization: boolean, cookies: string[] } (cookie names).
- * response: { cacheControl: string | undefined, expires?: string, setCookie: boolean }.
+ * response: { cacheControl: string | undefined, expires?: string, setCookie: boolean, statusCode?: number }.
  */
 export function guardCacheControl(request, response) {
   if (response.setCookie) return response.cacheControl === PRIVATE ? null : PRIVATE;
@@ -194,7 +200,7 @@ export function guardCacheControl(request, response) {
   const credentialed =
     (request.authorization && !KEY_HEADERS.has('authorization')) ||
     request.cookies.some((name) => !KEY_COOKIES.has(name));
-  if (!credentialed || !sharedCacheable(response.cacheControl, response.expires)) return null;
+  if (!credentialed || !sharedCacheable(response.cacheControl, response.expires, response.statusCode)) return null;
   return PRIVATE;
 }
 
@@ -241,6 +247,7 @@ function guardHeaders(target, request) {
     cacheControl: cacheControl.length ? cacheControl.join(', ') : undefined,
     expires,
     setCookie,
+    statusCode: target.statusCode,
   });
   if (next == null) return target;
   // Replace Cache-Control in each map that held it. With none to replace, add
@@ -374,7 +381,7 @@ function installHttpServerGuard() {
           authorization: req.headers.authorization != null,
           cookies: [...new Set(cookieNames(req.headers.cookie))],
         };
-        const next = guardCacheControl(request, { cacheControl, expires, setCookie });
+        const next = guardCacheControl(request, { cacheControl, expires, setCookie, statusCode });
         if (next != null) {
           this.setHeader('cache-control', next);
           // Headers passed to writeHead are merged over setHeader values, so

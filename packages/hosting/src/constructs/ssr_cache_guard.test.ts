@@ -31,7 +31,7 @@ import {
 } from './ssr_cache_guard.js';
 
 type RequestInfo = { authorization: boolean; cookies: string[] };
-type ResponseInfo = { cacheControl: string | undefined; expires?: string; setCookie: boolean };
+type ResponseInfo = { cacheControl: string | undefined; expires?: string; setCookie: boolean; statusCode?: number };
 type Headers = Record<string, string | string[]>;
 type LambdaResult = {
   statusCode?: number;
@@ -131,6 +131,24 @@ void describe('guardCacheControl', () => {
     assert.equal(withTtl.guardCacheControl(anon, { cacheControl: undefined, setCookie: false }), null);
   });
 
+  void it('treats an error status CloudFront caches without caching headers as shared-cacheable', () => {
+    const request = { authorization: false, cookies: ['theme'] };
+    for (const statusCode of [404, 414, 500, 501, 502, 503, 504]) {
+      assert.equal(guard.guardCacheControl(request, { cacheControl: undefined, setCookie: false, statusCode }), PRIVATE, String(statusCode));
+      assert.equal(guard.guardCacheControl(request, { cacheControl: 'must-revalidate', setCookie: false, statusCode }), PRIVATE, String(statusCode));
+    }
+    for (const statusCode of [404, 500]) {
+      for (const cacheControl of ['private', 'no-store', PRIVATE]) {
+        assert.equal(guard.guardCacheControl(request, { cacheControl, setCookie: false, statusCode }), null, `${statusCode} ${cacheControl}`);
+      }
+      assert.equal(guard.guardCacheControl(anon, { cacheControl: undefined, setCookie: false, statusCode }), null);
+    }
+    // Other statuses fall back to the default TTL, which is 0 here.
+    for (const statusCode of [200, 302, 400, 403, 410]) {
+      assert.equal(guard.guardCacheControl(request, { cacheControl: undefined, setCookie: false, statusCode }), null, String(statusCode));
+    }
+  });
+
   void it('treats a future Expires as shared-cacheable when Cache-Control gives no TTL', () => {
     const request = { authorization: true, cookies: [] };
     const future = new Date(Date.now() + 3_600_000).toUTCString();
@@ -217,6 +235,16 @@ void describe('requestInfoFromEvent / guardResult', () => {
     const expires = new Date(Date.now() + 3_600_000).toUTCString();
     const result = guard.guardResult({ statusCode: 200, headers: { Expires: expires } }, request);
     assert.equal(result.headers?.['cache-control'], PRIVATE);
+  });
+
+  void it('reads the status code of a buffered result', () => {
+    const request = guard.requestInfoFromEvent({ headers: { cookie: 'theme=dark' } });
+    assert.equal(guard.guardResult({ statusCode: 404, headers: {}, body: 'not found' }, request).headers?.['cache-control'], PRIVATE);
+    assert.equal(guard.guardResult({ statusCode: 500, body: 'error' }, request).headers?.['cache-control'], PRIVATE);
+    assert.deepEqual(guard.guardResult({ statusCode: 500, headers: { 'cache-control': 'private' } }, request).headers, {
+      'cache-control': 'private',
+    });
+    assert.deepEqual(guard.guardResult({ statusCode: 200, headers: {} }, request).headers, {});
   });
 
   void it('makes a result with cookies (HTTP API shape) private', () => {
@@ -537,6 +565,15 @@ void describe('Node HTTP server (writeHead)', () => {
       } else if (req.url === '/write-head-array') {
         res.writeHead(200, 'OK', ['Cache-Control', 's-maxage=300', 'content-type', 'text/plain']);
         res.end('c');
+      } else if (req.url === '/not-found') {
+        res.statusCode = 404;
+        res.end('not found');
+      } else if (req.url === '/error') {
+        res.writeHead(500);
+        res.end('error');
+      } else if (req.url === '/error-private') {
+        res.writeHead(500, { 'cache-control': 'private' });
+        res.end('error');
       } else if (req.url === '/expires') {
         res.writeHead(200, { Expires: new Date(Date.now() + 3_600_000).toUTCString() });
         res.end('f');
@@ -582,6 +619,13 @@ void describe('Node HTTP server (writeHead)', () => {
   void it('treats a future Expires passed to writeHead as shared-cacheable', async () => {
     assert.equal((await get('/expires', { cookie: 'theme=dark' })).headers.get('cache-control'), PRIVATE);
     assert.equal((await get('/expires')).headers.get('cache-control'), null);
+  });
+
+  void it('makes an uncached error status private for a credentialed request', async () => {
+    assert.equal((await get('/not-found', { cookie: 'theme=dark' })).headers.get('cache-control'), PRIVATE);
+    assert.equal((await get('/error', { cookie: 'theme=dark' })).headers.get('cache-control'), PRIVATE);
+    assert.equal((await get('/error-private', { cookie: 'theme=dark' })).headers.get('cache-control'), 'private');
+    assert.equal((await get('/not-found')).headers.get('cache-control'), null);
   });
 
   void it('does not count an empty Set-Cookie value as setting a cookie', async () => {
