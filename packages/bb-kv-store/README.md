@@ -52,7 +52,7 @@ The examples use Zod. `schema` accepts any Standard Schema library, such as Zod,
 
 ## API
 
-```typescript
+```text
 const store = new KVStore(scope, id, options?)
 ```
 
