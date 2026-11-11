@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'yaml';
-import { accountsOf, taggedForCi } from './sweep-cognito-pools.mjs';
+import { accountsOf, isMissingStackError, taggedForCi } from './sweep-cognito-pools.mjs';
 
 const SCRIPT = fileURLToPath(new URL('./sweep-cognito-pools.mjs', import.meta.url));
 const WORKFLOW = fileURLToPath(new URL('../../.github/workflows/cleanup-stacks.yml', import.meta.url));
@@ -45,6 +45,7 @@ switch (args[0] + ' ' + args[1]) {
 		const start = Number(args.includes('--next-token') ? arg('--next-token') : 0);
 		const page = start / size + 1;
 		if (state.listError && (!state.listErrorPage || state.listErrorPage === page)) fail(state.listError);
+		if (state.listDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.listDelayMs);
 		const pools = state.pools.slice(start, start + size).map(({ Id, Name, CreationDate }) => ({ Id, Name, CreationDate }));
 		out({ UserPools: pools, ...(start + size < state.pools.length ? { NextToken: String(start + size) } : {}) });
 		break;
@@ -85,7 +86,7 @@ switch (args[0] + ' ' + args[1]) {
 }
 `;
 
-function run({ pools = [], account = ACCOUNT, roleArns = ROLE_ARNS, ...extra } = {}) {
+function run({ pools = [], account = ACCOUNT, roleArns = ROLE_ARNS, env: extraEnv = {}, ...extra } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'cognito-sweep-'));
 	const bin = join(dir, 'bin');
 	mkdirSync(bin);
@@ -103,6 +104,7 @@ function run({ pools = [], account = ACCOUNT, roleArns = ROLE_ARNS, ...extra } =
 		FAKE_AWS_STATE: statePath,
 		FAKE_AWS_LOG: logPath,
 		GITHUB_STEP_SUMMARY: summaryPath,
+		...extraEnv,
 	};
 	if (roleArns === null) delete env.AWS_ROLE_ARNS;
 	else env.AWS_ROLE_ARNS = roleArns;
@@ -208,6 +210,39 @@ describe('sweep-cognito-pools.mjs', () => {
 		assert.match(r.summary, /unreadable\): 1/);
 	});
 
+	it('deletes a pool only on the ValidationError for a missing stack', () => {
+		// The fake answers a stackless pool with the real ValidationError shape.
+		const r = run({ pools: [blocksPool()] });
+		assert.deepEqual(deletes(r.calls), ['us-east-1_bb1']);
+	});
+
+	it('skips a pool when the owner lookup fails with any other error, even one saying "does not exist"', () => {
+		for (const ownerError of [
+			'An error occurred (AccessDenied) when calling the DescribeStackResources operation: User is not authorized; the role does not exist',
+			'An error occurred (Throttling) when calling the DescribeStackResources operation: Rate exceeded; resource does not exist yet',
+			'Could not connect to the endpoint URL: endpoint does not exist',
+			// A ValidationError, but about a different id.
+			'An error occurred (ValidationError) when calling the DescribeStackResources operation: Stack for us-east-1_other does not exist',
+		]) {
+			const r = run({ pools: [blocksPool({ ownerError })] });
+			assert.equal(r.status, 0, r.out);
+			assert.deepEqual(deletes(r.calls), [], ownerError);
+			assert.match(r.summary, /unreadable\): 1/, ownerError);
+		}
+	});
+
+	it('flags the summary when the time budget stops the listing after page 1', () => {
+		const r = run({
+			pools: [blocksPool({ Id: 'us-east-1_page1' }), blocksPool({ Id: 'us-east-1_page2' })],
+			pageSize: 1,
+			listDelayMs: 1500,
+			env: { COGNITO_SWEEP_BUDGET_SECONDS: '1' },
+		});
+		assert.equal(r.status, 0, r.out);
+		assert.equal(r.calls.filter((c) => c[1] === 'list-user-pools').length, 1);
+		assert.match(r.summary, /User pools listed: 1 \(1 page, listing truncated by time budget\)/);
+	});
+
 	it('reports, and never changes, a pool with deletion protection on', () => {
 		const r = run({ pools: [blocksPool({ protection: 'ACTIVE' })] });
 		assert.deepEqual(deletes(r.calls), []);
@@ -289,6 +324,20 @@ describe('helpers', () => {
 		assert.equal(taggedForCi('bb-test-x', { 'blocks:purpose': 'vpc-smoke-e2e' }), true);
 		assert.equal(taggedForCi('bb-test-x', AMPLIFY_TAGS), false);
 		assert.equal(taggedForCi('amplifyAuthUserPool4BA7F805-viQ0rPu77agW', BLOCKS_TAGS), false);
+	});
+
+	it('recognises only the missing-stack ValidationError for the given id', () => {
+		const id = 'us-east-1_XpDNmUrOu';
+		const real = `An error occurred (ValidationError) when calling the DescribeStackResources operation: Stack for ${id} does not exist`;
+		assert.equal(isMissingStackError(real, id), true);
+		assert.equal(isMissingStackError(real, 'us-east-1_Other'), false);
+		// The id is matched literally, not as a regex.
+		assert.equal(isMissingStackError(real, 'us-east-1.XpDNmUrOu'), false);
+		assert.equal(
+			isMissingStackError(`An error occurred (AccessDenied) when calling it: Stack for ${id} does not exist`, id),
+			false,
+		);
+		assert.equal(isMissingStackError('An error occurred (ValidationError): Stack for x does not exist', id), false);
 	});
 });
 

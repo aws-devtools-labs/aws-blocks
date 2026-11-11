@@ -82,21 +82,38 @@ export function accountsOf(roleArns) {
 	}
 }
 
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Whether an aws CLI error is CloudFormation's ValidationError saying that
+ * no stack exists for `id` ("Stack for <id> does not exist" from
+ * describe-stack-resources, "Stack with id <id> does not exist" from
+ * describe-stacks). Any other error, even one that mentions "does not exist"
+ * (throttling, AccessDenied, a network failure), is not proof of a missing stack.
+ */
+export function isMissingStackError(err, id) {
+	return (
+		/\(ValidationError\)/.test(err) &&
+		new RegExp(`Stack (for|with id) ${escapeRegExp(id)} does not exist`).test(err)
+	);
+}
+
 /**
  * Who owns a pool: 'none' when no live stack does, 'live' when one does,
  * `unknown (...)` when it can't be told (then the pool is skipped).
  * describe-stack-resources --physical-resource-id names the (nested) stack that
- * holds the pool, and answers "Stack for <id> does not exist" when no live stack
- * does, including after the owning stack was deleted.
+ * holds the pool, and fails with a ValidationError "Stack for <id> does not
+ * exist" when no live stack does, including after the owning stack was deleted.
+ * Only that error counts as "no owner"; every other failure skips the pool.
  */
 function ownerOf(poolId) {
 	const r = aws('cloudformation', 'describe-stack-resources', '--physical-resource-id', poolId);
-	if (!r.ok) return /does not exist/.test(r.err) ? 'none' : `unknown (${r.err})`;
+	if (!r.ok) return isMissingStackError(r.err, poolId) ? 'none' : `unknown (${r.err})`;
 	const stackId = json(r.out)?.StackResources?.[0]?.StackId;
 	if (!stackId) return 'none';
 	// A deleted stack can still be named here; only a live one owns the pool.
 	const s = aws('cloudformation', 'describe-stacks', '--stack-name', stackId, '--query', 'Stacks[0].StackStatus');
-	if (!s.ok) return /does not exist/.test(s.err) ? 'none' : `unknown (${s.err})`;
+	if (!s.ok) return isMissingStackError(s.err, stackId) ? 'none' : `unknown (${s.err})`;
 	return json(s.out) === 'DELETE_COMPLETE' ? 'none' : 'live';
 }
 
@@ -122,10 +139,12 @@ async function main() {
 	// read as "nothing to sweep".
 	const pools = [];
 	let pages = 0;
+	let truncated = false;
 	let nextToken;
 	do {
 		if (Date.now() >= deadline) {
 			console.log('Time budget reached while listing user pools; sweeping the pools listed so far.');
+			truncated = true;
 			break;
 		}
 		const page = aws(
@@ -148,7 +167,7 @@ async function main() {
 	const cutoff = Date.now() - minAgeMs;
 	const candidates = pools.filter((p) => BLOCKS_POOL.test(p.Name) || AMPLIFY_POOL.test(p.Name));
 	const counts = {
-		listed: `${pools.length} (${pages} page${pages === 1 ? '' : 's'})`,
+		listed: `${pools.length} (${pages} page${pages === 1 ? '' : 's'}${truncated ? ', listing truncated by time budget' : ''})`,
 		testNamed: candidates.length,
 		deleted: 0,
 		tooNew: 0,
