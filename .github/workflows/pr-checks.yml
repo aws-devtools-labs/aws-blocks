@@ -290,6 +290,11 @@ jobs:
       - name: Test the E2E job selection
         run: node --test scripts/ci/e2e-selection.test.mjs
 
+      # Secret values reach $GITHUB_ENV only masked, and pull request workflows
+      # grant id-token: write only to the jobs that assume an AWS role.
+      - name: Test workflow secret handling and OIDC scope
+        run: node --test scripts/ci/workflow-secrets.test.mjs
+
       # Deletes the stacks a cancelled or crashed E2E job leaves behind.
       - name: Test the E2E teardown
         run: node --test scripts/ci/e2e-teardown.test.mjs scripts/ci/e2e-stack-wait.test.mjs
@@ -1128,12 +1133,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Masks every value (line by line) before exporting it to later steps;
+      # see scripts/ci/secret-to-env.sh.
       - name: Fetch Supabase secrets
         run: |
-          SECRET=$(aws secretsmanager get-secret-value \
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
             --secret-id blocks/supabase-e2e \
-            --query SecretString --output text)
-          echo "$SECRET" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+            --query SecretString --output text \
+            | scripts/ci/secret-to-env.sh
 
       - name: Apply test schema
         run: npx tsx packages/bb-data/test/apply-schema.ts
