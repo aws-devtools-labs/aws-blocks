@@ -26,12 +26,23 @@ final class DeclaredNames {
     }
 }
 
+/// Counts the `BlocksRuntime` symbols the generator has emitted, so a
+/// file that names one can import `BlocksRuntime` and a file that names none stays without it.
+final class RuntimeReferences {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
+    }
+}
+
 public struct SwiftCodeGenerator {
     let declaredBindings: [String: DeclaredTransferableBinding]
     /// Unconditional once a module is declared: the generator cannot know a
     /// customer package's export list.
     let runtimePrefix: String
     let declaredNames = DeclaredNames()
+    let runtimeReferences = RuntimeReferences()
 
     public init() {
         self.init(declaredBindings: [:], runtimePrefix: "")
@@ -67,25 +78,34 @@ public struct SwiftCodeGenerator {
         }
     }
 
+    /// A `BlocksRuntime` symbol, recorded so the file emitting it imports the runtime.
+    func runtimeSymbol(_ name: String) -> String {
+        runtimeReferences.record()
+        return "\(runtimePrefix)\(name)"
+    }
+
     func emitDeclaration(_ name: String, line: String, lines: inout [String]) {
         declaredNames.record(name)
         lines.append(line)
     }
 
     private func emitSources(from model: CodegenModel) -> GeneratedSources {
-        var modelLines = ["import Foundation"]
-        if !runtimePrefix.isEmpty {
-            modelLines.append("import BlocksRuntime")
-        }
-        modelLines.append("")
+        var modelLines = ["import Foundation", ""]
         var apiLines: [String] = ["import Foundation", "import BlocksRuntime"]
         apiLines.append(contentsOf: declaredModuleImports(model).map { "import \($0)" })
         apiLines.append("")
         var emittedTypes: Set<String> = []
 
         // Generate type definitions (component schemas only — flat in Models.swift)
+        let runtimeReferencesBeforeModels = runtimeReferences.count
         for typeDef in model.typeDefinitions {
             emitType(typeDef.type, name: typeDef.name, lines: &modelLines, emitted: &emittedTypes)
+        }
+        // Imports are per file: Models.swift needs the runtime import whenever its own
+        // code names a runtime symbol (validation errors, `JSONValue`, transferable
+        // handles), not only when declared modules make the prefix qualified.
+        if !runtimePrefix.isEmpty || runtimeReferences.count > runtimeReferencesBeforeModels {
+            modelLines.insert("import BlocksRuntime", at: 1)
         }
 
         // Build per-operation qualified-name lookup from nested types.
@@ -874,14 +894,14 @@ public struct SwiftCodeGenerator {
                 let minErr = "\(field.name) must be at least \(min) characters"
                 checks.append(
                     "guard \(valueVar).count >= \(min)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(minErr))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(minErr))) }"
                 )
             }
             if let max = constraints.maxLength {
                 let maxErr = "\(field.name) must be at most \(max) characters"
                 checks.append(
                     "guard \(valueVar).count <= \(max)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(maxErr))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(maxErr))) }"
                 )
             }
             if let pattern = constraints.pattern {
@@ -894,7 +914,7 @@ public struct SwiftCodeGenerator {
                 checks.append(
                     "guard \(valueVar).range(of: \(swiftStringLiteral(pattern)),"
                     + " options: .regularExpression) != nil"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(patternErr))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(patternErr))) }"
                 )
             }
         case .primitive(.integer, _), .primitive(.number, _):
@@ -904,28 +924,28 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must be >= \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) >= \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.maximum {
                 let err = "\(field.name) must be <= \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) <= \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.exclusiveMinimum {
                 let err = "\(field.name) must be > \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) > \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.exclusiveMaximum {
                 let err = "\(field.name) must be < \(cast(limit))"
                 checks.append(
                     "guard \(valueVar) < \(cast(limit))"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.multipleOf {
@@ -935,7 +955,7 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must be a multiple of \(cast(limit))"
                 checks.append(
                     "guard \(mod) == 0"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
         case .list:
@@ -943,14 +963,14 @@ public struct SwiftCodeGenerator {
                 let err = "\(field.name) must have at least \(limit) items"
                 checks.append(
                     "guard \(valueVar).count >= \(limit)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
             if let limit = constraints.maxItems {
                 let err = "\(field.name) must have at most \(limit) items"
                 checks.append(
                     "guard \(valueVar).count <= \(limit)"
-                    + " else { throw \(runtimePrefix)CodegenError.validation(\(swiftStringLiteral(err))) }"
+                    + " else { throw \(runtimeSymbol("CodegenError")).validation(\(swiftStringLiteral(err))) }"
                 )
             }
         default:

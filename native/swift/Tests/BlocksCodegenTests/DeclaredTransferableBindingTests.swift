@@ -587,7 +587,7 @@ final class DeclaredTransferableBindingTests: XCTestCase {
         )
     }
 
-    func testModelsFileStaysUnqualifiedAndRuntimeFreeWithoutADeclaredModule() throws {
+    func testModelsFileStaysUnqualifiedWithoutADeclaredModule() throws {
         let spec = """
         {
             "openrpc": "1.3.2",
@@ -599,10 +599,12 @@ final class DeclaredTransferableBindingTests: XCTestCase {
         }
         """
         let output = try generate(from: spec)
-        XCTAssertTrue(output.models.contains("CodegenError"), "got:\n\(output.models)")
-        XCTAssertFalse(
+        XCTAssertTrue(output.models.contains("throw CodegenError.validation("), "got:\n\(output.models)")
+        XCTAssertFalse(output.models.contains("BlocksRuntime.CodegenError"), "got:\n\(output.models)")
+        // Imports are per file, so the unqualified name still needs the runtime import.
+        XCTAssertTrue(
             output.models.contains("import BlocksRuntime"),
-            "an unqualified models file must not gain the import, got:\n\(output.models)"
+            "Models.swift must import the runtime it names, got:\n\(output.models)"
         )
     }
 

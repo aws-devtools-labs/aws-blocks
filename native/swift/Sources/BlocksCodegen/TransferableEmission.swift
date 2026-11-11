@@ -48,16 +48,16 @@ extension SwiftCodeGenerator {
         direct: Bool = false,
         renderArg: (ResolvedType) -> String
     ) -> String {
-        guard let binding = knownTransferableBindings[blocksType] else { return "\(runtimePrefix)JSONValue" }
+        guard let binding = knownTransferableBindings[blocksType] else { return runtimeSymbol("JSONValue") }
         // Only a direct result hydrates an OIDCClient; below the top level it decodes as its descriptor.
         // A direct one is typed by its provider enum, or `String` for an untyped spec.
         if blocksType == "oidc/client" {
-            guard direct else { return "\(runtimePrefix)JSONValue" }
-            return "\(runtimePrefix)\(binding.base)<\(typeArgs.first.map(renderArg) ?? "String")>"
+            guard direct else { return runtimeSymbol("JSONValue") }
+            return "\(runtimeSymbol(binding.base))<\(typeArgs.first.map(renderArg) ?? "String")>"
         }
-        guard binding.isGeneric else { return "\(runtimePrefix)\(binding.base)" }
-        let argType = typeArgs.first.map(renderArg) ?? "\(runtimePrefix)JSONValue"
-        return "\(runtimePrefix)\(binding.base)<\(argType)>"
+        guard binding.isGeneric else { return runtimeSymbol(binding.base) }
+        let argType = typeArgs.first.map(renderArg) ?? runtimeSymbol("JSONValue")
+        return "\(runtimeSymbol(binding.base))<\(argType)>"
     }
 
     /// From the emission `qualifiedNames`, so it matches the emitted nesting; a `$ref` stays bare.
@@ -162,7 +162,7 @@ extension SwiftCodeGenerator {
             case .integer: return "Int"
             case .number: return "Double"
             case .void: return "Void"
-            case .unknown: return "\(runtimePrefix)JSONValue"
+            case .unknown: return runtimeSymbol("JSONValue")
             }
         case .formattedType(let format, _):
             switch format {
