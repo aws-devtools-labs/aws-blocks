@@ -58,27 +58,39 @@ export interface KeyModel {
 	/**
 	 * The DynamoDB attribute type of each table key field, `'S'` or `'N'`,
 	 * probed from the schema the same way the CDK layer provisions it, so a key
-	 * value of the other type is rejected before DynamoDB would.
+	 * value of the other type is rejected before DynamoDB would. `undefined`
+	 * when the schema does not tell the two apart (a pass-through validator);
+	 * such a field accepts a string or a number.
 	 */
-	readonly keyTypes: Readonly<Record<string, 'S' | 'N'>>;
+	readonly keyTypes: Readonly<Record<string, 'S' | 'N' | undefined>>;
 }
 
 /** A schema's validate function, the only part of it the key model needs. */
 type Validator = { '~standard': { validate: (value: unknown) => unknown } };
 
-/**
- * Whether the schema accepts a number in `field`. Probes `validate({ [field]: 0 })`
- * and treats "no issue on that field" as numeric — the same probe the CDK layer
- * uses to pick the table's attribute type, so the two agree. A schema that
- * validates asynchronously cannot be probed; the field is taken as a string.
- */
-function isNumericField(schema: Validator | undefined, field: string): boolean {
-	if (!schema) return false;
-	const result = schema['~standard'].validate({ [field]: 0 });
-	if (result instanceof Promise) return false;
+/** Whether `schema` accepts `probe` as the value of `field`. A schema that validates asynchronously cannot be probed. */
+function accepts(schema: Validator, field: string, probe: unknown): boolean | undefined {
+	const result = schema['~standard'].validate({ [field]: probe });
+	if (result instanceof Promise) return undefined;
 	const issues = (result as { issues?: { path?: unknown[] }[] }).issues;
 	if (!issues) return true;
 	return !issues.some((issue) => issue.path?.length === 1 && pathKey(issue.path[0]) === field);
+}
+
+/**
+ * The attribute type of a key field, `'S'` or `'N'`, from the schema. Probes
+ * `validate({ [field]: 0 })` and `validate({ [field]: 'x' })`: a schema that
+ * accepts one and rejects the other names the type (the CDK layer provisions
+ * the table from the same `0` probe). A schema that accepts both, such as a
+ * pass-through validator, or that validates asynchronously, gives `undefined`.
+ */
+function keyType(schema: Validator | undefined, field: string): 'S' | 'N' | undefined {
+	if (!schema) return 'S';
+	const number = accepts(schema, field, 0);
+	const string = accepts(schema, field, 'x');
+	if (number === true && string === false) return 'N';
+	if (string === true && number === false) return 'S';
+	return undefined;
 }
 
 function pathKey(segment: unknown): unknown {
@@ -102,9 +114,9 @@ export function resolveKeyModel(options?: {
 	const table: KeyAttributes = key
 		? { partitionKey: key.partitionKey, sortKey: key.sortKey }
 		: { partitionKey: PK_ATTRIBUTE };
-	const keyTypes: Record<string, 'S' | 'N'> = {};
+	const keyTypes: Record<string, 'S' | 'N' | undefined> = {};
 	for (const field of keyFields(table)) {
-		keyTypes[field] = key && isNumericField(options?.schema, field) ? 'N' : 'S';
+		keyTypes[field] = key ? keyType(options?.schema, field) : 'S';
 	}
 	return {
 		table,
@@ -133,12 +145,12 @@ function describe(value: unknown): string {
  * @throws {KVStoreErrors.InvalidQuery} If the value is not a string or a number.
  * @throws {KVStoreErrors.ValidationFailed} If the value is an empty string.
  */
-function checkKeyValue(field: string, value: unknown, type: 'S' | 'N'): KeyValue {
-	if (type === 'S' && typeof value === 'string') {
+function checkKeyValue(field: string, value: unknown, type: 'S' | 'N' | undefined): KeyValue {
+	if (type !== 'N' && typeof value === 'string') {
 		if (value === '') throw blocksError(KVStoreErrors.ValidationFailed, KVStoreMessages.emptyKeyField(field));
 		return value;
 	}
-	if (type === 'N' && typeof value === 'number' && Number.isFinite(value)) return value;
+	if (type !== 'S' && typeof value === 'number' && Number.isFinite(value)) return value;
 	throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.keyFieldType(field, type, describe(value)));
 }
 

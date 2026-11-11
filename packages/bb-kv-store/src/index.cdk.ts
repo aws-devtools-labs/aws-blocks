@@ -70,6 +70,7 @@ export class KVStore<
 	In = string,
 	Out = In,
 	K extends KeyConfig<In, Out> | undefined = undefined,
+	// biome-ignore lint/complexity/noBannedTypes: `{}` is the empty index map; `keyof {}` is `never`, so a store without indexes accepts no index name
 	I extends Record<string, IndexConfig<In, Out>> = {},
 > extends BuildingBlockScope {
 	private table: ITable;

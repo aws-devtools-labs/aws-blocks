@@ -4,9 +4,7 @@
 // Browser stub - KVStore runs server-side only. Frontends import this entry
 // for the error constants (`isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)`)
 // and for the types; the data methods have no browser implementation.
-export class KVStore {
-	constructor(..._args: unknown[]) {}
-}
+export class KVStore {}
 export { KVStoreErrors } from './errors.js';
 export type {
 	ConditionalDeleteOptions,

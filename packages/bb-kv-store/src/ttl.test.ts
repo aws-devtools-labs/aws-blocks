@@ -136,7 +136,12 @@ describe('AWS runtime writes the DynamoDB TTL attribute', () => {
 	function captureAws<T = string>(respond: () => any = () => ({})) {
 		const store = new AwsKVStore<T>(testScope(), 'kv');
 		const sent: any[] = [];
-		(store as any).docClient = { send: async (c: any) => (sent.push(c.input), respond()) };
+		(store as any).docClient = {
+			send: async (c: any) => {
+				sent.push(c.input);
+				return respond();
+			},
+		};
 		return { store, sent };
 	}
 

@@ -295,6 +295,7 @@ export type SortCondition<V> = OneOf<
 		lessThan: V;
 		lessThanOrEqual: V;
 		between: [V, V];
+	// biome-ignore lint/complexity/noBannedTypes: `{}` adds no member for a number sort field
 	} & ([V] extends [string] ? { beginsWith: string } : {})
 >;
 
@@ -601,6 +602,7 @@ export interface SchemaOptions<In, Out, K, I> {
  * the schema, and `key`, `indexes`, `ttl`, and `readValidation` become
  * available. `key` or `indexes` without a `schema` is a compile error.
  */
+// biome-ignore lint/complexity/noBannedTypes: `{}` is the empty index map (no index declared)
 export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = TableOptions &
 	(
 		| { schema?: undefined; key?: undefined; indexes?: undefined; ttl?: undefined; readValidation?: undefined }

@@ -9,17 +9,42 @@ import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
-// @public (undocumented)
-export interface ConditionalDeleteOptions<T = unknown> {
+// @public
+export type AtLeastOne<T> = T extends unknown ? {
+    [P in keyof T]-?: Required<Pick<T, P>> & Partial<T>;
+}[keyof T] : never;
+
+// @public
+export type ConditionalDeleteOptions<T = unknown> = {
     ifExists?: boolean;
-    ifValueEquals?: T;
+} & ValueCheck<T>;
+
+// @public
+export type ConditionalWriteOptions<T = unknown> = {
+    ifNotExists?: boolean;
+} & ValueCheck<T>;
+
+// @public
+export type DeleteOptions<T = unknown> = ConditionalDeleteOptions<T>;
+
+// @public
+export interface Entry<T, K> {
+    // (undocumented)
+    expiresAt?: number;
+    // (undocumented)
+    key: KeyOf<T, K>;
+    // (undocumented)
+    value: T;
 }
 
-// @public (undocumented)
-export interface ConditionalWriteOptions<T = unknown> {
-    ifNotExists?: boolean;
-    ifValueEquals?: T;
-}
+// @public
+export type Expiry = {
+    ttlSeconds?: number;
+    expiresAt?: undefined;
+} | {
+    expiresAt?: Date | number;
+    ttlSeconds?: undefined;
+};
 
 // @public
 export interface ExternalKmsKeyRef {
@@ -38,55 +63,214 @@ export interface ExternalTableRef {
 }
 
 // @public
-export class KVStore<T = string> extends Scope {
-    constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<T>);
+export type FieldsOf<C> = C extends {
+    partitionKey: infer P;
+    sortKey: infer S;
+} ? (P | S) & string : C extends {
+    partitionKey: infer P;
+} ? P & string : never;
+
+// @public
+export interface GetOptions {
+    consistentRead?: boolean;
+}
+
+// @public
+export interface IndexConfig<In, Out> {
+    partitionKey: IndexField<In, Out>;
+    sortKey?: IndexField<In, Out>;
+}
+
+// @public
+export type IndexField<In, Out> = IsRecord<Out> extends true ? {
+    [P in keyof Out & string]-?: [NonNullable<Out[P]>] extends [string | number] ? P extends keyof In ? [NonNullable<Out[P]>] extends [NonNullable<In[P]>] ? P : never : never : never;
+}[keyof Out & string] : never;
+
+// @public
+export type IsRecord<T> = T extends readonly unknown[] ? false : T extends object ? true : false;
+
+// @public
+export interface KeyConfig<In, Out> {
+    partitionKey: KeyField<In, Out>;
+    sortKey?: KeyField<In, Out>;
+}
+
+// @public
+export type KeyField<In, Out> = IsRecord<Out> extends true ? {
+    [P in keyof Out & string]-?: [Out[P]] extends [string | number] ? P extends keyof In ? [Out[P]] extends [NonNullable<In[P]>] ? P : never : never : never;
+}[keyof Out & string] : never;
+
+// @public
+export type KeyOf<T, K> = [K] extends [undefined] ? string : {
+    [F in FieldsOf<K> & keyof T]: T[F];
+};
+
+// @public
+export class KVStore<In = string, Out = In, K extends KeyConfig<In, Out> | undefined = undefined, I extends Record<string, IndexConfig<In, Out>> = {}> extends Scope {
+    constructor(scope: ScopeParent, id: string, options?: KVStoreOptions<In, Out, K, I>);
     // (undocumented)
     readonly bbName = "KVStore";
-    delete(key: string, conditions?: ConditionalDeleteOptions<T>): Promise<void>;
+    delete(key: KeyOf<Out, K>, conditions?: ConditionalDeleteOptions<Out>): Promise<void>;
+    deleteBatch(keys: KeyOf<Out, K>[]): Promise<void>;
     static fromExisting(tableName: string): ExternalTableRef;
-    // (undocumented)
     static fromKmsKey(keyArn: string): ExternalKmsKeyRef;
-    get(key: string): Promise<T | null>;
+    get(key: KeyOf<Out, K>, options?: GetOptions): Promise<Out | null>;
+    getBatch(keys: KeyOf<Out, K>[]): Promise<(Out | null)[]>;
     // @internal
     protected log: ChildLogger;
-    put(key: string, value: T, options?: PutOptions<T>): Promise<void>;
-    scan(options?: ScanOptions): AsyncIterable<{
-        key: string;
-        value: T;
-    }>;
+    put(key: KeyOf<Out, K>, value: ValueOf<In, K>, options?: PutOptions<Out>): Promise<void>;
+    putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void>;
+    query(options: QueryOptions<Out, K, I>): Results<Out, K>;
+    scan(options?: ScanOptions): Results<Out, K>;
 }
 
 // @public
 export const KVStoreErrors: {
     readonly ConditionalCheckFailed: "ConditionalCheckFailedException";
     readonly ValidationFailed: "ValidationFailedException";
+    readonly InvalidQuery: "InvalidQueryException";
     readonly ItemTooLarge: "ItemTooLargeException";
+    readonly BatchIncomplete: "BatchIncompleteException";
 };
 
-// @public (undocumented)
-export interface KVStoreOptions<T = string> {
-    deletionProtection?: boolean;
+// @public
+export type KVStoreOptions<In = string, Out = In, K = undefined, I = {}> = TableOptions & ({
+    schema?: undefined;
+    key?: undefined;
+    indexes?: undefined;
+    ttl?: undefined;
+    readValidation?: undefined;
+} | SchemaOptions<In, Out, K, I>);
+
+// @public
+export type NumberField<In, Out> = IsRecord<Out> extends true ? {
+    [P in keyof Out & string]-?: [NonNullable<Out[P]>] extends [number] ? P extends keyof In ? [NonNullable<In[P]>] extends [number] ? P : never : never : never;
+}[keyof Out & string] : never;
+
+// @public
+export type OneOf<M> = {
+    [P in keyof M]: {
+        [Q in P]: M[Q];
+    } & {
+        [Q in Exclude<keyof M, P>]?: never;
+    };
+}[keyof M];
+
+// @public
+export type OtherPart<T> = T extends readonly unknown[] ? T : T extends object ? never : T;
+
+// @public
+export interface Page {
+    cursor?: string;
+    limit?: number;
+    order?: 'asc' | 'desc';
+}
+
+// @public
+export type PartitionCondition<V> = {
+    equals: V;
+};
+
+// @public
+export type PutBatchEntry<In, Out, K> = {
+    key: KeyOf<Out, K>;
+    value: ValueOf<In, K>;
+} & Expiry;
+
+// @public
+export type PutOptions<T = unknown> = Expiry & ConditionalWriteOptions<T>;
+
+// @public
+export type QueryOptions<T, K, I> = ([K] extends [undefined] ? never : {
+    index?: undefined;
+    where: Where<T, K>;
+} & Page) | {
+    [N in keyof I & string]: {
+        index: N;
+        where: Where<T, I[N]>;
+    } & Page;
+}[keyof I & string];
+
+// @public
+export type ReadValidationMode = 'off' | 'coerce' | 'strict';
+
+// @public
+export type RecordPart<T> = T extends readonly unknown[] ? never : T extends object ? T : never;
+
+// @public
+export interface Results<T, K> extends AsyncIterable<Entry<T, K>> {
+    // (undocumented)
+    readonly cursor: string | undefined;
+}
+
+// @public
+export interface ScanOptions {
+    cursor?: string;
+    includeExpired?: boolean;
+    limit?: number;
+}
+
+// @public
+export interface SchemaOptions<In, Out, K, I> {
+    indexes?: I;
+    key?: K;
+    readValidation?: ReadValidationMode;
+    schema: StandardSchemaV1<In, Out>;
+    ttl?: NumberField<In, Out>;
+}
+
+// @public
+export type SortCondition<V> = OneOf<{
+    equals: V;
+    greaterThan: V;
+    greaterThanOrEqual: V;
+    lessThan: V;
+    lessThanOrEqual: V;
+    between: [V, V];
+} & ([V] extends [string] ? {
+    beginsWith: string;
+} : {})>;
+
+// @public
+export interface TableOptions {
     encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     logger?: ChildLogger;
     pointInTimeRecovery?: boolean | {
         retentionDays: number;
     };
-    removalPolicy?: 'destroy' | 'retain';
-    schema?: StandardSchemaV1<T>;
+    protection?: 'disposable' | 'retained' | 'locked';
     table?: ExternalTableRef;
-    ttl?: boolean;
 }
 
 // @public
-export interface PutOptions<T = unknown> extends ConditionalWriteOptions<T> {
-    expiresAt?: Date | number;
-    ttlSeconds?: number;
-}
+export type ValueCheck<T> = ([RecordPart<T>] extends [never] ? {
+    ifFieldEquals?: undefined;
+} : {
+    ifFieldEquals?: AtLeastOne<RecordPart<T>>;
+}) & ([OtherPart<T>] extends [never] ? {
+    ifValueEquals?: undefined;
+} : {
+    ifValueEquals?: OtherPart<T>;
+});
 
 // @public
-export interface ScanOptions {
-    includeExpired?: boolean;
-}
+export type ValueOf<T, K> = [K] extends [undefined] ? T : Omit<T, FieldsOf<K>> & {
+    [F in FieldsOf<K> & keyof T]?: T[F];
+};
+
+// @public
+export type Where<T, C> = C extends {
+    partitionKey: infer P extends keyof T;
+    sortKey: infer S extends keyof T;
+} ? {
+    [F in P]: PartitionCondition<NonNullable<T[F]>>;
+} & {
+    [F in S]?: SortCondition<NonNullable<T[F]>>;
+} : C extends {
+    partitionKey: infer P extends keyof T;
+} ? {
+    [F in P]: PartitionCondition<NonNullable<T[F]>>;
+} : never;
 
 // (No @packageDocumentation comment for this package)
 

@@ -38,7 +38,6 @@ const orderSchema = z.object({
 	total: z.number(),
 	note: z.string().optional(),
 });
-type Order = z.infer<typeof orderSchema>;
 
 // ── 1. A string key ─────────────────────────────────────────────────────────
 
