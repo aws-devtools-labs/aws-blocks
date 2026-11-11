@@ -58,6 +58,10 @@ switch (args[0] + ' ' + args[1]) {
 	case 'cloudformation describe-stack-resources': {
 		const p = pool();
 		if (p.ownerError) fail(p.ownerError);
+		if (p.ownerOutput !== undefined) {
+			process.stdout.write(p.ownerOutput);
+			break;
+		}
 		if (!p.stack) fail('An error occurred (ValidationError) when calling the DescribeStackResources operation: Stack for ' + p.Id + ' does not exist');
 		out({ StackResources: [{ StackId: p.stack.id, PhysicalResourceId: p.Id }] });
 		break;
@@ -229,6 +233,23 @@ describe('sweep-cognito-pools.mjs', () => {
 			assert.deepEqual(deletes(r.calls), [], ownerError);
 			assert.match(r.summary, /unreadable\): 1/, ownerError);
 		}
+	});
+
+	const skipsUnnamedOwner = (ownerOutput) => {
+		const r = run({ pools: [blocksPool({ ownerOutput })] });
+		assert.equal(r.status, 0, r.out);
+		assert.deepEqual(deletes(r.calls), []);
+		assert.deepEqual(r.left, ['bb-test-prod-pr-1327-1-altbgg-test-app-authC']);
+		assert.match(r.out, /describe-stack-resources returned no stack for us-east-1_bb1/);
+		assert.match(r.summary, /unreadable\): 1/);
+	};
+
+	it('skips a pool when the owner lookup returns no stack resources', () => {
+		skipsUnnamedOwner(JSON.stringify({ StackResources: [] }));
+	});
+
+	it('skips a pool when the owner lookup output cannot be parsed', () => {
+		skipsUnnamedOwner('not json');
 	});
 
 	it('flags the summary when the time budget stops the listing after page 1', () => {

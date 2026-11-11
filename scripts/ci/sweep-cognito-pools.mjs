@@ -104,13 +104,20 @@ export function isMissingStackError(err, id) {
  * describe-stack-resources --physical-resource-id names the (nested) stack that
  * holds the pool, and fails with a ValidationError "Stack for <id> does not
  * exist" when no live stack does, including after the owning stack was deleted.
- * Only that error counts as "no owner"; every other failure skips the pool.
+ * Only that error counts as "no owner"; every other failure skips the pool, as
+ * does a successful call that names no stack (no resources, or output that
+ * can't be parsed).
  */
 function ownerOf(poolId) {
 	const r = aws('cloudformation', 'describe-stack-resources', '--physical-resource-id', poolId);
 	if (!r.ok) return isMissingStackError(r.err, poolId) ? 'none' : `unknown (${r.err})`;
-	const stackId = json(r.out)?.StackResources?.[0]?.StackId;
-	if (!stackId) return 'none';
+	let stackId;
+	try {
+		stackId = json(r.out)?.StackResources?.[0]?.StackId;
+	} catch {
+		// Unparseable output names no stack; handled below.
+	}
+	if (!stackId) return `unknown (describe-stack-resources returned no stack for ${poolId})`;
 	// A deleted stack can still be named here; only a live one owns the pool.
 	const s = aws('cloudformation', 'describe-stacks', '--stack-name', stackId, '--query', 'Stacks[0].StackStatus');
 	if (!s.ok) return isMissingStackError(s.err, stackId) ? 'none' : `unknown (${s.err})`;
