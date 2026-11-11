@@ -163,7 +163,7 @@ const db = new Database(scope, 'db', {
 });
 ```
 
-With `rlsPolicy: 'enforce'`, each CRUD handler checks the live table before its first read or write (once per table per connection, then cached). If RLS isn't enabled, or the `authenticated` role is exempt from it (it owns the table without `FORCE ROW LEVEL SECURITY`, or has `BYPASSRLS`), the call fails with `DatabaseErrors.RowLevelSecurityRequired` and runs no query. The server log names the table and the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` to run. `bb-data pull` sets `rlsPolicy: 'enforce'` for you.
+With `rlsPolicy: 'enforce'`, each CRUD handler checks the live table before its first read or write. If RLS isn't enabled, or the `authenticated` role is exempt from it (it owns the table, directly or through role membership, without `FORCE ROW LEVEL SECURITY`, or has `BYPASSRLS`), the call fails with `DatabaseErrors.RowLevelSecurityRequired` and runs no query. The server log names the table and the `ALTER TABLE … ENABLE ROW LEVEL SECURITY;` to run. A refused table is checked again on the next call, so the fix takes effect without a restart. A table that passed is cached for the life of the database connection: if you later disable RLS on it, warm instances keep serving it until they recycle. `bb-data pull` sets `rlsPolicy: 'enforce'` for you.
 
 The table metadata can also record RLS per table with `rowLevelSecurity` (`bb-data pull` writes it):
 

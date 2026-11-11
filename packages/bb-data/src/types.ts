@@ -27,8 +27,15 @@ export interface DatabaseOptions {
    * `'enforce'`, every CRUD handler first checks the live table (once per table
    * per connection, cached) and is refused with
    * `DatabaseErrors.RowLevelSecurityRequired`, before any read or write, unless
-   * RLS is enabled on it and applies to the `authenticated` role. Tables listed
+   * RLS is enabled on it and applies to the `authenticated` role (the role
+   * doesn't own the table, directly or through role membership, without
+   * `FORCE ROW LEVEL SECURITY`, and has no `BYPASSRLS`). Tables listed
    * in `CrudOptions.dangerouslyAllowWithoutRowLevelSecurity` are not checked.
+   *
+   * Only a passing check is cached. A refused table is checked again on the
+   * next call, so enabling RLS takes effect without a restart; a table that
+   * passed keeps being served on a warm connection until it is recycled, even
+   * if RLS is disabled on it afterwards.
    *
    * Without it, CRUD still runs on a table without RLS (a warning is logged),
    * unless the table's metadata sets `rowLevelSecurity` (see `TableMetaEntry`).
