@@ -643,6 +643,9 @@ export class AgentBase<TContext = DefaultToolContext> extends Scope {
 					// message, so it reaches the model too. Wrap it like a successful result. An
 					// interrupt isn't a failure: rethrow it untouched so the approval flow still works.
 					if (err instanceof StrandsInterruptError) throw err;
+					// The model only sees the wrapped text, so record what failed here. The message can echo
+					// untrusted content, so only the error's shape (name, AWS status, request id) is logged.
+					this.log.warn('Untrusted tool failed', { tool: t.name, ...errorCauseShape(err) });
 					throw wrapUntrustedToolError(t.name!, err, untrustedNonce);
 				}
 				return wrapUntrustedToolOutput(t.name!, result, untrustedNonce);

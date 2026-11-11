@@ -1920,6 +1920,31 @@ describe('untrustedOutput', () => {
 		assert.match(seen, /<untrusted-data id="[0-9a-f]{18}" source="fetchPage">\n[\s\S]*IGNORE PREVIOUS INSTRUCTIONS[\s\S]*\n<\/untrusted-data id="[0-9a-f]{18}">/);
 	});
 
+	test('logs the shape of a throwing untrusted tool\'s original error server-side, without its message', async () => {
+		const warnings: Array<{ msg: string; meta?: Record<string, unknown> }> = [];
+		const logger = { info() {}, error() {}, debug() {}, warn: (msg: string, meta?: Record<string, unknown>) => { warnings.push({ msg, meta }); } } as never;
+		const scope = new Scope('test-untrusted-throw-log');
+		const agent = new Agent(scope, 'utl', {
+			systemPrompt: 'test',
+			logger,
+			model: { deployed: { provider: 'canned' }, local: { provider: 'canned' } },
+			tools: (tool) => ({ fetchPage: tool({ description: 'fetches a page',
+				parameters: z.object({}),
+				untrustedOutput: true,
+				handler: async () => {
+					const err = new Error(`upstream said: ${injected}`);
+					err.name = 'UpstreamError';
+					throw err;
+				}, }) }),
+		});
+		const result = await agent.stream('use fetchPage', { userId: 'u-1' });
+		await result.complete();
+		const logged = warnings.find((w) => w.meta?.tool === 'fetchPage');
+		assert.ok(logged, `expected a warning for the failed tool, got ${JSON.stringify(warnings)}`);
+		assert.strictEqual(logged.meta?.name, 'UpstreamError');
+		assert.ok(!JSON.stringify(logged).includes(injected), 'the untrusted message is not logged');
+	});
+
 	test('still pauses for approval when an untrusted tool calls interrupt()', async () => {
 		const scope = new Scope('test-untrusted-interrupt');
 		const agent = new Agent(scope, 'ui', {
