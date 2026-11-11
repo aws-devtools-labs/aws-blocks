@@ -16,6 +16,7 @@ import {
 	deleteCondition,
 	encodeCursor,
 	type Item,
+	itemExpired,
 	type KeyModel,
 	type KeyValue,
 	keyFields,
@@ -115,6 +116,8 @@ export class KVStore<
 	private data: Map<string, Item>;
 	private model: KeyModel;
 	private reader: Reader<Out, Entry<Out, K>>;
+	/** Every item in base-key order, for `scan`. Sorted on first use and dropped on every write. */
+	private sorted: Item[] | undefined;
 	/** @internal Logger for internal operations. Defaults to warn-level when not provided. */
 	protected log: ChildLogger;
 
@@ -291,7 +294,7 @@ export class KVStore<
 		// position after a restart (Map order would follow write order).
 		const byBaseKey = (a: Item, b: Item) => compareByBaseKey(this.model, a, b);
 		return this.results(
-			() => [...this.data.values()].sort(byBaseKey),
+			() => this.inBaseKeyOrder(byBaseKey),
 			byBaseKey,
 			decodeCursor(this.model, options?.cursor, undefined),
 			normalizeLimit(options?.limit),
@@ -423,9 +426,14 @@ export class KVStore<
 			const obj = JSON.parse(readFileSync(this.filePath, 'utf8')) as Record<string, unknown>;
 			const entries = new Map<string, Item>();
 			if (!isPlainObject(obj)) return entries;
+			const now = nowEpochSeconds();
 			for (const [key, stored] of Object.entries(obj)) {
 				// Skip anything that is not an item (a corrupt or legacy entry).
 				if (!isPlainObject(stored) || !keyFields(this.model.table).every((f) => f in stored)) continue;
+				// Drop an item whose expiry has passed, as DynamoDB does in the
+				// background. Without this the file only grows, and every write
+				// rewrites the dead rows.
+				if (itemExpired(this.model, stored, now)) continue;
 				entries.set(key, stored);
 			}
 			return entries;
@@ -434,7 +442,14 @@ export class KVStore<
 		}
 	}
 
+	/** Every item in base-key order. A full sort for each `scan` is wasted work when nothing was written in between. */
+	private inBaseKeyOrder(compare: (a: Item, b: Item) => number): Item[] {
+		if (!this.sorted) this.sorted = [...this.data.values()].sort(compare);
+		return this.sorted;
+	}
+
 	private flushToDisk(): void {
+		this.sorted = undefined;
 		const obj: Record<string, Item> = {};
 		for (const [key, item] of this.data) obj[key] = item;
 		writeFileSync(this.filePath, JSON.stringify(obj, null, 2));

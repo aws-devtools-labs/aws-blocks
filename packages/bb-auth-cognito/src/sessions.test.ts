@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { test, describe, beforeEach, afterEach, after } from 'node:test';
+import { test, describe, beforeEach, afterEach, after, mock } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -251,16 +251,24 @@ describe('SessionStore TTL', () => {
 	});
 
 	test('deleteByUsername physically deletes a session past its ttl that the reaper has not collected', async () => {
+		// The stale session gets a short lifetime and the others a long one. `store`
+		// loads all three while they are live. The clock then moves past the stale
+		// session's expiry, as when DynamoDB has not reaped an expired row yet. (The
+		// mock drops an expired row when it loads its file, so the row must expire
+		// while the store holds it.)
+		const stale = await new SessionStore(ROOT, 'delete-expired', 60).createSession(recordFor('alice'));
 		const store = new SessionStore(ROOT, 'delete-expired', 3600);
-		const stale = await store.createSession(recordFor('alice'));
 		const live = await store.createSession(recordFor('alice'));
 		const bob = await store.createSession(recordFor('bob'));
 
-		rewriteTtl('delete-expired', stale, nowSeconds() - 60);
-		assert.ok(itemKey(stale) in storedItems('delete-expired'), 'row is still on disk — this is the case under test');
-
-		const reopened = new SessionStore(ROOT, 'delete-expired', 3600);
-		assert.strictEqual(await reopened.deleteByUsername('alice'), 2, 'revoke must count the expired row too');
+		mock.timers.enable({ apis: ['Date'], now: Date.now() + 120_000 });
+		try {
+			assert.strictEqual(await store.lookupSession(stale), null, 'the stale session is past its ttl');
+			assert.ok(itemKey(stale) in storedItems('delete-expired'), 'row is still on disk — this is the case under test');
+			assert.strictEqual(await store.deleteByUsername('alice'), 2, 'revoke must count the expired row too');
+		} finally {
+			mock.timers.reset();
+		}
 
 		const remaining = storedItems('delete-expired');
 		assert.ok(!(itemKey(stale) in remaining), 'expired row must be physically deleted, not left holding a refresh token');

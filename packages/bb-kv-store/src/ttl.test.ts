@@ -96,6 +96,20 @@ describe('mock runtime emulates DynamoDB TTL', () => {
 		assert.equal(await new KVStore(scope, 'kv').get('dead'), null);
 	});
 
+	test('an expired item is dropped when the store loads its file, so the file does not grow', async () => {
+		const scope = testScope();
+		const first = new KVStore(scope, 'kv');
+		await first.put('dead', 'y', { expiresAt: 1 });
+		await first.put('live', 'x');
+		const reloaded = new KVStore(scope, 'kv');
+		assert.deepEqual(
+			(await Array.fromAsync(reloaded.scan({ includeExpired: true }))).map((e) => e.key),
+			['live'],
+		);
+		await reloaded.put('other', 'z');
+		assert.equal(readFileSync(`.bb-data/${reloaded.fullId}/store.json`, 'utf8').includes('dead'), false);
+	});
+
 	test('re-putting without a TTL clears a previous expiry', async () => {
 		const store = new KVStore(testScope(), 'kv');
 		await store.put('a', 'x', { ttlSeconds: 60 });

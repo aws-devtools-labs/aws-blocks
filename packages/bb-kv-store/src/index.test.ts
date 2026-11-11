@@ -78,6 +78,27 @@ describe('a store with no options (string key, string value)', () => {
 		]);
 	});
 
+	test('scan sees every write that happens between two scans', async () => {
+		const store = new KVStore(testScope(), 'kv');
+		await store.put('b', '2');
+		assert.deepStrictEqual(
+			(await Array.fromAsync(store.scan())).map((e) => e.key),
+			['b'],
+		);
+		await store.put('a', '1');
+		await store.delete('b');
+		await store.putBatch([{ key: 'c', value: '3' }]);
+		assert.deepStrictEqual(
+			(await Array.fromAsync(store.scan())).map((e) => e.key),
+			['a', 'c'],
+		);
+		await store.deleteBatch(['a']);
+		assert.deepStrictEqual(
+			(await Array.fromAsync(store.scan())).map((e) => e.key),
+			['c'],
+		);
+	});
+
 	test('scan on an empty store yields nothing and no cursor', async () => {
 		const store = new KVStore(testScope(), 'kv');
 		const results = store.scan();

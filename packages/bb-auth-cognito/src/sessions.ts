@@ -339,13 +339,18 @@ export class SessionStore {
 	 * ~48 h after expiry. A row past its TTL but still on disk holds a live
 	 * refresh token, and a deliberate revoke is the one moment retention matters
 	 * most — so it is deleted rather than skipped as already-invisible.
+	 *
+	 * The matching sessions are deleted with one batch call, not one call for
+	 * each session. On AWS the batch can fail with `BatchIncompleteException`
+	 * when DynamoDB leaves deletes unprocessed after its retries; the caller
+	 * sees that error and can run the revoke again.
 	 */
 	async deleteByUsername(username: string): Promise<number> {
 		const toDelete: string[] = [];
 		for await (const { key, value } of this.kv.scan({ includeExpired: true })) {
 			if (decodeIdToken(value.idToken).username === username) toDelete.push(key);
 		}
-		for (const id of toDelete) await this.kv.delete(id);
+		if (toDelete.length > 0) await this.kv.deleteBatch(toDelete);
 		return toDelete.length;
 	}
 }
