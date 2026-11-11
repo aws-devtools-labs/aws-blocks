@@ -36,13 +36,14 @@ interface StubOptions {
 	failEntryFor?: string;
 	/** Throw from the whole SendBulkEmail call when it includes this recipient. */
 	throwCallFor?: string;
+	maxBatchSize?: number;
 }
 
 /** An AWS EmailClient whose SES client records every command instead of calling SES. */
 function awsClient(options: StubOptions | string = {}): { email: AwsEmailClient; sent: Sent[] } {
-	const { fromAddress = 'noreply@example.com', replyTo, failEntryFor, throwCallFor } =
+	const { fromAddress = 'noreply@example.com', replyTo, failEntryFor, throwCallFor, maxBatchSize } =
 		typeof options === 'string' ? { fromAddress: options } : options;
-	const email = new AwsEmailClient(new Scope('app'), 'mail', { fromAddress, replyTo });
+	const email = new AwsEmailClient(new Scope('app'), 'mail', { fromAddress, replyTo, maxBatchSize });
 	const sent: Sent[] = [];
 	(email as unknown as { client: { send: (c: Sent) => Promise<unknown> } }).client.send = async (command: Sent) => {
 		sent.push(command);
@@ -292,21 +293,29 @@ test('sendBatch() honours a custom maxBatchSize on both the mock and AWS', async
 	const raised = new MockEmailClient(new Scope('app'), 'raised', { fromAddress: 'noreply@example.com', maxBatchSize: 150 });
 	assert.ok((await raised.sendBatch(batchOf(150))).results.every((r) => r.status === 'success'));
 
-	const email = new AwsEmailClient(new Scope('app'), 'mail', { fromAddress: 'noreply@example.com', maxBatchSize: 2 });
-	const sent: Sent[] = [];
-	(email as unknown as { client: { send: (c: Sent) => Promise<unknown> } }).client.send = async (c: Sent) => {
-		sent.push(c);
-		return { BulkEmailEntryResults: [] };
-	};
+	const { email, sent } = awsClient({ maxBatchSize: 2 });
 	await assert.rejects(() => email.sendBatch(batchOf(3)), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
-	assert.strictEqual(sent.length, 0);
+	assert.strictEqual(sent.length, 0, 'an over-cap batch must not reach SES');
+	const atLimit = await email.sendBatch(batchOf(2));
+	assert.strictEqual(atLimit.results.length, 2);
+	assert.ok(atLimit.results.every((r) => r.status === 'success'), 'a batch at the cap is sent');
+	assert.strictEqual(sent.length, 1);
+
+	const { email: raisedAws, sent: raisedSent } = awsClient({ maxBatchSize: 150 });
+	const raisedResult = await raisedAws.sendBatch(batchOf(150));
+	assert.strictEqual(raisedResult.results.length, 150);
+	assert.ok(raisedResult.results.every((r) => r.status === 'success'), 'a raised cap lets a 150-message batch through');
+	assert.strictEqual(raisedSent.length, 3, '150 messages go out as 3 SendBulkEmail calls of 50');
+	assert.ok(raisedSent.every((c) => c instanceof SendBulkEmailCommand));
 });
 
 for (const maxBatchSize of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
 	test(`the mock and AWS constructors reject maxBatchSize ${maxBatchSize}`, () => {
 		const options = { fromAddress: 'noreply@example.com', maxBatchSize };
-		assert.throws(() => new MockEmailClient(new Scope('app'), 'mail', options), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
-		assert.throws(() => new AwsEmailClient(new Scope('app'), 'mail', options), (e: unknown) => isBlocksError(e, EmailErrors.InvalidInput));
+		const rejected = (e: unknown) =>
+			isBlocksError(e, EmailErrors.InvalidInput) && (e as Error).message.includes(`(got ${String(maxBatchSize)})`);
+		assert.throws(() => new MockEmailClient(new Scope('app'), 'mail', options), rejected);
+		assert.throws(() => new AwsEmailClient(new Scope('app'), 'mail', options), rejected);
 	});
 }
 

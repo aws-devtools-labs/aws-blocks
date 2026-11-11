@@ -113,7 +113,7 @@ export function validateMessage(message: EmailMessage, fromAddress: string, repl
 export function resolveMaxBatchSize(maxBatchSize: number | undefined): number {
 	if (maxBatchSize === undefined) return DEFAULT_MAX_BATCH_SIZE;
 	if (!Number.isSafeInteger(maxBatchSize) || maxBatchSize < 1) {
-		throw blocksError(EmailErrors.InvalidInput, 'maxBatchSize must be a positive integer.');
+		throw blocksError(EmailErrors.InvalidInput, `maxBatchSize must be a positive integer (got ${String(maxBatchSize)}).`);
 	}
 	return maxBatchSize;
 }
