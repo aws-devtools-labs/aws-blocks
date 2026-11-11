@@ -45,9 +45,9 @@ Point any HTTP/JSON-RPC client at the RPC endpoint.
 - **Every `ApiNamespace` method is a public, internet-reachable endpoint.**
   Nothing is gated by default. When you add a method, start it with
   `await auth.requireAuth(context)` unless anyone on the internet may call it
-  signed out (like `health`). Scope what it touches to the caller (as
-  `userPath` and the `owner` key do here), not to an id or path the caller
-  passes in.
+  signed out (like `health`). Scope what it touches to the caller: derive the
+  owner or prefix from the signed-in user (as `userPath` and the `owner` key do
+  here), never from an id or owner the caller passes in.
 - **A presigned URL is a bearer credential.** Whoever holds the URL that
   `createUploadUrl` or `createDownloadUrl` returns can write or read that one
   key until the URL expires (one hour by default; `expiresIn` sets it), without
