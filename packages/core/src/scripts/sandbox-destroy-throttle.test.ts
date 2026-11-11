@@ -383,6 +383,113 @@ describe('runDestroyWithRetries (throttled destroy)', () => {
 		assert.deepStrictEqual(sleeps, [60_000, 120_000]);
 	});
 
+	// In CI the check's own DescribeStackEvents call is often throttled too: the
+	// account is under the same API pressure that failed the delete. Falling back
+	// to the short ordinary schedule then gave up on a throttled delete.
+	for (const [what, error] of [
+		[
+			'CloudFormation `Throttling: Rate exceeded`',
+			Object.assign(new Error('Rate exceeded'), { name: 'Throttling' }),
+		],
+		[
+			'a 429',
+			Object.assign(new Error('Too many requests'), {
+				name: 'TooManyRequestsException',
+				$metadata: { httpStatusCode: 429 },
+			}),
+		],
+	] as const) {
+		it(`treats a throttle check that fails on ${what} as a throttle (throttle backoff)`, async () => {
+			let attempts = 0;
+			const sleeps: number[] = [];
+			const warnings: string[] = [];
+			const warn = mock.method(console, 'warn', (...a: unknown[]) => {
+				warnings.push(a.join(' '));
+			});
+			try {
+				await runDestroyWithRetries({
+					runDestroy: () => {
+						attempts++;
+						if (attempts <= 3) throw new Error('cdk destroy exited with code 1');
+					},
+					listStacks: () => [{ stackName: 'stackA' }],
+					emptyBuckets: async () => {},
+					isThrottled: async () => {
+						throw error;
+					},
+					sleep: async (ms) => {
+						sleeps.push(ms);
+					},
+					random: () => 0.5,
+				});
+			} finally {
+				warn.mock.restore();
+			}
+			assert.strictEqual(attempts, 4, 'more than the ordinary 3 attempts');
+			assert.deepStrictEqual(sleeps, [45_000, 90_000, 180_000]);
+			assert.doesNotMatch(warnings.join('\n'), /using the ordinary retry schedule/);
+		});
+	}
+
+	it('reads a throttle from the failed attempt’s CDK output without calling isThrottled', async () => {
+		let attempts = 0;
+		let checks = 0;
+		const sleeps: number[] = [];
+		const outputs = [
+			[
+				'stackA | 3/9 | DELETE_FAILED | AWS::ApiGateway::RestApi | Api Too Many Requests (Service: ApiGateway, Status Code: 429)',
+			],
+			['❌  stackA: destroy failed Error: Throttling: Rate exceeded'],
+		];
+		await runDestroyWithRetries({
+			runDestroy: () => {
+				attempts++;
+				if (attempts <= 2) throw new Error('cdk destroy exited with code 1');
+			},
+			attemptOutput: () => outputs[attempts - 1] ?? [],
+			listStacks: () => [{ stackName: 'stackA' }],
+			emptyBuckets: async () => {},
+			isThrottled: async () => {
+				checks++;
+				return false;
+			},
+			sleep: async (ms) => {
+				sleeps.push(ms);
+			},
+			random: () => 0.5,
+		});
+		assert.strictEqual(attempts, 3);
+		assert.strictEqual(checks, 0, 'no extra CloudFormation call when the output already names the throttle');
+		assert.deepStrictEqual(sleeps, [45_000, 90_000]);
+	});
+
+	it('still asks isThrottled when the attempt’s CDK output names no throttle', async () => {
+		let checks = 0;
+		const sleeps: number[] = [];
+		await assert.rejects(
+			runDestroyWithRetries({
+				runDestroy: () => {
+					throw new Error('boom');
+				},
+				attemptOutput: () => [
+					'stackA | DELETE_FAILED | AWS::S3::Bucket | B The bucket you tried to delete is not empty',
+				],
+				listStacks: () => [{ stackName: 'stackA' }],
+				emptyBuckets: async () => {},
+				isThrottled: async () => {
+					checks++;
+					return false;
+				},
+				sleep: async (ms) => {
+					sleeps.push(ms);
+				},
+			}),
+			/boom/,
+		);
+		assert.strictEqual(checks, 3);
+		assert.deepStrictEqual(sleeps, [60_000, 120_000]);
+	});
+
 	it('stops on a Lambda@Edge replica failure even when the attempt was also throttled', async () => {
 		const errors: string[] = [];
 		const error = mock.method(console, 'error', (...a: unknown[]) => {
@@ -470,6 +577,7 @@ describe('destroy call sites', () => {
 		const deps = sandboxDestroyDeps('/app/aws-blocks/index.ts', {}, { cfnFor, s3 });
 		const stacks = [{ stackName: 's', region: 'eu-west-1' }];
 		assert.ok(deps.isThrottled, 'isThrottled is wired');
+		assert.deepStrictEqual(deps.attemptOutput?.(), [], 'attemptOutput is wired (nothing retained while uncurated)');
 		assert.strictEqual(await deps.isThrottled(stacks, SINCE), true);
 		assert.deepStrictEqual(calls, ['s:0']);
 		// The previous attempt's failure time reaches the check, so its throttle is not counted again.
@@ -489,6 +597,7 @@ describe('destroy call sites', () => {
 	it('production destroy detects throttles and empties buckets before a retry', () => {
 		const deps = productionDestroyDeps({ cdkAppPath: 'cdk.ts', projectRoot: '/app' }, {});
 		assert.strictEqual(deps.isThrottled, destroyWasThrottled);
+		assert.deepStrictEqual(deps.attemptOutput?.(), [], 'attemptOutput is wired (nothing retained while uncurated)');
 		assert.strictEqual(deps.emptyBuckets, emptySandboxBuckets);
 		assert.strictEqual(deps.successLabel, 'Production stack');
 	});
