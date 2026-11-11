@@ -14,7 +14,7 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
-import { outputsFileIn } from './deploy-outputs.js';
+import { BACKEND_OUTPUT_KEY, outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
@@ -505,9 +505,9 @@ export async function startSandbox(options: SandboxOptions) {
   // on the outputs file's write order; fall back to the first group so a
   // single-stack app is unchanged.
   const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
-  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
+  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.[BACKEND_OUTPUT_KEY]) ?? stackGroups[0] ?? ['', {}];
 
-  const apiUrl = stackOutputs.ApiUrl;
+  const apiUrl = stackOutputs[BACKEND_OUTPUT_KEY];
   if (!apiUrl) {
     throw new Error("Could not find API URL in CDK outputs");
   }

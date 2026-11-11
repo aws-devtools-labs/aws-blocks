@@ -15,7 +15,7 @@ import { createDeployRecorder } from './deploy-history.js';
 import { type InvalidationProbe, waitForLiveBuild, type WaitForLiveResult } from './wait-live.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { createCdkOutput } from './cdk-output.js';
-import { OUTPUTS_FILE } from './deploy-outputs.js';
+import { BACKEND_OUTPUT_KEY, OUTPUTS_FILE } from './deploy-outputs.js';
 import { log } from './log.js';
 
 export interface DeployOptions {
@@ -371,8 +371,8 @@ async function runDeploy(options: DeployOptions) {
     // than relying on the write order of the outputs file. Falls back to the
     // first group so a single-stack app is unchanged.
     const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
-    const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
-    const apiUrl = stackOutputs.ApiUrl;
+    const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.[BACKEND_OUTPUT_KEY]) ?? stackGroups[0] ?? ['', {}];
+    const apiUrl = stackOutputs[BACKEND_OUTPUT_KEY];
 
     // Pair the frontend URL, build id, and invalidation id from the SAME
     // Hosting output group (see resolveHostingOutputs). `--wait-live` targets a
