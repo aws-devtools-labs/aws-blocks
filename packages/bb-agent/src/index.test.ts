@@ -2912,6 +2912,70 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test("reconnect does not adopt the previous turn's answer when nothing has streamed", async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The second turn's user row is written inside the turn, after sendMessage returns,
+				// so this read still ends at the first turn's answer.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'Q1' },
+					{ role: 'assistant', content: 'Answer to Q1' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('Q1');
+		cap.handler!({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.handler!({ type: 'done' });
+		await chat.sendMessage('Q2');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the second turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the first turn's answer is not copied into the second turn");
+		cap.handler!({ type: 'text-delta', text: 'Answer to Q2' });
+		cap.handler!({ type: 'done' });
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's answer is shown");
+		chat.destroy();
+	});
+
+	test('reconnect adopts a new answer when nothing has streamed and the done chunk was missed', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'Q1' },
+					{ role: 'assistant', content: 'Answer to Q1' },
+					{ role: 'user', content: 'Q2' },
+					{ role: 'assistant', content: 'Answer to Q2' },
+				] }),
+			},
+			subscribe,
+		});
+
+		await chat.sendMessage('Q1');
+		cap.handler!({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.handler!({ type: 'done' });
+		await chat.sendMessage('Q2');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's saved answer is adopted");
+		chat.destroy();
+	});
+
 	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
 		const errors: string[] = [];
 		const { cap, subscribe } = subscribeCapture();
@@ -4636,6 +4700,81 @@ describe('createChat', () => {
 		await flush();
 		assert.strictEqual(chat.isLoading(), false);
 		assert.strictEqual(chat.getMessages().filter((m) => m.role === 'assistant').at(-1)?.content, 'Retry answer', "the retry's text is shown");
+		chat.destroy();
+		await flush();
+	});
+
+	test("reconnect does not adopt the previous turn's answer when nothing has streamed", async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The second turn's user row is written inside the turn, after sendMessage returns,
+				// so this read still ends at the first turn's answer.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'Q1' },
+						{ role: 'assistant', content: 'Answer to Q1' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('Q1');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		await chat.sendMessage('Q2');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the second turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the first turn's answer is not copied into the second turn");
+		cap.chunk({ type: 'text-delta', text: 'Answer to Q2' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's answer is shown");
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect adopts a new answer when nothing has streamed and the done chunk was missed', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'Q1' },
+						{ role: 'assistant', content: 'Answer to Q1' },
+						{ role: 'user', content: 'Q2' },
+						{ role: 'assistant', content: 'Answer to Q2' },
+					],
+				}),
+			},
+		});
+
+		await chat.sendMessage('Q1');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Answer to Q1' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		await chat.sendMessage('Q2');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's saved answer is adopted");
 		chat.destroy();
 		await flush();
 	});
