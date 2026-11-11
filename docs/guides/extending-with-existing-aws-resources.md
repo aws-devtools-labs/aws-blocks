@@ -616,7 +616,9 @@ What this does:
 
 1. Copies `node_modules/@aws-blocks/bb-kv-store/src/` into `vendor/bb-kv-store/src/`.
 2. Generates a `vendor/bb-kv-store/package.json` with the same `name`, but with
-   exports pointing at `./src/*.ts` instead of `./dist/*.js`.
+   exports pointing at `./src/*.ts` instead of `./dist/*.js`. It keeps the
+   package's `@types/*` devDependencies, and its `bin` commands (such as
+   `bb-data`), which then run the `src/` entry through `tsx` 4.9.0 or later.
 3. Adds `vendor/bb-kv-store` to your root `workspaces` array.
 4. Runs `npm install` so the workspace symlink takes precedence over the
    registry copy in `node_modules`.
@@ -631,15 +633,29 @@ import { KVStore } from '@aws-blocks/bb-kv-store';   // resolves to vendor/, not
 Edit `vendor/bb-kv-store/src/index.cdk.ts` and your changes apply on the next
 `cdk synth` (no rebuild — `tsx` consumes `.ts` directly).
 
+### Re-vendorizing
+
+```bash
+npx blocks-vendorize @aws-blocks/bb-kv-store --force
+```
+
+This replaces `vendor/bb-kv-store/` (and your changes) with the published source
+of the version in `vendor/bb-kv-store/package.json`. If the download or the
+`npm install` fails, the previous copy stays in place. While the new copy
+installs, the previous one waits in `vendor/.vendorize-<id>/old/`. If the
+command is killed at that point, the next vendorize run prints where that copy
+is, so you can move it back or delete it.
+
 ### Reverting
 
 ```bash
 rm -rf vendor/bb-kv-store
 # remove "vendor/bb-kv-store" from your root package.json `workspaces` array
-npm install
+npm update @aws-blocks/bb-kv-store
 ```
 
-You're back on the published version.
+You're back on the published version. (`npm install` alone keeps the
+lockfile's link to the deleted `vendor/bb-kv-store`.)
 
 ### What this gives you
 
