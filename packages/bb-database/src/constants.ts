@@ -70,7 +70,10 @@ const PG_NAME_MAX = 63;
 const hashSuffixed = (name: string, id: string, separator: string, max = PG_NAME_MAX): string => {
 	if (name.length <= max) return name;
 	const hash = createHash('sha256').update(id).digest('hex').slice(0, 8);
-	return `${name.slice(0, max - hash.length - 1).replace(new RegExp(`${separator}$`), '')}${separator}${hash}`;
+	const cut = name.slice(0, max - hash.length - 1);
+	// Drop one trailing separator so the result never holds a doubled one before the hash.
+	const head = cut.endsWith(separator) ? cut.slice(0, -separator.length) : cut;
+	return `${head}${separator}${hash}`;
 };
 
 // The express configuration names the writer instance `<cluster>-instance-1`, and an instance identifier is

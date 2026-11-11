@@ -55,7 +55,7 @@ const ALLOWLIST = [
 		reason: 'Base64 of a PNG this script rendered, after a constant data:image/png scheme; the base64 alphabet holds no HTML metacharacters.',
 	},
 	{
-		at: 'packages/bb-auth-oidc/src/engines/stub-idp.ts:752',
+		at: 'packages/bb-auth-oidc/src/engines/stub-idp.ts:710',
 		reason: "Form action is this stub IdP's own authorize URL (stubIssuerUrl: the request origin or BLOCKS_API_URL plus a fixed path), so it always has an http(s) scheme.",
 	},
 	...[41, 43, 45, 50].map((l) => ({ at: `native/kotlin/example/typescript/src/index.ts:${l}`, reason: TODO_ID })),
