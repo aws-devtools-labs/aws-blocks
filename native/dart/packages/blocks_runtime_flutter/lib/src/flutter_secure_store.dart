@@ -6,9 +6,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 ///
 /// On iOS and macOS, items are stored with
 /// [KeychainAccessibility.unlocked_this_device]
-/// (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`): they can be read only
-/// while the device is unlocked, and do not move to another device. This
-/// matches the Swift and Kotlin runtimes.
+/// (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`): as with the previous
+/// accessibility, they can be read only while the device is unlocked, and they
+/// now do not move to another device. This matches the Swift and Kotlin
+/// runtimes.
 class FlutterSecureStore implements TokenStore {
   /// Creates a store. Pass [storage] to configure flutter_secure_storage
   /// yourself; its options are then used as given, and items stored by an
@@ -58,6 +59,14 @@ class FlutterSecureStore implements TokenStore {
   /// themselves. The fallback read in [get] and the delete-before-write in
   /// [set] exist for apps that resolve 0.4.0 through 0.4.2, and are harmless
   /// no-ops on 0.4.3 and later.
+  ///
+  /// This is deliberate: requiring flutter_secure_storage_darwin 0.4.3 would
+  /// make the plugin's own fallback cover every resolution, but would add a
+  /// direct dependency on a platform package that this package otherwise
+  /// gets through flutter_secure_storage. Keeping the fallback here leaves the
+  /// upgrade path working on any darwin release flutter_secure_storage allows,
+  /// at the cost of up to two extra `containsKey` calls on a `set` whose key
+  /// is not yet stored under the current accessibility.
   final FlutterSecureStorage? _previousStorage;
 
   /// Only the Apple options changed, so only there can an item exist under

@@ -6,9 +6,10 @@
   flutter_secure_storage default, `KeychainAccessibility.unlocked`, matching
   the Swift and Kotlin runtimes. Items written by an earlier version are still
   read, so a signed-in session survives the upgrade, and each one moves to the
-  new accessibility the next time it is written. Items can be read only while
-  the device is unlocked. A store built with your own `storage` argument is
-  unchanged and uses that storage's options as given.
+  new accessibility the next time it is written. As before, items can be read
+  only while the device is unlocked; the only difference is that they are no
+  longer restored from a backup onto another device. A store built with your
+  own `storage` argument is unchanged and uses that storage's options as given.
 
 ## 0.1.4
 
