@@ -85,6 +85,9 @@ export function accountsOf(roleArns) {
 /**
  * Who owns a pool: 'none' when no live stack does, 'live' when one does,
  * `unknown (...)` when it can't be told (then the pool is skipped).
+ * describe-stack-resources --physical-resource-id names the (nested) stack that
+ * holds the pool, and answers "Stack for <id> does not exist" when no live stack
+ * does, including after the owning stack was deleted.
  */
 function ownerOf(poolId) {
 	const r = aws('cloudformation', 'describe-stack-resources', '--physical-resource-id', poolId);
@@ -114,23 +117,39 @@ async function main() {
 		return 1;
 	}
 
-	const list = aws(
-		'cognito-idp',
-		'list-user-pools',
-		'--max-results',
-		'60',
-		'--query',
-		'UserPools[].{Id: Id, Name: Name, CreationDate: CreationDate}',
-	);
-	if (!list.ok) {
-		warning(`Could not list user pools, so none is swept this run: ${list.err}`);
-		summary({ listed: 'unknown' });
-		return 0;
-	}
+	// ListUserPools returns at most 60 pools a page; follow NextToken through
+	// every page. Any page that fails sweeps nothing: a partial list must never
+	// read as "nothing to sweep".
+	const pools = [];
+	let pages = 0;
+	let nextToken;
+	do {
+		if (Date.now() >= deadline) {
+			console.log('Time budget reached while listing user pools; sweeping the pools listed so far.');
+			break;
+		}
+		const page = aws(
+			'cognito-idp',
+			'list-user-pools',
+			'--max-results',
+			'60',
+			...(nextToken ? ['--next-token', nextToken] : []),
+		);
+		if (!page.ok) {
+			warning(`Could not list user pools (page ${pages + 1}), so none is swept this run: ${page.err}`);
+			summary({ listed: `unknown (page ${pages + 1} failed after ${pools.length} listed)` });
+			return 0;
+		}
+		const body = json(page.out) ?? {};
+		pools.push(...(body.UserPools ?? []));
+		nextToken = body.NextToken;
+		pages++;
+	} while (nextToken);
 	const cutoff = Date.now() - minAgeMs;
-	const candidates = (json(list.out) ?? []).filter((p) => BLOCKS_POOL.test(p.Name) || AMPLIFY_POOL.test(p.Name));
+	const candidates = pools.filter((p) => BLOCKS_POOL.test(p.Name) || AMPLIFY_POOL.test(p.Name));
 	const counts = {
-		listed: candidates.length,
+		listed: `${pools.length} (${pages} page${pages === 1 ? '' : 's'})`,
+		testNamed: candidates.length,
 		deleted: 0,
 		tooNew: 0,
 		owned: 0,
@@ -209,10 +228,11 @@ async function main() {
 function summary(counts) {
 	const lines = [
 		'## Cognito User Pool Sweep',
-		`- Test-named pools listed: ${counts.listed}`,
-		...(counts.listed === 'unknown'
+		`- User pools listed: ${counts.listed}`,
+		...(counts.testNamed === undefined
 			? []
 			: [
+					`- Test-named pools: ${counts.testNamed}`,
 					`- Orphans deleted: ${counts.deleted}`,
 					`- Delete failed: ${counts.failed}`,
 					`- Skipped (younger than ${minAgeMs / 3600_000}h): ${counts.tooNew}`,

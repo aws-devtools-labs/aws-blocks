@@ -39,10 +39,16 @@ switch (args[0] + ' ' + args[1]) {
 	case 'sts get-caller-identity':
 		out(state.account);
 		break;
-	case 'cognito-idp list-user-pools':
-		if (state.listError) fail(state.listError);
-		out(state.pools.map(({ Id, Name, CreationDate }) => ({ Id, Name, CreationDate })));
+	case 'cognito-idp list-user-pools': {
+		// Pages of state.pageSize (default 60); the token is the next page's start index.
+		const size = state.pageSize || 60;
+		const start = Number(args.includes('--next-token') ? arg('--next-token') : 0);
+		const page = start / size + 1;
+		if (state.listError && (!state.listErrorPage || state.listErrorPage === page)) fail(state.listError);
+		const pools = state.pools.slice(start, start + size).map(({ Id, Name, CreationDate }) => ({ Id, Name, CreationDate }));
+		out({ UserPools: pools, ...(start + size < state.pools.length ? { NextToken: String(start + size) } : {}) });
 		break;
+	}
 	case 'cognito-idp describe-user-pool': {
 		const p = pool();
 		out({ UserPool: { Id: p.Id, Name: p.Name, UserPoolTags: p.tags || {}, DeletionProtection: p.protection || 'INACTIVE', Domain: p.domain } });
@@ -172,7 +178,8 @@ describe('sweep-cognito-pools.mjs', () => {
 			],
 		});
 		assert.deepEqual(deletes(r.calls), []);
-		assert.match(r.summary, /Test-named pools listed: 0/);
+		assert.match(r.summary, /User pools listed: 3 \(1 page\)/);
+		assert.match(r.summary, /Test-named pools: 0/);
 	});
 
 	it('skips a test-named pool without the CI tags', () => {
@@ -239,9 +246,36 @@ describe('sweep-cognito-pools.mjs', () => {
 	it('warns, and deletes nothing, when the pools cannot be listed', () => {
 		const r = run({ pools: [blocksPool()], listError: 'An error occurred (AccessDeniedException)' });
 		assert.equal(r.status, 0, r.out);
-		assert.match(r.out, /::warning title=Cognito pool sweep::Could not list user pools/);
-		assert.match(r.summary, /Test-named pools listed: unknown/);
+		assert.match(r.out, /::warning title=Cognito pool sweep::Could not list user pools \(page 1\)/);
+		assert.match(r.summary, /User pools listed: unknown/);
+		assert.doesNotMatch(r.summary, /Test-named pools/);
 		assert.deepEqual(deletes(r.calls), []);
+	});
+
+	it('reads every page of pools, sweeping a stale orphan on page 2', () => {
+		const filler = Array.from({ length: 3 }, (_, i) => blocksPool({ Id: `f${i}`, Name: `customer-pool-${i}` }));
+		const r = run({ pools: [...filler, blocksPool({ Id: 'us-east-1_page2' })], pageSize: 3 });
+		assert.equal(r.status, 0, r.out);
+		const lists = r.calls.filter((c) => c[1] === 'list-user-pools');
+		assert.equal(lists.length, 2);
+		assert.equal(lists[1][lists[1].indexOf('--next-token') + 1], '3');
+		assert.deepEqual(deletes(r.calls), ['us-east-1_page2']);
+		assert.match(r.summary, /User pools listed: 4 \(2 pages\)/);
+		assert.match(r.summary, /Test-named pools: 1/);
+	});
+
+	it('sweeps nothing when a later page fails to list', () => {
+		const r = run({
+			pools: [blocksPool({ Id: 'us-east-1_page1' }), blocksPool({ Id: 'us-east-1_page2' })],
+			pageSize: 1,
+			listError: 'An error occurred (TooManyRequestsException)',
+			listErrorPage: 2,
+		});
+		assert.equal(r.status, 0, r.out);
+		assert.match(r.out, /::warning title=Cognito pool sweep::Could not list user pools \(page 2\)/);
+		assert.match(r.summary, /User pools listed: unknown \(page 2 failed after 1 listed\)/);
+		assert.deepEqual(deletes(r.calls), []);
+		assert.equal(r.calls.filter((c) => c[1] === 'describe-user-pool').length, 0);
 	});
 });
 
