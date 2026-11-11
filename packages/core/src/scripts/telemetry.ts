@@ -27,6 +27,7 @@ Options:
   --global           Apply globally (~/.blocks/config.json)
                      Without this flag, applies to the project (.blocks/config.json at the
                      nearest directory with package.json and aws-blocks/, else the current one)
+                     --disable without --global fails when no such directory is found
   --help, -h         Show this help message
 
 Examples:
@@ -92,20 +93,30 @@ function describeDisable(status: TelemetryStatus, projectRoot?: string): string 
 
 /**
  * The project root: the nearest directory at or above `start` that holds both a
- * `package.json` and an `aws-blocks/` directory, or `start` itself when none does.
+ * `package.json` and an `aws-blocks/` directory, or `undefined` when none does.
  *
  * Mirrors `findProjectRoot` in `packages/blocks/src/cli/context.ts` (core cannot
  * import from `@aws-blocks/blocks`); keep the two rules in step.
  */
-function resolveProjectRoot(start: string = process.cwd()): string {
+function findProjectRoot(start: string = process.cwd()): string | undefined {
   let dir = resolve(start);
   for (;;) {
     const appDir = join(dir, 'aws-blocks');
     if (existsSync(join(dir, 'package.json')) && existsSync(appDir) && statSync(appDir).isDirectory()) return dir;
     const parent = dirname(dir);
-    if (parent === dir) return resolve(start);
+    if (parent === dir) return undefined;
     dir = parent;
   }
+}
+
+/**
+ * The project root, or `start` itself when none is found at or above it.
+ * Used by `--enable` and `--status`; `--disable` uses {@link findProjectRoot} and
+ * refuses rather than fall back, because an opt-out written outside a project is
+ * never read by the app it was meant for.
+ */
+function resolveProjectRoot(start: string = process.cwd()): string {
+  return findProjectRoot(start) ?? resolve(start);
 }
 
 function handleEnable(global: boolean): void {
@@ -136,7 +147,16 @@ function handleEnable(global: boolean): void {
 }
 
 function handleDisable(global: boolean): void {
-  const projectRoot = resolveProjectRoot();
+  const foundRoot = findProjectRoot();
+  if (!global && foundRoot === undefined) {
+    // e.g. a monorepo root whose app (with aws-blocks/) is nested below: an opt-out written
+    // here would never be read by the app, so say so instead of claiming success.
+    console.error(`❌ No AWS Blocks project found at or above ${resolve(process.cwd())}`);
+    console.error('   (no directory with both a package.json and an aws-blocks/ directory), so nothing was disabled.');
+    console.error('   Run this from your app directory, or opt out everywhere with --global or AWS_BLOCKS_DISABLE_TELEMETRY=1.');
+    process.exit(1);
+  }
+  const projectRoot = foundRoot ?? resolve(process.cwd());
   const configPath = global ? getGlobalConfigPath() : getProjectConfigPath(projectRoot);
 
   try {
@@ -147,21 +167,22 @@ function handleDisable(global: boolean): void {
     process.exit(1);
   }
 
+  // Read the result back the way the send gate does from the project root (where the
+  // CLI and the app's npm scripts run), and only then report success, so a write that
+  // did not take effect is reported instead of claimed.
+  const status = getTelemetryStatus(projectRoot);
+  if (status.enabled) {
+    console.error(`⚠️  Telemetry is still enabled after writing ${configPath}.`);
+    console.error('   Run --status to see every mechanism, or set AWS_BLOCKS_DISABLE_TELEMETRY=1.');
+    process.exit(1);
+  }
+
   if (global) {
     console.log('✅ Telemetry disabled globally.');
     console.log(`   Config: ${configPath}`);
   } else {
     console.log('✅ Telemetry disabled for this project.');
     console.log(`   Config: ${configPath}`);
-  }
-
-  // Read the result back the way the send gate does, so a write that did not take
-  // effect is reported instead of claimed.
-  const status = getTelemetryStatus(projectRoot);
-  if (status.enabled) {
-    console.error(`⚠️  Telemetry is still enabled after writing ${configPath}.`);
-    console.error('   Run --status to see every mechanism, or set AWS_BLOCKS_DISABLE_TELEMETRY=1.');
-    process.exit(1);
   }
 }
 
@@ -208,7 +229,10 @@ function handleStatus(): void {
  * - `--enable` / `--disable` — write `telemetry.enabled` (project-level by default, `--global` for global)
  *   The project-level file is `.blocks/config.json` at the project root: the nearest directory at or
  *   above the working directory holding a `package.json` and an `aws-blocks/` directory, else the
- *   working directory. `--disable` reads the status back and exits non-zero if telemetry is still enabled.
+ *   working directory. `--disable` reads the status back and exits non-zero if telemetry is still enabled,
+ *   printing its success line only after that check. Without `--global`, `--disable` exits non-zero
+ *   and writes nothing when no project root is found (for example at a monorepo root whose app is
+ *   nested below it), pointing at `--global` and `AWS_BLOCKS_DISABLE_TELEMETRY=1` instead.
  * - `--status` — display current telemetry status and mechanism values (reading the same project root)
  * - bare invocation (no flags) — prints help/usage text
  *
