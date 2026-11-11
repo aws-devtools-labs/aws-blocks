@@ -16,10 +16,12 @@
 // whether it is written plain, single- or double-quoted (escapes decoded), or inside
 // a flow mapping/sequence (`- { uses: … }`, `steps: [ … ]`), and decodes quoted
 // values before checking them. It skips the bodies of `|`/`>` block scalars (`run:`
-// scripts) and comments. It fails closed: any `uses` it cannot read off one line
-// (value on the next line, block scalar, alias, tag, anchor, multi-line string,
-// plain scalar that continues) and any key it cannot resolve (alias or tagged key,
-// including a verbatim `!<…>` tag, explicit `?` key) is reported as a violation. Write `uses` the canonical way —
+// scripts), comments, and flow indicators inside quoted strings. It fails closed: any
+// `uses` it cannot read off one line (value on the next line, block scalar, alias,
+// tag, anchor, multi-line string, plain scalar that continues), any key it cannot
+// resolve (alias or tagged key, including a verbatim `!<…>` tag, explicit `?` key),
+// and any flow collection that spans lines (its keys can break across lines) is
+// reported as a violation. Write `uses` the canonical way —
 // `uses: owner/repo@<sha> # vX` on one line — and it passes.
 //
 // It uses Node built-ins only, so the guard itself installs no third-party code.
@@ -119,11 +121,47 @@ function readValue(lines, i, at, flow, keyCol) {
 	return { ref };
 }
 
+/**
+ * Walk one line, skipping quoted strings and stopping at a comment. Returns the column
+ * after each `{`, `[` and `,` (candidate flow entries; over-approximated, since a block
+ * plain scalar may contain them) and whether a flow collection opened on this line is
+ * still open at its end, i.e. spans lines. A quote only opens a string where YAML starts
+ * a node: at line start, after `{`/`[`/`,` inside a flow collection, or after `:`/`-`/`?`
+ * and a blank. Anywhere else it is read as plain text and scanned, which is the safe side.
+ */
+function flowTokens(ln) {
+	const starts = [];
+	let depth = 0;
+	let prev = '';
+	let blank = true;
+	for (let j = 0; j < ln.length; j++) {
+		const c = ln[j];
+		if (c === ' ' || c === '\t') {
+			blank = true;
+			continue;
+		}
+		if (c === '#' && blank) break;
+		const nodeStart = prev === '' || (depth > 0 && '{[,'.includes(prev)) || (blank && ':-?'.includes(prev));
+		if ((c === '"' || c === "'") && nodeStart) {
+			const m = (c === '"' ? /^"(?:[^"\\]|\\.)*"/ : /^'(?:[^']|'')*'/).exec(ln.slice(j));
+			if (!m) return { starts, spans: depth > 0 };
+			j += m[0].length - 1;
+		} else if ('{['.includes(c) && (depth > 0 || nodeStart)) depth++;
+		else if ('}]'.includes(c) && depth > 0) depth--;
+		if ('{[,'.includes(c)) starts.push(j + 1);
+		prev = c;
+		blank = false;
+	}
+	return { starts, spans: depth > 0 };
+}
+
 /** Find every `uses` key on one line (block or flow) and return its unpinned or unreadable values. */
-function scanLine(lines, i) {
+function scanLine(lines, i, flowStarts) {
 	const ln = lines[i];
-	const starts = [{ at: LINE_START.exec(ln)[0].length, flow: false }];
-	for (let j = 0; j < ln.length; j++) if ('{[,'.includes(ln[j])) starts.push({ at: j + 1, flow: true });
+	const starts = [
+		{ at: LINE_START.exec(ln)[0].length, flow: false },
+		...flowStarts.map((at) => ({ at, flow: true })),
+	];
 	const out = [];
 	for (const { at, flow } of starts) {
 		const ws = /^[ \t]*/.exec(ln.slice(at))[0].length;
@@ -194,7 +232,10 @@ export function findUnpinned(text) {
 			block = -1;
 		}
 		if (/^[ \t]*(#|$)/.test(ln)) continue;
-		for (const v of scanLine(lines, i)) out.push({ line: i + 1, ...v });
+		const { starts, spans } = flowTokens(ln);
+		const found = scanLine(lines, i, starts);
+		if (spans && !found.length) found.push({ ref: ln.trim(), reason: 'flow collection spans lines' });
+		for (const v of found) out.push({ line: i + 1, ...v });
 		block = blockScalarIndent(ln);
 	}
 	return out;

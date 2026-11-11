@@ -89,7 +89,8 @@ describe('findUnpinned', () => {
 			'          uses: actions/checkout@v7',
 			'        }',
 		].join('\n');
-		assert.deepEqual(findUnpinned(yml).map((v) => v.line), [1, 2, 3, 4, 4, 5, 8]);
+		// Line 6 opens a flow mapping that spans lines, which is reported on its own (see below).
+		assert.deepEqual(findUnpinned(yml).map((v) => v.line), [1, 2, 3, 4, 4, 5, 6, 8]);
 		assert.deepEqual(findUnpinned(`      - { uses: actions/checkout@${SHA}, with: { a: 1 } }`), []);
 	});
 
@@ -119,6 +120,29 @@ describe('findUnpinned', () => {
 			'      - !<tag:yaml.org,2002:str> uses: actions/checkout@v7',
 		];
 		for (const yml of forms) assert.equal(findUnpinned(yml).length, 1, yml);
+	});
+
+	it('fails closed on a flow collection that spans lines', () => {
+		const forms = [
+			'      - { "us\\\n          es": actions/checkout@v7 }',
+			'      - { "uses"\n          : actions/checkout@v7 }',
+			'      - { uses\n          : actions/checkout@v7 }',
+			'    steps: [\n      uses: actions/checkout@v7 ]',
+		];
+		for (const yml of forms) assert.equal(findUnpinned(yml)[0]?.line, 1, yml);
+		const [v] = findUnpinned('      - { uses\n          : actions/checkout@v7 }');
+		assert.equal(v.reason, 'flow collection spans lines');
+	});
+
+	it('does not treat flow indicators inside quoted strings or comments as flow entries', () => {
+		const yml = [
+			'      - name: "Build, uses: docker"',
+			"      - name: 'Build, { uses: docker }'",
+			'      - run: echo hi # { uses: actions/checkout@v7 }',
+			'      - run: echo hi # [',
+			'      - name: "a [ b"',
+		].join('\n');
+		assert.deepEqual(findUnpinned(yml), []);
 	});
 
 	it('ignores `uses` text inside block scalars and comments', () => {
