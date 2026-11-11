@@ -430,6 +430,47 @@ test.describe('SSR cache isolation (per-session cache key)', () => {
     expect(keyed.headers()['cache-control'] || '').toMatch(/s-maxage=300/);
   });
 
+  // Cross-visitor isolation over the edge: each pair of requests shares one
+  // URL (the same `k`, fresh per run), so the second request reaches whatever
+  // the first one left in the cache.
+  test('a response rendered with a cookie outside the cache key is not served to another visitor (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const url = `${hostingUrl}/cache-isolation?k=${randomBytes(6).toString('hex')}`;
+    const marker = `marker-${randomBytes(6).toString('hex')}`;
+    const a = await request.get(url, { headers: { Cookie: `bb_other=${marker}` } });
+    expect(a.status()).toBe(200);
+    expect(await a.text()).toContain(`other=${marker}`);
+    // A visitor without the cookie, at the same URL: its own render, never A's.
+    for (let i = 0; i < 2; i++) {
+      const b = await request.get(url);
+      expect(b.status()).toBe(200);
+      const body = await b.text();
+      expect(body).not.toContain(marker);
+      expect(body).toContain('other=none');
+    }
+  });
+
+  test('a cookie-setting response is not replayed to the next request (deployed)', async ({ request }) => {
+    if (ENV === 'local') {
+      test.skip();
+      return;
+    }
+    const url = `${hostingUrl}/cache-isolation/set-cookie?k=${randomBytes(6).toString('hex')}`;
+    const visit = async (): Promise<string | undefined> => {
+      const resp = await request.get(url);
+      expect(resp.status()).toBe(200);
+      return /bb_visit=([^;]+)/.exec(resp.headers()['set-cookie'] || '')?.[1];
+    };
+    const first = await visit();
+    const second = await visit();
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(second).not.toBe(first);
+  });
+
   test('a response that sets a cookie is private (deployed)', async ({ request }) => {
     if (ENV === 'local') {
       test.skip();

@@ -11,7 +11,8 @@ export const dynamic = 'force-dynamic';
  * Per-session, edge-cacheable SSR route used to assert per-session cache
  * keying over the wire.
  *
- * The response body echoes the `bb_session` cookie and sets
+ * The response body echoes the `bb_session` cookie (and the `bb_other`
+ * cookie, which is not in the cache key) and sets
  * `Cache-Control: public, s-maxage=300`, so CloudFront caches it. Because the
  * app's `cdn.cacheKeyCookies` includes `bb_session`, each distinct session
  * value keys a separate cache entry, so the e2e can assert responses are
@@ -23,7 +24,8 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(req: NextRequest) {
   const session = req.cookies.get('bb_session')?.value ?? 'anonymous';
-  return new NextResponse(`cache-isolation user=${session}`, {
+  const other = req.cookies.get('bb_other')?.value ?? 'none';
+  return new NextResponse(`cache-isolation user=${session} other=${other}`, {
     status: 200,
     headers: {
       'content-type': 'text/plain; charset=utf-8',
