@@ -39,7 +39,7 @@ const E2E_SECRET = `synth-probe-secret-${'0'.repeat(48)}`;
 const E2E_SENDER = 'e2e-sender@example.com';
 
 /** Every `Auth` block of the app that creates a user pool (the OIDC-only ones create none). */
-const POOL_BLOCKS = ['auth', 'auth-same-origin', 'auth-cross-domain', 'authC', 'authCMfa', 'auth-gated'];
+const POOL_BLOCKS = ['auth', 'auth-same-origin', 'auth-cross-domain', 'authC', 'authCMfa', 'auth-gated', 'auth-delivery-fails'];
 
 /**
  * `cognito-idp` actions only the `admin` surface grants (bb-auth's

@@ -226,6 +226,7 @@ type CookieAuthId = keyof typeof cookieAuth;
 // Local only: deployed, Cognito sends the code and `codeDelivery` is not called.
 const RAW_BACKEND_ERROR = 'User: arn:aws:sts::111122223333:assumed-role/e2e-role/x is not authorized to perform: ses:SendEmail';
 const authDeliveryFails = new Auth(scope, 'auth-delivery-fails', {
+  ...e2eEmail,
   users: { signInWith: ['email'] },
   emailPassword: {
     passwordPolicy: { minLength: 6, requireUppercase: false, requireLowercase: false, requireDigits: false, requireSymbols: false },
