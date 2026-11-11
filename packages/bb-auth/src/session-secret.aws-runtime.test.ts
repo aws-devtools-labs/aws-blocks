@@ -142,7 +142,8 @@ describe('Auth session secret store (aws-runtime)', {
 			},
 		});
 		const auth = new Auth(new Scope('app'), 'auth');
-		await assert.rejects(auth.signOut(contextWithSessionCookie()), /Rate exceeded/);
+		// signOut reports a failed secret read as SignOutIncomplete rather than the raw error.
+		await assert.rejects(auth.signOut(contextWithSessionCookie()), { name: 'SignOutIncompleteException' });
 		await auth.signOut(contextWithSessionCookie());
 		await auth.signOut(contextWithSessionCookie());
 		assert.strictEqual(calls, 2, 'one failed read, one successful read, then the cached value');
