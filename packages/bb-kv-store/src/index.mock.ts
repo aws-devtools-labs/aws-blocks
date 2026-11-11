@@ -27,6 +27,7 @@ import {
 	PagedResults,
 	planQuery,
 	prepareItem,
+	presentOptions,
 	putCondition,
 	type Reader,
 	resolveKeyModel,
@@ -174,7 +175,8 @@ export class KVStore<
 	 * @throws {KVStoreErrors.ValidationFailed} If both `ttlSeconds` and `expiresAt` are set, or either is not a usable time.
 	 */
 	async put(key: KeyOf<Out, K>, value: ValueOf<In, K>, options?: PutOptions<Out>): Promise<void> {
-		const { keyStr, item } = await this.prepareWrite(key, value, options);
+		const present = presentOptions(options);
+		const { keyStr, item } = await this.prepareWrite(key, value, present);
 
 		// Conditional write. `ifNotExists` and a value check compose with OR
 		// (mirrors the AWS `attribute_not_exists(pk) OR <value check>`): the write
@@ -183,7 +185,7 @@ export class KVStore<
 		// the shared derivation in item.ts so mock and aws agree for identical
 		// inputs (incl. the combined case). Conditions see an expired item until
 		// DynamoDB deletes it, as on AWS.
-		const condition = putCondition(this.model, options);
+		const condition = putCondition(this.model, present);
 		if (condition.existence || condition.check) {
 			const existing = this.data.get(keyStr);
 			const absentOk = condition.existence && existing === undefined;
@@ -208,7 +210,7 @@ export class KVStore<
 		const keyStr = serializeKey(this.model, normalizeKey(this.model, key));
 		// Existence assertion wins (see put): `ifExists` makes a conflict
 		// non-retriable even when combined with a value check.
-		const condition = deleteCondition(this.model, conditions);
+		const condition = deleteCondition(this.model, presentOptions(conditions));
 		const existing = this.data.get(keyStr);
 		if (condition.existence && existing === undefined) throw conditionalCheckFailed(condition.retriable);
 		if (condition.check && !valueCheckHolds(condition.check, existing)) {
@@ -252,7 +254,7 @@ export class KVStore<
 	 *   this store, index, and partition, or `limit` is not a positive integer.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
-		const plan = planQuery(this.model, options);
+		const plan = planQuery(this.model, presentOptions(options));
 		const { key } = plan;
 		const direction = plan.order === 'desc' ? -1 : 1;
 
@@ -294,13 +296,14 @@ export class KVStore<
 		// Deterministic order by the base key, so a cursor resumes at the same
 		// position after a restart (Map order would follow write order).
 		const byBaseKey = (a: Item, b: Item) => compareByBaseKey(this.model, a, b);
+		const present = presentOptions(options);
 		return this.results(
 			() => this.inBaseKeyOrder(byBaseKey),
 			byBaseKey,
-			decodeCursor(this.model, options?.cursor, undefined),
-			normalizeLimit(options?.limit),
+			decodeCursor(this.model, present?.cursor, undefined),
+			normalizeLimit(present?.limit),
 			undefined,
-			options?.includeExpired === true,
+			present?.includeExpired === true,
 		);
 	}
 
@@ -336,7 +339,7 @@ export class KVStore<
 	async putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void> {
 		const prepared: { keyStr: string; item: Item }[] = [];
 		for (const entry of entries) {
-			prepared.push(await this.prepareWrite(entry.key, entry.value, entry));
+			prepared.push(await this.prepareWrite(entry.key, entry.value, presentOptions(entry)));
 		}
 		for (const { keyStr, item } of prepared) this.data.set(keyStr, item);
 		this.flushToDisk();

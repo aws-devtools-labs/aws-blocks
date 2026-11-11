@@ -257,6 +257,21 @@ describe('conditional-write composition (AWS PutCommand shape)', () => {
 		assert.deepEqual(input(2).ExpressionAttributeValues, { ':expected': null });
 	});
 
+	test('a null option is absent on AWS too: no expiry attribute, no condition, a consistent read', async () => {
+		const { store, sent, input } = awsStore('kv');
+		await store.put('a', 'x', { ttlSeconds: null, expiresAt: null, ifNotExists: null });
+		assert.deepEqual(input(), { Item: { _bkv_pk: 'a', _bkv_value: 'x' } });
+		await store.get('a', { consistentRead: null });
+		assert.equal(input(1).ConsistentRead, true);
+		await store.delete('a', { ifExists: null });
+		assert.equal(input(2).ConditionExpression, undefined);
+		await store.putBatch([{ key: 'b', value: 'y', ttlSeconds: null, expiresAt: null }]);
+		assert.deepEqual(batchOf(sent[3]).requests, [{ PutRequest: { Item: { _bkv_pk: 'b', _bkv_value: 'y' } } }]);
+		// `ifFieldEquals: null` stays a call error, before any call.
+		await rejects(store.put('a', { n: 1 }, { ifFieldEquals: null }), KVStoreErrors.InvalidQuery);
+		assert.equal(sent.length, 4);
+	});
+
 	test('both runtimes reject ifValueEquals with an object, an empty ifFieldEquals, and both checks together', async () => {
 		const mock = mockStore('kv');
 		const { store: aws, sent } = awsStore('kv');

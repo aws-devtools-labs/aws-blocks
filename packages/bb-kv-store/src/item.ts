@@ -318,6 +318,38 @@ export async function prepareItem(
 	return { keyAttrs, item: buildItem(model, keyAttrs, full, resolveTtlEpochSeconds(expiry)) };
 }
 
+// ── Call options ────────────────────────────────────────────────────────────
+
+/**
+ * The names for which `null` is a value and not an absent option: `value` (a
+ * store can hold `null`), `key`, and the two value checks. `ifValueEquals:
+ * null` compares with a stored `null`, and `ifFieldEquals: null` is a call
+ * error. If `null` counted as absent for a value check, a write that the
+ * caller made conditional would run with no condition.
+ */
+const NULL_IS_A_VALUE: ReadonlySet<string> = new Set(['key', 'value', 'ifValueEquals', 'ifFieldEquals']);
+
+/**
+ * The options of a call as the block reads them: an option with the value
+ * `null` counts as an option that the caller did not pass. Every public
+ * method that reads options calls this first, so the rule is the same for
+ * every option of every method, in both runtimes.
+ *
+ * The option types do not include `null`; this is for a value that comes from
+ * a request. JSON has no `undefined`, so an API method that forwards its
+ * arguments (`store.scan({ limit, cursor })`) can get `null` for an argument
+ * that the client left out.
+ *
+ * The exceptions are the names in {@link NULL_IS_A_VALUE}.
+ */
+export function presentOptions<T extends object>(options: T | null | undefined): T | undefined {
+	if (options === undefined || options === null) return undefined;
+	if (typeof options !== 'object') return options;
+	const entries = Object.entries(options);
+	const absent = ([name, value]: [string, unknown]) => value === null && !NULL_IS_A_VALUE.has(name);
+	return entries.some(absent) ? (Object.fromEntries(entries.filter((entry) => !absent(entry))) as T) : options;
+}
+
 // ── Reads ───────────────────────────────────────────────────────────────────
 
 /** What a read yields: the key, the value, and the expiry when the item has one. */
@@ -627,7 +659,7 @@ export interface QueryPlan {
 
 /** The query options as the shared code reads them. */
 interface LooseQueryOptions {
-	index?: string | null;
+	index?: string;
 	where?: Record<string, unknown>;
 	limit?: unknown;
 	order?: unknown;
@@ -645,7 +677,7 @@ interface LooseQueryOptions {
  */
 export function planQuery(model: KeyModel, queryOptions: unknown): QueryPlan {
 	const options = (queryOptions ?? {}) as LooseQueryOptions;
-	const indexName = options.index ?? undefined;
+	const indexName = options.index;
 	let key: KeyAttributes | undefined;
 	if (indexName !== undefined) {
 		key = model.indexes[indexName];
@@ -726,14 +758,14 @@ export function compareKeyValues(a: unknown, b: unknown): number {
 }
 
 /**
- * Check a `limit` option. `undefined` and `null` both mean "no limit": a JSON
- * transport turns an optional positional argument that the caller left out
- * into `null`, so an API method that forwards its arguments passes `null` here.
+ * Check a `limit` option. `undefined` means "no limit". A `null` does not
+ * arrive here: {@link presentOptions} takes it out of the options at the
+ * method entry.
  *
  * @throws {KVStoreErrors.InvalidQuery} If the limit is not a positive integer.
  */
 export function normalizeLimit(limit: unknown): number | undefined {
-	if (limit === undefined || limit === null) return undefined;
+	if (limit === undefined) return undefined;
 	if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.limitInvalid(String(limit)));
 	}
@@ -772,9 +804,10 @@ export function encodeCursor(model: KeyModel, indexName: string | undefined, ite
 
 /**
  * Decode and check a `cursor` option before it drives a read, or return
- * `undefined` when there is none. `undefined` and `null` both mean "start at
- * the first entry" (see {@link normalizeLimit} for why `null` counts as
- * absent), which any caller can already ask for by leaving the cursor out.
+ * `undefined` when there is none. `undefined` means "start at the first
+ * entry", which any caller can already ask for by leaving the cursor out. A
+ * `null` does not arrive here: {@link presentOptions} takes it out of the
+ * options at the method entry.
  *
  * The cursor must decode, must name the same index as the call, must hold
  * exactly the key attributes of that table or index (each a non-empty string
@@ -789,7 +822,7 @@ export function decodeCursor(
 	indexName: string | undefined,
 	partition?: { field: string; value: KeyValue },
 ): Record<string, KeyValue> | undefined {
-	if (cursor === undefined || cursor === null) return undefined;
+	if (cursor === undefined) return undefined;
 	let payload: unknown;
 	try {
 		payload =

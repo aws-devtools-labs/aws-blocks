@@ -881,6 +881,36 @@ describe('pages', () => {
 		assert.strictEqual((await Array.fromAsync(store.scan({ limit: null, cursor: null } as never))).length, 5);
 	});
 
+	test('a null option counts as absent in every method; the two value checks are the exception', async () => {
+		const store = new KVStore(testScope(), 'kv');
+		const nulls = { ttlSeconds: null, expiresAt: null, ifNotExists: null } as never;
+		await store.put('a', 'one', nulls);
+		// `ifNotExists: null` is no condition, so the second write goes through.
+		await store.put('a', 'two', nulls);
+		assert.strictEqual(await store.get('a', { consistentRead: null } as never), 'two');
+		const [entry] = await Array.fromAsync(store.scan({ includeExpired: null } as never));
+		assert.deepStrictEqual(entry, { key: 'a', value: 'two' });
+		await store.putBatch([{ key: 'b', value: 'three', ttlSeconds: null, expiresAt: null } as never]);
+		assert.strictEqual(await store.get('b'), 'three');
+		await store.delete('b', { ifExists: null } as never);
+		// No `ifExists`, so a delete of a missing key is not a conflict.
+		await store.delete('b', { ifExists: null } as never);
+
+		// `ifValueEquals: null` stays a compare with a stored null.
+		await rejects(store.put('a', 'three', { ifValueEquals: null } as never), KVStoreErrors.ConditionalCheckFailed);
+		assert.strictEqual(await store.get('a'), 'two');
+		const nullable = new KVStore<string | null>(testScope(), 'kv');
+		await nullable.put('n', null);
+		await nullable.put('n', 'set', { ifValueEquals: null });
+		assert.strictEqual(await nullable.get('n'), 'set');
+		await rejects(nullable.delete('n', { ifValueEquals: null }), KVStoreErrors.ConditionalCheckFailed);
+
+		// `ifFieldEquals: null` stays a call error.
+		const objects = new KVStore<{ n: number }>(testScope(), 'kv');
+		await rejects(objects.put('o', { n: 1 }, { ifFieldEquals: null } as never), KVStoreErrors.InvalidQuery);
+		await rejects(objects.delete('o', { ifFieldEquals: null } as never), KVStoreErrors.InvalidQuery);
+	});
+
 	test('a limit that is not a positive integer is InvalidQuery', async () => {
 		const store = await seeded();
 		for (const limit of [0, -1, 1.5, '2']) {

@@ -271,7 +271,9 @@ const lastHour = readings.query({
 
 ## Pages
 
-`query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end. A `cursor` of `undefined` or `null` starts at the first entry, so a client can pass back the `cursor` of the page before as it is.
+`query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end. A `cursor` of `undefined` starts at the first entry, so a client can pass back the `cursor` of the page before as it is.
+
+An option with the value `null` counts as an option that you did not pass, in every method: a value from a request can be `null` where the type says `undefined`. A `cursor` of `null` starts at the first entry, and an `expiresAt` of `null` sets no expiry. The two value checks are the exception: `ifValueEquals: null` compares with a stored `null`, and `ifFieldEquals: null` is an error.
 
 ```typescript
 import { ApiNamespace } from '@aws-blocks/core';

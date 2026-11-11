@@ -33,6 +33,7 @@ import {
 	PagedResults,
 	planQuery,
 	prepareItem,
+	presentOptions,
 	putCondition,
 	type Reader,
 	resolveKeyModel,
@@ -174,7 +175,7 @@ export class KVStore<
 			new GetCommand({
 				TableName: getSdkIdentifiers(this).tableName,
 				Key: normalizeKey(this.model, key),
-				ConsistentRead: options?.consistentRead !== false,
+				ConsistentRead: presentOptions(options)?.consistentRead !== false,
 			}),
 		);
 		return this.reader.value(result.Item);
@@ -206,14 +207,15 @@ export class KVStore<
 		// Schema validation and the layout checks run client-side, before any
 		// DynamoDB call. The 400 KB limit is DynamoDB's; its `ValidationException`
 		// is re-mapped on the way back.
-		const { item } = await prepareItem(this.model, key, value, options);
+		const present = presentOptions(options);
+		const { item } = await prepareItem(this.model, key, value, present);
 
 		// `ifNotExists` and a value check compose with OR: write when the key is
 		// absent OR its current value matches — the optimistic "create it, or update
 		// it only if unchanged" pattern. (AND would be unsatisfiable: a key can't be
 		// both absent and have a matching value.) The expression and the
 		// retriability come from item.ts, shared with the mock.
-		const condition = putCondition(this.model, options);
+		const condition = putCondition(this.model, present);
 		try {
 			await this.docClient.send(
 				new PutCommand({
@@ -251,7 +253,7 @@ export class KVStore<
 		const keyAttrs = normalizeKey(this.model, key);
 		// Delete conditions are conjunctive — both `ifExists` and the value check
 		// must hold — so they compose with AND, matching the mock.
-		const condition = deleteCondition(this.model, conditions);
+		const condition = deleteCondition(this.model, presentOptions(conditions));
 		try {
 			await this.docClient.send(
 				new DeleteCommand({
@@ -289,7 +291,7 @@ export class KVStore<
 	 *   this store, index, and partition, or `limit` is not a positive integer.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
-		const plan = planQuery(this.model, options);
+		const plan = planQuery(this.model, presentOptions(options));
 		return this.page(
 			plan.limit,
 			plan.startKey,
@@ -319,9 +321,10 @@ export class KVStore<
 	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this store, or `limit` is not a positive integer.
 	 */
 	scan(options?: ScanOptions): Results<Out, K> {
+		const present = presentOptions(options);
 		return this.page(
-			normalizeLimit(options?.limit),
-			decodeCursor(this.model, options?.cursor, undefined),
+			normalizeLimit(present?.limit),
+			decodeCursor(this.model, present?.cursor, undefined),
 			(exclusiveStartKey, limit) =>
 				this.docClient.send(
 					new ScanCommand({
@@ -331,7 +334,7 @@ export class KVStore<
 					}),
 				),
 			undefined,
-			options?.includeExpired === true,
+			present?.includeExpired === true,
 		);
 	}
 
@@ -381,7 +384,9 @@ export class KVStore<
 	 */
 	async putBatch(entries: PutBatchEntry<In, Out, K>[]): Promise<void> {
 		const items: Item[] = [];
-		for (const entry of entries) items.push((await prepareItem(this.model, entry.key, entry.value, entry)).item);
+		for (const entry of entries) {
+			items.push((await prepareItem(this.model, entry.key, entry.value, presentOptions(entry))).item);
+		}
 		const tableName = getSdkIdentifiers(this).tableName;
 
 		for (const chunk of chunked(items, BATCH_WRITE_MAX_REQUESTS)) {
