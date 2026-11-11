@@ -70,6 +70,7 @@ import {
   generateForwardedHostShimCode,
 } from './alb_lambda_event.js';
 import {
+  assertCacheGuardIgnoredCookies,
   isDefaultTtlPositive,
   type SsrCacheGuardConfig,
   withSsrCacheGuard,
@@ -285,6 +286,14 @@ export type HostingConstructProps = {
      * @deprecated Use `frontDoor.features.cacheKeyCookies`.
      */
     cacheKeyCookies?: string[];
+    /**
+     * Cookie names that never affect the rendered output (e.g. `_ga`,
+     * `_gid`, `_fbp`, a consent cookie): the SSR cache guard ignores them, as
+     * it does the `__dpl` build pin, and they are not in the cache key.
+     * @see HostingProps.cdn.cacheGuardIgnoredCookies for the full note.
+     * @deprecated Use `frontDoor.features.cacheGuardIgnoredCookies`.
+     */
+    cacheGuardIgnoredCookies?: string[];
     /**
      * Header names to include in the SSR cache key (e.g. `'authorization'`).
      * Use to vary cached SSR responses by credential-bearing headers.
@@ -903,8 +912,10 @@ export class HostingConstruct extends Construct {
     // names the selected door's server-route cache policy keys on, and
     // whether a response with no Cache-Control is edge-cached. The
     // CloudFront-over-ALB door's server-route policy keys on every cookie.
+    assertCacheGuardIgnoredCookies(f.cacheKeyCookies, f.cacheGuardIgnoredCookies);
     const ssrCacheGuardConfig: SsrCacheGuardConfig = {
       cacheKeyCookies: f.cacheKeyCookies,
+      ignoredCookies: f.cacheGuardIgnoredCookies,
       cacheKeyHeaders: f.cacheKeyHeaders,
       defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
       allCookiesKeyed: stackedRouter,
@@ -1646,6 +1657,7 @@ export class HostingConstruct extends Construct {
         skewProtection: f.skewProtection ?? { enabled: true },
         ssrDefaultTtl: f.ssrDefaultTtl,
         cacheKeyCookies: f.cacheKeyCookies,
+        cacheGuardIgnoredCookies: f.cacheGuardIgnoredCookies,
         cacheKeyHeaders: f.cacheKeyHeaders,
         webAclArn: effectiveWebAclArn ?? cdnWebAclArn,
         quotas: f.quotas,
@@ -2752,6 +2764,7 @@ const resolveHostingFrontDoor = (props: HostingConstructProps): ResolvedHostingF
     geoRestriction: { value: cdn?.geoRestriction, prop: 'cdn.geoRestriction' },
     ssrDefaultTtl: { value: cdn?.ssrDefaultTtl, prop: 'cdn.ssrDefaultTtl' },
     cacheKeyCookies: { value: cdn?.cacheKeyCookies, prop: 'cdn.cacheKeyCookies' },
+    cacheGuardIgnoredCookies: { value: cdn?.cacheGuardIgnoredCookies, prop: 'cdn.cacheGuardIgnoredCookies' },
     cacheKeyHeaders: { value: cdn?.cacheKeyHeaders, prop: 'cdn.cacheKeyHeaders' },
     responseHeadersPolicy: { value: cdn?.responseHeadersPolicy, prop: 'cdn.responseHeadersPolicy' },
     quotas: { value: cdn?.quotas, prop: 'cdn.quotas' },

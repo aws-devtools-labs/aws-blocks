@@ -18,12 +18,14 @@ import { pathToFileURL } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { Duration, Lazy } from 'aws-cdk-lib';
 import type { ComputeResource } from '../manifest/types.js';
+import { HostingError } from '../hosting_error.js';
 import {
   SSR_CACHE_GUARD_ENTRY_FILE,
   SSR_CACHE_GUARD_FILE,
   SSR_CACHE_GUARD_HANDLER,
   SSR_CACHE_GUARD_HANDLER_FILE,
   SSR_CACHE_GUARD_NODE_OPTION,
+  assertCacheGuardIgnoredCookies,
   generateSsrCacheGuardModule,
   isDefaultTtlPositive,
   withSsrCacheGuard,
@@ -122,6 +124,27 @@ void describe('guardCacheControl', () => {
 
   void it('leaves the response alone when authorization is a cache-key header (any case)', () => {
     assert.equal(keyed.guardCacheControl({ authorization: true, cookies: ['bb_session'] }, shared), null);
+  });
+
+  void it('treats cookies declared as never affecting the output like the build pin', async () => {
+    const ignoring = await load<GuardModule>({ cacheKeyCookies: ['bb_session'], ignoredCookies: ['_ga', '_gid'] });
+    assert.equal(ignoring.guardCacheControl({ authorization: false, cookies: ['_ga', '_gid', 'bb_session'] }, shared), null);
+    assert.equal(ignoring.guardCacheControl({ authorization: false, cookies: ['_ga', 'theme'] }, shared), PRIVATE);
+    assert.equal(ignoring.guardCacheControl({ authorization: false, cookies: ['_GA'] }, shared), PRIVATE);
+    assert.equal(ignoring.guardCacheControl({ authorization: true, cookies: ['_ga'] }, shared), PRIVATE);
+  });
+
+  void it('rejects a cookie that is both in the cache key and ignored', () => {
+    assert.doesNotThrow(() => assertCacheGuardIgnoredCookies(['bb_session'], ['_ga']));
+    assert.doesNotThrow(() => assertCacheGuardIgnoredCookies(undefined, ['_ga']));
+    assert.throws(
+      () => assertCacheGuardIgnoredCookies(['bb_session', '_ga'], ['_ga', '_ga']),
+      (err: unknown) =>
+        err instanceof HostingError &&
+        err.code === 'CacheGuardIgnoredCookieInCacheKeyError' &&
+        err.message.includes("'_ga'") &&
+        !err.message.includes('bb_session'),
+    );
   });
 
   void it('with every cookie in the cache key, rewrites only for Authorization and Set-Cookie', async () => {

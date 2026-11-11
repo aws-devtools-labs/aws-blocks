@@ -312,6 +312,35 @@ void describe('HostingConstruct — SSR mode', () => {
     assert.match(guardFor({ kind: 'alb' }), /^const ALL_COOKIES_KEYED = false;$/m);
   });
 
+  void it('bakes cdn.cacheGuardIgnoredCookies into the SSR cache guard, and keeps them out of the cache key', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', {
+      manifest: ssrManifest(staticDir, bundleDir),
+      frontDoor: { features: { cacheKeyCookies: ['bb_session'], cacheGuardIgnoredCookies: ['_ga', '_fbp'] } },
+    });
+    const guard = fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_FILE), 'utf-8');
+    assert.match(guard, /^const KEY_COOKIES = new Set\(\["__prerender_bypass","__next_preview_data","__dpl","bb_session","_ga","_fbp"\]\);$/m);
+    const policies = Template.fromStack(stack).findResources('AWS::CloudFront::CachePolicy');
+    const keyed = JSON.stringify(Object.values(policies).map((p) => p.Properties.CachePolicyConfig.ParametersInCacheKeyAndForwardedToOrigin.CookiesConfig));
+    assert.ok(keyed.includes('bb_session'));
+    assert.ok(!keyed.includes('_ga') && !keyed.includes('_fbp'), keyed);
+  });
+
+  void it('fails synth when a cookie is both a cache-key cookie and ignored by the SSR cache guard', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    assert.throws(
+      () =>
+        new HostingConstruct(createStack(), 'Hosting', {
+          manifest: ssrManifest(staticDir, bundleDir),
+          cdn: { cacheKeyCookies: ['bb_session'], cacheGuardIgnoredCookies: ['bb_session'] },
+        }),
+      (err: unknown) => err instanceof HostingError && err.code === 'CacheGuardIgnoredCookieInCacheKeyError',
+    );
+  });
+
   void it('installs the SSR cache guard on every regional compute a route targets, not on the image function', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();

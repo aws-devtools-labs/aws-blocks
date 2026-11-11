@@ -58,6 +58,7 @@ import type { DeployManifest } from '../manifest/types.js';
 import { ERROR_PAGE_KEY, NOT_FOUND_PAGE_KEY } from '../defaults.js';
 import { DEFAULT_NOT_FOUND_PAGE_HTML, needsDefaultNotFoundPage } from './default_not_found.js';
 import { customErrorResponses, withServerErrorsNotCached } from './error_responses.js';
+import { assertCacheGuardIgnoredCookies } from './ssr_cache_guard.js';
 import type { SkewProtectionConfig } from './skew_protection.js';
 import { QuotaBudget, type QuotaOverrides } from './quota_budget.js';
 import {
@@ -235,6 +236,12 @@ export type CdnConstructProps = {
   ssrDefaultTtl?: Duration;
   /** Cookie names to add to the SSR cache key. See HostingProps.cdn.cacheKeyCookies. */
   cacheKeyCookies?: string[];
+  /**
+   * Cookie names that never affect the rendered output; never in the SSR
+   * cache key (a name may not also be in {@link cacheKeyCookies}). See
+   * HostingProps.cdn.cacheGuardIgnoredCookies.
+   */
+  cacheGuardIgnoredCookies?: string[];
   /** Header names to add to the SSR cache key. See HostingProps.cdn.cacheKeyHeaders. */
   cacheKeyHeaders?: string[];
   /**
@@ -378,6 +385,8 @@ export class CdnConstruct extends Construct {
           'on a static-only deploy (no compute origin); the options are ignored.',
       );
     }
+
+    assertCacheGuardIgnoredCookies(props.cacheKeyCookies, props.cacheGuardIgnoredCookies);
 
     // ---- Lambda@Edge function-count validation ----
     // The KVS single-behavior model removed the per-route cache-behavior and

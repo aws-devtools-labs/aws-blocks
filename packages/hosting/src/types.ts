@@ -352,10 +352,11 @@ export type HostingProps = {
      * Adapter or a Web Function) runs behind a cache guard that sends `Cache-Control: private, no-store` when the request carries
      * `Authorization` (unless `'authorization'` is in {@link cacheKeyHeaders})
      * or a cookie not in the cache key (the Next.js preview cookies, the
-     * skew-protection `__dpl` cookie and {@link cacheKeyCookies}), and the
-     * response is shared-cacheable (`s-maxage`, `public`, `max-age` without
-     * `private`, a future `Expires`, or no caching headers while this TTL is
-     * positive). Where the guard cannot be installed (e.g. a Lambda Web
+     * skew-protection `__dpl` cookie and {@link cacheKeyCookies}) and not in
+     * {@link cacheGuardIgnoredCookies}, and the response is shared-cacheable
+     * (`s-maxage`, `public`, `max-age` without `private`, a future `Expires`,
+     * no caching headers while this TTL is positive, or an error status
+     * CloudFront caches without caching headers: 404, 414, 500-504). Where the guard cannot be installed (e.g. a Lambda Web
      * Adapter server that is not Node.js), synth emits a
      * `@aws-blocks/hosting:SsrCacheGuardNotInstalled` warning instead.
      * Responses already `private`/`no-store` (or `no-cache` without
@@ -389,6 +390,22 @@ export type HostingProps = {
      * such a response in the browser cache only.
      */
     cacheKeyCookies?: string[];
+    /**
+     * Cookie names that never affect the rendered output, e.g. client-side
+     * analytics and consent cookies (`_ga`, `_gid`, `_fbp`, a consent
+     * manager's cookie). Most browsers carry one, and without this a
+     * shared-cacheable SSR response (an ISR/SSG page served with `s-maxage`)
+     * is sent as `Cache-Control: private, no-store` to every visitor that
+     * does, so only cookie-less clients get edge hits. The SSR cache guard
+     * treats a request carrying only these (and cache-key) cookies like one
+     * without them, as it does the skew-protection `__dpl` cookie. They are
+     * never in the cache key: listing a name in both this and
+     * {@link cacheKeyCookies} fails synth.
+     *
+     * A listed name must never change what the server renders: a response
+     * that depends on it is cached once and served to every visitor.
+     */
+    cacheGuardIgnoredCookies?: string[];
     /**
      * Header names that vary the SSR response (e.g. `'authorization'`). Listing
      * a name declares that the response differs by that header, so CloudFront
