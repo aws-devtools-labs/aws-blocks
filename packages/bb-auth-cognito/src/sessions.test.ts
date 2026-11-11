@@ -258,3 +258,24 @@ describe('SessionStore TTL', () => {
 		assert.ok(bob in remaining, "bob's session must survive");
 	});
 });
+
+describe('SessionStore concurrent writers', () => {
+	test('updateSession does not recreate a session deleted between its read and its write', async () => {
+		const store = new SessionStore(ROOT, 'update-after-delete', 3600);
+		const id = await store.createSession(recordFor('alice'));
+
+		// Test seam: the store keeps its KVStore private; delete the session (as a
+		// concurrent signOut would) right before the update's write lands.
+		const internals = store as unknown as { kv: { put: (...args: unknown[]) => Promise<void> } };
+		const kv = internals.kv;
+		const realPut = kv.put.bind(kv);
+		kv.put = async (...args: unknown[]) => {
+			kv.put = realPut;
+			await store.deleteSession(id);
+			return realPut(...args);
+		};
+		await store.updateSession(id, { accessToken: jwtWith({ token_use: 'access', rotated: true }) });
+
+		assert.strictEqual(await store.lookupSession(id), null);
+	});
+});

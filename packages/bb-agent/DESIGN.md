@@ -88,11 +88,13 @@ The conversation record in the `convos` table is keyed by `{ userId, conversatio
 
 **The ownership read is strongly consistent** (`DistributedTable.get(key, { consistentRead: true })`). The documented flow is `createConversationId()` followed straight away by `stream()`, and an eventually consistent `GetItem` can miss the record that was just written and reject the user's first message on AWS. The mock is always strongly consistent, so the unit test simulates the lag.
 
-**Realtime channels are user-scoped when persistence is enabled.** The default `channelId` is the conversation id, and a caller may choose any `channelId`, so an unscoped channel would let someone who knows a conversation id publish onto the owner's live channel (`stream({ conversationId: <own>, channelId: <theirs> })`) or subscribe to it with `getChannel()`. `invokeTurn` publishes a turn's chunks on `u/<encodeURIComponent(userId)>/<channelId>` under the `chunks` namespace, and `getChannel(channelId, { userId })`, `stream()`'s returned `channel` and `complete()` resolve the same key. The caller still sees and passes around the plain `channelId`. `encodeURIComponent` keeps the user segment free of `/`, so a Realtime channel token (which also authorizes sub-paths of its channel) for one user can never cover another user's channels. The AgentCore payload carries the plain `channelId` plus the `userId`, and the runtime computes the same key. `inferenceOnly` agents keep no owner and publish on the bare `channelId`, as before.
+**Realtime channels are user-scoped when persistence is enabled.** The default `channelId` is the conversation id, and a caller may choose any `channelId`, so an unscoped channel would let someone who knows a conversation id publish onto the owner's live channel (`stream({ conversationId: <own>, channelId: <theirs> })`) or subscribe to it with `getChannel()`. `invokeTurn` publishes a turn's chunks on `u/<encodeURIComponent(userId)>/<channelId>` under the `chunks` namespace, and `getChannel(channelId, { userId })`, `stream()`'s returned `channel` and `complete()` resolve the same key. The caller still sees and passes around the plain `channelId`. `encodeURIComponent` keeps the user segment free of `/`, so a Realtime channel token (which also authorizes sub-paths of its channel) for one user can never cover another user's channels. The AgentCore payload carries the plain `channelId` plus the `userId`, and the runtime computes the same key. `inferenceOnly` agents keep no owner and publish on the bare `channelId`, as before, unless they set `sessionScope: 'user'` (below).
 
 **A turn without a conversation never runs in a conversation's session.** On AWS the `InvokeAgentRuntime` `runtimeSessionId` is derived from the `conversationId` for a conversation (the id itself, or its hash when shorter than 33 characters, so its turns and resumes reuse one warm microVM), and a turn without one, which has no state to keep, gets a fresh `turn-<uuid>` session (`runtimeSessionIdFor` in `agent.aws.ts`). The AgentCore entry (`handleInvocation` in `agentcore-invocation.ts`) takes `conversationId` from the request only, never from the session id. Before, the session id was the bare `channelId` and the entry fell back to it as the `conversationId`, so `stream({ channelId: <someone's conversation id> })` without a `conversationId` skipped the ownership check and ran inside that conversation's session on AWS (the mock never persisted such a turn).
 
-**`inferenceOnly` agents have no owner.** A `conversationId` passed to one is a shared session key with no ownership check, as before; the README says so.
+**`inferenceOnly` agents have no owner.** A `conversationId` passed to one is a shared session key with no ownership check by default (`sessionScope: 'shared'`); the README says so.
+
+**`sessionScope: 'user'` keys an `inferenceOnly` session by its owner.** There is no conversation record to check ownership against, so the owner goes into the key instead: the Strands session id is `u-` + the SHA-256 hex of `JSON.stringify([userId, conversationId])` (`sessionIdFor` in `agent.ts`). A caller who passes another user's `conversationId` selects a different, empty session. The hash keeps the key a fixed-length, path-safe S3 prefix whatever the ids contain, and the JSON array keeps `('a:b', 'c')` and `('a', 'b:c')` apart. Realtime channels take the same `u/<userId>/<channelId>` form as with persistence, and on AWS the AgentCore `runtimeSessionId` is derived from the scoped key, so two users on one `conversationId` don't share a runtime session either. `stream()`/`resume()`/`getChannel()` require a `userId` (the `'anonymous'` default would put every caller in one scope), and so does `invokeTurn` on the runtime: the AgentCore entry passes a missing `userId` through, and the turn is refused and logged rather than run as `'anonymous'`. It is opt-in because it changes which stored session an existing `conversationId` resolves to.
 
 ## Session Persistence
 
@@ -195,6 +197,18 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
   `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **A turn that failed during the gap** is recovered from the row the backend saves for it: an
+  assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the
+  turn threw, and holds the partial text when a runaway cap (`maxLlmCalls` / `maxToolIterations`)
+  stopped it. The client adopts any partial text under the same `extendsStream` guard, then ends the
+  turn through `failTurn()`, the same path a live `error` chunk takes: `loading` clears, the failsafe
+  is disarmed, and `onError` fires once with the recorded message (typed by `errorName`, e.g.
+  `AgentErrors.ModelUnavailable`, as for a live chunk), instead of waiting out the failsafe below.
+  The backend writes a turn's user row inside the turn, after `stream()` returns, so the read can miss
+  it and end at the previous turn's last row. Rows carry no turn id, so when the previous turn may have
+  failed (it failed, its send failed, the failsafe ended it, or a loaded conversation ends in an error
+  row) an error row is not trusted: the client waits for the terminal chunk or the failsafe, as for a
+  turn still running.
 - **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
   by every received chunk, so it fires only after *complete silence* — never during a long tool-call
   gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect

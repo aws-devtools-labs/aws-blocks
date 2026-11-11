@@ -107,13 +107,40 @@ options:
 |--------|------|---------|-------------|
 | `size` | `ContainerSize` | `{ vcpu: 0.5, memory: 1024 }` | A valid Fargate vCPU and memory pair. Invalid pairs don't type-check. |
 | `scaling` | `ContainerScaling` | fixed at one task | `{ minInstances, maxInstances, strategy? }`. `strategy` is one or more `cpu`, `memory` or `queue-depth` signals; omitted, it's inferred (queue depth for a compute that drains queues, CPU otherwise, and both when it drains queues and serves an `ApiNamespace`: CPU scales it in, the queue backlog only adds tasks). |
-| `image` | `string` | `public.ecr.aws/docker/library/node:24-slim` | Public or ECR image URI, pulled verbatim. It must be arm64-compatible and provide Node 24 on `PATH`. |
+| `image` | `string` | `public.ecr.aws/docker/library/node:24-slim`, pinned by digest | Public or ECR image URI, pulled verbatim. It must be arm64-compatible and provide Node 24 on `PATH`. Pin it by digest (see [Container image](#container-image)). |
 | `logRetention` | `RetentionDays` | the stack's `defaults.logRetention` | How long the container's logs are kept. |
 
 Blocks builds no container image, so deploying needs no local Docker. Your code
 is bundled with esbuild and uploaded as an S3 asset; at every task start a small
 bootstrap script fetches it with the task role and starts it. A custom `image`
 only supplies the runtime environment.
+
+### Container image
+
+ECS pulls the image again at every task start, and the container runs with the
+stack's shared execution role. A tag such as `my-image:24` can point at
+different bytes on each start, so pin the image by digest. Use the
+`repository@sha256:<digest>` form, which ECS documents (it lists `:tag` or
+`@digest`, not both), and keep the tag in a comment:
+
+```ts
+new Compute(scope, 'worker', {
+  type: 'container',
+  image: 'public.ecr.aws/my-registry/my-image@sha256:<64-hex digest>', // my-image:24
+});
+```
+
+Get the digest of a multi-arch image with
+`docker buildx imagetools inspect <image>:<tag>` (the `Digest:` line) or
+`crane digest <image>:<tag>`. Blocks uses your `image` exactly as written: it
+doesn't add a digest to it or change its user.
+
+The default image is ECR Public's mirror of the Docker official
+`node:24-slim` image, pinned by digest:
+`public.ecr.aws/docker/library/node@sha256:…` (the full reference is
+`DEFAULT_CONTAINER_IMAGE` in `src/default-image.ts`). It doesn't change
+between deploys until a Blocks release bumps the digest. The image's default
+user is root.
 
 `scaling.minInstances: 0` scales the service to zero between jobs. It needs at
 least one `AsyncJob` or `CronJob` on the compute and the default (or

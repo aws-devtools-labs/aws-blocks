@@ -24,7 +24,18 @@ self-starts the SQS pollers for the event handlers assigned to it.
   granted read on the code asset (below) so the boot script can fetch it.
 - **Image & code delivery (no local Docker).** The task runs a **stock public
   Node image** — `public.ecr.aws/docker/library/node:24-slim` by default, or the
-  customer's `image` — **verbatim via `fromRegistry`**. Blocks builds **no**
+  customer's `image` — **verbatim via `fromRegistry`**. The default is pinned by
+  its multi-arch index digest (`DEFAULT_CONTAINER_IMAGE` in
+  `src/default-image.ts`), so every task start pulls the same image; a unit test
+  fails if it isn't a digest reference (it checks the reference shape only, not
+  that the digest is the multi-arch index). `scripts/container-default-image-digest.mjs`
+  checks the registry: it prints the tag's current index digest (refusing a
+  response that isn't an image index) and verifies the pinned digest resolves to
+  an image index that lists linux/arm64. Bump with it (Dependabot doesn't track
+  it). The `Container default image digest` workflow runs it on every pull
+  request that changes the pin, so a typo'd or single-platform digest fails
+  before merge, and weekly to open a tracking issue when the pin is behind.
+  The customer's `image` is never rewritten. Blocks builds **no**
   container image, so `cdk deploy` never needs a local Docker daemon. The app
   code is co-bundled with esbuild (a `main.js` parent + a `worker.js` per-job
   worker, same bundle as the Lambda handler path) and shipped as an **S3 asset**

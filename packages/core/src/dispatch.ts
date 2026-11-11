@@ -9,6 +9,7 @@
 // guard and how its payload format carries `Set-Cookie`, the container's
 // body-size limit.
 
+import type { ServesApiNamespace } from './api-placement.js';
 import { requestBaseUrl } from './common/request-base-url.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { buildCorsHeaders, CORS_MAX_AGE, corsRejection, getCorsPatterns, isOriginAllowed } from './cors.js';
@@ -113,6 +114,15 @@ export interface DispatcherOptions {
    * Default `false`.
    */
   listApisWhenNotFound?: boolean;
+  /**
+   * Which API namespaces (by export name) this compute serves. A call to any
+   * other namespace gets the same "not found" error as an unknown one, whichever
+   * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
+   * namespace placed on another compute. Default: every namespace is served.
+   * The Lambda handler and the container HTTP server build it from the placement
+   * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
+   */
+  servesNamespace?: ServesApiNamespace;
 }
 
 /**
@@ -225,6 +235,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
   const trace = options.rpcTrace;
+  const servesNamespace = options.servesNamespace;
   const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
     if (options.logHandlerError) options.logHandlerError(failure);
     else logRequestError(request, label, failure.error);
@@ -340,7 +351,8 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
 
         // Get the API by export name. resolveApiNamespace refuses exported Building
         // Block instances and `_`-private exports, so only an API surface is callable.
-        const apiHandler = resolveApiNamespace(backend, apiNamespace);
+        // A namespace placed on another compute is refused exactly like an unknown one.
+        const apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
           reportRpcError({ status: 404, namespace: apiNamespace, method });
           const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';

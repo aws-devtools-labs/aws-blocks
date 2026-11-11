@@ -218,6 +218,23 @@ describe('createCdkOutput', () => {
     await output.run(process.execPath, fakeCdk(['a', 'b'], ['c'], 0));
     assert.strictEqual(out.text() + err.text(), '');
   });
+
+  it('lastRunOutput returns only the most recent run’s retained lines, and none once dumped', { timeout: 30_000 }, async () => {
+    const err = collectingSink();
+    const output = createCdkOutput({ label: 'cdk destroy', level: 'quiet', stdout: collectingSink(), stderr: err, retainLines: 3 });
+    assert.deepStrictEqual(output.lastRunOutput(), []);
+    await assert.rejects(Promise.resolve(output.run(process.execPath, fakeCdk(['first a', 'first b'], [], 1))));
+    assert.deepStrictEqual(output.lastRunOutput(), ['first a', 'first b']);
+    // The second run's lines only, even while the ring still holds the first run's.
+    await assert.rejects(Promise.resolve(output.run(process.execPath, fakeCdk(['second'], [], 1))));
+    assert.deepStrictEqual(output.lastRunOutput(), ['second']);
+    // A run longer than the ring: what the ring still holds.
+    await assert.rejects(Promise.resolve(output.run(process.execPath, fakeCdk(['1', '2', '3', '4'], [], 1))));
+    assert.deepStrictEqual(output.lastRunOutput(), ['2', '3', '4']);
+    output.printRetained();
+    assert.deepStrictEqual(output.lastRunOutput(), []);
+    assert.deepStrictEqual(createCdkOutput({ label: 'x', level: 'legacy' }).lastRunOutput(), []);
+  });
 });
 
 describe('attachCdkWatchOutput', () => {

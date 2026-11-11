@@ -227,6 +227,7 @@ export function productionDestroyDeps(options: DestroyOptions, cdkEnv: NodeJS.Pr
   return {
     runDestroy: () => cdkOutput.run('npx', cdkArgs, { cwd: options.projectRoot, env: cdkEnv }),
     printRetainedOutput: () => cdkOutput.printRetained(),
+    attemptOutput: () => cdkOutput.lastRunOutput(),
     listStacks: () => listProductionStackNames(options, cdkEnv).map((stackName) => ({ stackName })),
     emptyBuckets: emptySandboxBuckets,
     isThrottled: destroyWasThrottled,

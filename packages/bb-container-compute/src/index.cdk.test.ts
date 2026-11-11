@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 /**
  * Verifies `ContainerCompute` provisions a Fargate service in the framework's
@@ -19,6 +20,7 @@ import { BlocksPresets, BlocksStack } from '@aws-blocks/core/cdk';
 import * as cdk from 'aws-cdk-lib';
 import { Annotations, Match, Template } from 'aws-cdk-lib/assertions';
 import { containerMainEntry } from './bundle.js';
+import { DEFAULT_CONTAINER_IMAGE } from './default-image.js';
 import { ContainerCompute } from './index.cdk.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -223,13 +225,13 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 
 		const template = Template.fromStack(stack as unknown as cdk.Stack);
 
-		// The task runs the stock public Node 24 image by default, pulled by ECS —
-		// NOT a locally-built image asset (which would carry an account/region ECR
-		// URI). The command override runs the inlined bootstrap.
+		// The task runs the stock public Node 24 image by default (digest-pinned),
+		// pulled by ECS — NOT a locally-built image asset (which would carry an
+		// account/region ECR URI). The command override runs the inlined bootstrap.
 		template.hasResourceProperties('AWS::ECS::TaskDefinition', {
 			ContainerDefinitions: Match.arrayWith([
 				Match.objectLike({
-					Image: 'public.ecr.aws/docker/library/node:24-slim',
+					Image: DEFAULT_CONTAINER_IMAGE,
 					EntryPoint: ['node', '-e'],
 					Command: Match.arrayWith([Match.stringLikeRegexp('bootstrap\\.mjs')]),
 				}),
@@ -288,6 +290,53 @@ describe('ContainerCompute — no local Docker (image + S3 code asset)', () => {
 				Match.objectLike({ Image: 'public.ecr.aws/example/custom-node:24' }),
 			]),
 		});
+	});
+});
+
+describe('ContainerCompute — default image is pinned by digest', () => {
+	/**
+	 * The default image as an immutable reference: ECR Public's Node image by index digest only (`repository@sha256:…`, the form ECS documents).
+	 * This proves the reference shape only. It can't tell a multi-arch image-index digest from a single-platform manifest
+	 * digest, so it is not an arm64 guarantee: that needs a registry call. The source of truth for the digest is
+	 * `scripts/container-default-image-digest.mjs`, which prints the tag's index digest and verifies the pin against the
+	 * registry (it must resolve to an image index that lists linux/arm64); the `Container default image digest` workflow
+	 * runs it on every pull request that changes the pin.
+	 */
+	const DIGEST_PINNED_DEFAULT = /^public\.ecr\.aws\/docker\/library\/node@sha256:[0-9a-f]{64}$/;
+
+	async function synthImages(id: string, image?: string): Promise<string[]> {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, id, {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		new ContainerCompute(stack as never, 'worker', {
+			size: { vcpu: 0.5, memory: 1024 },
+			...(image ? { image } : {}),
+		});
+		const taskDefs = Template.fromStack(stack as unknown as cdk.Stack).findResources('AWS::ECS::TaskDefinition');
+		return Object.values(taskDefs).flatMap((td: any) =>
+			(td.Properties?.ContainerDefinitions ?? []).map((c: any) => String(c.Image)),
+		);
+	}
+
+	test('the synthesized task definition uses the digest-pinned default image', async () => {
+		const images = await synthImages('ContainerPinnedDefaultStack');
+		assert.strictEqual(images.length, 1, `expected one container; got ${JSON.stringify(images)}`);
+		assert.match(images[0], DIGEST_PINNED_DEFAULT);
+		assert.strictEqual(images[0], DEFAULT_CONTAINER_IMAGE, 'the task definition carries the pinned constant verbatim');
+	});
+
+	test('the default image constant is a digest reference, so a floating tag cannot be shipped', () => {
+		assert.match(DEFAULT_CONTAINER_IMAGE, DIGEST_PINNED_DEFAULT);
+	});
+
+	test('a custom digest-pinned image is used verbatim, not re-pinned by Blocks', async () => {
+		// The tagged case is covered by 'a custom image is used verbatim' above.
+		const pinned = `public.ecr.aws/example/custom-node@sha256:${'a'.repeat(64)}`;
+		assert.deepStrictEqual(await synthImages('ContainerCustomDigestStack', pinned), [pinned]);
 	});
 });
 
@@ -793,5 +842,92 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 	test('several container computes on one role add the ecs-tasks trust once', async () => {
 		const { ecs } = await synthTrust('EcsTrustOnce', ['a', 'b', 'c']);
 		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement across three computes');
+	});
+});
+
+// ── defaults.permissionsBoundary guard ───────────────────────────────────────
+// Every AWS::IAM::Role in every synthesized template (custom-resource provider
+// roles and any other stack or helper stack's roles included) must carry the
+// configured boundary and be listed in the synth-time IAM report.
+//
+// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
+// cdk test files, and mirrors core's `assertEveryRoleBounded` in
+// `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
+// belongs in all of them.
+
+const GUARD_BOUNDARY = 'blocks-guard-boundary';
+const GUARD_EXPECTED = {
+	'Fn::Join': [
+		'',
+		['arn:', { Ref: 'AWS::Partition' }, ':iam::', { Ref: 'AWS::AccountId' }, `:policy/${GUARD_BOUNDARY}`],
+	],
+};
+
+/**
+ * Read every top-level template and the IAM report in `outdir`; fail on a role
+ * without the boundary or missing from the report. Returns the checked roles as
+ * `<artifact>/<logicalId>` (for asserting a block's own roles were reached).
+ *
+ * Only the top level of the cloud assembly is read: templates from a CDK `Stage`
+ * (written under `assembly-*` folders) are not. No block tested here creates a Stage.
+ */
+function assertEveryRoleBoundedAndReported(outdir: string, reportFile: string): string[] {
+	const report = JSON.parse(readFileSync(join(outdir, reportFile), 'utf8')) as {
+		roles: { stack: string; logicalId: string; permissionsBoundary: unknown }[];
+	};
+	const reported = new Set(report.roles.map((r) => `${r.stack}/${r.logicalId}`));
+	const checked: string[] = [];
+	const problems: string[] = [];
+	for (const file of readdirSync(outdir).filter((f) => f.endsWith('.template.json'))) {
+		const artifact = file.slice(0, -'.template.json'.length);
+		const { Resources = {} } = JSON.parse(readFileSync(join(outdir, file), 'utf8')) as {
+			Resources?: Record<string, { Type: string; Properties?: { PermissionsBoundary?: unknown } }>;
+		};
+		for (const [id, r] of Object.entries(Resources)) {
+			if (r.Type !== 'AWS::IAM::Role') continue;
+			const key = `${artifact}/${id}`;
+			checked.push(key);
+			if (JSON.stringify(r.Properties?.PermissionsBoundary) !== JSON.stringify(GUARD_EXPECTED)) {
+				problems.push(`${key}: boundary ${JSON.stringify(r.Properties?.PermissionsBoundary ?? 'NONE')}`);
+			}
+			if (!reported.has(key)) problems.push(`${key}: missing from ${reportFile}`);
+		}
+	}
+	assert.ok(checked.length > 0, 'synth should produce at least one role');
+	assert.deepStrictEqual(
+		problems,
+		[],
+		`roles not covered by defaults.permissionsBoundary:\n  ${problems.join('\n  ')}`,
+	);
+	return checked;
+}
+
+describe('ContainerCompute under defaults.permissionsBoundary', () => {
+	test('every role it creates (the task execution role) carries the boundary and is in blocks-iam.json', async () => {
+		const outdir = mkdtempSync(join(tmpdir(), 'container-boundary-'));
+		try {
+			const app = new cdk.App({ outdir });
+			const stack = await BlocksStack.create(app, 'ContainerBoundary', {
+				backendHandlerPath: handlerPath,
+				backendCDKPath: backendPath,
+				defaults: { ...BlocksPresets.production, permissionsBoundary: GUARD_BOUNDARY },
+				defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+			} as never);
+			const compute = new ContainerCompute(stack as never, 'worker', {
+				size: { vcpu: 0.5, memory: 1024 },
+				scaling: { minInstances: 1, maxInstances: 2, strategy: { on: 'cpu', targetPercent: 65 } },
+			});
+			compute.finalize();
+			app.synth();
+
+			const blocksStack = stack as unknown as cdk.Stack;
+			const checked = assertEveryRoleBoundedAndReported(outdir, `${blocksStack.artifactId}.blocks-iam.json`);
+			assert.ok(
+				checked.some((r) => r.includes('worker')),
+				`the container's own roles were checked: ${checked}`,
+			);
+		} finally {
+			rmSync(outdir, { recursive: true, force: true });
+		}
 	});
 });

@@ -473,8 +473,9 @@ export class SessionStore {
     createSession(record: SessionRecord): Promise<string>;
     deleteByUsername(username: string): Promise<number>;
     deleteSession(sessionId: string): Promise<void>;
+    deleteSessionIfUnchanged(sessionId: string, expected: SessionRecord): Promise<boolean>;
     lookupSession(sessionId: string): Promise<SessionRecord | null>;
-    // (undocumented)
+    replaceSession(sessionId: string, expected: SessionRecord, next: SessionRecord): Promise<boolean>;
     updateSession(sessionId: string, update: Partial<SessionRecord>): Promise<void>;
 }
 

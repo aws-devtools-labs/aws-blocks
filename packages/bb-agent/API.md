@@ -43,6 +43,7 @@ export interface AgentConfig<TContext = DefaultToolContext> {
     // (undocumented)
     name?: string;
     removalPolicy?: 'destroy' | 'retain';
+    sessionScope?: 'shared' | 'user';
     streamingMode?: 'token' | 'block';
     // (undocumented)
     systemPrompt: string;

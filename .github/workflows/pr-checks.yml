@@ -295,6 +295,10 @@ jobs:
       # Maps a PR, and each E2E Hosting leg, to its E2E account.
       - name: Test the E2E account slot
         run: node --test scripts/ci/e2e-slot.test.mjs
+      # Secret values reach $GITHUB_ENV only masked, and pull request workflows
+      # grant id-token: write only to the jobs that assume an AWS role.
+      - name: Test workflow secret handling and OIDC scope
+        run: node --test scripts/ci/workflow-secrets.test.mjs
 
       # Deletes the stacks a cancelled or crashed E2E job leaves behind.
       - name: Test the E2E teardown
@@ -318,6 +322,11 @@ jobs:
       # log parser and quota model, against fixture logs (no GitHub calls).
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
+
+      # The wait the hosting E2E suites run between deploy and their first test
+      # (scripts/ci/hosting-ready.ts).
+      - name: Test the hosting readiness wait
+        run: npx tsx --test scripts/ci/hosting-ready.test.ts
 
       - name: Test the E2E cleanup wrapper
         run: node --test scripts/ci/e2e-cleanup.test.mjs
@@ -813,12 +822,20 @@ jobs:
       max-parallel: 1
       matrix:
         front-door: [apigateway, cloudfront]
+        # The cloudfront leg also turns on `defaults.strictNamespacePlacement`, so
+        # the bare endpoint's refusal of placed namespaces is proven on AWS while
+        # the apigateway leg keeps proving the default (off) behaviour, with no
+        # extra deploy.
+        include:
+          - front-door: cloudfront
+            strict-namespace-placement: 'true'
     env:
       # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
       # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
       # the app's FileBucket name past S3's 63 at four-digit PR numbers.
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
+      COMPUTE_STRICT_NAMESPACE_PLACEMENT: ${{ matrix.strict-namespace-placement || 'false' }}
     # No BLOCKS_SANDBOX_KEEP: ending the job once the delete has started would
     # release the concurrency group above while this stack's endpoints are
     # still in the shared VPC. The suite destroys its stacks and waits. (The
@@ -1121,12 +1138,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Masks every value (line by line) before exporting it to later steps;
+      # see scripts/ci/secret-to-env.sh.
       - name: Fetch Supabase secrets
         run: |
-          SECRET=$(aws secretsmanager get-secret-value \
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
             --secret-id blocks/supabase-e2e \
-            --query SecretString --output text)
-          echo "$SECRET" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+            --query SecretString --output text \
+            | scripts/ci/secret-to-env.sh
 
       - name: Apply test schema
         run: npx tsx packages/bb-data/test/apply-schema.ts
