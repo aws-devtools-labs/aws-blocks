@@ -262,9 +262,13 @@ export function knowledgeBaseTests(getApi: () => typeof apiType) {
 
       test('the agent sees results scoped by the server-side filter, wrapped as untrusted data', async () => {
         const api = getApi();
-        // Without the filter this query also matches guides/getting-started.md.
-        const unscoped = await api.kbRetrieve('Building Blocks Scope', { maxResults: 50 });
-        assert.ok(unscoped.some((r) => r.metadata.folder !== 'faq'), 'query should match docs outside faq');
+        // Without the filter, the tool's own query and maxResults (10) return guides/getting-started.md,
+        // so its absence below proves the server-side filter scoped the search.
+        const unscoped = await api.kbRetrieve('Building Blocks Scope', { maxResults: 10 });
+        assert.ok(
+          unscoped.some((r) => r.source.endsWith('guides/getting-started.md')),
+          `unscoped top 10 should include guides/getting-started.md: ${unscoped.map((r) => r.source).join(', ')}`,
+        );
 
         // The canned model echoes the tool result it was given, so `text` is what the model saw.
         const { text } = await api.kbAgentToolSearch('use searchDocs');

@@ -2830,7 +2830,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   async kbAgentToolSearch(message: string) {
-    // A real app takes the scope from the session (e.g. `(await auth.requireAuth(context)).tenantId`).
+    // A real app takes the scope from the session (e.g. a tenant id looked up for the user that
+    // `auth.requireAuth(context)` returns, which carries only `userId`, `username` and `createdAt`).
     const result = await kbToolAgent.stream(message, { context: { folder: 'faq' } });
     const done = await result.complete();
     return { text: done.text ?? '' };
