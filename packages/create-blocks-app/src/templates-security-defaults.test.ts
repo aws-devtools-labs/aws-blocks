@@ -517,8 +517,9 @@ function presignedUrlCalls(file: string): { call: string; method?: TemplateMetho
 function ungatedPresignedUrlCalls(file: string, allowed: Record<string, string>): string[] {
   return presignedUrlCalls(file).flatMap(({ call, method }) => {
     if (!method) return [`${call} (outside an API method, so its gate can't be checked)`];
-    if (!gatesFirst(method.body)) return [`${method.name} → ${call} (does not start with requireAuth/requireRole)`];
+    // Checked before the gate: a URL-signing method listed in UNGATED is fixed by removing it from the list.
     if (method.name in allowed) return [`${method.name} → ${call} (listed in UNGATED)`];
+    if (!gatesFirst(method.body)) return [`${method.name} → ${call} (does not start with requireAuth/requireRole)`];
     return [];
   });
 }
@@ -542,7 +543,7 @@ describe('create-blocks-app template methods that return a presigned URL require
         assert.deepStrictEqual(
           ungatedPresignedUrlCalls(file, allowed),
           [],
-          `${name} (${file}): start these methods with \`await auth.requireAuth(context)\` before signing a URL`,
+          `${name} (${file}): start these methods with \`await auth.requireAuth(context)\` before signing a URL, and keep them out of UNGATED`,
         );
       }
     });
@@ -567,14 +568,17 @@ describe('ungatedPresignedUrlCalls', () => {
         async open(path: string) { return { url: await files.getUrl(path) }; },
         async late(path: string) { const url = await files.createUploadHandle(path); await auth.requireAuth(context); return url; },
         async listed(path: string) { await auth.requireAuth(context); return files.getUrl(path); },
+        async publicSigner(path: string) { return files.putUrl(path); },
       }));`,
     );
     try {
-      assert.deepStrictEqual(ungatedPresignedUrlCalls(file, { 'api.listed': 'test' }), [
+      assert.deepStrictEqual(ungatedPresignedUrlCalls(file, { 'api.listed': 'test', 'api.publicSigner': 'test' }), [
         "files.getUrl (outside an API method, so its gate can't be checked)",
         'api.open → files.getUrl (does not start with requireAuth/requireRole)',
         'api.late → files.createUploadHandle (does not start with requireAuth/requireRole)',
         'api.listed → files.getUrl (listed in UNGATED)',
+        // Listed and ungated: the fix is to drop it from UNGATED (and gate it), so name the listing.
+        'api.publicSigner → files.putUrl (listed in UNGATED)',
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
