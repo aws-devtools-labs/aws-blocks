@@ -125,6 +125,7 @@ Start from what you need:
 - **Run work outside the request/response**
   - Fire-and-forget background jobs → `AsyncJob` (bb-async-job)
   - Scheduled / recurring tasks → `CronJob` (bb-cron-job)
+  - React to files uploaded to a bucket (imports, media processing) → `onObjectCreated` on `FileBucket` (bb-file-bucket)
 - **Push live updates to browsers** (chat, presence, dashboards) → `Realtime` (bb-realtime)
 - **Build AI features**
   - Agent with tool use + conversation → `Agent` (bb-agent)

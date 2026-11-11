@@ -152,6 +152,9 @@ import { MetricsSource } from '@aws-blocks/bb-dashboard';
 import { MetricUnit } from '@aws-blocks/bb-metrics';
 import { MFAPreference } from '@aws-blocks/bb-auth-cognito';
 import { ModelConfig } from '@aws-blocks/bb-agent';
+import { ObjectCreatedContext } from '@aws-blocks/bb-file-bucket';
+import { ObjectCreatedEvent } from '@aws-blocks/bb-file-bucket';
+import { ObjectCreatedOptions } from '@aws-blocks/bb-file-bucket';
 import { ObjectLockOptions } from '@aws-blocks/bb-file-bucket';
 import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
@@ -590,6 +593,12 @@ export { MetricUnit }
 export { MFAPreference }
 
 export { ModelConfig }
+
+export { ObjectCreatedContext }
+
+export { ObjectCreatedEvent }
+
+export { ObjectCreatedOptions }
 
 export { ObjectLockOptions }
 

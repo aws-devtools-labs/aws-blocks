@@ -53,15 +53,17 @@
   "scripts": {
     "prebuild": "node ../../scripts/generate-version.mjs FileBucket",
     "build": "tsc --build",
-    "test": "node --test 'dist/**/*.test.js'"
+    "test": "node --test 'dist/**/!(index.cdk).test.js' && node --conditions=cdk --test dist/index.cdk.test.js"
   },
   "dependencies": {
+    "@aws-blocks/bb-async-job": "^0.3.0",
     "@aws-blocks/bb-logger": "^0.3.0",
     "@aws-blocks/core": "^0.8.0",
     "@aws-sdk/client-s3": "^3.1156.0",
     "@aws-sdk/s3-request-presigner": "^3.1156.0"
   },
   "devDependencies": {
+    "@aws-blocks/bb-lambda-compute": "^0.7.0",
     "@types/node": "^20.19.43",
     "typescript": "^5.9.3"
   },
