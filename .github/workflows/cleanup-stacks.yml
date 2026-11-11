@@ -49,7 +49,8 @@ jobs:
     needs: legs
     runs-on: ubuntu-latest
     # The steps' own time budgets (stack sweep 40 min, Amplify sandbox sweep
-    # 40, REST API and CloudWatch role sweeps 15 each, log group sweep 5) add
+    # 40, Cognito pool sweep 5, REST API and CloudWatch role sweeps 15 each,
+    # log group sweep 5) add
     # up to more than this. They only bind on a backlog run: then the timeout
     # can land during the Amplify sandbox sweep or earlier, and the steps
     # after it, the log group sweep included, may not run until the next
@@ -662,6 +663,21 @@ jobs:
           if [ "$STILL_FAILED" != unknown ] && [ "$STILL_FAILED" -gt 0 ]; then
             echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup, nested ones included ($NESTED_DEFERRED root(s) deferred after a nested retain); AppSync API quota may be at risk"
           fi
+
+      # The E2E apps deploy Cognito user pools with self sign-up on, and the
+      # account's security scan reports every such pool it finds. A pool goes
+      # with its stack, so this only reclaims pools no live stack owns any more
+      # (left by a retained or out-of-band stack delete), older than 6 hours,
+      # test-named and CI-tagged, in an E2E account only. A pool a live stack
+      # still owns is the stack sweeps' (above). See scripts/ci/sweep-cognito-pools.mjs.
+      - name: Cleanup orphaned E2E Cognito user pools
+        if: always()
+        timeout-minutes: 6
+        env:
+          AWS_ROLE_ARNS: ${{ secrets.AWS_ROLE_ARNS }}
+          AWS_RETRY_MODE: adaptive
+          AWS_MAX_ATTEMPTS: '8'
+        run: node scripts/ci/sweep-cognito-pools.mjs
 
       - name: Cleanup orphaned API Gateway REST APIs
         if: always()

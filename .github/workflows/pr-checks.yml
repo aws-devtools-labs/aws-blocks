@@ -332,10 +332,11 @@ jobs:
         run: node --test scripts/ci/e2e-cleanup.test.mjs
 
       # The scheduled stack cleanup (cleanup-stacks.yml): a REST API or IAM role
-      # count it can't read must fail its leg, and no listing failure may read
-      # as "nothing to sweep".
+      # count it can't read must fail its leg, no listing failure may read as
+      # "nothing to sweep", and the Cognito pool sweep deletes only orphaned
+      # CI pools in an E2E account.
       - name: Test the stack cleanup's listing failures
-        run: node --test scripts/ci/rest-api-quota.test.mjs scripts/ci/cleanup-listings.test.mjs
+        run: node --test scripts/ci/rest-api-quota.test.mjs scripts/ci/cleanup-listings.test.mjs scripts/ci/sweep-cognito-pools.test.mjs
 
       # The Windows E2E driver's teardown failure reporting and the stack tag
       # cleanup-stacks.yml needs to reclaim a stack it leaks.
