@@ -99,6 +99,13 @@ export interface SsrCacheGuardConfig {
   /** `cacheKeyHeaders` (compared lower-cased). */
   readonly cacheKeyHeaders?: readonly string[];
   /**
+   * Whether the door's server-route cache key holds every cookie (as the
+   * CloudFront-over-ALB door's does): no cookie then makes a response depend
+   * on credentials outside the key, and only `Authorization` (unless a
+   * cache-key header) and `Set-Cookie` lead to a rewrite. @default false
+   */
+  readonly allCookiesKeyed?: boolean;
+  /**
    * Whether `ssrDefaultTtl` is positive, i.e. a response with no
    * `Cache-Control` is edge-cached. @default false
    */
@@ -137,6 +144,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 const KEY_COOKIES = new Set(${JSON.stringify(cookies)});
 const KEY_HEADERS = new Set(${JSON.stringify(headers)});
 const DEFAULT_TTL_POSITIVE = ${config.defaultTtlPositive === true};
+const ALL_COOKIES_KEYED = ${config.allCookiesKeyed === true};
 const PRIVATE = ${JSON.stringify(SSR_CACHE_GUARD_PRIVATE)};
 const PRELUDE_TYPE = 'application/vnd.awslambda.http-integration-response';
 const INSTALLED = Symbol.for('aws-blocks.hosting.ssr-cache-guard');
@@ -207,7 +215,7 @@ export function guardCacheControl(request, response) {
   if (!request) return null;
   const credentialed =
     (request.authorization && !KEY_HEADERS.has('authorization')) ||
-    request.cookies.some((name) => !KEY_COOKIES.has(name));
+    (!ALL_COOKIES_KEYED && request.cookies.some((name) => !KEY_COOKIES.has(name)));
   if (!credentialed || !sharedCacheable(response.cacheControl, response.expires, response.statusCode)) return null;
   return PRIVATE;
 }

@@ -124,6 +124,13 @@ void describe('guardCacheControl', () => {
     assert.equal(keyed.guardCacheControl({ authorization: true, cookies: ['bb_session'] }, shared), null);
   });
 
+  void it('with every cookie in the cache key, rewrites only for Authorization and Set-Cookie', async () => {
+    const allKeyed = await load<GuardModule>({ allCookiesKeyed: true });
+    assert.equal(allKeyed.guardCacheControl({ authorization: false, cookies: ['sess', 'theme'] }, shared), null);
+    assert.equal(allKeyed.guardCacheControl({ authorization: true, cookies: ['sess'] }, shared), PRIVATE);
+    assert.equal(allKeyed.guardCacheControl(anon, { ...shared, setCookie: true }), PRIVATE);
+  });
+
   void it('treats a missing Cache-Control as cacheable only when the default TTL is positive', async () => {
     const request = { authorization: true, cookies: [] };
     assert.equal(guard.guardCacheControl(request, { cacheControl: undefined, setCookie: false }), null);

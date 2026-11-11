@@ -11,7 +11,7 @@ import { HostingConstruct } from './hosting_construct.js';
 import type { DeployManifest } from '../manifest/types.js';
 import { HostingError } from '../hosting_error.js';
 import { generateKvsRouterRequestCode } from './kvs_router.js';
-import { SSR_CACHE_GUARD_NODE_OPTION } from './ssr_cache_guard.js';
+import { SSR_CACHE_GUARD_FILE, SSR_CACHE_GUARD_NODE_OPTION } from './ssr_cache_guard.js';
 
 // ---- Helpers ----
 
@@ -291,6 +291,20 @@ void describe('HostingConstruct — SSR mode', () => {
       Handler: 'run.sh',
       Environment: { Variables: Match.objectLike({ NODE_OPTIONS: '--enable-source-maps' }) },
     });
+  });
+
+  void it('derives the SSR cache guard cache key from the door: every cookie behind the CloudFront-over-ALB door', () => {
+    const guardFor = (frontDoor: ConstructorParameters<typeof HostingConstruct>[2]['frontDoor']): string => {
+      const staticDir = createStaticDir();
+      const bundleDir = createBundleDir();
+      const manifest = ssrManifest(staticDir, bundleDir);
+      manifest.compute.default = { ...manifest.compute.default, streaming: false };
+      new HostingConstruct(createStack(), 'Hosting', { manifest, frontDoor, skipRegionValidation: true });
+      return fs.readFileSync(path.join(bundleDir, SSR_CACHE_GUARD_FILE), 'utf-8');
+    };
+    assert.match(guardFor({ kind: 'stackedRouter' }), /^const ALL_COOKIES_KEYED = true;$/m);
+    assert.match(guardFor(undefined), /^const ALL_COOKIES_KEYED = false;$/m);
+    assert.match(guardFor({ kind: 'alb' }), /^const ALL_COOKIES_KEYED = false;$/m);
   });
 
   void it('accepts compute.timeout as a plain number (seconds) and coerces to Duration', () => {

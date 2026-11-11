@@ -897,12 +897,14 @@ export class HostingConstruct extends Construct {
     const serverResponse = serverResponseFor(props.frontDoor);
     this.serverResponse = serverResponse;
     // The SSR cache guard (see ssr_cache_guard.ts) needs the same cache-key
-    // names the CDN's SSR cache policy keys on, and whether a response with no
-    // Cache-Control is edge-cached.
+    // names the selected door's server-route cache policy keys on, and
+    // whether a response with no Cache-Control is edge-cached. The
+    // CloudFront-over-ALB door's server-route policy keys on every cookie.
     const ssrCacheGuardConfig: SsrCacheGuardConfig = {
       cacheKeyCookies: f.cacheKeyCookies,
       cacheKeyHeaders: f.cacheKeyHeaders,
       defaultTtlPositive: isDefaultTtlPositive(f.ssrDefaultTtl),
+      allCookiesKeyed: stackedRouter,
     };
 
     for (const [name, resource] of computeEntries) {
