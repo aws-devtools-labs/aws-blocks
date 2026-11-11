@@ -7,6 +7,7 @@ import { DataApiEngine } from './engines/data-api-engine.js';
 import { PgClientEngine } from './engines/pg-client-engine.js';
 import { RLSEnabledDatabase } from './database.js';
 import { createCrudHandlers } from './crud/index.js';
+import type { CrudRlsConfig } from './crud/rls-guard.js';
 import { ENV_NAME_SANITIZE_PATTERN, ENV_VAR_PREFIX } from './constants.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type { DatabaseOptions, ExternalDatabaseRef } from './types.js';
@@ -144,7 +145,7 @@ export class Database extends Scope {
     if (!this.options?.schema) {
       throw new Error('crud() requires schema metadata. Pass `schema: tableMeta` to the Database constructor.');
     }
-    return createAsyncCrudProxy(() => this.resolveBase(), this.options.schema, options) as any;
+    return createAsyncCrudProxy(() => this.resolveBase(), this.options.schema, options, { rlsPolicy: this.options.rlsPolicy }) as any;
   }
 
   /** @internal Get the underlying DatabaseEngine. Used by createKyselyAdapter(). */
@@ -157,7 +158,12 @@ export class Database extends Scope {
 /**
  * Creates a proxy that defers crud handler creation until the first method call.
  */
-function createAsyncCrudProxy(resolveBase: () => Promise<RLSEnabledDatabase>, schema: TableSchema, options: CrudOptions<any>): any {
+function createAsyncCrudProxy(
+  resolveBase: () => Promise<RLSEnabledDatabase>,
+  schema: TableSchema,
+  options: CrudOptions<any>,
+  rlsConfig: CrudRlsConfig,
+): any {
   let handlers: any = null;
   let initPromise: Promise<any> | null = null;
 
@@ -178,7 +184,7 @@ function createAsyncCrudProxy(resolveBase: () => Promise<RLSEnabledDatabase>, sc
     if (initPromise) return initPromise;
     initPromise = (async () => {
       const base = await resolveBase();
-      handlers = createCrudHandlers(base, schema, options);
+      handlers = createCrudHandlers(base, schema, options, undefined, rlsConfig);
       return handlers;
     })();
     handlers = await initPromise;
