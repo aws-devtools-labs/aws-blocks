@@ -378,8 +378,9 @@ async function addBlocksWorkspace(targetDir: string, options: {
 // An optional `blocksTemplateOverlayOnly: true` marks a template as an overlay
 // that's auto-selected when the CLI detects a matching existing project (e.g.
 // `amplify`) rather than a scaffoldable fresh-app starter; `createFreshProject`
-// rejects it up front. A folder whose package.json can't be read is still shown
-// in --help (flagged) but excluded from `--template` validation.
+// and `integrateWithExistingProject` reject it up front. A folder whose
+// package.json can't be read is still shown in --help (flagged) but excluded
+// from `--template` validation.
 //
 // Display order below is preserved from the previous hardcoded list so that
 // `--help` reads in the intended progression (default → bare → richer variants
@@ -453,23 +454,25 @@ async function validateTemplateName(templateName: string): Promise<void> {
   }
 }
 
-// ─── Fresh project creation ──────────────────────────────────────────────────
-
-async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
-  await validateTemplateName(templateName);
-
-  // Overlay templates (e.g. `amplify`, detected via `isAmplifyGen2Project()`)
-  // are auto-selected when the CLI finds a matching existing project and are
-  // flagged `blocksTemplateOverlayOnly` in their package.json. They ship only an
-  // overlay snippet — not a full standalone project (no `src/`, no `index.html`,
-  // no `gitignore`) — so a fresh scaffold would fail partway through the copy.
-  // Reject up front. Keying off the catalog flag (not a hardcoded name) means a
-  // new overlay template needs no change here — just the flag in its package.json.
+/**
+ * Exits with an error when `templateName` is an overlay template.
+ *
+ * Overlay templates (e.g. `amplify`, detected via `isAmplifyGen2Project()`)
+ * are auto-selected when the CLI finds a matching existing project and are
+ * flagged `blocksTemplateOverlayOnly` in their package.json. They ship only an
+ * overlay snippet — not a full standalone project (no `src/`, no `index.html`,
+ * no `gitignore`, no `cdk.json`) — so both a fresh scaffold and a generic
+ * existing-project integration would fail partway through the copy. Callers
+ * must invoke this before writing anything. Keying off the catalog flag (not a
+ * hardcoded name) means a new overlay template needs no change here — just the
+ * flag in its package.json.
+ */
+async function rejectOverlayTemplate(templateName: string): Promise<void> {
   const overlayEntry = (await loadTemplateCatalog()).find(t => t.name === templateName);
   if (overlayEntry?.overlayOnly) {
     console.error(`Error: The \`${templateName}\` template is an overlay that's auto-selected`);
-    console.error('when the CLI detects a compatible existing project. It cannot be');
-    console.error('scaffolded as a fresh app.');
+    console.error('when the CLI detects a compatible existing project. This directory');
+    console.error("isn't one, so the template can't be used here.");
     console.error('');
     console.error('To scaffold a fresh Blocks app, choose a different template:');
     console.error('  npx @aws-blocks/create-blocks-app my-app --template default');
@@ -479,6 +482,13 @@ async function createFreshProject(targetDir: string, templateName: string, skipI
     console.error('  npx @aws-blocks/create-blocks-app');
     process.exit(1);
   }
+}
+
+// ─── Fresh project creation ──────────────────────────────────────────────────
+
+async function createFreshProject(targetDir: string, templateName: string, skipInstall = false) {
+  await validateTemplateName(templateName);
+  await rejectOverlayTemplate(templateName);
 
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
 
@@ -787,6 +797,7 @@ function backendDevConfig(blocks: unknown): Record<string, unknown> | undefined 
 }
 
 async function integrateWithExistingProject(targetDir: string, templateName = 'default', skipConfirm = false, skipInstall = false) {
+  await rejectOverlayTemplate(templateName);
   const workspaceRoot = await enclosingWorkspaceRoot(targetDir);
   console.log('\n🔍 Detected existing project (package.json found)\n');
   console.log('This will add AWS Blocks backend to your project:');
