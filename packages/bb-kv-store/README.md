@@ -249,7 +249,7 @@ const matches = await Array.fromAsync(
 |-------|----------|-------------|
 | `where` | Yes | The partition field with `{ equals }`, and at most one condition on the sort field. |
 | `index` | No | The index to read. Without `index`, the query reads by the key of the store. |
-| `limit` | No | The largest number of entries to return. |
+| `limit` | No | The largest number of entries to return. A positive integer. |
 | `order` | No | `'asc'` or `'desc'` on the sort field. Defaults to `'asc'`. |
 | `cursor` | No | The position to start after. See [Pages](#pages). |
 
@@ -271,7 +271,7 @@ const lastHour = readings.query({
 
 ## Pages
 
-`query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end.
+`query` and `scan` return a `cursor`. Pass it to the same call to read the next page, in this request or in a later one. The cursor is `undefined` when the read reached the end. A `cursor` of `undefined` or `null` starts at the first entry, so a client can pass back the `cursor` of the page before as it is.
 
 ```typescript
 import { ApiNamespace } from '@aws-blocks/core';
@@ -349,7 +349,7 @@ Match an error by name with `isBlocksError`.
 |----------|--------------|-------------|
 | `KVStoreErrors.ConditionalCheckFailed` | `ConditionalCheckFailedException` | A condition on `put` or `delete` failed. Status 409. |
 | `KVStoreErrors.ValidationFailed` | `ValidationFailedException` | A value fails the schema, disagrees with its key, has a `_bkv_` field, or has an empty string in a key field or an indexed field. Also a bad expiry. |
-| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where`, an unknown index, a bad cursor, or `ifValueEquals` with an object. |
+| `KVStoreErrors.InvalidQuery` | `InvalidQueryException` | The call has the wrong shape: a bad key, a bad `where`, an unknown index, a bad `limit`, a bad cursor, or `ifValueEquals` with an object. |
 | `KVStoreErrors.ItemTooLarge` | `ItemTooLargeException` | An item is larger than 400 KB. |
 | `KVStoreErrors.BatchIncomplete` | `BatchIncompleteException` | A batch call left entries unprocessed. AWS runtime only. |
 

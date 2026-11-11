@@ -438,6 +438,16 @@ describe('AWS query', () => {
 });
 
 describe('AWS scan', () => {
+	test('a null cursor and limit send no ExclusiveStartKey and no Limit; a bad limit is rejected before any call', async () => {
+		const { store, sent, input } = awsStore('kv', undefined, () => ({ Items: [] }));
+		await Array.fromAsync(store.scan({ limit: null, cursor: null }));
+		assert.equal(input().Limit, undefined);
+		assert.equal(input().ExclusiveStartKey, undefined);
+		await rejects(() => store.scan({ limit: 0 }), KVStoreErrors.InvalidQuery);
+		await rejects(() => store.query({ index: 'nope', where: {}, limit: 0 }), KVStoreErrors.InvalidQuery);
+		assert.equal(sent.length, 1);
+	});
+
 	test('passes Limit, follows LastEvaluatedKey, filters expired unless includeExpired', async () => {
 		const page = {
 			Items: [

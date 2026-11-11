@@ -41,7 +41,7 @@ export const KVStoreErrors = {
 	/**
 	 * The call has the wrong shape and was rejected before reaching DynamoDB: a
 	 * key of the wrong shape, a missing `where` clause, a partition key not
-	 * given as `{ equals: value }`, an unknown index, more than one sort-key
+	 * given as `{ equals: value }`, an unknown index, a `limit` that is not a positive integer, more than one sort-key
 	 * condition, an empty `ifFieldEquals`, `ifValueEquals` with an object value,
 	 * or a cursor that does not decode or belongs to another store, index, or
 	 * partition. These are all caller bugs — something the caller can fix by
@@ -158,6 +158,7 @@ export const KVStoreMessages = {
 	reservedField: (field: string) => `value field '${field}' uses the reserved prefix '_bkv_'`,
 	keyValueDisagree: (field: string) => `value field '${field}' does not equal the key`,
 	valueMustBeObject: 'a store with a declared key takes an object value',
+	limitInvalid: (received: string) => `limit must be a positive integer (received ${received})`,
 	cursorInvalid: 'cursor is not a cursor of this store',
 	cursorIndexMismatch: (expected: string | undefined, got: string | undefined) =>
 		`cursor belongs to ${got ? `index '${got}'` : 'the table key'}, but the call reads ${expected ? `index '${expected}'` : 'the table key'}`,

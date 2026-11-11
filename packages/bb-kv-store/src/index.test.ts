@@ -780,6 +780,27 @@ describe('pages', () => {
 		);
 	}
 
+	test('a null cursor, limit or index counts as absent (a JSON transport sends null for an argument left out)', async () => {
+		const store = await seeded();
+		const all = await Array.fromAsync(
+			store.query({ where: { pk: { equals: 'p' } }, limit: null, cursor: null, index: null } as never),
+		);
+		assert.strictEqual(all.length, 5);
+		assert.strictEqual((await Array.fromAsync(store.scan({ limit: null, cursor: null } as never))).length, 5);
+	});
+
+	test('a limit that is not a positive integer is InvalidQuery', async () => {
+		const store = await seeded();
+		for (const limit of [0, -1, 1.5, '2']) {
+			await rejects(
+				() => store.query({ where: { pk: { equals: 'p' } }, limit } as never),
+				KVStoreErrors.InvalidQuery,
+				/positive integer/,
+			);
+			await rejects(() => store.scan({ limit } as never), KVStoreErrors.InvalidQuery, /positive integer/);
+		}
+	});
+
 	test('scan: a cursor continues across two calls', async () => {
 		const store = await seeded();
 		const first = store.scan({ limit: 3 });

@@ -21,7 +21,7 @@ import {
 import {
 	buildItem,
 	compareKeyValues,
-	decodeCursor,
+	decodeOptionalCursor,
 	deleteCondition,
 	encodeCursor,
 	type Item,
@@ -32,6 +32,7 @@ import {
 	matchesSortKeyCondition,
 	mergeKeyIntoValue,
 	normalizeKey,
+	normalizeLimit,
 	PagedResults,
 	type Positioned,
 	planQuery,
@@ -296,18 +297,14 @@ export class KVStore<
 	 *   declared key and no `index` is given, the `where` clause is missing, the partition key is
 	 *   not given as `{ equals: value }`, more than one sort-key condition is supplied (DynamoDB
 	 *   allows only one per query — use `between` for ranges), or the cursor does not belong to
-	 *   this store, index, and partition.
+	 *   this store, index, and partition, or `limit` is not a positive integer.
 	 */
 	query(options: QueryOptions<Out, K, I>): Results<Out, K> {
 		const plan = planQuery(this.model, options as Parameters<typeof planQuery>[1]);
-		const cursor = options.cursor;
-		const startAfter =
-			cursor === undefined
-				? undefined
-				: decodeCursor(this.model, cursor, plan.indexName, {
-						field: plan.key.partitionKey,
-						value: plan.pkValue,
-					});
+		const startAfter = decodeOptionalCursor(this.model, options.cursor, plan.indexName, {
+			field: plan.key.partitionKey,
+			value: plan.pkValue,
+		});
 		const model = this.model;
 		const reconcile = (value: unknown) => this.reconcileRead(value);
 		const data = this.data;
@@ -356,16 +353,15 @@ export class KVStore<
 	 * `includeExpired` is set. Returns a `Results` object with a `cursor` for the
 	 * next page.
 	 *
-	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this store.
+	 * @throws {KVStoreErrors.InvalidQuery} If the cursor does not belong to this store, or `limit` is not a positive integer.
 	 */
 	scan(options?: ScanOptions): Results<Out, K> {
-		const startAfter =
-			options?.cursor === undefined ? undefined : decodeCursor(this.model, options.cursor, undefined);
+		const startAfter = decodeOptionalCursor(this.model, options?.cursor, undefined);
 		const model = this.model;
 		const reconcile = (value: unknown) => this.reconcileRead(value);
 		const data = this.data;
 		const includeExpired = options?.includeExpired === true;
-		const limit = options?.limit;
+		const limit = normalizeLimit(options?.limit);
 		return new PagedResults<Entry<Out, K>>(async function* (): AsyncGenerator<Positioned<Entry<Out, K>>, boolean> {
 			const now = nowEpochSeconds();
 			// Deterministic order by the base key, so a cursor resumes at the same

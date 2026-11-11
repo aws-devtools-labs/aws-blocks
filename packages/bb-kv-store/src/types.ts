@@ -258,7 +258,7 @@ export interface GetOptions {
  * Options accepted by `scan`.
  */
 export interface ScanOptions {
-	/** The largest number of entries to return. */
+	/** The largest number of entries to return. A positive integer. */
 	limit?: number;
 	/** The position to start after, from the `cursor` of an earlier `scan`. */
 	cursor?: string;
@@ -295,7 +295,7 @@ export type SortCondition<V> = OneOf<
 		lessThan: V;
 		lessThanOrEqual: V;
 		between: [V, V];
-	// biome-ignore lint/complexity/noBannedTypes: `{}` adds no member for a number sort field
+		// biome-ignore lint/complexity/noBannedTypes: `{}` adds no member for a number sort field
 	} & ([V] extends [string] ? { beginsWith: string } : {})
 >;
 
@@ -322,7 +322,7 @@ export type Where<T, C> = C extends { partitionKey: infer P extends keyof T; sor
 
 /** Paging and ordering options shared by every form of `query`. */
 export interface Page {
-	/** The largest number of entries to return. */
+	/** The largest number of entries to return. A positive integer. */
 	limit?: number;
 	/** Sort order on the sort field. Defaults to `'asc'`. */
 	order?: 'asc' | 'desc';

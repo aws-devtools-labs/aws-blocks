@@ -493,7 +493,7 @@ export function planQuery(
 	options: { index?: string; where?: Record<string, unknown>; limit?: number; order?: 'asc' | 'desc' },
 ): QueryPlan {
 	let key: KeyAttributes | undefined;
-	if (options.index !== undefined) {
+	if (options.index !== undefined && options.index !== null) {
 		key = model.indexes[options.index];
 		if (!key) throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.indexNotFound(options.index));
 	} else {
@@ -515,11 +515,11 @@ export function planQuery(
 		? normalizeSortKeyCondition(options.where[key.sortKey] as Record<string, unknown> | undefined)
 		: undefined;
 	return {
-		indexName: options.index,
+		indexName: options.index ?? undefined,
 		key,
 		pkValue,
 		skCondition: skCondition as SortCondition<KeyValue> | undefined,
-		limit: options.limit,
+		limit: normalizeLimit(options.limit),
 		order: options.order === 'desc' ? 'desc' : 'asc',
 	};
 }
@@ -630,6 +630,40 @@ export function decodeCursor(
 		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.cursorPartitionMismatch(partition.field));
 	}
 	return key;
+}
+
+/**
+ * Check a `limit` option. `undefined` and `null` both mean "no limit": a JSON
+ * transport turns an optional positional argument that the caller left out
+ * into `null`, so an API method that forwards its arguments passes `null` here.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the limit is not a positive integer.
+ */
+export function normalizeLimit(limit: unknown): number | undefined {
+	if (limit === undefined || limit === null) return undefined;
+	if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+		throw blocksError(KVStoreErrors.InvalidQuery, KVStoreMessages.limitInvalid(String(limit)));
+	}
+	return limit;
+}
+
+/**
+ * Decode and check a `cursor` option, or return `undefined` when there is
+ * none. `undefined` and `null` both mean "start at the first entry" (see
+ * {@link normalizeLimit} for why `null` counts as absent), which any caller
+ * can already ask for by leaving the cursor out. Any other value goes through
+ * {@link decodeCursor}.
+ *
+ * @throws {KVStoreErrors.InvalidQuery} If the cursor fails a check of {@link decodeCursor}.
+ */
+export function decodeOptionalCursor(
+	model: KeyModel,
+	cursor: unknown,
+	indexName: string | undefined,
+	partition?: { field: string; value: KeyValue },
+): Record<string, KeyValue> | undefined {
+	if (cursor === undefined || cursor === null) return undefined;
+	return decodeCursor(model, cursor as string, indexName, partition);
 }
 
 // ── Results ─────────────────────────────────────────────────────────────────
