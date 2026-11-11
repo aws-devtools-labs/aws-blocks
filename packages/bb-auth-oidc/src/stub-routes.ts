@@ -40,7 +40,8 @@ let stubIdpModule: Promise<StubIdpModule> | undefined;
 /**
  * Load the stub IdP engine on first use. Deferred (rather than a static import)
  * so the engine module is evaluated only once a mounted stub route runs. A
- * failed load is not cached, so a later request retries it.
+ * rejected `import()` is dropped so a transient load failure can be retried; an
+ * error thrown while evaluating the module is permanent for the process.
  */
 function loadStubIdp(): Promise<StubIdpModule> {
 	if (!stubIdpModule) {

@@ -146,10 +146,13 @@ export interface OidcClientEngineOptions {
 	 * sandbox deployment (the only deployment that mounts the stub IdP routes).
 	 *
 	 * When `false`, stub providers are left out of the engine's provider table:
-	 * sign-in, authorize-params, callback, exchange, and refresh answer
-	 * `ProviderNotConfiguredException` for them, a bearer token whose `iss`
-	 * names a stub issuer is never matched, and no issuer discovery is run for
-	 * them. A stub provider then behaves exactly like an unavailable provider.
+	 * sign-in, authorize-params, callback, and exchange answer
+	 * `ProviderNotConfiguredException` for them; `refreshBearerTokens` returns
+	 * `null`; a session cookie naming a stub provider is not honoured by
+	 * `verifySession` / `refreshSession` (both return `null`); sign-out clears
+	 * the local session without an upstream revoke; a bearer token whose `iss`
+	 * names a stub issuer is never matched; and no issuer discovery is run for
+	 * them. A stub provider then behaves like an unavailable provider.
 	 */
 	trustStubProviders: boolean;
 	/**
@@ -538,14 +541,30 @@ export class OidcClientEngine implements AuthEngine {
 	}
 
 	async verifySession(ctx: BlocksContext): Promise<OIDCUser | null> {
-		return this.sessionManager.verifyStatefulSession(ctx, (refreshToken, providerName) =>
+		const user = await this.sessionManager.verifyStatefulSession(ctx, (refreshToken, providerName) =>
 			this.callTokenRefreshForProvider(refreshToken, providerName, ctx),
 		);
+		// The session manager does not consult the provider table, so a
+		// session minted by a stub provider is dropped here.
+		return user && this.isUntrustedStub(user.provider) ? null : user;
 	}
 
 	async refreshSession(ctx: BlocksContext): Promise<OIDCUser | null> {
-		return this.sessionManager.forceRefresh(ctx, (refreshToken, providerName) =>
+		const user = await this.sessionManager.forceRefresh(ctx, (refreshToken, providerName) =>
 			this.callTokenRefreshForProvider(refreshToken, providerName, ctx),
+		);
+		return user && this.isUntrustedStub(user.provider) ? null : user;
+	}
+
+	/**
+	 * Whether `name` is a configured stub provider this engine does not serve.
+	 * Checks the configured stubs rather than `providerByName`, so a session for
+	 * a provider that was renamed or removed from the config is not affected.
+	 */
+	private isUntrustedStub(name: string): boolean {
+		return (
+			!this.options.trustStubProviders &&
+			this.options.providers.some((p) => p.name === name && p.kind === 'stub')
 		);
 	}
 

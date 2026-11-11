@@ -25,7 +25,8 @@ import {
 	getRegisteredRoutes,
 	preloadConfig,
 } from '@aws-blocks/core';
-import { AuthOIDC, google, stubIdp } from './index.aws.js';
+import { AuthOIDC, cognitoFederated, google, stubIdp } from './index.aws.js';
+import { cognitoEnvPrefix } from './utils.js';
 import { stubIssuerPath } from './engines/stub-issuer.js';
 
 const ENV_KEYS = [
@@ -350,5 +351,43 @@ describe('AuthOIDC (aws-runtime): stub providers are served only in a sandbox de
 		assert.strictEqual(sent.length, 1);
 		const body = (typeof sent[0] === 'string' ? JSON.parse(sent[0]) : sent[0]) as { issuer?: string };
 		assert.strictEqual(body.issuer, `${ORIGIN}${stubIssuerPath('dev-lazy')}`);
+	});
+
+	test('cognitoFederated next to google: google is left out of getClient and the actions, with one warning', async () => {
+		const setting = (fullId: string) => ({ fullId, get: async () => 'value' });
+		const auth = new AuthOIDC({ id: 'my-app' }, 'auth-cognito-mixed', {
+			providers: [
+				cognitoFederated({
+					name: 'corp',
+					clientId: setting('corp-client-id'),
+					clientSecret: setting('corp-client-secret'),
+					cognitoDomain: 'myapp',
+					region: 'us-east-1',
+					identityProvider: 'Corp',
+					idpIssuerUrl: 'https://idp.example.test',
+				}),
+				google({ clientId: 'cid', clientSecret: 'secret' }),
+			],
+		});
+		const envPrefix = cognitoEnvPrefix(auth.fullId);
+		const prevClientId = process.env[`${envPrefix}_CLIENT_ID`];
+		process.env[`${envPrefix}_CLIENT_ID`] = 'cognito-client-id';
+		try {
+			const api = apiFor(auth as unknown as ReturnType<typeof construct>, requestCtx().ctx);
+			const client = (await api.getClient()).toJSON();
+			assert.deepStrictEqual(client.providers, ['corp']);
+			assert.deepStrictEqual(Object.keys(client.providerConfigs), ['corp']);
+			const state = await api.getAuthState();
+			assert.deepStrictEqual(state.actions?.map((a) => a.name), ['corp']);
+
+			const unserved = warn.mock.calls
+				.map((c) => String(c.arguments[0]))
+				.filter((m) => m.includes("provider 'google'"));
+			assert.strictEqual(unserved.length, 1, `warnings: ${JSON.stringify(unserved)}`);
+			assert.match(unserved[0], /not served by the configured auth engine/);
+		} finally {
+			if (prevClientId === undefined) delete process.env[`${envPrefix}_CLIENT_ID`];
+			else process.env[`${envPrefix}_CLIENT_ID`] = prevClientId;
+		}
 	});
 });

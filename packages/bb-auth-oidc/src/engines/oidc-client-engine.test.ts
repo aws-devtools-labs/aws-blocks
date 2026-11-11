@@ -271,6 +271,57 @@ describe('OidcClientEngine: trustStubProviders', () => {
 		assert.strictEqual(fetchMock.mock.callCount(), 0, 'no revocation or discovery for an untrusted stub');
 	});
 
+	test('false: a signed stub session cookie with a live row is not honoured', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const now = Math.floor(Date.now() / 1000);
+		const rows = new Map<string, SessionRow>([
+			['sid-1', { userId: 'u', refreshToken: 'rt', expiresAt: now + 3600, claims: {}, state: 'ready' }],
+		]);
+		const store: SessionStore = {
+			get: async (key) => rows.get(key) ?? null,
+			put: async (key, value) => {
+				rows.set(key, value);
+			},
+			delete: async (key) => {
+				rows.delete(key);
+			},
+		};
+		const session: SessionCookiePayload = {
+			mode: 'stateful',
+			provider: 'dev',
+			sessionId: 'sid-1',
+			exp: now + 3600,
+		};
+		const cookie = `${sessionCookieName(COOKIE_PREFIX)}=${encodeSignedCookie(session, COOKIE_SECRET)}`;
+
+		// The same cookie and row resolve to a user on a trusting engine, so
+		// the `null` below comes from the stub check and not from the fixture.
+		const trusted = engineFor(true, store).engine;
+		assert.strictEqual((await trusted.verifySession(ctxWith(new Headers({ cookie }))))?.provider, 'dev');
+
+		const { engine, resolved } = engineFor(false, store);
+		assert.strictEqual(await engine.verifySession(ctxWith(new Headers({ cookie }))), null);
+		assert.strictEqual(await engine.refreshSession(ctxWith(new Headers({ cookie }))), null);
+		assert.deepStrictEqual(resolved, []);
+		assert.strictEqual(fetchMock.mock.callCount(), 0);
+	});
+
+	test('false: loadConfig refuses a stub provider when called directly', async () => {
+		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
+		const { engine, resolved } = engineFor(false);
+		// `loadConfig` is private and not reachable for a stub through the
+		// public API (the provider table already excludes it); call it
+		// directly to pin the second check.
+		const internal = engine as unknown as {
+			loadConfig: (p: ProviderConfig, c: BlocksContext) => Promise<unknown>;
+		};
+		await assert.rejects(internal.loadConfig(stubIdp({ name: 'dev' }), ctxWith()), {
+			name: 'ProviderNotConfiguredException',
+		});
+		assert.deepStrictEqual(resolved, []);
+		assert.strictEqual(fetchMock.mock.callCount(), 0);
+	});
+
 	test('true: the stub issuer is matched and discovery runs against it', async () => {
 		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
 		const { engine, resolved } = engineFor(true);
