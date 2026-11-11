@@ -267,6 +267,13 @@ export function createChat(options: CreateChatOptions): ChatController {
 	 * per turn. Reset when a new turn begins (sendMessage).
 	 */
 	let errorReported = false;
+	/**
+	 * Whether the turn before the in-flight one may have ended in a failure (or its outcome is
+	 * unknown). The backend writes a turn's user row inside the turn, after `stream()` returns,
+	 * so a reconnect read can miss it and end at the previous turn's last row. When that row
+	 * may be a failure, an error row in the read cannot be tied to the in-flight turn.
+	 */
+	let priorTurnMayHaveFailed = false;
 
 	function setLoading(next: boolean) {
 		// Idempotent: only notify on an actual change. A turn ends by BOTH the done/
@@ -298,6 +305,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 			if (destroyed) return;
 			if (loading) {
 				setLoading(false);
+				priorTurnMayHaveFailed = true;
 				// Route through reportError so the once-per-turn errorReported latch covers the
 				// failsafe path too — a later `error` chunk for the same server-started turn
 				// won't then double-report after a failsafe timeout.
@@ -349,6 +357,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 		}
 		clearFailsafe();
 		setLoading(false);
+		priorTurnMayHaveFailed = true;
 		// Report at most once per turn: a prior send-rejection may have already surfaced
 		// onError for this same (server-started) turn. A server-classified failure (errorName)
 		// also passes the branded error as `cause`, so call sites can isBlocksError() on it.
@@ -367,6 +376,8 @@ export function createChat(options: CreateChatOptions): ChatController {
 	 */
 	function handleSendFailure(err: unknown) {
 		setLoading(false);
+		// The turn may still have run (and failed) server-side.
+		priorTurnMayHaveFailed = true;
 		removeEmptyAssistantPlaceholder();
 		reportError(err instanceof Error ? err.message : String(err), err);
 	}
@@ -401,6 +412,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 			const last = history[history.length - 1];
 			const turnComplete = !!last && last.role === 'assistant' && !!last.content;
 			const failure = persistedTurnError(last);
+			// A failure row could be the previous turn's when that turn may have failed too: the
+			// in-flight turn's user row is written after stream() returns, so this read can miss it
+			// and end at the previous turn's row. Rows carry no turn id, so wait in that case.
+			const failureMayBeStale = !!failure && priorTurnMayHaveFailed;
 
 			// Turn-identity + liveness guard: only act on the persisted read if the turn we
 			// captured is STILL the in-flight one and we're still loading. If a terminal
@@ -409,7 +424,10 @@ export function createChat(options: CreateChatOptions): ChatController {
 			// ignore this — possibly stale — DB result rather than clobber a live outcome.
 			const stillSameInFlightTurn = assistantId !== null && assistantId === turnAtStart && loading;
 
-			if (turnComplete && stillSameInFlightTurn) {
+			if (failureMayBeStale) {
+				// Treat the turn as still running: its terminal chunk or the failsafe ends it.
+				if (stillSameInFlightTurn) armFailsafe();
+			} else if (turnComplete && stillSameInFlightTurn) {
 				// Adopt the persisted final text ONLY if it extends what we've already
 				// streamed this turn (nothing streamed yet, or the stream is a prefix of the
 				// persisted text). If it does NOT extend our stream, `last` is a stale /
@@ -443,6 +461,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 						assistantId = null;
 						clearFailsafe();
 						setLoading(false);
+						priorTurnMayHaveFailed = false;
 					}
 				} else {
 					// Snapshot doesn't extend our stream — keep waiting for the terminal chunk,
@@ -450,9 +469,8 @@ export function createChat(options: CreateChatOptions): ChatController {
 					armFailsafe();
 				}
 			} else if (failure && stillSameInFlightTurn) {
-				// The turn failed before producing text and its `error` chunk was lost. A previous
-				// turn's error row can only be `last` if the read misses this turn's user row,
-				// which the backend writes before the turn starts.
+				// The turn threw and its `error` chunk was lost. Its row has empty content even when
+				// text had streamed, so failTurn keeps the streamed bubble.
 				failTurn(failure);
 			} else if (stillSameInFlightTurn) {
 				// Turn still running server-side (no final assistant message yet) — do NOT clear
@@ -486,6 +504,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 					assistantId = null;
 					clearFailsafe();
 					setLoading(false);
+					priorTurnMayHaveFailed = false;
 					options.onInterrupt?.(interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
 				}
 			}
@@ -551,6 +570,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 			assistantId = null;
 			clearFailsafe();
 			setLoading(false);
+			priorTurnMayHaveFailed = false;
 		}
 
 		if (chunk.type === 'error') failTurn(chunk);
@@ -567,6 +587,7 @@ export function createChat(options: CreateChatOptions): ChatController {
 			assistantId = null;
 			clearFailsafe();
 			setLoading(false);
+			priorTurnMayHaveFailed = false;
 			// The stream chunk carries `id`; expose it as `interruptId` so it matches the
 			// field the caller passes back in InterruptResponse (no remap at the call site).
 			options.onInterrupt?.(chunk.interrupts.map((i) => ({ interruptId: i.id, name: i.name, reason: i.reason })));
@@ -759,12 +780,14 @@ export function createChat(options: CreateChatOptions): ChatController {
 			messages = [];
 			assistantId = null;
 			assistantText = '';
+			priorTurnMayHaveFailed = false;
 			options.onMessagesChange?.(messages);
 		},
 
 		async loadConversation(id: string) {
 			conversationId = id;
 			const { messages: history } = await api.getConversation(id);
+			priorTurnMayHaveFailed = persistedTurnError(history[history.length - 1]) !== undefined;
 			messages = history.flatMap<ChatMessage>((m) => {
 				// metadata arrives as `unknown` (customers pass their backend shape
 				// straight through — no adapter). Narrow it HERE, once, so the customer

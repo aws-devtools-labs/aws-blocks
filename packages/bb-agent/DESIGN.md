@@ -202,6 +202,11 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   turn through `failTurn()`, the same path a live `error` chunk takes: `loading` clears, the failsafe
   is disarmed, and `onError` fires once with the recorded message (typed by `errorName`, e.g.
   `AgentErrors.ModelUnavailable`, as for a live chunk), instead of waiting out the failsafe below.
+  The backend writes a turn's user row inside the turn, after `stream()` returns, so the read can miss
+  it and end at the previous turn's last row. Rows carry no turn id, so when the previous turn may have
+  failed (it failed, its send failed, the failsafe ended it, or a loaded conversation ends in an error
+  row) an error row is not trusted: the client waits for the terminal chunk or the failsafe, as for a
+  turn still running.
 - **Bounded failsafe (`RECONNECT_FAILSAFE_MS = 660_000`, ~11 min).** A last-resort timer cleared/re-armed
   by every received chunk, so it fires only after *complete silence* — never during a long tool-call
   gap or a slow post-reconnect stream. It must exceed the API Gateway 10-min idle timeout + reconnect
