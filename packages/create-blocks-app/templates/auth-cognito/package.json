@@ -23,7 +23,7 @@
     "sandbox:console": "cdk-blocks sandbox console",
     "cleanup": "cdk-blocks dev stop --all",
     "prebuild": "cdk-blocks generate client",
-    "build": "tsc && vite build",
+    "build": "tsc -p tsconfig.build.json && vite build",
     "preview": "vite preview",
     "deploy": "cdk-blocks deploy",
     "secret": "cdk-blocks secret",

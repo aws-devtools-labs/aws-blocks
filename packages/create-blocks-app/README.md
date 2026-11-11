@@ -119,6 +119,8 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
 
 Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `@aws-blocks/blocks`: `npm run deploy` runs `cdk-blocks deploy`. Run `npx --no -- cdk-blocks --help` in the app for every command and its options. The dev server settings live in `package.json#blocks.dev`.
 
+A new Vite app scaffolded from a template gets these scripts, among others. Adding AWS Blocks to an existing project keeps your own `build` script.
+
 ```json
 {
   "scripts": {
@@ -137,7 +139,7 @@ Every lifecycle script is a thin alias of the `cdk-blocks` CLI that ships with `
     "spec": "cdk-blocks generate spec",
     "vendorize": "cdk-blocks vendorize",
     "prebuild": "cdk-blocks generate client",
-    "build": "tsc && vite build"
+    "build": "tsc -p tsconfig.build.json && vite build"
   },
   "blocks": {
     "dev": { "frontendPort": 3100 }
