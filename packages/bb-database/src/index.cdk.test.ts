@@ -10,7 +10,7 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import type { Construct } from 'constructs';
 import { MIGRATION_SERVICE_TIMEOUT_SECONDS, MIGRATION_TOTAL_TIMEOUT_MINUTES } from './constants.js';
-import { DSQL_MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
+import { MIGRATION_VALIDATION_ERROR_NAME } from './errors.js';
 import { Database, DatabaseCluster } from './index.cdk.js';
 import { migrations } from './test-support/fixtures.js';
 import { freshScope, installLocalTestHooks } from './test-support/lifecycle.js';
@@ -198,7 +198,7 @@ describe('Database (CDK)', () => {
 			'001_init.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);',
 		});
 		assert.throws(() => new Database(parent, 'db', { migrationsPath: dir }), {
-			name: DSQL_MIGRATION_VALIDATION_ERROR_NAME,
+			name: MIGRATION_VALIDATION_ERROR_NAME,
 			message: /001_init\.sql: serial_type: [\s\S]*001_init\.sql: index_async: /,
 		});
 	});
@@ -220,5 +220,142 @@ describe('Database (CDK)', () => {
 			() => new Database(parent, 'y', { cluster: shared, schemaName: 'public' }),
 			/both use schema 'public'/,
 		);
+	});
+});
+
+describe('DatabaseCluster type aurora (CDK)', () => {
+	test('provisions one express-configuration Aurora cluster, no DB instance, with IAM-only authentication', () => {
+		const { stack, parent } = setup();
+		const main = new DatabaseCluster(parent, 'main', { type: 'aurora' });
+		const a = new Database(parent, 'a', { cluster: main });
+		new Database(parent, 'b', { cluster: main });
+		const template = Template.fromStack(stack);
+		template.resourceCountIs('AWS::RDS::DBCluster', 1);
+		template.resourceCountIs('AWS::RDS::DBInstance', 0);
+		template.resourceCountIs('AWS::DSQL::Cluster', 0);
+		template.hasResource('AWS::RDS::DBCluster', {
+			DeletionPolicy: 'Delete',
+			Properties: {
+				DBClusterIdentifier: Match.stringLikeRegexp('-main$'),
+				Engine: 'aurora-postgresql',
+				WithExpressConfiguration: true,
+				MasterUsername: 'postgres',
+				ServerlessV2ScalingConfiguration: { MinCapacity: 0, MaxCapacity: 2 },
+				DeletionProtection: false,
+				BackupRetentionPeriod: 1,
+			},
+		});
+		const cluster = Object.values(template.findResources('AWS::RDS::DBCluster'))[0];
+		assert.strictEqual(cluster.Properties.StorageEncrypted, undefined, 'the express configuration rejects it');
+		assert.strictEqual(cluster.Properties.MasterUserPassword, undefined);
+		assert.strictEqual(
+			cluster.Properties.EnableIAMDatabaseAuthentication,
+			undefined,
+			'express sets it; naming it costs a post-create modify',
+		);
+		assert.strictEqual(cluster.Properties.MasterUserAuthenticationType, undefined);
+		assert.strictEqual(cluster.Properties.ManageMasterUserPassword, undefined);
+		const policies = JSON.stringify(template.findResources('AWS::IAM::Policy'));
+		assert.match(policies, /rds-db:connect/);
+		// arn:...:rds-db:<region>:<account>:dbuser:<resource id>/<user>; the CI deploy with a slash before the
+		// resource id refused every token ("The database query failed").
+		assert.match(
+			policies,
+			/:dbuser:"[\s\S]*?DBClusterResourceId[\s\S]*?\/blocks_app_/,
+			'the app role connects as its own role',
+		);
+		assert.match(
+			policies,
+			/:dbuser:"[\s\S]*?DBClusterResourceId[\s\S]*?\/postgres"/,
+			'the migration Lambdas connect as the master user',
+		);
+		assert.doesNotMatch(policies, /dbuser\//);
+		assert.doesNotMatch(policies, /dsql:/);
+		const env = Object.values(functionsByHandler(template, 'index.isComplete'))[0].Properties.Environment.Variables;
+		assert.strictEqual(env.CLUSTER_KIND, 'aurora');
+		assert.ok(env.CLUSTER_ENDPOINT, 'the endpoint is Endpoint.Address');
+		assert.deepStrictEqual(a.cluster, { kind: 'aurora', id: main.fullId });
+		// The endpoint is a property, so a replaced (empty) cluster re-runs every block's migrations.
+		template.hasResourceProperties('AWS::CloudFormation::CustomResource', { clusterEndpoint: Match.anyValue() });
+	});
+
+	test('production defaults retain with deletion protection and backups from pointInTimeRecovery; snapshot is a valid policy', () => {
+		const prod = setup(BlocksPresets.production);
+		new DatabaseCluster(prod.parent, 'main', { type: 'aurora', maxCapacity: 8 });
+		Template.fromStack(prod.stack).hasResource('AWS::RDS::DBCluster', {
+			DeletionPolicy: 'Retain',
+			Properties: {
+				DeletionProtection: true,
+				BackupRetentionPeriod: 15,
+				ServerlessV2ScalingConfiguration: { MinCapacity: 0, MaxCapacity: 8 },
+			},
+		});
+		const pinned = setup();
+		new DatabaseCluster(pinned.parent, 'main', {
+			type: 'aurora',
+			removalPolicy: 'snapshot',
+			pointInTimeRecovery: { retentionDays: 30 },
+		});
+		Template.fromStack(pinned.stack).hasResource('AWS::RDS::DBCluster', {
+			DeletionPolicy: 'Snapshot',
+			Properties: { BackupRetentionPeriod: 30 },
+		});
+		// A DSQL cluster has no snapshot: the policy falls back to retain.
+		const dsql = setup();
+		new DatabaseCluster(dsql.parent, 'd', { type: 'dsql', removalPolicy: 'retain' });
+		Template.fromStack(dsql.stack).hasResource('AWS::DSQL::Cluster', { DeletionPolicy: 'Retain' });
+	});
+
+	test('capacity must be 0.5 ACU steps within range, min at most max, backups 1 to 35 days', () => {
+		const { parent } = setup();
+		assert.throws(
+			() => new DatabaseCluster(parent, 'c0', { type: 'aurora', pointInTimeRecovery: { retentionDays: 40 } }),
+			/retentionDays must be an integer from 1 to 35/,
+		);
+		assert.throws(
+			() => new DatabaseCluster(parent, 'c1', { type: 'aurora', minCapacity: 0.3 }),
+			/minCapacity must be a multiple of 0\.5/,
+		);
+		assert.throws(
+			() => new DatabaseCluster(parent, 'c2', { type: 'aurora', maxCapacity: 0.5 }),
+			/maxCapacity must be a multiple of 0\.5 between 1 and 256/,
+		);
+		assert.throws(
+			() => new DatabaseCluster(parent, 'c3', { type: 'aurora', minCapacity: 4, maxCapacity: 2 }),
+			/minCapacity \(4\) is above maxCapacity \(2\)/,
+		);
+	});
+
+	test('the cluster identifier leaves room for the writer instance name the service appends', () => {
+		// The CI stack name made `<identifier>-instance-1` 64 characters: "Invalid database identifier".
+		const { stack, parent } = setup();
+		const long = new DatabaseCluster(parent, 'bb-test-runner-16cd7r-pr-1386-1-test-app-sharedaurora', {
+			type: 'aurora',
+		});
+		const cluster = Object.values(Template.fromStack(stack).findResources('AWS::RDS::DBCluster'))[0];
+		const identifier: string = cluster.Properties.DBClusterIdentifier;
+		assert.ok(identifier.length + '-instance-1'.length <= 63, identifier);
+		assert.match(identifier, /^[a-z][a-z0-9-]*[a-z0-9]$/);
+		assert.doesNotMatch(identifier, /--/);
+		assert.ok(
+			identifier.startsWith(
+				long.node.id
+					.slice(0, 20)
+					.toLowerCase()
+					.replace(/[^a-z0-9-]/g, '-'),
+			) || identifier.length === 52,
+		);
+	});
+
+	test('a PostgreSQL migration file is not linted for an aurora cluster', () => {
+		const { stack, parent } = setup();
+		const main = new DatabaseCluster(parent, 'main', { type: 'aurora' });
+		new Database(parent, 'pg', {
+			cluster: main,
+			migrationsPath: migrations({
+				'001.sql': 'CREATE TABLE t (id SERIAL PRIMARY KEY, n INT);\nCREATE INDEX t_n ON t (n);',
+			}),
+		});
+		Template.fromStack(stack).resourceCountIs('AWS::RDS::DBCluster', 1);
 	});
 });

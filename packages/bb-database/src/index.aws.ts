@@ -4,11 +4,10 @@
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { getSdkIdentifiers, registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
-import { DsqlSigner } from '@aws-sdk/dsql-signer';
 import { clusterConfigKey, sanitizeDbRoleName, searchPathFor } from './constants.js';
-import { DsqlEngine } from './engines/dsql-engine.js';
+import { iamAuthToken, PgEngine } from './engines/pg-engine.js';
 import { configError } from './errors.js';
-import { registerDatabase, registerUniqueId } from './runtime/construction.js';
+import { registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
 import type {
@@ -37,7 +36,7 @@ export class DatabaseCluster extends Scope {
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope });
-		this.type = options.type;
+		this.type = resolveClusterOptions(options, this.fullId).type;
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
 		registerSdkIdentifiers(this.fullId, readClusterConfig(this.fullId));
 	}
@@ -80,11 +79,12 @@ export class Database extends Scope {
 					`Database '${this.fullId}' is not configured: missing ${clusterConfigKey(clusterFullId, 'ENDPOINT')} / _REGION. Ensure the cluster is provisioned.`,
 				);
 			}
-			const signer = new DsqlSigner({ hostname: clusterEndpoint, region });
-			return new DsqlEngine({
+			const role = sanitizeDbRoleName(clusterFullId);
+			return new PgEngine({
+				kind: ref.kind,
 				endpoint: clusterEndpoint,
-				role: sanitizeDbRoleName(clusterFullId),
-				getAuthToken: () => signer.getDbConnectAuthToken(),
+				role,
+				getAuthToken: iamAuthToken({ kind: ref.kind, endpoint: clusterEndpoint, region, role }),
 				searchPath: searchPathFor(this.schemaName),
 			});
 		};
