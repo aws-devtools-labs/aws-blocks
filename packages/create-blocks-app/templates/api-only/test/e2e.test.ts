@@ -182,7 +182,7 @@ test('items: auth-gated CRUD round-trip', async () => {
 // When you replace the sample API, update or delete this test.
 test('items: optimistic-lock conflict rejects a stale write', async () => {
   // isBlocksError is client-safe (the browser bundle re-exports it); the error
-  // name is asserted as a literal string because DistributedTableErrors is a
+  // name is asserted as a literal string because KVStoreErrors is a
   // server-only value and is not present in the client bundle this test runs in.
   const { isBlocksError } = await import('@aws-blocks/blocks/client');
   const CONDITIONAL_CHECK_FAILED = 'ConditionalCheckFailedException';

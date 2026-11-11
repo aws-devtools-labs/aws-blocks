@@ -271,7 +271,7 @@ test('EmailClient - send returns a message id', async () => {
 // ─── DistributedDatabase (SQL) ───────────────────────────────────────────
 // A money transfer runs both UPDATEs inside one transaction: the balances move
 // together or not at all. We assert the post-transfer balances AND that the
-// total is conserved — the atomic-multi-row-write capability DistributedTable
+// total is conserved — the atomic-multi-row-write capability KVStore
 // cannot express. Runs on the PGlite mock locally (no AWS). OCC-conflict retry
 // (SerializationFailureException / retryOnConflict) is covered by the
 // bb-distributed-data unit suite; forcing a real 40001 race here would be
@@ -372,7 +372,7 @@ test("DistributedDatabase - a user cannot read, debit or credit another user's a
 
 // Todos are keyed by the owner's username. `updates` is typed, but RPC arguments
 // aren't checked at runtime, so a caller can send fields the type doesn't allow.
-test("DistributedTable - an update cannot move a todo into another user's list", async () => {
+test("KVStore - an update cannot move a todo into another user's list", async () => {
   const suffix = uniqueSuffix();
   const victim = `todo-victim-${suffix}`;
   await signUp(victim);

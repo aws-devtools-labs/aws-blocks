@@ -73,14 +73,14 @@ w.kvDelete = () => {
 };
 
 // ============================================================================
-// DistributedTable
+// KVStore with a declared key (documents)
 // ============================================================================
 
 w.dtPut = () => {
   const pk = (document.getElementById('dt-pk') as HTMLInputElement).value;
   const sk = (document.getElementById('dt-sk') as HTMLInputElement).value;
   const data = (document.getElementById('dt-data') as HTMLInputElement).value;
-  run('dt-result', () => api.tablePut({ pk, sk, data, timestamp: Date.now() }));
+  run('dt-result', () => api.tablePut({ pk, sk }, { data, timestamp: Date.now() }));
 };
 
 w.dtGet = () => {

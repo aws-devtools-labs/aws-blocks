@@ -10,7 +10,7 @@ To get started with Blocks, create a new Scope and instantiate the Building Bloc
 
 ## What databases does Blocks support?
 
-Blocks supports DynamoDB through KVStore and DistributedTable Building Blocks for NoSQL workloads. For SQL workloads, the Database Building Block provides Aurora Serverless v2 with a Kysely query builder.
+Blocks supports DynamoDB through the KVStore Building Block for NoSQL workloads: a string-keyed store with no options, or records with a schema, a declared key, and indexes. For SQL workloads, the Database Building Block provides Aurora Serverless v2 with a Kysely query builder.
 
 ## How does authentication work?
 

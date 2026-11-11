@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthOIDC, AppSetting, google, DistributedTable, Realtime, FileBucket, relayOrigin } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, AuthOIDC, AppSetting, google, Realtime, FileBucket, relayOrigin } from '@aws-blocks/blocks';
 import type { RealtimeChannel } from '@aws-blocks/blocks';
 export type { RealtimeChannel } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
@@ -27,7 +27,8 @@ const auth = new AuthOIDC(scope, 'auth', {
   ]
 });
 
-// DistributedTable: Use Zod schemas for type-safe tables with indexes
+// KVStore with a schema and a key: Use Zod schemas for type-safe records with
+// indexes. A store fixes its key when you create it.
 const todoSchema = z.object({
   userId: z.string(),
   todoId: z.string(),
@@ -48,7 +49,7 @@ interface Todo {
   createdAt: number;
 }
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userId',
@@ -140,7 +141,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // DistributedTable example methods
+  // KVStore (todos) example methods
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
     const user = await auth.requireAuth(context);
     
@@ -155,7 +156,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       priority,
       createdAt: Date.now()
     };
-    await todos.put(todo);
+    await todos.put({ userId: user.username, todoId: ulid }, todo);
     return todo;
   },
 
@@ -169,10 +170,10 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } as const;
     
     const iterator = sortBy 
-      ? todos.query(indexMap[sortBy], { userId: { equals: user.username } })
+      ? todos.query({ index: indexMap[sortBy], where: { userId: { equals: user.username } } })
       : todos.scan();
     
-    return await Array.fromAsync(iterator);
+    return (await Array.fromAsync(iterator)).map((entry) => entry.value);
   },
 
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
@@ -181,7 +182,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const existing = await todos.get({ userId: user.username, todoId });
     if (!existing) throw new Error('Todo not found');
     
-    await todos.put({ ...existing, ...updates });
+    await todos.put({ userId: user.username, todoId }, { ...existing, ...updates });
     return { success: true };
   },
 

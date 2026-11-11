@@ -87,7 +87,7 @@ test('VPC Smoke Tests', async (t) => {
     assert.strictEqual(result, 'hello-vpc');
   });
 
-  await t.test('DistributedTable: put + query via DynamoDB gateway endpoint', async () => {
+  await t.test('KVStore (schema + key): put + query via DynamoDB gateway endpoint', async () => {
     const pk = `vpc-smoke-${Date.now()}`;
     const items = await rpc('tablePutQuery', pk, 'item-1', 'vpc-test-data') as any[];
     assert.ok(items.length >= 1);

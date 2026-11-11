@@ -1,6 +1,6 @@
 import 'harness.dart';
 
-/// Todos E2E — the native-bindings DistributedTable block, exposed as a
+/// Todos E2E — the native-bindings KVStore block (with a schema and a key), exposed as a
 /// per-user todo list. Every Todos RPC is auth-gated behind
 /// `authBasic.requireAuth(context)`, so the suite signs in first and also
 /// verifies the gate rejects unauthenticated callers.
@@ -9,7 +9,7 @@ void main() async {
   final suffix = DateTime.now().millisecondsSinceEpoch.toString();
 
   group('Todos: auth gate (unauthenticated)');
-  // Before signing in, the DistributedTable RPCs must reject the caller.
+  // Before signing in, the Todos RPCs must reject the caller.
   await expectError(
     () => blocks.api.listTodos(),
     label: 'listTodos throws when not authenticated',

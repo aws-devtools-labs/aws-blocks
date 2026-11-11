@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, AuthCognito, DistributedTable } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, AuthCognito } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -69,8 +69,9 @@ const auth = new AuthCognito(scope, 'auth', {
   },
 });
 
-// DistributedTable: per-user todos, keyed by userSub (stable even if the
-// user changes their display name / username).
+// KVStore with a schema and a key: per-user todos, keyed by userSub (stable
+// even if the user changes their display name / username). A store fixes its
+// key when you create it.
 const todoSchema = z.object({
   userSub: z.string(),
   todoId: z.string(),
@@ -80,7 +81,7 @@ const todoSchema = z.object({
   createdAt: z.number()
 });
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userSub',
@@ -129,7 +130,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { message: `Hello reader ${user.username}` };
   },
 
-  // ── Todos (per-user DistributedTable) ────────────────────────────────
+  // ── Todos (per-user KVStore) ─────────────────────────────────────────
   async createTodo(title: string, priority: number = 2) {
     const user = await auth.requireAuth(context);
     const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
@@ -141,15 +142,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       priority,
       createdAt: Date.now(),
     };
-    await todos.put(todo);
+    await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
     return todo;
   },
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt') {
     const user = await auth.requireAuth(context);
-    const list = await Array.fromAsync(
+    const list = (await Array.fromAsync(
       todos.query({ where: { userSub: { equals: user.userSub } } })
-    );
+    )).map((entry) => entry.value);
     // Sort in the API (not via a secondary index) — a per-user todo list is
     // small, so an in-memory sort is simpler and avoids provisioning GSIs.
     if (sortBy === 'priority') return list.sort((a, b) => a.priority - b.priority);
@@ -166,7 +167,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // runtime, so spreading `updates` would let a caller set `userSub` and write
     // into another user's todos.
     const { completed, priority, title } = updates;
-    await todos.put({
+    await todos.put({ userSub: user.userSub, todoId }, {
       ...existing,
       completed: completed ?? existing.completed,
       priority: priority ?? existing.priority,

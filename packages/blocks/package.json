@@ -88,7 +88,6 @@
     "@aws-blocks/bb-auth-cognito": "^0.2.0",
     "@aws-blocks/bb-auth-oidc": "^0.3.0",
     "@aws-blocks/bb-kv-store": "^0.4.0",
-    "@aws-blocks/bb-distributed-table": "^0.3.0",
     "@aws-blocks/bb-realtime": "^0.5.0",
     "@aws-blocks/bb-data": "^0.5.0",
     "@aws-blocks/bb-distributed-data": "^0.3.0",
@@ -113,9 +112,6 @@
     "vendorize": {
       "@aws-blocks/bb-kv-store": [
         "KVStore"
-      ],
-      "@aws-blocks/bb-distributed-table": [
-        "DistributedTable"
       ],
       "@aws-blocks/bb-realtime": [
         "Realtime"

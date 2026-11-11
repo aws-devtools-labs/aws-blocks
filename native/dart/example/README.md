@@ -3,13 +3,13 @@
 This directory contains the E2E test suite for the Dart native SDK. It runs
 against the **`test-apps/native-bindings`** backend, which exercises the blocks
 native clients consume (auth basic + cognito, OIDC, realtime, file, KV, and a
-DistributedTable-backed todo list).
+todo list backed by a KVStore with a `schema` and a `key`).
 
 ## Structure
 
 - `bin/e2e/` — Test suites:
   - `kv_store_test.dart` — KV store round-trips
-  - `todos_test.dart` — DistributedTable todos (auth-gated behind AuthBasic)
+  - `todos_test.dart` — KVStore todos (auth-gated behind AuthBasic)
   - `file_bucket_test.dart` — presigned upload/download + server-side put/get
   - `realtime_test.dart` — cursor channel publish/subscribe
   - `auth_basic_test.dart` — AuthBasic (signUp → signIn, no confirm step)

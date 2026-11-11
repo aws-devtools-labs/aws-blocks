@@ -105,7 +105,6 @@ interface VpcRequirements {
 | Building Block | VPC requirements |
 |----------------|--------------------------------|
 | bb-kv-store | `{ gatewayEndpoints: [DYNAMODB] }` |
-| bb-distributed-table | `{ gatewayEndpoints: [DYNAMODB] }` |
 | bb-file-bucket | `{ gatewayEndpoints: [S3] }` |
 | bb-data | `{ interfaceEndpoints: [SECRETS_MANAGER, RDS_DATA] }` |
 | bb-async-job | `{ interfaceEndpoints: [SQS] }` |
@@ -182,7 +181,7 @@ This avoids:
 ```
 test-apps/vpc-smoke/
 ├── aws-blocks/
-│   ├── index.ts          # Instantiates KVStore, DistributedTable, FileBucket, AsyncJob, AppSetting, Realtime, AuthCognito, Database, Logger, Metrics, Tracer
+│   ├── index.ts          # Instantiates KVStore, FileBucket, AsyncJob, AppSetting, Realtime, AuthCognito, Database, Logger, Metrics, Tracer
 │   ├── index.cdk.ts      # Looks up persistent test VPC, passes vpc: { network: vpc, provisionEndpoints: true }
 │   └── index.handler.ts  # Re-exports BB instances
 └── package.json

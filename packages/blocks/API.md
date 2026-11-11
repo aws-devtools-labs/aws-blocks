@@ -87,15 +87,6 @@ import { DisconnectReason } from '@aws-blocks/bb-realtime';
 import { DistributedDatabase } from '@aws-blocks/bb-distributed-data';
 import { DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
 import { DistributedDatabaseOptions } from '@aws-blocks/bb-distributed-data';
-import { DistributedTable } from '@aws-blocks/bb-distributed-table';
-import { DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
-import { DistributedTableOptions } from '@aws-blocks/bb-distributed-table';
-import { DeleteOptions as DTDeleteOptions } from '@aws-blocks/bb-distributed-table';
-import { ExternalKmsKeyRef as DTExternalKmsKeyRef } from '@aws-blocks/bb-distributed-table';
-import { GetOptions as DTGetOptions } from '@aws-blocks/bb-distributed-table';
-import { PutOptions as DTPutOptions } from '@aws-blocks/bb-distributed-table';
-import { QueryOptions as DTQueryOptions } from '@aws-blocks/bb-distributed-table';
-import { ScanOptions as DTScanOptions } from '@aws-blocks/bb-distributed-table';
 import { EmailClient } from '@aws-blocks/bb-email-client';
 import { EmailErrors } from '@aws-blocks/bb-email-client';
 import { EmailMessage } from '@aws-blocks/bb-email-client';
@@ -121,13 +112,21 @@ import { GetUrlOptions } from '@aws-blocks/bb-file-bucket';
 import { github } from '@aws-blocks/bb-auth-oidc';
 import { google } from '@aws-blocks/bb-auth-oidc';
 import { GroupAdmin } from '@aws-blocks/bb-auth-cognito';
+import { IndexConfig } from '@aws-blocks/bb-kv-store';
+import { KeyConfig } from '@aws-blocks/bb-kv-store';
+import { KeyOf } from '@aws-blocks/bb-kv-store';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseAgentTool } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseAgentToolOptions } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseAgentToolResult } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-base';
 import { KnowledgeBaseOptions } from '@aws-blocks/bb-knowledge-base';
+import { Entry as KVEntry } from '@aws-blocks/bb-kv-store';
+import { GetOptions as KVGetOptions } from '@aws-blocks/bb-kv-store';
 import { PutOptions as KVPutOptions } from '@aws-blocks/bb-kv-store';
+import { QueryOptions as KVQueryOptions } from '@aws-blocks/bb-kv-store';
+import { Results as KVResults } from '@aws-blocks/bb-kv-store';
+import { ScanOptions as KVScanOptions } from '@aws-blocks/bb-kv-store';
 import { KVStore } from '@aws-blocks/bb-kv-store';
 import { KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { KVStoreOptions } from '@aws-blocks/bb-kv-store';
@@ -156,8 +155,9 @@ import { ObjectLockOptions } from '@aws-blocks/bb-file-bucket';
 import { OIDCUser } from '@aws-blocks/bb-auth-oidc';
 import { OllamaModels } from '@aws-blocks/bb-agent';
 import { PasswordPolicy } from '@aws-blocks/bb-auth-basic';
+import { PutBatchEntry } from '@aws-blocks/bb-kv-store';
 import { PutUrlOptions } from '@aws-blocks/bb-file-bucket';
-import { ReadValidationMode } from '@aws-blocks/bb-distributed-table';
+import { ReadValidationMode } from '@aws-blocks/bb-kv-store';
 import { Realtime } from '@aws-blocks/bb-realtime';
 import { RealtimeChannel } from '@aws-blocks/bb-realtime';
 import { RealtimeSubscription } from '@aws-blocks/bb-realtime';
@@ -183,6 +183,7 @@ import { SignInOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignInResult } from '@aws-blocks/bb-auth-cognito';
 import { SignUpOptions } from '@aws-blocks/bb-auth-cognito';
 import { SignUpResult } from '@aws-blocks/bb-auth-cognito';
+import { SortCondition } from '@aws-blocks/bb-kv-store';
 import { SourceConfig } from '@aws-blocks/bb-knowledge-base';
 import { sql } from '@aws-blocks/bb-data';
 import { SqlQuery } from '@aws-blocks/bb-data';
@@ -190,8 +191,6 @@ import { StreamOptions } from '@aws-blocks/bb-agent';
 import { stubIdp } from '@aws-blocks/bb-auth-oidc';
 import { SubmitOptions } from '@aws-blocks/bb-async-job';
 import { SubscribeOptions } from '@aws-blocks/bb-realtime';
-import { TableKey } from '@aws-blocks/bb-distributed-table';
-import { TableKeyConfig } from '@aws-blocks/bb-distributed-table';
 import { TokenUsage } from '@aws-blocks/bb-agent';
 import { ToolCallRecord } from '@aws-blocks/bb-agent';
 import { ToolDefinition } from '@aws-blocks/bb-agent';
@@ -204,8 +203,10 @@ import { Transaction } from '@aws-blocks/bb-data';
 import { TransactionOptions } from '@aws-blocks/bb-distributed-data';
 import { UpdateAttributeOutcome } from '@aws-blocks/bb-auth-cognito';
 import { UserAttribute } from '@aws-blocks/bb-auth-cognito';
+import { ValueOf } from '@aws-blocks/bb-kv-store';
 import { WaitUntilCompleteOptions } from '@aws-blocks/bb-async-job';
 import { WaitUntilSyncedOptions } from '@aws-blocks/bb-knowledge-base';
+import { Where } from '@aws-blocks/bb-kv-store';
 
 export { AdminAction }
 
@@ -373,24 +374,6 @@ export { DistributedDatabaseErrors }
 
 export { DistributedDatabaseOptions }
 
-export { DistributedTable }
-
-export { DistributedTableErrors }
-
-export { DistributedTableOptions }
-
-export { DTDeleteOptions }
-
-export { DTExternalKmsKeyRef }
-
-export { DTGetOptions }
-
-export { DTPutOptions }
-
-export { DTQueryOptions }
-
-export { DTScanOptions }
-
 export { EmailClient }
 
 export { EmailErrors }
@@ -434,12 +417,7 @@ export { fromExisting }
 export { GetChannelOptions }
 
 // @public
-export function getSdkIdentifiers(bb: KVStore<any>): {
-    tableName: string;
-};
-
-// @public (undocumented)
-export function getSdkIdentifiers(bb: DistributedTable<any, any, any>): {
+export function getSdkIdentifiers(bb: KVStore<any, any, any, any>): {
     tableName: string;
 };
 
@@ -529,6 +507,12 @@ export { google }
 
 export { GroupAdmin }
 
+export { IndexConfig }
+
+export { KeyConfig }
+
+export { KeyOf }
+
 export { KnowledgeBase }
 
 export { KnowledgeBaseAgentTool }
@@ -541,7 +525,17 @@ export { KnowledgeBaseErrors }
 
 export { KnowledgeBaseOptions }
 
+export { KVEntry }
+
+export { KVGetOptions }
+
 export { KVPutOptions }
+
+export { KVQueryOptions }
+
+export { KVResults }
+
+export { KVScanOptions }
 
 export { KVStore }
 
@@ -599,6 +593,8 @@ export { OllamaModels }
 
 export { PasswordPolicy }
 
+export { PutBatchEntry }
+
 export { PutUrlOptions }
 
 export { ReadValidationMode }
@@ -653,6 +649,8 @@ export { SignUpOptions }
 
 export { SignUpResult }
 
+export { SortCondition }
+
 export { SourceConfig }
 
 export { sql }
@@ -666,10 +664,6 @@ export { stubIdp }
 export { SubmitOptions }
 
 export { SubscribeOptions }
-
-export { TableKey }
-
-export { TableKeyConfig }
 
 export { TokenUsage }
 
@@ -695,9 +689,13 @@ export { UpdateAttributeOutcome }
 
 export { UserAttribute }
 
+export { ValueOf }
+
 export { WaitUntilCompleteOptions }
 
 export { WaitUntilSyncedOptions }
+
+export { Where }
 
 
 export * from "@aws-blocks/core";

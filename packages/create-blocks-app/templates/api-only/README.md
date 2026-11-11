@@ -5,7 +5,7 @@ backend behind a mobile app, a CLI, or a third-party client. Ships a public
 health check plus an auth-gated CRUD resource with per-user isolation.
 
 > "API-only" describes the interface — no web UI is served, clients talk to it
-> over JSON-RPC. It still owns backend state (here a `DistributedTable`); a real
+> over JSON-RPC. It still owns backend state (here a `KVStore`); a real
 > API almost always does.
 
 > Created with `npx @aws-blocks/create-blocks-app my-app --template api-only`
@@ -22,7 +22,9 @@ health check plus an auth-gated CRUD resource with per-user isolation.
   liveness probe for load balancers and uptime monitors.
 - **Protected** — `createItem` / `listItems` / `getItem` / `updateQuantity` /
   `setQuantity` / `deleteItem`, an auth-gated CRUD resource over a
-  `DistributedTable`. Every method calls `auth.requireAuth(context)`, so data is
+  `KVStore`. The store has a `schema` and a `key`, so it holds records you list
+  or query as a collection; a store fixes its key when you create it. Every
+  method calls `auth.requireAuth(context)`, so data is
   isolated per user, and writes use optimistic locking (`ifFieldEquals` on a
   version field). `setQuantity` is the raw compare-and-swap: pass the version you
   read, and a stale write is rejected with `ConditionalCheckFailedException`

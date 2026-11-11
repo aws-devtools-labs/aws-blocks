@@ -114,12 +114,12 @@ test('umbrella: cdk exports match default', () => {
 test('discovery sanity check', () => {
 	const names = bbPackages.map((pkg) => pkg.name);
 	assert.ok(names.length >= 8, `Expected ≥8 BB packages, found ${names.length}: ${names.join(', ')}`);
-	for (const expected of ['@aws-blocks/bb-kv-store', '@aws-blocks/bb-distributed-table', '@aws-blocks/bb-data']) {
+	for (const expected of ['@aws-blocks/bb-kv-store', '@aws-blocks/bb-data']) {
 		assert.ok(names.includes(expected), `Expected to discover ${expected}`);
 	}
 	// The browser checks below cover every bb-* package, so a floor keeps the set
 	// from shrinking quietly (e.g. if a directory is renamed out of the bb- prefix).
-	assert.ok(buildingBlocks.length >= 21, `Expected ≥21 bb-* packages, found ${buildingBlocks.length}`);
+	assert.ok(buildingBlocks.length >= 20, `Expected ≥20 bb-* packages, found ${buildingBlocks.length}`);
 });
 
 // `cdk synth` loads the whole backend module under --conditions=cdk, so an export

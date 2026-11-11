@@ -12,7 +12,7 @@ Test backend for native client bindings (Swift, Kotlin, Dart). Exercises the Bui
 | **Realtime** | WebSocket pub/sub (cursor tracking) |
 | **FileBucket** | S3 file storage with presigned upload/download handles |
 | **KVStore** | Key-value storage |
-| **DistributedTable** | Structured data (todos) with indexes |
+| **KVStore** (with a `schema` and a `key`) | Structured data (todos) with indexes |
 
 ## Setup
 
@@ -86,7 +86,7 @@ Point native SDKs at the API server base URL:
 Simple key-value CRUD:
 - `api.kvGet(key)`, `api.kvPut(key, value)`, `api.kvDelete(key)`, `api.kvScan()`
 
-### Todos (DistributedTable)
+### Todos (KVStore with a `schema` and a `key`)
 
 Requires AuthBasic sign-in:
 - `api.createTodo(title, priority)`, `api.listTodos(sortBy?)`, `api.getTodo(todoId)`

@@ -161,19 +161,6 @@ export type { DatabaseOptions, ExternalDatabaseRef, SqlQuery, Transaction } from
 export { Database, DatabaseErrors, fromExisting, sql } from '@aws-blocks/bb-data';
 export type { DistributedDatabaseOptions, TransactionOptions } from '@aws-blocks/bb-distributed-data';
 export { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-distributed-data';
-export type {
-	DeleteOptions as DTDeleteOptions,
-	DistributedTableOptions,
-	ExternalKmsKeyRef as DTExternalKmsKeyRef,
-	GetOptions as DTGetOptions,
-	PutOptions as DTPutOptions,
-	QueryOptions as DTQueryOptions,
-	ReadValidationMode,
-	ScanOptions as DTScanOptions,
-	TableKey,
-	TableKeyConfig,
-} from '@aws-blocks/bb-distributed-table';
-export { DistributedTable, DistributedTableErrors } from '@aws-blocks/bb-distributed-table';
 export type { EmailMessage, EmailOptions, SendBatchResult, SendResult } from '@aws-blocks/bb-email-client';
 export { EmailClient, EmailErrors } from '@aws-blocks/bb-email-client';
 export type {
@@ -208,10 +195,23 @@ export { KnowledgeBase, KnowledgeBaseErrors } from '@aws-blocks/bb-knowledge-bas
 export type {
 	ConditionalDeleteOptions,
 	ConditionalWriteOptions,
+	Entry as KVEntry,
 	ExternalKmsKeyRef,
 	ExternalTableRef,
+	GetOptions as KVGetOptions,
+	IndexConfig,
+	KeyConfig,
+	KeyOf,
 	KVStoreOptions,
+	PutBatchEntry,
 	PutOptions as KVPutOptions,
+	QueryOptions as KVQueryOptions,
+	ReadValidationMode,
+	Results as KVResults,
+	ScanOptions as KVScanOptions,
+	SortCondition,
+	ValueOf,
+	Where,
 } from '@aws-blocks/bb-kv-store';
 export { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 export type { ChildLogger, LogEntry, LoggingOptions, LogLevel } from '@aws-blocks/bb-logger';

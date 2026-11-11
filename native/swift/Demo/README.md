@@ -5,7 +5,7 @@ This folder contains a TypeScript backend and a Swift iOS app that demonstrates 
 ## Features
 
 - **Authentication** — sign-up/sign-in via AuthBasic
-- **Todo List** — CRUD with priority, sorting by index (DistributedTable)
+- **Todo List** — CRUD with priority, sorting by index (KVStore with a `schema` and a `key`)
 - **Realtime Cursors** — collaborative cursor tracking (Realtime pub/sub)
 - **File Storage** — upload/download via presigned URLs (FileBucket)
 - **KV Store** — simple key-value get/set

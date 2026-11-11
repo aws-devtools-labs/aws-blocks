@@ -6,8 +6,8 @@ import { ApiNamespace, Scope } from '@aws-blocks/blocks';
 // They work locally with automatic mocks and deploy to AWS with zero configuration.
 //
 // Some common getting-started blocks:
-//   • DistributedTable — structured data with indexes (DynamoDB)
-//   • KVStore          — simple key-value get/put/delete
+//   • KVStore          — key-value get/put/delete; with a schema and a key,
+//                        records you list or query as a collection (DynamoDB)
 //   • AuthBasic        — username/password auth with JWT sessions
 //   • Realtime         — push updates to connected clients (WebSocket)
 //   • FileBucket       — file uploads and downloads (S3)
@@ -28,7 +28,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 // ─── Examples (uncomment to use) ─────────────────────────────────────────────
 //
-// import { AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
+// import { AuthBasic, KVStore, Realtime } from '@aws-blocks/blocks';
 // import { z } from 'zod';  // zod ships with new bare apps; when adding AWS Blocks to an existing project, run npm install zod
 //
 // // Auth (see node_modules/@aws-blocks/bb-auth-basic/README.md for full API):
@@ -43,14 +43,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 // //   authApi.setAuthState({ action: 'signOut' })
 // //   authApi.getAuthState() → { state: 'signedIn', user: { username } }
 //
-// // Data (Zod schema → typed table with secondary indexes):
+// // Data (Zod schema + declared key → typed records you list or query; a store fixes its key when you create it):
 // const itemSchema = z.object({
 //   userId: z.string(),
 //   itemId: z.string(),
 //   title: z.string(),
 //   createdAt: z.number(),
 // });
-// const items = new DistributedTable(scope, 'items', {
+// const items = new KVStore(scope, 'items', {
 //   schema: itemSchema,
 //   key: { partitionKey: 'userId', sortKey: 'itemId' },
 // });
@@ -66,12 +66,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 //     const user = await auth.requireAuth(context);
 //     const itemId = Date.now().toString(36);
 //     const item = { userId: user.username, itemId, title, createdAt: Date.now() };
-//     await items.put(item);
+//     await items.put({ userId: user.username, itemId }, item);
 //     await rt.publish('items', user.username, { action: 'created', itemId });
 //     return item;
 //   },
 //   async listItems() {
 //     const user = await auth.requireAuth(context);
-//     return await Array.fromAsync(items.query({ where: { userId: { equals: user.username } } }));
+//     const entries = await Array.fromAsync(items.query({ where: { userId: { equals: user.username } } }));
+//     return entries.map((entry) => entry.value);
 //   },
 // }));

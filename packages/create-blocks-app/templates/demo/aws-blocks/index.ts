@@ -1,4 +1,4 @@
-import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, DistributedTable, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, DistributedDatabase, sql } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, KVStore, AuthBasic, FileBucket, AppSetting, AsyncJob, EmailClient, Secret, KnowledgeBase, DistributedDatabase, sql } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 
@@ -83,7 +83,8 @@ const greetingJob = new AsyncJob<{ name: string }>(scope, 'greeting-job', {
 
 const auth = new AuthBasic(scope, 'auth');
 
-// DistributedTable: Use Zod schemas for type-safe tables
+// KVStore with a schema and a key: Use Zod schemas for type-safe records you
+// list or query as a collection. A store fixes its key when you create it.
 const todoSchema = z.object({
   userId: z.string(),
   todoId: z.string(),
@@ -104,7 +105,7 @@ interface Todo {
   createdAt: number;
 }
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userId',
@@ -113,7 +114,7 @@ const todos = new DistributedTable(scope, 'todos', {
 });
 
 // DistributedDatabase: a relational, strongly-consistent SQL database (Aurora
-// DSQL on deploy; PGlite locally via the mock, no AWS). Unlike DistributedTable
+// DSQL on deploy; PGlite locally via the mock, no AWS). Unlike KVStore
 // (key-value), it runs multi-row SQL transactions atomically — used here for a
 // money transfer between accounts that must move both balances or neither.
 // Schema lives in aws-blocks/dsql-migrations/*.sql, applied automatically.
@@ -262,7 +263,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { success: true };
   },
 
-  // DistributedTable example methods
+  // KVStore (todos) example methods
   // ── Protected (requireAuth) — these gate before touching per-user data ─
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
     const user = await auth.requireAuth(context);
@@ -271,16 +272,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const now = Date.now();
     const ulid = now.toString(36) + crypto.randomBytes(8).toString('hex');
     const todo = { userId: user.username, todoId: ulid, title, completed: false, priority, createdAt: now };
-    await todos.put(todo);
+    await todos.put({ userId: user.username, todoId: ulid }, todo);
     return todo;
   },
 
   async listTodos(sortBy?: 'priority' | 'title' | 'createdAt'): Promise<Todo[]> {
     const user = await auth.requireAuth(context);
 
-    const list = await Array.fromAsync(
+    const list = (await Array.fromAsync(
       todos.query({ where: { userId: { equals: user.username } } })
-    );
+    )).map((entry) => entry.value);
 
     // Sort in the API (not via a secondary index) — a per-user todo list is
     // small, so an in-memory sort is simpler and avoids provisioning GSIs.
@@ -301,7 +302,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     // runtime, so spreading `updates` would let a caller set `userId` and write
     // into another user's todos.
     const { completed, priority, title } = updates;
-    await todos.put({
+    await todos.put({ userId: user.username, todoId }, {
       ...existing,
       completed: completed ?? existing.completed,
       priority: priority ?? existing.priority,
@@ -344,7 +345,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   // Move `amount` from one account to another inside a single transaction:
   // both updates commit together or neither does. This is the capability
-  // DistributedTable cannot express — a multi-row atomic write. The debit is
+  // KVStore cannot express — a multi-row atomic write. The debit is
   // guarded by `balance >= amount` so a missing sender or insufficient funds
   // matches zero rows; throwing an ApiError then aborts the transaction and the
   // credit is rolled back too, making the atomic-abort path observable. ApiError

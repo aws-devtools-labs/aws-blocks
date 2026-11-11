@@ -290,7 +290,7 @@ describe('formatUserAgentString', () => {
 	test('a chain exceeding 63 bytes drops parents from inside until it fits', () => {
 		const root = { id: 'my-app' };
 		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
-		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '4.5.6' });
 		const p3 = new TestBB('c', { parent: p2, bbName: 'AuthCognito', bbVersion: '7.8.9' });
 		const leaf = new TestBB('db', { parent: p3, bbName: 'Database', bbVersion: '0.2.6' });
 
@@ -394,7 +394,7 @@ describe('formatUserAgentString', () => {
 	test('every byte is printable ASCII, which is all Postgres preserves', () => {
 		const root = { id: 'my-app' };
 		const p1 = new TestBB('a', { parent: root, bbName: 'KnowledgeBase', bbVersion: '1.2.3' });
-		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedTable', bbVersion: '4.5.6' });
+		const p2 = new TestBB('b', { parent: p1, bbName: 'DistributedDatabase', bbVersion: '4.5.6' });
 		const leaf = new TestBB('db', { parent: p2, bbName: 'Database', bbVersion: '0.2.6' });
 
 		const s = leaf.testFormatUserAgentString();

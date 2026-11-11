@@ -30,7 +30,7 @@ echo ""
 
 # Step 2: Verify dependency tree
 echo "2. Verifying dependency tree..."
-(cd "$TEST_DIR" && npm ls @aws-blocks/blocks @aws-blocks/core @aws-blocks/bb-auth-basic @aws-blocks/bb-kv-store @aws-blocks/bb-distributed-table @aws-blocks/bb-realtime 2>&1)
+(cd "$TEST_DIR" && npm ls @aws-blocks/blocks @aws-blocks/core @aws-blocks/bb-auth-basic @aws-blocks/bb-kv-store @aws-blocks/bb-realtime 2>&1)
 echo "   ✓ Dependency tree correct"
 echo ""
 

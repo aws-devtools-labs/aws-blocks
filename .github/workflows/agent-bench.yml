@@ -92,7 +92,7 @@ jobs:
           - { task: auth-notes, template: demo } # AuthBasic + KVStore
           - { task: file-gallery, template: bare } # FileBucket
           - { task: async-word-counter, template: bare } # AsyncJob + KVStore
-          - { task: collab-presence-board, template: default } # Realtime + DistributedTable
+          - { task: collab-presence-board, template: default } # Realtime + KVStore (schema + key)
           - { task: cognito-profile, template: auth-cognito } # AuthCognito (email-OTP)
           - { task: observability-api, template: backend } # Logger + Metrics + Tracer + AppSetting
           - { task: sql-kb-catalog, template: nextjs } # Database + KnowledgeBase

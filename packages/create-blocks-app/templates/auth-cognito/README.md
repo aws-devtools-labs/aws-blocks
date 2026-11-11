@@ -43,8 +43,10 @@ email.
   update / verification methods (`updateEmail`, `confirmAttribute`, …).
 - **Session management** — `changePassword`, `listDevices`,
   `forgetCurrentDevice`, `signOutEverywhere`.
-- **DistributedTable** — per-user todos keyed by `userSub` (stable across
-  username changes), gated by `auth.requireAuth(context)`.
+- **KVStore** — per-user todos keyed by `userSub` (stable across username
+  changes), gated by `auth.requireAuth(context)`. A `KVStore` with a `schema`
+  and a `key` stores records you list or query as a collection; a store fixes
+  its key when you create it.
 
 ## Commands
 

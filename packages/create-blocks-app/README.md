@@ -68,7 +68,7 @@ The CLI detects your Amplify project (`amplify/backend.ts`) and integrates Block
 
 **aws-blocks/index.ts**
 ```typescript
-import { ApiNamespace, Scope, AuthBasic, DistributedTable, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, AuthBasic, KVStore, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
@@ -85,7 +85,7 @@ const todoSchema = z.object({
   completed: z.boolean(),
 });
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: { partitionKey: 'userId', sortKey: 'todoId' },
 });

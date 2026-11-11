@@ -12,7 +12,6 @@
     { "path": "../bb-auth-cognito" },
     { "path": "../bb-auth-oidc" },
     { "path": "../bb-kv-store" },
-    { "path": "../bb-distributed-table" },
     { "path": "../bb-realtime" },
     { "path": "../bb-data" },
     { "path": "../bb-distributed-data" },

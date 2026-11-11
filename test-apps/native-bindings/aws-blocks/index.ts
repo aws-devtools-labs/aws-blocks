@@ -17,7 +17,6 @@ import {
   Realtime,
   RealtimeChannel,
   FileBucket,
-  DistributedTable,
 } from '@aws-blocks/blocks';
 export type { RealtimeChannel, DisconnectReason, SubscribeOptions } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
@@ -91,7 +90,7 @@ const realtime = new Realtime(scope, 'collab', {
   },
 });
 
-// --- DistributedTable (Todos) ------------------------------------------------
+// --- KVStore with a schema and a key (Todos) ---------------------------------
 const todoSchema = z.object({
   userId: z.string(),
   todoId: z.string(),
@@ -110,7 +109,7 @@ export interface Todo {
   createdAt: number;
 }
 
-const todos = new DistributedTable(scope, 'todos', {
+const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
     partitionKey: 'userId',
@@ -356,7 +355,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   },
 
   // --------------------------------------------------------------------------
-  // Todos (DistributedTable)
+  // Todos (KVStore with a schema and a key)
   // --------------------------------------------------------------------------
 
   async createTodo(title: string, priority: number = 2): Promise<Todo> {
@@ -370,7 +369,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       priority,
       createdAt: Date.now(),
     };
-    await todos.put(todo);
+    await todos.put({ userId: user.username, todoId: ulid }, todo);
     return todo;
   },
 
@@ -385,7 +384,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     } else {
       iterator = todos.query({ where });
     }
-    return await Array.fromAsync(iterator);
+    return (await Array.fromAsync(iterator)).map((entry) => entry.value);
   },
 
   async getTodo(todoId: string): Promise<Todo | null> {
@@ -397,7 +396,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await authBasic.requireAuth(context);
     const existing = await todos.get({ userId: user.username, todoId });
     if (!existing) throw new Error('Todo not found');
-    await todos.put({ ...existing, ...updates });
+    await todos.put({ userId: user.username, todoId }, { ...existing, ...updates });
     return { success: true };
   },
 
