@@ -143,7 +143,7 @@ R4 is met by a separate pull request: a binding record in stack metadata, a dev-
 **Future work.** Each item states the condition for revisiting it.
 
 1. **`DatabaseCluster.fromExisting()`, `withRLS()` and `crud()`**: the remaining items of the design, now that `type: 'aurora'` gives the block a full-PostgreSQL cluster to put them on. **A customer managed KMS key on `aurora`** when the express configuration accepts one; the property is one line in `deploy/cluster-infra.ts`, and existing clusters would need a snapshot-and-restore. **A longer pool idle timeout on `aurora` when `minCapacity` is above 0**, since the cluster then never pauses and the ten-second timeout only adds IAM authentications; the runtime would read the value through `registerConfig`. **`SecondsUntilAutoPause` as an option** (300 to 86,400 seconds; the service default of 300 applies today) and **`iam-db-auth-error` log export** under production defaults.
-2. **Safe replacement**, a `replaces` option naming a previous binding. The same need exists for `KVStore`, `FileBucket` and `DistributedTable`, so it warrants one design across data blocks.
+2. **Safe replacement**, a `replaces` option naming a previous binding. The same need exists for `KVStore` and `FileBucket`, so it warrants one design across data blocks.
 3. **Compile-time binding verification** from a lock file written by deploys. The per-application uniqueness of short ids (§2.2) allows a block to be identified by the literal in its constructor. Revisit once deploys can write files back to the repository.
 4. **A copy command.** The README procedure suffices until copies are a recurring request.
 5. **Multi-region DSQL** (`regions`, `witnessRegion`). Revisit when the feature is scheduled.

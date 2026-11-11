@@ -61,8 +61,8 @@ export { anyRequirementNeedsVpc, getOrCreateVpc, getVpcContext, initializeVpc, i
 export { registerSharedConfig } from './config-registry.js';
 export { getBlocksRoot, getOrCreateOnRoot } from './root-registry.js';
 
-// Shared DynamoDB protection resolver for the two Blocks-provisioned DynamoDB
-// tables (bb-kv-store, bb-distributed-table). Framework-internal: a refactor
+// Shared DynamoDB protection resolver for the Blocks-provisioned DynamoDB
+// table (bb-kv-store). Framework-internal: a refactor
 // seam, not a customer-facing surface, so it lives here rather than on the
 // public `@aws-blocks/core/cdk` barrel (which `@aws-blocks/blocks` re-exports).
 export {
@@ -90,7 +90,7 @@ export {
 // Deploy-time Lambdas that ship in the block's npm package and still work when
 // the block is vendorized (`src/` only): the bundled asset when installed, the
 // TypeScript source bundled at synth otherwise. Used by first-party blocks
-// (bb-auth, bb-distributed-table, bb-data, bb-distributed-data).
+// (bb-auth, bb-kv-store, bb-data, bb-distributed-data).
 export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } from './lambda-code.js';
 // The service-agnostic half of the above: the `encryption` option parser, also
 // used by bb-file-bucket (S3) so every Blocks storage resource accepts the same

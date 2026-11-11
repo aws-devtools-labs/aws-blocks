@@ -4,7 +4,7 @@ Semantic document retrieval backed by Amazon Bedrock Knowledge Bases.
 
 **When to use:** Search over your own documents — FAQs, product guides, support articles, internal wikis. Point it at a folder and query with natural language.
 
-**When NOT to use:** If you need structured key-value lookups, use `KVStore`. If you need relational queries, use `Database`. If you need full-text keyword search only (no semantic understanding), roll your own with `DistributedTable`.
+**When NOT to use:** If you need structured key-value lookups, use `KVStore`. If you need relational queries, use `Database`. If you need full-text keyword search only (no semantic understanding), roll your own with `KVStore` indexes.
 
 > Design & mock parity details: [DESIGN.md](./DESIGN.md)
 

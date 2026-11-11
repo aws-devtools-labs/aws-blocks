@@ -94,8 +94,7 @@ export type ScopeParent = Scope | { id: string };
  * Each Building Block has comprehensive docstrings with use-cases, scaling characteristics, performance metrics, and best practices. Import and explore:
  * 
  * - **`ApiNamespace`** from `@aws-blocks/core` - Define type-safe APIs with automatic frontend/backend integration
- * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Simple key-value storage (DynamoDB)
- * - **`DistributedTable`** from `@aws-blocks/bb-distributed-table` - Type-safe tables with Zod schemas, indexes, and queries (DynamoDB)
+ * - **`KVStore`** from `@aws-blocks/bb-kv-store` - Key-value and document storage, with optional schemas, keys, indexes, and queries (DynamoDB)
  * - **`Auth`** from `@aws-blocks/bb-auth` - Authentication (email + password, social, OIDC and SAML sign-in) with built-in UI components
  * - **`Database`** from `@aws-blocks/bb-data` - SQL database with Kysely query builder (Aurora Serverless)
  * 
@@ -109,34 +108,32 @@ export type ScopeParent = Scope | { id: string };
  * 
  * **For data storage, choose based on your access patterns:**
  * 
- * - **`KVStore`** - Simple key-value lookups (user preferences, feature flags, session data)
- *   - Get/set by key only
- *   - No queries or indexes
- *   - Simplest option
- * 
- * - **`DistributedTable`** - Structured data with queries and indexes
- *   - Query by partition key with optional filtering
- *   - Secondary indexes for alternate access patterns
- *   - Supports filtering, sorting, pagination
- *   - Use Zod schemas for type safety
+ * - **`KVStore`** - One NoSQL block with three forms, chosen by how you read the data
+ *   - No options: a string key and a string value (user preferences, feature flags, session data, caches)
+ *   - `schema` + `indexes`: typed values, still a string key, read by other fields through indexes
+ *   - `schema` + `key`: records that you list or query as a collection (todos, notes, orders)
+ *     - Query by partition key, with a sort field for range reads, ordering, and pagination
+ *     - Secondary indexes for alternate access patterns
+ *   - Use Zod (or any Standard Schema library) for type safety
  *   - **Zero cost to start, highly scalable**
- *   - **Default choice for most application data**
+ *   - **Default choice for most application data** — decide the `key` before you create the store; a store cannot change its key
  * 
  * - **`Database`** - SQL database with full relational features
  *   - Use when you need: complex multi-table JOINs, SQL transactions across tables, foreign key constraints
  *   - Avoid when: DynamoDB limitations are acceptable (no ad-hoc queries, eventual consistency on indexes, 400KB item limit)
  *   - Requires migrations folder with .sql files
  *   - Local dev requires manual schema setup (see Database README)
- *   - Higher baseline cost than DistributedTable
+ *   - Higher baseline cost than KVStore
  * 
- * **Rule of thumb:** Use DistributedTable unless you specifically need SQL JOINs or transactions.
+ * **Rule of thumb:** Use KVStore unless you specifically need SQL JOINs or transactions.
  * 
  * ## Data Modeling
  * 
- * - **For DistributedTable**: Use Zod schemas for runtime validation and type inference. Install: `npm install zod`
+ * - **For KVStore with a `schema`**: Use Zod schemas for runtime validation and type inference. Install: `npm install zod`
  *   - For flexible key-value fields: `z.record(z.string(), z.any())`
+ *   - Example: `export const todos = new KVStore(scope, 'todos', { schema, key: { partitionKey: 'userId', sortKey: 'todoId' } })`
  * - **For Database**: Define TypeScript interfaces and create migrations folder with .sql files
- * - **For KVStore**: Store strings only (serialize objects as JSON)
+ * - **For KVStore with no options**: Store strings only (serialize objects as JSON, or pass a type argument such as `new KVStore<Todo>(scope, 'x')`)
  * 
  * ## Local Development
  * 
@@ -147,7 +144,7 @@ export type ScopeParent = Scope | { id: string };
  * 
  * When deployed (`npm run sandbox` or `npm run deploy`), Blocks provisions real AWS resources:
  * - Lambda functions for your APIs
- * - DynamoDB tables for KVStore and DistributedTable
+ * - DynamoDB tables for KVStore
  * - Aurora Serverless for Database
  * - S3 buckets for file storage
  * - IAM roles and policies

@@ -98,7 +98,7 @@ await api.addNote('hello');
 
 | Your BB is… | Reference | Note |
 |---|---|---|
-| key/value or single-table | `bb-kv-store` / `bb-distributed-table` | the typical file skeleton below |
+| key/value, documents, or single-table | `bb-kv-store` | the typical file skeleton below |
 | relational / SQL | `bb-data` (`Database`) / `bb-distributed-data` (`DistributedDatabase`) | `migrationsPath` + ordered `.sql` |
 | auth / composed from other BBs (no own infra) | `bb-auth-basic` | uses `index.ts` only; exposes `createApi()` |
 | background work (SQS + event source) | `bb-async-job` | `submit()` + a job handler |

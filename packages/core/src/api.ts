@@ -294,7 +294,7 @@ export interface ApiNamespaceOptions {
  * - Use async/await for all I/O operations
  * - Return serializable data (JSON-compatible types)
  * - Handle errors explicitly - they'll be sent to the client
- * - Use Building Blocks (KVStore, DistributedTable) for state
+ * - Use Building Blocks (KVStore, Database) for state
  */
 export interface ApiNamespaceConstructor {
   /**

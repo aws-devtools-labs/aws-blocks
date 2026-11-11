@@ -40,7 +40,7 @@ actually constraining you. Use this to weigh the tradeoffs:
 - You want mockable tests without stubbing AWS SDK calls — *unless* local mocking isn't required for this resource, or you're comfortable detecting local dev mode and writing your own mocks
 
 **✅ Use Pattern 2 (`fromExisting`) when:**
-- The resource type already has a Blocks BB (`KVStore`, `DistributedTable`, `FileBucket`, `Database`, `AuthCognito`)
+- The resource type already has a Blocks BB (`KVStore`, `FileBucket`, `Database`, `AuthCognito`)
 - You want to apply the runtime logic from an existing Blocks BB to a resource created outside of Blocks (e.g. via another stack, or managed outside the `BlocksBackend`)
 
 **❌ Don't use Pattern 2 (`fromExisting`) when:**
@@ -232,8 +232,7 @@ Today this is supported by:
 
 | BB | Factory | Wraps |
 |---|---|---|
-| `KVStore` | `KVStore.fromExisting(tableName)` | Existing DynamoDB table |
-| `DistributedTable` | `DistributedTable.fromExisting(tableName)` | Existing DynamoDB table (skips GSI provisioning — customer owns indexes) |
+| `KVStore` | `KVStore.fromExisting(tableName)` with a matching `key` option | Existing DynamoDB table (skips GSI provisioning — customer owns indexes and TTL) |
 | `FileBucket` | `FileBucket.fromExisting(bucketName)` | Existing S3 bucket |
 | `Database` | `fromExisting({ ... })` (from `@aws-blocks/bb-data`) | Existing RDS instance |
 | `AuthCognito` | `AuthCognito.fromExisting(userPoolId, clientId?)` | Existing Cognito User Pool |
@@ -753,7 +752,7 @@ of them — one per CDK shape from Pattern 1:
 
 | Harness | What it covers |
 |---|---|
-| [`test-apps/extending-blocks-guide/`](../../test-apps/extending-blocks-guide) | Pattern 1 via standalone `BlocksStack`, Pattern 2 (KVStore + DistributedTable `fromExisting`), Pattern 3 (custom `bb-queue` BB). |
+| [`test-apps/extending-blocks-guide/`](../../test-apps/extending-blocks-guide) | Pattern 1 via standalone `BlocksStack`, Pattern 2 (`KVStore.fromExisting` over a legacy table), Pattern 3 (custom `bb-queue` BB). |
 | [`test-apps/extending-blocks-guide-blocksbackend/`](../../test-apps/extending-blocks-guide-blocksbackend) | Pattern 1 via `BlocksBackend.create(...)` dropped into a user-owned outer `cdk.Stack`. |
 | [`test-apps/comprehensive/test/vendorize.test.ts`](../../test-apps/comprehensive/test/vendorize.test.ts) | Pattern 4 (vendorize). |
 
@@ -777,6 +776,5 @@ shape:
 ```bash
 npm test -w @aws-blocks/bb-kv-store
 npm test -w @aws-blocks/bb-file-bucket
-npm test -w @aws-blocks/bb-distributed-table
 npm test -w @aws-blocks/core    # includes BlocksBackend synth-shape tests
 ```

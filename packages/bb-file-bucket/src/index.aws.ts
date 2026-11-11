@@ -46,8 +46,7 @@ export type {
  * user uploads, generated reports, images, videos, or static assets.
  *
  * **When NOT to use:** If you need structured key-value data with conditional
- * writes, use `KVStore`. If you need queryable records with indexes, use
- * `DistributedTable`.
+ * writes, or queryable records with indexes, use `KVStore`.
  *
  * **Best practices:**
  * - Use path prefixes to organize files (e.g., `uploads/{userId}/`, `reports/`)

@@ -4,7 +4,7 @@ A single application secret backed by AWS Secrets Manager.
 
 **When to use:** You need to store a high-value credential — a third-party API key, OAuth client secret, database connection string, webhook signing key, or encryption key. Each `Secret` instance maps to exactly one Secrets Manager secret.
 
-**When NOT to use:** For non-sensitive configuration (feature flags, API URLs, thresholds) use [`AppSetting`](../bb-app-setting/README.md) — it is free for standard values. For application state, use `KVStore` or `DistributedTable`.
+**When NOT to use:** For non-sensitive configuration (feature flags, API URLs, thresholds) use [`AppSetting`](../bb-app-setting/README.md) — it is free for standard values. For application state, use `KVStore`.
 
 > **`Secret` is the recommended home for production secrets.** For any credential that protects a production app — a database connection string, API key, OAuth token, or private key — use `Secret`. It is purpose-built for secrets: a dedicated per-secret resource with its own access controls, cross-account sharing, version history, and (future) managed rotation. This mirrors [AWS's own guidance](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html) on where credentials belong.
 >

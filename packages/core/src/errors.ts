@@ -120,7 +120,7 @@ export function isWireSafeError(e: unknown): e is Error {
  *
  * A duplicated `@aws-blocks/core` is common in a real install: npm nests a
  * private copy under a dependency whenever versions do not dedupe, so an
- * `ApiError` built in one copy (e.g. `bb-distributed-table`'s) reaches the RPC
+ * `ApiError` built in one copy (e.g. `bb-kv-store`'s) reaches the RPC
  * serializer running in another copy (`blocks`'s). A plain `instanceof` check
  * then wrongly rejects it, collapsing a deliberate 409 into a nameless 500.
  *
