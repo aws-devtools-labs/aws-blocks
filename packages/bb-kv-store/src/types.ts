@@ -522,7 +522,8 @@ export interface SchemaOptions<In, Out, K, I> {
 	 * Keep the expiry in this number field of the value instead of the block's
 	 * own `_bkv_ttl` attribute. The field holds a Unix epoch timestamp in
 	 * seconds. A `put` with no expiry option then uses the field of the value;
-	 * a `put` with `ttlSeconds` or `expiresAt` writes the field. DynamoDB
+	 * a `put` with `ttlSeconds` or `expiresAt` writes the field, before the
+	 * schema validates the value, so the schema validates what is stored. DynamoDB
 	 * automatically deletes items whose TTL attribute value is older than the
 	 * current time, and every read hides an expired item until then.
 	 *

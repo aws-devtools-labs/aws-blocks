@@ -75,7 +75,11 @@ export interface KeyModel {
 	readonly indexes: Readonly<Record<string, KeyAttributes>>;
 	/** The attribute that holds the expiry: a named field of the value, or `_bkv_ttl`. */
 	readonly ttlAttribute: string;
-	/** Whether the expiry lives in a field of the value (so a read keeps it in the value). */
+	/**
+	 * Whether the expiry lives in a field of the value. A read then keeps it in
+	 * the value, and a write puts the expiry of the call into that field before
+	 * the schema validates the value (see {@link prepareItem}).
+	 */
 	readonly ttlInValue: boolean;
 	/** The schema of the store, if it has one. */
 	readonly schema: StandardSchemaV1 | undefined;
@@ -304,9 +308,28 @@ function buildItem(
 }
 
 /**
+ * The full value of a write, as the schema sees it and as the item stores it:
+ * the value with the key fields merged in ({@link mergeKeyIntoValue}) and, for
+ * a store whose `ttl` option names a field, with the expiry of the call in
+ * that field. Built once, before schema validation, so the schema validates
+ * what is stored.
+ */
+function fullValue(
+	model: KeyModel,
+	keyAttrs: Record<string, KeyValue>,
+	value: unknown,
+	expiresAt: number | undefined,
+): unknown {
+	const merged = mergeKeyIntoValue(model, keyAttrs, value);
+	if (!model.ttlInValue || expiresAt === undefined || !isPlainObject(merged)) return merged;
+	return { ...merged, [model.ttlAttribute]: expiresAt };
+}
+
+/**
  * Validate a write and build its stored item, the same way in both runtimes:
- * the key checks, the merge of the key into the value, schema validation, and
- * then the layout checks of {@link buildItem}.
+ * the key checks, the full value ({@link fullValue}: the key merged in, and
+ * the expiry of the call in a named `ttl` field), schema validation of that
+ * full value, and then the layout checks of {@link buildItem}.
  *
  * @throws {KVStoreErrors.InvalidQuery} If the key has the wrong shape.
  * @throws {KVStoreErrors.ValidationFailed} If the value fails the schema, disagrees with its key, has a
@@ -320,9 +343,11 @@ export async function prepareItem(
 	expiry: Expiry | undefined,
 ): Promise<{ keyAttrs: Record<string, KeyValue>; item: Item }> {
 	const keyAttrs = normalizeKey(model, key);
-	const full = mergeKeyIntoValue(model, keyAttrs, value);
+	const expiresAt = resolveTtlEpochSeconds(expiry);
+	const full = fullValue(model, keyAttrs, value, expiresAt);
 	await validateSchema(model.schema, full);
-	return { keyAttrs, item: buildItem(model, keyAttrs, full, resolveTtlEpochSeconds(expiry)) };
+	// A named `ttl` field holds the expiry already; `_bkv_ttl` is set by buildItem.
+	return { keyAttrs, item: buildItem(model, keyAttrs, full, model.ttlInValue ? undefined : expiresAt) };
 }
 
 // ── Call options ────────────────────────────────────────────────────────────

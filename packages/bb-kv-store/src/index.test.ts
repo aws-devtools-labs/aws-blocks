@@ -1092,6 +1092,33 @@ describe('expiry', () => {
 		);
 	});
 
+	test('ttl names a field: the expiry of the call is in the value before the schema validates it', async () => {
+		const store = new KVStore(testScope(), 'sessions', {
+			schema: z.object({
+				sessionId: z.string(),
+				userId: z.string(),
+				expiresAt: z.number().min(1_700_000_000),
+			}),
+			key: { partitionKey: 'sessionId' },
+			ttl: 'expiresAt',
+		});
+		// The value holds a number that the schema rejects. The option replaces it,
+		// and the schema validates the number that is stored.
+		await store.put({ sessionId: 's1' }, { userId: 'a', expiresAt: 1 }, { expiresAt: 1_800_000_000 });
+		assert.deepStrictEqual(await store.get({ sessionId: 's1' }), {
+			sessionId: 's1',
+			userId: 'a',
+			expiresAt: 1_800_000_000,
+		});
+		// A JavaScript caller can leave the field out when the call gives the expiry.
+		await store.put({ sessionId: 's2' }, { userId: 'b' } as never, { ttlSeconds: 60 });
+		const expiresAt = (await store.get({ sessionId: 's2' }))?.expiresAt ?? 0;
+		assert.ok(expiresAt > Date.now() / 1000 && expiresAt <= Date.now() / 1000 + 61);
+		// With no expiry option, the schema validates the field of the value, as before.
+		await rejects(store.put({ sessionId: 's3' }, { userId: 'c', expiresAt: 1 }), KVStoreErrors.ValidationFailed);
+		await rejects(store.put({ sessionId: 's4' }, { userId: 'd' } as never), KVStoreErrors.ValidationFailed);
+	});
+
 	test('a rewrite can pass expiresAt from scan back into put', async () => {
 		const store = new KVStore(testScope(), 'kv');
 		await store.put('a', ' padded ', { expiresAt: 1800000000 });

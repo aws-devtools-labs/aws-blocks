@@ -44,7 +44,7 @@ The runtime resolves a `KeyModel` from the options once, in the constructor: the
 
 The DynamoDB attribute type of a key field or an index field comes from one function, `probeKeyType` in `src/item.ts`, which the CDK layer and both runtimes call (D-KV-17). The field is a number if the schema accepts one of the samples `0`, `1`, `-1` as its value: `validate({ [field]: sample })` reports no issue at the path of the field. In all other cases the field is a string. The CDK layer provisions the attribute with that type, and the runtime rejects a key value of the other type with `InvalidQueryException` before DynamoDB would. There is no third result: a schema that accepts every value (a pass-through validator) makes its key fields numbers in every layer, so a block that wraps the store states the field types in its schema, as `AsyncJob` and `Realtime` do. A schema that validates asynchronously cannot be probed, and its fields count as numbers.
 
-`put` on a declared-key store merges the key into the value (`mergeKeyIntoValue`) before validation, so the schema sees the full item. A key field present in the value must equal the key, or the write is `ValidationFailedException`. The schema validates the merged input value and the block stores that input as it is, as both blocks did before.
+`put` on a declared-key store merges the key into the value (`mergeKeyIntoValue`) before validation, so the schema sees the full item. For a store whose `ttl` option names a field, the expiry of the call goes into that field in the same step (`fullValue`), so the value that the schema validates is the value that the item stores. A key field present in the value must equal the key, or the write is `ValidationFailedException`. The schema validates the merged input value and the block stores that input as it is, as both blocks did before.
 
 ## Conditions
 
@@ -227,7 +227,7 @@ The `D-DT-*` decisions of the former `DistributedTable` block that still apply a
 
 ### D-KV-7: TTL always on; `ttl` names a field or the block uses `_bkv_ttl`
 
-**Decision:** Every table the block creates has DynamoDB TTL enabled. By default the expiry is the block's own `_bkv_ttl` attribute, set per write with `ttlSeconds` or `expiresAt`. A store with a schema can set `ttl: '<numberField>'` to keep the expiry in that field of the value, as `DistributedTable` did; a `put` with no expiry option then uses the field, and a `put` with an expiry option writes the field.
+**Decision:** Every table the block creates has DynamoDB TTL enabled. By default the expiry is the block's own `_bkv_ttl` attribute, set per write with `ttlSeconds` or `expiresAt`. A store with a schema can set `ttl: '<numberField>'` to keep the expiry in that field of the value, as `DistributedTable` did; a `put` with no expiry option then uses the field, and a `put` with an expiry option writes the field. The block writes the field into the full value before schema validation, so the schema validates the value that is stored.
 
 **Rationale:** `KVStore` made TTL opt-in (`ttl: true`) because enabling it on a deployed table is a live table update; with one attribute name fixed at creation that concern goes away, and expiry is what caches, sessions, codes, and job records all need. Reads hide an expired item in both runtimes regardless of the reaper (DynamoDB deletes asynchronously, typically within 48 hours), so correctness never depends on TTL — it is storage hygiene. The named-field form keeps every `DistributedTable` table in place: its TTL attribute does not change.
 

@@ -169,7 +169,7 @@ await cache.put('config:theme', 'dark');
 - A condition still sees an expired item until DynamoDB deletes it.
 - `scan({ includeExpired: true })` returns expired items that are still in the table. Use it only for a cleanup job.
 
-A store with a schema can keep the expiry in a field of the value. Name the field with `ttl`. A `put` with no expiry option then uses the field.
+A store with a schema can keep the expiry in a field of the value. Name the field with `ttl`. A `put` with no expiry option then uses the field. A `put` with an expiry option writes that expiry into the field before the schema validates the value, so the schema validates the value that is stored.
 
 ```typescript
 const sessions = new KVStore(scope, 'sessions', {

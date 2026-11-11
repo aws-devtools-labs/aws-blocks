@@ -123,6 +123,9 @@ describe('AWS put writes the flat item layout', () => {
 		assert.deepEqual(named.input().Item, { id: 's', expiresAt: 1800000000 });
 		await named.store.put({ id: 's' }, { expiresAt: 1 }, { expiresAt: 1800000005 });
 		assert.deepEqual(named.input(1).Item, { id: 's', expiresAt: 1800000005 });
+		// The expiry of the call is in the value before the schema validates it.
+		await named.store.put({ id: 's' }, {}, { expiresAt: 1800000009 });
+		assert.deepEqual(named.input(2).Item, { id: 's', expiresAt: 1800000009 });
 	});
 
 	test('both runtimes reject a reserved field, a field name that DynamoDB cannot store, an empty key field, an empty indexed field, and a disagreeing key', async () => {
