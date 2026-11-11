@@ -75,6 +75,7 @@ import {
   withSsrCacheGuard,
   withSsrCacheGuardNodeOption,
 } from './ssr_cache_guard.js';
+import { resolveHandlerModule } from './handler_module.js';
 import { apiGatewayDoor } from './apigw_door.js';
 import { registerUploads } from './cf_helpers.js';
 import { ALB_LAMBDA_RESPONSE_LIMIT, LAMBDA_SYNC_RESPONSE_LIMIT, warnOversizedProxyAssets } from './proxy_limits.js';
@@ -2970,15 +2971,8 @@ const withDoorEventShim = (
   const isAlb = kind !== 'apiGateway';
   if (isAlb && resource.streaming === true) return resource; // fails synth (assertServerReachableByDoor)
   if (!isAlb && !forwardedHostFromHost) return resource;
-  const handler = resource.handler ?? 'index.handler';
-  const dot = handler.lastIndexOf('.');
-  if (dot <= 0) return resource;
-  const moduleBase = handler.substring(0, dot);
-  const exportName = handler.substring(dot + 1);
-  const moduleFile = ['.mjs', '.js', '.cjs']
-    .map((ext) => `${moduleBase}${ext}`)
-    .find((file) => fs.existsSync(path.join(resource.bundle, file)));
-  if (!moduleFile) return resource;
+  const { exportName, moduleFile } = resolveHandlerModule(resource.bundle, resource.handler ?? 'index.handler') ?? {};
+  if (!moduleFile || exportName === undefined) return resource;
   const [shimFile, shimHandler, code] = isAlb
     ? [ALB_EVENT_SHIM_FILE, ALB_EVENT_SHIM_HANDLER, generateAlbEventShimCode(`./${moduleFile}`, exportName, { forwardedHostFromHost })]
     : [FORWARDED_HOST_SHIM_FILE, FORWARDED_HOST_SHIM_HANDLER, generateForwardedHostShimCode(`./${moduleFile}`, exportName)];

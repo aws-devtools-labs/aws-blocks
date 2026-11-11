@@ -57,6 +57,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Token, type Duration } from 'aws-cdk-lib';
 import type { ComputeResource } from '../manifest/types.js';
+import { resolveHandlerModule } from './handler_module.js';
 
 /** The guard module's file name in the server bundle. */
 export const SSR_CACHE_GUARD_FILE = 'blocks_cache_guard.mjs';
@@ -729,13 +730,9 @@ export const withSsrCacheGuard = (
 
   if (resource.type !== 'handler') return { resource };
   const handler = resource.handler ?? 'index.handler';
-  const dot = handler.lastIndexOf('.');
-  if (dot <= 0) return { resource, skipped: `the handler '${handler}' does not name a module and an export` };
-  const moduleBase = handler.substring(0, dot);
-  const exportName = handler.substring(dot + 1);
-  const moduleFile = ['.mjs', '.js', '.cjs']
-    .map((ext) => `${moduleBase}${ext}`)
-    .find((file) => fs.existsSync(path.join(resource.bundle, file)));
+  const target = resolveHandlerModule(resource.bundle, handler);
+  if (!target) return { resource, skipped: `the handler '${handler}' does not name a module and an export` };
+  const { moduleBase, exportName, moduleFile } = target;
   if (!moduleFile) return { resource, skipped: `the handler module '${moduleBase}' (.mjs/.js/.cjs) is not in the bundle` };
   writeIfChanged(path.join(resource.bundle, SSR_CACHE_GUARD_FILE), guardCode);
   writeIfChanged(
