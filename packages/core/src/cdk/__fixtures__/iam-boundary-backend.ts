@@ -30,7 +30,15 @@ class FakeDataBlock extends Scope {
 			removalPolicy: cdk.RemovalPolicy.DESTROY,
 		});
 		table.grantReadWriteData(this.executionRole);
-		new iam.Role(this, 'HelperRole', { assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com') });
+		const stack = cdk.Stack.of(this);
+		new iam.Role(this, 'HelperRole', {
+			assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
+				conditions: {
+					StringEquals: { 'aws:SourceAccount': stack.account },
+					ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:*` },
+				},
+			}),
+		});
 		new s3.Bucket(this, 'bucket', { autoDeleteObjects: true, removalPolicy: cdk.RemovalPolicy.DESTROY });
 	}
 }

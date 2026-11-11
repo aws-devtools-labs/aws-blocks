@@ -285,16 +285,19 @@ export class KnowledgeBase extends BuildingBlockScope {
 		vectorIndex.applyRemovalPolicy(vectorRemovalPolicy);
 
 		// ── 3. IAM Role for Bedrock ────────────────────────────────────────
-		// Scoped to this account via aws:SourceAccount to prevent confused-deputy.
-		// Ideally we'd also add aws:SourceArn scoped to the KB ARN, but that
-		// creates a circular dependency (Role ↔ KB). aws:SourceAccount is sufficient
-		// since it limits the role to this account's Bedrock service principal.
-
+		// Trust is limited to Bedrock knowledge bases in this account and region:
+		// aws:SourceAccount pins the account, aws:SourceArn matches any knowledge
+		// base ARN there. The wildcard names no concrete knowledge base, so the role
+		// does not depend on the CfnKnowledgeBase that assumes it.
+		const stack = cdk.Stack.of(this);
 		const bedrockRole = new iam.Role(this, 'BedrockRole', {
 			assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
 				conditions: {
 					StringEquals: {
-						'aws:SourceAccount': cdk.Stack.of(this).account,
+						'aws:SourceAccount': stack.account,
+					},
+					ArnLike: {
+						'aws:SourceArn': `arn:${stack.partition}:bedrock:${stack.region}:${stack.account}:knowledge-base/*`,
 					},
 				},
 			}),

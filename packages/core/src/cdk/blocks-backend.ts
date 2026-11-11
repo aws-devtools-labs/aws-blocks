@@ -31,6 +31,7 @@ import { finalizeDashboards } from './dashboard-registry.js';
 import { attachIamReport } from './iam-report.js';
 import { coverBlocksRoot, coverStackLevelAdditions, snapshotChildren } from './blocks-roles.js';
 import { applyBlocksPermissionsBoundary, warnOnMixedBoundaries } from './permissions-boundary.js';
+import { addServicePrincipalTrustCheck } from './service-principal-trust.js';
 import { BLOCKS_BACKEND_ROOT, getBlocksRoot } from './root-registry.js';
 import { createSharedGateway, resolveNamespaceRoutes, type SharedGateway } from './shared-gateway.js';
 import { addBlocksStackMetadata, isSandboxContext } from './stack-metadata.js';
@@ -240,8 +241,11 @@ export function setupBlocksInfra(scope: Construct, props: BlocksBackendProps, id
 	// ceiling (`defaults.permissionsBoundary`) to that set. Unset → no-op,
 	// templates unchanged. The report lists what the shared role accumulated; it is
 	// written at synth (after every block has granted) beside the template.
+	// The same set is checked for service-principal trusts that carry no
+	// aws:SourceAccount / aws:SourceArn condition (Lambda execution roles excepted).
 	coverBlocksRoot(scope);
 	applyBlocksPermissionsBoundary(scope);
+	addServicePrincipalTrustCheck(scope);
 	const owningStack = cdk.Stack.of(scope);
 	attachIamReport(
 		scope,

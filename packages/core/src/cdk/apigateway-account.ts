@@ -48,11 +48,17 @@ export function ensureApiGatewayAccount(stack: cdk.Stack): CfnAccount {
 	const existing = (stack as unknown as Record<symbol, CfnAccount | undefined>)[ACCOUNT_KEY];
 	if (existing) return existing;
 
+	// API Gateway assumes this role for every API in the account and region. Its
+	// resource ARNs carry no account segment (`arn:<partition>:apigateway:<region>::/…`),
+	// so aws:SourceAccount pins the account and aws:SourceArn the partition and region.
 	const role = new Role(stack, 'BlocksApiGatewayCloudWatchRole', {
-		assumedBy: new ServicePrincipal('apigateway.amazonaws.com'),
-		managedPolicies: [
-			ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs'),
-		],
+		assumedBy: new ServicePrincipal('apigateway.amazonaws.com', {
+			conditions: {
+				StringEquals: { 'aws:SourceAccount': stack.account },
+				ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:apigateway:${stack.region}::*` },
+			},
+		}),
+		managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs')],
 	});
 
 	// `cloudWatchRoleArn: role.roleArn` already gives CDK an implicit dependency
