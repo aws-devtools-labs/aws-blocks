@@ -376,7 +376,8 @@
           "Variables": {
             "AWS_LAMBDA_EXEC_WRAPPER": "/opt/bootstrap",
             "AWS_LWA_INVOKE_MODE": "buffered",
-            "PORT": "3000"
+            "PORT": "3000",
+            "NODE_OPTIONS": "--import=file:///var/task/blocks_cache_guard.mjs"
           }
         },
         "Handler": "run.sh",

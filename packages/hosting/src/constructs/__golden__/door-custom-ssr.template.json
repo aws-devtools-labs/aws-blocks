@@ -427,7 +427,7 @@
           "S3Bucket": "cdk-hnb659fds-assets-111111111111-us-west-2",
           "S3Key": "<hash>.zip"
         },
-        "Handler": "index.handler",
+        "Handler": "blocks_cache_guard_handler.handler",
         "LoggingConfig": {
           "LogGroup": {
             "Ref": "HostingComputedefaultFunctionLogGroup17DE1884"

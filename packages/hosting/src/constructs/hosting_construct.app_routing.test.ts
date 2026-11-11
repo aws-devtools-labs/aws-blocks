@@ -26,6 +26,7 @@ import type { DeployManifest } from '../manifest/types.js';
 import { APP_ROUTER_FILE, APP_ROUTER_HANDLER } from './app_router.js';
 import { type DoorInput, defineFrontDoor, type EntryOrigin, type FrontDoor } from './front_door.js';
 import { HostingConstruct, type HostingConstructProps } from './hosting_construct.js';
+import { SSR_CACHE_GUARD_HANDLER_FILE, SSR_CACHE_GUARD_NODE_OPTION } from './ssr_cache_guard.js';
 
 const API_URL = 'https://abc123.execute-api.us-west-2.amazonaws.com/prod/aws-blocks/api';
 
@@ -216,9 +217,12 @@ describe("HostingConstruct — a door with routing: 'app'", () => {
 		assert.ok(env.API_GW_BASE);
 		for (const upload of uploads(t)) assert.ok(serverFn.DependsOn?.includes(upload), `depends on ${upload}`);
 
-		// The router sits next to the handler and delegates server routes to it.
-		const router = fs.readFileSync(path.join(manifest.compute.default.bundle, APP_ROUTER_FILE), 'utf-8');
-		assert.match(router, /"\.\/index\.mjs"/);
+		// The router sits next to the handler and delegates server routes to it,
+		// through the SSR cache guard that wraps the handler.
+		const bundle = manifest.compute.default.bundle;
+		const router = fs.readFileSync(path.join(bundle, APP_ROUTER_FILE), 'utf-8');
+		assert.ok(router.includes(`"./${SSR_CACHE_GUARD_HANDLER_FILE}"`), 'the router calls the guarded handler');
+		assert.match(fs.readFileSync(path.join(bundle, SSR_CACHE_GUARD_HANDLER_FILE), 'utf-8'), /\.\/index\.mjs/);
 		assert.match(router, /const ROUTER_SERVER = "handler"/);
 
 		// The server's role reads the assets bucket.
@@ -245,6 +249,19 @@ describe("HostingConstruct — a door with routing: 'app'", () => {
 		assert.match(router, /const ROUTER_SERVER = "http"/);
 		assert.match(router, /const ROUTER_SERVER_PORT = 4321;/);
 		assert.match(router, /const ROUTER_SERVER_START = "run.sh";/);
+		// The server child process inherits the function's environment, so it loads the SSR cache guard.
+		assert.equal(env.NODE_OPTIONS, SSR_CACHE_GUARD_NODE_OPTION);
+	});
+
+	it('a Lambda Web Adapter server keeps the SSR cache guard when compute.environment sets NODE_OPTIONS', () => {
+		const { t } = synth(lwaManifest(), recordingDoor({}), {
+			compute: { environment: { NODE_OPTIONS: '--enable-source-maps' } },
+		});
+		const server = Object.values(functions(t)).find((r) => r.Properties.Handler === APP_ROUTER_HANDLER);
+		assert.equal(
+			server?.Properties.Environment?.Variables?.NODE_OPTIONS,
+			`${SSR_CACHE_GUARD_NODE_OPTION} --enable-source-maps`,
+		);
 	});
 
 	it('names the image function to the router and lets it invoke it', () => {
