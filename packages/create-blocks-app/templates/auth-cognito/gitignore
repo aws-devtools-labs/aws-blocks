@@ -7,6 +7,9 @@ aws-blocks/client.js
 aws-blocks/blocks.spec.json
 .bb-data/
 .hosting/
+# Left behind if a command is killed while updating .blocks/config.json (config.json itself stays tracked)
+.blocks/*.lock*
+.blocks/*.tmp
 
 # Secrets and key material — never commit
 .env

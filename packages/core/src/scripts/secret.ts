@@ -12,16 +12,16 @@
  */
 
 import { listValues, removeValue, runValueCli, setValue } from '@aws-blocks/hosting/scripts';
-import { blocksSecretPrefix } from '../secret-naming.js';
+import { blocksCliPrefix } from '../secret-naming.js';
 
 /** Set (create or overwrite) a Blocks secret. */
-export function setSecret(key: string, value: string, opts: { stage?: string } = {}): Promise<void> {
-	return setValue('secret', key, value, { prefix: blocksSecretPrefix(), ...opts });
+export async function setSecret(key: string, value: string, opts: { stage?: string } = {}): Promise<void> {
+	return setValue('secret', key, value, { prefix: blocksCliPrefix('secret', 'setSecret()'), ...opts });
 }
 
 /** List Blocks secret keys (names only). */
-export function listSecrets(opts: { stage?: string } = {}): Promise<string[]> {
-	return listValues('secret', { prefix: blocksSecretPrefix(), ...opts });
+export async function listSecrets(opts: { stage?: string } = {}): Promise<string[]> {
+	return listValues('secret', { prefix: blocksCliPrefix('secret', 'listSecrets()'), ...opts });
 }
 
 /**
@@ -33,15 +33,19 @@ export function listSecrets(opts: { stage?: string } = {}): Promise<string[]> {
  * this API is non-interactive. The CLI additionally requires `--yes` for every
  * `--force` delete.
  */
-export function removeSecret(key: string, opts: { stage?: string; force?: boolean } = {}): Promise<boolean> {
-	return removeValue('secret', key, { prefix: blocksSecretPrefix(), ...opts });
+export async function removeSecret(key: string, opts: { stage?: string; force?: boolean } = {}): Promise<boolean> {
+	return removeValue('secret', key, { prefix: blocksCliPrefix('secret', 'removeSecret()'), ...opts });
 }
 
 /**
  * CLI dispatcher for `cdk-blocks secret <set|list|remove> …`. `interactive: false`
  * refuses the hidden prompt, and `yes` confirms `remove --force` as `--yes` does;
- * a usage problem throws hosting's `ValueCliUsageError`.
+ * a usage problem throws hosting's `ValueCliUsageError`. Warns on stderr when no
+ * `stackId` scopes the default namespace, and rejects when `.blocks/config.json`
+ * can't be parsed. An explicit `--prefix` skips the default namespace entirely.
  */
-export function runSecretCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
-	return runValueCli(argv, { kind: 'secret', prefix: blocksSecretPrefix(), label: 'cdk-blocks secret', ...options });
+export async function runSecretCli(argv: string[], options: { interactive?: boolean; yes?: boolean } = {}): Promise<void> {
+	const explicitPrefix = argv.some((arg) => arg === '--prefix' || arg.startsWith('--prefix='));
+	const prefix = explicitPrefix ? undefined : blocksCliPrefix('secret', 'cdk-blocks secret');
+	return runValueCli(argv, { kind: 'secret', prefix, label: 'cdk-blocks secret', ...options });
 }
