@@ -922,9 +922,12 @@ export class HostingConstruct extends Construct {
     };
     // The computes the manifest routes requests to, other than the image
     // function: they render server responses (e.g. a Next.js split function
-    // built regional), so they get the SSR cache guard too.
+    // built regional), so they get the SSR cache guard too. A route's fallback
+    // compute serves the same requests, so it counts as well.
     const serverRouteComputes = new Set(
-      manifest.routes.map((r) => r.target).filter((t) => t !== 'static' && t !== 's3' && t !== 'image-optimization'),
+      manifest.routes
+        .flatMap((r) => (r.fallback ? [r.target, r.fallback] : [r.target]))
+        .filter((t) => t !== 'static' && t !== 's3' && t !== 'image-optimization'),
     );
 
     for (const [name, resource] of computeEntries) {

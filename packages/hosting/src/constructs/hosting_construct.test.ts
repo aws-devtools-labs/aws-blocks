@@ -367,6 +367,36 @@ void describe('HostingConstruct — SSR mode', () => {
     Annotations.fromStack(stack).hasNoWarning('*', Match.stringLikeRegexp('SsrCacheGuardNotInstalled'));
   });
 
+  void it('installs the SSR cache guard on a regional compute a route names as its fallback', () => {
+    const staticDir = createStaticDir();
+    const bundleDir = createBundleDir();
+    const fallbackDir = path.join(tmpDir, 'fallback');
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    fs.writeFileSync(path.join(fallbackDir, 'index.mjs'), 'export const handler = async () => {};');
+    const manifest = ssrManifest(staticDir, bundleDir);
+    manifest.compute.fnFallback = {
+      type: 'handler',
+      handler: 'index.handler',
+      placement: 'regional',
+      streaming: true,
+      runtime: 'nodejs24.x',
+      bundle: fallbackDir,
+    };
+    manifest.routes = [
+      { pattern: '/data/*', target: 'static', fallback: 'fnFallback' },
+      { pattern: '/assets/*', target: 'static', fallback: 's3' },
+      ...manifest.routes,
+    ];
+    const stack = createStack();
+    new HostingConstruct(stack, 'Hosting', { manifest, skipRegionValidation: true });
+
+    assert.ok(fs.existsSync(path.join(fallbackDir, SSR_CACHE_GUARD_HANDLER_FILE)));
+    const handlers = Object.values(Template.fromStack(stack).findResources('AWS::Lambda::Function')).map(
+      (r) => r.Properties.Handler,
+    );
+    assert.equal(handlers.filter((h) => h === SSR_CACHE_GUARD_HANDLER).length, 2);
+  });
+
   void it('warns instead of installing the guard for a routed compute that shares the server bundle with another handler', () => {
     const staticDir = createStaticDir();
     const bundleDir = createBundleDir();

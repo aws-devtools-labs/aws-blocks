@@ -667,6 +667,81 @@ export const handler = run;
     assert.equal(rec2.bytes().toString('utf8'), '{"statusCode":200');
   });
 
+  void it('writes a rewritten prelude as UTF-8 when the handler wrote it as a string in another encoding', async () => {
+    const prelude = { statusCode: 200, headers: { 'cache-control': 's-maxage=60', 'x-name': 'café' } };
+    const json = JSON.stringify(prelude);
+    const cases: Array<[string, string]> = [
+      ['hex', Buffer.from(json, 'utf8').toString('hex')],
+      ['base64', Buffer.from(json, 'utf8').toString('base64')],
+      // A binary string: each character stands for one UTF-8 byte.
+      ['latin1', Buffer.from(json, 'utf8').toString('latin1')],
+    ];
+    for (const [encoding, text] of cases) {
+      const handler = await streamingWrapper(`${PRELUDE_CT}
+  stream.write(${JSON.stringify(text)}, ${JSON.stringify(encoding)});
+  stream.write(new Uint8Array(8));
+  stream.write('body');
+  stream.end();`);
+      // Records the bytes each write stands for, in the encoding it names.
+      const written: Buffer[] = [];
+      const stream = {
+        setContentType: (_type: string) => undefined,
+        write: (chunk: string | Uint8Array, encoding?: BufferEncoding | (() => void)) => {
+          written.push(
+            typeof chunk === 'string' ? Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8') : Buffer.from(chunk),
+          );
+          return true;
+        },
+        end: () => undefined,
+      };
+      await handler({ headers: { authorization: 'Bearer x' } }, stream);
+      const all = Buffer.concat(written);
+      const nul = all.indexOf(0);
+      assert.deepEqual(
+        JSON.parse(all.subarray(0, nul).toString('utf8')),
+        { ...prelude, headers: { ...prelude.headers, 'cache-control': PRIVATE } },
+        encoding,
+      );
+      assert.equal(all.subarray(nul).toString('utf8'), `${'\0'.repeat(8)}body`, encoding);
+    }
+  });
+
+  void it('on a stream without a content type, passes bytes on once their first key is not a prelude field', async () => {
+    const count = (code: string) =>
+      streamingWrapper(`${code}
+  event.flushed = event.count();
+  stream.write('": 1}');
+  stream.end();`);
+    for (const [first, flushed] of [['{"partial', 1], ['{ "x"', 1], ['{[', 1], ['{"stat', 0], ['{"statusCode"', 0], ['{', 0]] as const) {
+      const handler = await count(`stream.write(${JSON.stringify(first)});`);
+      const rec = recordingStream();
+      const event: { headers: Headers; count: () => number; flushed?: number } = {
+        headers: { authorization: 'Bearer x' },
+        count: () => rec.calls.length,
+      };
+      await handler(event, rec.stream);
+      assert.equal(event.flushed, flushed, first);
+      assert.equal(rec.bytes().toString('utf8'), `${first}": 1}`, first);
+    }
+  });
+
+  void it('holds at most 8 KiB on a stream without a content type', async () => {
+    const handler = await streamingWrapper(`
+  stream.write('{"statusCode":200,"headers":{"x":"');
+  stream.write('a'.repeat(9 * 1024));
+  event.flushed = event.count();
+  stream.write('"}}');
+  stream.end();`);
+    const rec = recordingStream();
+    const event: { headers: Headers; count: () => number; flushed?: number } = {
+      headers: { authorization: 'Bearer x' },
+      count: () => rec.calls.length,
+    };
+    await handler(event, rec.stream);
+    assert.equal(event.flushed, 1);
+    assert.equal(rec.bytes().toString('utf8'), `{"statusCode":200,"headers":{"x":"${'a'.repeat(9 * 1024)}"}}`);
+  });
+
   void it('guards the prelude HttpResponseStream.from writes, and does not read the first body write as a prelude', async () => {
     // The guard module reads globalThis.awslambda when it is first evaluated,
     // so the stand-in runtime is installed before the wrapper (and the guard
@@ -965,5 +1040,11 @@ void describe('withSsrCacheGuard', () => {
     assert.equal(isDefaultTtlPositive(Duration.seconds(0)), false);
     assert.equal(isDefaultTtlPositive(Duration.seconds(60)), true);
     assert.equal(isDefaultTtlPositive(Duration.seconds(Lazy.number({ produce: () => 0 }))), true);
+  });
+});
+
+void describe('generated module source', () => {
+  void it('contains no raw NUL character', () => {
+    assert.equal(generateSsrCacheGuardModule({ cacheKeyCookies: ['bb_session'] }).includes('\u0000'), false);
   });
 });

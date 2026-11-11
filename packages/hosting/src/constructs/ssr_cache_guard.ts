@@ -336,10 +336,27 @@ function isPrelude(value) {
 }
 
 // The most prelude bytes held back while a prelude written over several calls
-// is completed; past it, the held bytes are passed on unchanged.
+// is completed; past it, the held bytes are passed on unchanged. A stream with
+// no content type is not marked as framed, so less of it is held.
 const PRELUDE_LIMIT = 64 * 1024;
+const UNMARKED_PRELUDE_LIMIT = 8 * 1024;
 // What guardPreludeChunk returns for bytes that may be the start of a prelude.
 const MORE = Symbol('more');
+
+// Whether JSON text that does not parse yet (it starts with '{') can still
+// become a prelude: its first key, complete or not, must be (the start of) a
+// prelude field. A key with an escape sequence is not decided here.
+function mayBePrelude(text) {
+  const rest = text.slice(1).trimStart();
+  if (rest === '') return true;
+  if (rest[0] !== '"') return false;
+  const close = rest.indexOf('"', 1);
+  const key = close === -1 ? rest.slice(1) : rest.slice(1, close);
+  if (key.includes('\\\\')) return true;
+  if (close !== -1) return PRELUDE_FIELDS.has(key);
+  for (const field of PRELUDE_FIELDS) if (field.startsWith(key)) return true;
+  return false;
+}
 
 function toBuffer(chunk, encoding) {
   if (typeof chunk === 'string') return Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8');
@@ -356,7 +373,7 @@ function guardPreludeChunk(chunk, request, strict) {
   try {
     const isString = typeof chunk === 'string';
     const bytes = isString ? null : toBuffer(chunk);
-    const nul = isString ? chunk.indexOf('\0') : bytes.indexOf(0);
+    const nul = isString ? chunk.indexOf('\\u0000') : bytes.indexOf(0);
     const head = isString ? (nul === -1 ? chunk : chunk.slice(0, nul)) : (nul === -1 ? bytes : bytes.subarray(0, nul)).toString('utf8');
     const text = head.trimStart();
     if (text !== '' && text[0] !== '{') return chunk;
@@ -364,6 +381,9 @@ function guardPreludeChunk(chunk, request, strict) {
     try {
       prelude = JSON.parse(head);
     } catch {
+      // With strict set, bytes that can no longer be a prelude are passed on
+      // at once instead of being held.
+      if (nul === -1 && strict && !mayBePrelude(text)) return chunk;
       return nul === -1 ? MORE : chunk;
     }
     if (!prelude || typeof prelude !== 'object' || Array.isArray(prelude)) return chunk;
@@ -388,8 +408,10 @@ function guardPreludeChunk(chunk, request, strict) {
  *
  * The prelude may come in one write() or end(chunk), or over several: the
  * bytes are held back until they hold a complete JSON object or a NUL (at most
- * PRELUDE_LIMIT bytes), then written in one call. An empty chunk is passed on
- * without deciding anything, and the body after the prelude is never held.
+ * PRELUDE_LIMIT bytes, or UNMARKED_PRELUDE_LIMIT with no content type), then
+ * written in one call. With no content type, bytes whose first JSON key is not
+ * a prelude field are passed on at once. An empty chunk is passed on without
+ * deciding anything, and the body after the prelude is never held.
  */
 export function guardStream(stream, request) {
   if (!stream || typeof stream.write !== 'function') return stream;
@@ -432,7 +454,8 @@ export function guardStream(stream, request) {
     const out = inspect ? guardPreludeChunk(whole, request, contentType === undefined) : whole;
     if (out === MORE) {
       const size = toBuffer(chunk, encoding).length;
-      if (heldBytes + size <= PRELUDE_LIMIT) {
+      const limit = contentType === undefined ? UNMARKED_PRELUDE_LIMIT : PRELUDE_LIMIT;
+      if (heldBytes + size <= limit) {
         held.push(toBuffer(chunk, encoding));
         heldBytes += size;
         if (typeof callback === 'function') heldCallbacks.push(callback);
@@ -443,7 +466,10 @@ export function guardStream(stream, request) {
     const waiting = takeHeld();
     const merged = waiting && typeof callback === 'function' ? (err) => { waiting(err); callback(err); } : waiting ?? callback;
     const result = out === MORE ? whole : out;
-    return { chunk: result, encoding: typeof result === 'string' ? encoding : undefined, callback: merged };
+    // The caller's encoding applies only to its own string passed on
+    // unchanged; a rewritten prelude is UTF-8 JSON text.
+    const resultEncoding = typeof result !== 'string' ? undefined : result === chunk ? encoding : 'utf8';
+    return { chunk: result, encoding: resultEncoding, callback: merged };
   };
   // write(chunk, [encoding], [callback]) and end([chunk], [encoding], [callback]).
   const splitArgs = (args) => {
