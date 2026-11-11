@@ -22,8 +22,13 @@ type _Validated = Expect<Equal<Validated, { id: string; name: string; value: num
 type Added = NonNullable<Awaited<ReturnType<typeof apiType.dbxaAdd>>>;
 type _Added = Expect<Equal<Added, { id: number; sku: string; qty: number }>>;
 
+// The production stack leaves the bb-database blocks out to stay within the
+// account's DSQL cluster quota (see the bb-database section of aws-blocks/index.ts);
+// E2E Sandbox deploys and tests them.
+const productionSkip = process.env.BLOCKS_TEST_ENV === 'production' && 'bb-database is deployed by E2E Sandbox only';
+
 export function databaseBlockTests(getApi: () => typeof apiType) {
-  describe('bb-database (Database + DatabaseCluster)', () => {
+  describe('bb-database (Database + DatabaseCluster)', { skip: productionSkip }, () => {
     test('descriptors: dbx owns its DSQL cluster, dbxa/dbxb share one', async () => {
       const info = await getApi().dbxInfo();
       assert.deepStrictEqual(info.dbx.cluster, { kind: 'dsql', id: 'default' });
