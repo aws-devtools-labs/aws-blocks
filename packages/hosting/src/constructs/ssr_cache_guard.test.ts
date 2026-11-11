@@ -489,6 +489,172 @@ export const handler = run;
     assert.equal(chunks[0], '{"statusCode":200,"headers":{"cache-control":"s-maxage=60"}}');
   });
 
+  /** Wrap a streaming handler module (its source) and return the wrapper's handler. */
+  const streamingWrapper = async (code: string) => {
+    const dir = path.join(tmpRoot, `h${counter++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'index.mjs'),
+      `const run = async (event, stream) => {\n${code}\n};\nrun[Symbol.for('aws.lambda.runtime.handler.streaming')] = 'response';\nexport const handler = run;\n`,
+    );
+    withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, {});
+    const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as {
+      handler: (event: unknown, stream: unknown) => Promise<void>;
+    };
+    return mod.handler;
+  };
+  /** A response stream stand-in that records what reaches it, in order. */
+  const recordingStream = () => {
+    const calls: Array<{ op: 'write' | 'end'; chunk: Buffer | undefined }> = [];
+    const asBuffer = (chunk: unknown) =>
+      chunk == null || typeof chunk === 'function'
+        ? undefined
+        : Buffer.from(typeof chunk === 'string' ? chunk : (chunk as Uint8Array));
+    const stream = {
+      setContentType: (_type: string) => undefined,
+      write: (chunk: unknown, ...rest: unknown[]) => {
+        calls.push({ op: 'write', chunk: asBuffer(chunk) });
+        const cb = rest.find((r) => typeof r === 'function') as ((err?: Error) => void) | undefined;
+        cb?.();
+        return true;
+      },
+      end: (chunk?: unknown, ...rest: unknown[]) => {
+        calls.push({ op: 'end', chunk: asBuffer(chunk) });
+        const cb = [chunk, ...rest].find((r) => typeof r === 'function') as (() => void) | undefined;
+        cb?.();
+      },
+    };
+    const bytes = () => Buffer.concat(calls.flatMap((c) => (c.chunk ? [c.chunk] : [])));
+    const prelude = () => {
+      const all = bytes();
+      return JSON.parse(all.subarray(0, all.indexOf(0)).toString('utf8')) as { headers?: Headers };
+    };
+    return { stream, calls, bytes, prelude };
+  };
+  const PRELUDE_CT = "stream.setContentType('application/vnd.awslambda.http-integration-response');";
+
+  void it('guards a prelude written through end() as the only call', async () => {
+    const handler = await streamingWrapper(`${PRELUDE_CT}
+  const prelude = JSON.stringify({ statusCode: 200, headers: { 'cache-control': 's-maxage=60' }, cookies: ['sess=1'] });
+  stream.end(Buffer.concat([Buffer.from(prelude), Buffer.alloc(8), Buffer.from('body')]));`);
+    const rec = recordingStream();
+    await handler({ headers: {} }, rec.stream);
+    assert.equal(rec.prelude().headers?.['cache-control'], PRIVATE);
+    assert.equal(rec.bytes().subarray(rec.bytes().indexOf(0)).toString('utf8'), `${'\0'.repeat(8)}body`);
+    assert.deepEqual(rec.calls.map((c) => c.op), ['end']);
+  });
+
+  void it('guards a prelude split over several writes, holding only the prelude bytes', async () => {
+    const handler = await streamingWrapper(`${PRELUDE_CT}
+  const prelude = JSON.stringify({ statusCode: 404, headers: { 'cache-control': 'public, s-maxage=60' } });
+  stream.write(prelude.slice(0, 10));
+  stream.write(Buffer.from(prelude.slice(10, 25)));
+  stream.write(prelude.slice(25));
+  stream.write(new Uint8Array(8));
+  stream.write('{"statusCode":200,"headers":{"cache-control":"body"}}');
+  stream.end();`);
+    const rec = recordingStream();
+    await handler({ headers: { authorization: 'Bearer x' } }, rec.stream);
+    assert.deepEqual(rec.prelude().headers, { 'cache-control': PRIVATE });
+    // The held fragments go out in one write once they parse; the body is not held.
+    assert.equal(rec.calls.length, 4);
+    assert.equal(rec.calls[2].chunk?.toString('utf8'), '{"statusCode":200,"headers":{"cache-control":"body"}}');
+  });
+
+  void it('does not decide on an empty first write', async () => {
+    const handler = await streamingWrapper(`${PRELUDE_CT}
+  stream.write('');
+  stream.write(new Uint8Array(0));
+  stream.write(JSON.stringify({ statusCode: 200, headers: { 'cache-control': 's-maxage=60' } }));
+  stream.write(new Uint8Array(8));
+  stream.end();`);
+    const rec = recordingStream();
+    await handler({ headers: { cookie: 'theme=dark' } }, rec.stream);
+    assert.deepEqual(rec.prelude().headers, { 'cache-control': PRIVATE });
+  });
+
+  void it('calls the callbacks of held writes once the bytes are written', async () => {
+    const handler = await streamingWrapper(`${PRELUDE_CT}
+  const prelude = JSON.stringify({ statusCode: 200, headers: { 'cache-control': 's-maxage=60' } });
+  const seen = [];
+  stream.write(prelude.slice(0, 5), () => seen.push('a'));
+  stream.write(prelude.slice(5), 'utf8', () => seen.push('b'));
+  stream.end(() => { event.seen = seen; });`);
+    const rec = recordingStream();
+    const event: { headers: Headers; seen?: string[] } = { headers: { cookie: 'theme=dark' } };
+    await handler(event, rec.stream);
+    assert.deepEqual(event.seen, ['a', 'b']);
+    assert.equal(JSON.parse(rec.bytes().toString('utf8')).headers['cache-control'], PRIVATE);
+  });
+
+  void it('passes held bytes on unchanged past the size limit, or when the stream ends without a prelude', async () => {
+    const handler = await streamingWrapper(`${PRELUDE_CT}
+  stream.write('{"statusCode":200,"headers":{"x":"');
+  stream.write('a'.repeat(70 * 1024));
+  stream.write('"}}');
+  stream.end();`);
+    const rec = recordingStream();
+    await handler({ headers: { authorization: 'Bearer x' } }, rec.stream);
+    assert.equal(rec.bytes().toString('utf8'), `{"statusCode":200,"headers":{"x":"${'a'.repeat(70 * 1024)}"}}`);
+    const partial = await streamingWrapper(`${PRELUDE_CT}
+  stream.write('{"statusCode":200');
+  stream.end();`);
+    const rec2 = recordingStream();
+    await partial({ headers: { authorization: 'Bearer x' } }, rec2.stream);
+    assert.equal(rec2.bytes().toString('utf8'), '{"statusCode":200');
+  });
+
+  void it('guards the prelude HttpResponseStream.from writes, and does not read the first body write as a prelude', async () => {
+    // The guard module reads globalThis.awslambda when it is first evaluated,
+    // so the stand-in runtime is installed before the wrapper (and the guard
+    // module it imports, fresh in this directory) is loaded.
+    const preludes: string[] = [];
+    const runtime = {
+      streamifyResponse: (fn: (...args: unknown[]) => unknown) => Object.assign(fn, { [STREAMING]: 'response' }),
+      HttpResponseStream: {
+        from: (underlying: { setContentType?: (type: string) => void }, prelude: unknown) => {
+          preludes.push(JSON.stringify(prelude));
+          underlying.setContentType?.('application/vnd.awslambda.http-integration-response');
+          return underlying;
+        },
+      },
+    };
+    Reflect.set(globalThis, 'awslambda', runtime);
+    try {
+      const dir = path.join(tmpRoot, `h${counter++}`);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'index.mjs'),
+        `export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
+  const cookies = event.path === '/set-cookie' ? ['v=1; Path=/'] : [];
+  const stream = awslambda.HttpResponseStream.from(responseStream, { statusCode: 200, headers: { 'cache-control': 'public, s-maxage=60' }, cookies });
+  stream.write('{"statusCode":200,"headers":{"cache-control":"s-maxage=60"}}');
+  stream.end();
+});
+`,
+      );
+      withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, { cacheKeyCookies: ['bb_session'] });
+      const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as {
+        handler: ((event: unknown, stream: unknown) => Promise<void>) & Record<symbol, unknown>;
+      };
+      assert.equal(mod.handler[STREAMING], 'response');
+      const invoke = async (event: unknown) => {
+        const rec = recordingStream();
+        await mod.handler(event, rec.stream);
+        return rec;
+      };
+      const credentialed = await invoke({ path: '/', headers: { cookie: 'theme=dark' } });
+      assert.equal(JSON.parse(preludes[0]).headers['cache-control'], PRIVATE);
+      assert.equal(credentialed.calls[0].chunk?.toString('utf8'), '{"statusCode":200,"headers":{"cache-control":"s-maxage=60"}}');
+      await invoke({ path: '/set-cookie', headers: {} });
+      assert.equal(JSON.parse(preludes[1]).headers['cache-control'], PRIVATE);
+      await invoke({ path: '/', headers: { cookie: 'bb_session=1' } });
+      assert.equal(JSON.parse(preludes[2]).headers['cache-control'], 'public, s-maxage=60');
+    } finally {
+      Reflect.deleteProperty(globalThis, 'awslambda');
+    }
+  });
+
   void it('wraps a CommonJS handler module, through its named export or the default export', async () => {
     const dir = path.join(tmpRoot, `h${counter++}`);
     fs.mkdirSync(dir, { recursive: true });

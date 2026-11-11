@@ -284,22 +284,37 @@ function isPrelude(value) {
   return typeof value.statusCode === 'number' && Object.keys(value).every((key) => PRELUDE_FIELDS.has(key));
 }
 
-// Guard the prelude in a handler's first write. The write may also carry the
-// 8-NUL delimiter and the start of the body: only the part before the first
-// NUL is the JSON prelude, and the rest is passed on byte for byte. With
-// strict set (no content type marks the stream), the JSON must have the
-// prelude's shape.
+// The most prelude bytes held back while a prelude written over several calls
+// is completed; past it, the held bytes are passed on unchanged.
+const PRELUDE_LIMIT = 64 * 1024;
+// What guardPreludeChunk returns for bytes that may be the start of a prelude.
+const MORE = Symbol('more');
+
+function toBuffer(chunk, encoding) {
+  if (typeof chunk === 'string') return Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8');
+  return ArrayBuffer.isView(chunk) ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength) : Buffer.from(chunk);
+}
+
+// Guard the prelude at the start of the bytes a handler wrote. They may also
+// carry the 8-NUL delimiter and the start of the body: only the part before
+// the first NUL is the JSON prelude, and the rest is passed on byte for byte.
+// With strict set (no content type marks the stream), the JSON must have the
+// prelude's shape. Returns the bytes to write, or MORE when they have no NUL
+// yet and may be the start of a JSON prelude.
 function guardPreludeChunk(chunk, request, strict) {
   try {
     const isString = typeof chunk === 'string';
-    const bytes = isString
-      ? null
-      : ArrayBuffer.isView(chunk)
-        ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
-        : Buffer.from(chunk);
+    const bytes = isString ? null : toBuffer(chunk);
     const nul = isString ? chunk.indexOf('\0') : bytes.indexOf(0);
     const head = isString ? (nul === -1 ? chunk : chunk.slice(0, nul)) : (nul === -1 ? bytes : bytes.subarray(0, nul)).toString('utf8');
-    const prelude = JSON.parse(head);
+    const text = head.trimStart();
+    if (text !== '' && text[0] !== '{') return chunk;
+    let prelude;
+    try {
+      prelude = JSON.parse(head);
+    } catch {
+      return nul === -1 ? MORE : chunk;
+    }
     if (!prelude || typeof prelude !== 'object' || Array.isArray(prelude)) return chunk;
     if (strict && !isPrelude(prelude)) return chunk;
     const json = JSON.stringify(guardHeaders(prelude, request));
@@ -311,20 +326,29 @@ function guardPreludeChunk(chunk, request, strict) {
 }
 
 /**
- * Guard a response stream whose prelude the handler writes itself: the first
- * write is the JSON prelude after setContentType(<http-integration-response>),
+ * Guard a response stream whose prelude the handler writes itself: the JSON
+ * prelude written first after setContentType(<http-integration-response>),
  * and also when no content type is set at all, as behind an API Gateway
  * streaming integration (which frames every response with a prelude, so a
- * handler built for it may not set the marker). In that case the first write
- * is read as a prelude only when it has the prelude's shape. A stream with
+ * handler built for it may not set the marker). In that case the bytes are
+ * read as a prelude only when they have the prelude's shape. A stream with
  * another content type, or whose prelude HttpResponseStream.from already
  * guarded, is skipped, so a body chunk is never read as a prelude.
+ *
+ * The prelude may come in one write() or end(chunk), or over several: the
+ * bytes are held back until they hold a complete JSON object or a NUL (at most
+ * PRELUDE_LIMIT bytes), then written in one call. An empty chunk is passed on
+ * without deciding anything, and the body after the prelude is never held.
  */
 export function guardStream(stream, request) {
   if (!stream || typeof stream.write !== 'function') return stream;
   // undefined until the handler sets a content type, then the last one set.
   let contentType;
   let done = false;
+  // Prelude bytes held back, and the write callbacks waiting on them.
+  let held = [];
+  let heldBytes = 0;
+  let heldCallbacks = [];
   const setContentType = stream.setContentType;
   if (typeof setContentType === 'function') {
     stream.setContentType = function (type) {
@@ -332,16 +356,100 @@ export function guardStream(stream, request) {
       return setContentType.apply(this, arguments);
     };
   }
-  const write = stream.write;
-  stream.write = function (chunk, ...rest) {
-    if (!done) {
+  const takeHeld = () => {
+    const callbacks = heldCallbacks;
+    held = [];
+    heldBytes = 0;
+    heldCallbacks = [];
+    return callbacks.length ? (err) => { for (const cb of callbacks) cb(err); } : undefined;
+  };
+  // What to write for this chunk: { chunk, encoding, callback }, the held bytes
+  // in front of it; or undefined when it is held back too.
+  const take = (chunk, encoding, callback) => {
+    if (done) return { chunk, encoding, callback };
+    const inspect = !guardedStreams.has(stream) && (contentType === undefined || contentType === PRELUDE_TYPE);
+    if (!inspect && !held.length) {
       done = true;
-      if (!guardedStreams.has(stream) && (contentType === undefined || contentType === PRELUDE_TYPE)) {
-        chunk = guardPreludeChunk(chunk, request, contentType === undefined);
+      return { chunk, encoding, callback };
+    }
+    if (inspect && !held.length && (chunk == null || (chunk.length ?? chunk.byteLength) === 0)) {
+      return { chunk, encoding, callback };
+    }
+    // A string in another encoding is read as the bytes it stands for.
+    const own = typeof chunk === 'string' && (encoding === undefined || /^utf-?8$/i.test(encoding));
+    const whole = held.length || !own ? Buffer.concat([...held, toBuffer(chunk, encoding)]) : chunk;
+    const out = inspect ? guardPreludeChunk(whole, request, contentType === undefined) : whole;
+    if (out === MORE) {
+      const size = toBuffer(chunk, encoding).length;
+      if (heldBytes + size <= PRELUDE_LIMIT) {
+        held.push(toBuffer(chunk, encoding));
+        heldBytes += size;
+        if (typeof callback === 'function') heldCallbacks.push(callback);
+        return undefined;
       }
     }
-    return write.call(this, chunk, ...rest);
+    done = true;
+    const waiting = takeHeld();
+    const merged = waiting && typeof callback === 'function' ? (err) => { waiting(err); callback(err); } : waiting ?? callback;
+    const result = out === MORE ? whole : out;
+    return { chunk: result, encoding: typeof result === 'string' ? encoding : undefined, callback: merged };
   };
+  // write(chunk, [encoding], [callback]) and end([chunk], [encoding], [callback]).
+  const splitArgs = (args) => {
+    const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    const encoding = typeof args[1] === 'string' ? args[1] : undefined;
+    return { chunk: typeof args[0] === 'function' ? undefined : args[0], encoding, callback };
+  };
+  const write = stream.write;
+  const writeArgs = (next) => [next.chunk, ...(next.encoding ? [next.encoding] : []), ...(next.callback ? [next.callback] : [])];
+  // Stop inspecting and pass the held bytes on unchanged (never fail a
+  // response because of the guard).
+  const flushHeld = (target) => {
+    done = true;
+    if (held.length) write.call(target, Buffer.concat(held), ...[takeHeld()].filter(Boolean));
+  };
+  stream.write = function (...args) {
+    if (done) return write.apply(this, args);
+    const { chunk, encoding, callback } = splitArgs(args);
+    let next;
+    try {
+      next = take(chunk, encoding, callback);
+    } catch {
+      flushHeld(this);
+      return write.apply(this, args);
+    }
+    if (!next) return true;
+    return write.call(this, ...writeArgs(next));
+  };
+  const end = stream.end;
+  if (typeof end === 'function') {
+    stream.end = function (...args) {
+      if (done) return end.apply(this, args);
+      const { chunk, encoding, callback } = splitArgs(args);
+      if (chunk == null) {
+        flushHeld(this);
+        return end.apply(this, args);
+      }
+      let next;
+      try {
+        next = take(chunk, encoding, undefined);
+      } catch {
+        flushHeld(this);
+        return end.apply(this, args);
+      }
+      // Bytes still held at the end are not a prelude: passed on unchanged.
+      if (!next) {
+        flushHeld(this);
+        return end.call(this, ...(callback ? [callback] : []));
+      }
+      done = true;
+      if (next.callback) {
+        write.call(this, ...writeArgs(next));
+        return end.call(this, ...(callback ? [callback] : []));
+      }
+      return end.call(this, ...writeArgs({ ...next, callback }));
+    };
+  }
   return stream;
 }
 
