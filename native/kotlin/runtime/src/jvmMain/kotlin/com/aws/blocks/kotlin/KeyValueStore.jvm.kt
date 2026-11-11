@@ -3,6 +3,7 @@ package com.aws.blocks.kotlin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.FileSystemException
@@ -50,6 +51,10 @@ internal class EncryptedFileKeyValueStore(
         /** Attempts to read a key another process has created but not yet finished writing. */
         const val KEY_READ_ATTEMPTS = 5
         const val KEY_READ_RETRY_MILLIS = 20L
+
+        /** Attempts to replace an entry a concurrent reader still has open. See [writeAtomically]. */
+        const val MOVE_ATTEMPTS = 20
+        const val MOVE_RETRY_MILLIS = 20L
     }
 
     private val storageDir: Path by lazy {
@@ -98,13 +103,36 @@ internal class EncryptedFileKeyValueStore(
         try {
             restrictToOwner(temp, directory = false)
             Files.writeString(temp, contents)
-            try {
-                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+            moveIntoPlace(temp, target)
         } finally {
             Files.deleteIfExists(temp)
+        }
+    }
+
+    /**
+     * Renames [temp] over [target], retrying while another handle holds [target] open.
+     *
+     * Windows refuses to replace a file that is open elsewhere, where a POSIX filesystem allows it,
+     * so a write that overlaps a read of the same entry is denied rather than queued. The refusal
+     * lasts only as long as that read, so waiting is the whole remedy. Without it, the first write
+     * to collide with a read fails, and because the jar swallows a failed write and retries on the
+     * next call, the session would silently stop being saved under load.
+     */
+    private fun moveIntoPlace(temp: Path, target: Path) {
+        repeat(MOVE_ATTEMPTS) { attempt ->
+            try {
+                try {
+                    Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+                }
+                return
+            } catch (denied: AccessDeniedException) {
+                // A genuine permissions problem raises the same exception, so give up eventually
+                // and report it rather than waiting indefinitely on something that will not clear.
+                if (attempt == MOVE_ATTEMPTS - 1) throw denied
+                Thread.sleep(MOVE_RETRY_MILLIS)
+            }
         }
     }
 
