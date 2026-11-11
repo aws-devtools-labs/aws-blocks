@@ -1299,6 +1299,11 @@ its credential in `cacheKeyCookies`/`cacheKeyHeaders` so the cache is keyed per
 credential. Any route that otherwise varies per user should still emit
 `Cache-Control: private`.
 
+CloudFront uses `max-age` as its edge TTL when `s-maxage` is absent, so a bare
+`max-age` is cached at the edge and counts as shared-cacheable. A credentialed
+route that should still be cached by the browser should send
+`Cache-Control: private, max-age=…`, which the guard leaves unchanged.
+
 The SSR cache policy clamps edge TTLs to at most **1 day**, whatever
 `s-maxage` the origin sends.
 

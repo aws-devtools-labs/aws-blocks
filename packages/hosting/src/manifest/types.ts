@@ -10,7 +10,13 @@
 export type DeployManifest = {
   version: 1;
 
-  /** Named compute resources */
+  /**
+   * Named compute resources. `default` and `server` are the reserved names of
+   * the SSR server compute: only a compute with one of these names gets the
+   * SSR server settings (REST API origin, Web Functions, provisioned
+   * concurrency) and the SSR cache guard. Other computes (image optimization,
+   * revalidation, edge) do not.
+   */
   compute: Record<string, ComputeResource>;
 
   /** Static asset configuration */

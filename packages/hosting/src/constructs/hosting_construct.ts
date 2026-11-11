@@ -922,6 +922,9 @@ export class HostingConstruct extends Construct {
 
       // SSR compute is fronted by REST API (cdn_construct.ts), not by a
       // Function URL. Image-opt etc. keep OAC + Function URL.
+      // `default` and `server` are the reserved manifest names of the SSR
+      // server compute (ComputeResource has no role field); only these get
+      // the SSR cache guard, other computes are deployed without it.
       const isSsrCompute = name === 'default' || name === 'server';
 
       // Web Functions host the SSR server only; auxiliary compute (image

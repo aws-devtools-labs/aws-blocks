@@ -508,6 +508,16 @@ export const handler = run;
     const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as { handler: Handler };
     assert.equal((await mod.handler({ headers: { cookie: 'theme=dark' } }, {}))?.headers?.['cache-control'], PRIVATE);
   });
+
+  void it('passes a module without a matching handler export through unchanged', async () => {
+    const dir = path.join(tmpRoot, `h${counter++}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'index.mjs'), 'export const other = async () => ({ statusCode: 200 });\n');
+    const { resource } = withSsrCacheGuard({ type: 'handler', placement: 'regional', bundle: dir, handler: 'index.handler' }, {});
+    assert.equal(resource.handler, SSR_CACHE_GUARD_HANDLER);
+    const mod = (await import(pathToFileURL(path.join(dir, SSR_CACHE_GUARD_HANDLER_FILE)).href)) as { handler?: unknown };
+    assert.equal(mod.handler, undefined);
+  });
 });
 
 void describe('Node HTTP server (writeHead)', () => {

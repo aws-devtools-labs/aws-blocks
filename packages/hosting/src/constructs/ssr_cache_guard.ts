@@ -162,6 +162,9 @@ function expiresInFuture(expires) {
 // even next to no-cache; no-cache alone means revalidate on every request (not
 // stored with a zero minimum TTL); public, max-age or a future Expires are
 // stored; anything else (or no header) falls back to the default TTL.
+// CloudFront uses max-age as its own TTL when s-maxage is absent, so a bare
+// max-age is stored at the edge; a credentialed response meant for the browser
+// cache only sends private, max-age=..., which the guard leaves unchanged.
 // Directives are split on every comma, including one inside a quoted value
 // (e.g. no-cache="a, b"); a split there can only add directive names such as
 // private or no-store, so a mis-split errs toward not-cacheable.
@@ -432,7 +435,12 @@ import * as inner from ${JSON.stringify(innerModule)};
 const run = inner[${JSON.stringify(innerExport)}] || (inner.default && inner.default[${JSON.stringify(innerExport)}]);
 const STREAMING = Symbol.for('aws.lambda.runtime.handler.streaming');
 
-export const handler = run[STREAMING]
+// A module without a matching handler export is passed through unchanged, so
+// the runtime reports its own missing-handler error instead of the wrapper
+// failing while the module loads.
+export const handler = typeof run !== 'function'
+  ? run
+  : run[STREAMING]
   ? function (event, responseStream, ...rest) {
       const request = requestInfoFromEvent(event);
       return runWithRequest(request, () => run.call(this, event, guardStream(responseStream, request), ...rest));
@@ -443,7 +451,9 @@ export const handler = run[STREAMING]
     };
 // A streaming handler (awslambda.streamifyResponse) is marked with symbols the
 // runtime reads; the wrapper carries them so it is invoked the same way.
-for (const key of Object.getOwnPropertySymbols(run)) handler[key] = run[key];
+if (typeof run === 'function' && handler !== run) {
+  for (const key of Object.getOwnPropertySymbols(run)) handler[key] = run[key];
+}
 `;
 
 /**

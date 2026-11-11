@@ -361,7 +361,11 @@ export type HostingProps = {
      * Responses already `private`/`no-store` (or `no-cache` without
      * `s-maxage`) are left alone. Adding the credential to
      * `cacheKeyCookies`/`cacheKeyHeaders` puts it in the cache key and keeps
-     * such responses cacheable, keyed per credential.
+     * such responses cacheable, keyed per credential. CloudFront uses
+     * `max-age` as its edge TTL when `s-maxage` is absent, so a bare
+     * `max-age` counts as shared-cacheable; a credentialed route meant for
+     * the browser cache only should send `private, max-age=…`, which the
+     * guard leaves unchanged.
      *
      * Any SSR response that sets cookies (`Set-Cookie`) is always sent with
      * `Cache-Control: private, no-store`: CloudFront stores `Set-Cookie`
@@ -379,7 +383,9 @@ export type HostingProps = {
      * at most 10 cookies in the cache key (2 are reserved for Next.js preview
      * mode). A request carrying a cookie NOT listed here (or reserved) gets
      * shared-cacheable SSR responses as `Cache-Control: private, no-store`
-     * (see {@link ssrDefaultTtl}).
+     * (see {@link ssrDefaultTtl}); a bare `max-age` counts as shared-cacheable
+     * because CloudFront caches on it, so send `private, max-age=…` to keep
+     * such a response in the browser cache only.
      */
     cacheKeyCookies?: string[];
     /**
