@@ -31,7 +31,7 @@
  * | `monitoring` | ✓ | ✓ (`enabled` only) | – | ✓ |
  * | `skewProtection` | ✓ | – | – | ✓ |
  * | `geoRestriction` | ✓ | – | – | ✓ |
- * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
+ * | `priceClass`, `contentSecurityPolicy`, `ssrDefaultTtl`, `cacheKeyCookies`, `cacheGuardIgnoredCookies`, `cacheKeyHeaders`, `responseHeadersPolicy`, `quotas`, `serverOrigin` | ✓ | – | – | – |
  *
  * The stacked door (`@aws-blocks/core` `Hosting` only) scopes its settings
  * per layer: {@link StackedDoorFeatures}. `'none'` takes no settings.
@@ -200,6 +200,16 @@ export type CloudFrontDoorFeatures<TDomain = HostingDomainConfig> = {
   ssrDefaultTtl?: Duration;
   /** Cookie names in the SSR cache key (at most 10; 2 are reserved for Next.js preview mode). */
   cacheKeyCookies?: string[];
+  /**
+   * Cookie names that never affect the rendered output (e.g. `_ga`, `_gid`,
+   * `_fbp`, a consent cookie). The SSR cache guard treats a request carrying
+   * them like one without them, as it does the `__dpl` build pin, so a
+   * shared-cacheable SSR response stays edge-cacheable for those visitors.
+   * They are not in the cache key. A listed name must never change what the
+   * server renders: a response that depends on it would be cached once and
+   * served to every visitor. A name may not also be in `cacheKeyCookies`.
+   */
+  cacheGuardIgnoredCookies?: string[];
   /** Header names in the SSR cache key (e.g. `'authorization'`; not `'accept-encoding'`). */
   cacheKeyHeaders?: string[];
   /** Bring-your-own response headers policy (shared across stacks to save the account quota). */
@@ -472,6 +482,7 @@ export const FRONT_DOOR_SETTINGS = {
     'geoRestriction',
     'ssrDefaultTtl',
     'cacheKeyCookies',
+    'cacheGuardIgnoredCookies',
     'cacheKeyHeaders',
     'responseHeadersPolicy',
     'quotas',
