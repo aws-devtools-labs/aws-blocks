@@ -37,6 +37,9 @@ export type ReportedFramework = (typeof REPORTED_FRAMEWORKS)[number];
  * addresses, AWS account IDs, ARNs, file paths, file contents or source code.
  * As with any HTTPS request, the collection endpoint also receives the
  * client's IP address.
+ * The service does not store it, except in logs of requests its firewall
+ * blocks. Events are kept for up to 1 year, and request logs for up to
+ * 10 years.
  * Keep the first-run notice (`FIRST_RUN_NOTICE` in `identifiers.ts` and in
  * `create-blocks-app`'s `telemetry.ts`) and the `@aws-blocks/blocks` README in
  * sync with this list.
