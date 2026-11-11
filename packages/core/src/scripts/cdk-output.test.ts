@@ -474,6 +474,12 @@ describe('destroy output end to end (fake cdk on PATH)', { skip: process.platfor
     'Stack | 1 | 10:00:05 AM | DELETE_FAILED | AWS::S3::Bucket | Bucket The bucket you tried to delete is not empty',
     '❌  Stack: destroy failed Error: The stack named Stack is in a failed state',
   ];
+  const MANIFEST = JSON.stringify({
+    version: '22.0.0',
+    artifacts: { Stack: { type: 'aws:cloudformation:stack', environment: 'aws://000000000000/us-east-1', properties: {} } },
+  });
+  /** A POSIX shell single-quoted literal. */
+  const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
   /** Run production destroy (two attempts, both failing) in a child process at `level`. */
   function runDestroy(level: string | undefined): { stdout: string; stderr: string; status: number | null } {
@@ -487,6 +493,9 @@ describe('destroy output end to end (fake cdk on PATH)', { skip: process.platfor
         [
           '#!/bin/sh',
           'if [ "$2" = "ls" ]; then exit 0; fi',
+          // Like CDK, write the synthesized assembly (one stack) into `--output`;
+          // the retry reads the stacks it deletes from there.
+          `prev=; for a in "$@"; do if [ "$prev" = --output ]; then /bin/mkdir -p "$a" && printf '%s' ${shellQuote(MANIFEST)} > "$a/manifest.json"; fi; prev=$a; done`,
           ...OUT.map((l) => `printf '%s\\n' ${JSON.stringify(l)}`),
           ...ERR.map((l) => `printf '%s\\n' ${JSON.stringify(l)} >&2`),
           'exit 1',
@@ -502,7 +511,9 @@ describe('destroy output end to end (fake cdk on PATH)', { skip: process.platfor
         harness,
         `const { productionDestroyDeps } = await import(${JSON.stringify(new URL('./destroy.js', import.meta.url).href)});
 const { runDestroyWithRetries } = await import(${JSON.stringify(new URL('./sandbox.js', import.meta.url).href)});
-const deps = productionDestroyDeps({ cdkAppPath: '', projectRoot: process.cwd() }, process.env);
+// AWS clients that find nothing: no bucket to empty, no throttle, no Lambda@Edge stack.
+const cfn = { send: async () => ({}) };
+const deps = productionDestroyDeps({ cdkAppPath: '', projectRoot: process.cwd() }, process.env, { cfnFor: () => cfn, s3: {} });
 try { await runDestroyWithRetries({ ...deps, sleep: async () => {}, retryDelays: [0] }); } catch { process.exitCode = 3; }
 `,
       );
@@ -518,7 +529,9 @@ try { await runDestroyWithRetries({ ...deps, sleep: async () => {}, retryDelays:
 
   const attemptOut = `${OUT.join('\n')}\n`;
   const attemptErr = `${ERR.join('\n')}\n`;
-  const LEGACY_STDOUT = `${attemptOut}\n⏳ Stack deletion failed. Retrying in 0s (waiting for resource cleanup)...\n${attemptOut}`;
+  // The retry empties the listed stack's buckets first (none here).
+  const EMPTYING = '\n🧹 Emptying versioned S3 buckets before retry...\n';
+  const LEGACY_STDOUT = `${attemptOut}${EMPTYING}\n⏳ Stack deletion failed. Retrying in 0s (waiting for resource cleanup)...\n${attemptOut}`;
   const LEGACY_STDERR = `${attemptErr}${attemptErr}\n❌ Destroy failed after retries.\n`;
 
   it('is byte-for-byte unchanged with BLOCKS_LOG_LEVEL unset (inherited stdio)', { timeout: 60_000 }, () => {
@@ -554,7 +567,7 @@ try { await runDestroyWithRetries({ ...deps, sleep: async () => {}, retryDelays:
     assert.strictEqual(r.status, 3);
     assert.strictEqual(
       r.stdout,
-      '   CloudFormation: removing changes\n\n⏳ Stack deletion failed. Retrying in 0s (waiting for resource cleanup)...\n',
+      `   CloudFormation: removing changes\n${EMPTYING}\n⏳ Stack deletion failed. Retrying in 0s (waiting for resource cleanup)...\n`,
     );
     assert.ok(r.stderr.startsWith(`${attemptErr}${attemptErr}\n──── cdk destroy output (8 lines`), r.stderr);
     assert.ok(r.stderr.includes('Some CDK chatter line\n'), 'chatter is retained for the dump');

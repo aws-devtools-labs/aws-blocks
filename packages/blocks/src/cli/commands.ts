@@ -758,7 +758,9 @@ export async function destroy(ctx: Context): Promise<number> {
 	const code = await runRunner(ctx, {
 		runner: 'destroy',
 		operation: 'cdk-blocks destroy',
-		options: { cdkAppPath, projectRoot: root, stackName: stack, invocation: invocation(ctx, 'destroy') },
+		// Core also asks, listing the stacks, before it deletes more than one
+		// top-level stack on a terminal; --yes skips that question too.
+		options: { cdkAppPath, projectRoot: root, stackName: stack, invocation: invocation(ctx, 'destroy'), force: ctx.globals.yes },
 		where,
 	});
 	if (code === ExitCode.Ok) forgetDeployRecords(root, 'production', stack);
