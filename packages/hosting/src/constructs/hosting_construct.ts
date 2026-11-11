@@ -2106,18 +2106,22 @@ export class HostingConstruct extends Construct {
         });
       }
       // A door served over plain HTTP with an API: sign-in, cookies and every
-      // RPC travel in cleartext between the browser and the door.
+      // RPC travel in cleartext between the browser and the door. The `'none'`
+      // door warns even without an API: it can never serve over TLS, so the
+      // pages and scripts themselves travel in cleartext.
       // (The stacked door's router isn't the public address: the core warns about its hop.)
       // The S3 website's URL is a token at synth, so its handle's protocol says it.
       const plainHttp = built.url.startsWith('http://') || built.originHandle.protocol === 'http';
-      if (plainHttp && props.backendApi && !stackedRouter) {
+      if (plainHttp && (props.backendApi || isNone) && !stackedRouter) {
         Annotations.of(this).addWarningV2(
           '@aws-blocks/hosting:PlainHttpFrontDoor',
           `The '${resolved.kind}' front door serves the app over plain HTTP (${isNone ? 'an S3 website has no TLS' : 'no certificate'}), ` +
-            'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
             (isNone
-              ? ''
-              : '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ') +
+              ? "so the pages travel unencrypted. 'none' serves the public S3 website endpoint with no front door " +
+                'in front of it: it takes no certificate, so the HTML and scripts can be read or altered in transit — ' +
+                'even when the app calls an HTTPS API cross-origin, a tampered script sees everything the user enters. '
+              : 'so the pages — and, through a same-origin API, sign-in, session cookies and every RPC — travel unencrypted. ' +
+                '`Auth` drops `Secure` from its session cookie behind such a door so that sign-in still works. ') +
             (isNone
               ? 'Use the CloudFront door for HTTPS.'
               : "Give the ALB door a `certificate` and `features.domain`, or use the CloudFront or stacked door."),

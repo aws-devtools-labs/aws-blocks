@@ -435,6 +435,24 @@ describe('built-in doors — raw routes, server response mode, REST addressabili
       assert.match(JSON.stringify(none[0].entry.data), /an S3 website has no TLS/);
     });
 
+    it("the 'none' door warns that the site is served without TLS, with or without an API", () => {
+      const warn = (extra: Partial<HostingConstructProps> = {}) => {
+        const stack = new Stack(new App(), 'Http', { env: { account: '111111111111', region: 'us-west-2' } });
+        new HostingConstruct(stack, 'Hosting', { manifest: spaManifest(), frontDoor: 'none', ...extra });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('PlainHttpFrontDoor'));
+      };
+      // No backend API: the pages and scripts themselves travel in cleartext.
+      const noApi = warn();
+      assert.equal(noApi.length, 1, 'a static site with no API still warns');
+      const text = JSON.stringify(noApi[0].entry.data);
+      assert.match(text, /an S3 website has no TLS/);
+      assert.match(text, /'none' serves the public S3 website endpoint with no front door/);
+      assert.match(text, /Use the CloudFront door for HTTPS/);
+      assert.doesNotMatch(text, /drops `Secure`/, "'none' has no same-origin API, so no cookie clause");
+      // With an API: still exactly one warning.
+      assert.equal(warn({ backendApi: { url: API_URL } }).length, 1);
+    });
+
     it('the ALB door with a custom domain: the URL, the trusted origin and the CORS origin are the domain', () => {
       const certificate = Certificate.fromCertificateArn(
         new Stack(new App(), 'CertScope', { env: { account: '111111111111', region: 'us-west-2' } }),
