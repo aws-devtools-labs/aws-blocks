@@ -50,7 +50,15 @@ class DartCodeGenerator {
 
     if (transferableTags.contains('oidc/client')) {
       buf.writeln(
-        "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, TypedOidcClient, OidcProvider, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;",
+        "export 'package:blocks_runtime/blocks_runtime.dart' show OidcClient, OidcAuthState, OidcSignedIn, OidcSignedOut, OidcLoading, OidcUser, TokenStore, InMemoryTokenStore, AuthProvider, BrowserLauncher, ProviderConfig;",
+      );
+    }
+    // Only a library with a typed OIDC result names these, so only it
+    // re-exports them: an app's own `OidcProvider` stays unambiguous in a
+    // library that doesn't need the runtime's.
+    if (_hasProviderEnum(model)) {
+      buf.writeln(
+        "export 'package:blocks_runtime/blocks_runtime.dart' show TypedOidcClient, OidcProvider;",
       );
     }
 
@@ -353,6 +361,10 @@ class DartCodeGenerator {
     buf.writeln('}');
     return buf.toString();
   }
+
+  /// Whether any operation of [model] generates a provider enum.
+  static bool _hasProviderEnum(CodegenModel model) =>
+      model.namespaces.any((ns) => _providerEnums(ns).isNotEmpty);
 
   /// The provider enums of [ns]'s operations, in operation order (see
   /// [TransferableType.providerEnum]).
@@ -1784,8 +1796,7 @@ class DartCodeGenerator {
     for (final ns in model.namespaces)
       for (final providers in _providerEnums(ns)) providers.name,
     // A member named like a runtime type the library uses would shadow it.
-    if (_collectTransferableTags(model).contains('oidc/client'))
-      ...oidcRuntimeTypeNames,
+    if (_hasProviderEnum(model)) ...oidcRuntimeTypeNames,
   };
 
   /// `Blocks`, `Servers`, and the name of every model, enum, union and

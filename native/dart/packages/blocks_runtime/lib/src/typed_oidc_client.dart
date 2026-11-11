@@ -36,12 +36,21 @@ abstract interface class OidcProvider {
 /// runtime: every other member ([refresh], [signOut], [authStateChanges],
 /// [toJson], …) is the client's own, and it can be passed wherever an
 /// [OidcClient] is expected. Typed as an [OidcClient], it takes provider
-/// names again, and throws [OidcUnknownProviderException] for a name the
-/// backend doesn't list. Being a compile-time view, it can't be told apart
-/// from a plain [OidcClient] at runtime (`is TypedOidcClient` checks only
-/// for an [OidcClient]), and a `dynamic` call reaches the [OidcClient]
-/// methods, so passing a generated value through `dynamic` throws a
-/// `TypeError`.
+/// names again.
+///
+/// The narrowing holds only while the client is typed by its own enum.
+/// Because it is a compile-time view:
+///
+/// - Widening it, as `TypedOidcClient<OidcProvider>` or a bare
+///   `TypedOidcClient`, lets it take any [OidcProvider], including another
+///   method's enum.
+/// - `is TypedOidcClient` can't tell it apart from a plain [OidcClient] at
+///   runtime: it checks only for an [OidcClient].
+/// - A `dynamic` call reaches the [OidcClient] methods, so passing a
+///   generated value through `dynamic` throws a `TypeError`.
+///
+/// Whichever way a provider reaches [signIn], [signInRelay] or [exchange],
+/// one the backend doesn't list throws [OidcUnknownProviderException].
 extension type TypedOidcClient<P extends OidcProvider>(OidcClient untyped)
     implements OidcClient {
   /// [OidcClient.signIn] with [provider]'s name.

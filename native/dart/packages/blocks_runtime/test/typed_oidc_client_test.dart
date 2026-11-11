@@ -20,6 +20,14 @@ enum TestProvider implements OidcProvider {
 
 const _relayTo = 'testapp://auth';
 
+/// A provider from some other method's enum.
+final class _Other implements OidcProvider {
+  const _Other(this.providerName);
+
+  @override
+  final String providerName;
+}
+
 String _envelope(String csrf) {
   final body = base64Url
       .encode(utf8.encode(jsonEncode({'v': 1, 'csrf': csrf})))
@@ -283,6 +291,68 @@ void main() {
         expect(typed.toJson(), descriptor);
       },
     );
+  });
+
+  group('exchange', () {
+    test('throws OidcUnknownProviderException for a provider the client does '
+        'not list, and sends nothing', () {
+      final backend = _backend();
+      final typed = TypedOidcClient<TestProvider>(
+        _client(backend.client, providers: const ['google']),
+      );
+      expect(
+        () => typed.exchange(
+          code: 'c',
+          verifier: 'v',
+          callbackUrl: 'cb',
+          provider: TestProvider.github,
+          state: 's',
+          nonce: 'n',
+        ),
+        throwsA(
+          isA<OidcUnknownProviderException>().having(
+            (e) => e.provider,
+            'provider',
+            'github',
+          ),
+        ),
+      );
+      expect(backend.requests, isEmpty);
+    });
+
+    test('an untyped client rejects an unlisted name the same way', () {
+      final backend = _backend();
+      final client = _client(backend.client, providers: const ['google']);
+      expect(
+        () => client.exchange(
+          code: 'c',
+          verifier: 'v',
+          callbackUrl: 'cb',
+          provider: 'nope',
+          state: 's',
+          nonce: 'n',
+        ),
+        throwsA(isA<OidcUnknownProviderException>()),
+      );
+      expect(backend.requests, isEmpty);
+    });
+
+    test('a widened client still rejects another enum\'s unlisted value', () {
+      final backend = _backend();
+      final TypedOidcClient<OidcProvider> widened =
+          TypedOidcClient<TestProvider>(
+            _client(backend.client, providers: const ['google']),
+          );
+      expect(
+        () => widened.signInRelay(
+          const _Other('okta'),
+          launcher: _relayLauncher(),
+          relayTo: _relayTo,
+        ),
+        throwsA(isA<OidcUnknownProviderException>()),
+      );
+      expect(backend.requests, isEmpty);
+    });
   });
 
   group('OidcClient.signIn', () {

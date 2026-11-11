@@ -23,6 +23,10 @@
     fake might: `Future<OidcClient> getClient()`. Return
     `Future<TypedOidcClient<AuthApiGetClientProvider>>`, wrapping the client
     as `TypedOidcClient<AuthApiGetClientProvider>(client)`.
+  - Using an app type named `OidcProvider` or `TypedOidcClient` in a file
+    that also imports the generated client, which now re-exports the
+    runtime's: the name is `ambiguous_import`. Hide it on one import
+    (`import 'blocks.dart' hide OidcProvider;`) or prefix one.
 
   `TypedOidcClient` is an `OidcClient`, so code that stores the result in an
   `OidcClient`, passes it to one, or assigns the method to a
@@ -36,10 +40,10 @@
   codegen warns.
 - A spec that names no providers, and an OIDC client inside a model, list,
   map or parameter, are still a plain `OidcClient`, unchanged.
-- Generated clients that use an OIDC client also re-export `TypedOidcClient`
-  and `OidcProvider`. In such a client, a spec type or member named like one
-  of them is escaped (`OidcProvider$`); a spec with no OIDC client keeps the
-  name.
+- A generated client with a typed OIDC result also re-exports
+  `TypedOidcClient` and `OidcProvider`, and escapes a spec type or member
+  named like one of them (`OidcProvider$`). Any other client, including one
+  whose OIDC clients are all untyped, re-exports and reserves neither.
 - A declared native binding whose export is named `TypedOidcClient` or
   `OidcProvider` is a generation error, as for every other public
   `blocks_runtime` type, because the generated library imports the runtime

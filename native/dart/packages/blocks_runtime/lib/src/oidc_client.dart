@@ -351,6 +351,12 @@ class OidcClient implements AuthProvider {
 
   // --- Token exchange ---
 
+  /// Exchanges an authorization [code] from [provider] for the signed-in
+  /// user, at [exchangePath]. [signIn] and [signInRelay] call it; call it
+  /// directly only when the app ran the authorize step itself.
+  ///
+  /// Throws [OidcUnknownProviderException] when [providers] doesn't list
+  /// [provider], before anything is sent.
   Future<OidcUser> exchange({
     required String code,
     required String verifier,
@@ -360,6 +366,9 @@ class OidcClient implements AuthProvider {
     required String nonce,
     String? iss,
   }) async {
+    if (!providers.contains(provider)) {
+      throw OidcUnknownProviderException(provider);
+    }
     final url = Uri.parse('$_authBaseUrl$exchangePath');
     final (:response, url: responseUrl) = await postWithResponseUrl(
       _httpClient,

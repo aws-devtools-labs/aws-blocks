@@ -13,6 +13,9 @@
 - `OidcClient.signIn` throws `OidcUnknownProviderException` for a provider
   its descriptor doesn't list or has no config for, as `signInRelay` does.
   It used to fail a null check.
+- `OidcClient.exchange` throws `OidcUnknownProviderException` for a
+  provider its descriptor doesn't list, before sending anything, as Kotlin's
+  does. It used to post the name to the backend, which rejected it.
 - **Breaking for classes that implement or override `BlocksClient`:**
   `call(String method, Object params)` takes `Object`, not
   `Map<String, dynamic>`, so an override must widen its parameter. Callers

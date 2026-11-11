@@ -417,9 +417,10 @@ class CodegenModelBuilder {
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
   int _anonCounter = 0;
-  // Whether the spec holds an `oidc/client` anywhere, which reserves
-  // [oidcRuntimeTypeNames] (see [_assignDartTypeNames]).
-  bool _usesOidc = false;
+  // Whether an operation returns an `oidc/client` that names its providers,
+  // directly or optionally: such a library gets a provider enum and names
+  // [oidcRuntimeTypeNames], so it reserves them (see [_assignDartTypeNames]).
+  bool _hasTypedOidcResult = false;
 
   /// Resolves [rpc] into a model the generator can emit.
   ///
@@ -435,7 +436,7 @@ class CodegenModelBuilder {
     _warnings.clear();
     _bindings.clear();
     _anonCounter = 0;
-    _usesOidc = false;
+    _hasTypedOidcResult = false;
     _warnUnmatchedOptOuts(rpc);
     _resolveBindings(rpc);
     // Pass 1: Resolve all named schemas (skip reserved names from blocks_runtime)
@@ -496,6 +497,13 @@ class CodegenModelBuilder {
       // Decodability is settled after Pass 3, which can rename the payload a
       // type-arg `$ref` resolves to, so deciding here would bind the result to
       // a model the generator no longer sees.
+      if (switch (resultType) {
+        TransferableType(oidcProviders: _?) => true,
+        NullableType(inner: TransferableType(oidcProviders: _?)) => true,
+        _ => false,
+      }) {
+        _hasTypedOidcResult = true;
+      }
       if (resultType is TransferableType) {
         _checkBindingArity(method.name, resultType);
         boundDirectResults.add((ns, namespaceMap[ns]?.length ?? 0));
@@ -604,9 +612,7 @@ class CodegenModelBuilder {
                     .map((a) => _resolveTypeArgWithDedup(a, hint, path))
                     .toList(),
           binding: _bindings[kt],
-          oidcProviders: kt == 'oidc/client'
-              ? _oidcProviders(args, () => _usesOidc = true)
-              : null,
+          oidcProviders: kt == 'oidc/client' ? _oidcProviders(args) : null,
         ),
       MapRef(valueType: final vt) => MapType(
         _resolveType(vt, hint, false, path),
@@ -1032,7 +1038,7 @@ class CodegenModelBuilder {
       names,
       reserved: {
         ...generatedTopLevelNames,
-        if (_usesOidc) ...oidcRuntimeTypeNames,
+        if (_hasTypedOidcResult) ...oidcRuntimeTypeNames,
       },
     );
     String id(String name) => ids[name] ?? name;
@@ -1638,8 +1644,7 @@ class CodegenModelBuilder {
   /// The provider names of an `oidc/client` whose first type argument is a
   /// string enum, in spec order without duplicates. Null when there is no
   /// such argument or it lists no names, so the client takes any provider.
-  List<String>? _oidcProviders(List<TypeRef> args, void Function() seen) {
-    seen();
+  List<String>? _oidcProviders(List<TypeRef> args) {
     if (args.isEmpty) return null;
     final first = args.first;
     if (first is! UnionLiteralRef) return null;
