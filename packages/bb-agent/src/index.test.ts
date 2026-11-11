@@ -11,7 +11,7 @@ import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
-import { agentErrorFromChunk, classifyModelAccessError, walkCauseChain } from './errors.js';
+import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
@@ -170,6 +170,31 @@ describe('agentErrorFromChunk', () => {
 	test('falls back to StreamFailed when errorName is absent or unrecognised', () => {
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom' }), AgentErrors.StreamFailed));
 		assert.ok(isBlocksError(agentErrorFromChunk({ error: 'boom', errorName: 'SomethingElse' }), AgentErrors.StreamFailed));
+	});
+});
+
+describe('persistedTurnError', () => {
+	test('reads the error row a failed turn persists', () => {
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'denied', errorName: AgentErrors.ModelUnavailable } }),
+			{ error: 'denied', errorName: AgentErrors.ModelUnavailable },
+		);
+		assert.deepStrictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 'boom' } }), { error: 'boom' });
+		// A turn stopped by a runaway cap keeps its partial text alongside metadata.error.
+		assert.deepStrictEqual(
+			persistedTurnError({ role: 'assistant', content: 'partial', metadata: { error: 'Agent stopped: cap.' } }),
+			{ error: 'Agent stopped: cap.' },
+		);
+	});
+
+	test('ignores rows that are not a failed turn', () => {
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: 'done', metadata: { latencyMs: 12 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'user', content: '', metadata: { error: 'x' } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: {} }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: { error: 42 } }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: '{"error":"x"}' }), undefined);
+		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '' }), undefined);
+		assert.strictEqual(persistedTurnError(undefined), undefined);
 	});
 });
 
@@ -2702,6 +2727,197 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async () => {
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+				] }),
+			},
+			subscribe,
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		// The socket drops (arming the failsafe), then comes back.
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		chat.destroy();
+	});
+
+	test('reconnect keeps the text streamed before a turn threw while disconnected', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A turn that throws saves an empty-content error row even after text streamed.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'Stream failed' } },
+				] }),
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'text-delta', text: 'Partial' });
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the failed turn clears loading');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial', 'the streamed text is kept');
+		assert.deepStrictEqual(errors, ['Stream failed'], 'the recorded error is reported once');
+		chat.destroy();
+	});
+
+	test('a live error chunk after reconnect already failed the turn changes nothing more', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'boom' } },
+				] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+		cap.handler!({ type: 'error', error: 'boom' });
+
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.deepStrictEqual(errors, ['boom'], 'the error is reported once');
+		chat.destroy();
+	});
+
+	test("reconnect does not end a turn on a previous turn's error row", async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The retry's user row is written inside the turn, after sendMessage returns, so
+				// this read still ends at the failed first turn's error row.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: '', metadata: { error: 'first turn failed' } },
+				] }),
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'error', error: 'first turn failed' });
+		await chat.sendMessage('hello'); // the retry
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the retry is still running');
+		assert.deepStrictEqual(errors, ['first turn failed'], "the first turn's error is not reported again");
+		cap.handler!({ type: 'text-delta', text: 'Retry answer' });
+		cap.handler!({ type: 'done' });
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().filter((m) => m.role === 'assistant').at(-1)?.content, 'Retry answer', "the retry's text is shown");
+		chat.destroy();
+	});
+
+	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+		const history = { messages: [
+			{ role: 'user', content: 'hello' },
+			{ role: 'assistant', content: '', metadata: { error: 'earlier failure' } },
+		] };
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.loadConversation('conv-1');
+		await chat.sendMessage('hello');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the error row may be the loaded turn, so the new turn keeps running');
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+	});
+
+	test('reconnect keeps the partial text of a turn a cap stopped while disconnected, and reports why', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A runaway cap stopped the turn: its partial text is saved with the reason, and the
+				// `error` chunk that ended it was lost while the socket was down.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hello' },
+					{ role: 'assistant', content: 'Partial answer', metadata: { error: 'Agent stopped: too many model calls.' } },
+				] }),
+			},
+			subscribe,
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		cap.handler!({ type: 'text-delta', text: 'Partial' });
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the stopped turn found on re-sync clears loading');
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial answer', 'the partial text is kept');
+		assert.deepStrictEqual(errors, ['Agent stopped: too many model calls.'], 'the stop reason is reported once');
+		chat.destroy();
+	});
+
 	test('reconnect re-checks pending interrupts', async (t) => {
 		t.mock.timers.enable({ apis: ['setTimeout'] });
 		let interruptsReceived: Array<{ id: string; name: string; reason?: unknown }> | undefined;
@@ -4218,6 +4434,221 @@ describe('createChat', () => {
 		cap.chunk({ type: 'done', text: 'done at last' });
 		await flush();
 		assert.strictEqual(chat.isLoading(), false, 'a later done chunk clears loading');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect surfaces a turn that FAILED while disconnected (error row, error chunk missed)', async () => {
+		const errors: { message: string; cause: unknown }[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The backend persists an empty-content assistant row carrying the error before it
+				// publishes the `error` chunk; the chunk was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'Model access denied', errorName: AgentErrors.ModelUnavailable } },
+					],
+				}),
+			},
+			onError: (message, cause) => { errors.push({ message, cause }); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		// The socket drops (arming the failsafe), then comes back.
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'a failed turn found on re-sync clears loading');
+		assert.strictEqual(errors.length, 1, 'the persisted error is reported once');
+		assert.strictEqual(errors[0].message, 'Model access denied');
+		assert.ok(isBlocksError(errors[0].cause, AgentErrors.ModelUnavailable), 'cause carries the classified error');
+		assert.ok(!chat.getMessages().some((m) => m.role === 'assistant' && m.content === ''), 'no empty assistant bubble left behind');
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect keeps the text streamed before a turn threw while disconnected', async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A turn that throws saves an empty-content error row even after text streamed.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'Stream failed' } },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Partial' });
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the failed turn clears loading');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial', 'the streamed text is kept');
+		assert.deepStrictEqual(errors, ['Stream failed'], 'the recorded error is reported once');
+		chat.destroy();
+		await flush();
+	});
+
+	test('a live error chunk after reconnect already failed the turn changes nothing more', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'boom' } },
+					],
+				}),
+			},
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+		cap.chunk({ type: 'error', error: 'boom' });
+		await flush();
+
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.deepStrictEqual(errors, ['boom'], 'the error is reported once');
+		chat.destroy();
+		await flush();
+	});
+
+	test("reconnect does not end a turn on a previous turn's error row", async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The retry's user row is written inside the turn, after sendMessage returns, so
+				// this read still ends at the failed first turn's error row.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: '', metadata: { error: 'first turn failed' } },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'error', error: 'first turn failed' });
+		await flush();
+		await chat.sendMessage('hello'); // the retry
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the retry is still running');
+		assert.deepStrictEqual(errors, ['first turn failed'], "the first turn's error is not reported again");
+		cap.chunk({ type: 'text-delta', text: 'Retry answer' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		assert.strictEqual(chat.isLoading(), false);
+		assert.strictEqual(chat.getMessages().filter((m) => m.role === 'assistant').at(-1)?.content, 'Retry answer', "the retry's text is shown");
+		chat.destroy();
+		await flush();
+	});
+
+	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+		const history = {
+			messages: [
+				{ role: 'user', content: 'hello' },
+				{ role: 'assistant', content: '', metadata: { error: 'earlier failure' } },
+			],
+		};
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				getConversation: async () => history,
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.loadConversation('conv-1');
+		await chat.sendMessage('hello');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the error row may be the loaded turn, so the new turn keeps running');
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect keeps the partial text of a turn a cap stopped while disconnected, and reports why', async () => {
+		const errors: string[] = [];
+		const loadingStates: boolean[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// A runaway cap stopped the turn: its partial text is saved with the reason, and the
+				// `error` chunk that ended it was lost while the socket was down.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hello' },
+						{ role: 'assistant', content: 'Partial answer', metadata: { error: 'Agent stopped: too many model calls.' } },
+					],
+				}),
+			},
+			onLoadingChange: (l) => { loadingStates.push(l); },
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hello');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Partial' });
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the stopped turn found on re-sync clears loading');
+		assert.deepStrictEqual(loadingStates, [true, false], 'loading clears exactly once');
+		assert.strictEqual(chat.getMessages().find((m) => m.role === 'assistant')?.content, 'Partial answer', 'the partial text is kept');
+		assert.deepStrictEqual(errors, ['Agent stopped: too many model calls.'], 'the stop reason is reported once');
 		chat.destroy();
 		await flush();
 	});
