@@ -23,8 +23,9 @@
  * default user is root. Blocks doesn't run it as root: the task definition sets
  * the container user to {@link DEFAULT_CONTAINER_USER} (the image's built-in
  * `node` user) and boots from {@link DEFAULT_CONTAINER_APP_DIR}, which that user
- * owns. When bumping the digest, confirm the image still ships `node` as
- * uid/gid 1000 with `/home/node` as its home directory.
+ * owns, starting in {@link DEFAULT_CONTAINER_WORKDIR}. When bumping the digest,
+ * confirm the image still ships `node` as uid/gid 1000 with `/home/node` as its
+ * home directory.
  *
  * **Bumping it.** Dependabot doesn't track this constant. To pick up a newer
  * `24-slim` (security patches, Node minor releases), run
@@ -63,6 +64,20 @@ export const DEFAULT_CONTAINER_USER = '1000:1000';
  * @internal
  */
 export const DEFAULT_CONTAINER_APP_DIR = '/home/node/app';
+
+/**
+ * Working directory the default image's process starts in: the `node` user's
+ * home, which that user owns. The image sets no `WorkingDir`, so without this the
+ * process would start in the root-owned `/` and a relative write (for example
+ * `writeFile('report.csv')`) would fail with EACCES. It isn't
+ * {@link DEFAULT_CONTAINER_APP_DIR} because that directory doesn't exist when the
+ * container starts, and a working directory the container runtime has to create
+ * may be created as root, which would leave the boot directory unwritable. A custom
+ * `image` keeps its own `WORKDIR`.
+ *
+ * @internal
+ */
+export const DEFAULT_CONTAINER_WORKDIR = '/home/node';
 
 /**
  * Directory a custom `image` boots from. Unchanged from earlier releases, so an

@@ -344,6 +344,7 @@ describe('ContainerCompute — default image is pinned by digest', () => {
 describe('ContainerCompute — the default image runs as a non-root user', () => {
 	type ContainerDef = {
 		User?: string;
+		WorkingDirectory?: string;
 		Command?: string[];
 		Environment?: Array<{ Name: string; Value: unknown }>;
 	};
@@ -380,9 +381,17 @@ describe('ContainerCompute — the default image runs as a non-root user', () =>
 		assert.doesNotMatch(launcher, /"\/app[/"]/, 'the launcher must not write under /app for the default image');
 	});
 
-	test('a custom image keeps its own user and the /app boot directory', async () => {
+	test("the default image starts in the node user's home, so relative writes don't hit the root-owned /", async () => {
+		const container = await synthContainer('ContainerNonRootWorkdirStack');
+		// The image sets no WorkingDir, so without this the process starts in `/`.
+		// Not the boot dir itself: the runtime would create a missing cwd as root.
+		assert.strictEqual(container.WorkingDirectory, '/home/node');
+	});
+
+	test('a custom image keeps its own user, working directory and the /app boot directory', async () => {
 		const container = await synthContainer('ContainerNonRootCustomStack', 'public.ecr.aws/example/custom-node:24');
 		assert.strictEqual(container.User, undefined, 'Blocks must not override the user of a custom image');
+		assert.strictEqual(container.WorkingDirectory, undefined, 'Blocks must not override the WORKDIR of a custom image');
 		assert.strictEqual(envOf(container, 'BLOCKS_APP_DIR'), '/app');
 		assert.match(container.Command?.[0] ?? '', /"\/app\/bootstrap\.mjs"/);
 	});

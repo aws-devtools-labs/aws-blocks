@@ -143,12 +143,15 @@ between deploys until a Blocks release bumps the digest.
 
 The image's default user is root, but Blocks runs the default image as its
 unprivileged `node` user (uid/gid 1000; the task definition's container `user`
-is `1000:1000`). The app boots from `/home/node/app`, which that user owns. The
-API (8080) and readiness (8081) ports aren't privileged, so nothing needs root.
+is `1000:1000`). The app boots from `/home/node/app`, which that user owns, and
+the process starts in `/home/node` (the working directory), so a relative write
+such as `writeFile('report.csv')` lands in a directory that user owns. The API
+(8080) and readiness (8081) ports aren't privileged, so nothing needs root.
 As in Lambda, write scratch files under `/tmp`.
 
-A custom `image` runs as the image's own default user (Blocks sets no container
-`user` for it) and boots from `/app`, as before. If your app needs root, for
+A custom `image` runs as the image's own default user and starts in its own
+`WORKDIR` (Blocks sets no container `user` or working directory for it) and boots
+from `/app`, as before. If your app needs root, for
 example to install packages at boot, set `image` explicitly; passing the stock
 Node image runs it as root:
 

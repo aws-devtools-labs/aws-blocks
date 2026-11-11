@@ -40,8 +40,14 @@ self-starts the SQS pollers for the event handlers assigned to it.
   the container definition sets `user: '1000:1000'` (`DEFAULT_CONTAINER_USER`)
   and `BLOCKS_APP_DIR=/home/node/app` (`DEFAULT_CONTAINER_APP_DIR`), a
   directory that user owns, since the root-owned `/app` isn't writable by it.
+  The image sets no `WorkingDir`, so the container definition also sets
+  `workingDirectory: '/home/node'` (`DEFAULT_CONTAINER_WORKDIR`): relative
+  writes land in the user's home, not the root-owned `/`. It isn't the boot dir
+  itself because that dir doesn't exist at container start, and a working
+  directory the runtime has to create may be created as root.
   Nothing else needs root: the API and readiness ports (8080/8081) aren't
-  privileged. A custom `image` gets no `user` (its own `USER` applies) and keeps
+  privileged. A custom `image` gets no `user` or `workingDirectory` (its own
+  `USER` and `WORKDIR` apply) and keeps
   `BLOCKS_APP_DIR=/app`, so an image that needs root, or that prepared `/app`
   for its own user, behaves as before; setting `image` explicitly is the opt-out
   for root. Blocks builds **no**

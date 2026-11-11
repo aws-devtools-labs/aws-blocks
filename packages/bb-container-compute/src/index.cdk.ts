@@ -58,6 +58,7 @@ import {
 	DEFAULT_CONTAINER_APP_DIR,
 	DEFAULT_CONTAINER_IMAGE,
 	DEFAULT_CONTAINER_USER,
+	DEFAULT_CONTAINER_WORKDIR,
 } from './default-image.js';
 import {
 	buildContainerApiWidgets,
@@ -348,8 +349,10 @@ export class ContainerCompute extends ComputeBase {
 			entryPoint: ['node', '-e'],
 			command: [this.buildBootstrapLauncher(assetPath, appDir)],
 			// Not root: ports 8080/8081 aren't privileged and the boot dir is owned
-			// by this user. Omitted for a custom image (its own USER applies).
-			...(usesDefaultImage ? { user: DEFAULT_CONTAINER_USER } : {}),
+			// by this user. The image sets no WORKDIR, so start in the user's home
+			// rather than the root-owned `/`, so relative writes work. Both are
+			// omitted for a custom image (its own USER and WORKDIR apply).
+			...(usesDefaultImage ? { user: DEFAULT_CONTAINER_USER, workingDirectory: DEFAULT_CONTAINER_WORKDIR } : {}),
 			logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'blocks', logGroup: this.logGroup }),
 			environment: {
 				NODE_ENV: 'production',
