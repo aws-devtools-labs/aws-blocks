@@ -5,8 +5,8 @@
  * Compile-time contract of the public types. The body never runs: the test
  * passes when this file compiles, and a line marked `@ts-expect-error` must
  * fail to compile. If a rule stops being enforced, the marker itself becomes a
- * build error. Ported from the RFC's `api-check.ts` against the built types of
- * both runtime entries.
+ * build error. The contract is checked against the built types of both runtime
+ * entries.
  */
 import assert from 'node:assert';
 import { test } from 'node:test';
@@ -345,7 +345,7 @@ async function _contract() {
 	void user;
 }
 
-test('the public types compile with the 49 rejections of the RFC', () => {
+test('the public types compile with their 49 rejections', () => {
 	// The contract above is checked by the compiler; this test only records that the file built.
 	assert.strictEqual(typeof _contract, 'function');
 });
