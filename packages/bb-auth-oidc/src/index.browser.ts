@@ -11,6 +11,7 @@
 import { ApiError, registerMiddleware } from '@aws-blocks/core/client';
 import { broadcastAuthChange } from '@aws-blocks/auth-common/ui';
 import type { AuthUser } from '@aws-blocks/auth-common';
+import { AuthOIDCErrors } from './errors.js';
 
 // Provider helpers are pure config builders — safe to ship to the browser.
 export {
@@ -434,10 +435,34 @@ export class AuthOIDCClient<
 		}
 	}
 
-	/** Sign out and reload the page. */
+	/**
+	 * Sign out and reload the page.
+	 *
+	 * Rejects with an `ApiError` carrying the server's status and error name when
+	 * the sign-out request fails — e.g. `SignOutIncompleteException` (503) when the
+	 * server cleared the cookie but could not invalidate the session server-side.
+	 * On rejection no cross-tab broadcast is sent and the page is not reloaded, so
+	 * the caller can surface the error. For `SignOutIncompleteException` the
+	 * cookie is already gone, so the last-known user is cleared and
+	 * `onAuthStateChange` listeners are notified with `null` before the rejection;
+	 * on any other failure the local signed-in state is left unchanged.
+	 */
 	async signOut(): Promise<void> {
 		const baseUrl = await _getBaseUrl();
-		await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
+		const resp = await fetch(`${baseUrl}${this.signOutPath}`, { method: 'POST', credentials: 'include' });
+		if (!resp.ok) {
+			const body = await resp.json().catch(() => ({})) as { error?: unknown; name?: unknown };
+			const err = new ApiError(
+				typeof body.error === 'string' ? body.error : `AuthOIDC sign-out failed (${resp.status})`,
+				resp.status,
+				{ name: typeof body.name === 'string' ? body.name : undefined },
+			);
+			if (err.name === AuthOIDCErrors.SignOutIncomplete) {
+				lastUser = null;
+				notify(null, null);
+			}
+			throw err;
+		}
 		lastUser = null;
 		notify(null, null);
 		// Bridge the sign-out into @aws-blocks/auth-common too, symmetrically with

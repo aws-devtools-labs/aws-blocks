@@ -586,6 +586,117 @@ describe('AuthOIDCClient.signOut — @aws-blocks/auth-common bridge', () => {
 		assert.strictEqual(detail.user, null);
 		assert.strictEqual(reloaded, true, 'signOut should reload the page after broadcasting');
 	});
+
+	test('rejects with the server error and does not report success when the sign-out returns 503', async () => {
+		globalThis.fetch = (async () => ({
+			ok: false,
+			status: 503,
+			json: async () => ({
+				error: 'Sign-out could not be completed: the server-side session was not invalidated',
+				name: 'SignOutIncompleteException',
+			}),
+		})) as unknown as typeof globalThis.fetch;
+		let dispatched = false;
+		(globalThis as any).window.addEventListener('blocks-auth-change', () => { dispatched = true; });
+
+		const client = makeClient();
+		await assert.rejects(() => client.signOut(), (e: unknown) => {
+			assert.ok(e instanceof ApiError, `expected ApiError, got ${String(e)}`);
+			assert.strictEqual(e.name, 'SignOutIncompleteException');
+			assert.strictEqual(e.status, 503);
+			return true;
+		});
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab signed-out post for a failed sign-out');
+		assert.strictEqual(dispatched, false, 'no same-window auth-change event for a failed sign-out');
+		assert.strictEqual(reloaded, false, 'no reload, so the caller can surface the error');
+	});
+});
+
+describe('AuthOIDCClient.signOut — local state after a failed sign-out', () => {
+	const STATE = 'state-signout';
+	const BARE_USER = { userId: 'iss:sub', username: 'alice', email: 'alice@example.invalid', provider: 'google' };
+	let originalFetch: typeof globalThis.fetch;
+
+	function stubFetch(resp: { ok: boolean; status: number; body: unknown }): void {
+		globalThis.fetch = (async () => ({
+			ok: resp.ok,
+			status: resp.status,
+			json: async () => resp.body,
+		})) as unknown as typeof globalThis.fetch;
+	}
+
+	/** Complete a sign-in so the client's last-known user is set, then reset the capture state. */
+	async function signedInClient() {
+		const client = makeClient();
+		stubFetch({ ok: true, status: 200, body: { user: BARE_USER } });
+		assert.ok(await client.handleRedirectCallback(), 'precondition: signed in');
+		broadcasts.length = 0;
+		reloaded = false;
+		return client;
+	}
+
+	beforeEach(() => {
+		// A code of its own: the client's in-flight callback guard is keyed by code.
+		installBrowserGlobals(`http://localhost:3000/spa-callback?code=signout-code&state=${STATE}`);
+		process.env.BLOCKS_API_URL = 'http://localhost:3000/aws-blocks/api';
+		store.set('__blocks_oidc_pending', JSON.stringify({
+			provider: 'google', verifier: 'v', state: STATE, nonce: 'n',
+			callbackUrl: 'http://localhost:3000/spa-callback',
+		}));
+		originalFetch = globalThis.fetch;
+	});
+
+	afterEach(async () => {
+		// Reset the module-level last-known user so sibling tests start signed out.
+		stubFetch({ ok: true, status: 204, body: {} });
+		await makeClient().signOut();
+		globalThis.fetch = originalFetch;
+		delete process.env.BLOCKS_API_URL;
+		clearBrowserGlobals();
+	});
+
+	test('SignOutIncomplete (503): the server cleared the cookie, so listeners see signed-out; no broadcast, no reload', async () => {
+		const client = await signedInClient();
+		const seen: Array<string | null> = [];
+		const unsubscribe = client.onAuthStateChange((user) => { seen.push(user ? user.userId : null); });
+		assert.deepStrictEqual(seen, ['iss:sub'], 'precondition: listeners start with the signed-in user');
+		let dispatched = false;
+		// Plumbing: installBrowserGlobals() put an EventTarget-backed window stub on globalThis.
+		const win = (globalThis as unknown as { window: EventTarget }).window;
+		win.addEventListener('blocks-auth-change', () => { dispatched = true; });
+
+		stubFetch({
+			ok: false,
+			status: 503,
+			body: { error: 'Sign-out could not be completed', name: 'SignOutIncompleteException' },
+		});
+		await assert.rejects(() => client.signOut(), (e: unknown) => e instanceof ApiError && e.name === 'SignOutIncompleteException');
+		unsubscribe();
+
+		assert.deepStrictEqual(seen, ['iss:sub', null], 'listeners were notified of the sign-out');
+		let current: string | null | undefined;
+		client.onAuthStateChange((user) => { current = user ? user.userId : null; })();
+		assert.strictEqual(current, null, 'the last-known user is cleared');
+		assert.strictEqual(broadcasts.length, 0, 'no cross-tab signed-out post for a failed sign-out');
+		assert.strictEqual(dispatched, false, 'no same-window auth-change event for a failed sign-out');
+		assert.strictEqual(reloaded, false, 'no reload, so the caller can surface the error');
+	});
+
+	test('any other failure leaves the signed-in state alone (the cookie may not have been cleared)', async () => {
+		const client = await signedInClient();
+		const seen: Array<string | null> = [];
+		const unsubscribe = client.onAuthStateChange((user) => { seen.push(user ? user.userId : null); });
+
+		stubFetch({ ok: false, status: 502, body: {} });
+		await assert.rejects(() => client.signOut(), (e: unknown) => e instanceof ApiError && e.status === 502);
+		unsubscribe();
+
+		assert.deepStrictEqual(seen, ['iss:sub'], 'listeners were not told about a sign-out that may not have happened');
+		let current: string | null | undefined;
+		client.onAuthStateChange((user) => { current = user ? user.userId : null; })();
+		assert.strictEqual(current, 'iss:sub', 'the last-known user is kept');
+		assert.strictEqual(reloaded, false);
+	});
 });
 
 describe('AuthOIDCClient.signOut — server-side (no window / BroadcastChannel)', () => {

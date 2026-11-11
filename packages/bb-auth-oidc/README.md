@@ -200,6 +200,14 @@ Stable per-human-per-IdP. Use this as a foreign key in your own tables. Signing 
 
 Sessions outlive the IdP's ID token — users won't get kicked out every hour. The BB provisions the session storage it needs automatically (no configuration), refreshes the access token in the background when it expires, and coordinates concurrent refreshes across containers via a compare-and-swap protocol so a request burst doesn't pile up on the IdP's token endpoint. Sign-out invalidates the session server-side, not just client-side.
 
+Sign-out deletes the session row (a replayed copy of the cookie stops authenticating) and best-effort revokes the refresh token at the IdP. The session cookie is always cleared, so the device is signed out either way. If the row delete fails (for example a transient session-store error), or the cookie-signing secret cannot be resolved to identify the session, sign-out reports `SignOutIncompleteException` (503) instead of success, because the server-side session was not invalidated and a copy of the cookie keeps authenticating (how long is described below):
+
+- `POST /aws-blocks/auth/signout` returns `503` with `{"error":"...","name":"SignOutIncompleteException"}` instead of `204`.
+- `auth.signOut(ctx)` rejects with that error; `setAuthState({ action: 'signOut' })` returns a signed-out state with `errorName: 'SignOutIncompleteException'`.
+- The browser client's `auth.signOut()` rejects with the same `ApiError` (`name`, `status`) and does not broadcast to other tabs or reload, so you can tell the user. Because the cookie is already cleared, it does clear its last-known user and notifies `onAuthStateChange` listeners with `null` first. On any other failed sign-out it leaves the signed-in state alone.
+
+The refresh token is still revoked at the IdP when possible (the token is read before the delete is attempted). That revocation decides how long a leftover session keeps authenticating. When the IdP revokes the token, the session stops at its current access-token expiry, because its next refresh fails. Revocation is best-effort, though: the IdP's response is not checked, and it is skipped for `oauth2-custom` providers, for IdPs whose discovery document has no `revocation_endpoint`, and when the session row could not be read. In those cases the leftover session keeps refreshing for as long as the IdP honors the refresh token, at most until the session cookie expires 30 days after sign-in. Because the cookie is already cleared, repeating the sign-out from the same browser does not delete the row.
+
 ### Provider helpers
 
 - `google({ clientId, clientSecret, scopes? })` — OIDC.
@@ -329,13 +337,15 @@ catch (e) {
 }
 ```
 
-`NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`.
+`NotAuthenticated`, `TokenExpired`, `InvalidState`, `InvalidCallback`, `ProviderNotConfigured`, `IdpError`, `InvalidRelay`, `SdkOutdated`, `SignOutIncomplete`.
+
+`SignOutIncomplete` (503) means sign-out cleared the session cookie but could not invalidate the session server-side; see [Session management](#session-management).
 
 `SdkOutdated` is surfaced from `/aws-blocks/auth/callback` when a relay state envelope version is unrecognized — the client SDK is older than the backend expects and should be updated.
 
 The auth routes (`callback`, `signin`, `exchange`, `authorize-params`, `refresh`) apply the same rule to every error they catch: an `ApiError` keeps its status, `name` and message; a branded Building Block error (e.g. `InvalidState`, `IdpError`) is a `400` with its `name` and message; anything else is logged server-side and answered with a nameless `500 { "error": "Internal error" }`.
 
-Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path here — react to errors on the imperative API with `isBlocksError` as shown above. (For the returned-`AuthState` idiom on password providers, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs.)
+Unlike the password providers, OIDC sign-in is a browser redirect to the IdP, so there is no `setAuthState` error-branching path for sign-in — react to errors on the imperative API with `isBlocksError` as shown above. The one exception is `setAuthState({ action: 'signOut' })`, which reports `SignOutIncomplete` on the returned state's `errorName` (for the returned-`AuthState` idiom, see `hasAuthError` in the `bb-auth-basic` / `bb-auth-cognito` READMEs).
 
 ## Cognito-mediated federation
 

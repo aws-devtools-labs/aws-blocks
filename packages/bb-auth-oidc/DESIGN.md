@@ -76,7 +76,7 @@ Extracted from `OidcClientEngine` to avoid duplication. Owns:
 - `writeStatefulSession` — mint session ID, write row, issue cookie
 - `verifyStatefulSession` — read cookie, look up row, trigger refresh via `RefreshFn`
 - `forceRefresh` / CAS protocol — per-container coalescing, stale-lock recovery
-- `signOutSession` — clear cookie, delete row, return refresh token + provider for revocation
+- `signOutSession` — clear cookies, resolve the cookie secret, read row (capture refresh token), delete row, revoke upstream via the engine's callback; throws `SignOutIncompleteException` (503) when the delete or the secret resolution failed (D14)
 - Cookie helpers — pending-auth, session, clear
 
 The `RefreshFn` callback receives `(refreshToken, providerName)` so the engine
@@ -456,3 +456,46 @@ derived per provider from the instance's cookie-signing secret
 key separate from cookie signing, the provider name binds a code to the provider
 that issued it, and determinism per deployment keeps multi-container
 verification working. Verification uses a constant-time comparison.
+
+### D14 — A failed session delete fails sign-out loudly; cookie clear and revocation still run
+
+**Status:** Accepted.
+
+**Rationale.** Sign-out's contract is server-side invalidation: deleting the row
+is what makes a replayed copy of the cookie stop authenticating. Logging a failed
+delete and returning success (the previous behavior) made a transient
+session-store error indistinguishable from a completed sign-out. `signOutSession`
+therefore:
+
+1. clears the session and pending-auth cookies first, so this device is signed
+   out regardless (same rule as AuthBasic's `signOut`) — including when the
+   cookie-signing secret cannot be resolved (a transient SSM error), which is
+   reported as `SignOutIncompleteException` because the session cannot be
+   identified without it;
+2. reads the row, so the refresh token is captured even if the delete then
+   fails (a failed read is logged; the delete still runs);
+3. revokes the captured refresh token upstream (best-effort). When the IdP
+   revokes it, a leftover row stops at its current access-token expiry (the
+   next refresh fails and marks the row expired). The revocation response is not
+   checked, and it is skipped for `oauth2-custom`, for IdPs without a
+   `revocation_endpoint`, and when the read failed; then an expired row keeps
+   refreshing for as long as the IdP honors the token, at most until the
+   30-day session cookie expires;
+4. throws a branded `ApiError(503, SignOutIncompleteException)` if the delete
+   failed, with a BB-authored message; the raw store error is only logged.
+
+The name matches AuthBasic's `SignOutIncomplete` so apps can branch on one
+concept across auth BBs. `createApi().setAuthState({ action: 'signOut' })`
+catches this one error into a signed-out `AuthState` with `errorName`, since the
+cookie is gone. The `RawRoute` throws it as-is; core's dispatcher keeps the
+status, name and already-appended `Set-Cookie` clears. The browser client rejects
+with the decoded `ApiError` and skips the cross-tab broadcast and reload; for
+`SignOutIncompleteException` (the cookie is gone) it first clears its
+last-known user and notifies `onAuthStateChange` listeners with `null`, so the
+tab does not keep rendering a signed-in user. Other failures leave the local
+state alone, since the cookie may not have been cleared.
+
+Retrying from the same browser cannot complete the delete (the cookie is
+already cleared); keeping the cookie on failure so a retry could succeed was
+rejected because it leaves the user signed in on this device during a
+session-store outage.

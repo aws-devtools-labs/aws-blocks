@@ -132,7 +132,10 @@ export interface AuthEngine {
 		ctx: BlocksContext,
 	): Promise<BearerRefreshResult | null>;
 
-	/** Clear session cookie, evict the row, and best-effort revoke upstream. */
+	/**
+	 * Clear session cookie, evict the row, and best-effort revoke upstream.
+	 * Throws `SignOutIncompleteException` (503) when the row could not be evicted.
+	 */
 	signOut(ctx: BlocksContext): Promise<void>;
 
 	/** Resolve the cookie-signing secret. Used by the relay callback dispatcher. */
