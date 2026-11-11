@@ -44,6 +44,10 @@
       "types": "./dist/cdk/internal.d.ts",
       "default": "./dist/cdk/internal.js"
     },
+    "./internal": {
+      "types": "./dist/internal.d.ts",
+      "default": "./dist/internal.js"
+    },
     "./client": "./dist/client/index.js",
     "./lambda-handler": "./dist/lambda-handler.js",
     "./bb-utils": {
