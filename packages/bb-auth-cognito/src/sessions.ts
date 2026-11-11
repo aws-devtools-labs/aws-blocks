@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import crypto from 'node:crypto';
-import { KVStore } from '@aws-blocks/bb-kv-store';
+import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
+import { isBlocksError } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
 /**
@@ -127,6 +128,18 @@ export function jwtExpMs(token: string): number {
 }
 
 /**
+ * Whether a JWT has expired. RFC 7519 §4.1.4 forbids accepting a token on or
+ * after its `exp`, so it is expired from the instant the clock reaches `exp`.
+ * A malformed token, or one without `exp`, counts as expired
+ * (see {@link jwtExpMs}).
+ *
+ * @internal
+ */
+export function isJwtExpired(token: string): boolean {
+	return jwtExpMs(token) <= Date.now();
+}
+
+/**
  * Decode a JWT's payload (claims object) without verifying the signature.
  *
  * Same unsafe-decode guarantees as {@link decodeIdToken}: only called
@@ -197,6 +210,11 @@ export function sessionToTokens(record: SessionRecord): {
  * In the mock runtime, tokens are synthetic base64url-encoded JWT-shaped
  * strings so the same decode path works.
  *
+ * Besides the tokens, the record carries one piece of server-side state:
+ * {@link SessionRecord.refreshBackoff}, which spaces refresh retries after a
+ * transient failure. It is not derived from the tokens, so it can't drift
+ * from what Cognito asserts.
+ *
  * @internal
  */
 export interface SessionRecord {
@@ -206,6 +224,19 @@ export interface SessionRecord {
 	accessToken: string;
 	/** Refresh token — used by `REFRESH_TOKEN_AUTH`. */
 	refreshToken: string;
+	/**
+	 * Set after a `REFRESH_TOKEN_AUTH` call failed transiently (throttling,
+	 * network, service error): no refresh is attempted before `retryAt`, so
+	 * a Cognito throttle isn't answered with a retry on every request.
+	 * `failures` counts consecutive transient failures and sizes the next
+	 * window. Absent once a refresh succeeds.
+	 */
+	refreshBackoff?: {
+		/** Consecutive transient refresh failures. */
+		failures: number;
+		/** Epoch ms from which the next refresh may be attempted. */
+		retryAt: number;
+	};
 }
 
 /**
@@ -260,10 +291,58 @@ export class SessionStore {
 		await this.kv.delete(sessionId);
 	}
 
+	/**
+	 * Delete a session only if it still holds `expected` — the record the caller
+	 * read. Returns `true` when it was deleted; `false` (nothing deleted) when the
+	 * session was already deleted or was replaced since `expected` was read (for
+	 * example by a concurrent token refresh), so a decision made on stale data
+	 * never removes a newer session.
+	 *
+	 * Pass the record exactly as {@link lookupSession} returned it: the
+	 * comparison is on the serialized value.
+	 */
+	async deleteSessionIfUnchanged(sessionId: string, expected: SessionRecord): Promise<boolean> {
+		try {
+			await this.kv.delete(sessionId, { ifValueEquals: expected });
+			return true;
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
+			throw e;
+		}
+	}
+
+	/**
+	 * Merge `update` into an existing session. Silent no-op if the session
+	 * doesn't exist — including when it is deleted (sign-out, revoke) or
+	 * replaced between this method's read and its write: the write is
+	 * conditional on the record read (see {@link replaceSession}), so it never
+	 * recreates a deleted session or overwrites a concurrent writer's record.
+	 */
 	async updateSession(sessionId: string, update: Partial<SessionRecord>): Promise<void> {
 		const existing = await this.kv.get(sessionId);
 		if (!existing) return;
-		await this.kv.put(sessionId, { ...existing, ...update }, this.writeOptions());
+		await this.replaceSession(sessionId, existing, { ...existing, ...update });
+	}
+
+	/**
+	 * Write `next` only if the session still holds `expected` — the record the
+	 * caller read (compare-and-swap). Returns `true` when `next` was written;
+	 * `false` (nothing written) when the session was deleted (sign-out, revoke,
+	 * operator cleanup) or replaced by a concurrent writer since `expected` was
+	 * read. A stale writer therefore never recreates a deleted session or
+	 * overwrites a newer one.
+	 *
+	 * Pass `expected` exactly as {@link lookupSession} returned it: the
+	 * comparison is on the serialized value.
+	 */
+	async replaceSession(sessionId: string, expected: SessionRecord, next: SessionRecord): Promise<boolean> {
+		try {
+			await this.kv.put(sessionId, next, { ...this.writeOptions(), ifValueEquals: expected });
+			return true;
+		} catch (e) {
+			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
+			throw e;
+		}
 	}
 
 	/**
