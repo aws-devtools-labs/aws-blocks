@@ -101,6 +101,8 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 `db.crud()` generates list/get/create/update/delete methods from schema metadata. All operations route through `withRLS()` for row-level isolation. The generated SQL uses parameterized queries built from the schema definition.
 
+`withRLS()` only isolates rows on a table that has RLS, so each handler runs `assertCrudRowLevelSecurity()` (`crud/rls-guard.ts`) after auth and before its first query. It reads `pg_class.relrowsecurity` / `relforcerowsecurity`, the table owner and the `authenticated` role's `BYPASSRLS` / superuser flags, once per table per connection (a `WeakMap` keyed by the `RLSEnabledDatabase`; a missing table or a failed read isn't cached). The state counts as enforced only when RLS is on and the `authenticated` role isn't exempt from it. A table is refused with a branded `RowLevelSecurityRequired` error when its meta says `rowLevelSecurity: false`, or when RLS is required (`rlsPolicy: 'enforce'` or meta `rowLevelSecurity: true`) and not enforced. Meta without the field and no `rlsPolicy` keeps the earlier behavior: the call runs and a warning is logged once per table. `dangerouslyAllowWithoutRowLevelSecurity` skips the check for the listed tables. The client sees only the error name and a stable message; the table name and fix go to the server log. The check runs the same way on the local (PGlite) and AWS engines.
+
 ## Infrastructure (CDK)
 
 | Resource | Purpose |
