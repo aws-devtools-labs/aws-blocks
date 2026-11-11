@@ -24,6 +24,7 @@ const INTERNAL_ONLY = [
 	'deployTimeLambdaCode',
 	'deployTimeLambdaEntry',
 	'scopeProviderWaiterTrust',
+	'sourceScopedConditions',
 ] as const;
 
 describe('@aws-blocks/core/cdk/internal', () => {

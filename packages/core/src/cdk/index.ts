@@ -25,6 +25,7 @@ import {
 } from './blocks-backend.js';
 import { type ResolvedApiWaf, resolveApiWaf } from './api-waf.js';
 import { type BlocksDefaults, BlocksPresets } from './blocks-defaults.js';
+import { markBlocksOwned, recordFrameworkChildren, snapshotChildren } from './blocks-roles.js';
 import type { ComputeBase } from './compute/compute.js';
 import { getComputes } from './compute/compute-registry.js';
 import type { DefaultComputeFactory, LambdaShapedCompute } from './compute/default-compute-factory.js';
@@ -271,6 +272,9 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 		const deploymentType = isSandboxContext(stack) ? 'sandbox' : 'production';
 		registerConfig(stack, 'BLOCKS_DEPLOYMENT_TYPE', deploymentType);
 		process.env.BLOCKS_DEPLOYMENT_TYPE = deploymentType;
+		// Stack-level children the app's backend module adds (outside any
+		// Building Block) are the app's own; see recordFrameworkChildren below.
+		const childrenBeforeBackend = snapshotChildren(stack);
 		const mod = await import(backendUrl.href);
 		if (typeof mod.default === 'function') {
 			try {
@@ -282,6 +286,7 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 				);
 			}
 		}
+		const childrenAfterBackend = snapshotChildren(stack);
 		// Build the single shared REST API gateway now that the backend module has
 		// imported and every compute exists, and schedule the API front door
 		// (see buildSharedGateway).
@@ -342,6 +347,14 @@ export class BlocksStack extends cdk.Stack implements BaseBlocksStack, ApiFrontD
 
 		addBlocksStackMetadata(stack);
 
+		// The stack-level children AWS Blocks itself added: everything now on the
+		// stack except what the backend module added. Roles under the rest (the
+		// backend module's own constructs, and whatever the app adds after this
+		// returns) are app-owned unless a Building Block or framework helper sits
+		// above them (see isAppOwnedRole in blocks-roles.ts).
+		const appChildren = new Set([...childrenAfterBackend].filter((c) => !childrenBeforeBackend.has(c)));
+		recordFrameworkChildren(stack, new Set(stack.node.children.filter((c) => !appChildren.has(c))));
+
 		return stack;
 	}
 }
@@ -380,6 +393,10 @@ export class Scope extends Construct {
 		this.id = id;
 		this.parent = parent;
 		this.root = this.resolveRoot();
+		// Building Blocks and computes subclass Scope; a plain `new Scope(...)` is an
+		// app namespace. Marks the roles a block creates as AWS Blocks' own for the
+		// service-principal trust check (see isAppOwnedRole in blocks-roles.ts).
+		if (new.target !== Scope) markBlocksOwned(this);
 		if (options?.bbName) {
 			this.bbName = options.bbName;
 			this.bbVersion = options.bbVersion;

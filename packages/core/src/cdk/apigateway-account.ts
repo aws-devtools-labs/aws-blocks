@@ -4,6 +4,8 @@
 import type * as cdk from 'aws-cdk-lib';
 import { CfnAccount } from 'aws-cdk-lib/aws-apigateway';
 import { ManagedPolicy, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { markBlocksOwned } from './blocks-roles.js';
+import { sourceScopedConditions } from './service-principal-trust.js';
 
 /**
  * Global registry key for the per-stack API Gateway CloudWatch Logs account
@@ -53,13 +55,12 @@ export function ensureApiGatewayAccount(stack: cdk.Stack): CfnAccount {
 	// so aws:SourceAccount pins the account and aws:SourceArn the partition and region.
 	const role = new Role(stack, 'BlocksApiGatewayCloudWatchRole', {
 		assumedBy: new ServicePrincipal('apigateway.amazonaws.com', {
-			conditions: {
-				StringEquals: { 'aws:SourceAccount': stack.account },
-				ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:apigateway:${stack.region}::*` },
-			},
+			conditions: sourceScopedConditions(stack, 'apigateway', '*', { accountInArn: false }),
 		}),
 		managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs')],
 	});
+	// Created at stack scope on a block's behalf (Realtime, the shared gateway).
+	markBlocksOwned(role);
 
 	// `cloudWatchRoleArn: role.roleArn` already gives CDK an implicit dependency
 	// on the role, so no explicit node.addDependency is needed.

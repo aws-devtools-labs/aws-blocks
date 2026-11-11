@@ -803,3 +803,42 @@ jq -e '[.roles[] | select(.permissionsBoundary == null or ([.tags[] | select(.Ke
 - **Name resources by app.** The rules match resource names, so each app's resources must live under its own prefix or path.
 - **It doesn't isolate handlers inside one app.** Every handler in the app still runs as the same role, under the same boundary.
 - **One account per app remains the stronger model.** A boundary only enforces what its rules cover.
+
+### Service-principal trust: `aws:SourceAccount` and `aws:SourceArn`
+
+Every IAM role AWS Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
+
+- **Roles AWS Blocks creates** — under a Building Block or a compute, the backend's own roles, and the stack-level roles created on a block's behalf (custom-resource providers, the API Gateway CloudWatch role, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal. On an embedded `BlocksBackend` this is its whole subtree.
+- **Roles your app adds to a `BlocksStack`** — your own constructs at stack scope, in the backend module or after `BlocksStack.create()`, and the roles CDK creates inside them (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a **synth warning** instead, and the deploy goes ahead.
+
+Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are.
+
+**Resolving the warning.** Add both conditions to the trust statement. For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`):
+
+```ts
+import * as cdk from 'aws-cdk-lib';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+
+const machine = new sfn.StateMachine(stack, 'Machine', {
+  definitionBody: sfn.DefinitionBody.fromChainable(new sfn.Pass(stack, 'Start')),
+});
+new events.Rule(stack, 'Every5', {
+  schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+  targets: [new targets.SfnStateMachine(machine)],
+});
+// The EventsRole the target created trusts events.amazonaws.com in statement 0.
+// (A pattern, not rule.ruleArn: the rule already references this role.)
+const eventsRole = machine.node.findChild('EventsRole').node.defaultChild as cdk.CfnResource;
+eventsRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition', {
+  StringEquals: { 'aws:SourceAccount': stack.account },
+  ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:events:${stack.region}:${stack.account}:rule/*` },
+});
+```
+
+**Acknowledging it.** To keep a trust as it is, acknowledge the warning id `@aws-blocks/core:serviceRoleTrustWithoutSourceCondition`, on the role or on any construct above it (the stack acknowledges it for every role in the stack):
+
+```ts
+cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition');
+```

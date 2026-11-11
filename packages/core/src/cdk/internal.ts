@@ -94,8 +94,14 @@ export {
 export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } from './lambda-code.js';
 // Scopes the Step Functions trust of a custom-resource Provider's waiter role,
 // which the synth-time service-principal trust check requires (bb-distributed-table,
-// bb-database).
-export { scopeProviderWaiterTrust } from './service-principal-trust.js';
+// bb-database), and builds the aws:SourceAccount / aws:SourceArn conditions blocks
+// put on the service-principal trusts they create (bb-knowledge-base, bb-agent,
+// bb-cron-job, bb-container-compute, bb-auth-cognito).
+export {
+	type SourceScopedConditionsOptions,
+	scopeProviderWaiterTrust,
+	sourceScopedConditions,
+} from './service-principal-trust.js';
 // The service-agnostic half of the above: the `encryption` option parser, also
 // used by bb-file-bucket (S3) so every Blocks storage resource accepts the same
 // `'aws-managed' | 'customer-managed' | fromKmsKey(arn)` values.

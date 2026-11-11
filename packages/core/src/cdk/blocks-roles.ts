@@ -25,6 +25,10 @@
  *
  * Each role is visited once per visitor, whichever way it was reached.
  *
+ * In a `BlocksStack` the root's subtree is the whole stack, so it also holds
+ * roles the app adds itself. {@link isAppOwnedRole} tells those apart from the
+ * roles AWS Blocks creates, for checks that treat the two differently.
+ *
  * @internal
  */
 
@@ -141,6 +145,56 @@ export function snapshotChildren(scope: Construct): ReadonlySet<IConstruct> {
 	return new Set(scope.node.children);
 }
 
+const BLOCKS_OWNED = Symbol.for('blocks:BlocksOwned');
+const FRAMEWORK_CHILDREN = Symbol.for('blocks:FrameworkChildren');
+
+/**
+ * Mark `construct` (and so every role under it) as created by AWS Blocks, not
+ * by the app. Every Building Block and compute (`Scope` subclass) is marked at
+ * construction; framework code that hoists a construct to stack scope on a
+ * block's behalf marks it too.
+ */
+export function markBlocksOwned(construct: IConstruct): void {
+	(construct as unknown as Record<symbol, boolean>)[BLOCKS_OWNED] = true;
+}
+
+function isMarked(construct: IConstruct): boolean {
+	return (construct as unknown as Record<symbol, boolean | undefined>)[BLOCKS_OWNED] === true;
+}
+
+/**
+ * Record the direct children of a `BlocksStack` root that the framework added
+ * (everything but what the app's backend module and the app's own code after
+ * `create()` added at stack scope). Called once, at the end of
+ * `BlocksStack.create()`; until then — and for any other root — every covered
+ * role counts as framework-owned.
+ */
+export function recordFrameworkChildren(root: Construct, children: ReadonlySet<IConstruct>): void {
+	(root as unknown as Record<symbol, ReadonlySet<IConstruct>>)[FRAMEWORK_CHILDREN] = children;
+}
+
+/**
+ * Whether `role` is one the app added to a `BlocksStack` itself rather than one
+ * AWS Blocks created. A role is framework-owned when it, or a construct above
+ * it, is marked ({@link markBlocksOwned}: a Building Block, a compute, a hoisted
+ * provider, Hosting), when it sits under a stack-level construct the framework
+ * added ({@link recordFrameworkChildren}), or when it lies outside the root's
+ * subtree (reached as a stack-level addition or a Hosting helper). Always
+ * `false` for a root with no recorded framework children (an embedded
+ * `BlocksBackend`, whose subtree is all framework-owned).
+ */
+export function isAppOwnedRole(root: Construct, role: IConstruct): boolean {
+	const framework = (root as unknown as Record<symbol, ReadonlySet<IConstruct> | undefined>)[FRAMEWORK_CHILDREN];
+	if (!framework) return false;
+	let node: IConstruct = role;
+	while (node.node.scope && node.node.scope !== root) {
+		if (isMarked(node)) return false;
+		node = node.node.scope;
+	}
+	if (isMarked(node) || node.node.scope !== root) return false;
+	return !framework.has(node);
+}
+
 function coverNewChildren(
 	coverage: RoleCoverage,
 	parent: Construct,
@@ -150,6 +204,7 @@ function coverNewChildren(
 	for (const child of parent.node.children) {
 		if (child === exclude || before.has(child)) continue;
 		coverScope(coverage, child);
+		markBlocksOwned(child);
 	}
 }
 
@@ -196,6 +251,7 @@ export function coverHosting(
 	const coverage = coverageOf(owner);
 	const stack = cdk.Stack.of(hosting);
 	coverScope(coverage, hosting);
+	markBlocksOwned(hosting);
 	coverNewChildren(coverage, stack, before.stack, hosting);
 
 	const stage = cdk.Stage.of(hosting);
