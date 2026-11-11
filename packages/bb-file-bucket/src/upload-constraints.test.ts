@@ -29,6 +29,15 @@ describe('resolveUploadContentType renders parameters in canonical form', () => 
 		['Text/Plain;Charset=UTF-8', 'Text/Plain; Charset=UTF-8'],
 		['multipart/form-data;boundary="a ; b = c"', 'multipart/form-data; boundary="a ; b = c"'],
 		['text/plain;a="esc\\"aped";b=x', 'text/plain; a="esc\\"aped"; b=x'],
+		// A quoted value whose unescaped content is a token is written bare.
+		['text/plain; charset="utf-8"', 'text/plain; charset=utf-8'],
+		['text/plain;a="x\\yz"', 'text/plain; a=xyz'],
+		// Any other quoted value stays quoted, with only `"` and `\` escaped.
+		['text/plain; name="a b"', 'text/plain; name="a b"'],
+		['text/plain; a=""', 'text/plain; a=""'],
+		['text/plain; a="a/b"', 'text/plain; a="a/b"'],
+		['text/plain; a="b\\\\c"', 'text/plain; a="b\\\\c"'],
+		['text/plain; a="\\a b"', 'text/plain; a="a b"'],
 	];
 	for (const [input, canonical] of cases) {
 		test(`${JSON.stringify(input)} → ${JSON.stringify(canonical)}`, () => {
@@ -57,6 +66,15 @@ describe('resolveUploadContentType: type/* wildcards and active document types',
 		'text/xml',
 		'application/xml',
 		'text/javascript',
+		'text/xsl',
+		'text/ecmascript',
+		'application/javascript',
+		'application/ecmascript',
+		'application/x-javascript',
+		'application/atom+xml',
+		'application/rss+xml',
+		'image/foo+xml',
+		'Application/VND.Example+XML',
 	];
 	const wildcards = uploadConstraintsFrom({ allowedContentTypes: ['text/*', 'image/*', 'application/*'] });
 
@@ -69,7 +87,7 @@ describe('resolveUploadContentType: type/* wildcards and active document types',
 		});
 	}
 
-	for (const contentType of ['text/plain', 'image/png', 'application/json', 'application/octet-stream']) {
+	for (const contentType of ['text/plain', 'image/png', 'application/json', 'application/octet-stream', 'application/xml-dtd', 'application/vnd.api+json']) {
 		test(`a wildcard still matches ${JSON.stringify(contentType)}`, () => {
 			assert.strictEqual(resolveUploadContentType(wildcards, contentType), contentType);
 		});
@@ -79,5 +97,11 @@ describe('resolveUploadContentType: type/* wildcards and active document types',
 		const exact = uploadConstraintsFrom({ allowedContentTypes: ['image/*', 'Image/SVG+XML', 'text/html'] });
 		assert.strictEqual(resolveUploadContentType(exact, 'image/svg+xml'), 'image/svg+xml');
 		assert.strictEqual(resolveUploadContentType(exact, 'text/html;charset=utf-8'), 'text/html; charset=utf-8');
+	});
+
+	test('an exact entry accepts a +xml subtype; a wildcard alongside it does not widen to others', () => {
+		const exact = uploadConstraintsFrom({ allowedContentTypes: ['application/*', 'application/atom+xml'] });
+		assert.strictEqual(resolveUploadContentType(exact, 'application/atom+xml'), 'application/atom+xml');
+		assert.throws(() => resolveUploadContentType(exact, 'application/rss+xml'), /not allowed for this bucket/);
 	});
 });

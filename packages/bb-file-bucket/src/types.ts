@@ -200,7 +200,10 @@ export interface FileBucketOptions {
 	 * `'text/*'`. A wildcard matches every subtype of its type except the types
 	 * a browser can display as a page (scripts included) or run as a script:
 	 * `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`,
-	 * `application/xml` and `text/javascript`. So `'image/*'` does not accept
+	 * `application/xml`, `text/xsl`, `text/javascript`, `text/ecmascript`,
+	 * `application/javascript`, `application/ecmascript`,
+	 * `application/x-javascript`, and any subtype ending in `+xml`
+	 * (`application/atom+xml`, …). So `'image/*'` does not accept
 	 * `image/svg+xml`, and `'text/*'` does not accept `text/html`. To accept one
 	 * of these, list it exactly (`['image/*', 'image/svg+xml']`), and serve its
 	 * downloads with `getUrl()`'s `attachment` option.
@@ -286,7 +289,9 @@ export interface GetUrlOptions {
 	 * - `true` signs `Content-Disposition: attachment` into the URL.
 	 * - a filename (e.g. `'report.pdf'`) also suggests that name:
 	 *   `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`. Control
-	 *   characters are removed; in the quoted ASCII `filename`, quotes,
+	 *   characters and zero-width/directional formatting characters are
+	 *   removed, and a name that is empty, `.` or `..` afterwards throws
+	 *   `ValidationFailed`; in the quoted ASCII `filename`, quotes,
 	 *   backslashes, `%` and non-ASCII characters become `_`, while `filename*`
 	 *   carries the full UTF-8 name.
 	 *

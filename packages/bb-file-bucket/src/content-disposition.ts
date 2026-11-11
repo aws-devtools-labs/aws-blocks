@@ -17,8 +17,9 @@ const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/g;
  * True for a formatting character removed from a download filename: the
  * bidirectional embedding/override (U+202A–U+202E) and isolate (U+2066–U+2069)
  * characters that key validation also rejects, plus the directional marks
- * U+200E (LRM), U+200F (RLM) and U+061C (ALM). Each changes how the name is
- * displayed without being visible in it.
+ * U+200E (LRM), U+200F (RLM) and U+061C (ALM), and the zero-width characters
+ * U+200B–U+200D (ZWSP, ZWNJ, ZWJ) and U+FEFF (BOM / ZWNBSP). Each changes how
+ * the name is displayed, or is not visible in it.
  */
 function isDroppedFormatChar(code: number): boolean {
 	return (
@@ -26,7 +27,9 @@ function isDroppedFormatChar(code: number): boolean {
 		(code >= 0x2066 && code <= 0x2069) ||
 		code === 0x200e ||
 		code === 0x200f ||
-		code === 0x061c
+		code === 0x061c ||
+		(code >= 0x200b && code <= 0x200d) ||
+		code === 0xfeff
 	);
 }
 
@@ -53,7 +56,8 @@ const PATH_SEPARATORS = /[/\\]/g;
  * @param attachment - The `attachment` option from `getUrl()` / `getFileHandle()`.
  * @returns The header value, or `undefined` when no disposition is requested.
  * @throws {Error} `ValidationFailed` when `attachment` is not a boolean or a filename
- *   that is non-empty once control and formatting characters are removed.
+ *   that is non-empty once control and formatting characters are removed, or
+ *   when that filename trims to `.` or `..`.
  */
 export function resolveContentDisposition(attachment: unknown): string | undefined {
 	if (attachment === undefined || attachment === false) return undefined;
@@ -72,8 +76,11 @@ export function resolveContentDisposition(attachment: unknown): string | undefin
 		.join('')
 		.replace(CONTROL_CHARS, '')
 		.replace(PATH_SEPARATORS, '_');
-	if (name.trim() === '') {
-		throw validationFailed('Invalid attachment: filename must not be empty');
+	// `.` and `..` name a directory rather than a file, so they are rejected
+	// like an empty name.
+	const trimmed = name.trim();
+	if (trimmed === '' || trimmed === '.' || trimmed === '..') {
+		throw validationFailed('Invalid attachment: filename must not be empty, "." or ".."');
 	}
 	const ascii = name.replace(/[^\x20-\x7e]|["\\%]/g, '_');
 	const encoded = encodeURIComponent(name).replace(

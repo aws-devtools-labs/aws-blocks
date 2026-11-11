@@ -22,6 +22,8 @@ class FileUploadHandleTest {
         "text/plain; charset=utf-8",
         "text/plain; charset=UTF-8",
         "text/csv; charset=utf-8; header=present",
+        "text/plain; name=\"a b\"",
+        "multipart/form-data; boundary=\"a ; b = c\"",
     )
 
     /** A handle whose requests are answered 200 and whose sent Content-Type is recorded. */
@@ -57,6 +59,9 @@ class FileUploadHandleTest {
         val rerendered = mapOf(
             "text/plain;charset=utf-8" to "text/plain; charset=utf-8",
             "text/plain;  charset=UTF-8" to "text/plain; charset=UTF-8",
+            // A quoted value whose content is a token is rendered bare; any other stays quoted.
+            "text/plain; charset=\"utf-8\"" to "text/plain; charset=utf-8",
+            "text/plain;name=\"a b\"" to "text/plain; name=\"a b\"",
         )
         for ((input, canonical) in rerendered) {
             val sent = mutableListOf<String?>()

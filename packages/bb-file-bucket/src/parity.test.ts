@@ -476,6 +476,9 @@ describe('contentType must be a single well-formed media type in both runtimes',
 		['Text/Plain;A=B', 'Text/Plain; A=B'],
 		['text/plain; a="x, y";b="esc\\"aped"', 'text/plain; a="x, y"; b="esc\\"aped"'],
 		['text/plain;a="  ;  =  "', 'text/plain; a="  ;  =  "'],
+		['text/plain; charset="utf-8"', 'text/plain; charset=utf-8'],
+		['text/plain;name="a b"', 'text/plain; name="a b"'],
+		['text/plain; a="x\\yz"', 'text/plain; a=xyz'],
 	];
 	for (const [label, make] of runtimes) {
 		test(`${label}: rejects malformed values with or without allowedContentTypes`, async () => {
@@ -515,7 +518,21 @@ describe('contentType must be a single well-formed media type in both runtimes',
 });
 
 describe('a type/* wildcard does not match active document types in both runtimes', () => {
-	const ACTIVE = ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'text/xml', 'application/xml', 'text/javascript'];
+	const ACTIVE = [
+		'text/html',
+		'image/svg+xml',
+		'application/xhtml+xml',
+		'text/xml',
+		'application/xml',
+		'text/xsl',
+		'text/javascript',
+		'text/ecmascript',
+		'application/javascript',
+		'application/ecmascript',
+		'application/x-javascript',
+		'application/atom+xml',
+		'image/foo+xml',
+	];
 	const NOT_ALLOWED = 'ValidationFailed: The content type is not allowed for this bucket';
 	const runtimes = [
 		['mock', (o: FileBucketOptions) => new MockFileBucket(new Scope('root'), uniqueId(), o)],
@@ -621,6 +638,9 @@ describe('getUrl({ attachment }) signs the same Content-Disposition in both runt
 		['..\\..\\boot.ini', `attachment; filename=".._.._boot.ini"; filename*=UTF-8''.._.._boot.ini`],
 		['résumé (1).pdf', `attachment; filename="r_sum_ (1).pdf"; filename*=UTF-8''r%C3%A9sum%C3%A9%20%281%29.pdf`],
 		['line\r\nbreak.txt', `attachment; filename="linebreak.txt"; filename*=UTF-8''linebreak.txt`],
+		['a\u200Bb\u200Cc\u200Dd\uFEFFe.txt', `attachment; filename="abcde.txt"; filename*=UTF-8''abcde.txt`],
+		['...', `attachment; filename="..."; filename*=UTF-8''...`],
+		['.env', `attachment; filename=".env"; filename*=UTF-8''.env`],
 	];
 	for (const [attachment, expected] of cases) {
 		test(`attachment=${JSON.stringify(attachment)}`, async () => {
@@ -635,7 +655,7 @@ describe('getUrl({ attachment }) signs the same Content-Disposition in both runt
 		});
 	}
 
-	for (const bad of ['', '\r\n', '\u202e\u200f', 1, {}]) {
+	for (const bad of ['', '\r\n', '\u202e\u200f', '\u200b\ufeff', '.', '..', ' .. ', '.\u200b.', '\ufeff.', 1, {}]) {
 		test(`attachment=${JSON.stringify(bad)} is rejected by both runtimes`, async () => {
 			const attachment = bad as unknown as string;
 			await assert.rejects(() => awsSigningBucket().bucket.getUrl('a', { attachment }), isValidation400);

@@ -118,6 +118,9 @@ const UPLOAD_CONTENT_TYPE = new RegExp(
 	`^(${TOKEN})/(${TOKEN})(?:${OWS};${OWS}${TOKEN}${OWS}=${OWS}(?:${TOKEN}|${QUOTED_STRING}))*$`,
 );
 
+/** A whole string that is an RFC 9110 `token`. */
+const WHOLE_TOKEN = new RegExp(`^${TOKEN}$`);
+
 /** One `; name=value` parameter of a value that matched {@link UPLOAD_CONTENT_TYPE}. Captures the name and value. */
 const UPLOAD_CONTENT_TYPE_PARAMETER = new RegExp(
 	`${OWS};${OWS}(${TOKEN})${OWS}=${OWS}(${TOKEN}|${QUOTED_STRING})`,
@@ -133,10 +136,28 @@ interface ParsedUploadContentType {
 	/**
 	 * The value in canonical form: `type/subtype` as written, then each
 	 * parameter as `; name=value` — exactly one space after each `;` and none
-	 * around `=`. Names and token values keep their case; a quoted-string value
-	 * is kept byte-for-byte, quotes and escapes included.
+	 * around `=`. Names and values keep their case. A quoted-string value is
+	 * unescaped and, when its content is a token, written without quotes;
+	 * otherwise it is re-quoted with only `"` and `\\` escaped (see
+	 * {@link renderParameterValue}).
 	 */
 	readonly normalized: string;
+}
+
+/**
+ * Render a parameter value in canonical form: a token value as written; a
+ * quoted-string value unescaped, then written bare when its content is a
+ * token, or quoted with only `"` and `\\` escaped otherwise. This is how Ktor
+ * re-renders a parsed parameter (`charset="utf-8"` becomes `charset=utf-8`,
+ * `name="a b"` stays quoted), so the native Kotlin client sends the signed
+ * value unchanged.
+ */
+function renderParameterValue(value: string): string {
+	if (!value.startsWith('"')) return value;
+	// Remove the surrounding quotes and resolve each quoted-pair to the character it escapes.
+	const content = value.slice(1, -1).replace(/\\(.)/gs, '$1');
+	if (WHOLE_TOKEN.test(content)) return content;
+	return `"${content.replace(/["\\]/g, '\\$&')}"`;
 }
 
 /**
@@ -156,15 +177,17 @@ function parseUploadContentType(contentType: string): ParsedUploadContentType | 
 	let normalized = `${type}/${subtype}`;
 	const parameters = contentType.slice(type.length + 1 + subtype.length);
 	for (const [, name, value] of parameters.matchAll(UPLOAD_CONTENT_TYPE_PARAMETER)) {
-		normalized += `; ${name}=${value}`;
+		normalized += `; ${name}=${renderParameterValue(value)}`;
 	}
 	return { type: type.toLowerCase(), subtype: subtype.toLowerCase(), normalized };
 }
 
 /**
  * Media types a browser can render as an active document (HTML, SVG, XML,
- * XHTML) or run as a script. A `type/*` entry in `allowedContentTypes` does not
- * match these; each is accepted only when `allowedContentTypes` lists it exactly.
+ * XHTML, XSLT) or run as a script. A `type/*` entry in `allowedContentTypes`
+ * does not match these, nor any subtype with the `+xml` structured-syntax
+ * suffix (see {@link isActiveContentType}); each is accepted only when
+ * `allowedContentTypes` lists it exactly.
  */
 const ACTIVE_CONTENT_TYPES: ReadonlySet<string> = new Set([
 	'text/html',
@@ -172,19 +195,33 @@ const ACTIVE_CONTENT_TYPES: ReadonlySet<string> = new Set([
 	'application/xhtml+xml',
 	'text/xml',
 	'application/xml',
+	'text/xsl',
 	'text/javascript',
+	'text/ecmascript',
+	'application/javascript',
+	'application/ecmascript',
+	'application/x-javascript',
 ]);
+
+/**
+ * True for a lowercased media type a `type/*` wildcard does not match: one of
+ * the {@link ACTIVE_CONTENT_TYPES}, or any subtype ending in the `+xml`
+ * structured-syntax suffix (RFC 6839), which a browser can parse as XML.
+ */
+function isActiveContentType(type: string, subtype: string): boolean {
+	return ACTIVE_CONTENT_TYPES.has(`${type}/${subtype}`) || subtype.endsWith('+xml');
+}
 
 /**
  * True when the parsed media type matches an exact `type/subtype` entry, or a
  * `type/*` entry whose type part is exactly the parsed type and the media type
- * is not one of the {@link ACTIVE_CONTENT_TYPES}.
+ * is not active ({@link isActiveContentType}).
  */
 function isAllowedMediaType(allowed: readonly string[], mediaType: { type: string; subtype: string }): boolean {
 	const full = `${mediaType.type}/${mediaType.subtype}`;
 	return allowed.some((entry) =>
 		entry.endsWith('/*')
-			? entry.slice(0, -2) === mediaType.type && !ACTIVE_CONTENT_TYPES.has(full)
+			? entry.slice(0, -2) === mediaType.type && !isActiveContentType(mediaType.type, mediaType.subtype)
 			: entry === full,
 	);
 }
@@ -201,14 +238,16 @@ function isAllowedMediaType(allowed: readonly string[], mediaType: { type: strin
  * what was matched. Matching then ignores case and parameters:
  * `text/plain; charset=utf-8` matches an entry `text/plain` or `text/*`. A
  * `type/*` entry does not match the {@link ACTIVE_CONTENT_TYPES} (`text/html`,
- * `image/svg+xml`, …); list one exactly to accept it.
+ * `image/svg+xml`, …) or any `+xml` subtype; list one exactly to accept it.
  *
  * The returned value is the canonical rendering of the caller's value: the
  * `type/subtype` as written, then each parameter as `; name=value` (one space
- * after each `;`, none around `=`), with quoted-string values unchanged. That
- * is the form HTTP clients such as Ktor re-render a parsed `Content-Type` in,
- * so the header a client sends matches the signed value byte-for-byte.
- * `text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`.
+ * after each `;`, none around `=`), with a quoted value written bare when its
+ * unescaped content is a token and re-quoted (escaping only `"` and `\\`)
+ * otherwise. That is the form HTTP clients such as Ktor re-render a parsed
+ * `Content-Type` in, so the header a client sends matches the signed value
+ * byte-for-byte. `text/plain;charset=utf-8` and `text/plain; charset="utf-8"`
+ * both become `text/plain; charset=utf-8`.
  *
  * @param constraints - The bucket's upload constraints.
  * @param contentType - The caller-supplied content type, if any.
