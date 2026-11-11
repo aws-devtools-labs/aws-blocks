@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { evaluateGates, parseThreshold } from './gates.mjs';
+import { evaluateGates, parseThreshold, shouldPersistBaseline } from './gates.mjs';
 
 const gate = (res, name) => res.gates.find((g) => g.name === name);
 
@@ -157,5 +157,43 @@ describe('gates are independent', () => {
 		assert.equal(gate(res, 'floor').failed, false);
 		assert.equal(gate(res, 'regression').failed, true);
 		assert.equal(res.failed, true);
+	});
+});
+
+describe('shouldPersistBaseline(run) — may this run become the latest-main baseline?', () => {
+	const passing = evaluateGates(OK_RUN, { minScore: '60', maxHarnessErrors: '0' }).gates;
+	it('persists a run that ran tests and passed the floor/harness gates', () => {
+		assert.equal(shouldPersistBaseline({ cancelled: false, testedCells: 3, gates: passing }).persist, true);
+	});
+	it('keeps the previous pointer for a run that measured nothing: one counted agent_fail at 0, no cell ran a test', () => {
+		const gates = evaluateGates({ ...OK_RUN, meanComposite: 0, scoredCells: 1, totalCells: 10 }, { minScore: '65' }).gates;
+		const v = shouldPersistBaseline({ cancelled: false, testedCells: 0, gates });
+		assert.equal(v.persist, false);
+		assert.match(v.reason, /no cell ran any test/);
+	});
+	it('keeps the previous pointer when the floor fails even though tests ran', () => {
+		const gates = evaluateGates({ ...OK_RUN, meanComposite: 10 }, { minScore: '65' }).gates;
+		const v = shouldPersistBaseline({ cancelled: false, testedCells: 3, gates });
+		assert.equal(v.persist, false);
+		assert.match(v.reason, /floor/);
+	});
+	it('keeps the previous pointer when the harness gate fails', () => {
+		const gates = evaluateGates({ ...OK_RUN, harnessErrors: 2 }, { maxHarnessErrors: '0' }).gates;
+		assert.equal(shouldPersistBaseline({ cancelled: false, testedCells: 3, gates }).persist, false);
+	});
+	it('keeps the previous pointer for a cancelled run, whatever it measured', () => {
+		const v = shouldPersistBaseline({ cancelled: true, testedCells: 3, gates: passing });
+		assert.equal(v.persist, false);
+		assert.match(v.reason, /cancelled/);
+	});
+	it('a regression-gate failure does NOT block: a real drop on main is still main', () => {
+		const gates = evaluateGates({ ...OK_RUN, meanDelta: -20 }, { maxRegression: '5' }).gates;
+		assert.equal(gate({ gates }, 'regression').failed, true);
+		assert.equal(shouldPersistBaseline({ cancelled: false, testedCells: 3, gates }).persist, true);
+	});
+	it('with every gate disabled, the tested-cells requirement still applies', () => {
+		const gates = evaluateGates(OK_RUN, {}).gates;
+		assert.equal(shouldPersistBaseline({ cancelled: false, testedCells: 1, gates }).persist, true);
+		assert.equal(shouldPersistBaseline({ cancelled: false, testedCells: 0, gates }).persist, false);
 	});
 });

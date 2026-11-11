@@ -78,7 +78,7 @@ The boundary, outermost first:
 2. **Bedrock-only AWS session.** The bench job's `Configure AWS credentials`
    step passes an inline session policy, so the session every step up to the
    uploads runs with can only call `bedrock:InvokeModelWithResponseStream` and
-   `bedrock:Converse` on model-invocation ARNs (the effective permissions are the
+   `bedrock:InvokeModel` on model-invocation ARNs (the effective permissions are the
    intersection of the role and that policy). The S3 write is regained only by
    re-assuming the role without the policy right before `Persist to S3`, after
    every agent, analysis and upload step, and only if step 4c succeeded (so
@@ -381,13 +381,17 @@ skip-chain — so an agent timeout still skips its tests/judge and scores compos
 0, rather than scoring a partial app. A cell's outcome lives in `result.json` +
 the run summary, not the check status, and the summary job is green too (unless a
 gate above is set and trips). A new commit cancels the prior in-flight run
-via the workflow `concurrency` group.
+via the workflow `concurrency` group; the `summary` job runs on `!cancelled()`,
+so a cancelled run neither replaces the sticky PR comment nor writes a baseline.
 
 **The report — a single results table vs the `main` baseline.** Each run writes
 a compact **aggregate** (per cell: composite/verdict, test counts, per-dimension
 judge scores, builder tokens, cost, and score-per-$, plus the mean) to S3 at
 `bench/runs/<sha>/results.json`; a push-to-`main` run also updates the stable
-pointer `bench/runs/latest-main.json`. The summary job fetches a baseline and
+pointer `bench/runs/latest-main.json`, but only when it qualifies as a baseline
+(`shouldPersistBaseline` in `lib/gates.mjs`: at least one cell ran tests and the
+floor and harness gates did not fail). Otherwise the previous pointer is kept, so
+a run that measured nothing can't make the regression gate vacuous. The summary job fetches a baseline and
 renders ONE results table (`renderDetailed` in `lib/overview.mjs`):
 `TASK · TEMPLATE · TESTS · JUDGE · COST · TURNS · SCORE · STOP REASON`.
 Each metric cell is a single inline line — `<indicator> <value> (<Δ vs main>)`: the
@@ -441,7 +445,7 @@ Reading/writing the baseline uses the same OIDC role (`s3:GetObject` /
 | `steps/lib/analysis.mjs` | Shared, mostly-pure helpers for the trace/metrics analysis feature: trace trimming, prompt builders, and `parseCellAnalysis` (splits the per-cell model output into an analysis string + a bounded potential-issues list). Imported by `analyze-cell.mjs` (per-cell) and `analyze.mjs` (roll-up) |
 | `steps/analyze-cell.mjs` | Step 4b: per-cell trace/metrics analysis via the judge model; writes a concise `analysis` string **and** an `analysis_issues[]` (potential issues) back into the cell's `result.json` |
 | `steps/analyze.mjs` | Summary-job roll-up: synthesizes the per-cell analyses into a short **Executive summary** (paragraph + bullets) via one best-effort Bedrock call, aggregates a **Potential issues** section, and renders a collapsed **Per-cell analysis** (each cell also collapsed) |
-| `steps/lib/gates.mjs` | **Single source of truth** for the merge gate: `parseThreshold` + `evaluateGates` decide pass/fail from the floor (`BENCH_MIN_SCORE`), regression-vs-`main` (`BENCH_MAX_REGRESSION`) and harness/infra (`BENCH_MAX_HARNESS_ERRORS`, incl. the whole-run upstream-failure case). Pure; imported by summary |
+| `steps/lib/gates.mjs` | **Single source of truth** for the merge gate: `parseThreshold` + `evaluateGates` decide pass/fail from the floor (`BENCH_MIN_SCORE`), regression-vs-`main` (`BENCH_MAX_REGRESSION`) and harness/infra (`BENCH_MAX_HARNESS_ERRORS`, incl. the whole-run upstream-failure case); `shouldPersistBaseline` decides whether a push-to-`main` run may replace `latest-main.json`. Pure; imported by summary |
 | `steps/lib/pr-comment.sh` | Upsert the report as one sticky PR comment keyed by a hidden marker (update oldest, delete duplicates); same-repo PR only, best-effort |
 | `steps/finalize-result.mjs` | Run with `if: always()`; stamps `status` + `failed_at` from per-step outcomes, then `klass`, `test_rate`, `verdict`, `composite` via `lib/scoring.mjs` |
 | `steps/summary.mjs` | Render the report to `$GITHUB_STEP_SUMMARY` **and** to a file for the sticky PR comment: a collapsible **Glossary**, the headline (mean composite + delta), the single **results table** — current value + colored signed delta per cell — vs the `main` baseline, a **Merge verdict** section (each enabled gate's decision), and a deterministic caveats block; reads one `result.json` per cell (N=1); writes the run's schema-2 aggregate (+ Athena NDJSON) for the S3 baseline; runs the three gates via `lib/gates.mjs` and exits non-zero when any trips |

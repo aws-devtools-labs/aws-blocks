@@ -320,12 +320,14 @@ export function buildGithubE2eOidcStack(scope: cdk.App, props: GithubE2eOidcStac
       assumedBy: githubPrincipal(BENCH_GITHUB_ENVIRONMENT),
     });
     // The actions the bench calls (see the inline session policy in
-    // agent-bench.yml). Inference profiles route across regions, so the ARNs
-    // keep a region wildcard.
+    // agent-bench.yml): the builder/judge stream, and the CLI `converse`
+    // failure analysis, which Bedrock authorizes as `bedrock:InvokeModel`.
+    // Inference profiles route across regions, so the ARNs keep a region
+    // wildcard.
     benchRole.addToPolicy(
       new iam.PolicyStatement({
         sid: 'BedrockInvoke',
-        actions: ['bedrock:InvokeModelWithResponseStream', 'bedrock:Converse'],
+        actions: ['bedrock:InvokeModelWithResponseStream', 'bedrock:InvokeModel'],
         resources: [
           `arn:aws:bedrock:*:${account}:inference-profile/*`,
           `arn:aws:bedrock:*:${account}:application-inference-profile/*`,

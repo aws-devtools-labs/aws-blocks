@@ -127,3 +127,27 @@ export function evaluateGates(run, envs = {}) {
 
 	return { failed: gates.some((g) => g.failed), gates };
 }
+
+/**
+ * Decide whether this run's aggregate may become the `latest-main` baseline every PR diffs against.
+ * A baseline that measured nothing makes the regression gate vacuous (every PR "improves" by its own
+ * absolute mean), so a run qualifies only when it was not cancelled, at least one cell actually ran
+ * tests, and neither the floor nor the harness gate failed. A regression-gate failure does NOT
+ * disqualify it: a real drop on main is still main's true state, and refusing it would freeze the
+ * baseline at an older, higher score. A disabled floor/harness gate cannot fail, so it never blocks.
+ * @param {{
+ *   cancelled: boolean,      // the bench matrix or its build-blocks dependency was cancelled
+ *   testedCells: number,     // cells whose Playwright run produced at least one pass/fail
+ *   gates: {name: string, failed: boolean}[],  // evaluateGates(...).gates
+ * }} run
+ * @returns {{persist: boolean, reason: string}}
+ */
+export function shouldPersistBaseline(run) {
+	if (run.cancelled) return { persist: false, reason: 'the run was cancelled' };
+	if (!(run.testedCells > 0)) return { persist: false, reason: 'no cell ran any test' };
+	const blocking = run.gates.filter((g) => g.failed && (g.name === 'floor' || g.name === 'harness'));
+	if (blocking.length > 0) {
+		return { persist: false, reason: `the ${blocking.map((g) => g.name).join(' and ')} gate failed` };
+	}
+	return { persist: true, reason: `${run.testedCells} cell(s) ran tests and the floor/harness gates passed` };
+}

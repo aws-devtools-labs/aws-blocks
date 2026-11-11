@@ -8,7 +8,8 @@ name: PR Agent Bench
 # Required configuration (agent-bench environment, consumed inside agent-bench.yml;
 # both created by test-infra/github-oidc-stack.ts):
 #   BENCH_ROLE_ARN secret   OIDC role with bedrock:InvokeModelWithResponseStream
-#                           on the bench model, plus s3:PutObject on bench/* in
+#                           + bedrock:InvokeModel on the bench model, plus
+#                           s3:PutObject on bench/* in
 #                           the bench bucket (per-cell archive + the commit-
 #                           keyed baseline aggregate). Reading the baseline back
 #                           for the PR-vs-baseline overview also needs
