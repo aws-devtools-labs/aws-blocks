@@ -4,7 +4,7 @@
 
 - **Backend:** `aws-blocks/index.ts` — APIs, auth, data models
 - **Frontend:** `src/` — imports backend APIs via `import { api } from 'aws-blocks'`
-- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`
+- **Tests:** `test/e2e.test.ts` — run with `npm run test:e2e`. It targets the starter API: when you change the API and it stops typechecking, update its tests to match your methods — never delete `test/` or the `test:e2e` script.
 - **AWS Blocks docs** are in `node_modules/@aws-blocks/blocks/docs/` (the docs folder). Before you open any block doc, print the index with one command: `D=node_modules/@aws-blocks/blocks/docs; ls $D; sed -n '/BEGIN:block-catalog/,/END:block-catalog/p' $D/README.md`. It lists every docs folder (one per block, named after its package, e.g. `bb-distributed-table`) and what each block does. Then read `node_modules/@aws-blocks/blocks/docs/<folder>/README.md`; it covers normal use. Open the same folder's `API.md` only when you need an exact signature or type, and its `DESIGN.md` only when you are stuck or need implementation details. `ApiNamespace`, `ApiError` and the typed client are in `core/README.md`; import them from `@aws-blocks/blocks`.
 
 ## Framework model
@@ -134,12 +134,13 @@ Call `const stop = pollDashboard(render)` when the view mounts, and `stop()` whe
 ## Workflow
 
 1. Make changes to backend (`aws-blocks/index.ts`) or frontend (`src/`)
-2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running
+2. Test with `npm run test:e2e` — starts a dev server automatically if one isn't running. Run it and get it passing before every `npm run deploy`. It exercises the API through the typed client, not the UI, so if you changed the frontend also check the page in a browser.
 3. For faster iteration, keep one dev server running and rerun tests against it:
    - Start `npm run dev` as a background process — use your harness's background-process feature if it has one, otherwise `npm run dev > dev.log 2>&1 &`. Keep the redirect: without it the background dev server still writes to your shell's output, and it stops at its next log line once that shell or pipe closes. Read `dev.log` for its output.
    - Run `npm run test:e2e` as often as needed; it reuses the server running on the `package.json` `"blocks.dev.port"` (default 3000, or 3001 for a backend-only app). To use another port, set it there rather than passing `npm run dev -- --port`, so the tests and `npm run dev:stop` find the same server.
-   - When finished, stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID). Avoid name-matching kills like `pkill -f tsx` or `killall node`: they also match your own shell/agent process and terminate it.
-4. Do NOT use curl/fetch against the API unless troubleshooting connectivity
+   - When finished (including before `npm run deploy`), stop it with `npm run dev:stop` (it signals the dev server's own recorded supervisor by PID).
+   - **Never** stop it with a name-matching kill (`pkill -f …`, `kill $(pgrep -f …)`, `killall node`): the pattern also matches your own shell/agent command and kills it.
+4. Do NOT use curl/fetch against the local API as your functional test — add the check to `test/e2e.test.ts` instead. Raw calls are only for troubleshooting connectivity or checking a deployed app (below).
 
 ### Calling the API directly (troubleshooting only)
 

@@ -140,6 +140,8 @@ All condition failures throw with `error.name === DistributedTableErrors.Conditi
 
 > **No partial update:** There is no `update()` or `patch()` method. To change a field, do a read-modify-write — `get()` the item, mutate it, then `put()` the full item back. For safe concurrent updates, pass `{ ifFieldEquals: { version: <previous> } }` to `put()` so the write fails (via `ConditionalCheckFailed`) if another writer changed the item in the meantime (optimistic locking).
 
+> **No atomic increment:** For a counter that is updated concurrently, either loop `get()` → `put(next, { ifFieldEquals: { count: current.count } })` and retry with backoff on `ConditionalCheckFailed`, or write one row per event and aggregate with a `query()` on read (not a `scan()`).
+
 ### Reads and schema evolution
 
 Writes always validate against `schema`. Reads reconcile a stored item with the schema according to the **`readValidation`** option, which matters after a schema change: a row written under an older schema may no longer match the declared type `T`. Under the default `'coerce'` (and under `'strict'`), a newly added field with a `.default()` is **filled in on the returned value**, but the stored row is **not rewritten** — the default reaches storage only when you `put()` the returned item back. Under `'off'` the field stays **absent** from the read (so the value silently violates `T`, and a `.default()` is neither applied nor persisted on write-back). A **required, no-default** field can't be filled in any mode: the read-modify-write cycle above **fails on the write** as `put()` rejects the legacy shape (under `'strict'`, the read itself throws first).
@@ -181,7 +183,7 @@ Choose **`'strict'`** for tables where a schema mismatch should be treated as co
 
 ### Error Handling
 
-Errors thrown by DistributedTable carry an `error.name` you can match with `isBlocksError`:
+Errors thrown by DistributedTable carry an `error.name`. Match it with `isBlocksError(e, DistributedTableErrors.X)` and type the catch variable as `unknown`. Do not compare `e.name` strings by hand or regex the message on an `any`-typed catch:
 
 | Constant | `error.name` | Thrown when |
 |----------|--------------|-------------|

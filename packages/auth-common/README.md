@@ -206,6 +206,8 @@ await submitAuthAction(authApi, { action: 'signOut' });
 
 `submitAuthAction(api, input)` returns the resulting `AuthState`. A bare `setAuthState` call flips the server session but notifies **nothing** on the client, which is why custom UI that calls it directly goes stale (notably on sign-out; issue #185). The `Authenticator` uses `submitAuthAction` internally, so you get this for free when you use it.
 
+Both calls are fully typed, so a custom form needs no `as any`. A literal `action` narrows the input (wrong fields are a compile error), and the result is an `AuthState`.
+
 ### `broadcastAuthChange` (lower-level primitive)
 
 `broadcastAuthChange` is the underlying broadcast primitive that `submitAuthAction` calls. Reach for it directly only when auth state changed through a path `submitAuthAction` doesn't cover and you need to fan the change out yourself:
