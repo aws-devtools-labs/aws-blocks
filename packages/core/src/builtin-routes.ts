@@ -4,16 +4,22 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import type { BlocksContext } from './api.js';
+import { escapeHtml } from './common/escape.js';
 import { getRegisteredRoutes, registerRoute } from './raw-route.js';
 
 /**
  * Open `filePath` in the OS default app. `execFile` with an argument array — no
  * shell, no string interpolation.
+ *
+ * On Windows it starts `explorer.exe` with the path rather than `cmd /c start`:
+ * `cmd.exe` re-parses its command line, so a project directory name holding
+ * `&` or `|` (and no space, which is when Node leaves the argument unquoted)
+ * would split into a second command.
  */
 function defaultOpenInEditor(filePath: string): void {
 	const onError = () => {};
 	if (process.platform === 'darwin') execFile('open', [filePath], onError);
-	else if (process.platform === 'win32') execFile('cmd', ['/c', 'start', '', filePath], onError);
+	else if (process.platform === 'win32') execFile('explorer.exe', [filePath], onError);
 	else execFile('xdg-open', [filePath], onError);
 }
 
@@ -79,7 +85,7 @@ export function registerBuiltinRoutes(options: BuiltinRoutesOptions = {}): void 
 					ctx.response.status = 200;
 					ctx.response.headers.set('Content-Type', 'text/html');
 					ctx.response.send(
-						`<!DOCTYPE html><html><head><title>Settings</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em}a{color:#0066cc}</style></head><body><h1>Settings</h1><p>Opening <code>.bb-data/settings.json</code> in your default editor.</p><p>All AppSetting and Secret values are stored as <code>{ "key": value }</code> entries. Edit and save -- changes take effect on the next <code>get()</code> call.</p><p>File location: <code>${settingsPath}</code></p></body></html>`,
+						`<!DOCTYPE html><html><head><title>Settings</title><style>body{font-family:system-ui,sans-serif;max-width:640px;margin:4rem auto;padding:0 1rem;color:#1a1a1a}h1{font-size:1.5rem}p{line-height:1.6}code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:0.9em}a{color:#0066cc}</style></head><body><h1>Settings</h1><p>Opening <code>.bb-data/settings.json</code> in your default editor.</p><p>All AppSetting and Secret values are stored as <code>{ "key": value }</code> entries. Edit and save -- changes take effect on the next <code>get()</code> call.</p><p>File location: <code>${escapeHtml(settingsPath)}</code></p></body></html>`,
 					);
 					return;
 				}

@@ -54,8 +54,9 @@ jobs:
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Assert gradle.properties matches package.json
+        env:
+          PKG: ${{ steps.ver.outputs.version }}
         run: |
-          PKG="${{ steps.ver.outputs.version }}"
           GRADLE=$(grep '^VERSION_NAME=' gradle.properties | cut -d= -f2)
           if [ "$PKG" != "$GRADLE" ]; then
             echo "::error::Version mismatch: package.json=$PKG gradle.properties=$GRADLE"
@@ -66,8 +67,9 @@ jobs:
       - name: Guard against existing release branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          BRANCH="release/kotlin-${{ steps.ver.outputs.version }}"
+          BRANCH="release/kotlin-${VERSION}"
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             echo "::error::Branch $BRANCH already exists — a release for this version is already in flight."
             exit 1
@@ -76,8 +78,8 @@ jobs:
       - name: Create branch, commit, push
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
           BRANCH="release/kotlin-${VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -89,8 +91,8 @@ jobs:
       - name: Open release PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
           NOTES="$(./scripts/extract-changelog.sh CHANGELOG.md "$VERSION")"
           gh pr create \
             --base main \
