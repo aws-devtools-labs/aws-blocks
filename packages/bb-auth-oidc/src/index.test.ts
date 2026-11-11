@@ -1937,3 +1937,130 @@ describe('auth routes never echo raw error text', () => {
 		});
 	}
 });
+
+// ── Session refresh: every write compares the version of the row ────────────
+
+describe('session refresh — each write is conditional on the version of the row', () => {
+	const cookieAttributes = { secure: false, partitioned: false, sameSite: 'Lax', path: '/' } as const;
+	type Conditions = { ifNotExists?: boolean; ifFieldEquals?: object };
+
+	/**
+	 * A session store that applies `ifNotExists` and `ifFieldEquals` the way
+	 * KVStore does, and keeps the conditions of each write.
+	 */
+	function versionedStore() {
+		const rows = new Map<string, SessionRow>();
+		const conditions: Array<Conditions | undefined> = [];
+		const sessionStore = {
+			get: async (k: string) => rows.get(k) ?? null,
+			put: async (k: string, v: SessionRow, c?: Conditions) => {
+				conditions.push(c);
+				const current: Record<string, unknown> | undefined = rows.get(k) && { ...rows.get(k) };
+				if (c?.ifNotExists && current) throw new Error('ConditionalCheckFailedException');
+				for (const [field, expected] of Object.entries(c?.ifFieldEquals ?? {})) {
+					if (!current || current[field] !== expected) throw new Error('ConditionalCheckFailedException');
+				}
+				rows.set(k, v);
+			},
+			delete: async (k: string) => { rows.delete(k); },
+		};
+		return { rows, conditions, sessionStore };
+	}
+
+	function managerFor(sessionStore: ReturnType<typeof versionedStore>['sessionStore']): SessionManager {
+		return new SessionManager({ sessionStore, cookieSecret: 'test-secret', cookieNamePrefix: 'test', cookieAttributes });
+	}
+
+	/** Write a stateful session, as a completed sign-in does, and return a request that carries its cookie. */
+	async function signedIn(sm: SessionManager): Promise<BlocksContext> {
+		const signIn = freshContext();
+		const exp = Math.floor(Date.now() / 1000) + 3600;
+		await sm.writeStatefulSession({
+			userId: 'https://issuer.example:u1',
+			username: 'u1',
+			provider: 'google',
+			sub: 'u1',
+			iss: 'https://issuer.example',
+			email: null,
+			name: null,
+			claims: { sub: 'u1', iss: 'https://issuer.example', exp },
+		}, 'RT-1', signIn);
+		const [setCookie] = signIn.response.headers.getSetCookie();
+		const ctx = freshContext();
+		ctx.request.headers.set('cookie', setCookie.split(';')[0]);
+		return ctx;
+	}
+
+	const refreshed = (refreshToken: string) => {
+		const exp = Math.floor(Date.now() / 1000) + 7200;
+		return { refreshToken, exp, claims: { sub: 'u1', iss: 'https://issuer.example', exp } };
+	};
+
+	test('a refresh takes the lock and stores the new tokens; each write increments the version and compares it alone', async () => {
+		const { rows, conditions, sessionStore } = versionedStore();
+		const sm = managerFor(sessionStore);
+		const ctx = await signedIn(sm);
+		const [sessionId] = [...rows.keys()];
+		assert.strictEqual(rows.get(sessionId)?.version, 1);
+
+		const user = await sm.forceRefresh(ctx, async () => refreshed('RT-2'));
+		assert.strictEqual(user?.userId, 'https://issuer.example:u1');
+		assert.deepStrictEqual(conditions, [
+			{ ifNotExists: true },
+			{ ifFieldEquals: { version: 1 } },
+			{ ifFieldEquals: { version: 2 } },
+		]);
+		const row = rows.get(sessionId);
+		assert.strictEqual(row?.version, 3);
+		assert.strictEqual(row?.state, 'ready');
+		assert.strictEqual(row?.refreshToken, 'RT-2');
+		assert.strictEqual(row?.refreshingSince, undefined);
+	});
+
+	test('a refresh that fails marks the row expired, with the next version', async () => {
+		const { rows, conditions, sessionStore } = versionedStore();
+		const sm = managerFor(sessionStore);
+		const ctx = await signedIn(sm);
+		const [sessionId] = [...rows.keys()];
+
+		const user = await sm.forceRefresh(ctx, async () => { throw new Error('invalid_grant'); });
+		assert.strictEqual(user, null);
+		assert.deepStrictEqual(conditions.slice(1), [
+			{ ifFieldEquals: { version: 1 } },
+			{ ifFieldEquals: { version: 2 } },
+		]);
+		const row = rows.get(sessionId);
+		assert.strictEqual(row?.version, 3);
+		assert.strictEqual(row?.state, 'expired');
+		assert.strictEqual(row?.refreshingSince, undefined);
+	});
+
+	test('a holder does not refresh a row that another holder wrote again, even when the other fields are the same', async () => {
+		const { rows, sessionStore } = versionedStore();
+		// After this holder reads the row, another holder completes a refresh that
+		// leaves every field as it was (an IdP that returns the same tokens). Only
+		// the version shows the two writes.
+		let reads = 0;
+		const racing = {
+			...sessionStore,
+			get: async (k: string) => {
+				const row = await sessionStore.get(k);
+				if (row && ++reads === 1) rows.set(k, { ...row, version: row.version + 2 });
+				return row;
+			},
+		};
+		const sm = managerFor(racing);
+		const ctx = await signedIn(sm);
+		const [sessionId] = [...rows.keys()];
+
+		let tokenEndpointCalls = 0;
+		const user = await sm.forceRefresh(ctx, async () => {
+			tokenEndpointCalls++;
+			return refreshed('RT-2');
+		});
+		assert.strictEqual(tokenEndpointCalls, 0, 'the lost compare must not reach the token endpoint');
+		assert.strictEqual(user?.userId, 'https://issuer.example:u1', 'the row of the other holder is served');
+		assert.strictEqual(rows.get(sessionId)?.version, 3);
+		assert.strictEqual(rows.get(sessionId)?.refreshToken, 'RT-1');
+	});
+});

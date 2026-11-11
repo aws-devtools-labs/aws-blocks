@@ -219,6 +219,15 @@ export interface SessionRecord {
 	accessToken: string;
 	/** Refresh token — used by `REFRESH_TOKEN_AUTH`. */
 	refreshToken: string;
+	/**
+	 * The number of the write that stored this record: `1` for a new session,
+	 * and one more for each replacement. `SessionStore` sets it on every write;
+	 * a caller does not set it. A conditional write or delete compares this
+	 * field alone (see `SessionStore.replaceSession`), so a record that
+	 * {@link SessionStore.lookupSession} returned carries what the next
+	 * conditional call needs.
+	 */
+	version?: number;
 }
 
 /**
@@ -258,7 +267,7 @@ export class SessionStore {
 	/** Insert a new session record; returns the generated session ID. */
 	async createSession(record: SessionRecord): Promise<string> {
 		const sessionId = crypto.randomBytes(24).toString('base64url');
-		await this.kv.put(sessionId, record, this.writeOptions());
+		await this.kv.put(sessionId, { ...record, version: 1 }, this.writeOptions());
 		return sessionId;
 	}
 
@@ -280,11 +289,15 @@ export class SessionStore {
 	 * never removes a newer session.
 	 *
 	 * Pass the record exactly as {@link lookupSession} returned it: the
-	 * comparison is field by field on the stored record.
+	 * comparison is on its `version`, which every write of the session
+	 * increments. Any write since the read makes the record stale, also a write
+	 * of the same tokens. A record that did not come from the store has no
+	 * version; the call then deletes nothing and returns `false`.
 	 */
 	async deleteSessionIfUnchanged(sessionId: string, expected: SessionRecord): Promise<boolean> {
+		if (expected.version === undefined) return false;
 		try {
-			await this.kv.delete(sessionId, { ifFieldEquals: expected });
+			await this.kv.delete(sessionId, { ifFieldEquals: { version: expected.version } });
 			return true;
 		} catch (e) {
 			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
@@ -314,11 +327,23 @@ export class SessionStore {
 	 * overwrites a newer one.
 	 *
 	 * Pass `expected` exactly as {@link lookupSession} returned it: the
-	 * comparison is field by field on the stored record.
+	 * comparison is on its `version`, which every write of the session
+	 * increments. Any write since the read makes `expected` stale, also a write
+	 * of the same tokens. A record that did not come from the store has no
+	 * version; the call then writes nothing and returns `false`.
+	 *
+	 * `next` is stored with the version after `expected`; a `version` on `next`
+	 * is not used. Read the session again to get a record for a later
+	 * conditional call.
 	 */
 	async replaceSession(sessionId: string, expected: SessionRecord, next: SessionRecord): Promise<boolean> {
+		if (expected.version === undefined) return false;
 		try {
-			await this.kv.put(sessionId, next, { ...this.writeOptions(), ifFieldEquals: expected });
+			await this.kv.put(
+				sessionId,
+				{ ...next, version: expected.version + 1 },
+				{ ...this.writeOptions(), ifFieldEquals: { version: expected.version } },
+			);
 			return true;
 		} catch (e) {
 			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;

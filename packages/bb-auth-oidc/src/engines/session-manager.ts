@@ -111,6 +111,7 @@ export class SessionManager {
 			expiresAt: exp,
 			claims: user.claims,
 			state: 'ready',
+			version: 1,
 		};
 		await this.options.sessionStore.put(sessionId, row, { ifNotExists: true });
 
@@ -315,14 +316,18 @@ export class SessionManager {
 			// Stale lock — fall through and try to reclaim via CAS.
 		}
 
-		// Try to acquire the lock.
+		// Try to acquire the lock. Every write of the protocol increments
+		// `version` and is conditional on the version that this holder read. The
+		// version alone is compared: any write by another holder changes it, also
+		// one that leaves every other field as it was.
 		const lockedRow: SessionRow = {
 			...row,
 			state: 'refreshing',
 			refreshingSince: Date.now(),
+			version: row.version + 1,
 		};
 		try {
-			await this.options.sessionStore.put(sessionId, lockedRow, { ifFieldEquals: row });
+			await this.options.sessionStore.put(sessionId, lockedRow, { ifFieldEquals: { version: row.version } });
 		} catch {
 			// CAS failed — someone else took the lock. Re-read and use their
 			// result. Do not call the token endpoint.
@@ -347,9 +352,12 @@ export class SessionManager {
 				...lockedRow,
 				state: 'expired',
 				refreshingSince: undefined,
+				version: lockedRow.version + 1,
 			};
 			try {
-				await this.options.sessionStore.put(sessionId, expiredRow, { ifFieldEquals: lockedRow });
+				await this.options.sessionStore.put(sessionId, expiredRow, {
+					ifFieldEquals: { version: lockedRow.version },
+				});
 			} catch {
 			}
 			return null;
@@ -361,9 +369,10 @@ export class SessionManager {
 			expiresAt: newAccessExp,
 			claims: newClaims,
 			state: 'ready',
+			version: lockedRow.version + 1,
 		};
 		try {
-			await this.options.sessionStore.put(sessionId, newRow, { ifFieldEquals: lockedRow });
+			await this.options.sessionStore.put(sessionId, newRow, { ifFieldEquals: { version: lockedRow.version } });
 		} catch {
 			// Unexpected — lost the row between acquire and write. Re-read to
 			// surface whatever state actually won.

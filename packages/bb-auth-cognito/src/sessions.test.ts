@@ -179,7 +179,7 @@ describe('SessionStore TTL', () => {
 		const store = new SessionStore(ROOT, 'readable', 3600);
 		const record = recordFor('alice');
 		const id = await store.createSession(record);
-		assert.deepStrictEqual(await store.lookupSession(id), record);
+		assert.deepStrictEqual(await store.lookupSession(id), { ...record, version: 1 });
 	});
 
 	test('refresh (updateSession) slides the ttl forward', async () => {
@@ -280,6 +280,51 @@ describe('SessionStore TTL', () => {
 });
 
 describe('SessionStore concurrent writers', () => {
+	test('each write increments the version, and a conditional call compares the version alone', async () => {
+		const store = new SessionStore(ROOT, 'cas-version', 3600);
+		const id = await store.createSession(recordFor('alice'));
+		const first = await store.lookupSession(id);
+		assert.strictEqual(first?.version, 1);
+
+		const rotated = { ...recordFor('alice'), accessToken: jwtWith({ token_use: 'access', rotated: true }) };
+		assert.strictEqual(await store.replaceSession(id, first, rotated), true);
+		const second = await store.lookupSession(id);
+		assert.strictEqual(second?.version, 2);
+		assert.strictEqual(second.accessToken, rotated.accessToken);
+
+		// The first read is stale now: nothing is written and nothing is deleted.
+		assert.strictEqual(await store.replaceSession(id, first, recordFor('alice')), false);
+		assert.strictEqual(await store.deleteSessionIfUnchanged(id, first), false);
+		assert.deepStrictEqual(await store.lookupSession(id), second);
+
+		assert.strictEqual(await store.deleteSessionIfUnchanged(id, second), true);
+		assert.strictEqual(await store.lookupSession(id), null);
+	});
+
+	test('a write of the same tokens still makes an earlier read stale', async () => {
+		const store = new SessionStore(ROOT, 'cas-same-tokens', 3600);
+		const record = recordFor('alice');
+		const id = await store.createSession(record);
+		const read = await store.lookupSession(id);
+		assert.ok(read);
+
+		// Another writer stores the same tokens again. A compare of the token
+		// fields cannot see this write; the version can.
+		assert.strictEqual(await store.replaceSession(id, read, record), true);
+		assert.strictEqual(await store.replaceSession(id, read, recordFor('alice')), false);
+		assert.strictEqual(await store.deleteSessionIfUnchanged(id, read), false);
+		assert.strictEqual((await store.lookupSession(id))?.version, 2);
+	});
+
+	test('a record that did not come from the store has no version and never matches', async () => {
+		const store = new SessionStore(ROOT, 'cas-no-version', 3600);
+		const record = recordFor('alice');
+		const id = await store.createSession(record);
+		assert.strictEqual(await store.replaceSession(id, record, recordFor('alice')), false);
+		assert.strictEqual(await store.deleteSessionIfUnchanged(id, record), false);
+		assert.deepStrictEqual(await store.lookupSession(id), { ...record, version: 1 });
+	});
+
 	test('updateSession does not recreate a session deleted between its read and its write', async () => {
 		const store = new SessionStore(ROOT, 'update-after-delete', 3600);
 		const id = await store.createSession(recordFor('alice'));

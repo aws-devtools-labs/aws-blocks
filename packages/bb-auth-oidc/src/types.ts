@@ -309,6 +309,13 @@ export interface SessionRow {
 	claims: Readonly<Record<string, unknown>>;
 	state: 'ready' | 'refreshing' | 'expired';
 	refreshingSince?: number;
+	/**
+	 * The number of the write that stored this row: `1` for a new session, and
+	 * one more for each later write. Each step of the refresh protocol writes
+	 * on the condition that the row still has the version that the step read,
+	 * and compares no other field.
+	 */
+	version: number;
 }
 
 /**

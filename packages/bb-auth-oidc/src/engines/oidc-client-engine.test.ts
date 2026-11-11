@@ -242,7 +242,7 @@ describe('OidcClientEngine: trustStubProviders', () => {
 	test('false: signing out a stub session never revokes upstream (no fetch)', async () => {
 		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
 		const rows = new Map<string, SessionRow>([
-			['sid-1', { userId: 'u', refreshToken: 'rt', expiresAt: 0, claims: {}, state: 'ready' }],
+			['sid-1', { userId: 'u', refreshToken: 'rt', expiresAt: 0, claims: {}, state: 'ready', version: 1 }],
 		]);
 		const deleted: string[] = [];
 		const store: SessionStore = {
@@ -275,7 +275,7 @@ describe('OidcClientEngine: trustStubProviders', () => {
 		const fetchMock = mock.method(globalThis, 'fetch', async () => new Response('', { status: 404 }));
 		const now = Math.floor(Date.now() / 1000);
 		const rows = new Map<string, SessionRow>([
-			['sid-1', { userId: 'u', refreshToken: 'rt', expiresAt: now + 3600, claims: {}, state: 'ready' }],
+			['sid-1', { userId: 'u', refreshToken: 'rt', expiresAt: now + 3600, claims: {}, state: 'ready', version: 1 }],
 		]);
 		const store: SessionStore = {
 			get: async (key) => rows.get(key) ?? null,

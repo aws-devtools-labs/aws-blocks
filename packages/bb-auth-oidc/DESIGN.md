@@ -76,6 +76,7 @@ Extracted from `OidcClientEngine` to avoid duplication. Owns:
 - `writeStatefulSession` — mint session ID, write row, issue cookie
 - `verifyStatefulSession` — read cookie, look up row, trigger refresh via `RefreshFn`
 - `forceRefresh` / CAS protocol — per-container coalescing, stale-lock recovery
+  Each session row has a numeric `version`: `1` on create, one more on each write. Every step of the protocol (take the lock, mark expired, store the new tokens) writes with `ifFieldEquals: { version }` on the version that the step read, and compares no other field. A whole-row compare dropped `undefined` fields, so it could not state that `refreshingSince` is absent, and it could not see a write that left the other fields as they were.
 - `signOutSession` — clear cookies, resolve the cookie secret, read row (capture refresh token), delete row, revoke upstream via the engine's callback; throws `SignOutIncompleteException` (503) when the delete or the secret resolution failed (D14)
 - Cookie helpers — pending-auth, session, clear
 

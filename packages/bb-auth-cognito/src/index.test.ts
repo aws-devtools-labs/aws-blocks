@@ -462,10 +462,15 @@ describe('fetchAuthSession', () => {
 
 		// Replaced by a live session: the request is served it, and it survives.
 		const live = tokens(nowSeconds + 3600, 'refresh-live');
-		const replace = (next: SessionRecord) => (id: string, stale: SessionRecord) => internals.sessions.replaceSession(id, stale, next);
+		// The concurrent writer read the session first, as every caller of `replaceSession` does.
+		const replace = (next: SessionRecord) => async (id: string) => {
+			const current = await internals.sessions.lookupSession(id);
+			assert.ok(current);
+			assert.strictEqual(await internals.sessions.replaceSession(id, current, next), true);
+		};
 		let race = await expiredReadRacing(replace(live));
 		assert.strictEqual((await auth.getCurrentUser(race.ctx))?.username, 'frank', 'getCurrentUser serves the newer session');
-		assert.deepStrictEqual(await internals.sessions.lookupSession(race.id), live);
+		assert.deepStrictEqual(await internals.sessions.lookupSession(race.id), { ...live, version: 2 });
 		assert.ok(!clearsCookie(race.ctx));
 		race = await expiredReadRacing(replace(live));
 		assert.strictEqual((await auth.fetchAuthSession(race.ctx)).tokens?.accessToken.toString(), live.accessToken, 'fetchAuthSession serves the newer session');
@@ -475,7 +480,7 @@ describe('fetchAuthSession', () => {
 		const alsoExpired = tokens(nowSeconds - 5, 'refresh-also-expired');
 		race = await expiredReadRacing(replace(alsoExpired));
 		assert.strictEqual(await auth.getCurrentUser(race.ctx), null);
-		assert.deepStrictEqual(await internals.sessions.lookupSession(race.id), alsoExpired);
+		assert.deepStrictEqual(await internals.sessions.lookupSession(race.id), { ...alsoExpired, version: 2 });
 		assert.ok(!clearsCookie(race.ctx));
 
 		// Signed out meanwhile: unauthenticated, and the cookie is cleared.
