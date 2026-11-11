@@ -14,6 +14,7 @@ import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { isBlocksError } from '@aws-blocks/core';
 import type { api as apiType } from 'aws-blocks';
+import { pollForMembership } from './poll-for-membership.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 const isSandbox = ENV === 'sandbox' || ENV === 'production';
@@ -25,6 +26,20 @@ function uniqueUser() {
 }
 
 const PW = 'AdminE2e!1';
+
+/**
+ * `authCRequireRole(role)` as a read a poll can wait on: the user when the
+ * guard passes, `null` when it answers 403 `NotAuthorizedException`. Any other
+ * error is a real failure and propagates.
+ */
+async function roleCheck(api: typeof apiType, role: string) {
+	try {
+		return await api.authCRequireRole(role);
+	} catch (e) {
+		if (isBlocksError(e, 'NotAuthorizedException')) return null;
+		throw e;
+	}
+}
 
 export function authCognitoAdminTests(getApi: () => typeof apiType) {
 	describe('AuthCognito admin surface (sandbox)', { skip: !isSandbox && 'sandbox not deployed' }, () => {
@@ -48,12 +63,15 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			await api.authCAdminCreateUser(u, PW);
 			await api.authCAdminSetPassword(u, PW);
 
+			// A membership read can lag the grant for a moment, so every read after
+			// a group change in this suite polls (see ./poll-for-membership.ts).
 			await api.authCAdminAddToGroup(u, 'admins');
-			const groups = await api.authCAdminListGroupsForUser(u);
+			const groups = await pollForMembership(() => api.authCAdminListGroupsForUser(u), (g) => g.includes('admins'));
 			assert.ok(groups.includes('admins'), `expected admins in ${JSON.stringify(groups)}`);
 
 			await api.authCSignIn(u, PW); // fresh sign-in → claim carries the group
-			const user = await api.authCRequireRole('admins');
+			const user = await pollForMembership(() => roleCheck(api, 'admins'), (r) => r !== null);
+			assert.ok(user, 'requireRole(admins) still answered 403 after the grant');
 			assert.strictEqual(user.username, u);
 
 			await api.authCAdminDeleteUser(u);
@@ -76,19 +94,19 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			// Grant membership on the already-signed-in session. requireRole reads
 			// AdminListGroupsForUser live, so it must pass with NO re-login — this is
 			// the fix (previously the stale cognito:groups claim kept returning 403).
+			// The live read itself can lag the grant for a moment, hence the poll.
 			await api.authCAdminAddToGroup(u, 'admins');
-			const granted = await api.authCRequireRole('admins');
+			const granted = await pollForMembership(() => roleCheck(api, 'admins'), (r) => r !== null);
+			assert.ok(granted, 'requireRole(admins) still answered 403 after the grant');
 			assert.strictEqual(granted.username, u);
 			assert.ok(granted.groups.includes('admins'), `returned groups reflect the live read: ${JSON.stringify(granted.groups)}`);
 
-			// Revoke on the same live session — access must drop immediately, again
-			// with no re-login (the stale claim would still say 'admins').
+			// Revoke on the same live session — access must drop with no re-login
+			// (the stale claim would still say 'admins'), once the live read reflects
+			// the removal.
 			await api.authCAdminRemoveFromGroup(u, 'admins');
-			await assert.rejects(
-				() => api.authCRequireRole('admins'),
-				(e: unknown) => isBlocksError(e, 'NotAuthorizedException'),
-				'removal must lock the live session out immediately',
-			);
+			const revoked = await pollForMembership(() => roleCheck(api, 'admins'), (r) => r === null);
+			assert.strictEqual(revoked, null, 'removal must lock the live session out without a re-login');
 
 			await api.authCAdminDeleteUser(u);
 		});
@@ -100,7 +118,9 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			await api.authCAdminSetPassword(u, PW);
 			await api.authCAdminAddToGroup(u, 'admins');
 			await api.authCSignIn(u, PW);
-			assert.strictEqual((await api.authCRequireRole('admins')).username, u);
+			const member = await pollForMembership(() => roleCheck(api, 'admins'), (r) => r !== null);
+			assert.ok(member, 'requireRole(admins) still answered 403 after the grant');
+			assert.strictEqual(member.username, u);
 
 			// Delete the user out from under the live session. deleteUser does NOT
 			// revoke the Blocks session, so requireAuth still succeeds off the record,
@@ -174,7 +194,7 @@ export function authCognitoAdminTests(getApi: () => typeof apiType) {
 			await api.authCAdminCreateUserWithDept(u, PW, 'engineering');
 			await api.authCAdminAddToGroup(u, 'admins');
 
-			const got = await api.authCAdminGetUser(u);
+			const got = await pollForMembership(() => api.authCAdminGetUser(u), (g) => g?.groups.includes('admins') === true);
 			assert.ok(got, 'expected a user');
 			assert.strictEqual(got.username, u);
 			assert.strictEqual(got.department, 'engineering');
