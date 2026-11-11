@@ -77,10 +77,26 @@ describe('initialInput', () => {
 });
 
 describe('initialKind', () => {
-	it('reads the kind from what is stored rather than guessing at the text', () => {
-		assert.equal(initialKind(entry({ value: { display: '{"retries":3}', masked: false } })), 'json');
-		assert.equal(initialKind(entry({ value: { display: '[1,2]', masked: false } })), 'json');
-		assert.equal(initialKind(entry({ value: { display: 'on', masked: false } })), 'text');
+	it('reads the kind from the stored type, never from the display text', () => {
+		assert.equal(initialKind(entry({ value: { display: '{"retries":3}', masked: false, valueType: 'object' } })), 'json');
+		assert.equal(initialKind(entry({ value: { display: '[1,2]', masked: false, valueType: 'array' } })), 'json');
+		assert.equal(initialKind(entry({ value: { display: 'on', masked: false, valueType: 'string' } })), 'text');
+	});
+
+	/**
+	 * The two saves that changed a setting's type while editing nothing, raised in
+	 * review on #843. Both came from reading the kind off the display text.
+	 */
+	it('does not change a type on a save that edited nothing', () => {
+		// A STRING whose text happens to be JSON must not be stored as an object.
+		assert.equal(initialKind(entry({ value: { display: '{"a":1}', masked: false, valueType: 'string' } })), 'text');
+		// A NUMBER goes through the JSON kind, so `3` round-trips as 3 and not "3".
+		assert.equal(initialKind(entry({ value: { display: '3', masked: false, valueType: 'number' } })), 'json');
+		assert.equal(initialKind(entry({ value: { display: 'true', masked: false, valueType: 'boolean' } })), 'json');
+	});
+
+	it('defaults to text when the server reports no type', () => {
+		assert.equal(initialKind(entry({ value: { display: '{"a":1}', masked: false } })), 'text');
 	});
 
 	it('defaults to text when there is nothing to read', () => {

@@ -49,6 +49,7 @@ describe('buildSettingEntry — what a reader may see', () => {
 		assert.deepEqual(entry.value, {
 			display: 'on',
 			masked: false,
+			valueType: 'string',
 			version: 3,
 			lastModified: '2026-10-14T09:00:00.000Z',
 			encoding: 'json',

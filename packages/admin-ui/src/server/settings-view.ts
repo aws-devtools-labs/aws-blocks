@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { SettingEntry, SettingValueView } from '../contract/v1.js';
+import type { SettingEntry, SettingValueType, SettingValueView } from '../contract/v1.js';
 import { REDACTED, displayTextOrRedacted, redactValue } from './redact.js';
 import { decodeSettingValue, type SettingRow } from './settings-inventory.js';
 import type { StoredParameter } from './settings-store.js';
@@ -110,8 +110,24 @@ export function storedView(value: unknown, secret: boolean): SettingValueView {
 function displayValue(value: unknown, stored: StoredParameter | undefined): SettingValueView {
 	const display = displayTextOrRedacted(value);
 	if (display === undefined) return maskedView(stored);
-	const view: SettingValueView = { display, masked: false };
+	const view: SettingValueView = { display, masked: false, valueType: jsonTypeOf(value) };
 	if (stored?.version !== undefined) view.version = stored.version;
 	if (stored?.lastModified !== undefined) view.lastModified = stored.lastModified;
 	return view;
+}
+
+/** The stored value's JSON type, reported so the editor never infers it from text. */
+function jsonTypeOf(value: unknown): SettingValueType {
+	if (value === null) return 'null';
+	if (Array.isArray(value)) return 'array';
+	switch (typeof value) {
+		case 'number':
+			return 'number';
+		case 'boolean':
+			return 'boolean';
+		case 'object':
+			return 'object';
+		default:
+			return 'string';
+	}
 }

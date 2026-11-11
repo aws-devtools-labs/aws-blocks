@@ -992,6 +992,9 @@ export type SettingValueHidden =
 	| 'unreadable';
 
 /** The stored value of one setting, as a reader is allowed to see it. */
+/** The JSON type of a stored setting value, reported so an editor need not guess. */
+export type SettingValueType = 'string' | 'number' | 'boolean' | 'object' | 'array' | 'null';
+
 export interface SettingValueView {
 	/** Text to show. For a masked value this is the mask, never the value. */
 	display: string;
@@ -1004,6 +1007,17 @@ export interface SettingValueView {
 	 * the UI trusted was a claim rather than a fact.
 	 */
 	masked: boolean;
+	/**
+	 * The JSON type of the value actually stored, so an editor never has to infer
+	 * it from the display text.
+	 *
+	 * Guessing from the text changed a setting's type on a save that edited
+	 * nothing: the number `3` displays as `3`, read as text and stored as `"3"`,
+	 * and a string whose text happens to be `{"a":1}` read as JSON and was stored
+	 * as an object. An app declaring `z.number()` then failed validation. Absent
+	 * for a masked or missing value, where there is no type to report.
+	 */
+	valueType?: SettingValueType;
 	/** `raw` means the stored value predates the current JSON encoding. */
 	encoding?: SettingEncoding;
 	/** SSM parameter version, which is what a rollback targets. */

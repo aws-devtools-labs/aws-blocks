@@ -53,15 +53,22 @@ export function initialInput(entry: SettingEntry): string {
 /**
  * Whether the editor should treat input as JSON by default.
  *
- * Read from the value already stored rather than guessed from the text: a
- * setting currently holding an object is being edited as JSON, and one holding
- * a string is being edited as text. A new or masked value defaults to text,
- * which is the choice that cannot silently change a type.
+ * Read from the stored value's reported TYPE, never inferred from its display
+ * text, and `text` only for a value that really is a string. Inferring from the
+ * text changed a setting's type on a save that edited nothing: the number `3`
+ * displays as `3`, defaulted to text and was stored back as the string `"3"`,
+ * and a string whose text happens to be `{"a":1}` defaulted to JSON and was
+ * stored back as an object — so an app declaring `z.number()` then failed
+ * validation. Editing a number, boolean or null through the JSON kind is what
+ * makes it round-trip as itself.
+ *
+ * A new or masked value, or one from a server that reports no type, defaults to
+ * text: the choice that cannot silently change a type.
  */
 export function initialKind(entry: SettingEntry): SettingValueKind {
 	if (entry.secret || entry.value === undefined || entry.value.masked) return 'text';
-	const display = entry.value.display;
-	return display.startsWith('{') || display.startsWith('[') ? 'json' : 'text';
+	if (entry.value.valueType === undefined) return 'text';
+	return entry.value.valueType === 'string' ? 'text' : 'json';
 }
 
 /** Settings grouped by the block that declares them, in declaration order. */
