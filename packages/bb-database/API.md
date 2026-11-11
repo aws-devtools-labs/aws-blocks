@@ -7,8 +7,8 @@
 import { ChildLogger } from '@aws-blocks/bb-logger';
 import { Scope } from '@aws-blocks/core';
 import { ScopeParent } from '@aws-blocks/core';
-import { sql } from '@aws-blocks/data-common';
-import { SqlQuery } from '@aws-blocks/data-common';
+import { sql } from '@aws-blocks/data-common/core';
+import { SqlQuery } from '@aws-blocks/data-common/core';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 
 // @public

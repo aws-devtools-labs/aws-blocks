@@ -24,6 +24,8 @@ import { DistributedDatabase, DistributedDatabaseErrors } from '@aws-blocks/bb-d
 import { Database as SqlDatabase, DatabaseCluster } from '@aws-blocks/bb-database';
 import { simulateConflict } from '@aws-blocks/bb-database/testing';
 import { z } from 'zod';
+import { type Generated, Kysely, sql as kyselySql } from 'kysely';
+import { DatabaseDialect } from '@aws-blocks/bb-database/kysely';
 
 
 const scope = new Scope('test-app');
@@ -633,6 +635,11 @@ const dbxb = new SqlDatabase(scope, 'dbxb', { cluster: sharedDsql });
 // transaction may change any number of rows. Scales to zero between requests.
 const sharedAurora = new DatabaseCluster(scope, 'sharedaurora', { type: 'aurora', removalPolicy: 'destroy' });
 const dbxc = new SqlDatabase(scope, 'dbxc', { cluster: sharedAurora });
+// Kysely on `dbxc` through the block's dialect: the app installs and configures Kysely.
+interface DbxcTables {
+  tasks: { id: Generated<number>; title: string; done: Generated<boolean>; updated_at: Generated<Date> };
+}
+const dbxcKysely = new Kysely<DbxcTables>({ dialect: new DatabaseDialect(dbxc) });
 const DbxcTask = z.object({ id: z.number(), title: z.string(), done: z.boolean() });
 
 // AsyncJob - Background job processing
@@ -2127,6 +2134,68 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     });
     const { rowCount } = await dbxc.execute(sql`DELETE FROM tasks WHERE title = ${title}`);
     return { seenInside, committed: rowCount === 1 };
+  },
+
+  // Kysely through DatabaseDialect: typed rows, and affected-row counts that come from the engine.
+  async dbxcKyselyRoundTrip(title: string) {
+    const inserted = await dbxcKysely
+      .insertInto('tasks')
+      .values({ title })
+      .returning(['id', 'title', 'done'])
+      .executeTakeFirstOrThrow();
+    const updated = await dbxcKysely.updateTable('tasks').set({ done: true }).where('id', '=', inserted.id).executeTakeFirst();
+    const row = await dbxcKysely.selectFrom('tasks').select(['id', 'title', 'done']).where('id', '=', inserted.id).executeTakeFirst();
+    const deleted = await dbxcKysely.deleteFrom('tasks').where('id', '=', inserted.id).executeTakeFirst();
+    return {
+      inserted,
+      updated: Number(updated.numUpdatedRows),
+      row: row ?? null,
+      deleted: Number(deleted.numDeletedRows),
+    };
+  },
+
+  // A Kysely transaction that throws keeps nothing, and the ApiError passes through.
+  async dbxcKyselyRollback(prefix: string) {
+    let aborted = false;
+    try {
+      await dbxcKysely.transaction().execute(async (trx) => {
+        await trx.insertInto('tasks').values([{ title: `${prefix}-1` }, { title: `${prefix}-2` }]).execute();
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+      aborted = true;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${prefix}%`}`);
+    return { aborted, kept: row?.n ?? 0 };
+  },
+
+  // A Kysely statement inside the block's transaction() runs in that transaction.
+  async dbxcKyselyInBlockTransaction(title: string) {
+    let seenInside = false;
+    try {
+      await dbxc.transaction(async (tx) => {
+        await tx.execute(sql`INSERT INTO tasks (title) VALUES (${title})`);
+        const row = await dbxcKysely.selectFrom('tasks').select('id').where('title', '=', title).executeTakeFirst();
+        seenInside = row !== undefined;
+        await dbxcKysely.insertInto('tasks').values({ title: `${title}-kysely` }).execute();
+        throw new ApiError('abort', 409);
+      });
+    } catch (e) {
+      if (!(e instanceof ApiError) || e.status !== 409) throw e;
+    }
+    const row = await dbxc.queryOne<{ n: number }>(sql`SELECT count(*)::int AS n FROM tasks WHERE title LIKE ${`${title}%`}`);
+    return { seenInside, kept: row?.n ?? 0 };
+  },
+
+  // What Kysely returns for bigint, numeric and timestamp values, read on the server: JSON would hide a Date.
+  async dbxcKyselyValueTypes() {
+    const { rows } = await kyselySql<{ big: unknown; num: unknown; at: unknown; n: unknown }>`
+      select 7::bigint as big, 1.50::numeric as num, now() as at, count(*) as n from tasks
+    `.execute(dbxcKysely);
+    const kind = (value: unknown) => (value instanceof Date ? 'Date' : typeof value);
+    const [row] = rows;
+    return row ? { big: kind(row.big), num: kind(row.num), at: kind(row.at), n: kind(row.n) } : null;
   },
 
   // DDL and TRUNCATE on the app connection of an aurora cluster: the mock's guard locally, the role's
