@@ -59,14 +59,26 @@ describe('resolveLocalPort', () => {
 	});
 
 	/**
-	 * A script that EXISTS but names no literal port leaves the real port unknown,
-	 * which is not the same as defaulted: `port: Number(process.env.PORT) || 3001`
-	 * is a dev server this probe would miss entirely, and a missed dev server makes
-	 * "not running" a wrong answer that the local write path acts on. Raised in
-	 * review on #843.
+	 * No `port` key at all is KNOWABLE, not indeterminate: `startDevServer`
+	 * destructures `port = 3000`, so 3000 really is the port. An earlier version of
+	 * this guard called it indeterminate, which refused every local write for any
+	 * app whose server.ts just says `startDevServer({ backendPath })` — telling the
+	 * developer to stop a dev server that was not running. Raised in review on #843.
 	 */
-	it('reports source "indeterminate" when server.ts exists but names no port', () => {
+	it('reports source "default" when server.ts states no port at all', () => {
 		const root = makeProject({ 'aws-blocks/scripts/server.ts': 'startDevServer({ backendPath: x });\n' });
+		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'default' });
+	});
+
+	/**
+	 * A `port` key whose value is not a literal IS indeterminate: this parse cannot
+	 * read it, so a dev server there would be missed and "not running" would be a
+	 * wrong answer the local write path acts on.
+	 */
+	it('reports source "indeterminate" when port is set to a computed value', () => {
+		const root = makeProject({
+			'aws-blocks/scripts/server.ts': 'startDevServer({ port: Number(process.env.PORT) || 3001 });\n',
+		});
 		assert.deepStrictEqual(resolveLocalPort(root), { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' });
 	});
 

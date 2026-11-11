@@ -50,6 +50,14 @@ export interface LocalDevServerStatus {
 
 /** `startDevServer({ port: 4000 })` in the app's server script. */
 const PORT_PATTERN = /port:\s*(\d+)/;
+/**
+ * A `port` key at all, literal value or not.
+ *
+ * Tells "this script states no port" from "this script states a port we cannot
+ * read". The first is knowable — `startDevServer` defaults to 3000 — and the
+ * second is not.
+ */
+const PORT_KEY_PATTERN = /\bport\s*:/;
 
 const MIN_PORT = 1;
 const MAX_PORT = 65535;
@@ -74,12 +82,20 @@ export function resolveLocalPort(projectRoot: string): {
 			if (Number.isInteger(port) && port >= MIN_PORT && port <= MAX_PORT) {
 				return { port, source: 'server-script' };
 			}
+			// A literal out of range: the script names a port that cannot be
+			// listened on, so the real one is not knowable from here.
+			return { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' };
 		}
-		// The script EXISTS but states no literal port, so the real port is
-		// unknown rather than defaulted: `port: Number(process.env.PORT) || 3001`
-		// is a dev server this probe would otherwise miss entirely, and a missed
-		// dev server turns "not running" into a wrong answer that callers act on.
-		return { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' };
+		// A `port` key whose value is not a literal — `port: Number(process.env.PORT) || 3001`
+		// — is a port this parse cannot read, and a dev server there would be missed.
+		// NO `port` key is a different thing: `startDevServer` destructures
+		// `port = 3000` (see core's dev-server.ts), so 3000 really is the port.
+		// Conflating the two refused every local write for an app whose server.ts
+		// just says `startDevServer({ backendPath })`, telling the developer to stop
+		// a dev server that was not running.
+		if (PORT_KEY_PATTERN.test(script)) {
+			return { port: DEFAULT_LOCAL_PORT, source: 'indeterminate' };
+		}
 	} catch {
 		// No server.ts, or unreadable — the default is the honest answer.
 	}

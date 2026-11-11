@@ -991,10 +991,10 @@ export type SettingValueHidden =
 	/** The read itself failed; `error` carries why. */
 	| 'unreadable';
 
-/** The stored value of one setting, as a reader is allowed to see it. */
 /** The JSON type of a stored setting value, reported so an editor need not guess. */
 export type SettingValueType = 'string' | 'number' | 'boolean' | 'object' | 'array' | 'null';
 
+/** The stored value of one setting, as a reader is allowed to see it. */
 export interface SettingValueView {
 	/** Text to show. For a masked value this is the mask, never the value. */
 	display: string;
