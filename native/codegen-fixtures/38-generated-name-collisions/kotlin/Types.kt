@@ -1,11 +1,14 @@
 package com.example.app
 
 import kotlin.String
+import kotlin.collections.List
 import kotlin.collections.Map
 import kotlin.collections.Set
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
@@ -67,12 +70,53 @@ public data class Profile(
   public val Meta: Meta_2,
   public val state: State,
 ) {
-  @Serializable
-  public enum class State {
-    @SerialName("in-progress")
-    InProgress,
-    @SerialName("in_progress")
-    InProgress2,
+  /**
+   * A string enum that keeps a value this client was generated without as [Unknown].
+   */
+  @Serializable(with = State.Serializer::class)
+  public sealed class State {
+    /**
+     * The value as it is sent on the wire.
+     */
+    public abstract val `value`: String
+
+    public data object InProgress : State() {
+      override val `value`: String = "in-progress"
+    }
+
+    public data object InProgress2 : State() {
+      override val `value`: String = "in_progress"
+    }
+
+    /**
+     * A value this client was generated without, as the server sent it.
+     */
+    public data class Unknown(
+      override val `value`: String,
+    ) : State()
+
+    public companion object {
+      /**
+       * The known values, in the spec's order.
+       */
+      public val entries: List<State> by lazy { listOf(InProgress, InProgress2) }
+
+      /**
+       * The case for [value]: a known one, else [Unknown].
+       */
+      public fun fromValue(`value`: String): State = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<State> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.State", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: State) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): State = fromValue(decoder.decodeString())
+    }
   }
 
   @Serializable
