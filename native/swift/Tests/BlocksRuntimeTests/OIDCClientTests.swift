@@ -887,21 +887,7 @@ final class OIDCClientTests: XCTestCase {
     /// `POST <base>/exchange/refresh` as the default refresh path.
     func testSignInDerivesTheAuthBlockRoutesFromExchangePath() async throws {
         let session = makeMockSession()
-        OIDCMockURLProtocol.handler = { request in
-            let url = try XCTUnwrap(request.url)
-            if url.path.hasSuffix("/authorize-params/google") {
-                let body = try JSONSerialization.data(withJSONObject: [
-                    "authorizeUrl": "https://idp.example.com/authorize",
-                    "clientId": "cid",
-                    "scopes": ["openid"],
-                    "kind": "oidc",
-                    "state": "signed-state"
-                ])
-                return (okResponse(for: url), body)
-            }
-            let body = try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]])
-            return (okResponse(for: url), body)
-        }
+        stubAuthRoutes()
         let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: session)
         let client = try OIDCClient<String>.fromJSON(
             [
@@ -912,7 +898,7 @@ final class OIDCClientTests: XCTestCase {
             baseUrl: blocksClient.baseUrl,
             client: blocksClient
         )
-        let launcher = CapturingRelayLauncher(relay: "nativebindings://auth?code=c&state=signed-state")
+        let launcher = EchoStateRelayLauncher(relay: "nativebindings://auth?code=c")
 
         let user = try await client.signIn(provider: "google", relayTo: "nativebindings://auth", launcher: launcher)
 
@@ -1054,6 +1040,42 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
     }
 
+    /// The relay's state is checked against the csrf this client sent, and refused when its
+    /// envelope can't be decoded or carries no csrf.
+    func testSignInRefusesAStateWhoseCsrfCannotBeChecked() async throws {
+        let payloads: [String] = [
+            "no-dot-state",
+            "!!!.sig",
+            Self.base64URL(Data("not json".utf8)) + ".sig",
+            Self.base64URL(try JSONSerialization.data(withJSONObject: ["v": 1])) + ".sig",
+            Self.base64URL(try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": "someone-elses"])) + ".sig"
+        ]
+        for state in payloads {
+            OIDCMockURLProtocol.reset()
+            OIDCMockURLProtocol.handler = { request in
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid",
+                    "scopes": ["openid"], "kind": "oidc", "state": state
+                ])
+                return (okResponse(for: request.url!), body)
+            }
+            let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+            let client = try Self.authClient(on: blocksClient)
+
+            do {
+                _ = try await client.signIn(
+                    provider: "google",
+                    relayTo: "myapp://auth",
+                    launcher: EchoStateRelayLauncher(relay: "myapp://auth?code=c")
+                )
+                XCTFail("Expected stateMismatch for \(state)")
+            } catch let error as OIDCError {
+                XCTAssertEqual(error, .stateMismatch, state)
+            }
+            XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange for \(state)")
+        }
+    }
+
     /// The origin raw routes are requested at: the client URL cut at its first `aws-blocks` segment.
     func testRawRouteBaseKeepsTheStageAndCutsAtTheFirstAwsBlocksSegment() {
         let cases = [
@@ -1091,21 +1113,6 @@ final class OIDCClientTests: XCTestCase {
             guard let oidc = error as? OIDCError else { return XCTFail("Expected OIDCError") }
             XCTAssertEqual(oidc, .malformedDescriptor("kind"))
         }
-    }
-}
-
-/// Returns a fixed relay redirect and records the authorize URL it was launched with.
-private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable {
-    private let relay: String
-    private(set) var authorizeURL: URL?
-
-    init(relay: String) {
-        self.relay = relay
-    }
-
-    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
-        self.authorizeURL = authorizeURL
-        return try XCTUnwrap(URL(string: relay))
     }
 }
 
