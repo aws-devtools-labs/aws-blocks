@@ -652,6 +652,34 @@ void main() {
     });
   });
 
+  group('OidcUser.fromJson', () {
+    test('reads the optional fields the server sends', () {
+      final user = OidcUser.fromJson({
+        'userId': 'https://idp.example.com:sub-1',
+        'username': 'alice',
+        'displayName': 'Alice',
+        'userSub': 'https://idp.example.com:sub-1',
+        'groups': ['admins'],
+        'attributes': {'email': 'alice@example.com'},
+        'signInProvider': 'google',
+      });
+      expect(user.displayName, 'Alice');
+      expect(user.userSub, 'https://idp.example.com:sub-1');
+      expect(user.groups, ['admins']);
+      expect(user.attributes, {'email': 'alice@example.com'});
+      expect(user.signInProvider, 'google');
+    });
+
+    test('leaves them null or empty when absent', () {
+      final user = OidcUser.fromJson({'userId': 'u1', 'username': 'bob'});
+      expect(user.displayName, isNull);
+      expect(user.userSub, isNull);
+      expect(user.signInProvider, isNull);
+      expect(user.attributes, isNull);
+      expect(user.groups, isEmpty);
+    });
+  });
+
   group('OidcClient fromJson', () {
     test('parses descriptor correctly', () {
       final descriptor = {

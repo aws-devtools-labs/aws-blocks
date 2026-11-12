@@ -1,5 +1,9 @@
 ## Unreleased
 
+- `OidcUser` gains the optional fields the backend sends: `displayName`,
+  `userSub`, `signInProvider` and `attributes`. Each is null when the server
+  doesn't send it.
+
 - **Breaking:** `OidcClient.signOut()` returns `Future<Uri?>`, the identity
   provider's logout URL, or null when it has none. Open it with the app's
   launcher to end the provider's own session; the client doesn't open it. It
