@@ -576,10 +576,13 @@ The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so no
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
+The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/aws-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+
 You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the `cdk-blocks` CLI then also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
 
-- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Same-origin pages reached by IP are accepted; DNS names are not, because a same-origin check against a name can be defeated by DNS rebinding.
+- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Requests and same-origin pages reached by IP are accepted; DNS names are not (the dev server answers them `403`), because a same-origin check against a name can be defeated by DNS rebinding.
 - To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
+- Behind a **reverse proxy or a port-forwarding tunnel** that passes its own public hostname in `Host` (a cloud-IDE forwarded-port URL, or nginx with `proxy_set_header Host $host`), configure the proxy to rewrite `Host` to `localhost:<port>`. `BLOCKS_DEV_HOST` is also the address the dev server binds, so setting it to a name that only exists in front of the proxy makes the dev server fail to start.
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
 
