@@ -92,6 +92,10 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   200 used to sign back in after a sign-out.
 - The `OidcClient` docs say to hold one client per block for the app's
   lifetime instead of calling `getClient()` again.
+- `OidcClient.signInDirect` throws `OidcCallbackException` for a callback that carries
+  an IdP `error` or no `code`. It threw a `TypeError` from a null check. It also
+  deletes the attempt's stored PKCE values whatever happens, where a launcher
+  error or a state mismatch left them in the token store.
 - `OidcClient.fromJson` reads the descriptor's `sessionPath` and `refreshPath`
   when it sends them, and otherwise derives them, and a missing `signOutPath`,
   `callbackPath` or `authorizeParamsBasePath`, from the directory of
