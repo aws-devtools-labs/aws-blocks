@@ -34,9 +34,9 @@ describe('root help', () => {
 	it('lists every runnable task once under its package script name', () => {
 		const listed = listedCommands(help);
 		const runnable = [
-			'dev', 'dev:stop', 'sandbox', 'sandbox:deploy', 'sandbox:preview', 'sandbox:destroy', 'sandbox:console',
-			'docs', 'docs:api', 'docs:search', 'deploy', 'destroy', 'whoami', 'secret', 'config', 'telemetry',
-			'generate-client', 'spec', 'typegen', 'db', 'vendorize', 'migrate', 'help',
+			'dev', 'dev:stop', 'dashboard', 'dashboard:doctor', 'sandbox', 'sandbox:deploy', 'sandbox:preview',
+			'sandbox:destroy', 'sandbox:console', 'docs', 'docs:api', 'docs:search', 'deploy', 'destroy', 'whoami',
+			'secret', 'config', 'telemetry', 'generate-client', 'spec', 'typegen', 'db', 'vendorize', 'migrate', 'help',
 		];
 		assert.deepStrictEqual(listed.sort(), [...runnable].sort());
 		assert.doesNotMatch(help, /cdk-blocks|sandbox up/);

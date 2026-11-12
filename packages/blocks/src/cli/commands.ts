@@ -12,10 +12,11 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AwsIdentity } from '@aws-blocks/core/scripts';
+import type { AwsIdentity, DashboardCommand, DashboardOptions } from '@aws-blocks/core/scripts';
 import {
 	frontendPortWarning,
 	keepsOwnClient,
+	parsePort,
 	resolveDevConfig,
 	resolveDevPort,
 	unknownDevConfigWarnings,
@@ -71,7 +72,7 @@ import {
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
 
-interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher'> {
+interface ChildRun extends Pick<SpawnSpec, 'longRunning' | 'watcher' | 'ignoreStdin'> {
 	operation: string;
 	/**
 	 * The tool, for a child that is not a lifecycle runner (`blocks-vendorize`): its own
@@ -182,6 +183,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 			stdoutToStderr: ctx.out.format === 'json',
 			longRunning: run.longRunning,
 			watcher: run.watcher,
+			ignoreStdin: run.ignoreStdin,
 		});
 	} catch (error) {
 		throw new CliError(
@@ -228,7 +230,7 @@ async function runChild(ctx: Context, run: ChildRun): Promise<number> {
 }
 
 interface RunnerRun
-	extends Pick<SpawnSpec, 'longRunning'>,
+	extends Pick<SpawnSpec, 'longRunning' | 'ignoreStdin'>,
 		Pick<RunnerLaunch, 'watch' | 'conditions'>,
 		Pick<ChildRun, 'tool'> {
 	runner: RunnerName;
@@ -292,6 +294,7 @@ function runRunner(ctx: Context, run: RunnerRun): Promise<number> {
 		tool: run.tool,
 		longRunning: run.longRunning,
 		watcher: run.watch,
+		ignoreStdin: run.ignoreStdin,
 		failureFile: run.failureFile,
 	});
 }
@@ -648,6 +651,72 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 	};
 	if (ctx.out.format === 'json' || text !== '') ctx.out.result(value, text);
 	return warnings.length > 0 ? ExitCode.Failure : ExitCode.Ok;
+}
+
+/**
+ * A browser origin to trust, as `scheme://host[:port]`. The dashboard compares
+ * a request's `Origin` header against parsed origins, so it drops a value that
+ * is not a URL and one whose origin is `'null'` ('file:', 'data:'): `*`, a bare
+ * hostname and a path would silently trust nothing and leave a proxied
+ * dashboard failing its mutation guard with no explanation. Refused here
+ * instead, and passed on canonical, which is what the comparison uses.
+ */
+function parseAllowedOrigin(value: string, ctx: Context): string {
+	const invalid = new UsageError(
+		`option --allow-origin must be an origin such as https://host:port, not ${JSON.stringify(value)}.`,
+	);
+	let origin: string;
+	try {
+		origin = new URL(value).origin;
+	} catch {
+		throw invalid;
+	}
+	if (origin === 'null') throw invalid;
+	if (origin !== value) ctx.out.warn(`--allow-origin ${value} is read as the origin ${origin}.`);
+	return origin;
+}
+
+/**
+ * The dashboard runner's options. Core parses the dashboard's own flags out of
+ * `DashboardOptions.argv`, so the subcommand travels there too: core reads it as
+ * a leading positional rather than an option. `--profile` and `--region` reach
+ * the dashboard the way they reach every other command, as AWS_PROFILE and
+ * AWS_REGION in the child environment.
+ *
+ * A run that may not prompt (no TTY, `--no-input` or `CI`) gets no stdin, so
+ * core's offer to install `@aws-blocks/admin-ui` takes its non-interactive path
+ * and reports how to install it by hand instead of waiting for an answer
+ * nobody can give.
+ */
+function dashboardRun(ctx: Context, input: CommandInput, command: DashboardCommand): RunnerRun {
+	const root = ctx.requireRoot();
+	const port = parsePort(input.flags.port, 'option --port');
+	const allowOrigins = input.flags['allow-origin'];
+	const options: DashboardOptions = {
+		projectRoot: root,
+		argv: command === 'serve' ? [] : [command],
+		...(port === undefined ? {} : { port }),
+		...(input.flags['no-open'] === true ? { open: false } : {}),
+		...(Array.isArray(allowOrigins)
+			? { allowOrigins: allowOrigins.map((origin) => parseAllowedOrigin(String(origin), ctx)) }
+			: {}),
+	};
+	return {
+		runner: 'dashboard',
+		operation: command === 'serve' ? 'npm run dashboard' : `npm run dashboard:${command}`,
+		options,
+		where: [`project: ${root}`],
+		ignoreStdin: !ctx.interactive,
+	};
+}
+
+export async function dashboard(ctx: Context, input: CommandInput): Promise<number> {
+	// The server runs until Ctrl-C, like the dev server: a clean exit is not a completed operation.
+	return runRunner(ctx, { ...dashboardRun(ctx, input, 'serve'), longRunning: true });
+}
+
+export async function dashboardDoctor(ctx: Context, input: CommandInput): Promise<number> {
+	return runRunner(ctx, dashboardRun(ctx, input, 'doctor'));
 }
 
 /** How `npm run sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */

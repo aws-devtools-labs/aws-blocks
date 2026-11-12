@@ -671,12 +671,23 @@ describe('cdk-blocks migrate', () => {
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
 			const migrated = readPkg(root);
 			// spec, vendorize, prebuild and test:e2e run no wrapper (bins, or the app's own test), and the
-			// templates have changed them since; migrate leaves them as they are. config is new in the
-			// templates and no released app had it or a wrapper for it, so migrate adds nothing for it.
-			// typecheck and build run no wrapper either: the Vite templates now run `tsc -b --force`
-			// over project references, an optional move that also needs new tsconfig files (see
-			// docs/guides/upgrading-older-apps.md, "Keep Node types out of the frontend").
-			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config', 'typecheck', 'build'];
+			// templates have changed them since; migrate leaves them as they are. config, dashboard and
+			// dashboard:doctor are new in the templates and no released app had any of them or a wrapper
+			// for them, so migrate adds nothing for them. typecheck and build run no wrapper either: the
+			// Vite templates now run `tsc -b --force` over project references, an optional move that also
+			// needs new tsconfig files (see docs/guides/upgrading-older-apps.md, "Keep Node types out of
+			// the frontend").
+			const omit = [
+				'spec',
+				'vendorize',
+				'prebuild',
+				'test:e2e',
+				'config',
+				'dashboard',
+				'dashboard:doctor',
+				'typecheck',
+				'build',
+			];
 			const pick = (scripts: Record<string, string>) =>
 				Object.fromEntries(Object.entries(scripts).filter(([name]) => !omit.includes(name)));
 			const expected = pick(current.scripts);
