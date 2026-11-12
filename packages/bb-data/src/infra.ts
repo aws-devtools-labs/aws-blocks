@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { VpcContext } from '@aws-blocks/core/cdk';
 import { blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry } from '@aws-blocks/core/cdk/internal';
+import { copyMigrationsCommand } from '@aws-blocks/data-common/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -32,7 +33,6 @@ import {
   SAR_ROTATION_PARTITIONS,
   VPC_MAX_AZS,
 } from './constants.js';
-import { copyMigrationsCommand } from './migrations-copy.js';
 
 /**
  * Configuration for Aurora Serverless v2 infrastructure.
