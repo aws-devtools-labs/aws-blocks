@@ -453,8 +453,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     /// - Returns: The signed-in user, after emitting `.signedIn`. `nil` when the server has no
     ///   session for this client (401), after clearing stored tokens and emitting `.signedOut`.
     /// - Throws: `RawRouteError` with `statusCode` 404 when the backend serves no session route: an
-    ///   `Auth` block without federated providers, or a custom block that doesn't serve `<base>/session`. Any other failure, including a transport error or
-    ///   `ClientClosedError`, is thrown and leaves the state and stored tokens as they were.
+    ///   `Auth` block without federated providers, or a custom block that doesn't serve
+    ///   `<base>/session`. Any other failure, including a transport error or `ClientClosedError`, is
+    ///   thrown and leaves the state and stored tokens as they were.
     @discardableResult
     public func restore() async throws -> OIDCUser? {
         var headers: [String: String] = [:]
