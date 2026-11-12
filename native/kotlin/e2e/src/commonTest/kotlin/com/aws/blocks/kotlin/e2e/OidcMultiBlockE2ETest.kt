@@ -3,10 +3,12 @@
 package com.aws.blocks.kotlin.e2e
 
 import com.aws.blocks.kotlin.InternalBlocksApi
+import com.aws.blocks.kotlin.exceptions.ApiException
 import com.aws.blocks.kotlin.oidc.AnyProvider
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
 import com.aws.blocks.kotlin.oidc.signIn
+import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
 import kotlin.test.Test
@@ -85,6 +87,21 @@ class OidcMultiBlockE2ETest {
 
         client.authState.value shouldBe OidcAuthState.SignedOut
         api.ssoGetCurrentUser().shouldBeNull()
+    }
+
+    @Test
+    fun aBlockRefusesAnotherBlocksSession() = runTest {
+        if (!hasHeadlessIdp()) {
+            markSkipped(NEEDS_HEADLESS_IDP)
+            return@runTest
+        }
+        val client = oidcClient()
+        client.signIn("github2")
+
+        val e = shouldThrow<ApiException> { api.ssoRequireAuth() }
+        e.name shouldBe AuthErrorNames.NotAuthenticated
+        api.ssoGetCurrentUser().shouldBeNull()
+        client.signOut()
     }
 
     private companion object {
