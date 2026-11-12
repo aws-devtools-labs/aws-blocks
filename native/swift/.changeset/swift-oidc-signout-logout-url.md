@@ -12,5 +12,5 @@ signs out locally and throws a `RawRouteError` named `SignOutIncompleteException
 clears the stored tokens and throws, with the state unchanged.
 
 Previously the server's empty 204 response failed to parse, the failure was ignored, and the logout
-URL was dropped. The body is now `{}` when no refresh token is stored, instead of an empty
-`refreshToken`.
+URL was dropped. The body is now `{}`: the server ends the session from its cookie and never read
+the `refreshToken` the client used to send, which also means sign-out doesn't revoke bearer tokens.
