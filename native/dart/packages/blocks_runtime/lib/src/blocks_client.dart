@@ -19,6 +19,11 @@ class BlocksClient {
   /// Optional bearer token auth provider. Takes priority over cookie auth.
   AuthProvider? authProvider;
 
+  /// The HTTP client this client sends its requests with. An
+  /// `OidcClient.forAuth` built from this client sends its auth requests with
+  /// it too.
+  http.Client get httpClient => _httpClient;
+
   int _nextId = 1;
 
   BlocksClient({

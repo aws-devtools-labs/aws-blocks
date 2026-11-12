@@ -1,5 +1,19 @@
 ## Unreleased
 
+- Add `OidcClient.forAuth(client, providers: …, relayTo: …)`, a client for an
+  `Auth` block's federated sign-in. It shares the app's `BlocksClient`: its
+  base URL, HTTP client, session store and, unless one is passed, token
+  store, so the session cookie the exchange sets is the one the app's calls
+  send. Its routes are derived from `callbackPath` (default
+  `/aws-blocks/auth/callback`) the way `Auth` derives them, and `signOutPath`
+  defaults to `/aws-blocks/auth/signout`; both must be under
+  `/aws-blocks/auth/`, or it throws an `ArgumentError`. It returns a plain
+  `OidcClient`; wrap it as `TypedOidcClient<E>(client)` to narrow its
+  providers to an enum.
+- Add `OidcClient.relayTo`, the relay URI `signInRelay` uses when it isn't
+  given one. `signInRelay`'s `relayTo` is now optional; with neither set, it
+  throws a `StateError` before sending anything.
+- Add `BlocksClient.httpClient`, the HTTP client it sends requests with.
 - `OidcClient` resolves the auth routes against its base URL cut at the
   first path segment that is `aws-blocks`, keeping any API Gateway stage. It
   used to strip one trailing `/aws-blocks/api`, so a base URL that repeated

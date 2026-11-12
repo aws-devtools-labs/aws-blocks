@@ -6,6 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import 'auth_provider.dart';
+import 'blocks_client.dart';
 import 'browser_launcher.dart';
 import 'oidc_auth_state.dart';
 import 'oidc_exception.dart';
@@ -54,6 +55,11 @@ class OidcClient implements AuthProvider {
   final String baseUrl;
   final TokenStore tokenStore;
 
+  /// The custom-scheme URI [signInRelay] relays back to when its own
+  /// `relayTo` is omitted, such as `myappscheme://oidcRedirect`. Set by
+  /// [OidcClient.forAuth]; null when not configured.
+  final String? relayTo;
+
   /// Shared session store. In the cookie flow the session cookie set by the
   /// backend's `/exchange` response is captured here and replayed by the
   /// owning [BlocksClient] on subsequent JSON-RPC calls. Pass the
@@ -79,10 +85,88 @@ class OidcClient implements AuthProvider {
     required this.tokenStore,
     this.authorizeParamsBasePath = defaultAuthorizeParamsBasePath,
     this.callbackPath = defaultCallbackPath,
+    this.relayTo,
     SessionStore? sessionStore,
     http.Client? httpClient,
   }) : sessionStore = sessionStore ?? InMemorySessionStore(),
        _httpClient = httpClient ?? http.Client();
+
+  /// The prefix every `Auth` route lives under.
+  static const String _authRoutePrefix = '/aws-blocks/auth/';
+
+  /// A client for an `Auth` block's federated sign-in, sharing [client]'s
+  /// base URL, HTTP client and session store, so the session cookie the
+  /// exchange sets is the one [client]'s calls send.
+  ///
+  /// [providers] are the ids of the block's sign-in providers that this
+  /// client may sign in with; any other id throws
+  /// [OidcUnknownProviderException] before a request is sent. [relayTo] is
+  /// the custom-scheme URI the backend relays back to, which must be listed
+  /// in the block's `redirects.allowedRelayOrigins`; [signInRelay] uses it
+  /// when it isn't given one. [callbackPath] and [signOutPath] are the
+  /// block's `redirects.callbackPath` and `redirects.signOutPath`; leave them
+  /// at their defaults unless the block sets them. The other routes are
+  /// derived from [callbackPath] the way the block derives them: its
+  /// directory, followed by `/authorize-params/<id>`, `/exchange`,
+  /// `/session` and `/exchange/refresh`. [tokenStore] defaults to
+  /// [client]'s.
+  ///
+  /// It returns a plain [OidcClient]. An app that has an enum of the block's
+  /// providers can wrap it as `TypedOidcClient<E>(client)`.
+  ///
+  /// ```dart
+  /// final client = BlocksClient(baseUrl: 'https://api.example.com/aws-blocks/api');
+  /// final oidc = OidcClient.forAuth(
+  ///   client,
+  ///   providers: ['google'],
+  ///   relayTo: 'myapp://auth',
+  /// );
+  /// final user = await oidc.signInRelay('google', launcher: launcher);
+  /// ```
+  ///
+  /// Makes no network call. Throws an [ArgumentError] when either path is
+  /// not under `/aws-blocks/auth/`, or [callbackPath] has no segment after
+  /// that prefix or ends with `/`.
+  factory OidcClient.forAuth(
+    BlocksClient client, {
+    required List<String> providers,
+    String? relayTo,
+    String callbackPath = defaultCallbackPath,
+    String signOutPath = '/aws-blocks/auth/signout',
+    TokenStore? tokenStore,
+  }) {
+    if (!callbackPath.startsWith(_authRoutePrefix) ||
+        callbackPath.length == _authRoutePrefix.length ||
+        callbackPath.endsWith('/')) {
+      throw ArgumentError.value(
+        callbackPath,
+        'callbackPath',
+        "must be a path under '$_authRoutePrefix' with no trailing '/'",
+      );
+    }
+    if (!signOutPath.startsWith(_authRoutePrefix)) {
+      throw ArgumentError.value(
+        signOutPath,
+        'signOutPath',
+        "must be a path under '$_authRoutePrefix'",
+      );
+    }
+    final base = callbackPath.substring(0, callbackPath.lastIndexOf('/'));
+    return OidcClient(
+      exchangePath: '$base/exchange',
+      refreshPath: '$base/exchange/refresh',
+      signOutPath: signOutPath,
+      authorizeParamsBasePath: '$base/authorize-params',
+      callbackPath: callbackPath,
+      providers: List.unmodifiable(providers),
+      providerConfigs: const {},
+      baseUrl: client.baseUrl,
+      tokenStore: tokenStore ?? client.tokenStore,
+      relayTo: relayTo == null || relayTo.isEmpty ? null : relayTo,
+      sessionStore: client.sessionStore,
+      httpClient: client.httpClient,
+    );
+  }
 
   /// API origin that the server-relay auth routes resolve against.
   ///
@@ -225,17 +309,27 @@ class OidcClient implements AuthProvider {
   /// 5. Exchanges the code (forwarding `iss` per RFC 9207).
   ///
   /// [relayTo] must be the custom-scheme URI registered in the backend's
-  /// `allowedRelayOrigins` (e.g. `myappscheme://oidcRedirect`).
+  /// `allowedRelayOrigins` (e.g. `myappscheme://oidcRedirect`). When it is
+  /// omitted, the client's own [OidcClient.relayTo] is used.
   ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
-  /// [provider].
+  /// [provider]. Throws a [StateError] when neither [relayTo] nor the
+  /// client's [OidcClient.relayTo] is set.
   Future<OidcUser> signInRelay(
     String provider, {
     required BrowserLauncher launcher,
-    required String relayTo,
+    String? relayTo,
   }) async {
     if (!providers.contains(provider)) {
       throw OidcUnknownProviderException(provider);
+    }
+    final relay = (relayTo == null || relayTo.isEmpty) ? this.relayTo : relayTo;
+    if (relay == null) {
+      throw StateError(
+        'signInRelay needs a relayTo: pass one to OidcClient.forAuth or to '
+        'signInRelay. It must be listed in the backend\'s '
+        'redirects.allowedRelayOrigins.',
+      );
     }
 
     final csrf = generateRandom();
@@ -243,7 +337,7 @@ class OidcClient implements AuthProvider {
     final challenge = generateChallenge(verifier);
 
     // Step 1: fetch the signed state envelope from the backend.
-    final params = await _fetchAuthorizeParams(provider, csrf, relayTo);
+    final params = await _fetchAuthorizeParams(provider, csrf, relay);
 
     // Step 2: build the authorize URL. redirect_uri = backend HTTPS callback.
     final callbackUrl = '$_authBaseUrl$callbackPath';
@@ -256,7 +350,7 @@ class OidcClient implements AuthProvider {
     // Step 3: open the browser and wait for the relay custom-scheme redirect.
     final resultUri = await launcher.launch(
       authorizeUri,
-      callbackScheme: Uri.parse(relayTo).scheme,
+      callbackScheme: Uri.parse(relay).scheme,
     );
 
     // Step 4: validate the callback.
