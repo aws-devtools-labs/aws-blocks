@@ -14,7 +14,7 @@ AWS Blocks collects usage data to improve the product. Each event can include:
 Events never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code.
 The collection endpoint also receives your IP address, as with any HTTPS request.
 It is not stored, except in logs of requests that the endpoint's firewall blocks.
-Events are kept for up to 1 year, and request logs for up to 10 years.
+Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.
 To opt out everywhere, export AWS_BLOCKS_DISABLE_TELEMETRY=1 (accepts 1, true, or yes, case-insensitive),
 or run one of these inside an AWS Blocks app:
   npx --no -- cdk-blocks telemetry disable --global
