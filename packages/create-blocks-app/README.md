@@ -159,6 +159,23 @@ No template sets `frontendCommand`: `cdk-blocks dev` starts the frontend dev ser
 
 Apps that create-blocks-app 0.1.0 to 0.4.0 scaffolded run `aws-blocks/scripts/*.ts` wrappers. Run `npx --no -- cdk-blocks migrate` in such an app to switch its scripts to these aliases and delete the wrappers it generated (see [Migrating an app from `aws-blocks/scripts`](https://github.com/aws-devtools-labs/aws-blocks/tree/main/packages/blocks#migrating-an-app-from-aws-blocksscripts)).
 
+### `@aws-blocks/*` Dependency Versions
+
+Every `@aws-blocks/*` package the CLI writes into your `package.json` (and into `aws-blocks/package.json` for an Amplify Gen 2 project) gets a caret range on the release line this CLI version was tested with, for example:
+
+```json
+{
+  "dependencies": {
+    "@aws-blocks/blocks": "^0.9.0",
+    "@aws-blocks/hosting": "^0.5.0"
+  }
+}
+```
+
+A reinstall stays on that release line and picks up later releases on it. Before 1.0, a new minor (`0.9.x` to `0.10.0`) is a new, breaking release line, and your app moves to it only when you edit the range. The CLI is released with every `@aws-blocks/blocks` release and has the same version number, so the latest CLI starts a new app on the latest `@aws-blocks/blocks` release. If you add AWS Blocks to an existing project that already lists one of these packages in `dependencies`, your range is kept. For an Amplify Gen 2 project, `aws-blocks/package.json` follows the root's range too (from `dependencies` or `devDependencies`) when it is a semver range; a `*`, path or protocol spec gets the stamp instead.
+
+Apps scaffolded by an older CLI declare `"*"` instead, so their next clean install can pull a breaking release. Replace each `"*"` for an `@aws-blocks/*` package with a caret range for the version you have installed (`npm ls @aws-blocks/blocks` shows it), then run `npm install`.
+
 ## Templates
 
 Available templates: `default`, `bare`, `react`, `backend`, `api-only`, `sql`, `nextjs`, `auth`, `auth-oidc`, `agent`, `cron`, `observability`, `amplify`, `demo`.
@@ -170,6 +187,8 @@ Every folder under `templates/` is a self-registering template. Each `package.js
 ```bash
 npx @aws-blocks/create-blocks-app --help
 ```
+
+A template declares each `@aws-blocks/*` dependency as `"*"`, a placeholder. Inside this monorepo the CLI rewrites the placeholders in the app's root `package.json` to `file:` paths to the sibling packages. From the published CLI it stamps the range listed for that package in create-blocks-app's own `devDependencies`, which `changeset version` keeps on the package's current release line. So when a template starts using another `@aws-blocks/*` package, add it to create-blocks-app's `devDependencies` too; the unit tests fail until you do. A devDependency bump never releases the CLI on its own, so `.changeset/config.json` puts create-blocks-app and `@aws-blocks/blocks` in one `fixed` group: every blocks release also releases the CLI, at the same version number, with the updated ranges. A new release line of a package blocks depends on (such as `@aws-blocks/hosting`) falls outside blocks' caret range for it, so changesets releases blocks, and with it the CLI. So a template should import Building Blocks from `@aws-blocks/blocks`, and only write an `@aws-blocks/*` package that blocks itself lists in `dependencies`.
 
 ## Related Packages
 
