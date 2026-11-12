@@ -51,5 +51,6 @@ class OidcRequestException extends OidcException {
 
 /// The user dismissed / cancelled the sign-in flow.
 class OidcCancelledException extends OidcException {
-  OidcCancelledException() : super('Sign-in cancelled');
+  /// [message] says why, for example a desktop sign-in that timed out.
+  OidcCancelledException([super.message = 'Sign-in cancelled']);
 }
