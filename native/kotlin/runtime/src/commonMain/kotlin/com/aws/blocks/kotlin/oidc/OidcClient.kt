@@ -36,6 +36,7 @@ import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -398,13 +399,49 @@ class OidcClient<P : OidcProvider> internal constructor(
     private val sessionPath: String
         get() = config.callbackPath.substringBeforeLast('/') + "/session"
 
-    suspend fun signOut() {
+    /**
+     * Signs the user out of the backend, which ends its session and clears its session cookie.
+     *
+     * ```kotlin
+     * val logoutUrl = oidc.signOut()
+     * // Open logoutUrl, if any, to end the identity provider's session too.
+     * ```
+     *
+     * Only the backend's `Set-Cookie` removes the cookie, so the cookies of any other `Auth` block
+     * sharing the cookie jar are left in place.
+     *
+     * @return the identity provider's logout URL, or `null` when the provider has none. The client
+     *   does not open it; an app that wants the provider's own session ended opens it itself, or
+     *   the provider can sign the user straight back in.
+     * @throws OidcSignOutException if the backend answers with a failure status. For a 503 named
+     *   `SignOutIncompleteException` the cookie was cleared but the backend could not remove its
+     *   session, and [authState] is set to signed out first; for any other status [authState] is
+     *   left as it was, as it is for a request that fails to reach the backend.
+     * @throws BlocksException if the Blocks instance this client came from has been closed.
+     */
+    suspend fun signOut(): String? {
         ensureOpen()
-        val signOutUrl = server.rawRoute(config.signOutPath)
-        httpClient.post(signOutUrl) {
+        val signOutUrl = URLBuilder(server.rawRoute(config.signOutPath)).apply {
+            parameters.append("format", "json")
+        }.buildString()
+        val response = httpClient.post(signOutUrl) {
             contentType(ContentType.Application.Json)
+            setBody("{}")
+        }
+        val body = runCatching { Json.parseToJsonElement(response.bodyAsText()).jsonObject }.getOrNull()
+        if (!response.status.isSuccess()) {
+            val name = (body?.get("name") as? JsonPrimitive)?.contentOrNull
+            if (response.status == HttpStatusCode.ServiceUnavailable && name == SIGN_OUT_INCOMPLETE) {
+                _authState.value = OidcAuthState.SignedOut
+            }
+            throw OidcSignOutException(
+                "Sign-out failed: HTTP ${response.status.value}" + (name?.let { " ($it)" } ?: ""),
+                response.status.value,
+                name,
+            )
         }
         _authState.value = OidcAuthState.SignedOut
+        return (body?.get("logoutUrl") as? JsonPrimitive)?.contentOrNull
     }
 
     /**
@@ -423,6 +460,9 @@ class OidcClient<P : OidcProvider> internal constructor(
         private const val INVALID_CALLBACK = "invalid_callback"
         private const val EXCHANGE_FAILED = "exchange_failed"
         private const val CANCELLED = "cancelled"
+
+        /** The error name the backend's sign-out answers a 503 with when its session survived. */
+        private const val SIGN_OUT_INCOMPLETE = "SignOutIncompleteException"
 
         /** The path every `Auth` route must sit under, as the backend enforces. */
         private const val AUTH_ROUTE_PREFIX = "/aws-blocks/auth/"

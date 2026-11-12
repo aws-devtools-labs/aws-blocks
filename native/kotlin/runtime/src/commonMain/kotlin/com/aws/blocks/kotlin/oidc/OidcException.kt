@@ -31,3 +31,20 @@ class OidcSessionException(
     val statusCode: Int,
     val errorName: String?,
 ) : BlocksException(message)
+
+/**
+ * The backend refused a sign-out.
+ *
+ * It extends [BlocksException] rather than [OidcException], so a `when` over the sealed
+ * [OidcException] subclasses stays exhaustive.
+ *
+ * @property statusCode the HTTP status the backend answered with.
+ * @property errorName the error name in the backend's response, if it sent one.
+ *   `SignOutIncompleteException` (with status 503) means the session cookie was cleared but the
+ *   backend could not remove its session.
+ */
+class OidcSignOutException(
+    message: String,
+    val statusCode: Int,
+    val errorName: String?,
+) : BlocksException(message)
