@@ -4,17 +4,20 @@
 /**
  * The server-side session store and its record format.
  *
- * ## Compatibility contract (the upgrade safety property)
+ * ## What carries over from `AuthCognito`, and what does not
  *
- * An app that switches `AuthCognito` → `Auth` with the same id keeps the
- * record format of its sessions. In local development its signed-in users
- * stay signed in: the mock converts the `store.json` that the earlier
- * `KVStore` wrote. On AWS the `sessions` table of the earlier `KVStore` has
- * another key attribute (`pk`, now `_bkv_pk`), so that table cannot stay in
- * place and its sessions end with it (see MIGRATION.md). So:
+ * An app that switches `AuthCognito` → `Auth` with the same id keeps its
+ * session cookie (name, value format, HMAC secret) and the format of a session
+ * record. It does not keep its stored sessions: the store has a new child id
+ * (`SESSION_STORE_ID`, `session-store`; it was `sessions`), so it has a new
+ * table on AWS and a new directory locally, and nothing reads the old one. A
+ * cookie from before the switch verifies, finds no row, and is handled as
+ * signed out, with the cookie cleared; the user signs in once more
+ * (MIGRATION.md). So:
  *
- * - The store is a `KVStore` at child id `sessions` of the block (same table
- *   name, same mock file `.bb-data/<fullId>-sessions/store.json`).
+ * - The store is a `KVStore` at child id `session-store` of the block (table
+ *   `<fullId>-session-store`, mock file
+ *   `.bb-data/<fullId>-session-store/store.json`).
  * - Keys are `AuthCognito`'s: 24 random bytes, base64url.
  * - A **pool session** (email + password, or any provider federated through
  *   Cognito) is stored exactly as `AuthCognito` stores it:
@@ -26,8 +29,7 @@
  * - The stored row also has a numeric `version`, which is not part of the
  *   record: `1` for a new session, one more for each later write. A
  *   conditional write compares that field alone ({@link SessionStore.read}).
- *   A row with no version is a row from before `Auth` stamped it; only local
- *   data of an earlier release can hold one.
+ *   Every row that this store writes has a version.
  * - A **direct session** (an OIDC provider federated directly — no Cognito
  *   record and no Cognito tokens) carries the discriminator `kind: 'direct'`.
  *   Its identity is `` `${issuer}:${subject}` ``.
@@ -49,6 +51,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { KVStore, KVStoreErrors } from '@aws-blocks/bb-kv-store';
 import { isBlocksError, type ScopeParent } from '@aws-blocks/core';
+import { SESSION_STORE_ID } from './session-store-id.js';
 import { type SignInMode, sameSignInName, signsInWithAttribute } from './sign-in-mode.js';
 import type { JWT } from './types.js';
 
@@ -443,8 +446,7 @@ type SessionRow = Record<string, unknown>;
 
 /**
  * The `version` of a stored row, or `undefined` for a row that has none (a row
- * from before `Auth` stamped it; only local data of an earlier release can
- * hold one).
+ * that this store did not write).
  */
 function versionOf(row: unknown): number | undefined {
 	if (typeof row !== 'object' || row === null) return undefined;
@@ -465,7 +467,7 @@ function unchangedSince(row: unknown): { ifFieldEquals: SessionRow } {
 }
 
 /**
- * The store. A nested `KVStore` at child id `sessions` — its own DynamoDB table
+ * The store. A nested `KVStore` at child id `session-store` — its own DynamoDB table
  * in AWS, a JSON file locally; the same code path in both runtimes.
  *
  * @internal
@@ -475,14 +477,14 @@ export class SessionStore {
 	private readonly ttlSeconds?: number;
 
 	/**
-	 * @param scope - The `Auth` instance (the store is its `sessions` child).
+	 * @param scope - The `Auth` instance (the store is its `session-store` child).
 	 * @param ttlSeconds - When set, every write stamps the row with a DynamoDB
 	 *   TTL of `now + ttlSeconds`, so abandoned sessions are reaped instead of
 	 *   retaining refresh tokens at rest forever. Callers pass the session
 	 *   lifetime, keeping the row's ceiling aligned with the cookie's `Max-Age`.
 	 */
 	constructor(scope: ScopeParent, ttlSeconds?: number) {
-		this.kv = new KVStore<SessionRow>(scope, 'sessions');
+		this.kv = new KVStore<SessionRow>(scope, SESSION_STORE_ID);
 		this.ttlSeconds = ttlSeconds !== undefined && ttlSeconds > 0 ? ttlSeconds : undefined;
 	}
 

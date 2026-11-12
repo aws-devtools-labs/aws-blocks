@@ -5,11 +5,20 @@
  * RESOURCE-IDENTITY GATE for `Auth` against `AuthCognito`. If this test fails, STOP.
  *
  * An app that switches from `AuthCognito` to `Auth` (same block id) must keep
- * every deployed resource: CloudFormation identifies a resource by its logical
- * ID, which CDK derives from the construct path. A renamed child construct, a
- * changed `userPoolName`, or a `client` that generates a secret makes
- * CloudFormation create a NEW user pool / client and DELETE the old one —
- * every user and every signed-in session in that app is gone.
+ * its user pool, its app client, its groups and its session secret:
+ * CloudFormation identifies a resource by its logical ID, which CDK derives
+ * from the construct path. A renamed child construct, a changed
+ * `userPoolName`, or a `client` that generates a secret makes CloudFormation
+ * create a NEW user pool / client and DELETE the old one — every user in that
+ * app is gone.
+ *
+ * One resource is deliberately not kept: the sessions table. `Auth` builds its
+ * session store under the child id `session-store`, so the upgrade creates a
+ * new table (`<fullId>-session-store`) and removes the `sessions` table from
+ * the stack. The gate pins that too: no resource under the old logical id, and
+ * exactly one session store table with that path and name
+ * (`expectedAuthIdentity` in `test-support/identity.ts`). Signed-in sessions end
+ * at the upgrade; users sign in once more (MIGRATION.md).
  *
  * This test runs `AuthCognito`'s golden fixture — `bb-auth-cognito`'s
  * `__fixtures__/resource-identity.json`, vendored **unchanged** as
@@ -17,7 +26,8 @@
  * was deleted at the cutover; its hash pins the copy) — against `Auth`. For each
  * pinned `AuthCognito` variant it synthesizes the equivalent `Auth`
  * configuration under `--conditions=cdk` and requires the identical logical
- * IDs, Types, construct paths and physical names, the identical
+ * IDs, Types, construct paths and physical names (the session store excepted,
+ * as above), the identical
  * `BLOCKS_AUTH_COGNITO_*` config keys and values, the `auth_<fullId>` cookie
  * name, and no `GenerateSecret`. The only field not compared is the fixture's
  * `construct` label (the customer code differs: `AuthOptions` is a new shape).
@@ -36,8 +46,12 @@ import { cognitoConfigKeys } from './cdk/contract.js';
 import {
 	BLOCK_PATH_PREFIX,
 	diffIdentity,
+	expectedAuthIdentity,
 	expectedConfigKeys,
+	LEGACY_SESSIONS_LOGICAL_ID,
+	SESSION_STORE_TABLE_PATH,
 	type SynthesizedAuth,
+	sessionStoreIdOf,
 	synthIdentity,
 	type VariantIdentity,
 } from './test-support/identity.js';
@@ -84,9 +98,10 @@ describe('Auth — deployed resource identity equals AuthCognito (golden fixture
 
 	for (const name of Object.keys(AUTH_VARIANTS)) {
 		describe(`variant "${name}"`, () => {
-			test('resource identity matches the AuthCognito golden fixture', () => {
-				const expected = fixture.variants[name];
+			test('resource identity matches the AuthCognito golden fixture, except the session store', () => {
 				const { identity } = synthOnce(name);
+				// The fixture, with the sessions table swapped for the session store.
+				const expected = expectedAuthIdentity(fixture.variants[name], identity);
 				const diff = diffIdentity(expected, identity);
 				assert.ok(
 					diff.length === 0,
@@ -109,12 +124,42 @@ describe('Auth — deployed resource identity equals AuthCognito (golden fixture
 
 			test('frozen child construct ids are present', () => {
 				const paths = Object.values(synthOnce(name).identity.resources).map((r) => r.path);
-				const required = [`${BLOCK_PATH_PREFIX}client/Resource`, `${BLOCK_PATH_PREFIX}sessions/table/Resource`];
+				const required = [`${BLOCK_PATH_PREFIX}client/Resource`, SESSION_STORE_TABLE_PATH];
 				if (name !== 'existingPool') required.push(`${BLOCK_PATH_PREFIX}pool/Resource`);
 				if (name === 'configured') {
 					required.push(`${BLOCK_PATH_PREFIX}group-admins`, `${BLOCK_PATH_PREFIX}group-readers`);
 				}
 				for (const path of required) assert.ok(paths.includes(path), `missing frozen construct ${path}`);
+			});
+
+			test('the sessions table of AuthCognito is gone; the session store is one new table', () => {
+				const { identity } = synthOnce(name);
+				assert.ok(
+					fixture.variants[name].resources[LEGACY_SESSIONS_LOGICAL_ID],
+					'the fixture pins the old table',
+				);
+				assert.strictEqual(
+					identity.resources[LEGACY_SESSIONS_LOGICAL_ID],
+					undefined,
+					'no resource under the logical id of the old sessions table',
+				);
+				const legacyPath = `${BLOCK_PATH_PREFIX}sessions/`;
+				assert.deepStrictEqual(
+					Object.values(identity.resources).filter((r) => r.path.startsWith(legacyPath)),
+					[],
+					'no resource under the old child id',
+				);
+				const tables = Object.entries(identity.resources).filter(([, r]) => r.Type === 'AWS::DynamoDB::Table');
+				assert.deepStrictEqual(tables, [
+					[
+						sessionStoreIdOf(identity),
+						{
+							Type: 'AWS::DynamoDB::Table',
+							path: SESSION_STORE_TABLE_PATH,
+							physicalName: `${identity.fullId}-session-store`,
+						},
+					],
+				]);
 			});
 
 			test('userPoolName === fullId', () => {
