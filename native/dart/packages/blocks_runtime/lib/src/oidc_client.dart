@@ -295,8 +295,8 @@ class OidcClient implements AuthProvider {
 
     final returnedState = callbackUri.queryParameters['state'];
     final storedState = await tokenStore.get(_key('oidc_state'));
-    if (returnedState != storedState) {
-      throw StateError('OIDC state mismatch — possible CSRF attack');
+    if (storedState == null || returnedState != storedState) {
+      throw StateError('OIDC state mismatch: possible CSRF attack');
     }
 
     final code = callbackUri.queryParameters['code']!;
@@ -312,7 +312,7 @@ class OidcClient implements AuthProvider {
       verifier: storedVerifier,
       callbackUrl: redirectUri,
       provider: provider,
-      state: storedState!,
+      state: storedState,
       nonce: storedNonce,
     );
   }

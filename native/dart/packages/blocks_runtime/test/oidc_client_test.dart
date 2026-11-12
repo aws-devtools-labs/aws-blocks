@@ -304,6 +304,39 @@ void main() {
     });
   });
 
+  group('OidcClient signIn', () {
+    test('a callback with no state when none is stored throws the state '
+        'error', () async {
+      final store = InMemoryTokenStore();
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: {
+          'google': ProviderConfig(
+            authorizeUrl: 'https://idp.example.com/authorize',
+            clientId: 'cid',
+            scopes: const ['openid'],
+            kind: 'oidc-builtin',
+          ),
+        },
+        baseUrl: 'http://localhost:3000',
+        tokenStore: store,
+        httpClient: MockClient((_) async => http.Response('{}', 200)),
+      );
+
+      await expectLater(
+        client.signIn(
+          'google',
+          launcher: _StateDroppingLauncher(store),
+          redirectUri: 'myapp://auth',
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
+  });
+
   group('OidcClient restore', () {
     OidcClient sessionClient(
       MockClient http, {
@@ -884,3 +917,17 @@ void main() {
 
 /// The `Set-Cookie` an `Auth` block sends to remove its session cookie.
 const _clearSession = 'blocks_session=; Path=/; HttpOnly; Max-Age=0';
+
+/// Returns a callback with no state, after removing the state the client
+/// stored, so neither side has one.
+class _StateDroppingLauncher implements BrowserLauncher {
+  _StateDroppingLauncher(this._store);
+
+  final TokenStore _store;
+
+  @override
+  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+    await _store.delete('oidc_state');
+    return Uri.parse('$callbackScheme://auth?code=c');
+  }
+}
