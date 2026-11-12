@@ -15,4 +15,7 @@ only parameters use stays a closed `enum class`.
 
 **Breaking in source.** An exhaustive `when` over an open enum needs an `is Status.Unknown` (or
 `else`) branch. `valueOf`, `name`, `ordinal`, `enumValues`, `EnumSet` and `EnumMap` don't apply to
-a sealed class; use `value`, `entries` and `fromValue` instead.
+a sealed class; use `value`, `entries` and `fromValue` instead. The values aren't `Comparable`
+any more, so `compareTo`, `sorted()` and `maxOf` on them stop compiling, and `entries` is a
+`List<Status>`, not `EnumEntries<Status>`. When a spec value is named `companion`, the companion
+object is named `Known`, so its members are `Status.Known.entries` and `Status.Known.fromValue`.

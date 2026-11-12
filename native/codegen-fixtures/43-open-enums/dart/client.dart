@@ -133,6 +133,47 @@ final class TaskSourceUnknown implements TaskSource {
 }
 
 
+sealed class TaskPhase {
+  static const companion = TaskPhaseKnown.companion;
+  static const other = TaskPhaseKnown.other;
+  static const values = TaskPhaseKnown.values;
+  static final Map<String, TaskPhaseKnown> _byJson = TaskPhaseKnown.values.asNameMap();
+
+  String toJson();
+  static TaskPhase fromJson(String json) => _byJson[json] ?? TaskPhaseUnknown(json);
+}
+
+enum TaskPhaseKnown implements TaskPhase {
+  companion,
+  other
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `TaskPhase` value this client was generated without.
+final class TaskPhaseUnknown implements TaskPhase {
+  /// The value as the server sent it.
+  final String value;
+
+  const TaskPhaseUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TaskPhaseUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'TaskPhaseUnknown' '($value)';
+}
+
+
 sealed class NodeKind {
   static const leaf = NodeKindKnown.leaf;
   static const branch = NodeKindKnown.branch;
@@ -396,6 +437,7 @@ class Task {
   final Map<String, TaskLabels> labels;
   final TaskPriority? priority;
   final TaskSource? source;
+  final TaskPhase? phase;
 
   const Task({
     required this.id,
@@ -404,6 +446,7 @@ class Task {
     required this.labels,
     this.priority,
     this.source,
+    this.phase,
   });
 
   factory Task.fromJson(Map<String, dynamic> json) {
@@ -414,6 +457,7 @@ class Task {
       labels: (json['labels'] as Map<String, dynamic>).map((k, v) => MapEntry(k, TaskLabels.fromJson(v as String))),
       priority: json['priority'] != null ? TaskPriority.fromJson(json['priority'] as String) : null,
       source: json['source'] != null ? TaskSource.fromJson(json['source'] as String) : null,
+      phase: json['phase'] != null ? TaskPhase.fromJson(json['phase'] as String) : null,
     );
   }
 
@@ -425,6 +469,7 @@ class Task {
       'labels': labels.map((k, v) => MapEntry(k, v.toJson())),
       if (priority != null) 'priority': priority?.toJson(),
       if (source != null) 'source': source?.toJson(),
+      if (phase != null) 'phase': phase?.toJson(),
     };
   }
 
@@ -437,13 +482,14 @@ class Task {
           blocksDeepEquals(history, other.history) &&
           blocksDeepEquals(labels, other.labels) &&
           priority == other.priority &&
-          source == other.source;
+          source == other.source &&
+          phase == other.phase;
 
   @override
-  int get hashCode => Object.hash(id, status, blocksDeepHash(history), blocksDeepHash(labels), priority, source);
+  int get hashCode => Object.hash(id, status, blocksDeepHash(history), blocksDeepHash(labels), priority, source, phase);
 
   @override
-  String toString() => 'Task(id: $id, status: $status, history: $history, labels: $labels, priority: $priority, source: $source)';
+  String toString() => 'Task(id: $id, status: $status, history: $history, labels: $labels, priority: $priority, source: $source, phase: $phase)';
 }
 
 

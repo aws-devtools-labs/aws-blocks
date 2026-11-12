@@ -75,6 +75,18 @@ class OpenEnumTest : FunSpec({
         source shouldContain "?: UnknownValue(value)"
     }
 
+    test("a component only a parameter uses stays closed beside an inline result enum of its name") {
+        val source = fixture("43-open-enums")
+        source shouldContain "@Serializable\npublic enum class Mode {"
+        source shouldContain "public sealed class Mode {"
+    }
+
+    test("a spec value named companion keeps its constant, and the companion object is named") {
+        val source = generate(resultEnumSpec("companion", "other"))
+        source shouldContain "public data object Companion : Mode() {"
+        source shouldContain "public companion object Known {"
+    }
+
     test("a spec value named serializer keeps its constant, and the serializer steps aside") {
         val source = generate(resultEnumSpec("serializer", "other"))
         source shouldContain "public data object Serializer : Mode() {"
