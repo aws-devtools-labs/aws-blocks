@@ -43,6 +43,8 @@ internal object OpenEnumGenerator {
         // A spec value named `unknown` keeps its constant; the fallback steps aside.
         val unknown = if ("Unknown" in taken) free("UnknownValue", taken) else "Unknown"
         val serializer = free("Serializer", taken + unknown)
+        // A constant named `Companion` would clash with the default companion object's name.
+        val companion = if ("Companion" in taken) free("Known", taken + unknown + serializer) else null
         val self = ClassName("", name)
 
         val builder = TypeSpec.classBuilder(name)
@@ -85,7 +87,7 @@ internal object OpenEnumGenerator {
 
         val knownList = List::class.asTypeName().parameterizedBy(self)
         builder.addType(
-            TypeSpec.companionObjectBuilder()
+            TypeSpec.companionObjectBuilder(companion)
                 .addProperty(
                     PropertySpec.builder("entries", knownList)
                         .addKdoc("The known values, in the spec's order.\n")
@@ -181,16 +183,22 @@ internal object OpenEnumGenerator {
     fun reachableNames(results: List<ResolvedType>, definitions: Map<String, ResolvedType>): Set<String> {
         val names = mutableSetOf<String>()
         val followed = mutableSetOf<String>()
+        // An inline type counts only when it is the definition of its name, not one nested in an
+        // operation or another schema that shares the name (a result's inline `mode` enum beside a
+        // component `Mode` only a parameter uses).
+        fun record(name: String, type: ResolvedType) {
+            if (definitions[name] == type) names.add(name)
+        }
         fun walk(type: ResolvedType) {
             when (type) {
                 is ResolvedType.Record -> {
-                    names.add(type.name)
+                    record(type.name, type)
                     type.fields.forEach { walk(it.type) }
                     type.additionalPropertiesType?.let(::walk)
                 }
-                is ResolvedType.Enum -> names.add(type.name)
+                is ResolvedType.Enum -> record(type.name, type)
                 is ResolvedType.Union -> {
-                    names.add(type.name)
+                    record(type.name, type)
                     for (variant in type.variants) {
                         variant.fields.forEach { walk(it.type) }
                         variant.additionalPropertiesType?.let(::walk)
@@ -204,7 +212,7 @@ internal object OpenEnumGenerator {
                     if (followed.add(type.name)) definitions[type.name]?.let(::walk)
                 }
                 is ResolvedType.TupleType -> {
-                    names.add(type.name)
+                    record(type.name, type)
                     type.elements.forEach(::walk)
                 }
                 is ResolvedType.ListType -> walk(type.elementType)

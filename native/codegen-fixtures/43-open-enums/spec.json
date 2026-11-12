@@ -299,6 +299,13 @@
               "web",
               "unknown"
             ]
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "companion",
+              "other"
+            ]
           }
         },
         "required": [

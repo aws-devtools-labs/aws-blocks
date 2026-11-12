@@ -134,6 +134,29 @@ public nonisolated enum TaskLabels: RawRepresentable, Codable, Hashable, Sendabl
     }
 }
 
+public nonisolated enum TaskPhase: RawRepresentable, Codable, Hashable, Sendable {
+    case companion
+    case other
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "companion": self = .companion
+        case "other": self = .other
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .companion: return "companion"
+        case .other: return "other"
+        case .unknown(let value): return value
+        }
+    }
+}
+
 public nonisolated enum TaskPriority: RawRepresentable, Codable, Hashable, Sendable {
     case low
     case high
@@ -184,6 +207,7 @@ public nonisolated struct Task: Codable, Sendable {
     public let history: [Status]
     public let id: String
     public let labels: [String: TaskLabels]
+    public let phase: TaskPhase?
     public let priority: TaskPriority?
     public let source: TaskSource?
     public let status: Status
@@ -192,6 +216,7 @@ public nonisolated struct Task: Codable, Sendable {
         case history
         case id
         case labels
+        case phase
         case priority
         case source
         case status
@@ -202,15 +227,17 @@ public nonisolated struct Task: Codable, Sendable {
         try c.encode(self.history, forKey: .history)
         try c.encode(self.id, forKey: .id)
         try c.encode(self.labels, forKey: .labels)
+        try c.encodeIfPresent(self.phase, forKey: .phase)
         try c.encodeIfPresent(self.priority, forKey: .priority)
         try c.encodeIfPresent(self.source, forKey: .source)
         try c.encode(self.status, forKey: .status)
     }
 
-    public init(history: [Status], id: String, labels: [String: TaskLabels], priority: TaskPriority? = nil, source: TaskSource? = nil, status: Status) {
+    public init(history: [Status], id: String, labels: [String: TaskLabels], phase: TaskPhase? = nil, priority: TaskPriority? = nil, source: TaskSource? = nil, status: Status) {
         self.history = history
         self.id = id
         self.labels = labels
+        self.phase = phase
         self.priority = priority
         self.source = source
         self.status = status

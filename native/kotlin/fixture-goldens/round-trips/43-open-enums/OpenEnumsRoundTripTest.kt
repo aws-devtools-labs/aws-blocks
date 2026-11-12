@@ -39,6 +39,12 @@ class OpenEnumsRoundTripTest : FunSpec({
         BlocksJson.encodeToJsonElement(Task.serializer(), task) shouldBe wire
     }
 
+    test("a value named companion is a case of its own beside the named companion object") {
+        Task.Phase.fromValue("companion") shouldBe Task.Phase.Companion
+        Task.Phase.Known.entries shouldBe listOf(Task.Phase.Companion, Task.Phase.Other)
+        BlocksJson.encodeToJsonElement(Task.Phase.Serializer, Task.Phase.Companion) shouldBe json("\"companion\"")
+    }
+
     test("known values decode to their cases") {
         Status.fromValue("in-progress") shouldBe Status.InProgress
         Status.entries shouldBe listOf(Status.Todo, Status.InProgress, Status.Done)

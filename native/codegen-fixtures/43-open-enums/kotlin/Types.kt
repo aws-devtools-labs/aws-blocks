@@ -4,6 +4,7 @@ import kotlin.String
 import kotlin.collections.List
 import kotlin.collections.Map
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
@@ -60,53 +61,12 @@ public sealed class Color {
   }
 }
 
-/**
- * A string enum that keeps a value this client was generated without as [Unknown].
- */
-@Serializable(with = Mode.Serializer::class)
-public sealed class Mode {
-  /**
-   * The value as it is sent on the wire.
-   */
-  public abstract val `value`: String
-
-  public data object Auto : Mode() {
-    override val `value`: String = "auto"
-  }
-
-  public data object Manual : Mode() {
-    override val `value`: String = "manual"
-  }
-
-  /**
-   * A value this client was generated without, as the server sent it.
-   */
-  public data class Unknown(
-    override val `value`: String,
-  ) : Mode()
-
-  public companion object {
-    /**
-     * The known values, in the spec's order.
-     */
-    public val entries: List<Mode> by lazy { listOf(Auto, Manual) }
-
-    /**
-     * The case for [value]: a known one, else [Unknown].
-     */
-    public fun fromValue(`value`: String): Mode = entries.firstOrNull { it.value == value } ?: Unknown(value)
-  }
-
-  public object Serializer : KSerializer<Mode> {
-    override val descriptor: SerialDescriptor =
-        PrimitiveSerialDescriptor("com.example.app.Mode", PrimitiveKind.STRING)
-
-    override fun serialize(encoder: Encoder, `value`: Mode) {
-      encoder.encodeString(value.value)
-    }
-
-    override fun deserialize(decoder: Decoder): Mode = fromValue(decoder.decodeString())
-  }
+@Serializable
+public enum class Mode {
+  @SerialName("auto")
+  Auto,
+  @SerialName("manual")
+  Manual,
 }
 
 /**
@@ -274,6 +234,7 @@ public data class Task(
   public val labels: Map<String, Labels>,
   public val priority: Priority? = null,
   public val source: Source? = null,
+  public val phase: Phase? = null,
 ) {
   /**
    * A string enum that keeps a value this client was generated without as [Unknown].
@@ -321,6 +282,55 @@ public data class Task(
       }
 
       override fun deserialize(decoder: Decoder): Labels = fromValue(decoder.decodeString())
+    }
+  }
+
+  /**
+   * A string enum that keeps a value this client was generated without as [Unknown].
+   */
+  @Serializable(with = Phase.Serializer::class)
+  public sealed class Phase {
+    /**
+     * The value as it is sent on the wire.
+     */
+    public abstract val `value`: String
+
+    public data object Companion : Phase() {
+      override val `value`: String = "companion"
+    }
+
+    public data object Other : Phase() {
+      override val `value`: String = "other"
+    }
+
+    /**
+     * A value this client was generated without, as the server sent it.
+     */
+    public data class Unknown(
+      override val `value`: String,
+    ) : Phase()
+
+    public companion object Known {
+      /**
+       * The known values, in the spec's order.
+       */
+      public val entries: List<Phase> by lazy { listOf(Companion, Other) }
+
+      /**
+       * The case for [value]: a known one, else [Unknown].
+       */
+      public fun fromValue(`value`: String): Phase = entries.firstOrNull { it.value == value } ?: Unknown(value)
+    }
+
+    public object Serializer : KSerializer<Phase> {
+      override val descriptor: SerialDescriptor =
+          PrimitiveSerialDescriptor("com.example.app.Phase", PrimitiveKind.STRING)
+
+      override fun serialize(encoder: Encoder, `value`: Phase) {
+        encoder.encodeString(value.value)
+      }
+
+      override fun deserialize(decoder: Decoder): Phase = fromValue(decoder.decodeString())
     }
   }
 
