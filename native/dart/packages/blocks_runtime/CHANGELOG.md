@@ -1,5 +1,7 @@
 ## Unreleased
 
+The next release is 0.2.0, because of the breaking changes marked below.
+
 - `OidcClient.signInRelay` checks the callback's `state` and the CSRF value
   in its envelope before it reads an IdP `error`. A redirect to the app's
   scheme that didn't come from this sign-in now fails the state check
@@ -13,30 +15,28 @@
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.
-
 - **Breaking:** `OidcClient.signOut()` returns `Future<Uri?>`, the identity
   provider's logout URL, or null when it has none. Open it with the app's
   launcher to end the provider's own session; the client doesn't open it. It
   POSTs `{signOutPath}?format=json`. On a 2xx it clears the stored tokens and
   emits `OidcSignedOut`. It doesn't clear the session store, which may hold
   other `Auth` blocks' cookies; the server's `Set-Cookie` removes this
-  block's cookie. On a 503
-  `SignOutIncompleteException` (the cookie was cleared but the server-side
-  session was not removed) it does the same, then throws an
-  `OidcRequestException` with that `errorName`. Any other status, or a transport
-  error, now throws: the stored tokens are cleared, but the session cookie
-  and the state are kept. It used to ignore the response and drop the
-  logout URL.
+  block's cookie. On a 503 `SignOutIncompleteException` (the cookie was
+  cleared but the server-side session was not removed) it does the same,
+  then throws an `OidcRequestException` with that `errorName`. Any other
+  status, or a transport error, now throws: the stored tokens are cleared,
+  but the session cookie and the state are kept. It used to ignore the
+  response and drop the logout URL.
 - **Breaking:** `OidcClient.restore()` returns `Future<OidcUser?>` and reads
   the backend's session route (`GET <exchangePath's directory>/session`, new
   `OidcClient.sessionPath`) with the session cookie, plus the stored access
   token as a bearer token when there is one and it hasn't expired. A client
-  from a custom block's `getClient()` now needs that route on the block. On 200 it emits `OidcSignedIn`
-  with the server's user and returns it; on 401 it clears the stored tokens,
-  emits `OidcSignedOut` and returns null; any other status throws an
-  `OidcRequestException` without changing the state (a 404 means the block
-  serves no session route), as does a 200 whose body has no readable
-  `user`. It no longer builds the user from the access
+  from a custom block's `getClient()` now needs that route on the block. On
+  200 it emits `OidcSignedIn` with the server's user and returns it; on 401
+  it clears the stored tokens, emits `OidcSignedOut` and returns null; any
+  other status throws an `OidcRequestException` without changing the state
+  (a 404 means the block serves no session route), as does a 200 whose body
+  has no readable `user`. It no longer builds the user from the access
   token's JWT claims, so the user id is the server's, and it no longer emits
   `OidcLoading` first. It used to report signed out for a valid cookie
   session, because a cookie session stores no tokens.
@@ -57,7 +57,11 @@
   prefixed with the block's base path (such as
   `/aws-blocks/auth/access_token`), so clients for several `Auth` blocks can
   share one token store. Clients built the other ways keep the unprefixed
-  keys.
+  keys. A `forAuth` client doesn't read tokens stored under the unprefixed
+  keys (`access_token`, `refresh_token`, `expires_at`, `provider`), so an
+  app that moves to `forAuth` from a client that stored bearer tokens can
+  delete them. The client doesn't, because another client may still share
+  the store.
 - Add `OidcClient.relayTo`, the relay URI `signInRelay` uses when it isn't
   given one. `signInRelay`'s `relayTo` is now optional; with neither set, it
   throws a `StateError` before sending anything.
