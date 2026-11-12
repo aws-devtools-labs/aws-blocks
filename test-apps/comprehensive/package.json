@@ -47,6 +47,7 @@
     "@aws-blocks/bb-tracer": "*",
     "@aws-blocks/blocks": "*",
     "@aws-blocks/core": "*",
+    "kysely": "^0.29.7",
     "zod": "^4.6.7"
   },
   "devDependencies": {

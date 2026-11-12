@@ -3,7 +3,7 @@
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
+import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common/core';
 import {
 	AURORA_MIGRATION_TRANSACTION_TIMEOUT_MS,
 	DEFAULT_MIGRATIONS_ROOT,
