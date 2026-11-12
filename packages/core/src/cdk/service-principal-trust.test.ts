@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { before, describe, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import * as cdk from 'aws-cdk-lib';
+import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import type { IWidget } from 'aws-cdk-lib/aws-cloudwatch';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type { IFunction } from 'aws-cdk-lib/aws-lambda';
@@ -237,17 +238,18 @@ describe('service-principal trust check', () => {
 		assert.doesNotThrow(() => app.synth());
 	});
 
-	test('exempts only apigateway.amazonaws.com, and only on the stack-level CloudWatch Logs role', () => {
+	test('exempts only apigateway.amazonaws.com, and only on a role an AWS::ApiGateway::Account names', () => {
 		const { app, stack } = checkedStack();
-		// Another principal on the CloudWatch Logs role id is still reported.
+		// Another principal on a CloudWatch Logs role is still reported.
 		const cloudWatchRole = new iam.Role(stack, 'BlocksApiGatewayCloudWatchRole', {
 			assumedBy: new iam.CompositePrincipal(
 				new iam.ServicePrincipal('apigateway.amazonaws.com'),
 				new iam.ServicePrincipal('glue.amazonaws.com'),
 			),
 		});
+		new apigateway.CfnAccount(stack, 'Account', { cloudWatchRoleArn: cloudWatchRole.roleArn });
 		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(cloudWatchRole)), ['glue.amazonaws.com']);
-		// API Gateway on any other role, or on the same id below stack scope, is reported.
+		// API Gateway on a role no account names is reported, whatever its id.
 		const other = new iam.Role(stack, 'OtherApiGatewayRole', {
 			assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
 		});
@@ -261,6 +263,16 @@ describe('service-principal trust check', () => {
 			trustError('TrustCheckStack/OtherApiGatewayRole/Resource', 'apigateway.amazonaws.com'),
 			trustError('TrustCheckStack/Nested/BlocksApiGatewayCloudWatchRole/Resource', 'apigateway.amazonaws.com'),
 		]);
+	});
+
+	test('reports API Gateway on a role an AWS::ApiGateway::Account in another stack names', () => {
+		const { app, stack } = checkedStack();
+		const role = new iam.Role(stack, 'LogsRole', {
+			assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
+		});
+		const otherStack = new cdk.Stack(app, 'OtherStack', { env: { account: '123456789012', region: 'us-east-1' } });
+		new apigateway.CfnAccount(otherStack, 'Account', { cloudWatchRoleArn: role.roleArn });
+		assert.deepStrictEqual(unconditionedServicePrincipals(roleResource(role)), ['apigateway.amazonaws.com']);
 	});
 
 	test('fails synth for an unconditioned non-Lambda service role, naming the role path and principal', () => {
@@ -384,6 +396,19 @@ describe('service-principal trust check', () => {
 			...expectedAppRoleWarnings('TrustCheckEmbeddedAppRoles', [['ModuleStackRole', 'glue.amazonaws.com']]),
 		];
 		assert.deepStrictEqual(trustWarnings(app.synth(), stack).sort(byId), expected.sort(byId));
+	});
+
+	test("BlocksStack doesn't warn for the CloudWatch Logs role of an app-owned RestApi", async () => {
+		const { app, stack } = await trustCheckBlocksStack('TrustCheckUserRestApi', { blockRole: false });
+		// CDK's default `cloudWatchRole`: the RestApi creates the role and an
+		// AWS::ApiGateway::Account that names it.
+		const api = new apigateway.RestApi(stack, 'UserApi');
+		api.root.addMethod('GET', new apigateway.MockIntegration());
+		const assembly = app.synth();
+		const expected = expectedAppRoleWarnings('TrustCheckUserRestApi', FIXTURE_ROOT_APP_ROLES);
+		assert.deepStrictEqual(trustWarnings(assembly, stack).sort(byId), expected.sort(byId));
+		const role = api.node.findChild('CloudWatchRole').node.defaultChild as cdk.CfnResource;
+		assert.deepStrictEqual(unconditionedServicePrincipals(role), []);
 	});
 
 	test('the app-owned role warning can be acknowledged on the stack', async () => {

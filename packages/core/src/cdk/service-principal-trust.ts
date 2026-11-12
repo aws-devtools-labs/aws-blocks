@@ -21,24 +21,53 @@ export const SERVICE_PRINCIPAL_TRUST_WARNING_ID = '@aws-blocks/core:serviceRoleT
  */
 const UNCONDITIONED_SERVICES: ReadonlySet<string> = new Set(['lambda.amazonaws.com', 'edgelambda.amazonaws.com']);
 
-/**
- * Construct id of the account-level API Gateway CloudWatch Logs role that
- * `ensureApiGatewayAccount` creates at stack scope (in `@aws-blocks/core` and,
- * under the same id, in `@aws-blocks/hosting`).
- */
-const APIGATEWAY_CLOUDWATCH_ROLE_ID = 'BlocksApiGatewayCloudWatchRole';
+/** CloudFormation type of the account-level API Gateway settings resource. */
+const APIGATEWAY_ACCOUNT_TYPE = 'AWS::ApiGateway::Account';
 
 /**
- * Whether `service` on `role` is the `apigateway.amazonaws.com` trust of the
- * stack-level API Gateway CloudWatch Logs role, which stays unconditioned: API
- * Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers
- * logs with this role, so either condition stops log delivery. Only that
- * principal on that role is exempt.
+ * The logical id of the role an `AWS::ApiGateway::Account`'s rendered
+ * `CloudWatchRoleArn` (property overrides included) points at, when it is a
+ * `Fn::GetAtt` of a role's `Arn` in the same stack; otherwise `undefined`.
+ */
+function cloudWatchRoleLogicalId(account: cdk.CfnResource): string | undefined {
+	const rendered = cdk.Stack.of(account).resolve(account._toCloudFormation());
+	if (!isObject(rendered) || !isObject(rendered.Resources)) return undefined;
+	const resource = Object.values(rendered.Resources)[0];
+	if (!isObject(resource) || !isObject(resource.Properties)) return undefined;
+	const arn = resource.Properties.CloudWatchRoleArn;
+	if (!isObject(arn)) return undefined;
+	const getAtt = arn['Fn::GetAtt'];
+	if (Array.isArray(getAtt) && getAtt.length === 2 && getAtt[1] === 'Arn' && typeof getAtt[0] === 'string') {
+		return getAtt[0];
+	}
+	if (typeof getAtt === 'string' && getAtt.endsWith('.Arn')) return getAtt.slice(0, -'.Arn'.length);
+	return undefined;
+}
+
+/**
+ * Whether `service` on `role` is the `apigateway.amazonaws.com` trust of an API
+ * Gateway CloudWatch Logs role: a role that an `AWS::ApiGateway::Account` in
+ * the same stack names as its `CloudWatchRoleArn`. That covers the stack-level
+ * role `ensureApiGatewayAccount` creates (`@aws-blocks/core` and
+ * `@aws-blocks/hosting`) and the `cloudWatchRole` a CDK `RestApi` creates by
+ * default. The trust stays unconditioned: API Gateway does not send
+ * `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with this role,
+ * so either condition stops log delivery. Only that principal on such a role
+ * is exempt.
  */
 function isApiGatewayCloudWatchTrust(role: cdk.CfnResource, service: string): boolean {
 	if (service !== 'apigateway.amazonaws.com') return false;
-	const l2 = role.node.scope;
-	return l2?.node.id === APIGATEWAY_CLOUDWATCH_ROLE_ID && l2.node.scope === cdk.Stack.of(role);
+	const stack = cdk.Stack.of(role);
+	const roleId = stack.resolve(role.logicalId);
+	return stack.node
+		.findAll()
+		.some(
+			(c) =>
+				cdk.CfnResource.isCfnResource(c) &&
+				c.cfnResourceType === APIGATEWAY_ACCOUNT_TYPE &&
+				cdk.Stack.of(c) === stack &&
+				cloudWatchRoleLogicalId(c) === roleId,
+		);
 }
 
 /** Condition keys that scope a service-principal trust to this account's resources (compared case-insensitively). */
@@ -108,7 +137,7 @@ function unconditionedTrusts(role: cdk.CfnResource): UnconditionedTrust[] {
  * The service principals in `role`'s trust policy that `Allow` an assume-role
  * action with neither an `aws:SourceAccount` nor an `aws:SourceArn` condition,
  * other than the Lambda execution principals ({@link UNCONDITIONED_SERVICES})
- * and the API Gateway CloudWatch Logs role's trust ({@link isApiGatewayCloudWatchTrust}).
+ * and the trust of an API Gateway CloudWatch Logs role ({@link isApiGatewayCloudWatchTrust}).
  *
  * @internal
  */
