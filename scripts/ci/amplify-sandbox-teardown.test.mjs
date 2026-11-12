@@ -58,6 +58,8 @@ function run({ failures = 0, hang = false, budgetSeconds = 30, args }) {
 	chmodSync(join(bin, 'npm'), 0o755);
 	const state = join(dir, 'state.json');
 	const log = join(dir, 'calls.log');
+	const summary = join(dir, 'step-summary.md');
+	writeFileSync(summary, '');
 	writeFileSync(state, JSON.stringify({ failures, hang }));
 	writeFileSync(log, '');
 	const r = spawnSync(process.execPath, [SCRIPT, ...(args ?? [app, 'amp-1234-1'])], {
@@ -67,6 +69,7 @@ function run({ failures = 0, hang = false, budgetSeconds = 30, args }) {
 			PATH: `${bin}:${process.env.PATH}`,
 			FAKE_NPM_STATE: state,
 			FAKE_NPM_LOG: log,
+			GITHUB_STEP_SUMMARY: summary,
 			AMPLIFY_TEARDOWN_BUDGET_SECONDS: String(budgetSeconds),
 			AMPLIFY_TEARDOWN_BACKOFF_MS: '10',
 			AMPLIFY_TEARDOWN_JITTER_MS: '10',
@@ -79,7 +82,7 @@ function run({ failures = 0, hang = false, budgetSeconds = 30, args }) {
 		.map((l) => JSON.parse(l));
 	const childFile = `${state}.child`;
 	const childPid = existsSync(childFile) ? Number(readFileSync(childFile, 'utf8')) : null;
-	return { ...r, calls, app, childPid };
+	return { ...r, calls, app, childPid, summary: readFileSync(summary, 'utf8') };
 }
 
 describe('amplify-sandbox-teardown', () => {
@@ -89,7 +92,8 @@ describe('amplify-sandbox-teardown', () => {
 		assert.deepEqual(r.calls, [
 			{ cwd: r.app, args: ['run', 'sandbox:delete', '--', '--identifier', 'amp-1234-1'] },
 		]);
-		assert.doesNotMatch(r.stdout, /::warning/);
+		assert.doesNotMatch(r.stdout, /::(warning|error)/);
+		assert.equal(r.summary, '');
 	});
 
 	it('retries a failed delete until it succeeds', () => {
@@ -97,14 +101,18 @@ describe('amplify-sandbox-teardown', () => {
 		assert.equal(r.status, 0, r.stdout + r.stderr);
 		assert.equal(r.calls.length, 3);
 		assert.match(r.stdout, /Deleted Amplify sandbox "amp-1234-1"/);
-		assert.doesNotMatch(r.stdout, /::warning/);
+		assert.doesNotMatch(r.stdout, /::(warning|error)/);
+		assert.equal(r.summary, '');
 	});
 
-	it('warns without failing the step when the budget runs out', () => {
+	it('reports an error, without failing the step, when the budget runs out', () => {
 		const r = run({ failures: 1_000, budgetSeconds: 0.2 });
 		assert.equal(r.status, 0, r.stdout + r.stderr);
 		assert.ok(r.calls.length >= 1);
-		assert.match(r.stdout, /::warning title=Amplify sandbox teardown::sandbox "amp-1234-1" not deleted/);
+		// An error, not a warning: the left sandbox holds a self sign-up user pool.
+		assert.match(r.stdout, /::error title=Amplify sandbox teardown::sandbox "amp-1234-1" not deleted/);
+		assert.match(r.stdout, /Cognito user pool/);
+		assert.match(r.summary, /### Amplify sandbox teardown failed[\s\S]*sandbox "amp-1234-1" not deleted/);
 	});
 
 	it('stops a hung delete, and what it started, when the budget runs out', async () => {
@@ -113,7 +121,7 @@ describe('amplify-sandbox-teardown', () => {
 		assert.equal(r.status, 0, r.stdout + r.stderr);
 		assert.ok(Date.now() - started < 10_000, 'returns soon after the budget, not when the delete would');
 		assert.equal(r.calls.length, 1);
-		assert.match(r.stdout, /::warning title=Amplify sandbox teardown::sandbox "amp-1234-1" not deleted \(attempt 1 stopped/);
+		assert.match(r.stdout, /::error title=Amplify sandbox teardown::sandbox "amp-1234-1" not deleted \(attempt 1 stopped/);
 		assert.ok(r.childPid, 'the fake npm started its child');
 		// A killed process can take a moment to be reaped.
 		for (let i = 0; i < 20 && alive(r.childPid); i++) await new Promise((res) => setTimeout(res, 100));

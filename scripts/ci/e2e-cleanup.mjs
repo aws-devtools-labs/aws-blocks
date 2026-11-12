@@ -19,7 +19,7 @@
 //    the runner itself uses to terminate orphans at job end, except this
 //    process, its ancestors, and everything the cleanup step itself started.
 //    CDK treats a lock held by a dead PID as stale.
-// 2. Runs the command. A failure is reported as a ::warning:: annotation and in
+// 2. Runs the command. A failure is reported as an ::error:: annotation and in
 //    the step summary, and this exits 0: a teardown failure is not a test
 //    result, and the stack-cleanup sweeper reclaims what is left behind.
 //
@@ -220,8 +220,11 @@ function escapeData(s) {
 /** Report a failed cleanup where a reviewer sees it: an annotation and the step summary. */
 export function reportFailure(command, status, seconds) {
 	const what = `\`${command.join(' ')}\` exited with ${status} after ${seconds}s`;
+	// An error annotation, not a warning: a leaked stack can hold a Cognito
+	// user pool with self sign-up, which the account's security scan files a
+	// finding for, so it must not read as noise. Still exit 0 (see above).
 	console.log(
-		`::warning title=E2E cleanup failed::${escapeData(what.replaceAll('`', "'"))}. This job's stacks may be left behind.`,
+		`::error title=E2E cleanup failed::${escapeData(what.replaceAll('`', "'"))}. This job's stacks may be left behind.`,
 	);
 	const summary = process.env.GITHUB_STEP_SUMMARY;
 	if (!summary) return;
