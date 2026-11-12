@@ -77,8 +77,10 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 
 		assert.strictEqual(h.sessionWrites.length, 1);
 		const [w] = h.sessionWrites;
-		// Plus `Auth`'s own sign-in time, which a password reset compares against (#912).
-		const { issuedAt, ...cognitoTokens } = w.value;
+		// Plus `Auth`'s own sign-in time, which a password reset compares against (#912),
+		// and the row's `version`, which a conditional write compares: 1 for a new session.
+		const { issuedAt, version, ...cognitoTokens } = w.value;
+		assert.strictEqual(version, 1);
 		assert.deepStrictEqual(cognitoTokens, {
 			idToken: tokens.IdToken,
 			accessToken: tokens.AccessToken,
@@ -88,7 +90,8 @@ describe('AWS signIn (USER_PASSWORD_AUTH)', () => {
 		assert.deepStrictEqual(w.options, { ttlSeconds: DEFAULT_TTL });
 		// Opaque, server-generated id: 24 random bytes, base64url.
 		assert.match(w.key, /^[A-Za-z0-9_-]{32}$/);
-		assert.deepStrictEqual(await h.lookupSession(w.key), w.value);
+		// The record that the store reads back is the row without its `version`.
+		assert.deepStrictEqual(await h.lookupSession(w.key), { ...cognitoTokens, issuedAt });
 	});
 
 	test('sets an HttpOnly session cookie auth_<fullId>=<sessionId>.<hmac> with Max-Age = session TTL', async () => {
