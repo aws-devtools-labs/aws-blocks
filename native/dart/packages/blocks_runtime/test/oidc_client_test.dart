@@ -92,6 +92,84 @@ void main() {
     });
   });
 
+  group('OidcClient auth origin', () {
+    // The auth routes resolve against the base URL cut at its first
+    // `aws-blocks` path segment, which keeps an API Gateway stage.
+    Future<String> exchangeUrlFor(String baseUrl) async {
+      Uri? sent;
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: baseUrl,
+        tokenStore: InMemoryTokenStore(),
+        httpClient: MockClient((req) async {
+          sent = req.url;
+          return http.Response(
+            jsonEncode({
+              'user': {'userId': 'u1', 'username': 'alice'},
+            }),
+            200,
+          );
+        }),
+      );
+      await client.exchange(
+        code: 'c',
+        verifier: 'v',
+        callbackUrl: 'cb',
+        provider: 'google',
+        state: 's',
+        nonce: '',
+      );
+      return sent.toString();
+    }
+
+    test('keeps an API Gateway stage', () async {
+      expect(
+        await exchangeUrlFor(
+          'https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api',
+        ),
+        'https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/exchange',
+      );
+    });
+
+    test('gives the origin for a URL with no stage', () async {
+      expect(
+        await exchangeUrlFor('https://d1.cloudfront.net/aws-blocks/api'),
+        'https://d1.cloudfront.net/aws-blocks/auth/exchange',
+      );
+    });
+
+    test('gives the origin for a doubled RPC prefix', () async {
+      expect(
+        await exchangeUrlFor(
+          'https://d1.cloudfront.net/aws-blocks/api/aws-blocks/api',
+        ),
+        'https://d1.cloudfront.net/aws-blocks/auth/exchange',
+      );
+    });
+
+    test('keeps a URL with no aws-blocks segment, port included', () async {
+      expect(
+        await exchangeUrlFor('http://localhost:3001'),
+        'http://localhost:3001/aws-blocks/auth/exchange',
+      );
+      expect(
+        await exchangeUrlFor('http://localhost:3001/'),
+        'http://localhost:3001/aws-blocks/auth/exchange',
+      );
+    });
+
+    test('cuts only at a segment that is exactly aws-blocks', () async {
+      expect(
+        await exchangeUrlFor('https://host/aws-blocks-x/aws-blocks/api'),
+        'https://host/aws-blocks-x/aws-blocks/auth/exchange',
+      );
+    });
+  });
+
   group('OidcClient refresh', () {
     test('sends refresh token and stores new access token', () async {
       final store = InMemoryTokenStore();

@@ -84,9 +84,6 @@ class OidcClient implements AuthProvider {
   }) : sessionStore = sessionStore ?? InMemorySessionStore(),
        _httpClient = httpClient ?? http.Client();
 
-  /// The framework's JSON-RPC mount prefix. Auth routes do NOT live under it.
-  static const String _rpcPathPrefix = '/aws-blocks/api';
-
   /// API origin that the server-relay auth routes resolve against.
   ///
   /// [baseUrl] is the JSON-RPC endpoint (e.g.
@@ -94,15 +91,24 @@ class OidcClient implements AuthProvider {
   /// `/auth-relay/*`, …) mount at the API *origin*, not under the RPC path. We
   /// strip the RPC prefix so auth requests target `<origin><authPath>` — the
   /// auth path prefix itself comes from the server-provided path fields
-  /// (`authorizeParamsBasePath`, `exchangePath`, …). Falls back to [baseUrl]
-  /// unchanged when it doesn't end with the RPC prefix (e.g. a bare origin).
+  /// (`authorizeParamsBasePath`, `exchangePath`, …).
+  ///
+  /// The cut is at the first path segment that is exactly `aws-blocks`:
+  /// scheme, host, port and every segment before it (an API Gateway stage
+  /// such as `/prod`) are kept, with no trailing `/`. So a URL that repeats
+  /// the RPC prefix (`…/aws-blocks/api/aws-blocks/api`) gives the same origin
+  /// as one that has it once. Falls back to [baseUrl] with its trailing `/`
+  /// stripped when no segment is `aws-blocks` (e.g. a bare origin).
   String get _authBaseUrl {
-    var s = baseUrl;
+    final uri = Uri.parse(baseUrl.trim());
+    // Split the encoded path, so a percent-encoded stage stays as sent.
+    final segments = uri.path.split('/');
+    final cut = segments.indexOf('aws-blocks');
+    var s = cut < 0
+        ? baseUrl.trim()
+        : '${uri.scheme}://${uri.authority}${segments.take(cut).join('/')}';
     while (s.endsWith('/')) {
       s = s.substring(0, s.length - 1);
-    }
-    if (s.endsWith(_rpcPathPrefix)) {
-      return s.substring(0, s.length - _rpcPathPrefix.length);
     }
     return s;
   }

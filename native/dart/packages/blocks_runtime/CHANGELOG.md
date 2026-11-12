@@ -1,5 +1,11 @@
 ## Unreleased
 
+- `OidcClient` resolves the auth routes against its base URL cut at the
+  first path segment that is `aws-blocks`, keeping any API Gateway stage. It
+  used to strip one trailing `/aws-blocks/api`, so a base URL that repeated
+  it (`…/aws-blocks/api/aws-blocks/api`) sent auth requests under the RPC
+  path.
+
 - Add `TypedOidcClient<P extends OidcProvider>`, an extension type over an
   `OidcClient` whose `signIn`, `signInRelay` and `exchange` take a provider
   of type `P` (and send its `providerName`) instead of a name, so a typo or
