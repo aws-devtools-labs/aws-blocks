@@ -1,11 +1,14 @@
 ---
-"@aws-blocks/bb-auth-basic": minor
-"@aws-blocks/bb-auth-cognito": minor
-"@aws-blocks/bb-auth-oidc": minor
+"@aws-blocks/bb-auth": minor
 ---
 
-refactor(auth): adopt the new `KVStore` item layout for the user, code and session tables
+feat(bb-auth): the session store uses the new `KVStore` layout
 
-The three auth blocks follow `@aws-blocks/bb-kv-store` to its new version. Their public APIs do not change. Their DynamoDB tables do: the partition key attribute is now `_bkv_pk` (was `pk`), object records are stored as flat attributes, and DynamoDB TTL is always enabled (`AuthBasic` and `AuthCognito` no longer pass `ttl: true`; `AuthCognito` maps `removalPolicy` onto the store's `protection`). Compare-and-swap writes on session records use `ifFieldEquals` instead of a whole-value compare: the `AuthCognito` and `AuthOIDC` session records have a numeric `version` field that each write increments, and a conditional write compares that field alone. Reads of a single record (`KVStore.get`) are now strongly consistent, so in `AuthBasic` a request that starts after `signOut` or a password reset sees the revocation on every Lambda instance; these reads use twice the read capacity.
+`Auth` follows `@aws-blocks/bb-kv-store` to its new version. Its public API does not change.
 
-A deployed stack cannot update these tables in place, because a DynamoDB key schema cannot change and the tables have fixed names. For a sandbox, destroy the stack and deploy again. For a production stack, deploy the auth block under a new id (users and sessions sign in again) or copy the items to the new tables before switching.
+- The `sessions` table changes: the partition key attribute is `_bkv_pk` (was `pk`), each field of a session record is one attribute, and the expiry is in `_bkv_ttl` (was `ttl`). DynamoDB TTL is always on.
+- **A deployed stack cannot update the `sessions` table in place.** A key change is a replacement, and CloudFormation does not replace a table that has a fixed name. The first deploy over a stack that an earlier release deployed (with `AuthCognito` or `AuthOIDC`) fails and rolls back until the old `sessions` table is out of the stack. For a sandbox, destroy the stack and deploy again. For a stack whose user pool you must keep, remove the old table from the stack first; see "The `sessions` table" in `MIGRATION.md`. The table holds only sessions: users sign in once more, and the user pool is not affected.
+- A session row has a numeric `version` that each write increments. A refresh, or a refresh that the identity provider rejects, writes on the condition that the version is the one it read, in place of a compare of the whole row.
+- `removalPolicy` and `deletionProtection` map onto the one `protection` setting of the store for the session table: retained and protected when deletion protection resolves to on, retained when it resolves to off with `'retain'`, deleted with the stack when it resolves to off with `'destroy'`. With neither option set, the table follows the stack defaults, as before.
+- `auth.admin.revokeUserSessions` deletes the sessions of a user with one batch call. On AWS the call can fail with the store's `BatchIncompleteException` when DynamoDB leaves entries unprocessed; call it again.
+- Local development: the mock converts the session file of an earlier release, so local users stay signed in.

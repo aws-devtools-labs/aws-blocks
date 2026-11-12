@@ -8,7 +8,7 @@ AWS Blocks ships three auth Building Blocks (`AuthBasic`, `AuthCognito`, `AuthOI
 
 Two properties are non-negotiable:
 
-1. **Existing `AuthCognito` deployments survive the switch untouched, including signed-in sessions.** The CDK layer reproduces `AuthCognito`'s resource identity: child construct ids `pool`, `client`, `sessions`, `session-secret`, `group-<name>`; `userPoolName: this.fullId`; and no `GenerateSecret` on `client`. Changing any of these makes CloudFormation create a new resource and delete the old one. The class name is not part of the construct path or `fullId`, so renaming `AuthCognito` to `Auth` is identity-neutral.
+1. **Existing `AuthCognito` deployments keep their user pool, client, users and session secret across the switch.** The CDK layer reproduces `AuthCognito`'s resource identity: child construct ids `pool`, `client`, `sessions`, `session-secret`, `group-<name>`; `userPoolName: this.fullId`; and no `GenerateSecret` on `client`. Changing any of these makes CloudFormation create a new resource and delete the old one. The class name is not part of the construct path or `fullId`, so renaming `AuthCognito` to `Auth` is identity-neutral. One resource is the exception: the `sessions` table keeps its logical id and its name but not its key attribute, because `KVStore` now stores an item under `_bkv_pk`. The table is replaced, signed-in sessions end, and the first deploy fails until the old table is out of the stack ([MIGRATION.md](./MIGRATION.md#the-sessions-table)). Locally the sessions survive: the mock converts the data file of the earlier release.
 2. **Unsupported calls are compile errors, not runtime surprises** (see [Mode gates](#mode-gates)).
 
 ## Structure: one base class, pluggable engines
@@ -105,7 +105,7 @@ The non-negotiable: an app switching `AuthCognito` → `Auth` with the same id k
 | Cookie value | `<sessionId>.<base64url(HMAC-SHA256(sessionId, secret))>`, verified in constant time |
 | Cookie attributes | `HttpOnly; <D-007 SameSite/Secure/Partitioned>; Path=/; Max-Age=<session ttl>` (default 400 days), re-issued on refresh |
 | Secret | AWS: the `session-secret` `AppSetting` child (same SSM parameter). Mock: `sessionSecret` in `.bb-data/<fullId>/state.json` (the file `AuthCognito`'s mock uses — the mock engine must preserve that field) |
-| Store | `KVStore` child `sessions` (table / mock dir `<fullId>-sessions`); key = 24 random bytes, base64url |
+| Store | `KVStore` child `sessions` (table / mock dir `<fullId>-sessions`); key = 24 random bytes, base64url. Each row also has a numeric `version` (`1` on create, one more on each write); a conditional write (refresh, rejected refresh) compares that field alone |
 | Pool row | `{ idToken, accessToken, refreshToken }` — **no discriminator**; user decoded from the ID token, validity from the access token's `exp`, freshness from `auth_time` (else `iat`). `Auth` adds an optional `provider` only for hosted-UI federated sessions, and an optional `issuedAt` (ms, its own clock, kept across refreshes) on every pool row it writes, for [password-reset revocation](#password-reset-ends-every-session-912). `AuthCognito` ignores both; a row without `issuedAt` reads as issued at `0` |
 | TTL | every write stamps `now + session ttl`, recomputed per write (sliding) |
 | Auto-sign-in bridge | `autosignin_<fullId>`, same AES-GCM + HMAC construction and HKDF `info` strings |

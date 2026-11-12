@@ -14,6 +14,9 @@
  * `UpdateUserPool` rejects it and the stack rolls back. So this test compares
  * the pool and client `Properties` exactly, and then the **whole template**
  * (IAM policy, session table, secret, groups, everything), for each pair below.
+ * One resource has a narrower promise, the session table: it keeps its logical
+ * id and its name, and its layout changes exactly as
+ * {@link SESSIONS_TABLE_ALLOWLIST} says.
  *
  * The `Auth` side is synthesized live under `--conditions=cdk` in the harness
  * stack. The `AuthCognito` side was synthesized the same way, in the same
@@ -42,8 +45,9 @@ import { frozenAuthCognitoSynths } from './test-support/legacy-fixtures.js';
 /**
  * THE ALLOWLIST — the only differences `Auth` may have from `AuthCognito`, and
  * only on the `AWS::Cognito::UserPool` resource. Nothing else is tolerated —
- * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST})
- * and the password-reset grant ({@link withoutResetGrant}).
+ * apart from the deploy-time guard's new resources ({@link GUARD_ALLOWLIST}),
+ * the password-reset grant ({@link withoutResetGrant}) and the layout of the
+ * session table ({@link SESSIONS_TABLE_ALLOWLIST}).
  *
  * The pool honours the stack defaults when `removalPolicy` /
  * `deletionProtection` are unset. `AuthCognito` hard-codes `DESTROY` unless
@@ -130,6 +134,96 @@ function withoutResetGrant(template: CfnTemplateJson): void {
 	}
 }
 
+/**
+ * THE SESSIONS TABLE ALLOWLIST — the session store is a `KVStore`, and the
+ * `KVStore` that `Auth` uses has another item layout than the one
+ * `AuthCognito` used. For this one resource the promise of this file is
+ * narrower: **the table keeps its logical id, its name and every other
+ * property, and it does not keep its key attribute or its TTL attribute.**
+ * Exactly these differences are allowed, each with its exact value on both
+ * sides. Any other difference on the table, or one of these with another
+ * value, fails.
+ *
+ * - `KeySchema` and `AttributeDefinitions`: the partition key attribute `pk`
+ *   is `_bkv_pk`.
+ * - `TimeToLiveSpecification`: the attribute `ttl` is `_bkv_ttl`.
+ * - One added IAM statement on the shared role: `dynamodb:Query` on
+ *   `<table arn>/index/*`, which the store grants with or without indexes.
+ * - `DeletionPolicy` / `UpdateReplacePolicy` `Delete` → `Retain`, only on a
+ *   table whose deletion protection is on. The store has one `protection`
+ *   setting, and a protected table is `'locked'`, which also retains it; this
+ *   happens when the block sets `removalPolicy: 'destroy'` under defaults that
+ *   protect. Template metadata only.
+ *
+ * What this means for a deployed `AuthCognito` stack: a key change is a
+ * replacement, and CloudFormation does not replace a table that has a fixed
+ * name. The first deploy over such a stack fails and rolls back until the old
+ * `sessions` table is out of the stack, and its sessions end with it
+ * (MIGRATION.md, "The `sessions` table").
+ */
+const SESSIONS_TABLE_ALLOWLIST = {
+	/** Table properties that differ, with the exact `AuthCognito` value and the exact `Auth` value. */
+	properties: [
+		{
+			name: 'KeySchema',
+			authCognito: [{ AttributeName: 'pk', KeyType: 'HASH' }],
+			auth: [{ AttributeName: '_bkv_pk', KeyType: 'HASH' }],
+		},
+		{
+			name: 'AttributeDefinitions',
+			authCognito: [{ AttributeName: 'pk', AttributeType: 'S' }],
+			auth: [{ AttributeName: '_bkv_pk', AttributeType: 'S' }],
+		},
+		{
+			name: 'TimeToLiveSpecification',
+			authCognito: { AttributeName: 'ttl', Enabled: true },
+			auth: { AttributeName: '_bkv_ttl', Enabled: true },
+		},
+	],
+	/** Resource attributes that may go from `Delete` to `Retain`, and only on a table with deletion protection on. */
+	retainedWhenProtected: ['DeletionPolicy', 'UpdateReplacePolicy'],
+	/** The one IAM action the store adds, on `<table arn>/index/*`. */
+	indexAction: 'dynamodb:Query',
+} as const;
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Take the allowlisted session-table differences out of `Auth`'s side: a
+ * property only when both sides hold the exact allowlisted values, the
+ * removal attributes only for `Delete` → `Retain` on a protected table, and
+ * the index statement only in its exact form. Anything else stays, and the
+ * comparison reports it.
+ */
+function withoutSessionsTableLayout(cognito: CfnTemplateJson, auth: CfnTemplateJson): void {
+	const cognitoTable = resourceOfType(cognito, 'AWS::DynamoDB::Table');
+	const authTable = resourceOfType(auth, 'AWS::DynamoDB::Table');
+	if (!cognitoTable || !authTable) return;
+	const [, before] = cognitoTable;
+	const [authId, after] = authTable;
+	for (const { name, authCognito: was, auth: is } of SESSIONS_TABLE_ALLOWLIST.properties) {
+		if (after.Properties && sameJson(before.Properties?.[name], was) && sameJson(after.Properties[name], is)) {
+			after.Properties[name] = structuredClone(before.Properties?.[name]);
+		}
+	}
+	if (after.Properties?.DeletionProtectionEnabled === true) {
+		for (const attr of SESSIONS_TABLE_ALLOWLIST.retainedWhenProtected) {
+			if (before[attr] === 'Delete' && after[attr] === 'Retain') after[attr] = 'Delete';
+		}
+	}
+	const indexArn = { 'Fn::Join': ['', [{ 'Fn::GetAtt': [authId, 'Arn'] }, '/index/*']] };
+	const isIndexGrant = (statement: Record<string, unknown>): boolean =>
+		Object.keys(statement).length === 3 &&
+		statement.Action === SESSIONS_TABLE_ALLOWLIST.indexAction &&
+		statement.Effect === 'Allow' &&
+		sameJson(statement.Resource, indexArn);
+	for (const resource of Object.values(auth.Resources)) {
+		if (resource.Type !== 'AWS::IAM::Policy') continue;
+		const doc = resource.Properties?.PolicyDocument as { Statement: Record<string, unknown>[] } | undefined;
+		if (doc) doc.Statement = doc.Statement.filter((statement) => !isIndexGrant(statement));
+	}
+}
+
 function isGuardResource(resource: CfnResourceJson): boolean {
 	return String(resource.Metadata?.['aws:cdk:path'] ?? '').startsWith(GUARD_ALLOWLIST.pathPrefix);
 }
@@ -197,6 +291,7 @@ function withoutAllowlisted(
 	const cognito = structuredClone(cognitoTemplate);
 	const auth = structuredClone(authTemplate);
 	withoutResetGrant(auth);
+	withoutSessionsTableLayout(cognito, auth);
 	const cognitoPool = resourceOfType(cognito, 'AWS::Cognito::UserPool');
 	const authPool = resourceOfType(auth, 'AWS::Cognito::UserPool');
 	if (authPool?.[1].Properties) {
@@ -366,6 +461,50 @@ describe('Auth — property-level snapshot vs AuthCognito', () => {
 				),
 				['PASSWORD'],
 			);
+		});
+	});
+
+	describe('the session table keeps its identity and changes its layout exactly as allowlisted', () => {
+		for (const preset of PRESETS) {
+			for (const [name, pair] of Object.entries(PAIRS)) {
+				test(`${preset} preset — pair "${name}"`, () => {
+					const cognitoTable = resourceOfType(authCognito(name, preset).template, 'AWS::DynamoDB::Table');
+					const authTable = resourceOfType(synth(pair.auth, preset).template, 'AWS::DynamoDB::Table');
+					assert.ok(cognitoTable && authTable, 'both sides synthesize the session table');
+					assert.strictEqual(authTable[0], cognitoTable[0], 'logical id');
+					assert.deepStrictEqual(
+						authTable[1].Properties?.TableName,
+						cognitoTable[1].Properties?.TableName,
+						'table name',
+					);
+					const rest = (properties: Record<string, unknown> | undefined) => {
+						const copy = { ...properties };
+						for (const { name: property } of SESSIONS_TABLE_ALLOWLIST.properties) delete copy[property];
+						return copy;
+					};
+					for (const { name: property, authCognito: was, auth: is } of SESSIONS_TABLE_ALLOWLIST.properties) {
+						assert.deepStrictEqual(cognitoTable[1].Properties?.[property], was, `AuthCognito ${property}`);
+						assert.deepStrictEqual(authTable[1].Properties?.[property], is, `Auth ${property}`);
+					}
+					assertSame(
+						rest(cognitoTable[1].Properties),
+						rest(authTable[1].Properties),
+						'session table Properties outside the allowlist',
+					);
+				});
+			}
+		}
+
+		test("removalPolicy: 'destroy' under defaults that protect: the table is 'locked' (retained and protected)", () => {
+			// The one pair that sets `removalPolicy: 'destroy'`, under the production preset.
+			const cognitoTable = resourceOfType(authCognito('everything').template, 'AWS::DynamoDB::Table');
+			const authTable = resourceOfType(synth(PAIRS.everything.auth).template, 'AWS::DynamoDB::Table');
+			assert.ok(cognitoTable && authTable);
+			assert.strictEqual(cognitoTable[1].DeletionPolicy, 'Delete');
+			assert.strictEqual(cognitoTable[1].Properties?.DeletionProtectionEnabled, true);
+			assert.strictEqual(authTable[1].DeletionPolicy, 'Retain');
+			assert.strictEqual(authTable[1].UpdateReplacePolicy, 'Retain');
+			assert.strictEqual(authTable[1].Properties?.DeletionProtectionEnabled, true);
 		});
 	});
 

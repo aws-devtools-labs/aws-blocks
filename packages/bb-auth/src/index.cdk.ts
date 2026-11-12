@@ -119,7 +119,7 @@ export type * from './types.js';
  *
  * Always creates:
  * - `AppSetting(this, 'session-secret', { secret: true })` — the session HMAC key.
- * - `KVStore(this, 'sessions', { ttl: true })` — the server-side session store.
+ * - `KVStore(this, 'sessions')` — the server-side session store. DynamoDB TTL is always on for it.
  *
  * Grants the shared execution role the client-facing `cognito-idp:*` actions on
  * the pool (and the `Admin*`/`List*` set only when `admin` is set).
@@ -407,13 +407,22 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 		new AppSetting(this, 'session-secret', { secret: true });
 
 		// ── 5. Session store ─────────────────────────────────────────────────
-		// Durability options propagate; unset, KVStore follows the stack defaults.
-		// TTL on, so session records (which hold refresh tokens) expire.
-		new KVStore(this, 'sessions', {
-			removalPolicy: opts.removalPolicy,
-			deletionProtection: opts.deletionProtection,
-			ttl: true,
-		});
+		// Durability options propagate through the store's one `protection`
+		// setting; with neither option set, KVStore follows the stack defaults.
+		// Each option resolves against the stack default first, as for the pool:
+		// deletion protection on is 'locked' (the table is retained too), off with
+		// `retain` is 'retained', off with `destroy` is 'disposable'.
+		// DynamoDB TTL is always on for the store, so session records (which hold
+		// refresh tokens) expire.
+		const sessionProtection =
+			opts.removalPolicy === undefined && opts.deletionProtection === undefined
+				? undefined
+				: (opts.deletionProtection ?? this.defaults.deletionProtection)
+					? 'locked'
+					: resolveRemovalPolicy(opts.removalPolicy, this.defaults.removalPolicy) === cdk.RemovalPolicy.RETAIN
+						? 'retained'
+						: 'disposable';
+		new KVStore(this, 'sessions', { protection: sessionProtection });
 
 		// ── 6. Config + IAM — only when a pool exists ────────────────────────
 		// A pool-less configuration registers no `BLOCKS_AUTH_COGNITO_*` key; the

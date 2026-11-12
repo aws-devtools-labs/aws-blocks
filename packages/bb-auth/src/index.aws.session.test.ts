@@ -162,9 +162,11 @@ describe('AWS session refresh (expired access token)', () => {
 				accessToken: fresh.AccessToken,
 				refreshToken: tokens.RefreshToken,
 				issuedAt,
+				// Sign-in wrote version 1; each later write stores the next one.
+				version: 2,
 			},
-			// Conditional on the row this request read, so a concurrent sign-out or refresh wins.
-			options: { ttlSeconds: DEFAULT_TTL, ifValueEquals: { ...tokensRow(tokens), issuedAt } },
+			// Conditional on the version of the row this request read, so a concurrent sign-out or refresh wins.
+			options: { ttlSeconds: DEFAULT_TTL, ifFieldEquals: { version: 1 } },
 		});
 	});
 
@@ -559,7 +561,8 @@ describe('AWS session cookie parse/verify — bad cookies mean signed-out, never
 
 describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', () => {
 	/** An SDK-shaped store failure whose text names an account and a table. */
-	const STORE_FAILURE = 'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
+	const STORE_FAILURE =
+		'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
 
 	/** Make the session store's deletes fail, as a transient DynamoDB fault would. */
 	function failSessionDeletes(h: ReturnType<typeof makeAwsAuth>): void {
@@ -593,7 +596,9 @@ describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', 
 		await signInAs(h, b, 'alice');
 		failSessionDeletes(h);
 		const state = await b.request((ctx) =>
-			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({ action: 'signOut' }),
+			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({
+				action: 'signOut',
+			}),
 		);
 		assert.strictEqual(state.state, 'signedOut');
 		assert.strictEqual(state.errorName, AuthErrors.SignOutIncomplete);

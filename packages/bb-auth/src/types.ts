@@ -223,6 +223,12 @@ export interface AuthCommonOptions {
 	 * `BlocksPresets.sandbox` destroys). Set `'retain'` explicitly for any pool
 	 * holding real users.
 	 *
+	 * The session table has one setting for removal and deletion protection
+	 * (`KVStore`'s `protection`). When this option or `deletionProtection` is
+	 * set, the table is retained and protected if deletion protection resolves
+	 * to on, retained if it resolves to off with `'retain'`, and deleted with
+	 * the stack if it resolves to off with `'destroy'`.
+	 *
 	 * @default the stack's `defaults.removalPolicy`
 	 */
 	removalPolicy?: 'destroy' | 'retain';
@@ -235,6 +241,9 @@ export interface AuthCommonOptions {
 	 * ACTIVE`); `false` leaves the property out, which Cognito treats as inactive.
 	 * Changing an already-protected pool to `false` deactivates its protection on
 	 * the next deploy.
+	 *
+	 * On the session table, deletion protection also retains the table when the
+	 * block leaves the stack (see `removalPolicy`).
 	 *
 	 * @default the stack's `defaults.deletionProtection`
 	 */
@@ -1305,8 +1314,8 @@ export interface UserPoolOptions {
 	 * values; anything else is rejected with `InvalidParameterException`, by
 	 * the local runtime as by Cognito.
 	 *
-	 * ⚠️ **Not a profile database.** Keep profile data in `KVStore` or
-	 * `DistributedTable`, keyed on `user.userSub`.
+	 * ⚠️ **Not a profile database.** Keep profile data in a `KVStore`, keyed
+	 * on `user.userSub`.
 	 */
 	attributes?: readonly UserAttribute[];
 

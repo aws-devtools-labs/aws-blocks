@@ -6,11 +6,15 @@
  *
  * ## Compatibility contract (the upgrade safety property)
  *
- * An app that switches `AuthCognito` → `Auth` with the same id keeps its
- * `sessions` table, and its signed-in users must stay signed in. So:
+ * An app that switches `AuthCognito` → `Auth` with the same id keeps the
+ * record format of its sessions. In local development its signed-in users
+ * stay signed in: the mock converts the `store.json` that the earlier
+ * `KVStore` wrote. On AWS the `sessions` table of the earlier `KVStore` has
+ * another key attribute (`pk`, now `_bkv_pk`), so that table cannot stay in
+ * place and its sessions end with it (see MIGRATION.md). So:
  *
- * - The store is a `KVStore` at child id `sessions` of the block (same table,
- *   same mock file `.bb-data/<fullId>-sessions/store.json`).
+ * - The store is a `KVStore` at child id `sessions` of the block (same table
+ *   name, same mock file `.bb-data/<fullId>-sessions/store.json`).
  * - Keys are `AuthCognito`'s: 24 random bytes, base64url.
  * - A **pool session** (email + password, or any provider federated through
  *   Cognito) is stored exactly as `AuthCognito` stores it:
@@ -19,6 +23,11 @@
  *   is decoded from the ID token, its validity is the access token's `exp`.
  *   `Auth` adds one optional field, `provider`, only for sessions that came
  *   through a hosted-UI federated provider; `AuthCognito` ignores it.
+ * - The stored row also has a numeric `version`, which is not part of the
+ *   record: `1` for a new session, one more for each later write. A
+ *   conditional write compares that field alone ({@link SessionStore.read}).
+ *   A row with no version is a row from before `Auth` stamped it; only local
+ *   data of an earlier release can hold one.
  * - A **direct session** (an OIDC provider federated directly — no Cognito
  *   record and no Cognito tokens) carries the discriminator `kind: 'direct'`.
  *   Its identity is `` `${issuer}:${subject}` ``.
@@ -426,13 +435,43 @@ export function rawToJwt(raw: string): JWT {
 }
 
 /**
+ * A stored row: the fields of a session record plus the store's `version`, or
+ * a reset marker (`{ revokedBefore }`). `KVStore` stores each field as one
+ * attribute.
+ */
+type SessionRow = Record<string, unknown>;
+
+/**
+ * The `version` of a stored row, or `undefined` for a row that has none (a row
+ * from before `Auth` stamped it; only local data of an earlier release can
+ * hold one).
+ */
+function versionOf(row: unknown): number | undefined {
+	if (typeof row !== 'object' || row === null) return undefined;
+	const version: unknown = Reflect.get(row, 'version');
+	return typeof version === 'number' && Number.isInteger(version) ? version : undefined;
+}
+
+/**
+ * The condition "the session still holds `row`". Every write increments the
+ * row's `version`, so the condition compares that field alone: any write since
+ * `row` was read fails it, also a write of the same tokens. A row with no
+ * version is compared field by field, which is all that such a row allows.
+ */
+function unchangedSince(row: unknown): { ifFieldEquals: SessionRow } {
+	const version = versionOf(row);
+	if (version !== undefined) return { ifFieldEquals: { version } };
+	return { ifFieldEquals: typeof row === 'object' && row !== null ? { ...row } : {} };
+}
+
+/**
  * The store. A nested `KVStore` at child id `sessions` — its own DynamoDB table
  * in AWS, a JSON file locally; the same code path in both runtimes.
  *
  * @internal
  */
 export class SessionStore {
-	private readonly kv: KVStore<unknown>;
+	private readonly kv: KVStore<SessionRow>;
 	private readonly ttlSeconds?: number;
 
 	/**
@@ -443,7 +482,7 @@ export class SessionStore {
 	 *   lifetime, keeping the row's ceiling aligned with the cookie's `Max-Age`.
 	 */
 	constructor(scope: ScopeParent, ttlSeconds?: number) {
-		this.kv = new KVStore<unknown>(scope, 'sessions');
+		this.kv = new KVStore<SessionRow>(scope, 'sessions');
 		this.ttlSeconds = ttlSeconds !== undefined && ttlSeconds > 0 ? ttlSeconds : undefined;
 	}
 
@@ -451,11 +490,14 @@ export class SessionStore {
 		return this.ttlSeconds === undefined ? undefined : { ttlSeconds: this.ttlSeconds };
 	}
 
-	/** Insert a new session; returns the generated session id. A pool row is stamped with `issuedAt`. */
+	/**
+	 * Insert a new session; returns the generated session id. A pool row is
+	 * stamped with `issuedAt`. The row starts at `version` 1.
+	 */
 	async create(record: SessionRecord): Promise<string> {
 		const sessionId = crypto.randomBytes(24).toString('base64url');
 		const row = 'kind' in record ? record : { ...record, issuedAt: Date.now() };
-		await this.kv.put(sessionId, row, this.writeOptions());
+		await this.kv.put(sessionId, { ...row, version: 1 }, this.writeOptions());
 		return sessionId;
 	}
 
@@ -478,9 +520,14 @@ export class SessionStore {
 		return record ? { record, row } : null;
 	}
 
-	/** Replace a session's row (sliding its TTL forward). */
+	/**
+	 * Replace a session's row (sliding its TTL forward). Not conditional. The
+	 * row gets the version after the one the store holds now, so a caller that
+	 * read the row before this write fails its conditional write.
+	 */
 	async replace(sessionId: string, record: SessionRecord): Promise<void> {
-		await this.kv.put(sessionId, record, this.writeOptions());
+		const version = (versionOf(await this.kv.get(sessionId)) ?? 0) + 1;
+		await this.kv.put(sessionId, { ...record, version }, this.writeOptions());
 	}
 
 	/**
@@ -490,10 +537,17 @@ export class SessionStore {
 	 * was deleted (sign-out, revoke) or replaced by a concurrent writer since
 	 * `row` was read. A stale writer therefore never recreates a deleted session
 	 * or overwrites a newer one.
+	 *
+	 * The comparison is on the row's `version` alone, and `next` is stored with
+	 * the version after it ({@link unchangedSince}).
 	 */
 	async replaceIfUnchanged(sessionId: string, row: unknown, next: SessionRecord): Promise<boolean> {
 		try {
-			await this.kv.put(sessionId, next, { ...this.writeOptions(), ifValueEquals: row });
+			await this.kv.put(
+				sessionId,
+				{ ...next, version: (versionOf(row) ?? 0) + 1 },
+				{ ...this.writeOptions(), ...unchangedSince(row) },
+			);
 			return true;
 		} catch (e) {
 			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
@@ -506,11 +560,12 @@ export class SessionStore {
 	 * with {@link read}. Returns `true` when it was deleted; `false` (nothing
 	 * deleted) when it was already deleted or was replaced since `row` was read
 	 * (for example by a concurrent refresh), so a decision made on stale data
-	 * never removes a newer session.
+	 * never removes a newer session. The comparison is on the row's `version`
+	 * alone ({@link unchangedSince}).
 	 */
 	async deleteIfUnchanged(sessionId: string, row: unknown): Promise<boolean> {
 		try {
-			await this.kv.delete(sessionId, { ifValueEquals: row });
+			await this.kv.delete(sessionId, unchangedSince(row));
 			return true;
 		} catch (e) {
 			if (isBlocksError(e, KVStoreErrors.ConditionalCheckFailed)) return false;
@@ -557,7 +612,10 @@ export class SessionStore {
 	 * Delete every **pool** session of `username` (rows `AuthCognito` wrote
 	 * included); returns how many. Scans the whole table, so it backs only the
 	 * privileged `auth.admin.revokeUserSessions` — never a request path. Direct
-	 * (federated) rows and rows `Auth` cannot read are left alone.
+	 * (federated) rows and rows `Auth` cannot read are left alone. The rows are
+	 * deleted with one batch call; on AWS it throws `BatchIncompleteException`
+	 * when DynamoDB still has entries unprocessed after its retries, and the
+	 * caller can revoke again.
 	 *
 	 * With `signInMode`, `username` may also be a sign-in email / phone, as
 	 * Cognito accepts it in `AdminUserGlobalSignOut`: on an email / phone-only
@@ -579,7 +637,7 @@ export class SessionStore {
 				);
 			})
 			.map(({ key }) => key);
-		for (const id of ids) await this.kv.delete(id);
+		if (ids.length > 0) await this.kv.deleteBatch(ids);
 		return ids.length;
 	}
 }

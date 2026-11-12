@@ -57,16 +57,27 @@ After it runs:
 
 | Switching from | User pool | Session table and secret | Users | Signed-in sessions |
 |---|---|---|---|---|
-| `AuthCognito`, same id | **Kept**: same construct id `pool`, same `userPoolName` | **Kept**: same `sessions` / `session-secret` | Kept, including passwords, groups and attributes | **Stay valid**: same cookie name, HMAC secret and table |
-| `AuthOIDC`, direct (`google()`, `github()`, `customOidc()`, `customOauth2()`, `stubIdp()`) | None is created (direct federation needs no pool); nothing is destroyed | The table is kept. Old rows are treated as signed out. The old `/<fullId>-cookie-secret-<id>` parameter is deleted | The IdP is the source of truth, and `userId` stays `` `${iss}:${sub}` `` | The old `oidc_…` cookie is ignored, so every user signs in once more |
+| `AuthCognito`, same id | **Kept**: same construct id `pool`, same `userPoolName` | The `session-secret` is **kept**. The `sessions` table is **replaced**, and [the deploy fails until the old table is out of the stack](#the-sessions-table) | Kept, including passwords, groups and attributes | Every user signs in once more: the cookie name and the HMAC secret are the same, but the rows are in the old table |
+| `AuthOIDC`, direct (`google()`, `github()`, `customOidc()`, `customOauth2()`, `stubIdp()`) | None is created (direct federation needs no pool); nothing is destroyed | The `sessions` table is replaced, [as for `AuthCognito`](#the-sessions-table). The old `/<fullId>-cookie-secret-<id>` parameter is deleted | The IdP is the source of truth, and `userId` stays `` `${iss}:${sub}` `` | The old `oidc_…` cookie is ignored, so every user signs in once more |
 | `AuthOIDC` with `cognitoFederated()` | The old `cognito-pool` is **deleted** and replaced by `pool`. Its domain prefix collides (see below) | As for direct | The pool's shadow users are deleted. **`userId` changes**, so data keyed on it must be [re-keyed](#re-keying-cognitofederated-users) | Every user signs in once more |
 | `AuthBasic` | A **new** pool | The `users` / `codes` tables and the `jwt-secret` parameter are **retained under `BlocksPresets.production` and deleted under `BlocksPresets.sandbox`** | **Lost**: every user must sign up again | The `auth_<fullId>` cookie is rejected and cleared (signed out, never an error) |
 
 For `AuthCognito`, "kept" assumes the first `Auth` deploy still has a pool-backed sign-in method and does not wrap the block's own pool: deploy the codemod's output unchanged first ([checklist](#before-every-deploy-the-checklist)).
 
+### The `sessions` table
+
+`Auth` keeps its sessions in a `KVStore`. This release of `KVStore` stores each item under the key attribute `_bkv_pk` (it was `pk`) and keeps the expiry in `_bkv_ttl` (it was `ttl`). A DynamoDB table cannot change its key, so the `sessions` table that an earlier release deployed (with `AuthCognito` or `AuthOIDC`) must be replaced. The table has a fixed name, `<fullId>-sessions`, and CloudFormation does not replace a resource that has a fixed name. **The first deploy fails and rolls back, and it keeps failing until the old table is out of the stack.** The rollback changes nothing: the pool, the users and the old sessions are as they were.
+
+- **A sandbox, or any stack you can delete:** destroy the stack and deploy again.
+- **A stack whose user pool you must keep:** the old `sessions` table must leave the stack before the deploy. `Auth` has no option that does this. Remove the table resource from the deployed stack with CloudFormation, delete the table, and then deploy.
+
+The table holds only sessions. When it goes, every signed-in user signs in once more. Users, passwords, groups and attributes are in the user pool and are not affected. The session secret and the cookie name do not change.
+
+Local development is not affected: the mock converts the session file of the earlier release, so local users stay signed in.
+
 ## `AuthCognito`
 
-Your pool, your users and their sessions survive, **provided the block's id is unchanged**.
+Your pool and your users survive, **provided the block's id is unchanged**. Their sessions do not: [the `sessions` table](#the-sessions-table) is replaced, so each user signs in once more.
 
 ```ts
 // Before (AuthCognito)
@@ -374,7 +385,8 @@ Behaviour that changes for your users and your code:
 - [ ] **Commit the immutability baseline.** On the first synth, `Auth` writes `aws-blocks/baselines/<stack>/<fullId>.auth-pool.json` and reports "commit it". The file records the user-pool properties that Cognito can't change on an existing pool (sign-in attributes, username case sensitivity, required attributes, existing custom attributes). From then on, synth refuses a change to them, and the deploy refuses it again before the pool is updated. Without the committed file, CI's synth can't see the change. If you deploy only from CI, make the deploy workflow commit the baselines its synth writes (see "The CI caveat" in [DESIGN.md](./DESIGN.md#immutability-guard)); otherwise the production baseline never reaches the repository and synth never refuses anything.
 - [ ] **Don't rename or remove an `Auth` block by accident.** Synth fails when a committed baseline belongs to a block that no longer exists, because CloudFormation would delete its pool and every user in it. If you really mean it, set `removalPolicy: 'retain'` and deploy first, then re-baseline deliberately with `BLOCKS_AUTH_REBASELINE=<fullId>` on the synth/deploy command, and commit the deleted baseline file. The variable must name the block; `=1` does nothing.
 - [ ] **Review every auth error check** (the codemod marks each one). `InvalidCodeException` is now two names. See [Error names](#error-names).
-- [ ] **Expect the cookie cutover.** `AuthCognito` sessions stay valid. `AuthBasic` and `AuthOIDC` users are signed out once.
+- [ ] **The old `sessions` table is out of the stack.** The first deploy of this release over a stack that has it fails and rolls back ([The `sessions` table](#the-sessions-table)).
+- [ ] **Expect every user to sign in once more.** `AuthCognito` sessions end with the old `sessions` table. `AuthBasic` and `AuthOIDC` users are signed out by the cookie cutover.
 - [ ] **Email volume:** with Cognito's default sender, sign-up and reset codes are capped at 50 a day.
 - [ ] **`stubIdp()` providers:** a production deployment selects a real provider (for example with `getDeploymentType()`), since synth refuses a stub outside a sandbox ([`stubIdp()` is local and sandbox only](#stubidp-is-local-and-sandbox-only)).
 - [ ] **`cognitoFederated()` apps:** domain prefix plan chosen (new prefix, then re-register redirect URIs; or two deploys), and data keyed on `userId` re-keyed.

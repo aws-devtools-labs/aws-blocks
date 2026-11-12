@@ -22,6 +22,11 @@
  * 3. **Captured fixtures** (`__fixtures__/authcognito-*.json`): the exact cookie
  *    bytes and `Set-Cookie` line `AuthCognito` produces, and a row exactly as
  *    its `SessionStore` stores it.
+ *
+ * These are the local (mock) and record-level properties. On AWS the
+ * `sessions` table is replaced by this release of `KVStore`, which stores an
+ * item under another key attribute, so deployed sessions end at the upgrade
+ * (MIGRATION.md, "The `sessions` table").
  */
 
 import assert from 'node:assert';
@@ -140,29 +145,40 @@ describe('AuthCognito → Auth: signed-in users stay signed in', () => {
 		});
 	});
 
-	test('rows Auth writes for pool sessions keep AuthCognito’s shape and TTL (rollback-safe)', async () => {
+	test('rows Auth writes for pool sessions keep AuthCognito’s record fields and TTL, plus the row version', async () => {
 		const h = makeAuth(undefined, { rootId: 'shape-app' });
 		h.native.addUser('carol');
 		const browser = new Browser();
 		await browser.request((ctx) => h.auth.signIn('carol', 'Passw0rd!', ctx));
-		const raw = JSON.parse(readFileSync('.bb-data/shape-app-auth-sessions/store.json', 'utf8'));
-		const [entry] = Object.values(raw) as { value: string; ttl: number }[];
+		// The mock file holds the exact DynamoDB items: `{ version, items }` (`version` there is the file format's).
+		const file: { items: Record<string, unknown>[] } = JSON.parse(
+			readFileSync('.bb-data/shape-app-auth-sessions/store.json', 'utf8'),
+		);
+		const [item] = file.items;
 		// AuthCognito's three tokens, plus `Auth`'s optional sign-in time (#912), which
-		// AuthCognito never read (as it never read `provider`).
-		assert.deepStrictEqual(Object.keys(JSON.parse(entry.value)).sort(), [
+		// AuthCognito never read (as it never read `provider`), plus the row's `version`
+		// (what a conditional write compares) and the store's own key and expiry attributes.
+		assert.deepStrictEqual(Object.keys(item).sort(), [
+			'_bkv_pk',
+			'_bkv_ttl',
 			'accessToken',
 			'idToken',
 			'issuedAt',
 			'refreshToken',
+			'version',
 		]);
+		assert.strictEqual(item.version, 1);
 		const expected = Math.floor(Date.now() / 1000) + 400 * 86400;
-		assert.ok(Math.abs(entry.ttl - expected) <= 5, 'TTL = now + 400 days, as AuthCognito');
+		assert.ok(
+			typeof item._bkv_ttl === 'number' && Math.abs(item._bkv_ttl - expected) <= 5,
+			'TTL = now + 400 days, as AuthCognito',
+		);
 
-		// …and bb-auth-cognito's own store reads it back: its `lookupSession` was a plain
-		// `KVStore` read of `<fullId>-sessions` (checked against the live package at the freeze).
-		const legacy = new KVStore<unknown>(new Scope('auth', { parent: { id: 'shape-app' } }), 'sessions');
-		const [sessionId] = Object.keys(raw);
-		assert.ok(await legacy.get(sessionId));
+		// A plain `KVStore` read of `<fullId>-sessions` returns the row, as bb-auth-cognito's
+		// `lookupSession` did. It is not a rollback path: the `KVStore` that bb-auth-cognito
+		// shipped with reads neither this table nor this file (MIGRATION.md, "The `sessions` table").
+		const store = new KVStore<unknown>(new Scope('auth', { parent: { id: 'shape-app' } }), 'sessions');
+		assert.ok(await store.get(String(item._bkv_pk)));
 	});
 
 	test('the mock layer reads AuthCognito’s mock secret from .bb-data/<fullId>/state.json', async () => {
