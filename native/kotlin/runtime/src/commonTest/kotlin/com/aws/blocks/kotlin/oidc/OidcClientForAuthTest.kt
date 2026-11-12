@@ -3,6 +3,7 @@ package com.aws.blocks.kotlin.oidc
 import com.aws.blocks.kotlin.BlocksServer
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.string.shouldContain
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -38,13 +39,14 @@ class OidcClientForAuthTest {
      * A backend that answers the relay routes wherever they are mounted: authorize-params (echoing
      * the CSRF in a state envelope, as the real one does), exchange and sign-out.
      */
-    private fun backend(): HttpClient = HttpClient(MockEngine) {
+    private fun backend(observe: (path: String, body: String?) -> Unit = { _, _ -> }): HttpClient = HttpClient(MockEngine) {
         install(HttpCookies)
         install(ContentNegotiation) { json() }
         engine {
             addHandler { request ->
                 requests += "${request.method.value} ${request.url.encodedPath}"
                 val path = request.url.encodedPath
+                observe(path, (request.body as? TextContent)?.text)
                 val body = when {
                     path.contains("/authorize-params/") && request.method == HttpMethod.Post -> {
                         val csrf = Json.parseToJsonElement((request.body as TextContent).text)
@@ -162,15 +164,73 @@ class OidcClientForAuthTest {
     }
 
     @Test
-    fun `forAuth follows a moved callback path`() = runTest {
+    fun `forAuth derives the routes from the callback's directory`() = runTest {
         val launcher = RelayingLauncher()
-        val client = OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth", basePath = "/login/")
+        val client = OidcClient.forAuth(
+            backend(), server, listOf("google"), "myapp://auth",
+            callbackPath = "/aws-blocks/auth/sso/callback",
+            signOutPath = "/aws-blocks/auth/sso/signout",
+        ).also { it.platformLauncher = launcher }
+
+        client.signIn("google")
+        client.signOut()
+
+        requests shouldBe listOf(
+            "POST /aws-blocks/auth/sso/authorize-params/google",
+            "POST /aws-blocks/auth/sso/exchange",
+            "POST /aws-blocks/auth/sso/signout",
+        )
+        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe
+            "http://localhost:3001/aws-blocks/auth/sso/callback"
+    }
+
+    @Test
+    fun `forAuth keeps a callback file name of the backend's choosing`() = runTest {
+        var exchangeBody: String? = null
+        val launcher = RelayingLauncher()
+        val client = OidcClient.forAuth(
+            backend { path, body -> if (path.endsWith("/exchange")) exchangeBody = body },
+            server, listOf("google"), "myapp://auth",
+            callbackPath = "/aws-blocks/auth/oidc-return",
+        ).also { it.platformLauncher = launcher }
+
+        client.signIn("google")
+
+        requests shouldBe listOf("POST /aws-blocks/auth/authorize-params/google", "POST /aws-blocks/auth/exchange")
+        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe
+            "http://localhost:3001/aws-blocks/auth/oidc-return"
+        Json.parseToJsonElement(exchangeBody!!).jsonObject["callbackUrl"]!!.jsonPrimitive.content shouldBe
+            "http://localhost:3001/aws-blocks/auth/oidc-return"
+    }
+
+    @Test
+    fun `forAuth signs out at a sign-out path outside the callback's directory`() = runTest {
+        val client = OidcClient.forAuth(
+            backend(), server, listOf("google"), "myapp://auth",
+            callbackPath = "/aws-blocks/auth/sso/callback",
+            signOutPath = "/aws-blocks/auth/logout",
+        )
+
+        client.signOut()
+
+        requests shouldBe listOf("POST /aws-blocks/auth/logout")
+    }
+
+    @Test
+    fun `forAuth resolves routes against an API Gateway stage`() = runTest {
+        val staged = BlocksServer("prod", "https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api")
+        val launcher = RelayingLauncher()
+        val client = OidcClient.forAuth(backend(), staged, listOf("google"), "myapp://auth")
             .also { it.platformLauncher = launcher }
 
         client.signIn("google")
 
-        requests shouldBe listOf("POST /login/authorize-params/google", "POST /login/exchange")
-        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe "http://localhost:3001/login/callback"
+        requests shouldBe listOf(
+            "POST /prod/aws-blocks/auth/authorize-params/google",
+            "POST /prod/aws-blocks/auth/exchange",
+        )
+        Url(launcher.authorizeUrl!!).parameters["redirect_uri"] shouldBe
+            "https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/auth/callback"
     }
 
     @Test
@@ -183,9 +243,35 @@ class OidcClientForAuthTest {
     }
 
     @Test
-    fun `forAuth rejects a relative base path`() {
-        shouldThrow<IllegalArgumentException> {
-            OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth", basePath = "aws-blocks/auth")
+    fun `forAuth rejects a path the backend would refuse`() {
+        val refused = listOf(
+            "/login" to OidcClient.DEFAULT_SIGN_OUT_PATH,
+            "aws-blocks/auth/callback" to OidcClient.DEFAULT_SIGN_OUT_PATH,
+            "/aws-blocks/auth/" to OidcClient.DEFAULT_SIGN_OUT_PATH,
+            "/aws-blocks/auth/callback/" to OidcClient.DEFAULT_SIGN_OUT_PATH,
+            "/aws-blocks/authx/callback" to OidcClient.DEFAULT_SIGN_OUT_PATH,
+            OidcClient.DEFAULT_CALLBACK_PATH to "/signout",
+            OidcClient.DEFAULT_CALLBACK_PATH to "/aws-blocks/auth",
+        )
+        for ((callbackPath, signOutPath) in refused) {
+            shouldThrow<IllegalArgumentException> {
+                OidcClient.forAuth(backend(), server, listOf("google"), "myapp://auth", callbackPath, signOutPath)
+            }
         }
+        requests shouldBe emptyList()
+    }
+
+    @Test
+    fun `forAuth needs no relay target to be built`() {
+        OidcClient.forAuth(backend(), server, listOf("google")).providers shouldBe listOf("google")
+    }
+
+    @Test
+    fun `signIn without a relay target fails before any request`() = runTest {
+        val client = OidcClient.forAuth(backend(), server, listOf("google"))
+            .also { it.platformLauncher = RelayingLauncher() }
+
+        shouldThrow<IllegalStateException> { client.signIn("google") }.message shouldContain "relayTo"
+        requests shouldBe emptyList()
     }
 }

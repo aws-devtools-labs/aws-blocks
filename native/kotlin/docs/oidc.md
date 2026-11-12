@@ -24,9 +24,12 @@ The client is an `OidcClient<AnyProvider>`: its providers are the ids you pass, 
 declared, so it signs in by id. That `signIn(String)` is an extension on `OidcClient<AnyProvider>`,
 hence the `signIn` import (see [Typed providers](#typed-providers)).
 
-Sign-in stores the backend's session cookie, which every generated API client sends, so methods the
-backend gates with `requireAuth` work after it. If the backend moves its routes with
-`redirects.callbackPath`, pass that path's directory as `basePath`.
+Sign-in stores the backend's session cookie in the `Blocks` instance's cookie jar, which every API
+reached through that instance sends, so methods the backend gates with `requireAuth` work after it.
+On the JVM the jar survives a restart only when `BlocksConfig` sets an `applicationId`. If the
+backend moves its routes with `redirects.callbackPath` or `redirects.signOutPath`, pass the same
+values as `callbackPath` and `signOutPath`. A desktop (JVM) app can leave `relayTo` out: it relays
+to a loopback address of its own.
 
 `signIn` suspends until the flow finishes. Bringing your window to the front afterwards is the
 app's job; `signIn` returning is the signal.

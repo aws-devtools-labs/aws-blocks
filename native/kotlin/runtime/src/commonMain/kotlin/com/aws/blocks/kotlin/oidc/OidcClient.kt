@@ -97,6 +97,8 @@ class OidcClient<P : OidcProvider> internal constructor(
      *   callback's state or CSRF value did not match what was sent.
      * @throws OidcExchangeException if the backend rejected the authorization code.
      * @throws BlocksException if the Blocks instance this client came from has been closed.
+     * @throws IllegalStateException if no relay target is configured and the platform has no
+     *   loopback launcher of its own (every platform but the JVM).
      */
     suspend fun signIn(
         provider: P,
@@ -116,6 +118,11 @@ class OidcClient<P : OidcProvider> internal constructor(
         // own port, which has to happen before the authorize-params request carries it.
         val session = platformLauncher.openSession(config.relayTo, options)
         try {
+            // A loopback launcher binds its own relay target; any other needs the configured one.
+            check(session.relayTo.isNotEmpty()) {
+                "OIDC sign-in needs a relayTo on this platform: pass relayTo to OidcClient.forAuth, " +
+                    "or set oidc { relayTo = \"...\" } in the awsBlocks Gradle block."
+            }
             // Step 1: POST to /auth/authorize-params/<provider> to get the signed state envelope.
             val params = fetchAuthorizeParams(name, csrf, session.relayTo)
 
@@ -352,18 +359,27 @@ class OidcClient<P : OidcProvider> internal constructor(
         private const val EXCHANGE_FAILED = "exchange_failed"
         private const val CANCELLED = "cancelled"
 
+        /** The path every `Auth` route must sit under, as the backend enforces. */
+        private const val AUTH_ROUTE_PREFIX = "/aws-blocks/auth/"
+
         /**
-         * Where an AWS Blocks `Auth` block serves its federation routes, unless the backend moves
-         * them with `redirects.callbackPath` (the routes live in that path's directory).
+         * Where an AWS Blocks `Auth` block serves its OIDC callback, unless the backend moves it
+         * with `redirects.callbackPath`. The other federation routes live in that path's directory.
          */
-        const val DEFAULT_AUTH_BASE_PATH: String = "/aws-blocks/auth"
+        const val DEFAULT_CALLBACK_PATH: String = "/aws-blocks/auth/callback"
+
+        /**
+         * Where an AWS Blocks `Auth` block serves sign-out, unless the backend moves it with
+         * `redirects.signOutPath`.
+         */
+        const val DEFAULT_SIGN_OUT_PATH: String = "/aws-blocks/auth/signout"
 
         /**
          * Creates a client for the federation routes of an AWS Blocks `Auth` block.
          *
-         * `Auth` serves the relay sign-in routes at fixed paths under [basePath]
-         * (`authorize-params/<provider>`, `callback`, `exchange`, `signout`), so the client needs no
-         * server-supplied descriptor:
+         * `Auth` serves the relay sign-in routes at fixed paths in the directory of [callbackPath]
+         * (`authorize-params/<provider>`, `exchange`), plus [callbackPath] itself and
+         * [signOutPath], so the client needs no server-supplied descriptor:
          *
          * ```kotlin
          * val blocks = Blocks(Servers.local)
@@ -380,8 +396,15 @@ class OidcClient<P : OidcProvider> internal constructor(
          * imported as `com.aws.blocks.kotlin.oidc.signIn`), and rejects an id not in
          * [providers].
          *
-         * Signing in stores the backend's session cookie in the cookie storage every generated API
-         * client shares, so `requireAuth`-gated methods are authenticated afterwards.
+         * Signing in stores the backend's session cookie in the cookie jar of the `Blocks`
+         * instance [blocksClient] belongs to, which every API reached through that instance
+         * shares, so `requireAuth`-gated methods are authenticated afterwards. On the JVM the jar
+         * outlives the process only when the instance's `BlocksConfig` sets an `applicationId`;
+         * without one the session is held in memory.
+         *
+         * Building the client makes no network call. Every route is resolved against the origin
+         * of [blocksClient]'s server: its URL cut at the first `aws-blocks` path segment, so an
+         * API Gateway stage is kept.
          *
          * @param blocksClient the client whose server and HTTP session to use: the
          *   [com.aws.blocks.kotlin.Blocks.client] of the app's `Blocks` instance.
@@ -390,35 +413,52 @@ class OidcClient<P : OidcProvider> internal constructor(
          * @param relayTo the custom-scheme URL the backend relays the sign-in result to. It must be
          *   listed in the backend's `redirects.allowedRelayOrigins` and registered with the platform
          *   (the Gradle plugin's `oidc { relayTo }`). The desktop (JVM) launcher relays to a loopback
-         *   address of its own instead.
-         * @param basePath the directory of the backend's `redirects.callbackPath`. Leave the default
-         *   unless the backend changes `callbackPath`.
+         *   address of its own instead, so a desktop app can leave it empty. On a platform with no
+         *   loopback, [signIn] throws an [IllegalStateException] while it is empty.
+         * @param callbackPath the backend's `redirects.callbackPath`. Leave the default unless the
+         *   backend changes it.
+         * @param signOutPath the backend's `redirects.signOutPath`. Leave the default unless the
+         *   backend changes it.
+         * @throws IllegalArgumentException if [callbackPath] or [signOutPath] is not under
+         *   `/aws-blocks/auth/`, or [callbackPath] names no route there or ends in `/`. The backend
+         *   refuses the same paths.
          */
         fun forAuth(
             blocksClient: BlocksClient,
             providers: List<String>,
-            relayTo: String,
-            basePath: String = DEFAULT_AUTH_BASE_PATH,
+            relayTo: String = "",
+            callbackPath: String = DEFAULT_CALLBACK_PATH,
+            signOutPath: String = DEFAULT_SIGN_OUT_PATH,
         ): OidcClient<AnyProvider> =
-            forAuth(blocksClient.httpClient, blocksClient.server, providers, relayTo, basePath)
+            forAuth(blocksClient.httpClient, blocksClient.server, providers, relayTo, callbackPath, signOutPath)
 
         internal fun forAuth(
             httpClient: HttpClient,
             server: BlocksServer,
             providers: List<String>,
-            relayTo: String,
-            basePath: String = DEFAULT_AUTH_BASE_PATH,
+            relayTo: String = "",
+            callbackPath: String = DEFAULT_CALLBACK_PATH,
+            signOutPath: String = DEFAULT_SIGN_OUT_PATH,
         ): OidcClient<AnyProvider> {
-            require(basePath.startsWith("/")) { "basePath must start with '/': \"$basePath\"" }
-            val base = basePath.trimEnd('/')
+            require(callbackPath.startsWith(AUTH_ROUTE_PREFIX)) {
+                "callbackPath must be a path under '$AUTH_ROUTE_PREFIX': \"$callbackPath\""
+            }
+            require(callbackPath.length > AUTH_ROUTE_PREFIX.length && !callbackPath.endsWith("/")) {
+                "callbackPath must name a route under '$AUTH_ROUTE_PREFIX', with no trailing '/': \"$callbackPath\""
+            }
+            require(signOutPath.startsWith(AUTH_ROUTE_PREFIX)) {
+                "signOutPath must be a path under '$AUTH_ROUTE_PREFIX': \"$signOutPath\""
+            }
+            // The backend serves the other routes in the callback's directory.
+            val base = callbackPath.substringBeforeLast('/')
             val config = OidcClientConfig(
                 providers = providers,
                 providerConfigs = emptyMap(),
                 exchangePath = "$base/exchange",
-                signOutPath = "$base/signout",
+                signOutPath = signOutPath,
                 signInBasePath = "$base/signin",
                 authorizeParamsBasePath = "$base/authorize-params",
-                callbackPath = "$base/callback",
+                callbackPath = callbackPath,
                 relayTo = relayTo,
             )
             return OidcClient(config, httpClient, server)
