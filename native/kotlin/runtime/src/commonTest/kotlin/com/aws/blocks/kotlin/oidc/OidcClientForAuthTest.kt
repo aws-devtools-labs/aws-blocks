@@ -166,6 +166,7 @@ class OidcClientForAuthTest {
         exchange["provider"]!!.jsonPrimitive.content shouldBe "google"
         exchange["code"]!!.jsonPrimitive.content shouldBe "the-code"
         exchange["callbackUrl"]!!.jsonPrimitive.content shouldBe "http://localhost:3001/aws-blocks/auth/callback"
+        exchange["tokens"]!!.jsonPrimitive.content shouldBe "false"
     }
 
     @Test

@@ -287,6 +287,8 @@ class OidcClient<P : OidcProvider> internal constructor(
             put("provider", name)
             put("callbackUrl", callbackUrl)
             if (iss != null) put("iss", iss)
+            // The session cookie authenticates this client, so it asks the backend for no tokens.
+            put("tokens", false)
         }
 
         val exchangeUrl = server.rawRoute(config.exchangePath)
