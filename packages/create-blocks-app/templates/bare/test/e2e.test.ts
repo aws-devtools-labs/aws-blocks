@@ -17,23 +17,8 @@ let api: typeof apiType;
 const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blocks?.dev?.port ?? 3000;
 const readinessUrl = `http://localhost:${serverPort}/.blocks-sandbox/config.json`;
 
-test.before(async () => {
-  if (!await isServerRunning(serverPort)) {
-    server = spawn('npm', ['run', 'dev:server'], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: !isWin,
-      shell: isWin,
-      env: { ...process.env, NODE_OPTIONS: '' },
-    });
-    server.unref();
-    await setTimeout(2000);
-  }
-
-  const mod = await import('aws-blocks');
-  api = mod.api;
-
-  // Wait for the Blocks server to be ready without depending on the sample API.
+// Wait for the Blocks server to be ready without depending on the sample API.
+async function waitForServer() {
   for (let i = 0; i < 30; i++) {
     try {
       const response = await fetch(readinessUrl);
@@ -44,6 +29,27 @@ test.before(async () => {
     await setTimeout(1000);
   }
   throw new Error(`Server not ready at ${readinessUrl}`);
+}
+
+test.before(async () => {
+  if (!await isServerRunning(serverPort)) {
+    server = spawn('npm', ['run', 'dev:server'], {
+      cwd: process.cwd(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: !isWin,
+      shell: isWin,
+      env: { ...process.env, NODE_OPTIONS: '' },
+    });
+    server.unref();
+  }
+
+  await waitForServer();
+
+  // Import the client only once the server answers: the dev server regenerates
+  // aws-blocks/client.js before it listens, so an earlier import could load a
+  // stale client that lacks namespaces exported since the last generation.
+  const mod = await import('aws-blocks');
+  api = mod.api;
 });
 
 // Signal the dev server's process group; signal 0 only reports whether any of it is still alive.
