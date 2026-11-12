@@ -4,7 +4,7 @@ Design document for the auth common package. For usage, see [README.md](./README
 
 **Package:** `@aws-blocks/auth-common`
 **Type:** Shared interface (not a standalone Building Block)
-**AWS Service:** None — defines the contract that `AuthBasic`, `AuthOIDC`, and `AuthCognito` implement
+**AWS Service:** None — defines the contract that `Auth` (`@aws-blocks/bb-auth`) implements. It was written for, and implemented by, the three blocks `Auth` replaced: `AuthBasic`, `AuthOIDC` and `AuthCognito`.
 
 ## Purpose
 
@@ -12,7 +12,8 @@ All auth Building Blocks should look and work the same from the customer's persp
 
 1. `BlocksAuth` — server-side interface all auth BBs implement
 2. Auth state machine types — drive a provider-agnostic Authenticator component
-3. UI components — `Authenticator`, `AuthenticatedContent`, `onAuthChange`, `broadcastAuthChange`, and `StatusMessage` (a presentational status-line primitive; see the README for its full API)
+3. UI components — `Authenticator`, `AuthenticatedContent`, `AccountMenuBar`, `StatusMessage` (a presentational status-line primitive; see the README), `onAuthChange`, `broadcastAuthChange`, plus the client-side notifier `submitAuthAction` and the auth-state store (`subscribeAuthState` / `getAuthStateSnapshot`)
+4. `AuthErrors` — the canonical auth error-name vocabulary, plus the `isAuthError` / `isAuthErrorName` guards
 
 ## State Machine Design
 
@@ -41,29 +42,31 @@ States are intentionally minimal — only states where the client must act are r
 | `signedOut` | No session |
 | `signedIn` | Authenticated, `user` is present |
 | `confirmingSignUp` | Account created, awaiting verification code |
-| `confirmingMfa` | Credentials valid, awaiting MFA code |
+| `confirmingSignIn` | Credentials valid, awaiting a sign-in challenge answer (an MFA code, a new password, a passkey) |
+| `confirmingMfa` | Credentials valid, awaiting MFA code (part of the contract; `Auth` uses `confirmingSignIn`) |
 | `confirmingPasswordReset` | Reset requested, awaiting code + new password |
 
 ### Auth Flows
 
-#### AuthBasic: Sign Up
+How `Auth` (`@aws-blocks/bb-auth`) drives the state machine. Fields marked hidden are pre-filled by the server and sent back unchanged.
+
+#### Sign Up with Email Confirmation
 
 ```mermaid
 sequenceDiagram
 	participant C as Client
 	participant S as Server
 
-	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [{name: signUp, fields: [username, password]}, ...]
+	C->>S: setAuthState({ action: 'signUp', username, password, email })
+	Note over S: Create the user (Cognito, or the local pool), send a verification code
+	S-->>C: state: confirmingSignUp<br/>actions: [{name: confirmSignUp, fields: [username (hidden), code]},<br/>{name: resendSignUpCode, fields: [username (hidden)]}]
 
-	Note over C: User fills in username + password
-
-	C->>S: setAuthState({ action: 'signUp', username, password })
-	Note over S: Create user, hash password, set cookie
+	C->>S: setAuthState({ action: 'confirmSignUp', username, code })
+	Note over S: Confirm the user, sign in automatically (emailPassword.autoSignIn), set cookie
 	S-->>C: state: signedIn, user: {userId, username}
 ```
 
-#### AuthBasic: Sign In
+#### Sign In
 
 ```mermaid
 sequenceDiagram
@@ -75,7 +78,7 @@ sequenceDiagram
 	S-->>C: state: signedIn, user: {userId, username}
 ```
 
-#### AuthBasic: Sign In (wrong password)
+#### Sign In (wrong password)
 
 ```mermaid
 sequenceDiagram
@@ -83,11 +86,27 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: setAuthState({ action: 'signIn', username, password })
-	Note over S: Credentials don't match
-	S-->>C: state: signedOut<br/>error: "Invalid username or password"
+	Note over S: Credentials don't match (an unknown user gets the same answer)
+	S-->>C: state: signedOut, retriable: true<br/>error: "Incorrect username or password"
 ```
 
-#### AuthBasic: Password Reset
+#### Sign In with MFA
+
+```mermaid
+sequenceDiagram
+	participant C as Client
+	participant S as Server
+
+	C->>S: setAuthState({ action: 'signIn', username, password })
+	Note over S: Cognito (or the local pool) returns an MFA challenge
+	S-->>C: state: confirmingSignIn<br/>actions: [{name: confirmSignIn, fields: [session (hidden), challenge (hidden), code]}]
+
+	C->>S: setAuthState({ action: 'confirmSignIn', session, challenge, code })
+	Note over S: Verify the code, set cookie
+	S-->>C: state: signedIn, user: {userId, username}
+```
+
+#### Password Reset
 
 ```mermaid
 sequenceDiagram
@@ -95,71 +114,43 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: setAuthState({ action: 'resetPassword', username })
-	Note over S: Generate code, store with TTL, send via email
-	S-->>C: state: confirmingPasswordReset<br/>actions: [{name: confirmResetPassword,<br/>fields: [username, code, newPassword]}]
+	Note over S: Send a reset code
+	S-->>C: state: confirmingPasswordReset<br/>actions: [{name: confirmResetPassword,<br/>fields: [username (hidden), code, newPassword]}]
 
 	C->>S: setAuthState({ action: 'confirmResetPassword',<br/>username, code, newPassword })
-	Note over S: Validate code, update password
+	Note over S: Validate code, update password, end the user's sessions
 	S-->>C: state: signedOut
 ```
 
-#### AuthOIDC: Sign In with Google
+#### Federated Sign-In
+
+A federated provider's action is an external form: its `url` is the block's sign-in route. The same flow serves a `store: 'builtin'` block's providers (verified by the backend) and a default-store block's providers (through Cognito managed login).
 
 ```mermaid
 sequenceDiagram
 	participant C as Client
-	participant G as Google
+	participant P as Identity provider
 	participant S as Server
 
 	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [{name: signIn:google,<br/>url: "https://accounts.google.com/...",<br/>method: GET, fields: []}]
+	S-->>C: state: signedOut<br/>actions: [{name: signIn:okta,<br/>url: "/aws-blocks/auth/signin/okta",<br/>method: GET, fields: []}]
 
-	Note over C: User clicks "Sign in with Google"
-	C->>G: GET https://accounts.google.com/...
+	Note over C: User clicks "Sign in with Okta"
+	C->>S: GET /aws-blocks/auth/signin/okta
+	S-->>C: 302 → the provider (PKCE, signed state)
+	C->>P: authorize
 
-	Note over G: User authenticates
+	Note over P: User authenticates
 
-	G->>S: GET /auth/callback?code=abc&state=xyz
-	Note over S: Exchange code, set cookie
-	S-->>C: 302 → /
+	P->>S: GET /aws-blocks/auth/callback?code=abc&state=xyz
+	Note over S: Check state, exchange code, verify tokens, set cookie
+	S-->>C: 302 → redirects.postSignInPath (default /)
 
 	C->>S: getAuthState()
 	S-->>C: state: signedIn, user: {userId, username}
 ```
 
-#### AuthCognito: Sign Up with Email Confirmation
-
-```mermaid
-sequenceDiagram
-	participant C as Client
-	participant S as Server
-
-	C->>S: setAuthState({ action: 'signUp', username, password, email })
-	Note over S: Cognito creates user, sends verification email
-	S-->>C: state: confirmingSignUp<br/>actions: [{name: confirmSignUp, fields: [code]},<br/>{name: resendCode, fields: []}]
-
-	C->>S: setAuthState({ action: 'confirmSignUp', code })
-	Note over S: Cognito confirms, auto-signs in, sets cookie
-	S-->>C: state: signedIn, user: {userId, username}
-```
-
-#### AuthCognito: Sign In with MFA
-
-```mermaid
-sequenceDiagram
-	participant C as Client
-	participant S as Server
-
-	C->>S: setAuthState({ action: 'signIn', username, password })
-	Note over S: Cognito returns MFA challenge
-	S-->>C: state: confirmingMfa<br/>actions: [{name: confirmMfa, fields: [code]}]
-
-	C->>S: setAuthState({ action: 'confirmMfa', code })
-	Note over S: Cognito verifies MFA, sets cookie
-	S-->>C: state: signedIn, user: {userId, username}
-```
-
-#### AuthCognito: Mixed Form + Federated
+#### Mixed Form + Federated
 
 ```mermaid
 sequenceDiagram
@@ -167,10 +158,44 @@ sequenceDiagram
 	participant S as Server
 
 	C->>S: getAuthState()
-	S-->>C: state: signedOut<br/>actions: [<br/>{name: signIn, fields: [username, password]},<br/>{name: signUp, fields: [username, password, email]},<br/>{name: signIn:google, url: "https://...", method: GET, fields: []}<br/>]
+	S-->>C: state: signedOut<br/>actions: [<br/>{name: signIn, fields: [username, password]},<br/>{name: signUp, fields: [username, password, email]},<br/>{name: resetPassword, fields: [username]},<br/>{name: signIn:google, url: "/aws-blocks/auth/signin/google", method: GET, fields: []}<br/>]
 
-	Note over C: Authenticator renders:<br/>- Username/password form<br/>- "Create Account" link<br/>- "Sign in with Google" button
+	Note over C: Authenticator renders:<br/>- Username/password form<br/>- "Create Account" link<br/>- "Forgot Password" link<br/>- "Sign in with Google" button
 ```
+
+## `BlocksAuth` contract notes
+
+- **Method shorthand, on purpose.** Every member is declared as a method (`requireAuth(context): …`), never as a property holding a function type. Under `strictFunctionTypes`, property-style function types check parameters contravariantly, while methods are checked bivariantly. Implementations narrow parameters (e.g. `Auth.requireRole` accepts only its declared group names, as `AuthCognito.requireRole` did), and only method shorthand lets those implementations satisfy the interface. `src/blocks-auth.types-test.ts` pins both the passing case and the property-syntax counterexample.
+- **`requireRole` is required.** `Auth` implements it. It was optional while two of the blocks `Auth` replaced (`AuthBasic`, `AuthOIDC`) existed, because they had no roles; it became a required member when they were removed.
+- **The 401 name is `NotAuthenticatedException`.** `Auth` throws it from `requireAuth`, as `AuthCognito` and `AuthOIDC` did (the removed `AuthBasic` threw `SessionExpiredException`).
+
+## Auth error vocabulary
+
+`AuthErrors` (`src/errors.ts`) is the one set of error names the `Auth` block throws. Names follow Amazon Cognito's exception names wherever Cognito has one; the federation-flow names keep the same `*Exception` suffix. Matching is by `name` (`isAuthError` / `isBlocksError` on a thrown error, `hasAuthError` on a returned `AuthState`), which works the same on server and client.
+
+Adding `AuthErrors` changed nothing about what the predecessor blocks threw. There are **no runtime aliases**: a caller matching an old `AuthBasic` name will not match the new one, so each rename below is a breaking change when `AuthBasic` callers move to `Auth` (see [`MIGRATION.md`](../bb-auth/MIGRATION.md#error-names)).
+
+### Mapping from predecessor names
+
+`src/errors.test.ts` holds this table as data and checks every error name recorded from the three removed blocks' sources against it: a name with no row fails the test.
+
+| Source | Predecessor name | `AuthErrors` | Change |
+|---|---|---|---|
+| `AuthCognito` | all 29 `AuthCognitoErrors` | same keys, same values | unchanged |
+| `AuthOIDC` | all 8 `AuthOIDCErrors` | same keys, same values | unchanged |
+| `AuthBasic` | `InvalidPassword` → `InvalidPasswordException` | `InvalidPassword` | unchanged |
+| `AuthBasic` | `InvalidCredentials` → `InvalidCredentialsException` | `NotAuthorized` → `NotAuthorizedException` | renamed |
+| `AuthBasic` | `UserAlreadyExists` → `UserAlreadyExistsException` | `UserAlreadyExists` → `UsernameExistsException` | renamed (key kept, value changes) |
+| `AuthBasic` | `SessionExpired` → `SessionExpiredException` | `NotAuthenticated` → `NotAuthenticatedException` | renamed |
+| `AuthBasic` | `InvalidCode` → `InvalidCodeException` | `CodeMismatch` **and** `ExpiredCode` | **split** — wrong code vs. expired / no outstanding code. Every `isBlocksError` / `hasAuthError` call site matching `InvalidCode` needs a manual decision; there is no mechanical rename. |
+| `AuthOIDC` | `AuthOIDCEngineError` (plain `Error`, Cognito-federation engine) | `ProviderNotConfigured`, `InvalidState`, `InvalidCallback`, `IdpError`, `TokenExpired` | **split** — by failure: provider not configured; pending cookie / state mismatch; missing code; token exchange failed; refresh failed |
+| `AuthOIDC` | `AuthOIDCConfigError`, `RelayConfigError` (plain `Error`) | — | excluded: constructor-time configuration mistakes stay plain `Error`s with no constant ([D-AB-10](https://github.com/aws-devtools-labs/aws-blocks/blob/b58f248706bba1cfd3a73308dddb92a5733f6da8/packages/bb-auth-basic/DESIGN.md#d-ab-10-named-error-constants-only-for-user-facing-input-errors), in the removed `bb-auth-basic`) |
+| `AuthOIDC` | `ResourceNotFoundException`, `DuplicateProviderException` | — | excluded: Cognito SDK errors caught inside the IdP-registration custom-resource Lambda, never surfaced |
+| `AuthCognito` | `AccessDeniedException`, `UnrecognizedClientException`, `InvalidSignatureException`, `ExpiredTokenException`, `CredentialsProviderError` | — | excluded: AWS rejected the function role's own credentials or IAM policy, which is a deployment problem and not an auth outcome. Reported by name as a 500 with a generic message; the detail (role ARN, account id) is logged, never sent to the client |
+
+New names with no predecessor: `ReauthenticationRequired`, `ProviderUnavailable`, `EmailPasswordNotEnabled`, `NoFederatedProvider`, `PasskeysNotEnabled`, `MfaNotEnabled`.
+
+`AuthCognito` also passed any other Cognito exception through by its service name (e.g. `CodeDeliveryFailureException`); those are not part of the vocabulary, and `Auth` reports them as `InternalErrorException`.
 
 ## Cross-Tab Auth State Broadcasting
 
@@ -179,7 +204,61 @@ Auth state changes are broadcast via two mechanisms:
 1. `BroadcastChannel('blocks-auth')` — delivers to other tabs/windows with the same origin
 2. `window.dispatchEvent(new CustomEvent('blocks-auth-change'))` — delivers to the same window (BroadcastChannel only fires on *other* contexts)
 
-The `broadcastAuthChange()` function fires both. All UI components (`Authenticator`, `AuthenticatedContent`, `onAuthChange`) subscribe via `onAuthChange()`, which listens to both channels.
+The `broadcastAuthChange()` function fires both. `onAuthChange()` listens to both, and `AuthenticatedContent` and `AccountMenuBar` render through it. The channel name, the event name and the `{ type: 'auth-change', user }` payload are a wire format: tabs running an older and a newer bundle coexist during a deploy, so none of them may be renamed.
+
+### One notifier, two views
+
+`setAuthState()` is a plain RPC. It runs in Node too (SSR, cookie-jar scripts, e2e clients), so it never touches the client state. `submitAuthAction(api, input)` is the single client-side notifier, and every built-in submit path goes through it (the `Authenticator` form and Enter key, the slot `submit` helper, the auto sign-in chain, `AccountMenuBar`'s Sign Out). It:
+
+1. calls `setAuthState(input)` once and returns its result unchanged;
+2. on `retriable: true`, stops there — the caller keeps the current form and its hidden fields;
+3. otherwise writes the per-`api` store (a `WeakMap` keyed by the `api` object's identity);
+4. and broadcasts `user ?? null` when the resulting state is `signedIn` or `signedOut`. The trigger is the resulting state, not a diff, so a tab that missed a broadcast still converges. Mid-flow challenge states are not broadcast.
+
+Outside a browser it is just the RPC: a module-level store keyed by a shared server-side `authApi` would leak one request's state into another.
+
+That gives two views of one source:
+
+| View | API | Fires on |
+|---|---|---|
+| User-level | `onAuthChange` | sign-in / sign-out broadcasts (this window and other tabs), plus its synchronous first frame and hydration, and any other change of the store's user (it follows the store) |
+| State-level | `subscribeAuthState` / `getAuthStateSnapshot` | every store write: hydration, every non-retriable `submitAuthAction` result the store takes (including mid-flow states; see "Ordering answers" for the ones it drops), and a cross-tab refetch |
+
+The store's only inputs are hydration (one shared in-flight `getAuthState()` per `api`), `submitAuthAction`, and a cross-tab refetch: a broadcast from another tab triggers one `getAuthState()` per `api` that has store subscribers (the `Authenticator` is one), installed with the first subscriber and removed with the last. The refetch is skipped when the broadcast names the user the store shows, the store is in no flow, and nothing was sent after the answer it shows: no request in flight can then have seen the session before the other tab's change or after it. A same-window broadcast is not refetched, because `submitAuthAction` already wrote the store. The snapshot keeps its identity between writes, as `useSyncExternalStore` requires.
+
+`submitAuthAction` tags its broadcast, in this window and to other tabs, with the RPC namespace of the API it ran on (the generated client answers `Symbol.for('aws-blocks.apiNamespace')` with it, the same in every tab): another API's `onAuthChange` skips the message and its store does not refetch, so signing in to one auth block never hands its user to another's listener. An untagged message (`broadcastAuthChange(user)` without an `api`, or a tab running an older `@aws-blocks/auth-common`) reaches every API, as before; so does any message for an API that is not a generated client. The id includes an overridden URL: on one backend, `generateClient({ url: X }).authApi` is `X#authApi` and the default client's `authApi` is `authApi`, so neither gets the other's tagged messages.
+
+### Ordering answers
+
+Requests overlap: a hydration is in flight when the user signs in, another tab's broadcast starts a refetch while this tab signs out, answers arrive in any order, and some fail. The store's rule decides which answer it shows. It is written from how the session cookie behaves, which the race tests model (`src/test-support/auth-store-races.ts`, run by `ui.races.*.test.ts`):
+
+- A read (`getAuthState()`) carries the cookie the browser holds when it is **sent**, so it tells the session as of then.
+- An action that sets or clears the session (a `signedIn` answer, or the answer to `signOut`) changes the cookie when its answer **arrives** (`Set-Cookie`), so it tells the session as of then.
+- Any other answer — a challenge step, a failed sign-in, a resend, a confirmed sign-up — leaves the session as it was. It is this tab's place in a flow, not news about the session.
+
+The rule:
+
+1. **Reads are ordered by when they were sent, session actions by when they were answered**, on one clock per `api`. The newest of them is the session answer. An answer older than the current one is dropped, so a stale refetch or hydration never overwrites a newer sign-in or sign-out, and a session action's answer is never masked by an older read.
+2. **A flow answer is shown over a signed-out session.** This tab's place in the flow is its latest-arriving flow answer that is not moot. A flow answer is moot once the session is seen signed in after it was sent (a signed-in read sent later) or changed here after it was sent (a session action answered later): another tab finished signing in, or this tab did. A signed-out read does not end it — another tab's sign-out does not cancel this tab's MFA step.
+3. **When the answers cannot settle it, the store re-reads** (one `getAuthState()`), and keeps showing what it showed until the answer lands (the flow if it was showing it, else the session answer):
+   - a flow answer under a signed-in session answer sent before it — the session may have timed out (the user is signing in again), or may still be live (a resend raced another tab's sign-in);
+   - a session action that another request was sent during — the server may have handled that request before the action took effect or after.
+4. **A failed request changes nothing.** It never empties the store and never blocks an older answer still in flight (a hydration still lands when a refetch fails). The store does not retry it.
+
+Known limitations, all on failure paths and all settled by the next broadcast, submit or reload:
+
+- **A failed re-read keeps what was shown.** The store does not retry the re-read of rule 3, and it does not fall back from what it showed when that read fails. If a session timed out and the user signed in again and got an MFA step, the store keeps showing the signed-in state. If this tab is showing an MFA step, another tab signs in (a read already says so, but was sent before the step) and the re-read fails, the MFA step stays shown although the session is signed in.
+- **Keeping a broadcast when its refetch fails has a cost.** If another tab signs out, this tab then signs in, and the other tab's broadcast arrives late and its refetch fails, `onAuthChange` keeps that broadcast's `null` although this tab is signed in (the store shows the sign-in).
+
+Display: the session answer if it is signed in, else the flow answer if there is one, else the session answer. `submitAuthAction` broadcasts a `signedIn` / `signedOut` result when the store shows it, which a session action's result always is. A result the store does not show is not this tab's state and is not broadcast: a failed sign-in sent before the session was seen signed in, or one under a signed-in state the store is re-reading.
+
+`onAuthChange` follows the store: it takes broadcasts at their word as before, and then emits the store's user whenever that differs from what it emitted — after the refetch a cross-tab broadcast triggers (so a stale broadcast is corrected) and when the store re-reads. An answer the store learned before the last broadcast arrived is older than that broadcast and is emitted only if it agrees with it, so when the refetch fails the broadcast stands: a sign-out another tab made stays a sign-out on a network blip, even though the store still shows the user it knew. Otherwise it ends where `subscribeAuthState` does. A user equal to the last one it emitted is not emitted again (a broadcast still is, as before). Since it follows the store, an `api` with only `onAuthChange` subscribers (`AuthenticatedContent`, `AccountMenuBar`) also sends one `getAuthState()` per broadcast from another tab (except one the store skips, above).
+
+The race tests check this exhaustively: every interleaving of up to three concurrent operations (hydration, another tab's sign-in or sign-out and the refetch it triggers, a submit with a terminal result, a submit with a mid-flow result, a session timeout followed by a new sign-in, and failures of each), for one and two APIs, both with this cookie timing and with the old naive timing in which a request's effect lands when it is sent. After every event the snapshot must be the one the rule names; once everything settles it must equal the session's truth (a fresh read, or the step the tab is still in) when no request failed, `onAuthChange` must agree with it (or hold the last broadcast, when a refetch failed), and nothing may cross APIs. With cookie timing, `onAuthChange`'s emissions are also checked against the server's session: once it reported a sign-out the server had made, it reports a user again only after a sign-in since (another tab's late broadcast excepted: it names a sign-in that happened, and the refetch corrects it). Reads are bounded by their causes (one per API, broadcast, action and failure), and a run that does not settle, or an enumeration that overruns its time budget, fails.
+
+`npm test` runs the one-API sets and the two-API sets of up to two operations (about 1.2 million interleavings). The two-API, three-operation sets (about 8.6 million more) run with `AUTH_STORE_RACES_FULL=1`; the `Auth Store Races` workflow does that on every PR that changes `src/ui.ts` or the race model. Run it locally the same way after changing the store: `AUTH_STORE_RACES_FULL=1 node --test dist/ui.races.*.test.js` in this package.
+
+The model takes a failed request to have never reached the server; a request the server handled whose answer was then lost is outside it (the store keeps what it showed, and the next broadcast or reload corrects it).
 
 ## Cookie Management
 

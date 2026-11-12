@@ -89,7 +89,23 @@ The body is JSON-RPC 2.0:
 
 - `method` is `<namespace>.<methodName>`, where `<namespace>` is the **export variable name** from `aws-blocks/index.ts` (e.g., `export const api = ...` → `api`).
 - `params` is a POSITIONAL array of the method's arguments. A named object also works (its values are used in order).
-- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status.
+- Errors come back as HTTP `200` with an `error` object in the body (per JSON-RPC), not as a non-2xx status — unless the namespace opts in to `httpErrorStatus` (below).
+
+To let status-code-only tooling (API Gateway and CloudFront metrics, access logs, WAF rate rules, a 4xx alarm) see rejected calls, create the namespace with `httpErrorStatus: true`. A call that throws an `ApiError` with a `4xx` status is then answered with that HTTP status; the body is the same JSON-RPC error, and the typed client decodes it the same way, so `isBlocksError()` is unaffected. `5xx` and other failures stay HTTP `200`. It applies locally and on AWS:
+
+```typescript
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getNote() {
+    const user = await auth.requireAuth(context); // signed out → HTTP 401
+    return notes.get(user.userId);
+  },
+}), { httpErrorStatus: true });
+```
+
+Turn it on only when every client of the namespace reads the body of a non-2xx response (a hand-written `fetch` that throws on `!response.ok` would not). Two more things to check:
+
+- **Hosting error pages.** CloudFront custom error responses apply to the whole distribution, `/aws-blocks/*` included. When it maps 403 or 404 to a page — `errorPages.notFound`, a static build's own `404.html`, or the default not-found page of a static multi-page site — a 403 / 404 from such a namespace reaches the browser as that HTML page and the typed client cannot read it. CloudFront cannot scope error responses away from `/aws-blocks/*`, so `Hosting` fails synth for that combination (`HttpErrorStatusErrorPagesError`): remove the 4xx error pages, or leave `httpErrorStatus` off for the namespace. 401, 409 and 429 are not mapped.
+- **Dart clients with bearer tokens.** With an `authProvider`, the Dart client treats any HTTP 401 as an expired token: it refreshes and runs the method once more, so a method that throws 401 after a side effect runs twice. Put the guard first — `requireAuth()` as the first statement, or `auth.protect`, which runs it before any of the method's code — and keep any method that can still fail with 401 later idempotent. The Swift and Kotlin clients decode the error the same way on any status, and do not retry.
 
 Error responses use these JSON-RPC codes:
 
@@ -219,7 +235,7 @@ Either tier serves the API at the same path. The TypeScript client (and any manu
 POST /aws-blocks/api/{namespace}
 ```
 
-where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
+where `{namespace}` is the backend export name (`export const api = …` → `api`). The bare `POST /aws-blocks/api` form still works for back-compat; it runs on the default compute, and with `defaults.strictNamespacePlacement` it refuses a namespace placed on another compute. Either way the request body's `method` (`"api.greet"`) names the namespace that runs; a per-namespace path must be exactly `/aws-blocks/api/{namespace}` and name the same namespace, or the call fails with a JSON-RPC `-32600` Invalid Request. Internally the shared gateway routes each namespace's path to the compute that hosts it; by default every namespace runs on the single default compute, so every path lands on the same function. Pass `{ compute }` as the fourth `ApiNamespace` argument to run a namespace on its own `Compute`; the API namespaces section of the `@aws-blocks/bb-compute` README lists what that changes (and what it doesn't), including which callers reach the namespace's compute. With `'cloudfront'`, the path of a namespace on a `container` compute has a CloudFront behavior of its own — on the managed distribution, or on `Hosting`'s default CloudFront door when it fronts the API — that goes straight to the container's load balancer (calls can run up to 60 seconds); every other path reaches the gateway. The `stacked` door's edge is not one of them: it sends `/aws-blocks/*`, container namespaces included, through its ALB router to the gateway, so those calls keep the gateway's 29-second limit (the load balancer still gets its CloudFront prefix-list rule and lookup, unused). A container namespace whose VPC has no public subnets (an isolated VPC) also stays on the gateway: a CloudFront VPC origin needs an internet gateway, and synth warns (`blocks:api:direct-routes-without-public-subnets`). The check reads the VPC's public subnets, so for an imported VPC (`Vpc.fromVpcAttributes`) list its `publicSubnetIds`. On the `apigateway` tier, a CloudFront `Hosting` sends container namespaces to the gateway like every other path.
 
 **Hosting is same-origin.** When you pass the backend to the `Hosting` construct, the frontend and the API are served from one origin, so the browser treats `/aws-blocks/api/*` calls as same-origin and no CORS configuration is needed (see the CORS Configuration section below). With `'cloudfront'`, a CloudFront-backed `Hosting` door (the CloudFront default, or the `stacked` door's edge) takes the front-door role and no second distribution is created. Behind the `alb`, `apiGateway` and `custom` doors the browser still reaches the API same-origin, but the API keeps its own distribution and `ApiUrl` stays on it for every other client; `'none'` serves static files only, so the browser calls the API cross-origin.
 
@@ -363,7 +379,7 @@ And what you read from `ctx.request`:
 | On `ctx.request` | Notes |
 |---|---|
 | `params` | Path parameters, e.g. route `/users/{id}` + request `/users/42` → `{ id: '42' }`. Always `{}` for RPC methods. |
-| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. |
+| `url` | Absolute `URL` of the request. Use `url.searchParams` for the query string. `url.pathname` is the route path, the same under `npm run dev` and deployed: it never includes the API Gateway stage (`/prod`). Behind a front door such as `Hosting`, `url.origin` is the API Gateway host the backend received, not the browser's, so don't build public links from it. |
 | `headers` | Request `Headers`, including `cookie`. |
 | `json()` / `text()` / `body` | Body as parsed JSON, raw text, or a `ReadableStream`. |
 | `signal` | `AbortSignal` that fires just before the platform's timeout response. Pass it to `fetch`/SDK calls. `undefined` in local dev. |
@@ -383,6 +399,8 @@ new RawRoute(scope, 'user', {
 ```
 
 Path syntax: exact (`/health`), named parameter capturing one segment (`/users/{id}`), or a trailing wildcard capturing the rest (`/files/*`, available as `params['*']`). One wildcard per route, last segment only. Named parameters are URL-decoded; wildcard captures are not, so validate them before touching a filesystem or an S3 key.
+
+To sub-route under a wildcard, match on `params['*']` (or `url.pathname`, which is the same path in every environment) rather than on a full URL.
 
 `path` can be omitted, in which case it is derived from the scope-chain IDs, so `Scope('app') → Scope('v1') → RawRoute('health')` gives `/v1/health`. That means restructuring your construct tree silently changes URLs, so pass an explicit `path` for anything a client depends on.
 
@@ -558,10 +576,13 @@ The dev server (`npm run dev`) listens on **`127.0.0.1` (loopback) only**, so no
 BLOCKS_DEV_HOST=0.0.0.0 npm run dev   # prints a warning: anyone who can reach this interface can call your API
 ```
 
+The dev server also checks the `Host` header of every request and answers `403 Forbidden` unless it names `localhost`, `127.0.0.1`, `[::1]` (with any port) or the host you configured. This blocks DNS rebinding, where a page on another site re-points its own DNS name at `127.0.0.1` and then calls your local API as if it were same-origin. The local `/aws-blocks/settings` shortcut opens `.bb-data/settings.json` in your editor only for a request you made yourself (typed into the address bar or followed from your app, including a frontend served on another `localhost` port); a request another site triggers gets `403`.
+
 You can also set the host with `npm run dev -- --host <host>` or `"host"` in `package.json#blocks.dev`; the `cdk-blocks` CLI then also exports it to the dev server as `BLOCKS_DEV_HOST`. The local realtime WebSocket (`/realtime`) accepts upgrades only from loopback origins, or from the host in `BLOCKS_DEV_HOST`. Passing `host` to `startDevServer({ host })` when you call it yourself changes only the interface it binds; set `BLOCKS_DEV_HOST` too to opt `/realtime` in:
 
-- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Same-origin pages reached by IP are accepted; DNS names are not, because a same-origin check against a name can be defeated by DNS rebinding.
+- With a **wildcard** (`BLOCKS_DEV_HOST=0.0.0.0`), open the app **by IP address** (e.g. `http://192.168.1.10:3000`). Requests and same-origin pages reached by IP are accepted; DNS names are not (the dev server answers them `403`), because a same-origin check against a name can be defeated by DNS rebinding.
 - To open it by **hostname** (e.g. `http://mybox.example.com:3000`), set `BLOCKS_DEV_HOST=mybox.example.com` instead.
+- Behind a **reverse proxy or a port-forwarding tunnel** that passes its own public hostname in `Host` (a cloud-IDE forwarded-port URL, or nginx with `proxy_set_header Host $host`), configure the proxy to rewrite `Host` to `localhost:<port>`. `BLOCKS_DEV_HOST` is also the address the dev server binds, so setting it to a name that only exists in front of the proxy makes the dev server fail to start.
 
 Only server-side `Realtime.publish()` can publish. Clients can subscribe, but not publish, exactly as in a deployed app.
 
@@ -589,7 +610,16 @@ In the dev server, `quiet` and `normal` hide the per-call `[rpc-in]` / `[rpc-cal
 
 ## CORS Configuration
 
-By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
+By default, the Lambda handler does **not** set any `Access-Control-Allow-Origin` header. Allowed origins come from two places: the stack's `defaults.allowedOrigins` (plain origins or regex patterns; every Blocks compute receives them as the `CORS_ALLOWED_ORIGINS` environment variable) and, when you use `Hosting`, the distribution's own domain (registered automatically as `CORS_HOSTING_ORIGINS`).
+
+### `allowedOrigins` entries
+
+Each entry in `defaults.allowedOrigins` is one of:
+
+- **A plain origin** — `scheme://host[:port]`, such as `'https://app.example.com'` or `'http://localhost:3000'`. It is matched exactly and case-insensitively; its dots are literal, so `https://appxexample.com` does not match. A trailing `/` is ignored. An `http`/`https` origin is compared in the form the browser sends: the default port is dropped (`'https://app.example.com:443'` matches `https://app.example.com`) and an internationalized host is converted to punycode (`'https://bücher.example'` matches `https://xn--bcher-kva.example`). User info (`user@`), a path (anything after the host and port other than a single trailing `/`), a query or a fragment is not part of an origin and is rejected, as is a host with characters other than letters, digits, `.` and `-` (or a bracketed IPv6 address).
+- **A regex pattern** — any entry with regex syntax (`^`, `$`, `\`, `(`, `|`, `*`, ...). It is anchored as `^(?:<entry>)$` and matched case-sensitively. Escape every dot (`'https://app\\.example\\.com'`) unless it is followed by a quantifier, as in `'.*'`, and make sure the entry compiles on its own. To allow any subdomain, use a pattern such as `'https://[a-z0-9-]+\\.example\\.com'`; glob wildcards such as `'https://*.example.com'` are not supported. Brace quantifiers are limited to `{n}`: `{n,}` and `{n,m}` contain a comma, and entries are comma-joined into `CORS_ALLOWED_ORIGINS`. A group repeated with `*`, `+` or `{n}` that itself contains a repeating quantifier or an alternation (such as `'(a+)+'`, `'([a-z]+\\.)*'` or `'(a|b)+'`) is not supported, because such patterns can make matching very slow; this check does not rule out every slow pattern. To allow subdomains at any depth, use `'https://[a-z0-9.-]+\\.example\\.com'` instead of `'https://([a-z0-9-]+\\.)*example\\.com'`.
+
+`BlocksStack.create()` and `BlocksBackend.create()` reject an invalid entry (a plain origin that is not a valid origin; a regex that is a glob, does not compile on its own, has a nested quantifier or an alternation inside a repeated group, or has an unescaped `.`), so `cdk synth` fails with a message naming the entry. If one still reaches the runtime, it is ignored and logged.
 
 ### When using Hosting (recommended)
 
@@ -611,7 +641,7 @@ The dev server automatically allows `localhost` / `127.0.0.1` origins. No config
 ```typescript
 defaults: {
   ...BlocksPresets.sandbox,
-  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview\\.myapp\\.com'],
+  allowedOrigins: [...BlocksPresets.sandbox.allowedOrigins, 'https://preview.myapp.com'],
 },
 ```
 
@@ -626,7 +656,7 @@ export const blocksStack = await BlocksStack.create(app, stackName, {
   backendCDKPath: join(__dirname, 'index.ts'),
   defaults: {
     ...BlocksPresets.production,
-    allowedOrigins: ['https://myapp\\.com', 'https://staging\\.myapp\\.com'],
+    allowedOrigins: ['https://myapp.com', 'https://staging.myapp.com'],
   },
 });
 ```
@@ -801,3 +831,44 @@ jq -e '[.roles[] | select(.permissionsBoundary == null or ([.tags[] | select(.Ke
 - **Name resources by app.** The rules match resource names, so each app's resources must live under its own prefix or path.
 - **It doesn't isolate handlers inside one app.** Every handler in the app still runs as the same role, under the same boundary.
 - **One account per app remains the stronger model.** A boundary only enforces what its rules cover.
+
+### Service-principal trust: `aws:SourceAccount` and `aws:SourceArn`
+
+Every IAM role AWS Blocks creates that an AWS service assumes (other than Lambda execution roles) limits that trust to the stack's account and to resources of that service, with an `aws:SourceAccount` (`StringEquals`) and an `aws:SourceArn` (`ArnLike`) condition. Synth checks this on the same set of roles `defaults.permissionsBoundary` covers:
+
+- **Roles AWS Blocks creates** — under an AWS Blocks Building Block or a compute, the backend's own roles, and the stack-level roles a block creates on its behalf (custom-resource providers, `Hosting`'s). A trust without either condition **fails synth**, naming the role's construct path and the principal.
+- **Roles your app creates** — your own constructs in the backend module (on the `BlocksStack` or embedded `BlocksBackend`, at stack scope, or under a `Scope` namespace), roles you add to a `BlocksStack` after `BlocksStack.create()`, roles inside a custom Building Block you write (a `Scope` subclass, see [Pattern 3: Custom BB](https://github.com/aws-devtools-labs/aws-blocks/blob/main/docs/guides/extending-with-existing-aws-resources.md#pattern-3-custom-bb)), and the roles CDK creates inside any of these (for example the `EventsRole` of an `events.Rule` that targets a state machine). A trust without either condition gets a **synth warning** instead, and the deploy goes ahead.
+
+Ownership follows who created the role, not where it sits in the construct tree: AWS Blocks marks the constructs its own blocks, computes and stack-level helpers create, and every other covered role is your app's.
+
+Lambda execution roles (`lambda.amazonaws.com`, `edgelambda.amazonaws.com`) are accepted as they are. So is the `apigateway.amazonaws.com` trust of an API Gateway CloudWatch Logs role, meaning any role that an `AWS::ApiGateway::Account` in the same stack names as its `cloudWatchRoleArn`. That includes the stack-level `BlocksApiGatewayCloudWatchRole` AWS Blocks creates when access logging is on, and the `cloudWatchRole` a CDK `apigateway.RestApi` creates by default. API Gateway does not send `aws:SourceAccount` or `aws:SourceArn` when it delivers logs with that role, so either condition stops log delivery. Any other principal on that role, and `apigateway.amazonaws.com` on any other role, is still checked.
+
+**Resolving the warning.** Add both conditions to the trust statement (but don't condition an API Gateway CloudWatch Logs role: API Gateway doesn't send these keys when it delivers logs, so logs stop arriving. Name it as the `cloudWatchRoleArn` of an `apigateway.CfnAccount`, which the check already accepts, or acknowledge the warning). For a role you create, pass them as the principal's `conditions`. For a role a CDK construct creates with no prop for its trust, set them on the role's CloudFormation resource with a property override; the warning names the statement index (`N`):
+
+```ts
+import * as cdk from 'aws-cdk-lib';
+import * as events from 'aws-cdk-lib/aws-events';
+import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
+
+const machine = new sfn.StateMachine(stack, 'Machine', {
+  definitionBody: sfn.DefinitionBody.fromChainable(new sfn.Pass(stack, 'Start')),
+});
+new events.Rule(stack, 'Every5', {
+  schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+  targets: [new targets.SfnStateMachine(machine)],
+});
+// The EventsRole the target created trusts events.amazonaws.com in statement 0.
+// (A pattern, not rule.ruleArn: the rule already references this role.)
+const eventsRole = machine.node.findChild('EventsRole').node.defaultChild as cdk.CfnResource;
+eventsRole.addPropertyOverride('AssumeRolePolicyDocument.Statement.0.Condition', {
+  StringEquals: { 'aws:SourceAccount': stack.account },
+  ArnLike: { 'aws:SourceArn': `arn:${stack.partition}:events:${stack.region}:${stack.account}:rule/*` },
+});
+```
+
+**Acknowledging it.** To keep a trust as it is, acknowledge the warning id `@aws-blocks/core:serviceRoleTrustWithoutSourceCondition`, on the role or on any construct above it (the stack acknowledges it for every role in the stack):
+
+```ts
+cdk.Annotations.of(stack).acknowledgeWarning('@aws-blocks/core:serviceRoleTrustWithoutSourceCondition');
+```

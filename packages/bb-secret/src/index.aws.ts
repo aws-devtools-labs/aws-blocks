@@ -14,7 +14,9 @@ import {
 } from '@aws-sdk/client-secrets-manager';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import { SecretErrors } from './errors.js';
+import { secretArnConfigKey } from './internal-shared.js';
 import type { ExternalSecretRef, SecretOptions, SecretReadOptions, SecretVersion, SecretVersionInfo } from './types.js';
+import { validateSchema } from './validation.js';
 import { BB_NAME, BB_VERSION } from './version.js';
 
 // Re-export public types and errors (canonical source)
@@ -28,15 +30,6 @@ export type {
 } from './types.js';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-async function validateSchema<T>(schema: StandardSchemaV1<T>, value: unknown): Promise<T> {
-	const result = schema['~standard'].validate(value);
-	const resolved = result instanceof Promise ? await result : result;
-	if (resolved.issues) {
-		throw blocksError(SecretErrors.ValidationFailed, resolved.issues[0].message);
-	}
-	return (resolved as { value: T }).value;
-}
 
 /**
  * Map a {@link SecretReadOptions.version} selector to the SDK's GetSecretValue
@@ -166,6 +159,14 @@ class SecretImpl<T = string> extends Scope {
 	 * out-of-band change.
 	 */
 	private cacheTtlMs: number;
+	/**
+	 * Invalidation generation for {@link readCache}, incremented whenever the
+	 * cache is cleared by `put()`. `get()` captures it before fetching and stores
+	 * the result only if it is unchanged when the fetch settles, so a read that
+	 * was in flight across a `put()` can't re-cache the pre-write value or
+	 * overwrite an entry a post-write read already stored.
+	 */
+	private cacheGeneration = 0;
 
 	/**
 	 * Update the secret value — **present only when the secret was constructed
@@ -175,10 +176,15 @@ class SecretImpl<T = string> extends Scope {
 	 *
 	 * Without a schema, accepts a string. With a schema, accepts `T`, validates
 	 * it, and serializes to JSON before storing. Clears this instance's read
-	 * cache on success.
+	 * cache on success, including against a `get()` that was already in flight:
+	 * that read still returns what it fetched but does not cache it, so the next
+	 * `get()` sees the new value.
 	 *
 	 * @param value - The new secret value.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the value fails validation.
+	 *   The error message never contains the value or the schema library's issue text
+	 *   or the failing path, which a record schema takes from the value's keys; the
+	 *   original issues and path are on the non-enumerable `cause` for server-side logs.
 	 * @throws {SecretErrors.SecretNotFound} If the underlying Secrets Manager secret does not exist.
 	 *
 	 * @example
@@ -226,11 +232,11 @@ class SecretImpl<T = string> extends Scope {
 	 * different scopes resolve distinct ARNs.
 	 */
 	private resolveSecretArn(): string {
-		const secretArn = this.externalArn ?? process.env[configKey(this.fullId)];
+		const secretArn = this.externalArn ?? process.env[secretArnConfigKey(this.fullId)];
 		if (!secretArn) {
 			throw blocksError(
 				SecretErrors.NotSupported,
-				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${configKey(this.fullId)}), or pass an existing secret via Secret.fromExisting().`,
+				`Secret '${this.constructId}' is missing its secret ARN. The CDK layer must register it (config key ${secretArnConfigKey(this.fullId)}), or pass an existing secret via Secret.fromExisting().`,
 			);
 		}
 		return secretArn;
@@ -261,6 +267,9 @@ class SecretImpl<T = string> extends Scope {
 	 * @param options - Optional read options; `version` selects which version.
 	 * @returns The secret value, or `null` if that version has not been set or does not exist.
 	 * @throws {SecretErrors.ValidationFailed} If a schema is configured and the stored value is not valid JSON, or fails validation.
+	 *   The error message never contains the value or the schema library's issue text
+	 *   or the failing path, which a record schema takes from the value's keys; the
+	 *   original issues and path are on the non-enumerable `cause` for server-side logs.
 	 *
 	 * @example
 	 * ```typescript
@@ -290,6 +299,10 @@ class SecretImpl<T = string> extends Scope {
 			// 'current' (default) → omit (AWSCURRENT); 'previous' → AWSPREVIOUS stage;
 			// a SecretVersion → its versionId.
 			const selector = versionSelector(options?.version);
+			// Snapshot the invalidation generation: if a put() clears the cache while
+			// this fetch is in flight, the result predates the write and is returned
+			// to this caller but not cached.
+			const generation = this.cacheGeneration;
 			try {
 				const result = await this.client.send(new GetSecretValueCommand({ SecretId: secretArn, ...selector }));
 				cached = { raw: result.SecretString ?? null, fetchedAt: Date.now() };
@@ -300,7 +313,7 @@ class SecretImpl<T = string> extends Scope {
 					throw err;
 				}
 			}
-			this.readCache.set(key, cached);
+			if (generation === this.cacheGeneration) this.readCache.set(key, cached);
 		}
 
 		if (cached.raw === null) return null;
@@ -384,8 +397,11 @@ class SecretImpl<T = string> extends Scope {
 
 		// A write advances the AWSCURRENT/AWSPREVIOUS labels, so every cached read
 		// (current, previous, and any specific version) is now potentially stale —
-		// drop them all; the next get() re-fetches and repopulates.
+		// drop them all; the next get() re-fetches and repopulates. Bumping the
+		// generation also stops a get() already in flight from caching its
+		// pre-write result after this clear.
 		this.readCache.clear();
+		this.cacheGeneration++;
 	}
 }
 
@@ -440,13 +456,3 @@ function fromExisting(secretArn: string): ExternalSecretRef {
 // plumbing: a class cannot narrow its own constructor return type per-overload).
 Object.assign(SecretImpl, { fromExisting });
 export const Secret = SecretImpl as unknown as SecretConstructor;
-
-/**
- * The config-registry / environment key the CDK layer uses to pass a Secret's
- * ARN to the runtime. Derived from the scoped `fullId` (same derivation on both
- * layers), so same-`id` secrets in different scopes resolve distinct keys. The
- * `BLOCKS_` prefix is framework-reserved.
- */
-function configKey(fullId: string): string {
-	return `BLOCKS_SECRET_ARN_${fullId.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
-}

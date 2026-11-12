@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createLambdaHandler, _resetCorsPatterns, requestCookies, isApiGatewayHttpEvent, computeHttpDeadlineMs, classifyEvent, buildEventUrl, isLoopbackForwardedHost, TransientConfigError } from './lambda-handler.js';
 import type { LambdaContext } from './lambda-handler.js';
@@ -13,6 +13,7 @@ import { HttpRequest } from '@smithy/protocol-http';
 import { installClientUserAgent } from './server/client-user-agent.js';
 import { ApiNamespace } from './api.js';
 import type { BlocksContext } from './api.js';
+import { getRequestBaseUrl } from './bb-utils.js';
 
 beforeEach(() => {
   clearRouteRegistry();
@@ -280,6 +281,139 @@ describe('createLambdaHandler — RPC body handling', () => {
     assert.strictEqual(capturedJson.jsonrpc, '2.0');
     assert.strictEqual(capturedJson.method, 'api.echo');
   });
+});
+
+describe('createLambdaHandler — strict API namespace placement (defaults.strictNamespacePlacement)', () => {
+  // What the CDK layer sets when `reports` is placed on compute `app-reports`:
+  // the placement map in the environment of every API compute, and the
+  // compute's own id only on that compute. The handler reads both from
+  // process.env, as a deployed function does.
+  const PLACEMENT = JSON.stringify({ reports: 'app-reports' });
+
+  function withEnv(vars: Record<string, string>, fn: () => Promise<void>): () => Promise<void> {
+    return async () => {
+      const saved = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
+      Object.assign(process.env, vars);
+      try {
+        await fn();
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    };
+  }
+
+  function placedBackend(calls: string[]) {
+    return {
+      api: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('api'); return 'api'; } }),
+      reports: (_ctx: BlocksContext) => ({ async whereAmI() { calls.push('reports'); return 'reports'; } }),
+    };
+  }
+
+  function rpc(namespace: string, path = '/aws-blocks/api') {
+    return makeEvent({ path, body: JSON.stringify({ jsonrpc: '2.0', method: `${namespace}.whereAmI`, params: [], id: 1 }) });
+  }
+
+  it('the default compute refuses a namespace placed on another compute, on the bare endpoint', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      const result = await invoke(placedBackend(calls), rpc('reports'));
+      const body = JSON.parse(result.body);
+      assert.strictEqual(body.error?.code, -32601, 'refused like an unknown namespace');
+      assert.match(body.error?.message, /API 'reports' not found/);
+      assert.deepStrictEqual(calls, [], "the placed namespace's code never ran on the default compute");
+    },
+  ));
+
+  it('the default compute still serves its own namespaces on the bare endpoint and their own path', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT },
+    async () => {
+      const calls: string[] = [];
+      for (const path of ['/aws-blocks/api', '/aws-blocks/api/api']) {
+        const body = JSON.parse((await invoke(placedBackend(calls), rpc('api', path))).body);
+        assert.strictEqual(body.result, 'api', path);
+      }
+      assert.deepStrictEqual(calls, ['api', 'api']);
+    },
+  ));
+
+  it('the placed compute serves its namespace and refuses every other one', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, BLOCKS_API_COMPUTE_ID: 'app-reports' },
+    async () => {
+      const calls: string[] = [];
+      const served = JSON.parse((await invoke(placedBackend(calls), rpc('reports', '/aws-blocks/api/reports'))).body);
+      assert.strictEqual(served.result, 'reports');
+      const refused = JSON.parse((await invoke(placedBackend(calls), rpc('api'))).body);
+      assert.strictEqual(refused.error?.code, -32601);
+      assert.deepStrictEqual(calls, ['reports']);
+    },
+  ));
+
+  it('serves every namespace on the bare endpoint when no placement is configured', async () => {
+    const calls: string[] = [];
+    const body = JSON.parse((await invoke(placedBackend(calls), rpc('reports'))).body);
+    assert.strictEqual(body.result, 'reports');
+  });
+
+  it('a refused namespace writes a 404 RpcErrors metric through onRpcError', withEnv(
+    { BLOCKS_API_NAMESPACE_COMPUTES: PLACEMENT, AWS_LAMBDA_FUNCTION_NAME: 'app-default-fn' },
+    async () => {
+      const lines: string[] = [];
+      const savedWrite = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString();
+        if (text.includes('"_aws"')) {
+          lines.push(...text.split('\n').filter(Boolean));
+          return true;
+        }
+        return (savedWrite as (...a: unknown[]) => boolean).call(process.stdout, chunk, ...rest);
+      }) as typeof process.stdout.write;
+      try {
+        const body = JSON.parse((await invoke(placedBackend([]), rpc('reports'))).body);
+        assert.strictEqual(body.error?.code, -32601);
+      } finally {
+        process.stdout.write = savedWrite;
+      }
+      const metrics = lines.map((l) => JSON.parse(l));
+      assert.strictEqual(metrics.length, 1);
+      assert.strictEqual(metrics[0].Status, 404);
+      assert.strictEqual(metrics[0].StatusClass, '4xx');
+      assert.strictEqual(metrics[0].ApiNamespace, 'reports');
+      assert.strictEqual(metrics[0].FunctionName, 'app-default-fn');
+    },
+  ));
+
+  for (const [name, env, message] of [
+    ['a malformed placement map', { BLOCKS_API_NAMESPACE_COMPUTES: '{not json' }, /must be a JSON object/],
+    ['a compute id without a placement map', { BLOCKS_API_COMPUTE_ID: 'app-reports' }, /BLOCKS_API_COMPUTE_ID is set but/],
+  ] as const) {
+    it(`${name} fails initialization, and the next request retries it`, async () => {
+      const keys = ['BLOCKS_API_NAMESPACE_COMPUTES', 'BLOCKS_API_COMPUTE_ID'];
+      const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+      for (const k of keys) delete process.env[k];
+      Object.assign(process.env, env);
+      try {
+        const calls: string[] = [];
+        const handler = createLambdaHandler(async () => placedBackend(calls));
+        await assert.rejects(async () => handler(rpc('reports', '/aws-blocks/api/reports')), message);
+        assert.deepStrictEqual(calls, [], 'nothing was served');
+        // The same environment, once it carries a readable map, initializes.
+        for (const k of keys) delete process.env[k];
+        process.env.BLOCKS_API_NAMESPACE_COMPUTES = PLACEMENT;
+        process.env.BLOCKS_API_COMPUTE_ID = 'app-reports';
+        const res = (await handler(rpc('reports', '/aws-blocks/api/reports'))) as { body: string };
+        assert.strictEqual(JSON.parse(res.body).result, 'reports');
+      } finally {
+        for (const [k, v] of Object.entries(saved)) {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        }
+      }
+    });
+  }
 });
 
 // ── RawRoute body tests ─────────────────────────────────────────────────────
@@ -1852,7 +1986,7 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     assert.strictEqual(url.host, 'localhost:3000');
   });
 
-  it('keeps proto and stage prefix for the non-loopback (deploy) path', () => {
+  it('keeps proto and host, but not the stage prefix, for the non-loopback (deploy) path', () => {
     const url = buildEventUrl({
       path: '/auth/callback',
       headers: { 'x-forwarded-proto': 'https', Host: EXECUTE_API },
@@ -1860,7 +1994,29 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
     });
     assert.strictEqual(url.protocol, 'https:');
     assert.strictEqual(url.host, EXECUTE_API);
-    assert.strictEqual(url.pathname, '/prod/auth/callback');
+    // The route path, as under the dev server: every front door adds the stage
+    // on the way to the gateway, so it is not part of the path the app routes on.
+    assert.strictEqual(url.pathname, '/auth/callback');
+  });
+
+  it('does not prepend the `$default` stage of a v2 event', () => {
+    const url = buildEventUrl({
+      version: '2.0',
+      rawPath: '/echo/a',
+      headers: { host: 'abc123.lambda-url.us-east-1.on.aws' },
+      requestContext: { stage: '$default', http: { method: 'GET', path: '/echo/a' } },
+    });
+    assert.strictEqual(url.pathname, '/echo/a');
+  });
+
+  it('keeps the selected origin when the path starts with `//`', () => {
+    // `new URL('//evil.example/x', origin)` would resolve the path as a
+    // protocol-relative reference and swap the host.
+    for (const requestContext of [undefined, { stage: 'prod' }]) {
+      const url = buildEventUrl({ path: '//evil.example/echo/a', headers: { Host: EXECUTE_API }, requestContext });
+      assert.strictEqual(url.host, EXECUTE_API);
+      assert.strictEqual(url.pathname, '//evil.example/echo/a');
+    }
   });
 
   it('accepts 127.0.0.1 and [::1] as loopback forwarded hosts', () => {
@@ -1869,6 +2025,120 @@ describe('buildEventUrl — X-Forwarded-Host (sandbox front door)', () => {
 
     const v6 = buildEventUrl({ path: '/', headers: { 'x-forwarded-host': '[::1]:3000', Host: EXECUTE_API } });
     assert.strictEqual(v6.hostname, '[::1]');
+  });
+
+  it('takes only the host from a loopback X-Forwarded-Host, never a query, fragment or userinfo', () => {
+    for (const forwarded of ['localhost:3000?role=admin#injected', 'user:pw@localhost:3000/evil']) {
+      const url = buildEventUrl({
+        path: '/aws-blocks/api/x',
+        headers: { 'x-forwarded-host': forwarded, Host: EXECUTE_API },
+        queryStringParameters: { a: '1' },
+      });
+      assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/x?a=1', forwarded);
+    }
+    const noQuery = buildEventUrl({ path: '/x', headers: { 'x-forwarded-host': 'localhost:3000?role=admin#injected', Host: EXECUTE_API } });
+    assert.strictEqual(noQuery.href, 'http://localhost:3000/x');
+  });
+});
+
+describe('buildEventUrl — behind a Blocks CloudFront front door', () => {
+  // CloudFront forwards the gateway's own Host; the door stamps the viewer's host as
+  // x-blocks-public-host, and the backend's config lists the hosts its doors serve.
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+  const VIEWER = 'd111.cloudfront.net';
+  const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+  beforeEach(() => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},app.example.com`;
+  });
+  afterEach(() => {
+    if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+    else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+  });
+  const throughDoor = (headers: Record<string, string>, path = '/aws-blocks/api/reports') => ({
+    path,
+    headers: { Host: EXECUTE_API, 'X-Forwarded-Proto': 'https', ...headers },
+    requestContext: { stage: 'prod' },
+    queryStringParameters: { a: '1' },
+  });
+
+  it('reports the URL the viewer called: its host, no stage', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${VIEWER}/aws-blocks/api/reports?a=1`);
+  });
+
+  it("reports a custom domain the door serves, whatever the header's letter case", () => {
+    const url = buildEventUrl(throughDoor({ 'X-Blocks-Public-Host': 'App.Example.com' }));
+    assert.strictEqual(url.href, 'https://app.example.com/aws-blocks/api/reports?a=1');
+  });
+
+  it("ignores a host that isn't one of the backend's front doors (a direct execute-api caller)", () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': 'attacker.example' }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('ignores a list of hosts, and a host with a port', () => {
+    for (const value of [`${VIEWER}, app.example.com`, `${VIEWER}:443`]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': value }));
+      assert.strictEqual(url.host, EXECUTE_API, value);
+    }
+  });
+
+  it('ignores two copies under different letter case', () => {
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER, 'X-Blocks-Public-Host': 'app.example.com' }));
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('ignores a header repeated on the wire, as the container does', () => {
+    // A REST event keeps the last copy in `headers` and every copy in `multiValueHeaders`.
+    const url = buildEventUrl({
+      ...throughDoor({ 'x-blocks-public-host': VIEWER }),
+      multiValueHeaders: { 'x-blocks-public-host': ['attacker.example', VIEWER] },
+    });
+    assert.strictEqual(url.host, EXECUTE_API);
+  });
+
+  it('reports a subdomain of a wildcard custom domain the door serves, at any depth', () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of ['a.tenant.example.com', 'deep.a.tenant.example.com', 'A.Tenant.Example.com']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.href, `https://${host.toLowerCase()}/aws-blocks/api/reports?a=1`, host);
+    }
+  });
+
+  it("ignores a host a wildcard custom domain doesn't cover: its apex, a lookalike, a longer domain", () => {
+    process.env.BLOCKS_PUBLIC_HOSTS = `${VIEWER},*.tenant.example.com`;
+    for (const host of [
+      'tenant.example.com',
+      'eviltenant.example.com',
+      'a.tenant.example.com.evil.example',
+      '.tenant.example.com',
+      'x/y.tenant.example.com',
+      'u@a.tenant.example.com',
+      'a.tenant.example.com:443',
+      'a..tenant.example.com',
+    ]) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': host }));
+      assert.strictEqual(url.host, EXECUTE_API, host);
+    }
+  });
+
+  it('ignores the header when the backend has no front-door hosts', () => {
+    delete process.env.BLOCKS_PUBLIC_HOSTS;
+    const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, `https://${EXECUTE_API}/aws-blocks/api/reports?a=1`);
+  });
+
+  it('keeps the loopback dev-server origin first (a sandbox proxying through the door)', () => {
+    const url = buildEventUrl(throughDoor({ 'x-forwarded-host': 'localhost:3000', 'x-blocks-public-host': VIEWER }));
+    assert.strictEqual(url.href, 'http://localhost:3000/aws-blocks/api/reports?a=1');
+  });
+
+  it('never moves to another host on a //- or /\\-prefixed path', () => {
+    for (const path of ['//evil.example/x', '/\\evil.example/x']) {
+      const url = buildEventUrl(throughDoor({ 'x-blocks-public-host': VIEWER }, path));
+      assert.strictEqual(url.host, VIEWER, path);
+      assert.strictEqual(url.pathname, '//evil.example/x', path);
+    }
   });
 });
 
@@ -1944,6 +2214,107 @@ describe('createLambdaHandler — sandbox forwarded-host reaches the route', () 
     }));
 
     assert.strictEqual(capturedHost, 'abc123.execute-api.us-east-1.amazonaws.com');
+  });
+});
+
+// ── RawRoute URL parity with the dev server (#1138) ─────────────────────────
+
+describe('createLambdaHandler — RawRoute ctx.request.url on a deployed stage', () => {
+  const EXECUTE_API = 'abc123.execute-api.us-east-1.amazonaws.com';
+
+  function stageEvent(path: string, headers: Record<string, string> = {}) {
+    return makeEvent({
+      httpMethod: 'GET',
+      path,
+      body: null,
+      queryStringParameters: { q: 'a b' },
+      requestContext: { stage: 'prod' },
+      headers: { Host: EXECUTE_API, 'x-forwarded-proto': 'https', ...headers },
+    });
+  }
+
+  it('a RawRoute sees the route path, without the API Gateway stage', async () => {
+    let seen: { href: string; pathname: string; wildcard: string | undefined; q: string | null } | undefined;
+    registerRoute({
+      method: 'GET',
+      path: '/echo/*',
+      handler: async (ctx) => {
+        const { url, params } = ctx.request;
+        seen = { href: url.href, pathname: url.pathname, wildcard: params['*'], q: url.searchParams.get('q') };
+        ctx.response.send('');
+      },
+    });
+
+    const result = await invoke({}, stageEvent('/echo/a/b'));
+
+    assert.strictEqual(result.statusCode, 200);
+    assert.deepStrictEqual(seen, {
+      href: `https://${EXECUTE_API}/echo/a/b?q=a+b`,
+      pathname: '/echo/a/b',
+      wildcard: 'a/b',
+      q: 'a b',
+    });
+  });
+
+  it('getRequestBaseUrl returns the gateway origin with its stage', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback'));
+
+    assert.strictEqual(base, `https://${EXECUTE_API}/prod`);
+  });
+
+  it('getRequestBaseUrl returns the loopback front door, without a stage, in sandbox', async () => {
+    let base = '';
+    registerRoute({
+      method: 'GET',
+      path: '/auth/callback',
+      handler: async (ctx) => {
+        base = getRequestBaseUrl(ctx);
+        ctx.response.send('');
+      },
+    });
+
+    await invoke({}, stageEvent('/auth/callback', { 'x-forwarded-host': 'localhost:3000' }));
+
+    assert.strictEqual(base, 'http://localhost:3000');
+  });
+
+  it("behind a Blocks CloudFront front door: ctx.request.url is the viewer's URL, the base URL stays the gateway's", async () => {
+    const previous = process.env.BLOCKS_PUBLIC_HOSTS;
+    process.env.BLOCKS_PUBLIC_HOSTS = 'd111.cloudfront.net';
+    try {
+      const seen = { url: '', base: '' };
+      registerRoute({
+        method: 'GET',
+        path: '/auth/callback',
+        handler: async (ctx) => {
+          seen.url = ctx.request.url.href;
+          seen.base = getRequestBaseUrl(ctx);
+          ctx.response.send('');
+        },
+      });
+
+      await invoke({}, stageEvent('/auth/callback', { 'x-blocks-public-host': 'd111.cloudfront.net' }));
+
+      assert.deepStrictEqual(seen, { url: 'https://d111.cloudfront.net/auth/callback?q=a+b', base: `https://${EXECUTE_API}/prod` });
+    } finally {
+      if (previous === undefined) delete process.env.BLOCKS_PUBLIC_HOSTS;
+      else process.env.BLOCKS_PUBLIC_HOSTS = previous;
+    }
+  });
+
+  it('getRequestBaseUrl falls back to the request origin outside the Lambda handler (local dev)', () => {
+    const ctx = { request: { url: new URL('http://localhost:3000/aws-blocks/auth/callback?code=x') } };
+    assert.strictEqual(getRequestBaseUrl(ctx), 'http://localhost:3000');
   });
 });
 
@@ -2307,6 +2678,85 @@ describe('createLambdaHandler — RPC dispatch only reaches API surfaces', () =>
     const backend = { api: (_ctx: BlocksContext) => ({ async echo(m: string) { return { m }; } }) };
     const result = await invoke(backend, rpcEvent('api.echo', ['hi']));
     assert.deepStrictEqual(JSON.parse(result.body).result, { m: 'hi' });
+  });
+});
+
+// ── ApiNamespace `httpErrorStatus` ──────────────────────────────────────────
+//
+// Opt-in: a 4xx `ApiError` is answered with its HTTP status; the JSON-RPC body
+// is the same either way. Off (the default), every RPC response stays a 200.
+
+function statusBackend(options?: { httpErrorStatus?: boolean }) {
+  const thrown: { current: unknown } = { current: undefined };
+  const api = new ApiNamespace(
+    { id: 'app' },
+    'api',
+    () => ({
+      async echo() {
+        throw thrown.current;
+      },
+    }),
+    options,
+  );
+  return { backend: { api }, thrown };
+}
+
+describe('createLambdaHandler — ApiNamespace httpErrorStatus', () => {
+  it('default: a 401 ApiError is an HTTP 200 carrying the error in the body', async () => {
+    const { backend, thrown } = statusBackend();
+    thrown.current = new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+    const result = await invoke(backend, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcError(result).status, 401);
+  });
+
+  for (const status of [400, 401, 403, 404, 409, 429]) {
+    it(`on: a ${status} ApiError is answered with HTTP ${status}, same body`, async () => {
+      const on = statusBackend({ httpErrorStatus: true });
+      const off = statusBackend();
+      on.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      off.thrown.current = new ApiError('nope', status, { name: 'SomeError' });
+      const result = await invoke(on.backend, makeEvent());
+      const baseline = await invoke(off.backend, makeEvent());
+      assert.strictEqual(result.statusCode, status);
+      assert.strictEqual(result.body, baseline.body, 'the JSON-RPC body is unchanged');
+      const err = decodeRpcError(result);
+      assert.strictEqual(err.status, status);
+      assert.strictEqual(err.name, 'SomeError');
+    });
+  }
+
+  it('on: a 5xx ApiError, an unbranded throw and a branded BB error stay HTTP 200', async () => {
+    for (const error of [new ApiError('boom', 503), new Error('raw driver text'), blocksError('KVStore.Conflict', 'x')]) {
+      const { backend, thrown } = statusBackend({ httpErrorStatus: true });
+      thrown.current = error;
+      const result = await invoke(backend, makeEvent());
+      assert.strictEqual(result.statusCode, 200, String(error));
+    }
+  });
+
+  it('on: the clearing Set-Cookie still travels with a 401', async () => {
+    const api = new ApiNamespace(
+      { id: 'app' },
+      'api',
+      (ctx: BlocksContext) => ({
+        async echo() {
+          ctx.response.headers.set('set-cookie', CLEAR_SESSION);
+          throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+        },
+      }),
+      { httpErrorStatus: true },
+    );
+    const result = await invoke({ api }, makeV2Event());
+    assert.strictEqual(result.statusCode, 401);
+    assert.deepStrictEqual(result.cookies, [CLEAR_SESSION]);
+  });
+
+  it('on: a successful call is unaffected', async () => {
+    const api = new ApiNamespace({ id: 'app' }, 'api', () => ({ async echo(v: string) { return v; } }), { httpErrorStatus: true });
+    const result = await invoke({ api }, makeEvent());
+    assert.strictEqual(result.statusCode, 200);
+    assert.strictEqual(decodeRpcResponse(JSON.parse(result.body)), 'hello');
   });
 });
 

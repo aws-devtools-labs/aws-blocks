@@ -38,8 +38,10 @@ const bucket = new FileBucket(scope, id, options?)
 | `corsRules` | `CorsRule[]` | CORS rules for browser-based access. **Default: none — browsers block every cross-origin `fetch()` to the deployed bucket.** Required whenever browser code fetches a presigned URL directly (`download()` / `upload()` on a file handle, or `fetch()` on a `getUrl()` / `putUrl()` URL) against a deployed sandbox or production stack. Not inherited from the stack's `defaults.allowedOrigins` or the Hosting domain. Ignored when `bucket` wraps an existing bucket. See [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors), and [CorsRule](#corsrule) for the wildcard-origin synth guard. |
 | `lifecycleRules` | `LifecycleRule[]` | Lifecycle rules for automatic expiration or storage class transitions. |
 | `accessLogging` | `boolean` | Enable S3 server access logging. **Default: falls back to the stack posture (`BlocksDefaults.storageAccessLogging`, then `BlocksDefaults.accessLogging`)** when omitted — so a stack can opt every FileBucket into logging without a per-block flag. When enabled, a dedicated, locked-down log bucket is provisioned (all public access blocked, S3-managed encryption, SSL enforced) and the main bucket delivers its access logs there under the `access-logs/` prefix. Access logs expire automatically after the stack posture's `logRetention` (`ONE_WEEK` in sandbox / `ONE_YEAR` in production; `RetentionDays.INFINITE` keeps them indefinitely). Ignored by the mock and browser runtimes. |
-| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
+| `encryption` | `'aws-managed' \| 'customer-managed' \| ExternalKmsKeyRef` | Server-side encryption at rest. **Default: `'aws-managed'` (SSE-S3).** `'customer-managed'` creates a dedicated KMS key for this bucket (rotation on, removed with the bucket); `FileBucket.fromKmsKey(arn)` uses a key you already own. Both use SSE-KMS with S3 Bucket Keys. Any other value (e.g. a typo from untyped JavaScript or config) fails the synth with an error listing the valid values, rather than falling back to SSE-S3. See [Encryption with KMS](#encryption-with-kms). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Ignored by the mock and browser runtimes. |
 | `objectLock` | `{ mode: 'governance' \| 'compliance'; retentionDays: number }` | Enable S3 Object Lock with a default retention for every new object version. **Default: off.** Requires versioning and a retained bucket (`removalPolicy: 'retain'` in a sandbox); both are checked at synth. Can be added to a deployed bucket, but can't be turned off once on. Presigned uploads (`putUrl`, `createUploadHandle`) are not supported on these buckets — upload with `put()`. See [Object Lock](#object-lock). Ignored, with a synth warning, when `bucket` wraps an existing bucket. Validated, but not enforced, by the mock. |
+| `allowedContentTypes` | `string[]` | Content types the bucket accepts on upload. **Default: any.** Entries are exact media types (`'application/pdf'`) or `type/*` wildcards (`'image/*'`), without parameters; matching ignores case and parameters. A wildcard does not match `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml`, `text/xsl`, `text/javascript`, `text/ecmascript`, `application/javascript`, `application/ecmascript` and `application/x-javascript`, and any subtype ending in `+xml`; list one exactly to accept it. Checked by `put()`, `putUrl()` and `createUploadHandle()` against the effective content type (`application/octet-stream` when the caller passes none — list it to accept those uploads). An unlisted type throws `ValidationFailed`. Must be a non-empty array of `type/subtype` or `type/*` strings (checked at synth). See [Upload constraints](#upload-constraints). |
+| `maxUploadBytes` | `number` | Largest upload, in bytes. **Default: no limit.** When set, `putUrl()` / `createUploadHandle()` require `contentLength` and reject one above the limit, and `put()` rejects a larger body (`ValidationFailed`). Must be a positive integer (checked at synth). See [Upload constraints](#upload-constraints). |
 | `bucket` | `ExternalBucketRef` | Wrap an existing S3 bucket instead of creating one. |
 | `logger` | `ChildLogger` | Optional logger for internal operations. When omitted, a default error-level logger is created. |
 | `removalPolicy` | `'destroy' \| 'retain'` | CDK removal behavior for the underlying S3 bucket. When omitted, it falls back to the stack posture default (`BlocksDefaults.removalPolicy` — `DESTROY` in sandbox, `RETAIN` in production); pass `'destroy'` or `'retain'` to set it explicitly per-block. `'destroy'` also enables `autoDeleteObjects` so the bucket can be emptied on teardown. Ignored by the mock and browser runtimes. |
@@ -52,13 +54,26 @@ The S3 bucket name is derived from the scope chain: the FileBucket id joined to 
 
 | Option | Type | Description |
 |--------|------|-------------|
-| `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. |
+| `contentType` | `string` | MIME type (e.g., `image/png`). Default: `application/octet-stream`. Must be in `allowedContentTypes` when the bucket sets it. |
 | `metadata` | `Record<string, string>` | Custom metadata key-value pairs, set when the object is written. It can't be edited in place: each `put()` replaces it, so a `put()` without `metadata` leaves none. See [Changing Metadata](#changing-metadata). S3 stores the keys in lowercase, so use lowercase keys. |
 | `cacheControl` | `string` | Cache-Control header value. |
 
 ### Presigned URL options
 
 `getUrl`, `putUrl`, `getFileHandle`, and `createUploadHandle` accept `expiresIn` in seconds. It must be an integer from `1` to `604800` (seven days); the default is `3600`.
+
+`putUrl` and `createUploadHandle` also accept:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `contentType` | `string` | Content type of the upload. **Default: `application/octet-stream`.** Always signed into the URL: the upload must send exactly this `Content-Type` header, or S3 rejects it with `403 SignatureDoesNotMatch`. `createUploadHandle().upload()` sends it for you, whatever the uploaded file's own type; to store a browser `File`'s type, pass `contentType: file.type`. |
+| `contentLength` | `number` | Exact size of the upload in bytes. When set, it is signed into the URL and S3 only accepts a body of exactly this size (browsers set `Content-Length` from the body). Required when the bucket sets `maxUploadBytes`. |
+
+`getUrl` and `getFileHandle` also accept:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `attachment` | `boolean \| string` | Make the browser download the file instead of displaying it. **Default: off** (the file is displayed inline when the browser can render it). `true` signs `Content-Disposition: attachment` into the URL; a filename (e.g. `'report.pdf'`) also suggests that name. Control characters, directional formatting characters and zero-width characters are removed from the filename, and `/` and `\` are replaced with `_`; a filename that is empty, `.` or `..` afterwards throws `ValidationFailed`. See [Serving user uploads](#serving-user-uploads). |
 
 ### CorsRule
 
@@ -106,6 +121,8 @@ if (!file) {
 }
 ```
 
+Invalid input — a key or `scan()` prefix that breaks the [key rules](#object-keys), an out-of-range `expiresIn`, a content type or size the bucket does not accept, or an invalid `attachment` — throws an error named `ValidationFailed` (match it with `isBlocksError(e, 'ValidationFailed')`). It is an `ApiError` with status `400`, so an API method that lets it propagate answers the client with HTTP 400. Its message is fixed text and never includes the key or other input.
+
 `FileBucketErrors` are thrown by other operations and matched with `isBlocksError`:
 
 | Constant | `error.name` | Thrown when |
@@ -129,19 +146,93 @@ try {
 }
 ```
 
+## Access control and per-user isolation
+
+FileBucket has no per-object permissions of its own. Every API method reads and writes the bucket with the app's shared execution role, so **any key a method accepts from the client is a key every signed-in user can reach**. Enforce ownership in the API method:
+
+- Gate each method with your auth block (`await auth.requireAuth(context)`).
+- Build keys on the server under a per-user prefix derived from the authenticated identity (`uploads/${encodeURIComponent(user.userId)}/…`). Never pass a client-supplied full key, or a client-supplied `scan()` prefix, straight to `put`, `get`, `delete`, `getUrl`, `putUrl`, `scan` or the handle methods.
+- Accept only a file *name* from the client and wrap it in `encodeURIComponent()`, so it stays a single path segment and can't add `/` to reach another prefix. FileBucket rejects `.`/`..` segments and other unsafe keys with `ValidationFailed`; see [Object keys](#object-keys).
+- For a resource shared between users (a document, a team folder), check that the caller may access it — for example by looking up an ownership record — before building its key.
+
+The examples below assume an auth block such as `AuthBasic` and a helper that builds the caller's keys:
+
+```typescript
+const auth = new AuthBasic(scope, 'auth');
+const bucket = new FileBucket(scope, 'uploads');
+
+/** The caller's key for `name`, under a prefix only they can reach. */
+function userKey(userId: string, name: string): string {
+  return `uploads/${encodeURIComponent(userId)}/${encodeURIComponent(name)}`;
+}
+```
+
+## Upload constraints
+
+Presigned uploads always sign a `Content-Type` — the `contentType` you pass, or `application/octet-stream` when you pass none — so the uploader can't send a different one. To restrict what a bucket accepts:
+
+```typescript
+const avatars = new FileBucket(scope, 'avatars', {
+  allowedContentTypes: ['image/png', 'image/jpeg', 'image/webp'],
+  maxUploadBytes: 5 * 1024 * 1024, // 5 MiB
+});
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getAvatarUploadSlot(contentType: string, size: number) {
+    const user = await auth.requireAuth(context);
+    // Throws ValidationFailed (HTTP 400) for a type that isn't listed or a size over 5 MiB.
+    return avatars.createUploadHandle(`avatars/${encodeURIComponent(user.userId)}`, {
+      contentType,
+      contentLength: size,
+      expiresIn: 300,
+    });
+  },
+}));
+
+// Frontend
+const slot = await api.getAvatarUploadSlot(file.type, file.size);
+await slot.upload(file);
+```
+
+- `allowedContentTypes` entries are exact media types or `type/*` wildcards. Matching ignores case and parameters (`text/plain; charset=utf-8` matches `text/plain`). The default `application/octet-stream` is only accepted when listed.
+- A wildcard matches every subtype of its type except the types a browser can display as a page or run as a script: `text/html`, `image/svg+xml`, `application/xhtml+xml`, `text/xml`, `application/xml`, `text/xsl`, `text/javascript`, `text/ecmascript`, `application/javascript`, `application/ecmascript` and `application/x-javascript`, and any subtype ending in `+xml` (`application/atom+xml`, …). These can run script when displayed inline (see [Serving user uploads](#serving-user-uploads)), so `image/*` does not accept `image/svg+xml` and `text/*` does not accept `text/html`. To accept one, list it exactly (`allowedContentTypes: ['image/*', 'image/svg+xml']`), and serve its downloads with `attachment`.
+- A `contentType` must be a single media type — `type/subtype` with optional `; name=value` parameters, ASCII only. A comma-separated list, control characters or an empty value throws `ValidationFailed`, with or without `allowedContentTypes`.
+- The content type is signed, stored and returned in canonical form: each parameter as `; name=value`, with one space after `;` and none around `=` (`text/plain;charset=utf-8` becomes `text/plain; charset=utf-8`). A quoted parameter value is written without quotes when its content is a token (`charset="utf-8"` becomes `charset=utf-8`), and otherwise stays quoted with only `"` and `\` escaped (`name="a b"` is unchanged). An upload to a `putUrl()` URL must send that canonical value; `createUploadHandle().upload()` and the native clients send it for you.
+- With `maxUploadBytes`, `putUrl()` and `createUploadHandle()` require `contentLength` and sign it, so S3 only accepts a body of exactly that size. `put()` checks the body size directly.
+- An upload to a URL or handle signed with `contentLength` must send exactly that many bytes with a `Content-Length` header. Browsers and `fetch` set it from the body. With the native Kotlin client, pass the same `contentLength` to `uploadFrom(source, contentLength)`: without it the stream is sent with no `Content-Length` and the upload is rejected. The native Swift `uploadFrom(fileURL:)` sends the file's size, so the file must be exactly `contentLength` bytes.
+- The checks run in the API method, before a URL is signed, identically in local dev and on AWS — including for a bucket wrapped with `FileBucket.fromExisting`. The local dev server also rejects an upload whose `Content-Type` or size differs from the signed values with `403`, as S3 does.
+
+## Serving user uploads
+
+A presigned download URL serves the file with its stored content type, and the browser displays it inline when it can render it. **A file displayed inline can run as a page:** an uploaded HTML or SVG file executes script in the origin that serves it. For user-uploaded content, either restrict uploads to safe types with `allowedContentTypes` (for example `image/*`, which does not accept `image/svg+xml` unless you list it exactly — see [Upload constraints](#upload-constraints)), or make downloads attachments:
+
+```typescript
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+  async getDownloadLink(name: string) {
+    const user = await auth.requireAuth(context);
+    // Content-Disposition: attachment; filename="<name>" — the browser saves the file instead of rendering it.
+    return bucket.getUrl(userKey(user.userId, name), { attachment: name, expiresIn: 300 });
+  },
+}));
+```
+
+Never serve uploaded files inline from your application's own origin (for example by proxying them through an API route). If they must render inline, serve them from a separate origin.
+
 ## Examples
+
+The examples use the `auth` block, `bucket` and `userKey()` helper from [Access control and per-user isolation](#access-control-and-per-user-isolation).
 
 ### Basic Put/Get
 
 ```typescript
-const bucket = new FileBucket(scope, 'uploads');
-
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async uploadFile(name: string, content: string) {
-    await bucket.put(name, content, { contentType: 'text/plain' });
+    const user = await auth.requireAuth(context);
+    await bucket.put(userKey(user.userId, name), content, { contentType: 'text/plain' });
   },
   async getFile(name: string) {
-    const file = await bucket.get(name);
+    const user = await auth.requireAuth(context);
+    const file = await bucket.get(userKey(user.userId, name));
     if (!file) return null;
     return { contentType: file.contentType, size: file.size };
   },
@@ -153,10 +244,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 Object metadata is fixed when the object is written: S3 can only change metadata by rewriting the object, and FileBucket doesn't expose S3's server-side copy (`CopyObject`), so there is no call that edits it. Every `put()` replaces the object's metadata with what it passes, and a `put()` without `metadata` leaves the object with none. To change metadata, `put()` the same body again with the complete new set:
 
 ```typescript
-const bucket = new FileBucket(scope, 'documents');
-
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async markReviewed(path: string) {
+  async markReviewed(name: string) {
+    const user = await auth.requireAuth(context);
+    // Derive the key from the caller — never act on a client-supplied full key.
+    const path = userKey(user.userId, name);
     const file = await bucket.get(path);
     if (!file) return null;
     await bucket.put(path, file.body, {
@@ -178,13 +270,12 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 ### Presigned Upload URL
 
 ```typescript
-const bucket = new FileBucket(scope, 'media');
-
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async getUploadUrl(path: string) {
-    const url = await bucket.putUrl(path, {
+  async getUploadUrl(name: string) {
+    const user = await auth.requireAuth(context);
+    const url = await bucket.putUrl(userKey(user.userId, name), {
       expiresIn: 600,
-      contentType: 'image/jpeg',
+      contentType: 'image/jpeg', // signed: the upload must send `Content-Type: image/jpeg`
     });
     return { uploadUrl: url };
   },
@@ -230,12 +321,12 @@ const bucket = new FileBucket(scope, 'uploads', {
 ### Listing Files with Scan
 
 ```typescript
-const bucket = new FileBucket(scope, 'reports');
-
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async listReports(yearMonth: string) {
+  async listMyFiles() {
+    const user = await auth.requireAuth(context);
     const files: FileInfo[] = [];
-    for await (const file of bucket.scan({ prefix: `reports/${yearMonth}/` })) {
+    // The prefix is built from the caller's identity, so the listing only covers their files.
+    for await (const file of bucket.scan({ prefix: `uploads/${encodeURIComponent(user.userId)}/` })) {
       files.push(file);
     }
     return files;
@@ -243,14 +334,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 }));
 ```
 
+A `scan()` prefix follows the [key rules](#object-keys), except that it may be empty or end with `/`.
+
 ### Batch Delete
 
 ```typescript
-const bucket = new FileBucket(scope, 'tmp');
-
 export const api = new ApiNamespace(scope, 'api', (context) => ({
-  async cleanupTemp(paths: string[]) {
-    await bucket.deleteBatch(paths);
+  async deleteFiles(names: string[]) {
+    const user = await auth.requireAuth(context);
+    await bucket.deleteBatch(names.map(name => userKey(user.userId, name)));
   },
 }));
 ```
@@ -270,20 +362,25 @@ const bucket = new FileBucket(scope, 'legacy', {
 Versioning is **on by default**, so the version-aware methods (`listVersions`, `restoreVersion`, and optional `versionId` on `get`/`delete`/`getUrl`/`getFileHandle`) are available without any option. Pass `versioned: false` to opt out (which also removes the `versionId` option typings). The example below passes `versioned: true` explicitly for clarity:
 
 ```typescript
-const bucket = new FileBucket(scope, 'docs', { versioned: true });
+const docs = new FileBucket(scope, 'docs', { versioned: true });
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async upload(name: string, content: string) {
-    await bucket.put(name, content);
+    const user = await auth.requireAuth(context);
+    await docs.put(userKey(user.userId, name), content);
   },
   async getVersion(name: string, versionId?: string) {
-    return await bucket.get(name, versionId ? { versionId } : undefined);
+    const user = await auth.requireAuth(context);
+    const file = await docs.get(userKey(user.userId, name), versionId ? { versionId } : undefined);
+    return file ? { body: file.body.toString(), contentType: file.contentType } : null;
   },
   async listVersions(name: string) {
-    return await bucket.listVersions(name);
+    const user = await auth.requireAuth(context);
+    return await docs.listVersions(userKey(user.userId, name));
   },
   async restore(name: string, versionId: string) {
-    await bucket.restoreVersion(name, versionId);
+    const user = await auth.requireAuth(context);
+    await docs.restoreVersion(userKey(user.userId, name), versionId);
   },
 }));
 ```
@@ -361,10 +458,23 @@ Every new version is locked for `retentionDays`. `delete(path)` still hides the 
 
 Object Lock can be added to a bucket that is already deployed, but S3 can't turn it off once it's on. Locked objects also block teardown, so the bucket must be retained — pass `removalPolicy: 'retain'` when using Object Lock in a sandbox.
 
+## Object keys
+
+Keys are validated identically in local dev and on AWS. A key that breaks any of these rules throws `ValidationFailed` (HTTP 400):
+
+- not empty, and at most 1,024 bytes once UTF-8 encoded (S3's key limit);
+- no leading `/`;
+- no empty segment (`a//b`) or trailing `/`;
+- no `.` or `..` segment, including one spelled with `%2e`, `%2f` or `%5c` in either case (`a/%2e%2e/b`, `a/..%2f../b`, `a/%2e%2e%2fb`) — other `%` sequences, such as `100%done.txt`, are allowed;
+- no backslash (`\`);
+- no control characters (U+0000–U+001F, U+007F–U+009F), line or paragraph separators (U+2028, U+2029), or bidirectional formatting characters (U+202A–U+202E, U+2066–U+2069).
+
 ## Best Practices
 
 - Use path prefixes to organize files (e.g., `uploads/{userId}/`, `reports/`). If a segment can contain URL-shaped or special characters (e.g. an OIDC `userId` of `${iss}:${sub}` like `https://issuer:sub`), wrap it in `encodeURIComponent()` first — an un-encoded `//` is an empty path segment, which FileBucket rejects (`ValidationFailed`) on both the local mock and AWS so a key can't mean one object locally and another in production.
+- Derive keys from the authenticated user on the server, never from a client-supplied key or prefix (see [Access control and per-user isolation](#access-control-and-per-user-isolation))
 - Set `contentType` on `put()` to ensure correct MIME handling on download
+- For user uploads, set `allowedContentTypes` / `maxUploadBytes`, and serve downloads with `attachment` (see [Upload constraints](#upload-constraints) and [Serving user uploads](#serving-user-uploads))
 - Use presigned URLs (`getUrl` / `putUrl`) for direct browser upload/download — and set `corsRules` for your frontend's origins, or the browser blocks them once deployed (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors))
 - Prefer `scan({ prefix })` over unscoped `scan()` to limit enumeration cost
 - For browser uploads/downloads returned from API methods, prefer `createUploadHandle`/`getFileHandle` over raw presigned URLs — they encode the fetch protocol into typed methods so the client can't misuse them
@@ -383,6 +493,8 @@ Object Lock can be added to a bucket that is already deployed, but S3 can't turn
 ## Local Development
 
 Mock data persists to disk at `.bb-data/{fullId}/` across dev server restarts. Internal data is segregated into sibling roots so it never collides with your keys: file bodies live under `content/`, metadata under `meta/`, and version history under `versions/`. Wipe with `rm -rf .bb-data`. Presigned URLs are served by the dev server at `/.bb-file-bucket/{fullId}/{path}?token=...`. Version-aware operations are available locally, with the historical delete-marker limitation described under [Versioned Bucket](#versioned-bucket). Lifecycle rules and `corsRules` have no effect locally — the dev file-server accepts browser requests from any origin, so a missing or wrong `corsRules` only shows up after deploy (see [Browser Uploads and Downloads (CORS)](#browser-uploads-and-downloads-cors)).
+
+The dev server enforces what an upload URL signs, as S3 does: an upload whose `Content-Type` (or, when `contentLength` was signed, size) differs from the signed value fails with `403 SignatureDoesNotMatch`. Local downloads are always served with `X-Content-Type-Options: nosniff` and a `Content-Disposition` — the one signed with `attachment`, or plain `attachment` otherwise — so files never display inline in local dev even though they can on AWS (see [Serving user uploads](#serving-user-uploads)).
 
 When a local download URL specifies a `versionId`, only that version is served. An unknown or permanently deleted version returns HTTP 404; it never falls back to the current file. URLs without `versionId` continue to select the current file.
 

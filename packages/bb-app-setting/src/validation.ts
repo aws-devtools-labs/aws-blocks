@@ -1,7 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { brandBlocksError } from '@aws-blocks/core';
+import { blocksError as prefixedBlocksError, brandBlocksError } from '@aws-blocks/core';
 import { AppSettingErrors } from './errors.js';
 import type { InternalAppSettingOptions } from './types.js';
 
@@ -99,6 +99,32 @@ export function validateAppSettingOptions<T>(
 			AppSettingErrors.ValidationFailed,
 			`AppSetting '${id}': non-secret settings require a value. ` +
 			`Provide an initial value for the SSM parameter.`,
+		);
+	}
+}
+
+/** SSM standard-tier parameter value limit, in bytes. */
+export const MAX_VALUE_BYTES = 4096;
+
+/**
+ * Reject a serialized value that exceeds the SSM standard-tier 4 KB limit.
+ *
+ * Shared by the mock and AWS `put()` paths and called at the same point in
+ * both (after schema validation, before the write), so an oversized value
+ * fails with the same {@link AppSettingErrors.ValidationFailed} locally and
+ * deployed instead of reaching SSM. Unlike {@link validateAppSettingOptions},
+ * this uses core's prefixing `blocksError` (message `${name}: ${message}`),
+ * matching the other runtime `put()` errors.
+ *
+ * Secret settings are not size-checked here (unchanged behavior).
+ */
+export function assertValueWithinSizeLimit(serialized: string, isSecret: boolean): void {
+	if (isSecret) return;
+	const bytes = Buffer.byteLength(serialized, 'utf8');
+	if (bytes > MAX_VALUE_BYTES) {
+		throw prefixedBlocksError(
+			AppSettingErrors.ValidationFailed,
+			`Value size ${bytes} bytes exceeds the 4 KB (${MAX_VALUE_BYTES} bytes) limit`,
 		);
 	}
 }

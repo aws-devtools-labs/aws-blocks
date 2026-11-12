@@ -74,12 +74,12 @@ If your own code uses `blocksStack.handler`, use the stack-wide equivalents, whi
 
 This one is optional: nothing stops working if you skip it. It is for:
 
-- an app scaffolded from a Vite template (`default`, `bare`, `react`, `auth-cognito`, `demo`) whose `tsconfig.json` still lists `aws-blocks/**/*` in `include`, and
+- an app scaffolded from a Vite template (`default`, `bare`, `react`, `auth`, `agent`, `demo`) whose `tsconfig.json` still lists `aws-blocks/**/*` in `include`, and
 - a project you added AWS Blocks to, when its frontend `tsconfig` sets `types` (such as create-vite's `"types": ["vite/client"]`) and `tsc` reports `error TS2591: Cannot find name 'process'` in `aws-blocks/`.
 
 The frontend imports the backend (`import { api } from 'aws-blocks'`), so its `tsconfig` typechecks the backend source with the frontend's settings. A single `tsconfig.json` with Node types makes that pass, but it also lets browser code use `process` or `Buffer` without an error. Current templates make the backend a TypeScript project of its own, with Node types, and the frontend reads it through a [project reference](https://www.typescriptlang.org/docs/handbook/project-references.html). `tsc -b` builds the backend's declarations into `node_modules/.tmp/` first.
 
-Skip this for a Next.js app: `next build` ignores project references when it type-checks, so it checks `aws-blocks/` with the app's `tsconfig.json` either way, and that needs Node types (a `tsconfig.json` that sets no `types` has them). Skip it for a backend-only app (`backend`, `api-only`, `sql`, `cron`) too: all its code runs on Node.
+Skip this for a Next.js app: `next build` ignores project references when it type-checks, so it checks `aws-blocks/` with the app's `tsconfig.json` either way, and that needs Node types (a `tsconfig.json` that sets no `types` has them). Skip it for a backend-only app (`backend`, `api-only`, `sql`, `cron`, `observability`, `observability`) too: all its code runs on Node.
 
 ### An app from a Blocks Vite template
 

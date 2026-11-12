@@ -1,0 +1,82 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "test",
+    "version": "1.0.0"
+  },
+  "methods": [
+    {
+      "name": "api.getDoc",
+      "params": [
+        {
+          "name": "_id",
+          "required": true,
+          "schema": { "type": "string" }
+        },
+        {
+          "name": "int",
+          "required": false,
+          "schema": { "type": "integer" }
+        }
+      ],
+      "result": {
+        "name": "GetDocResult",
+        "schema": { "$ref": "#/components/schemas/Doc" }
+      }
+    },
+    {
+      "name": "api.putExtras",
+      "params": [
+        {
+          "name": "extras",
+          "required": true,
+          "schema": { "$ref": "#/components/schemas/Extras" }
+        }
+      ],
+      "result": {
+        "name": "PutExtrasResult",
+        "schema": { "$ref": "#/components/schemas/Extras" }
+      }
+    },
+    {
+      "name": "api.getLevel",
+      "params": [],
+      "result": {
+        "name": "GetLevelResult",
+        "schema": { "$ref": "#/components/schemas/Level" }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Doc": {
+        "type": "object",
+        "properties": {
+          "_id": { "type": "string" },
+          "__v": { "type": "integer" },
+          "toJson": { "type": "string" },
+          "fromJson": { "type": "string" },
+          "hashCode": { "type": "integer" },
+          "toString": { "type": "string" },
+          "int": { "type": "integer" },
+          "String": { "type": "string" },
+          "level": { "$ref": "#/components/schemas/Level" }
+        },
+        "required": ["_id", "toJson", "fromJson", "hashCode", "toString", "int", "String", "level"]
+      },
+      "Extras": {
+        "type": "object",
+        "properties": {
+          "additionalProperties": { "type": "string" },
+          "id": { "type": "string" }
+        },
+        "required": ["additionalProperties", "id"],
+        "additionalProperties": { "type": "integer" }
+      },
+      "Level": {
+        "type": "string",
+        "enum": ["values", "index", "name", "_hidden", "ok"]
+      }
+    }
+  }
+}

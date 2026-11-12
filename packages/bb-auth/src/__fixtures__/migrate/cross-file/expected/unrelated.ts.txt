@@ -1,0 +1,3 @@
+// No auth here: this file must not be touched (not even re-written).
+export const api = { fetchDevices: () => [] as string[] };
+export const devices = api.fetchDevices();

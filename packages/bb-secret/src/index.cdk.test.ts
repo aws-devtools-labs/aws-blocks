@@ -71,6 +71,17 @@ test('CDK: generate:true keeps GenerateSecretString (a random value on deploy)',
 	});
 });
 
+test('CDK: the internal has-initial-value flag matches whether the deploy seeds a value', () => {
+	const { parent } = setup();
+	const flag = Symbol.for('blocks:SecretHasInitialValue');
+	assert.strictEqual(Reflect.get(new Secret(parent, 'empty'), flag), false);
+	assert.strictEqual(Reflect.get(new Secret(parent, 'generated', { generate: true }), flag), true);
+	const existing = new Secret(parent, 'existing', {
+		secret: Secret.fromExisting('arn:aws:secretsmanager:us-east-1:123456789012:secret:x-AbCdEf'),
+	});
+	assert.strictEqual(Reflect.get(existing, flag), undefined, 'not stack-managed: no flag');
+});
+
 test('CDK: same id in different scopes yields distinct fullIds (no config-key collision)', () => {
 	const { parent } = setup();
 	const tenantA = new Scope('tenant-a', { parent });

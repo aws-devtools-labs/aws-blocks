@@ -25,10 +25,11 @@ import {
 	PostToConnectionCommand,
 	GoneException,
 } from '@aws-sdk/client-apigatewaymanagementapi';
-import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { type FrameworkKey, frameworkKey } from '@aws-blocks/bb-secret/internal';
 import { DistributedTable } from '@aws-blocks/bb-distributed-table';
 import { BB_NAME, BB_VERSION } from './version.js';
 import type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
@@ -39,10 +40,11 @@ import type {
 } from './types.js';
 import { RealtimeErrors } from './errors.js';
 import { localListener, serverSubscribe, type ServerSubscription } from './server-subscribe.js';
-import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validatePublishSize, isClientChannelPath } from './utils.js';
+import { blocksError, validateSchema, mintChannelToken, mintConnectToken, validateChannelToken, validateChannelPath, validateChannelName, resolveChannelTokenScope, validatePublishSize, isClientChannelPath } from './utils.js';
 
 export { RealtimeErrors } from './errors.js';
 export type {
+	GetChannelOptions,
 	NamespaceConfig,
 	NamespaceDefs,
 	RealtimeChannel,
@@ -148,18 +150,40 @@ function connectionsTable() {
 	return _connectionsTable;
 }
 
-// ── Token secret via AppSetting ──────────────────────────────────────────────
+// ── Token secret via frameworkKey ────────────────────────────────────────────
 
-let _tokenSecret: AppSetting | null = null;
+let _tokenSecret: FrameworkKey | null = null;
 let cachedSecret: string | null = null;
 let secretPromise: Promise<string> | null = null;
 
+/**
+ * The token secret, read once per container and then cached. Concurrent callers
+ * share one in-flight read. A failed read is NOT cached: the in-flight promise
+ * is cleared on rejection, so a transient failure at cold start (throttling, a
+ * network blip, IAM still propagating) is retried by the next caller instead of
+ * breaking the container for its lifetime.
+ */
 async function getTokenSecret(): Promise<string> {
 	if (cachedSecret) return cachedSecret;
 	if (secretPromise) return secretPromise;
-	if (!_tokenSecret) throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret AppSetting not initialized');
-	secretPromise = _tokenSecret.get().then(value => { cachedSecret = value; return value; });
-	return secretPromise;
+	if (!_tokenSecret) throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret not initialized');
+	const pending = _tokenSecret.get().then(
+		(value) => {
+			cachedSecret = value;
+			return value;
+		},
+		(err: unknown) => {
+			if (secretPromise === pending) secretPromise = null;
+			throw err;
+		},
+	);
+	secretPromise = pending;
+	return pending;
+}
+
+/** {@link getTokenSecret}, resolving to `null` instead of rejecting (e.g. during codegen). */
+function getTokenSecretOrNull(): Promise<string | null> {
+	return getTokenSecret().catch(() => null);
 }
 
 // ── DistributedTable helpers ────────────────────────────────────────────────
@@ -293,6 +317,8 @@ async function handleWebSocketEvent(event: any): Promise<any> {
  * **Best practices:**
  * - Use descriptive namespace names (`cursors`, `chat`, `notifications`)
  * - Use channels for dynamic scoping (`room-123`, `user-456`)
+ * - A channel handle also opens the channel's `/`-separated sub-channels by default;
+ *   pass `{ scope: 'exact' }` to `getChannel()` when a sub-channel can belong to someone else
  * - Keep message payloads small — large payloads increase latency and cost
  * - Return channel handles from API methods for seamless client hydration
  *
@@ -306,7 +332,6 @@ export const Realtime: {
 } = class Realtime extends Scope {
 	private _namespaces: Map<string, { schema: StandardSchemaV1<any>; prefix: string }>;
 	private _localEmitter = new EventEmitter();
-	private _cachedSecretPromise: Promise<string | null>;
 	private _customUserAgent: [string, string][];
 
 	constructor(scope: ScopeParent, id: string, options: RealtimeOptions<NamespaceDefs>) {
@@ -330,18 +355,20 @@ export const Realtime: {
 			});
 		}
 
-		// Initialize the token secret via AppSetting (shared across instances)
+		// Initialize the token secret via frameworkKey (shared across instances).
+		// Same scope path as the CDK layer, so both derive the same names.
 		if (!_tokenSecret) {
-			_tokenSecret = new AppSetting(this, 'token-secret', { secret: true });
+			_tokenSecret = frameworkKey(this, 'token-secret');
 		}
 
 		if (!wsUrl) {
 			console.warn(`[Realtime] BLOCKS_RT_WS_URL not set — getChannel() will return incomplete descriptors`);
 		}
 
-		// Pre-warm secret fetch. Resolves to null when SSM is unreachable (e.g., codegen).
-		// Callers must treat null as "secret unavailable" and fail explicitly.
-		this._cachedSecretPromise = getTokenSecret().catch(() => null);
+		// Pre-warm secret fetch. A failure is ignored here (e.g. codegen, where the
+		// store is unreachable) and retried by the next read, which treats null as
+		// "secret unavailable" and fails explicitly.
+		void getTokenSecretOrNull();
 
 		this._namespaces = new Map();
 		for (const [name, config] of Object.entries(options.namespaces)) {
@@ -357,6 +384,7 @@ export const Realtime: {
 
 	async publish(namespace: string, channel: string, data: unknown): Promise<void> {
 		const ns = this._ns(namespace);
+		validateChannelName(channel);
 		await validateSchema(ns.schema, data);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
@@ -386,6 +414,7 @@ export const Realtime: {
 
 	subscribe(namespace: string, channel: string, handler: (message: unknown) => void): () => void {
 		const ns = this._ns(namespace);
+		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
 		// Real WebSocket for cross-invocation publish (established once secret resolves)
@@ -397,9 +426,10 @@ export const Realtime: {
 		const { wsUrl } = getSdkIdentifiers(this);
 		if (wsUrl) {
 			const fullId = this.fullId;
-			this._cachedSecretPromise.then(secret => {
-				if (!secret) return; // SSM unavailable (e.g., codegen)
-				const channelToken = mintChannelToken(fullChannel, secret);
+			getTokenSecretOrNull().then(secret => {
+				if (!secret) return; // secret store unavailable (e.g., codegen)
+				// Never leaves the server and only subscribes to fullChannel, so scope it exactly.
+				const channelToken = mintChannelToken(fullChannel, secret, undefined, 'exact');
 				const connectToken = mintConnectToken(fullId, secret);
 				wsSub = serverSubscribe(wsUrl, connectToken, fullChannel, channelToken, handler);
 			}).catch(() => {});
@@ -410,15 +440,17 @@ export const Realtime: {
 		};
 	}
 
-	async getChannel(namespace: string, channel: string): Promise<RealtimeChannel<unknown>> {
+	async getChannel(namespace: string, channel: string, options?: GetChannelOptions): Promise<RealtimeChannel<unknown>> {
 		const ns = this._ns(namespace);
+		const tokenScope = resolveChannelTokenScope(options);
+		validateChannelName(channel);
 		const fullChannel = `${ns.prefix}/${channel}`;
 		validateChannelPath(fullChannel);
-		const secret = await this._cachedSecretPromise;
+		const secret = await getTokenSecretOrNull();
 		if (!secret) {
 			throw blocksError(RealtimeErrors.ConnectionFailed, 'Token secret unavailable — cannot issue channel credentials');
 		}
-		const channelToken = mintChannelToken(fullChannel, secret);
+		const channelToken = mintChannelToken(fullChannel, secret, undefined, tokenScope);
 		const connectToken = mintConnectToken(this.fullId, secret);
 		const wsUrl = getSdkIdentifiers(this).wsUrl;
 		const localEmitter = this._localEmitter;

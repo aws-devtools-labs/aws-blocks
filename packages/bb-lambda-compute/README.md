@@ -55,8 +55,8 @@ to these options.
   compute) does not move the default compute, which is built before that VPC
   exists; a serverless `Compute` declared after the container compute does land in it.
 - **CORS.** When the stack's `defaults.allowedOrigins` is non-empty (e.g. the
-  sandbox preset allows localhost), the origin patterns (regular expressions)
-  are set on the function as `CORS_ALLOWED_ORIGINS`.
+  sandbox preset allows localhost), the entries (plain origins, matched
+  exactly, or regex patterns) are set on the function as `CORS_ALLOWED_ORIGINS`.
 - **Tracing.** When a `Tracer` is registered, the function switches to X-Ray
   Active tracing.
 - **Dashboard.** Contributes health (invocations, errors, duration, concurrent

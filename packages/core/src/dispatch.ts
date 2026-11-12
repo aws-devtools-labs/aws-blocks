@@ -9,6 +9,8 @@
 // guard and how its payload format carries `Set-Cookie`, the container's
 // body-size limit.
 
+import type { ServesApiNamespace } from './api-placement.js';
+import { requestBaseUrl } from './common/request-base-url.js';
 import { CLIENT_USER_AGENT_HEADER, isRpcPath } from './constants.js';
 import { buildCorsHeaders, CORS_MAX_AGE, corsRejection, getCorsPatterns, isOriginAllowed } from './cors.js';
 import { getLoadedCoreCopies, getRegisteredRoutes, matchRoute } from './raw-route.js';
@@ -22,7 +24,7 @@ import {
   sanitizeCaughtError,
   successResponse,
 } from './rpc.js';
-import { isDispatchableExport, resolveApiMethod, resolveApiNamespace } from './rpc-dispatch.js';
+import { isDispatchableExport, resolveApiMethod, resolveApiNamespace, rpcErrorHttpStatus } from './rpc-dispatch.js';
 import type { RpcErrorInfo } from './rpc-error-metric.js';
 import { validateClientUserAgentToken } from './server/client-user-agent.js';
 import { errorResponseSetCookies } from './set-cookie.js';
@@ -51,6 +53,14 @@ export interface DispatchRequest {
   headers: () => Headers;
   /** Builds the absolute, externally visible request URL (`ctx.request.url`). */
   url: () => URL;
+  /**
+   * Builds the externally reachable base URL the request arrived under: its
+   * origin plus any API Gateway stage prefix (`https://<api-host>/prod`), with no
+   * trailing slash. `url().pathname` never carries the stage, so this is the only
+   * place a handler can read it from, through `getRequestBaseUrl()`. Required, so
+   * that a transport cannot leave the stage out by omission.
+   */
+  baseUrl: () => string;
   /** The decoded body (`text` is `''` and `stream` is `null` when absent). Called at most once. */
   body: () => DispatchRequestBody;
   /** Fires when the transport gives up on the request (timeout, client gone). */
@@ -104,6 +114,21 @@ export interface DispatcherOptions {
    * Default `false`.
    */
   listApisWhenNotFound?: boolean;
+  /**
+   * Runs each RPC method call and RawRoute handler, labelled `namespace.method`
+   * or `METHOD /path`. The local dev server uses it to trace an unhandled
+   * rejection back to its request. Default: calls `fn` directly.
+   */
+  runHandler?: <T>(label: string, fn: () => T | Promise<T>) => Promise<T>;
+  /**
+   * Which API namespaces (by export name) this compute serves. A call to any
+   * other namespace gets the same "not found" error as an unknown one, whichever
+   * RPC path it arrived on — so the bare `/aws-blocks/api` endpoint can't run a
+   * namespace placed on another compute. Default: every namespace is served.
+   * The Lambda handler and the container HTTP server build it from the placement
+   * map in the compute's environment (see `apiNamespaceFilterFromEnv`).
+   */
+  servesNamespace?: ServesApiNamespace;
 }
 
 /**
@@ -200,7 +225,8 @@ export function rpcResponseHeaders(corsHeaders: Record<string, string>): Record<
  * dispatch for any path outside `/aws-blocks/api`, and JSON-RPC for the
  * `/aws-blocks/api` subtree. Request cookies and the validated client user agent
  * are available to handlers through {@link requestCookies} /
- * {@link requestClientUserAgent} for the duration of the call.
+ * {@link requestClientUserAgent} for the duration of the call, and the request's
+ * {@link DispatchRequest.baseUrl} through `getRequestBaseUrl()` ({@link requestBaseUrl}).
  *
  * @internal
  */
@@ -215,6 +241,8 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
   };
   const cors = options.cors ?? ALLOWLIST_CORS_POLICY;
   const trace = options.rpcTrace;
+  const runHandler = options.runHandler ?? (async <T>(_label: string, fn: () => T | Promise<T>): Promise<T> => fn());
+  const servesNamespace = options.servesNamespace;
   const logHandlerError = (failure: DispatchHandlerFailure, request: DispatchRequest, label: string): void => {
     if (options.logHandlerError) options.logHandlerError(failure);
     else logRequestError(request, label, failure.error);
@@ -258,7 +286,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       if (!isRpcPath(requestPath)) {
         const matched = matchRoute(httpMethod, requestPath);
         if (matched) {
-          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders, logHandlerError);
+          return dispatchRawRoute(request, matched.route, matched.params, corsHeaders, logHandlerError, runHandler);
         }
         // No RawRoute matched and the path is not under the RPC endpoint — 404.
         // Log it: an unmatched route used to be entirely silent, which is what
@@ -302,6 +330,9 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
       // Declared outside the try so the error path can still deliver cookies the
       // method set before throwing (e.g. clearing a dead session on a 401).
       let responseHeaders: Headers | undefined;
+      // Also outside the try: an `httpErrorStatus` namespace answers a 4xx error
+      // with that HTTP status (see rpcErrorHttpStatus).
+      let apiHandler: unknown;
 
       try {
         const headers = request.headers();
@@ -330,7 +361,8 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
 
         // Get the API by export name. resolveApiNamespace refuses exported Building
         // Block instances and `_`-private exports, so only an API surface is callable.
-        const apiHandler = resolveApiNamespace(backend, apiNamespace);
+        // A namespace placed on another compute is refused exactly like an unknown one.
+        apiHandler = servesNamespace && !servesNamespace(apiNamespace) ? undefined : resolveApiNamespace(backend, apiNamespace);
         if (!apiHandler) {
           reportRpcError({ status: 404, namespace: apiNamespace, method });
           const available = options.listApisWhenNotFound ? `. Available: ${dispatchableExportNames(backend).join(', ')}` : '';
@@ -349,7 +381,7 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
           return rpcEnvelope(methodNotFoundResponse(`'${method}' on API '${apiNamespace}'`, rpcId));
         }
 
-        const result = await apiMethod(...args);
+        const result = await runHandler(`${apiNamespace}.${method}`, () => apiMethod(...args));
         const value = responseBody ?? result;
         trace?.result?.(apiNamespace, method, value);
 
@@ -374,7 +406,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
         // never hand out a live session. The method's other headers are dropped,
         // as before, so the JSON-RPC error envelope keeps its standard headers.
         // The body is unchanged (message/name only — never SDK metadata).
-        return { ...rpcEnvelope(errorResponseFromCatch(error, rpcId)), cookies: errorResponseSetCookies(responseHeaders) };
+        return {
+          ...rpcEnvelope(errorResponseFromCatch(error, rpcId)),
+          status: rpcErrorHttpStatus(apiHandler, error),
+          cookies: errorResponseSetCookies(responseHeaders),
+        };
       }
     };
 
@@ -387,8 +423,11 @@ export function createDispatcher(backend: unknown, options: DispatcherOptions = 
     // malformed input never reaches the AWS user agent.
     const clientUserAgent = validateClientUserAgentToken(request.clientUserAgent);
 
+    // The stage-bearing base URL goes in a store as well: `ctx.request.url` has no
+    // stage, and Building Blocks that address the gateway itself (an OIDC callback
+    // or stub issuer URL) read it through `getRequestBaseUrl()`.
     return requestCookies.run(request.cookie, () =>
-      requestClientUserAgent.run(clientUserAgent, dispatchWithinStores),
+      requestClientUserAgent.run(clientUserAgent, () => requestBaseUrl.run(request.baseUrl(), dispatchWithinStores)),
     );
   };
 }
@@ -399,6 +438,7 @@ async function dispatchRawRoute(
   params: Record<string, string>,
   corsHeaders: Record<string, string>,
   logHandlerError: (failure: DispatchHandlerFailure, request: DispatchRequest, label: string) => void,
+  runHandler: <T>(label: string, fn: () => T | Promise<T>) => Promise<T>,
 ): Promise<DispatchResponse> {
   const headers = request.headers();
   const { text: bodyText, stream: bodyStream } = request.body();
@@ -430,7 +470,7 @@ async function dispatchRawRoute(
   };
 
   try {
-    await route.handler(context);
+    await runHandler(`${request.method} ${request.path}`, () => route.handler(context));
 
     return {
       kind: 'raw-route',

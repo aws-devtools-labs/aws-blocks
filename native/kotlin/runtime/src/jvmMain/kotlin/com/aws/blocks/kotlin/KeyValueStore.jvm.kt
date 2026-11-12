@@ -3,6 +3,7 @@ package com.aws.blocks.kotlin
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.file.AccessDeniedException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.FileSystemException
@@ -18,16 +19,38 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-internal actual fun encryptedKeyValueStore(name: String): KeyValueStore =
-    EncryptedFileKeyValueStore(name)
+/**
+ * Falls back to an in-memory store when no application id was configured. Writing to `~/.blocks`
+ * itself would put every Blocks application the user runs in one directory — the defect this
+ * fallback exists instead of.
+ */
+internal actual fun platformKeyValueStore(name: String, applicationId: String?): KeyValueStore =
+    applicationStorageDirectoryOrNull(applicationId)
+        ?.let { EncryptedFileKeyValueStore(name, it) }
+        ?: InMemoryKeyValueStore()
 
 /**
- * Stores each entry as an AES-GCM encrypted file under `<[root]>/.blocks/<[name]>`, with the key
- * in `.key` in the same directory.
+ * Stores each entry as an AES-GCM encrypted file under `<[directory]>/<[name]>`, with the key in
+ * `.key` in the same directory.
+ *
+ * [directory] is already private to the application that supplied it, so the store names its
+ * entries directly within it rather than inserting a directory of its own. It is resolved on
+ * first use, off the calling thread, so creating it is not the caller's concern.
+ *
+ * The key file sits unencrypted next to the entries it decrypts, and is protected only by file
+ * permissions: on a POSIX filesystem the store directory is `rwx------` and the key and entry
+ * files `rw-------`, which keeps other OS users out. Elsewhere the store falls back to the [File]
+ * owner-only flags, which on Windows have no effect on who can read a file: there the key and
+ * entries keep the access control list inherited from the user profile, which by default keeps
+ * other standard users out but lets administrators and the system account read them. In every
+ * case any process running as the same OS user can read the key and decrypt the entries, and so can anything with access to a backup or copy of the directory. The
+ * encryption guards against casual inspection of the files, not against those readers. An
+ * application that needs more than this should leave `applicationId` unset, so the session is held
+ * in memory for the life of the process and never written to disk.
  */
 internal class EncryptedFileKeyValueStore(
     private val name: String,
-    private val root: File = File(System.getProperty("user.home")),
+    private val directory: File,
 ) : KeyValueStore {
 
     private companion object {
@@ -39,10 +62,14 @@ internal class EncryptedFileKeyValueStore(
         /** Attempts to read a key another process has created but not yet finished writing. */
         const val KEY_READ_ATTEMPTS = 5
         const val KEY_READ_RETRY_MILLIS = 20L
+
+        /** Attempts to replace an entry a concurrent reader still has open. See [writeAtomically]. */
+        const val MOVE_ATTEMPTS = 20
+        const val MOVE_RETRY_MILLIS = 20L
     }
 
     private val storageDir: Path by lazy {
-        val dir = File(root, ".blocks/$name").toPath()
+        val dir = File(directory, name).toPath()
         Files.createDirectories(dir)
         restrictToOwner(dir, directory = true)
         dir
@@ -87,13 +114,36 @@ internal class EncryptedFileKeyValueStore(
         try {
             restrictToOwner(temp, directory = false)
             Files.writeString(temp, contents)
-            try {
-                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
-            } catch (_: AtomicMoveNotSupportedException) {
-                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
-            }
+            moveIntoPlace(temp, target)
         } finally {
             Files.deleteIfExists(temp)
+        }
+    }
+
+    /**
+     * Renames [temp] over [target], retrying while another handle holds [target] open.
+     *
+     * Windows refuses to replace a file that is open elsewhere, where a POSIX filesystem allows it,
+     * so a write that overlaps a read of the same entry is denied rather than queued. The refusal
+     * lasts only as long as that read, so waiting is the whole remedy. Without it, the first write
+     * to collide with a read fails, and because the jar swallows a failed write and retries on the
+     * next call, the session would silently stop being saved under load.
+     */
+    private fun moveIntoPlace(temp: Path, target: Path) {
+        repeat(MOVE_ATTEMPTS) { attempt ->
+            try {
+                try {
+                    Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING)
+                }
+                return
+            } catch (denied: AccessDeniedException) {
+                // A genuine permissions problem raises the same exception, so give up eventually
+                // and report it rather than waiting indefinitely on something that will not clear.
+                if (attempt == MOVE_ATTEMPTS - 1) throw denied
+                Thread.sleep(MOVE_RETRY_MILLIS)
+            }
         }
     }
 

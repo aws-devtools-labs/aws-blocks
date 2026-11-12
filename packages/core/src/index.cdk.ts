@@ -35,6 +35,7 @@ export {
 	type BlocksBackendProps,
 	type BlocksDefaults,
 	BlocksPresets,
+	type BlocksSecretsStore,
 	BlocksStack,
 	type BlocksThrottling,
 	BuildingBlockScope,

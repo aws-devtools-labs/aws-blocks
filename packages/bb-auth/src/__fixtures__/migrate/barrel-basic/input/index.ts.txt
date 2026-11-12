@@ -1,0 +1,10 @@
+import { Scope } from '@aws-blocks/core';
+import { AuthBasic, type AuthBasicUser } from './barrel.js';
+
+const scope = new Scope('app');
+export const auth = new AuthBasic(scope, 'auth', { sessionDuration: 3600 });
+export const legacyApi = auth.buildApi();
+
+export function joined(user: AuthBasicUser): number {
+	return user.createdAt;
+}

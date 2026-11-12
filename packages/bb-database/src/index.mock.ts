@@ -5,14 +5,14 @@ import { join } from 'node:path';
 import { type ChildLogger, Logger } from '@aws-blocks/bb-logger';
 import { registerSdkIdentifiers, Scope, type ScopeParent } from '@aws-blocks/core';
 import { assertNotMockInDeployedEnv, getMockDataDir } from '@aws-blocks/core/bb-utils';
-import type { DatabaseEngine, SqlQuery } from '@aws-blocks/data-common';
+import type { SqlQuery } from '@aws-blocks/data-common/core';
 import { DEFAULT_SCHEMA, quoteIdent } from './constants.js';
-import { DsqlRulesEngine } from './dialect/rules-engine.js';
+import { RulesEngine } from './dialect/rules-engine.js';
 import { type SchemaEngine, sharedPgliteCluster } from './engines/pglite-cluster.js';
 import { configError } from './errors.js';
 import { buildMigrationPlan, lintMigrationFiles } from './migrations/plan.js';
 import { loadMigrationFiles, resolveMigrationsPath, runMigrationPlan } from './migrations/runner.js';
-import { registerDatabase, registerUniqueId } from './runtime/construction.js';
+import { registerDatabase, registerUniqueId, resolveClusterOptions } from './runtime/construction.js';
 import { DatabaseCore } from './runtime/index.js';
 import { registerInternalAccess } from './runtime/internal.js';
 import type {
@@ -28,15 +28,17 @@ import { BB_NAME, BB_VERSION } from './version.js';
 
 assertNotMockInDeployedEnv('bb-database');
 
-function pgliteEngine(dataDir: string, schemaName: string): SchemaEngine {
-	return sharedPgliteCluster(join(dataDir, 'pglite')).forSchema(schemaName);
+function pgliteEngine(dataDir: string, kind: ClusterType, schemaName: string): SchemaEngine {
+	return sharedPgliteCluster(join(dataDir, 'pglite'), kind).forSchema(schemaName);
 }
 
 /**
  * A cluster several `Database` blocks share, each in its own schema. `type: 'dsql'`
- * is Aurora DSQL. Part of the `Database` block, not a block on its own.
+ * is Aurora DSQL; `type: 'aurora'` is Aurora PostgreSQL Serverless v2 with the
+ * express configuration. Part of the `Database` block, not a block on its own.
  *
- * Locally it is one PGlite under `.bb-data/{fullId}/pglite/`.
+ * Locally it is one PGlite under `.bb-data/{fullId}/pglite/`, with DSQL's checks
+ * and limits when the type is `dsql`.
  *
  * @example
  * const shared = new DatabaseCluster(scope, 'shared', { type: 'dsql' });
@@ -49,14 +51,14 @@ export class DatabaseCluster extends Scope {
 
 	constructor(scope: ScopeParent, id: string, options: DatabaseClusterOptions) {
 		super(id, { parent: scope });
-		this.type = options.type;
+		this.type = resolveClusterOptions(options, this.fullId).type;
 		registerUniqueId('DatabaseCluster', this, id, this.fullId);
 		registerSdkIdentifiers(this.fullId, { clusterEndpoint: `mock-endpoint-${this.fullId}` });
 	}
 
 	/** @internal */
 	engineFor(schemaName: string): SchemaEngine {
-		return pgliteEngine(getMockDataDir(this), schemaName);
+		return pgliteEngine(getMockDataDir(this), this.type, schemaName);
 	}
 }
 
@@ -83,7 +85,7 @@ export class Database extends Scope {
 	private readonly migrationsPath: string | undefined;
 
 	private readonly core: DatabaseCore;
-	private mock: DsqlRulesEngine | null = null;
+	private mock: RulesEngine | null = null;
 	private pendingConflict = false;
 	/** @internal Logger for internal operations. Defaults to error level. */
 	protected log: ChildLogger;
@@ -101,15 +103,16 @@ export class Database extends Scope {
 		this.schemaName = resolved.schemaName;
 
 		const dataDir = getMockDataDir(this);
+		const kind = resolved.ref.kind;
 		this.migrationsPath = resolveMigrationsPath(options.migrationsPath, id, this.fullId);
 		// At construction so a bad file stops `npm run dev`, not the first request; the engine lints again
 		// (a cache hit) in case a file changed after startup.
-		if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath));
+		if (this.migrationsPath) lintMigrationFiles(loadMigrationFiles(this.migrationsPath), kind);
 
-		const buildEngine = async (): Promise<DatabaseEngine> => {
+		const buildEngine = async (): Promise<RulesEngine> => {
 			let inner: SchemaEngine;
 			if (!resolved.shared) {
-				inner = pgliteEngine(dataDir, this.schemaName);
+				inner = pgliteEngine(dataDir, kind, this.schemaName);
 			} else if (resolved.shared instanceof DatabaseCluster) {
 				inner = resolved.shared.engineFor(this.schemaName);
 			} else {
@@ -124,13 +127,22 @@ export class Database extends Scope {
 				this.mock = null;
 				this.core.invalidateEngine();
 			});
-			const mock = new DsqlRulesEngine(inner);
+			const mock = new RulesEngine(inner, kind);
 			await mock.withDdl(async () => {
 				if (this.migrationsPath) {
 					const files = loadMigrationFiles(this.migrationsPath);
-					lintMigrationFiles(files);
-					const plan = buildMigrationPlan(files);
-					await runMigrationPlan(mock, plan, { schemaName: this.schemaName, log: (m) => this.log.info(m) });
+					lintMigrationFiles(files, kind);
+					const plan = buildMigrationPlan(files, kind);
+					const { applied } = await runMigrationPlan(mock, plan, {
+						schemaName: this.schemaName,
+						log: (m) => this.log.info(m),
+					}).finally(() => inner.cluster.forgetSchema()); // a file may have changed the session's search_path
+					// Visible in `npm run dev` without a logger: which files ran, into which schema, and where the data is.
+					if (applied.length > 0) {
+						console.log(
+							`[bb-database] ${this.fullId}: applied ${applied.join(', ')} to schema "${this.schemaName}" (${dataDir})`,
+						);
+					}
 				} else if (this.schemaName !== DEFAULT_SCHEMA) {
 					await mock.execute(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(this.schemaName)}`);
 				}
@@ -148,6 +160,7 @@ export class Database extends Scope {
 		this.core = new DatabaseCore({ engine: buildEngine });
 		registerInternalAccess(this, {
 			engine: () => this.core.getEngine(),
+			session: () => this.core.session(),
 			simulateConflict: () => {
 				if (this.mock) this.mock.simulateConflict();
 				else this.pendingConflict = true;

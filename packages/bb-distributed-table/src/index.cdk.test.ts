@@ -457,6 +457,46 @@ test('CDK: GSI manager Lambda log groups adopt defaults.logRetention', () => {
 	template.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 7 });
 });
 
+test('CDK: the GSI provider waiter state machine role trusts Step Functions with aws:SourceAccount and aws:SourceArn', () => {
+	const { stack, parent } = setup();
+	new DistributedTable(parent, 'users', {
+		schema: userSchema,
+		key: { partitionKey: 'userId', sortKey: 'createdAt' },
+		indexes: { byEmail: { partitionKey: 'email' } },
+	});
+	const template = Template.fromStack(stack);
+	template.hasResourceProperties('AWS::IAM::Role', {
+		AssumeRolePolicyDocument: {
+			Statement: [
+				Match.objectLike({
+					Effect: 'Allow',
+					Action: 'sts:AssumeRole',
+					Principal: { Service: 'states.amazonaws.com' },
+					Condition: {
+						StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+						ArnLike: {
+							'aws:SourceArn': {
+								'Fn::Join': [
+									'',
+									[
+										'arn:',
+										{ Ref: 'AWS::Partition' },
+										':states:',
+										{ Ref: 'AWS::Region' },
+										':',
+										{ Ref: 'AWS::AccountId' },
+										':stateMachine:*',
+									],
+								],
+							},
+						},
+					},
+				}),
+			],
+		},
+	});
+});
+
 test('CDK: DistributedTable.fromExisting does NOT provision a table (regression)', () => {
 	const { stack, parent } = setup();
 	new DistributedTable(parent, 'users', {
@@ -518,16 +558,16 @@ test('CDK: an unrecognized protection value warns at synth', () => {
 	Annotations.fromStack(stack).hasWarning('*', Match.stringLikeRegexp('Unrecognized protection'));
 });
 
-test('CDK: an unrecognized encryption value warns at synth', () => {
-	const { stack, parent } = setup();
-	new DistributedTable(parent, 'users', {
-		schema: userSchema,
-		key: { partitionKey: 'userId', sortKey: 'createdAt' },
-		encryption: 'kms', // intentional typo — exercise the synth guard
-	});
-	Annotations.fromStack(stack).hasWarning(
-		'*',
-		Match.stringLikeRegexp('Unrecognized encryption.*ack: @aws-blocks/bb-distributed-table:UnknownEncryption'),
+test('CDK: an unrecognized encryption value fails the synth', () => {
+	const { parent } = setup();
+	assert.throws(
+		() =>
+			new DistributedTable(parent, 'users', {
+				schema: userSchema,
+				key: { partitionKey: 'userId', sortKey: 'createdAt' },
+				encryption: 'kms', // intentional typo — exercise the synth guard
+			}),
+		/Unrecognized encryption 'kms'.*'aws-managed', 'customer-managed', or DistributedTable\.fromKmsKey\(arn\)/,
 	);
 });
 

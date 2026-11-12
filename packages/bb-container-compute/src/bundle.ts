@@ -65,8 +65,10 @@ export function containerMainEntry(backendModulePath: string): string {
 		'(async () => {',
 		'  await loadConfigToProcessEnv();',
 		// Absolute in-image path to the co-bundled worker; dispatchJobToWorker reads this.
-		// bootstrap.mjs writes both bundles here before exec, so the path is stable.
-		"  process.env.BLOCKS_JOB_WORKER_ENTRY = '/app/worker.js';",
+		// bootstrap.mjs writes both bundles to BLOCKS_APP_DIR (set by the task
+		// definition: the default image's non-root boot dir, or /app for a custom
+		// image) before exec, so the path is stable.
+		"  process.env.BLOCKS_JOB_WORKER_ENTRY = (process.env.BLOCKS_APP_DIR || '/app') + '/worker.js';",
 		`  const backend = await import(${JSON.stringify(backendModulePath)});`,
 		`  await runContainer(process.env.${CONTAINER_SERVES_API_ENV} === 'true' ? { backend } : {});`,
 		'})();',

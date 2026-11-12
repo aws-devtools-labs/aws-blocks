@@ -9,7 +9,11 @@ import { AgentErrors } from '@aws-blocks/bb-agent';
 import { createChat, realtimeTransport } from '@aws-blocks/bb-agent/client';
 import type { AgentStreamChunk, ChatMessage, CreateChatOptions } from '@aws-blocks/bb-agent/client';
 import type { RealtimeSubscription } from '@aws-blocks/bb-realtime';
-import { codePoller } from './poll-for-code.js';
+// The agent per-user isolation test needs two distinct signed-in users; it does
+// not test sign-up itself. On a deployed stack they are provisioned through the
+// secret-gated `testSupport.provisionUser` (no mailbox needed), locally through
+// the code-confirmed sign-up.
+import { provisionConfirmedUser } from './test-support.js';
 
 /**
  * Build the Realtime transport wired to the canned agent's RPCs — the copy-paste
@@ -84,17 +88,6 @@ async function waitForMessages(api: typeof apiType, conversationId: string, expe
   }
   const { messages } = useCanned ? await api.cannedGetConversation(conversationId) : await api.agentGetConversation(conversationId);
   return messages;
-}
-
-/**
- * Sign up a user and confirm it with the verification code delivered for that
- * username. The agent per-user isolation test needs two distinct signed-in
- * users, so the code has to be matched to the right one.
- */
-async function signUpAndConfirm(api: typeof apiType, username: string, password: string): Promise<void> {
-  await api.authSignUp(username, password);
-  const delivered = await codePoller('authGetLastCode', (u) => api.authGetLastCode(u))(username);
-  await api.authConfirmSignUp(username, delivered.code);
 }
 
 export function agentTests(getApi: () => typeof apiType) {
@@ -397,9 +390,9 @@ export function agentTests(getApi: () => typeof apiType) {
       test('conversations are scoped to the authenticated user', async () => {
         const api = getApi();
 
-        // Sign up and sign in as user A
+        // Provision and sign in as user A
         const userA = `agent-test-a-${Date.now()}`;
-        await signUpAndConfirm(api, userA, 'password123');
+        await provisionConfirmedUser(api, userA, 'password123');
         await api.authSignIn(userA, 'password123');
 
         // Create a conversation as user A
@@ -408,10 +401,10 @@ export function agentTests(getApi: () => typeof apiType) {
         const idsA = listA.conversations.map((c: any) => c.conversationId);
         assert.ok(idsA.includes(conversationId), 'user A should see their conversation');
 
-        // Sign out, sign up and sign in as user B
+        // Sign out, provision and sign in as user B
         await api.authSignOut();
         const userB = `agent-test-b-${Date.now()}`;
-        await signUpAndConfirm(api, userB, 'password123');
+        await provisionConfirmedUser(api, userB, 'password123');
         await api.authSignIn(userB, 'password123');
 
         // User B should NOT see user A's conversation
@@ -420,6 +413,25 @@ export function agentTests(getApi: () => typeof apiType) {
         assert.ok(!idsB.includes(conversationId), 'user B should NOT see user A conversation');
 
         // Clean up
+        await api.authSignOut();
+      });
+
+      // Ownership is keyed on `userSub`, the id that is stable for the user's lifetime,
+      // so the user-scoped channel key carries it rather than the username.
+      test('conversation ownership is keyed on userSub', async () => {
+        const api = getApi();
+        const username = `agent-test-sub-${Date.now()}`;
+        await provisionConfirmedUser(api, username, 'password123');
+        const { userSub } = await api.authSignIn(username, 'password123');
+        assert.notStrictEqual(userSub, username, 'this pool gives users a sub distinct from the username');
+
+        const { conversationId } = await api.agentCreateConversationId();
+        const { channel } = await api.agentGetRawDescriptor(conversationId);
+        assert.ok(
+          channel.endsWith(`/u/${encodeURIComponent(userSub)}/${conversationId}`),
+          `channel key should be scoped to the userSub, got ${channel}`,
+        );
+
         await api.authSignOut();
       });
     });
@@ -492,8 +504,8 @@ export function agentTests(getApi: () => typeof apiType) {
 
       before(async () => {
         const api = getApi();
-        await signUpAndConfirm(api, userA, password);
-        await signUpAndConfirm(api, userB, password);
+        await provisionConfirmedUser(api, userA, password);
+        await provisionConfirmedUser(api, userB, password);
         await signInAs(api, userA);
         ({ conversationId: convA } = await api.agentCreateConversationId());
         const { channel } = await api.agentGetChannel(convA);
@@ -657,6 +669,22 @@ export function agentTests(getApi: () => typeof apiType) {
     });
 
     describe('HITL — Tool Approval (deterministic)', () => {
+      /**
+       * The paused turn's pending interrupts, read from history once its `interrupt` chunk has
+       * arrived. The turn publishes the chunk before it records the interrupt, so poll until the
+       * record is there instead of reading once, and fail on a timeout instead of returning none.
+       */
+      async function pendingInterruptsAfterChunk(api: typeof apiType, chunks: AgentStreamChunk[], conversationId: string) {
+        await waitUntil(() => chunks.some(c => c.type === 'interrupt'), 10_000, 'No interrupt chunk within 10s');
+        const deadline = Date.now() + 5_000;
+        for (;;) {
+          const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
+          if (interrupts.length > 0) return interrupts;
+          if (Date.now() > deadline) throw new Error('No pending interrupt recorded within 5s of the interrupt chunk');
+          await new Promise(r => setTimeout(r, 200));
+        }
+      }
+
       test('interrupt chunk arrives for tool with approval: always', { timeout: 15_000 }, async () => {
         const api = getApi();
         const { conversationId } = await api.cannedCreateConversationId();
@@ -686,27 +714,25 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
         const { channel } = await api.cannedGetChannel(conversationId);
 
-        const chunks: any[] = [];
+        const chunks: AgentStreamChunk[] = [];
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
+          const sub = channel.subscribe((chunk) => {
             chunks.push(chunk);
             if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
           });
           sub.established.then(async () => {
             await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            // Wait for interrupt to arrive
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: true })), conversationId);
-            }
+            // Resume once the turn has paused, not after a fixed wait: a wait that ended before
+            // the interrupt was recorded skipped the resume, and the test then timed out on `done`.
+            const interrupts = await pendingInterruptsAfterChunk(api, chunks, conversationId);
+            await api.cannedResume(conversationId, interrupts.map(i => ({ interruptId: i.id, approved: true })), conversationId);
           }).catch(reject);
         });
 
         await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'should have received done after resume');
+        assert.ok(chunks.some(c => c.type === 'interrupt'), 'should have received interrupt');
+        assert.ok(chunks.some(c => c.type === 'done'), 'should have received done after resume');
       });
 
       test('approval is persisted to conversation history', { timeout: 20_000 }, async () => {
@@ -740,26 +766,24 @@ export function agentTests(getApi: () => typeof apiType) {
         const { conversationId } = await api.cannedCreateConversationId();
         const { channel } = await api.cannedGetChannel(conversationId);
 
-        const chunks: any[] = [];
+        const chunks: AgentStreamChunk[] = [];
         const done = new Promise<void>((resolve, reject) => {
           const timer = setTimeout(() => reject(new Error('No done chunk within 15s')), 15_000);
-          const sub = channel.subscribe((chunk: any) => {
+          const sub = channel.subscribe((chunk) => {
             chunks.push(chunk);
             if (chunk.type === 'done') { clearTimeout(timer); resolve(); }
           });
           sub.established.then(async () => {
             await api.cannedStream('use deleteRecords', conversationId, conversationId);
-            await new Promise(r => setTimeout(r, 1000));
-            const { interrupts } = await api.cannedGetPendingInterrupts(conversationId);
-            if (interrupts.length) {
-              await api.cannedResume(conversationId, interrupts.map((i: any) => ({ interruptId: i.id, approved: false })), conversationId);
-            }
+            // Resume once the turn has paused (see the approval test above).
+            const interrupts = await pendingInterruptsAfterChunk(api, chunks, conversationId);
+            await api.cannedResume(conversationId, interrupts.map(i => ({ interruptId: i.id, approved: false })), conversationId);
           }).catch(reject);
         });
 
         await done;
-        assert.ok(chunks.some((c: any) => c.type === 'interrupt'), 'should have received interrupt');
-        assert.ok(chunks.some((c: any) => c.type === 'done'), 'agent should complete after denial');
+        assert.ok(chunks.some(c => c.type === 'interrupt'), 'should have received interrupt');
+        assert.ok(chunks.some(c => c.type === 'done'), 'agent should complete after denial');
         // After denial, conversation history should show the tool was cancelled (not executed successfully)
         const { messages } = await api.cannedGetConversation(conversationId);
         const toolResult = messages.find((m: any) => m.role === 'tool-result');
