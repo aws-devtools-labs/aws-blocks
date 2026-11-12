@@ -496,6 +496,10 @@ class OidcClient implements AuthProvider {
   /// user, at [exchangePath]. [signIn] and [signInRelay] call it; call it
   /// directly only when the app ran the authorize step itself.
   ///
+  /// The request sends `tokens: false`: this client signs in with the
+  /// session cookie, so the backend doesn't return bearer tokens even when
+  /// it has them enabled.
+  ///
   /// Throws [OidcUnknownProviderException] when [providers] doesn't list
   /// [provider], before anything is sent.
   Future<OidcUser> exchange({
@@ -525,6 +529,9 @@ class OidcClient implements AuthProvider {
         // RFC 9207 issuer forwarding — only sent when the relay callback
         // provided it.
         'iss': ?iss,
+        // The client signs in with the session cookie, so ask the backend
+        // not to mint bearer tokens it would never use.
+        'tokens': false,
       }),
     );
 

@@ -84,6 +84,7 @@ void main() {
       expect(sentBody!['provider'], 'google');
       expect(sentBody!['state'], 'test_state');
       expect(sentBody!['nonce'], 'test_nonce');
+      expect(sentBody!['tokens'], isFalse);
       expect(user.userId, 'u1');
       expect(user.username, 'alice');
       expect(user.groups, ['admin']);

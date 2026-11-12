@@ -19,6 +19,9 @@ The next release is 0.2.0, because of the breaking changes marked below.
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.
+- `OidcClient.exchange` sends `tokens: false`, so a backend with bearer
+  tokens enabled doesn't mint tokens for a client that signs in with the
+  session cookie.
 - **Breaking:** `OidcClient.signOut()` returns `Future<Uri?>`, the identity
   provider's logout URL, or null when it has none. Open it with the app's
   launcher to end the provider's own session; the client doesn't open it. It
