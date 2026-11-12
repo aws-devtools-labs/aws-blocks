@@ -50,6 +50,37 @@ class OidcClientRestoreTest {
     }
 
     @Test
+    fun `restore reads the optional user fields an Auth block reports`() = runTest {
+        val client = client(
+            HttpStatusCode.OK,
+            """{"user":{"userId":"alice","username":"alice","userSub":"https://idp.example.com:123",""" +
+                """"signInProvider":"google","groups":["admins"],"attributes":{"email":"a@example.com"},""" +
+                """"displayName":"Alice"}}""",
+        )
+
+        client.restore() shouldBe OidcUser(
+            userId = "alice",
+            username = "alice",
+            userSub = "https://idp.example.com:123",
+            signInProvider = "google",
+            groups = listOf("admins"),
+            attributes = mapOf("email" to "a@example.com"),
+            displayName = "Alice",
+        )
+    }
+
+    @Test
+    fun `restore leaves the optional user fields empty when the backend omits them`() = runTest {
+        val client = client(HttpStatusCode.OK, """{"user":{"userId":"alice","username":"alice"}}""")
+
+        val user = client.restore()!!
+
+        user.groups shouldBe emptyList()
+        user.displayName shouldBe null
+        user.userSub shouldBe null
+    }
+
+    @Test
     fun `restore returns null and signs out when there is no session`() = runTest {
         val client = client(HttpStatusCode.Unauthorized, """{"error":"Unauthorized"}""")
 
