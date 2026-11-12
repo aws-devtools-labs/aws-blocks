@@ -417,11 +417,16 @@ describe('AWS admin surface — command shapes', () => {
 		assert.strictEqual(h.sent[1].input.PaginationToken, 'p2');
 	});
 
-	test('revokeUserSessions sends AdminUserGlobalSignOut', async () => {
+	test('revokeUserSessions looks the user up, then sends AdminUserGlobalSignOut', async () => {
 		const h = makeAwsAuth({ admin: {} });
+		h.on('AdminGetUserCommand', () => ({ Username: 'bob', UserAttributes: [{ Name: 'sub', Value: 'sub-bob' }] }));
+		h.on('AdminListGroupsForUserCommand', () => ({ Groups: [] }));
 		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await h.auth.admin.revokeUserSessions('bob');
+		// The lookup gives the audit record a `sub` (the argument may be a sign-in email).
 		assert.deepStrictEqual(h.sent, [
+			{ name: 'AdminGetUserCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
+			{ name: 'AdminListGroupsForUserCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
 			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
 		]);
 	});

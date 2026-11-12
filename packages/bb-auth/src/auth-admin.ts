@@ -34,6 +34,7 @@ import type {
 	AdminUser,
 	AdminUserFilter,
 	AttrOf,
+	AuthAuditRecord,
 	AuthOptions,
 	GroupOf,
 	ReadAttrOf,
@@ -52,6 +53,8 @@ export interface AdminDeps<O extends AuthOptions> {
 	readAttributes(attrs: Record<string, string>): Partial<Record<ReadAttrOf<O>, string>>;
 	/** Delete every session row of `username` (`SessionStore.deleteByUsername`). */
 	deleteSessionsOf(username: string): Promise<number>;
+	/** Write an audit record (the `audit` option); a no-op when it is off. */
+	audit(record: Omit<AuthAuditRecord, 'block'>): void;
 	/**
 	 * Run `validateUser` for a user about to be created (`phase: 'signUp'`,
 	 * `provider: 'password'`) — the in-process half of the PreSignUp check.
@@ -214,10 +217,27 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 		revokeUserSessions: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {
 			void gate;
 			return run('lifecycle', async (n) => {
-				await n.admin.globalSignOut(username);
-				// Make the revocation immediate: the session rows would otherwise stay
-				// valid until their access token next needs refreshing.
-				await deps.deleteSessionsOf(username);
+				// Record the user by `sub`: `username` may be a sign-in email.
+				const sub = await n.admin
+					.getUser(username)
+					.then((u) => u?.userSub)
+					.catch(() => undefined);
+				try {
+					await n.admin.globalSignOut(username);
+					// Make the revocation immediate: the session rows would otherwise stay
+					// valid until their access token next needs refreshing.
+					await deps.deleteSessionsOf(username);
+				} catch (e) {
+					deps.audit({
+						event: 'auth.sessions.revoked',
+						sub,
+						outcome: 'incomplete',
+						reason: 'admin',
+						error: e instanceof Error ? e.name : typeof e,
+					});
+					throw e;
+				}
+				deps.audit({ event: 'auth.sessions.revoked', sub, outcome: 'success', reason: 'admin' });
 			});
 		},
 	};
