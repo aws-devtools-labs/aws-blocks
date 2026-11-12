@@ -9,7 +9,10 @@
  *   cookie, signed in with the new password), so the caller stays signed in.
  *   On AWS it also revokes the user's refresh tokens (`AdminUserGlobalSignOut`).
  *   When signing in again needs a step only the user can answer (MFA), the
- *   caller's session ends too.
+ *   caller's session ends too; when it would send an SMS or email MFA code,
+ *   no sign-in is attempted (no code is sent) and the session ends. A failed
+ *   re-issue (sign-in, session write, cookie) ends the session too, and the
+ *   call still resolves.
  * - `auth.admin.setUserPassword` ends every session of the user.
  */
 
@@ -45,6 +48,9 @@ function codeSink() {
 	return {
 		deliver: async (_username: string, code: string, purpose: CodeDeliveryPurpose) => {
 			sent.push({ code, purpose });
+		},
+		count(purpose: CodeDeliveryPurpose): number {
+			return sent.filter((s) => s.purpose === purpose).length;
 		},
 		last(purpose: CodeDeliveryPurpose): string {
 			const match = [...sent].reverse().find((s) => s.purpose === purpose);
@@ -137,6 +143,55 @@ describe('mock engine — updatePassword ends the user’s other sessions', () =
 		await b.request((ctx) => auth.updatePassword(ctx, PASSWORD, NEW_PASSWORD));
 		assert.notStrictEqual(cookieOf(b, auth.fullId), before);
 		assert.strictEqual(await b.request((ctx) => auth.checkAuth(ctx)), true);
+	});
+
+	test('SMS MFA: no sign-in is attempted (no code is sent); the caller is signed out', async () => {
+		const sink = codeSink();
+		const auth = new Auth(root(), 'auth', {
+			mfa: { mode: 'optional', types: ['SMS', 'TOTP'] },
+			codeDelivery: sink.deliver,
+		});
+		await auth.signUp('nia', PASSWORD, { attributes: { email: 'nia@example.com', phone_number: '+15555550100' } });
+		await auth.confirmSignUp('nia', sink.last('signUp'));
+		const b = new Browser();
+		assert.strictEqual((await b.request((ctx) => auth.signIn('nia', PASSWORD, ctx))).status, 'signedIn');
+		await b.request((ctx) => auth.sendUserAttributeVerificationCode(ctx, 'phone_number'));
+		await b.request((ctx) => auth.confirmUserAttribute(ctx, 'phone_number', sink.last('attribute')));
+		assert.deepStrictEqual(await b.request((ctx) => auth.getMfaPreference(ctx)), { enabled: ['SMS'] });
+		const before = cookieOf(b, auth.fullId);
+		assert.ok(before);
+
+		await b.request((ctx) => auth.updatePassword(ctx, PASSWORD, NEW_PASSWORD));
+
+		assert.strictEqual(sink.count('mfa'), 0, 'no MFA code was delivered');
+		assert.strictEqual(cookieOf(b, auth.fullId), undefined, 'the cookie is cleared');
+		const replay = new Browser();
+		replay.jar.set(`auth_${auth.fullId}`, before);
+		assert.strictEqual(await replay.request((ctx) => auth.checkAuth(ctx)), false);
+		const next = await new Browser().request((ctx) => auth.signIn('nia', NEW_PASSWORD, ctx));
+		assert.ok(next.status === 'continueSignIn' && next.nextStep.name === 'CONFIRM_SIGN_IN_WITH_SMS_CODE');
+	});
+
+	test('email MFA: no sign-in is attempted (no code is sent); the caller is signed out', async () => {
+		const sink = codeSink();
+		const auth = new Auth(root(), 'auth', {
+			mfa: { mode: 'optional', types: ['EMAIL'] },
+			codeDelivery: sink.deliver,
+		});
+		await register(auth, sink, 'oli');
+		const b = new Browser();
+		const r = await b.request((ctx) => auth.signIn('oli', PASSWORD, ctx));
+		assert.ok(r.status === 'continueSignIn' && r.nextStep.name === 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE');
+		const session = r.nextStep.session;
+		const signedIn = await b.request((ctx) => auth.confirmSignIn(session, sink.last('mfa'), ctx));
+		assert.strictEqual(signedIn.status, 'signedIn');
+		const codes = sink.count('mfa');
+
+		await b.request((ctx) => auth.updatePassword(ctx, PASSWORD, NEW_PASSWORD));
+
+		assert.strictEqual(sink.count('mfa'), codes, 'no further MFA code was delivered');
+		assert.strictEqual(cookieOf(b, auth.fullId), undefined, 'the cookie is cleared');
+		assert.strictEqual(await b.request((ctx) => auth.checkAuth(ctx)), false);
 	});
 
 	test('a wrong old password changes nothing and ends no session', async () => {
@@ -243,6 +298,61 @@ describe('AWS engine — updatePassword ends the user’s other sessions', () =>
 		assert.strictEqual(await b.request((ctx) => h.auth.checkAuth(ctx)), false);
 	});
 
+	for (const [label, factor] of [
+		['SMS', 'SMS_MFA'],
+		['email', 'EMAIL_OTP'],
+	] as const) {
+		test(`${label} MFA: GetUser, no InitiateAuth (no code is sent); the caller is signed out`, async () => {
+			const h = makeAwsAuth({ mfa: { mode: 'optional', types: ['SMS', 'TOTP', 'EMAIL'] } });
+			const b = new AwsBrowser();
+			await signInAs(h, b, 'alice');
+			const before = cookieOf(b, h.fullId);
+			assert.ok(before);
+			h.on('ChangePasswordCommand', () => ({}));
+			h.on('GetUserCommand', () => ({
+				Username: 'alice',
+				UserAttributes: [],
+				UserMFASettingList: [factor],
+				PreferredMfaSetting: factor,
+			}));
+			h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+			h.on('AdminUserGlobalSignOutCommand', () => ({}));
+
+			await b.request((ctx) => h.auth.updatePassword(ctx, 'Old!pass1', 'New!pass1'));
+
+			assert.deepStrictEqual(
+				h.sent.map((c) => c.name),
+				['ChangePasswordCommand', 'GetUserCommand', 'AdminGetUserCommand', 'AdminUserGlobalSignOutCommand'],
+				'no sign-in was attempted, so no code was sent',
+			);
+			assert.strictEqual(cookieOf(b, h.fullId), undefined, 'the cookie is cleared');
+			const replay = new AwsBrowser();
+			replay.jar.set(`auth_${h.fullId}`, before);
+			assert.strictEqual(await replay.request((ctx) => h.auth.checkAuth(ctx)), false);
+		});
+	}
+
+	test('TOTP MFA preferred: the re-issue is attempted (an authenticator code sends nothing)', async () => {
+		const h = makeAwsAuth({ mfa: { mode: 'optional', types: ['SMS', 'TOTP'] } });
+		const b = new AwsBrowser();
+		await signInAs(h, b, 'alice');
+		h.on('ChangePasswordCommand', () => ({}));
+		h.on('GetUserCommand', () => ({
+			Username: 'alice',
+			UserAttributes: [],
+			UserMFASettingList: ['SMS_MFA', 'SOFTWARE_TOKEN_MFA'],
+			PreferredMfaSetting: 'SOFTWARE_TOKEN_MFA',
+		}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
+		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+
+		await b.request((ctx) => h.auth.updatePassword(ctx, 'Old!pass1', 'New!pass1'));
+
+		assert.ok(h.sent.some((c) => c.name === 'InitiateAuthCommand'));
+		assert.strictEqual(await b.request((ctx) => h.auth.checkAuth(ctx)), true);
+	});
+
 	test('a failed sign-out step is reported (the password is already changed), not swallowed', async () => {
 		const { logger, entries } = captureLogger();
 		const h = makeAwsAuth({ logger });
@@ -260,6 +370,93 @@ describe('AWS engine — updatePassword ends the user’s other sessions', () =>
 			);
 		assert.strictEqual(wireView(e).code, 500);
 		assert.ok(entries.some((l) => l.level === 'error' && /password change/.test(l.message)));
+	});
+});
+
+describe('AWS engine — updatePassword when the re-issue fails after the password changed', () => {
+	/** A signed-in `alice` whose password change succeeds up to the re-issue. */
+	async function changed() {
+		const { logger, entries } = captureLogger();
+		const changedFor: string[] = [];
+		const h = makeAwsAuth({
+			logger,
+			onPasswordChanged: async (user) => {
+				changedFor.push(user.username);
+			},
+		});
+		const b = new AwsBrowser();
+		await signInAs(h, b, 'alice');
+		const before = cookieOf(b, h.fullId);
+		assert.ok(before);
+		h.on('ChangePasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
+		return { h, b, before, entries, changedFor };
+	}
+
+	/** The call resolved; the caller is signed out; the old session id is rejected; the hook ran; it was logged. */
+	async function assertSignedOut(
+		r: Awaited<ReturnType<typeof changed>>,
+		level: 'warn' | 'error',
+		message: RegExp,
+	): Promise<void> {
+		assert.strictEqual(cookieOf(r.b, r.h.fullId), undefined, 'the cookie is cleared');
+		assert.strictEqual(await r.b.request((ctx) => r.h.auth.checkAuth(ctx)), false);
+		const replay = new AwsBrowser();
+		replay.jar.set(`auth_${r.h.fullId}`, r.before);
+		assert.strictEqual(
+			await replay.request((ctx) => r.h.auth.checkAuth(ctx)),
+			false,
+			'the old session id is rejected',
+		);
+		assert.deepStrictEqual(r.changedFor, ['alice'], 'onPasswordChanged ran');
+		assert.ok(
+			r.entries.some((l) => l.level === level && message.test(l.message)),
+			`logged at ${level}: ${JSON.stringify(r.entries.map((l) => [l.level, l.message]))}`,
+		);
+	}
+
+	test('the sign-in with the new password throws', async () => {
+		const r = await changed();
+		r.h.on('InitiateAuthCommand', () => {
+			throw cognitoError('InternalErrorException', 'boom', 500);
+		});
+		await r.b.request((ctx) => r.h.auth.updatePassword(ctx, 'Old!pass1', 'New!pass1'));
+		await assertSignedOut(r, 'warn', /re-issuing the current session failed/);
+	});
+
+	test('writing the re-issued session row throws', async () => {
+		const r = await changed();
+		r.h.on('InitiateAuthCommand', () => ({ AuthenticationResult: r.h.idp.authResult('alice') }));
+		const sessions = Reflect.get(r.h.auth, 'sessions');
+		const create = sessions.create;
+		sessions.create = async () => {
+			throw new Error('store down');
+		};
+		try {
+			await r.b.request((ctx) => r.h.auth.updatePassword(ctx, 'Old!pass1', 'New!pass1'));
+		} finally {
+			sessions.create = create;
+		}
+		await assertSignedOut(r, 'error', /writing the re-issued session failed/);
+	});
+
+	test('setting the re-issued session cookie throws', async () => {
+		const r = await changed();
+		r.h.on('InitiateAuthCommand', () => ({ AuthenticationResult: r.h.idp.authResult('alice') }));
+		await r.b.request((ctx) => {
+			const headers = ctx.response.headers;
+			const set = headers.set.bind(headers);
+			// Refuse the session cookie itself; a clearing cookie (Max-Age=0) still goes through.
+			headers.set = (name: string, value: string) => {
+				if (name.toLowerCase() === 'set-cookie' && !/Max-Age=0(?:;|$)/.test(value)) {
+					throw new Error('header write failed');
+				}
+				set(name, value);
+			};
+			return r.h.auth.updatePassword(ctx, 'Old!pass1', 'New!pass1');
+		});
+		await assertSignedOut(r, 'error', /writing the re-issued session failed/);
 	});
 });
 
@@ -288,5 +485,21 @@ describe('AWS engine — admin.setUserPassword ends the user’s sessions', () =
 			{ name: 'AdminUserGlobalSignOutCommand', input: { UserPoolId: TEST_POOL_ID, Username: 'bob' } },
 		]);
 		assert.strictEqual(await b.request((ctx) => h.auth.checkAuth(ctx)), false);
+	});
+
+	test('a failed sign-out step is logged at error and reported as a 5xx (the password is already set)', async () => {
+		const { logger, entries } = captureLogger();
+		const h = makeAwsAuth({ admin: {}, logger });
+		h.on('AdminSetUserPasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'bob', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => {
+			throw cognitoError('InternalErrorException', 'boom', 500);
+		});
+		const e = await h.auth.admin.setUserPassword('bob', 'Final!1234', { permanent: true }).then(
+			() => assert.fail('expected a rejection'),
+			(err: unknown) => err,
+		);
+		assert.strictEqual(wireView(e).code, 500);
+		assert.ok(entries.some((l) => l.level === 'error' && /admin\.setUserPassword/.test(l.message)));
 	});
 });

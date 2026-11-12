@@ -21,6 +21,7 @@
  * @internal
  */
 
+import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { ApiError } from '@aws-blocks/core';
 import { assertAdminUserFilter } from './admin-filter.js';
 import type { NativeAdminUser, NativeAdminUserPage, NativeEngine } from './engines/types.js';
@@ -45,6 +46,8 @@ export interface AdminDeps<O extends AuthOptions> {
 	/** The native engine, or the "no pool provisioned" error. */
 	native(): NativeEngine;
 	mapError(e: unknown): ApiError;
+	/** The block's logger (a post-change sign-out failure is logged at error). */
+	log: ChildLogger;
 	prefixAttributes(attrs: Partial<Record<string, string>>): Record<string, string>;
 	narrowGroups(groups: readonly string[]): GroupOf<O>[];
 	readAttributes(attrs: Record<string, string>): Partial<Record<ReadAttrOf<O>, string>>;
@@ -176,7 +179,17 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 				// A new password ends the user's sessions, as a completed reset does:
 				// resolve the pool username the sessions carry, revoke the refresh
 				// tokens upstream, and reject every session issued before now.
-				await deps.revokeSessionsOf(await n.signOutEverywhere(username));
+				try {
+					await deps.revokeSessionsOf(await n.signOutEverywhere(username));
+				} catch (e) {
+					deps.log.error(
+						'[bb-auth] admin.setUserPassword: the password changed but ending the sessions failed',
+						{
+							error: e instanceof Error ? e.name : typeof e,
+						},
+					);
+					throw e;
+				}
 			});
 		},
 		getUser: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {

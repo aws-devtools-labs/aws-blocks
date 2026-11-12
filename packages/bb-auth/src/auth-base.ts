@@ -53,6 +53,7 @@ import type {
 	FederationEngine,
 	NativeDevicePage,
 	NativeEngine,
+	NativeMfaPreference,
 	NativeMfaPreferenceInput,
 	NativeSignInOutcome,
 	PoolBearerVerifier,
@@ -1208,6 +1209,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * cannot answer on the user's behalf — the current session cannot be
 	 * re-issued, so it ends too: the cookie is cleared and the user signs in
 	 * again with the new password. The password change itself still succeeded.
+	 * A user whose sign-in would send an SMS or email MFA code (read from their
+	 * MFA settings, Cognito `GetUser`) is not signed in again at all, so no
+	 * unused code is sent: their session ends the same way. The same holds when
+	 * those settings cannot be read, or when writing the re-issued session fails.
 	 *
 	 * Then runs `onPasswordChanged` with the signed-in user.
 	 *
@@ -1230,6 +1235,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		} catch (e) {
 			throw this.mapError(e);
 		}
+		// Read the user's MFA settings while the access token is still valid
+		// (the global sign-out below revokes it): a sign-in that would send an
+		// SMS or email code is not attempted.
+		const sendsCode = await this.signInSendsCode(native, accessToken);
 		// The password changed: end every session issued before it, this one
 		// included (the marker covers it), then re-issue this one below.
 		let username: string;
@@ -1242,7 +1251,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			});
 			throw this.mapError(e);
 		}
-		await this.reissueSession(context, session.sessionId, native, username, newPassword);
+		await this.reissueSession(context, session.sessionId, native, username, newPassword, sendsCode);
 		const hook = this.config.onPasswordChanged;
 		if (hook) await this.runAuditHook('onPasswordChanged', () => hook(user, context));
 	}
@@ -1254,6 +1263,8 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * not ended). Not a new sign-in for the hooks or the metrics: `validateUser`,
 	 * `onSignIn` and `SignInSuccess` do not run. When the sign-in needs a step
 	 * only the user can answer (MFA), or fails, the current session ends instead.
+	 * With `skipSignIn` (the sign-in would send an SMS or email code, see
+	 * {@link signInSendsCode}) no sign-in is attempted and the session ends.
 	 */
 	private async reissueSession(
 		context: BlocksContext,
@@ -1261,19 +1272,24 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		native: NativeEngine,
 		username: string,
 		password: string,
+		skipSignIn: boolean,
 	): Promise<void> {
 		let outcome: NativeSignInOutcome | undefined;
-		try {
-			outcome = await native.signIn({ username, password, preferredChallenge: 'PASSWORD' });
-			// Choice-based sign-in (USER_AUTH) may still ask for the password as a step.
-			if (outcome.status === 'continueSignIn' && outcome.nextStep.name === 'CONFIRM_SIGN_IN_WITH_PASSWORD') {
-				outcome = await native.confirmSignIn({ session: outcome.nextStep.session, response: password });
+		if (skipSignIn) {
+			this.log.info('[bb-auth] password change: signing in again would send an MFA code; the session ends');
+		} else {
+			try {
+				outcome = await native.signIn({ username, password, preferredChallenge: 'PASSWORD' });
+				// Choice-based sign-in (USER_AUTH) may still ask for the password as a step.
+				if (outcome.status === 'continueSignIn' && outcome.nextStep.name === 'CONFIRM_SIGN_IN_WITH_PASSWORD') {
+					outcome = await native.confirmSignIn({ session: outcome.nextStep.session, response: password });
+				}
+			} catch (e) {
+				this.log.warn('[bb-auth] password change: re-issuing the current session failed; it ends too', {
+					error: e instanceof Error ? e.name : typeof e,
+				});
+				outcome = undefined;
 			}
-		} catch (e) {
-			this.log.warn('[bb-auth] password change: re-issuing the current session failed; it ends too', {
-				error: e instanceof Error ? e.name : typeof e,
-			});
-			outcome = undefined;
 		}
 		await this.sessions.delete(oldSessionId).catch((e: unknown) => {
 			// The revocation marker already ends it; this only tidies the row.
@@ -1306,6 +1322,35 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			});
 			clearSessionCookie(context, this.fullId, this.crossDomain);
 		}
+	}
+
+	/**
+	 * Whether signing the user in with their password would send them an SMS or
+	 * email MFA code — mirroring how the pool picks the challenge: the preferred
+	 * factor, else the only enabled one (several enabled and none preferred asks
+	 * the user to choose, which sends nothing). TOTP sends nothing. Read with
+	 * the access token (Cognito `GetUser`, no IAM permission). Skipped when this
+	 * block's own pool has MFA off. When the settings cannot be read, assumes a
+	 * code would be sent (the caller is signed out rather than sent a code).
+	 */
+	private async signInSendsCode(native: NativeEngine, accessToken: string): Promise<boolean> {
+		const mfa = this.config.mfa;
+		const mfaMode = typeof mfa === 'object' ? (mfa.mode ?? 'off') : (mfa ?? 'off');
+		if (!this.config.userPool && mfaMode === 'off') return false;
+		let pref: NativeMfaPreference;
+		try {
+			pref = await native.getMfaPreference(accessToken);
+		} catch (e) {
+			this.log.warn('[bb-auth] password change: reading the MFA settings failed; the session ends', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			return true;
+		}
+		const sendsCode = (f: MfaFactor | 'NOMFA' | undefined): boolean => f === 'SMS' || f === 'EMAIL';
+		if (pref.preferred && pref.preferred !== 'NOMFA' && pref.enabled.includes(pref.preferred)) {
+			return sendsCode(pref.preferred);
+		}
+		return pref.enabled.length === 1 && sendsCode(pref.enabled[0]);
 	}
 
 	// ── User attributes & account ───────────────────────────────────────────
@@ -1674,6 +1719,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				return this.native;
 			},
 			mapError: (e) => this.mapError(e),
+			log: this.log,
 			prefixAttributes: (attrs) => this.prefixCustomAttributes(attrs),
 			narrowGroups: (groups) => this.narrowGroups(groups),
 			readAttributes: (attrs) => this.readAttributes(attrs),
@@ -1897,8 +1943,10 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		try {
 			return await this.completeNativeSignIn(outcome, context);
 		} catch (e) {
-			await this.signInFailed(context, attempt, e instanceof ApiError ? e : this.mapError(e), false);
-			throw e;
+			// Rethrow the error the hook reported, so its `errorName` is what the client receives.
+			const clientError = e instanceof ApiError ? e : this.mapError(e);
+			await this.signInFailed(context, attempt, clientError, false);
+			throw clientError;
 		}
 	}
 

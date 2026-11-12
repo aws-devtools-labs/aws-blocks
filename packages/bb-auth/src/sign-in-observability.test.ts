@@ -287,6 +287,25 @@ describe('mock engine — onSignInFailed', () => {
 		assert.ok(entries.some((l) => l.level === 'error' && /onSignInFailed threw/.test(l.message)));
 	});
 
+	test('AWS: a fault after the engine signed the user in: errorName is the name the client receives', async () => {
+		const failures: SignInFailure[] = [];
+		const h = makeAwsAuth({ logger: captureLogger().logger, onSignInFailed: async (f) => void failures.push(f) });
+		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: h.idp.authResult('alice') }));
+		const sessions = Reflect.get(h.auth, 'sessions');
+		sessions.create = async () => {
+			throw new Error('store down');
+		};
+		const e = await new AwsBrowser()
+			.request((ctx) => h.auth.signIn('alice', 'Password!1', ctx))
+			.then(
+				() => assert.fail('expected a rejection'),
+				(err: unknown) => err,
+			);
+		assert.ok(e instanceof ApiError, 'the client receives the mapped error');
+		assert.strictEqual(failures.length, 1);
+		assert.strictEqual(failures[0].errorName, e.name);
+	});
+
 	test('runs for a failed setAuthState signIn too', async () => {
 		const failures: SignInFailure[] = [];
 		const auth = new Auth(root(), 'auth', { onSignInFailed: async (f) => void failures.push(f) });

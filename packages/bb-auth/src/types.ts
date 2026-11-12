@@ -281,8 +281,9 @@ export interface AuthCommonOptions {
 	 *   answer, `autoSignIn`, or a federated sign-in).
 	 * - `SignInFailure` — an email + password sign-in was refused: unknown user
 	 *   or wrong password (one name for both, so the metric does not reveal which
-	 *   usernames exist), a wrong challenge code, an unconfirmed user, or a
-	 *   rejection by `validateUser` / `onSignIn`.
+	 *   usernames exist), a wrong challenge code, an unconfirmed user, a
+	 *   rejection by `validateUser` / `onSignIn`, or a malformed request (a
+	 *   `4xx` the `onSignInFailed` hook reports with reason `'error'`).
 	 * - `SignInLocked` — an email + password sign-in was refused because of too
 	 *   many attempts (the user pool's lockout or throttling).
 	 *
@@ -2884,6 +2885,9 @@ export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
 	 * Ends the user's sessions, as a completed password reset does: every
 	 * session they had is rejected from its next request on, and on AWS their
 	 * Cognito refresh tokens are revoked (`AdminUserGlobalSignOut`).
+	 *
+	 * @throws {ApiError} 5xx when the password changed but ending the sessions
+	 *   failed (logged at error). Set the password again to end them.
 	 */
 	setUserPassword(
 		username: string,
