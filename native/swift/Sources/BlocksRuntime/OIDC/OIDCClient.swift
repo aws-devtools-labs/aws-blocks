@@ -651,6 +651,8 @@ public extension OIDCClient where Provider == String {
     /// - Precondition: Both paths start with `/aws-blocks/auth/`, and `callbackPath` has a segment
     ///   after that and no trailing `/`. The paths are constants of the app's backend, so a path that
     ///   breaks this stops the app with `preconditionFailure`, naming the path, instead of throwing.
+    ///   This differs from the Kotlin and Dart SDKs, whose `forAuth` throws an argument error: pass
+    ///   the backend's own `redirects.callbackPath` and `redirects.signOutPath`, never user input.
     static func forAuth(
         client: BlocksClient,
         providers: [String],
