@@ -463,6 +463,8 @@ class DartCodeGenerator {
     buf.writeln('  int get hashCode => value.hashCode;');
     buf.writeln();
     buf.writeln('  @override');
+    // The class name may end in `$` (`StatusUnknown$`), which a string
+    // literal must escape.
     buf.writeln(
       "  String toString() => ${_dartStringLiteral(unknown)} '(\$value)';",
     );
