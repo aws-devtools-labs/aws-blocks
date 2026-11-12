@@ -543,6 +543,8 @@ class OidcClient implements AuthProvider {
     // only when they exist.
     if (json['accessToken'] != null) {
       await tokenStore.set(_key('access_token'), json['accessToken'] as String);
+      // Refresh must name the provider when the backend has several.
+      await tokenStore.set(_key('provider'), provider);
     }
     if (json['refreshToken'] != null) {
       await tokenStore.set(
@@ -550,15 +552,7 @@ class OidcClient implements AuthProvider {
         json['refreshToken'] as String,
       );
     }
-    if (json['expiresAt'] != null) {
-      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
-    } else if (json['expiresIn'] != null) {
-      // Relay exchange (Kotlin parity) reports lifetime in seconds.
-      final expiresAt = DateTime.now()
-          .add(Duration(seconds: (json['expiresIn'] as num).toInt()))
-          .millisecondsSinceEpoch;
-      await tokenStore.set(_key('expires_at'), expiresAt.toString());
-    }
+    await _storeExpiry(json);
 
     final userJson = json['user'];
     if (userJson == null) {
@@ -572,6 +566,20 @@ class OidcClient implements AuthProvider {
 
   // --- Token refresh ---
 
+  /// Exchanges the stored refresh token for a new access token.
+  ///
+  /// - 200: stores the new access token, its expiry and, when the response
+  ///   has one, the rotated refresh token.
+  /// - 400 or 401: the refresh token is no longer valid. Clears the stored
+  ///   tokens and emits [OidcSignedOut].
+  /// - Any other status throws an [OidcRequestException], and a transport
+  ///   failure throws the HTTP client's error. Both keep the tokens and the
+  ///   state, so a later call can try again.
+  ///
+  /// With no refresh token stored, emits [OidcSignedOut]. When a sign-in or
+  /// sign-out finishes while the request is in flight, the response is
+  /// ignored, so it never stores tokens after a sign-out or over a newer
+  /// sign-in's.
   Future<void> refresh() async {
     await _ready;
     if (_refreshCompleter != null) {
@@ -590,24 +598,34 @@ class OidcClient implements AuthProvider {
         return;
       }
 
+      final provider = await tokenStore.get(_key('provider'));
       final response = await _httpClient.post(
         Uri.parse('$_authBaseUrl$refreshPath'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken}),
+        body: jsonEncode({'refreshToken': refreshToken, 'provider': ?provider}),
       );
 
       // A sign-in or sign-out finished meanwhile: its tokens are newer.
       if (generation != _generation) return;
-      if (response.statusCode != 200) {
+      final status = response.statusCode;
+      if (status == 400 || status == 401) {
         await _clearTokens();
         _emit(OidcSignedOut());
         return;
       }
+      if (status != 200) {
+        throw OidcRequestException(
+          'Token refresh failed: HTTP $status',
+          statusCode: status,
+          errorName: _errorName(response),
+        );
+      }
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       await tokenStore.set(_key('access_token'), json['accessToken'] as String);
-      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
-      if (json.containsKey('refreshToken')) {
+      await _storeExpiry(json);
+      // The backend rotates the refresh token: the old one no longer works.
+      if (json['refreshToken'] != null) {
         await tokenStore.set(
           _key('refresh_token'),
           json['refreshToken'] as String,
@@ -884,15 +902,13 @@ class OidcClient implements AuthProvider {
     return token;
   }
 
+  /// Refreshes the access token after the backend rejected a call. Signs out
+  /// only when the refresh route rejects the refresh token (see [refresh]);
+  /// any other refresh failure is rethrown, so the call fails with it.
   @override
   Future<void> onAuthFailure() async {
     await _ready;
-    try {
-      await refresh();
-    } catch (_) {
-      await _clearTokens();
-      _emit(OidcSignedOut());
-    }
+    await refresh();
   }
 
   // --- Factory ---
@@ -980,9 +996,25 @@ class OidcClient implements AuthProvider {
     return DateTime.now().millisecondsSinceEpoch >= expiry;
   }
 
+  /// Stores the access token's expiry, in epoch milliseconds, from a token
+  /// response: `expiresIn` seconds from now, which the auth block sends, or
+  /// an absolute `expiresAt` as a fallback.
+  Future<void> _storeExpiry(Map<String, dynamic> json) async {
+    final expiresIn = json['expiresIn'];
+    if (expiresIn is num) {
+      final expiresAt = DateTime.now()
+          .add(Duration(seconds: expiresIn.toInt()))
+          .millisecondsSinceEpoch;
+      await tokenStore.set(_key('expires_at'), expiresAt.toString());
+    } else if (json['expiresAt'] != null) {
+      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
+    }
+  }
+
   Future<void> _clearTokens() async {
     await tokenStore.delete(_key('access_token'));
     await tokenStore.delete(_key('refresh_token'));
     await tokenStore.delete(_key('expires_at'));
+    await tokenStore.delete(_key('provider'));
   }
 }

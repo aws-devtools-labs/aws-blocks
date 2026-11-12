@@ -46,9 +46,7 @@ void main() {
           jsonEncode({
             'accessToken': 'at_123',
             'refreshToken': 'rt_456',
-            'expiresAt': DateTime.now()
-                .add(Duration(hours: 1))
-                .millisecondsSinceEpoch,
+            'expiresIn': 3600,
             'user': {
               'userId': 'u1',
               'username': 'alice',
@@ -91,6 +89,8 @@ void main() {
       expect(user.groups, ['admin']);
       expect(await store.get('access_token'), 'at_123');
       expect(await store.get('refresh_token'), 'rt_456');
+      expect(await store.get('provider'), 'google');
+      _expectExpiresInAboutAnHour(await store.get('expires_at'));
     });
   });
 
@@ -177,15 +177,17 @@ void main() {
       final store = InMemoryTokenStore();
       await store.set('refresh_token', 'rt_old');
 
+      await store.set('provider', 'google');
+      Map<String, dynamic>? body;
+
       final mockClient = MockClient((req) async {
-        final body = jsonDecode(req.body) as Map<String, dynamic>;
-        expect(body['refreshToken'], 'rt_old');
+        body = jsonDecode(req.body) as Map<String, dynamic>;
+        // The auth block's refresh response.
         return http.Response(
           jsonEncode({
             'accessToken': 'at_new',
-            'expiresAt': DateTime.now()
-                .add(Duration(hours: 1))
-                .millisecondsSinceEpoch,
+            'refreshToken': 'rt_new',
+            'expiresIn': 3600,
           }),
           200,
         );
@@ -203,7 +205,64 @@ void main() {
       );
 
       await client.refresh();
+      expect(body, {'refreshToken': 'rt_old', 'provider': 'google'});
       expect(await store.get('access_token'), 'at_new');
+      // The refresh token rotates.
+      expect(await store.get('refresh_token'), 'rt_new');
+      _expectExpiresInAboutAnHour(await store.get('expires_at'));
+      // Not expired, so the next read doesn't refresh again.
+      expect(await client.getAccessToken(), 'at_new');
+    });
+
+    test('omits provider when none was stored', () async {
+      final store = InMemoryTokenStore();
+      await store.set('refresh_token', 'rt_old');
+      Map<String, dynamic>? body;
+      final client = OidcClient(
+        exchangePath: '/auth/exchange',
+        refreshPath: '/auth/refresh',
+        signOutPath: '/auth/signout',
+        providers: [],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000',
+        tokenStore: store,
+        httpClient: MockClient((req) async {
+          body = jsonDecode(req.body) as Map<String, dynamic>;
+          return http.Response(
+            jsonEncode({'accessToken': 'at_new', 'expiresIn': 60}),
+            200,
+          );
+        }),
+      );
+      await client.refresh();
+      expect(body, {'refreshToken': 'rt_old'});
+      // Without a rotated token, the old one is kept.
+      expect(await store.get('refresh_token'), 'rt_old');
+    });
+
+    test('falls back to an absolute expiresAt', () async {
+      final store = InMemoryTokenStore();
+      await store.set('refresh_token', 'rt_old');
+      final expiresAt = DateTime.now()
+          .add(Duration(hours: 1))
+          .millisecondsSinceEpoch;
+      final client = OidcClient(
+        exchangePath: '/auth/exchange',
+        refreshPath: '/auth/refresh',
+        signOutPath: '/auth/signout',
+        providers: [],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000',
+        tokenStore: store,
+        httpClient: MockClient(
+          (_) async => http.Response(
+            jsonEncode({'accessToken': 'at_new', 'expiresAt': expiresAt}),
+            200,
+          ),
+        ),
+      );
+      await client.refresh();
+      expect(await store.get('expires_at'), '$expiresAt');
     });
 
     test('emits OidcSignedOut on refresh failure', () async {
@@ -231,6 +290,139 @@ void main() {
       await Future.delayed(Duration.zero);
       expect(states.last, isA<OidcSignedOut>());
       expect(await store.get('access_token'), isNull);
+    });
+
+    ({OidcClient client, InMemoryTokenStore store, List<OidcAuthState> states})
+    refreshClient(Future<http.Response> Function(http.Request) handler) {
+      final store = InMemoryTokenStore();
+      final client = OidcClient(
+        exchangePath: '/auth/exchange',
+        refreshPath: '/auth/refresh',
+        signOutPath: '/auth/signout',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000',
+        tokenStore: store,
+        httpClient: MockClient(handler),
+      );
+      final states = <OidcAuthState>[];
+      // Skip the state a new listener gets first: these tests check changes.
+      client.authStateChanges.skip(1).listen(states.add);
+      return (client: client, store: store, states: states);
+    }
+
+    for (final status in [400, 401]) {
+      test('$status: clears the tokens and signs out', () async {
+        final t = refreshClient((_) async => http.Response('{}', status));
+        await t.store.set('access_token', 'at');
+        await t.store.set('refresh_token', 'rt');
+
+        await t.client.refresh();
+        await Future<void>.delayed(Duration.zero);
+        expect(t.states, [isA<OidcSignedOut>()]);
+        expect(await t.store.get('refresh_token'), isNull);
+      });
+    }
+
+    for (final status in [403, 429, 500, 503]) {
+      test('$status: throws and keeps the tokens and the state', () async {
+        final t = refreshClient(
+          (_) async => http.Response(jsonEncode({'name': 'Busy'}), status),
+        );
+        await t.store.set('access_token', 'at');
+        await t.store.set('refresh_token', 'rt');
+
+        await expectLater(
+          t.client.refresh(),
+          throwsA(
+            isA<OidcRequestException>()
+                .having((e) => e.statusCode, 'statusCode', status)
+                .having((e) => e.errorName, 'errorName', 'Busy'),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(t.states, isEmpty);
+        expect(await t.store.get('access_token'), 'at');
+        expect(await t.store.get('refresh_token'), 'rt');
+      });
+    }
+
+    test('a transport error throws and keeps the tokens', () async {
+      final t = refreshClient(
+        (_) async => throw http.ClientException('offline'),
+      );
+      await t.store.set('refresh_token', 'rt');
+
+      await expectLater(
+        t.client.refresh(),
+        throwsA(isA<http.ClientException>()),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(t.states, isEmpty);
+      expect(await t.store.get('refresh_token'), 'rt');
+    });
+
+    test('a sign-out during the refresh keeps it signed out', () async {
+      final refreshed = Completer<http.Response>();
+      final t = refreshClient(
+        (req) async => req.url.path.endsWith('/signout')
+            ? http.Response('{}', 200)
+            : refreshed.future,
+      );
+      await t.store.set('refresh_token', 'rt');
+
+      final refresh = t.client.refresh();
+      await Future<void>.delayed(Duration.zero);
+      await t.client.signOut();
+      refreshed.complete(
+        http.Response(
+          jsonEncode({
+            'accessToken': 'late-at',
+            'refreshToken': 'late-rt',
+            'expiresIn': 3600,
+          }),
+          200,
+        ),
+      );
+      await refresh;
+
+      expect(await t.store.get('access_token'), isNull);
+      expect(await t.store.get('refresh_token'), isNull);
+      expect(t.client.authState, isA<OidcSignedOut>());
+    });
+
+    test('a sign-in during the refresh keeps its tokens', () async {
+      final refreshed = Completer<http.Response>();
+      final t = refreshClient(
+        (req) async => req.url.path.endsWith('/refresh')
+            ? refreshed.future
+            : http.Response(
+                jsonEncode({
+                  'accessToken': 'new-at',
+                  'refreshToken': 'new-rt',
+                  'expiresIn': 3600,
+                  'user': {'userId': 'u1', 'username': 'alice'},
+                }),
+                200,
+              ),
+      );
+      await t.store.set('refresh_token', 'rt');
+
+      final refresh = t.client.refresh();
+      await Future<void>.delayed(Duration.zero);
+      await t.client.exchange(
+        code: 'code',
+        verifier: 'verifier',
+        callbackUrl: 'myapp://callback',
+        provider: 'google',
+        state: 'state',
+        nonce: 'nonce',
+      );
+      refreshed.complete(http.Response('{}', 401));
+      await refresh;
+
+      expect(await t.store.get('refresh_token'), 'new-rt');
+      expect(t.client.authState, isA<OidcSignedIn>());
     });
   });
 
@@ -281,12 +473,7 @@ void main() {
 
       final mockClient = MockClient(
         (_) async => http.Response(
-          jsonEncode({
-            'accessToken': 'at_refreshed',
-            'expiresAt': DateTime.now()
-                .add(Duration(hours: 1))
-                .millisecondsSinceEpoch,
-          }),
+          jsonEncode({'accessToken': 'at_refreshed', 'expiresIn': 3600}),
           200,
         ),
       );
@@ -304,6 +491,28 @@ void main() {
 
       await client.onAuthFailure();
       expect(await store.get('access_token'), 'at_refreshed');
+    });
+
+    test('rethrows a refresh failure other than a rejected token', () async {
+      final store = InMemoryTokenStore();
+      await store.set('refresh_token', 'rt_valid');
+      final client = OidcClient(
+        exchangePath: '/auth/exchange',
+        refreshPath: '/auth/refresh',
+        signOutPath: '/auth/signout',
+        providers: [],
+        providerConfigs: {},
+        baseUrl: 'http://localhost:3000',
+        tokenStore: store,
+        httpClient: MockClient((_) async => http.Response('', 502)),
+      );
+
+      await expectLater(
+        client.onAuthFailure(),
+        throwsA(isA<OidcRequestException>()),
+      );
+      expect(await store.get('refresh_token'), 'rt_valid');
+      expect(client.authState, isA<OidcLoading>());
     });
   });
 
@@ -521,6 +730,7 @@ void main() {
       await store.set('access_token', 'at');
       await store.set('refresh_token', 'rt');
       await store.set('expires_at', '1');
+      await store.set('provider', 'google');
       final client = sessionClient(
         MockClient(
           (_) async => http.Response(
@@ -544,6 +754,7 @@ void main() {
       expect(await store.get('access_token'), isNull);
       expect(await store.get('refresh_token'), isNull);
       expect(await store.get('expires_at'), isNull);
+      expect(await store.get('provider'), isNull);
     });
 
     test('404: throws an error naming the missing session route', () async {
@@ -1195,6 +1406,15 @@ void main() {
       expect(client.callbackPath, OidcClient.defaultCallbackPath);
     });
   });
+}
+
+/// Expects a stored `expires_at` about an hour from now, in epoch ms.
+void _expectExpiresInAboutAnHour(String? stored) {
+  final expiresAt = int.parse(stored!);
+  final inAnHour = DateTime.now()
+      .add(const Duration(hours: 1))
+      .millisecondsSinceEpoch;
+  expect((expiresAt - inAnHour).abs(), lessThan(60000));
 }
 
 /// The `Set-Cookie` an `Auth` block sends to remove its session cookie.

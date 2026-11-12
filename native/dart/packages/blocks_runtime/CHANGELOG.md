@@ -121,6 +121,18 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.
+- `OidcClient.refresh` stores the new token's expiry from `expiresIn` seconds,
+  which the auth block sends, keeping `expiresAt` as a fallback. It read only
+  `expiresAt`, so every refreshed token looked expired and every
+  `getAccessToken()` refreshed again. Refresh now also sends the provider the
+  exchange signed in with (stored under `provider`), which a backend with
+  several providers requires, and stores the rotated refresh token only when the
+  response carries one.
+- `OidcClient.refresh` and `onAuthFailure` sign out only when the refresh route
+  answers 400 or 401. Any other status throws an `OidcRequestException`, and a
+  transport error is rethrown, keeping the tokens and the state; both used to
+  sign out. A refresh still in flight when a sign-in or sign-out finishes
+  ignores its response, so it no longer stores tokens after a sign-out.
 - `OidcClient` resolves the auth routes against its base URL cut at the first
   path segment that is `aws-blocks`, keeping any API Gateway stage. It used to
   strip one trailing `/aws-blocks/api`, so a base URL that repeated it
