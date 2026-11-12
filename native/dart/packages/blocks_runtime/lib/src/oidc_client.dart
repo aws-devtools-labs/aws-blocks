@@ -42,9 +42,11 @@ class OidcClient implements AuthProvider {
 
   /// The backend's session route, which [restore] reads.
   ///
-  /// Defaults to the directory of [callbackPath] followed by `/session`, the
-  /// route the auth block serves (`/aws-blocks/auth/session` for the default
-  /// [callbackPath]).
+  /// Defaults to the directory of [exchangePath] followed by `/session`, the
+  /// route the auth block serves next to its exchange route
+  /// (`/aws-blocks/auth/session` for `/aws-blocks/auth/exchange`). A custom
+  /// block whose descriptor names its own [exchangePath] gets the session
+  /// route beside it.
   final String sessionPath;
 
   /// The auth block's default authorize-params route
@@ -107,7 +109,7 @@ class OidcClient implements AuthProvider {
     http.Client? httpClient,
   }) : sessionPath =
            sessionPath ??
-           '${callbackPath.substring(0, callbackPath.lastIndexOf('/'))}/session',
+           '${exchangePath.contains('/') ? exchangePath.substring(0, exchangePath.lastIndexOf('/')) : ''}/session',
        sessionStore = sessionStore ?? InMemorySessionStore(),
        _httpClient = httpClient ?? http.Client();
 
@@ -691,17 +693,23 @@ class OidcClient implements AuthProvider {
   /// on launch, and returns it, or null when there is no session.
   ///
   /// GETs [sessionPath] with the session cookie, plus an
-  /// `Authorization: Bearer` header when an access token is stored:
+  /// `Authorization: Bearer` header when an unexpired access token is stored:
   ///
   /// - 200: emits [OidcSignedIn] with the server's user and returns it.
   /// - 401: clears the stored tokens, emits [OidcSignedOut] and returns null.
-  /// - 404: the block serves no session route, because it has no sign-in
-  ///   providers. Throws an [OidcRequestException] that says so.
+  /// - 404: the block serves no session route: an `Auth` block with no
+  ///   sign-in providers, or a custom block that doesn't serve one. Throws an
+  ///   [OidcRequestException] that says so.
+  /// - A 200 whose body isn't a JSON object with a `user` the client can
+  ///   read throws an [OidcRequestException] and leaves the state as is.
   /// - Any other status throws an [OidcRequestException], and a transport
   ///   failure throws the HTTP client's error. Neither changes the state.
   Future<OidcUser?> restore() async {
     final url = Uri.parse('$_authBaseUrl$sessionPath');
-    final accessToken = await tokenStore.get(_key('access_token'));
+    final storedToken = await tokenStore.get(_key('access_token'));
+    final accessToken = storedToken != null && !await _isExpired()
+        ? storedToken
+        : null;
     final cookie = sessionStore.cookieHeaderFor(url);
     final response = await _httpClient.get(
       url,
@@ -714,7 +722,15 @@ class OidcClient implements AuthProvider {
 
     switch (response.statusCode) {
       case 200:
-        final json = jsonDecode(response.body);
+        final Object? json;
+        try {
+          json = jsonDecode(response.body);
+        } on FormatException {
+          throw OidcRequestException(
+            'Malformed session response: not JSON',
+            statusCode: 200,
+          );
+        }
         final userJson = json is Map<String, dynamic> ? json['user'] : null;
         if (userJson is! Map<String, dynamic>) {
           throw OidcRequestException(
@@ -722,7 +738,18 @@ class OidcClient implements AuthProvider {
             statusCode: 200,
           );
         }
-        final user = OidcUser.fromJson(userJson);
+        final OidcUser user;
+        try {
+          user = OidcUser.fromJson(userJson);
+          // A cast in fromJson fails with a TypeError on a field of the wrong
+          // type; report it as the malformed response it is.
+          // ignore: avoid_catching_errors
+        } on TypeError {
+          throw OidcRequestException(
+            'Malformed session response: unreadable user',
+            statusCode: 200,
+          );
+        }
         _controller.add(OidcSignedIn(user));
         return user;
       case 401:
@@ -731,8 +758,9 @@ class OidcClient implements AuthProvider {
         return null;
       case 404:
         throw OidcRequestException(
-          'GET $url returned 404: the auth block serves no session route, '
-          'which means it has no sign-in providers',
+          'GET $url returned 404: the block serves no session route. An '
+          'Auth block with no sign-in providers has none, and a custom '
+          'block has one only if it serves GET $sessionPath',
           statusCode: 404,
           errorName: _errorName(response),
         );
