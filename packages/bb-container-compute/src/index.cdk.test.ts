@@ -944,6 +944,33 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 		assert.strictEqual(lambda[0].Condition, undefined);
 	});
 
+	test("the task definition's execution role trust is scoped by aws:SourceAccount and aws:SourceArn", async () => {
+		const app = new cdk.App();
+		const stack = await BlocksStack.create(app, 'EcsExecutionTrust', {
+			backendHandlerPath: handlerPath,
+			backendCDKPath: backendPath,
+			defaults: BlocksPresets.production,
+			defaultComputeFactory: (root: unknown) => new LambdaCompute(root as never, 'DefaultCompute'),
+		} as never);
+		new ContainerCompute(stack as never, 'worker', {});
+		const template = Template.fromStack(stack as unknown as cdk.Stack);
+		// The execution role trusts ecs-tasks only (the shared role also trusts Lambda).
+		const executionRoles = Object.values(template.findResources('AWS::IAM::Role')).filter((r) => {
+			const all = (r.Properties?.AssumeRolePolicyDocument?.Statement ?? []) as TrustStatement[];
+			return all.length > 0 && all.every(trusts('ecs-tasks.amazonaws.com'));
+		});
+		assert.strictEqual(executionRoles.length, 1, 'one task execution role');
+		const statements = executionRoles[0].Properties.AssumeRolePolicyDocument.Statement as TrustStatement[];
+		assert.strictEqual(statements.length, 1);
+		assert.deepStrictEqual(statements[0].Condition?.StringEquals?.['aws:SourceAccount'], { Ref: 'AWS::AccountId' });
+		assert.deepStrictEqual(statements[0].Condition?.ArnLike?.['aws:SourceArn'], {
+			'Fn::Join': [
+				'',
+				['arn:', { Ref: 'AWS::Partition' }, ':ecs:', { Ref: 'AWS::Region' }, ':', { Ref: 'AWS::AccountId' }, ':*'],
+			],
+		});
+	});
+
 	test('several container computes on one role add the ecs-tasks trust once', async () => {
 		const { ecs } = await synthTrust('EcsTrustOnce', ['a', 'b', 'c']);
 		assert.strictEqual(ecs.length, 1, 'one ecs-tasks trust statement across three computes');
@@ -955,7 +982,7 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 // roles and any other stack or helper stack's roles included) must carry the
 // configured boundary and be listed in the synth-time IAM report.
 //
-// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
+// Keep in sync: the same helper is copied in the bb-auth (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
 // cdk test files, and mirrors core's `assertEveryRoleBounded` in
 // `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
 // belongs in all of them.

@@ -1,0 +1,57 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.echo",
+      "params": [
+        { "name": "payload", "required": true, "schema": { "type": "unknown" } }
+      ],
+      "result": { "name": "EchoResult", "schema": { "type": "unknown" } }
+    },
+    {
+      "name": "api.store",
+      "params": [
+        { "name": "entry", "required": true, "schema": { "$ref": "#/components/schemas/Entry" } }
+      ],
+      "result": { "name": "StoreResult", "schema": { "$ref": "#/components/schemas/Entry" } }
+    },
+    {
+      "name": "api.collect",
+      "params": [
+        { "name": "items", "required": true, "schema": { "type": "array", "items": { "type": "unknown" } } },
+        { "name": "metadata", "required": true, "schema": { "type": "object", "additionalProperties": { "type": "unknown" } } },
+        { "name": "maybe", "required": true, "schema": { "oneOf": [ { "type": "unknown" }, { "type": "null" } ] } },
+        { "name": "holes", "required": true, "schema": { "type": "array", "items": { "oneOf": [ { "type": "unknown" }, { "type": "null" } ] } } },
+        { "name": "sparse", "required": true, "schema": { "type": "object", "additionalProperties": { "oneOf": [ { "type": "unknown" }, { "type": "null" } ] } } },
+        { "name": "extra", "required": false, "schema": { "type": "unknown" } }
+      ],
+      "result": {
+        "name": "CollectResult",
+        "schema": { "type": "array", "items": { "type": "unknown" } }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Entry": {
+        "type": "object",
+        "properties": {
+          "payload": { "type": "unknown" },
+          "optionalPayload": { "type": "unknown" },
+          "nullablePayload": { "oneOf": [ { "type": "unknown" }, { "type": "null" } ] },
+          "metadata": { "type": "object", "additionalProperties": { "type": "unknown" } },
+          "tags": { "type": "array", "items": { "type": "unknown" } },
+          "sparse": { "type": "object", "additionalProperties": { "oneOf": [ { "type": "unknown" }, { "type": "null" } ] } },
+          "claims": {
+            "oneOf": [
+              { "type": "object", "additionalProperties": { "type": "unknown" } },
+              { "type": "null" }
+            ]
+          }
+        },
+        "required": ["payload", "nullablePayload", "metadata", "tags", "sparse"]
+      }
+    }
+  }
+}

@@ -248,6 +248,9 @@ describe('create-blocks-app template key-value methods require auth', () => {
     const backend = join(TEMPLATES_DIR, name, 'aws-blocks', 'index.ts');
     if (!existsSync(backend)) continue;
     const source = stripComments(readFileSync(backend, 'utf-8'));
+    // Deny by default: an `auth.protect` namespace runs its methods only after the
+    // session check (the auth.protect test below checks they are in `methods`).
+    if (/export const api = auth\.protect\(/.test(source)) continue;
 
     for (const method of ['getValue', 'setValue']) {
       if (!source.includes(`async ${method}(`)) continue;
@@ -262,14 +265,33 @@ describe('create-blocks-app template key-value methods require auth', () => {
   }
 });
 
-/** AuthCognito methods that take `context` and throw 401 without a signed-in session. */
+describe('create-blocks-app auth template defines its signed-in methods with auth.protect', () => {
+  const source = stripComments(readFileSync(join(TEMPLATES_DIR, 'auth', 'aws-blocks', 'index.ts'), 'utf-8'));
+  const protect = source.match(/export const api = auth\.protect\(scope, 'api', \{([\s\S]*?)\n\}\);/);
+
+  it('the template\'s api namespace is auth.protect(...)', () => {
+    assert.ok(protect, 'auth template: export const api = auth.protect(scope, \'api\', { ... }) not found');
+  });
+
+  const parts = protect?.[1].split(/\n  methods: \(context, user\) => \(\{/) ?? [];
+  for (const method of ['getValue', 'setValue', 'whoAmI', 'createTodo', 'listTodos', 'updateTodo', 'deleteTodo']) {
+    it(`auth template ${method} is a protected method (in methods, not public)`, () => {
+      assert.strictEqual(parts.length, 2, 'auth template: a single `methods: (context, user) => ({` factory');
+      assert.ok(!new RegExp(`async ${method}\\(`).test(parts[0]), `${method} must not be a public method`);
+      assert.ok(new RegExp(`async ${method}\\(`).test(parts[1]), `${method} must be in methods`);
+    });
+  }
+});
+
+/** `Auth` methods that take `context` and throw 401 without a signed-in session. */
 const SESSION_GATED_AUTH_METHODS = [
-  'fetchUserAttributes',
+  'getUserAttributes',
   'updateUserAttributes',
   'confirmUserAttribute',
   'sendUserAttributeVerificationCode',
   'updatePassword',
-  'fetchDevices',
+  'scanDevices',
+  'rememberDevice',
   'forgetDevice',
 ];
 
@@ -290,20 +312,8 @@ const UNGATED: Record<string, Record<string, string>> = {
   agent: { 'api.ping': 'public: liveness probe, touches no data' },
   amplify: { 'api.greet': PUBLIC_GREETING },
   'api-only': { 'api.health': 'public: liveness probe, touches no data' },
-  'auth-cognito': {
-    'hello.greet': PUBLIC_GREETING,
-    'api.ping': 'public: liveness probe, touches no data',
-    'api.fetchUserAttributes': SESSION_GATED,
-    'api.updateDepartment': SESSION_GATED,
-    'api.updateEmail': SESSION_GATED,
-    'api.confirmAttribute': SESSION_GATED,
-    'api.sendAttributeVerificationCode': SESSION_GATED,
-    'api.changePassword': SESSION_GATED,
-    'api.listDevices': SESSION_GATED,
-    'api.forgetCurrentDevice': SESSION_GATED,
-    'api.signOutEverywhere': "public: signs out the caller's own session, a no-op without one",
-    'api.getLastCode': 'public: local mock only, returns null when BLOCKS_STACK_NAME is set (every deployed Lambda)',
-  },
+  // `api` is `auth.protect(...)`: deny-by-default, checked by the auth.protect test above.
+  auth: { 'hello.greet': PUBLIC_GREETING },
   backend: { 'api.greet': PUBLIC_GREETING },
   bare: { 'api.greet': PUBLIC_GREETING },
   // The template has no auth block. Its store only holds what the two cron handlers write.

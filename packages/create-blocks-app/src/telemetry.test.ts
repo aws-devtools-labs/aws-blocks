@@ -675,6 +675,10 @@ describe('create-blocks-app telemetry/first-run notice', () => {
       assert.doesNotMatch(notice, /\bPII\b/);
       assert.doesNotMatch(notice, /anonymous/i);
       assert.ok(notice.includes('The collection endpoint also receives your IP address, as with any HTTPS request.'), notice);
+      // What the service keeps, and for how long: the IP address is dropped from accepted requests,
+      // events are kept for up to 1 year and logs of all requests for up to 10 years.
+      assert.match(notice, /It is not stored, except in logs of requests that the endpoint's firewall blocks\./);
+      assert.match(notice, /Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years\./);
       // The sender sets no User-Agent header, so only the payload's package manager user agent is claimed.
       assert.doesNotMatch(notice, /IP address and user agent/);
       // What the event itself carries, and what it never carries.
@@ -705,6 +709,17 @@ describe('create-blocks-app telemetry/first-run notice', () => {
       extract(new URL('../src/telemetry.ts', import.meta.url)),
       extract(new URL('../../core/src/telemetry/identifiers.ts', import.meta.url)),
     );
+  });
+
+  it('states the same retention as the @aws-blocks/blocks README', () => {
+    // The README telemetry paragraph repeats the retention lines of the notice word for word.
+    const readme = readFileSync(new URL('../../blocks/README.md', import.meta.url), 'utf-8');
+    for (const sentence of [
+      "It is not stored, except in logs of requests that the endpoint's firewall blocks.",
+      'Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.',
+    ]) {
+      assert.ok(readme.includes(sentence), `README is missing: ${sentence}`);
+    }
   });
 });
 

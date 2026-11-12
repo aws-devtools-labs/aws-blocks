@@ -120,6 +120,40 @@ test('CDK: sandbox defaults make the data bucket + vector store destroy', () => 
   template.hasResource(VECTOR_INDEX_TYPE, { DeletionPolicy: 'Delete' });
 });
 
+test('CDK: the Bedrock service role trusts bedrock.amazonaws.com with aws:SourceAccount and an aws:SourceArn knowledge-base wildcard', () => {
+  const template = synth();
+  template.hasResourceProperties('AWS::IAM::Role', {
+    AssumeRolePolicyDocument: {
+      Statement: [
+        Match.objectLike({
+          Effect: 'Allow',
+          Action: 'sts:AssumeRole',
+          Principal: { Service: 'bedrock.amazonaws.com' },
+          Condition: {
+            StringEquals: { 'aws:SourceAccount': { Ref: 'AWS::AccountId' } },
+            ArnLike: {
+              'aws:SourceArn': {
+                'Fn::Join': [
+                  '',
+                  [
+                    'arn:',
+                    { Ref: 'AWS::Partition' },
+                    ':bedrock:',
+                    { Ref: 'AWS::Region' },
+                    ':',
+                    { Ref: 'AWS::AccountId' },
+                    ':knowledge-base/*',
+                  ],
+                ],
+              },
+            },
+          },
+        }),
+      ],
+    },
+  });
+});
+
 test('CDK: execution role can read ingestion-job status (GetIngestionJob/ListIngestionJobs), scoped to the KB ARN like bedrock:Retrieve', () => {
   const template = synth();
 

@@ -43,6 +43,12 @@ public final nonisolated class Posts: Sendable {
             public let authorId: String
             public let id: String
             public let title: String
+
+            public init(authorId: String, id: String, title: String) {
+                self.authorId = authorId
+                self.id = id
+                self.title = title
+            }
         }
     }
 
@@ -52,12 +58,24 @@ public final nonisolated class Posts: Sendable {
             public let authorId: String
             public let body: String
             public let title: String
+
+            public init(authorId: String, body: String, title: String) {
+                self.authorId = authorId
+                self.body = body
+                self.title = title
+            }
         }
 
         public struct Result: Codable {
             public let authorId: String
             public let id: String
             public let title: String
+
+            public init(authorId: String, id: String, title: String) {
+                self.authorId = authorId
+                self.id = id
+                self.title = title
+            }
         }
     }
 
@@ -65,6 +83,10 @@ public final nonisolated class Posts: Sendable {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }
@@ -110,6 +132,11 @@ public final nonisolated class Users: Sendable {
         public struct Input: Codable {
             public let email: String
             public let name: String
+
+            public init(email: String, name: String) {
+                self.email = email
+                self.name = name
+            }
         }
     }
 }

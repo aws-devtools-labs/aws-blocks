@@ -92,6 +92,22 @@ export {
 // TypeScript source bundled at synth otherwise. Used by first-party blocks
 // (bb-auth, bb-distributed-table, bb-data, bb-distributed-data).
 export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } from './lambda-code.js';
+// Scopes the Step Functions trust of a custom-resource Provider's waiter role,
+// which the synth-time service-principal trust check requires (bb-distributed-table,
+// bb-database), and builds the aws:SourceAccount / aws:SourceArn conditions blocks
+// put on the service-principal trusts they create (bb-knowledge-base, bb-agent,
+// bb-cron-job, bb-container-compute, bb-auth).
+export {
+	type SourceScopedConditionsOptions,
+	scopeProviderWaiterTrust,
+	sourceScopedConditions,
+} from './service-principal-trust.js';
+// Marks a construct (and every role under it) as created by AWS Blocks, for the
+// service-principal trust check's ownership split. Used by first-party blocks
+// that add constructs at stack scope on a block's behalf (bb-app-setting,
+// bb-distributed-table, bb-distributed-data) or carry no official bbName at
+// synth (bb-database).
+export { markAddedChildrenBlocksOwned, markBlocksOwned } from './blocks-roles.js';
 // The service-agnostic half of the above: the `encryption` option parser, also
 // used by bb-file-bucket (S3) so every Blocks storage resource accepts the same
 // `'aws-managed' | 'customer-managed' | fromKmsKey(arn)` values.

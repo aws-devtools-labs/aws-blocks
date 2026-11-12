@@ -10,7 +10,7 @@ import assert from 'node:assert';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as ApiType, authApi as AuthApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -36,6 +36,15 @@ let isLocalMock = false;
 // A new user each run: the local auth store persists, so a fixed username
 // would already exist when you rerun `npm run test:e2e` against the same server.
 const creds = { username: `agent-user-${Date.now()}@example.com`, password: 'TestPass123!' };
+
+// Sign up the way the sign-in UI does: sign-up confirms the email with a code,
+// then signs the user in. Locally no email is sent: getLastAuthCode reads the
+// code the local auth block issued.
+async function signUpAndSignIn() {
+  await authApi.setAuthState({ action: 'signUp', ...creds });
+  await authApi.setAuthState({ action: 'confirmSignUp', username: creds.username, code: await getLastAuthCode(creds.username) });
+  return await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
+}
 
 test.before(async () => {
   if (!await isServerRunning(serverPort)) {
@@ -125,7 +134,7 @@ test('Agent - a chat turn returns the model text', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  const signedUp = await signUpAndSignIn();
   assert.strictEqual(signedUp.state, 'signedIn');
 
   const { text } = await api.chat('hello there');
@@ -140,9 +149,8 @@ test('Agent - a tool-calling turn runs the tool handler', async (t) => {
     t.skip('needs the local mock: the canned provider only runs in `npm run dev`');
     return;
   }
-  await authApi.setAuthState({ action: 'signIn', ...creds }).catch(async () => {
-    await authApi.setAuthState({ action: 'signUp', ...creds });
-  });
+  const signedIn = await authApi.setAuthState({ action: 'signIn', ...creds });
+  if (signedIn.state !== 'signedIn') await signUpAndSignIn();
 
   // Mentioning the tool's name (its camelCase words "save"/"note") makes the
   // canned provider emit a toolUse for `saveNote`; Strands runs the handler,
