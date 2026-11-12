@@ -19,6 +19,15 @@ const setting = new AppSetting(scope, id, options)
 | `get()` | `Promise<T>` | Read the current value. |
 | `put(value)` | `Promise<void>` | Update the value at runtime. |
 
+**CDK layer (synth time) only** — read-only properties on the construct, for CDK code and for other Building Blocks' CDK layers. They are not on the local or Lambda runtime class.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `parameterName` | `string` | The SSM parameter name: the explicit `name` (always set for `fromExisting`), else the derived `/${fullId}`. The same name the runtime reads. |
+| `secret` | `boolean` | `true` for an SSM SecureString (`secret: true`), for created and `fromExisting` settings alike. |
+
+For example, `Auth` reads both when an `AppSetting` is passed as an identity provider's client secret: it registers the provider against `parameterName`, so a secret with an explicit `name` or from `AppSetting.fromExisting` works, and it refuses a setting whose `secret` is `false`.
+
 ### Options
 
 | Option | Type | Required | Description |

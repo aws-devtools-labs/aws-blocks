@@ -11,7 +11,9 @@ import { FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from './constants.js';
 import { buildEventUrl, createLambdaHandler, _resetCorsPatterns, requestClientUserAgent, requestCookies } from './lambda-handler.js';
 import { registerRoute, clearRouteRegistry } from './raw-route.js';
 import { MAX_RPC_BODY_BYTES, decodeRpcResponse } from './rpc.js';
+import { ApiNamespace } from './api.js';
 import type { BlocksContext } from './api.js';
+import { ApiError } from './errors.js';
 import { getRequestBaseUrl } from './common/request-base-url.js';
 
 const API_HOST = 'abc123.execute-api.us-west-2.amazonaws.com';
@@ -216,6 +218,17 @@ const backend = {
       return { url: ctx.request.url.href, base: getRequestBaseUrl(ctx) };
     },
   }),
+  // `httpErrorStatus`: a 4xx ApiError is answered with its HTTP status.
+  strict: new ApiNamespace(
+    { id: 'app' },
+    'strict',
+    () => ({
+      async guarded() {
+        throw new ApiError('Authentication required', 401, { name: 'NotAuthenticated' });
+      },
+    }),
+    { httpErrorStatus: true },
+  ),
 };
 
 /** Larger than the socket buffers, so the response is still being written when its handler settles. */
@@ -468,6 +481,14 @@ describe('serveHttp — parity with the Lambda handler', () => {
     const viaHttp = await send(server.port, 'POST', '/aws-blocks/api', json, rpc('api.signOutAndFail'));
     assert.deepStrictEqual(viaLambda.multiValueHeaders?.['Set-Cookie'], ['gone=; Path=/; Max-Age=0']);
     assert.deepStrictEqual(viaHttp.headers['set-cookie'], ['gone=; Path=/; Max-Age=0']);
+    assert.strictEqual(viaHttp.body, viaLambda.body);
+  });
+
+  it('answers a 4xx ApiError of an httpErrorStatus namespace with its status, as the Lambda handler does', async () => {
+    const viaLambda = await lambda(lambdaEvent('POST', '/aws-blocks/api', json, rpc('strict.guarded')));
+    const viaHttp = await send(server.port, 'POST', '/aws-blocks/api', json, rpc('strict.guarded'));
+    assert.strictEqual(viaLambda.statusCode, 401);
+    assert.strictEqual(viaHttp.status, 401);
     assert.strictEqual(viaHttp.body, viaLambda.body);
   });
 });

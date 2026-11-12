@@ -35,6 +35,10 @@ public final nonisolated class Api: Sendable {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }

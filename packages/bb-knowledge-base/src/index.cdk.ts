@@ -541,7 +541,7 @@ export class KnowledgeBase extends BuildingBlockScope {
 	 * // In an API method: the scope comes from the authenticated session. The built-in auth
 	 * // blocks' users carry no tenant, so look it up (`tenantOf` is your own helper).
 	 * const user = await auth.requireAuth(context);
-	 * await agent.stream(message, { userId: user.userId, context: { tenantId: await tenantOf(user.userId) } });
+	 * await agent.stream(message, { userId: user.userSub, context: { tenantId: await tenantOf(user.userSub) } });
 	 * ```
 	 */
 	asAgentTool<TContext = Record<string, any>>(options: KnowledgeBaseAgentToolOptions<TContext>): KnowledgeBaseAgentTool<TContext> {

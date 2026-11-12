@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthBasic, Realtime, FileBucket } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, Auth, Realtime, FileBucket } from '@aws-blocks/blocks';
 import type { RealtimeChannel } from '@aws-blocks/blocks';
 export type { RealtimeChannel } from '@aws-blocks/blocks';
 import crypto from 'node:crypto';
@@ -13,14 +13,22 @@ const scope = new Scope('my-app');
 const store = new KVStore(scope, 'app-store', {});
 
 
-const auth = new AuthBasic(scope, 'auth', {});
+// Email + password sign-in. Sign-up confirms the email address with a code;
+// locally no email is sent, so `codeDelivery` (local dev only — deployed,
+// Cognito emails the code) prints it to the dev-server console.
+const auth = new Auth(scope, 'auth', {
+  codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
+});
 
 const files = new FileBucket(scope, 'files', {});
 
 // KVStore with a schema and a key: Use Zod schemas for type-safe records with
 // indexes. A store fixes its key when you create it.
+// Per-user todos: the partition key is the owner's `userSub` (stable for the
+// user's lifetime), and every method below reads and writes only the caller's
+// partition, so one user can never list, read or change another user's todos.
 const todoSchema = z.object({
-  userId: z.string(),
+  userSub: z.string(),
   todoId: z.string(),
   title: z.string(),
   completed: z.boolean(),
@@ -31,7 +39,7 @@ const todoSchema = z.object({
 /** Inferred Todo type — used in return type annotations so the spec emitter
  *  produces a named `Todo` schema in `components.schemas` with `$ref` pointers. */
 interface Todo {
-  userId: string;
+  userSub: string;
   todoId: string;
   title: string;
   completed: boolean;
@@ -42,20 +50,20 @@ interface Todo {
 const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
   key: {
-    partitionKey: 'userId',
+    partitionKey: 'userSub',
     sortKey: 'todoId'
   },
   indexes: {
     byPriority: {
-      partitionKey: 'userId',
+      partitionKey: 'userSub',
       sortKey: 'priority'
     },
     byTitle: {
-      partitionKey: 'userId',
+      partitionKey: 'userSub',
       sortKey: 'title'
     },
     byCreatedAt: {
-      partitionKey: 'userId',
+      partitionKey: 'userSub',
       sortKey: 'createdAt'
     }
   }
@@ -120,14 +128,14 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const ulid = Date.now().toString(36) + crypto.randomBytes(8).toString('hex');
     
     const todo = {
-      userId: user.username,
+      userSub: user.userSub,
       todoId: ulid,
       title,
       completed: false,
       priority,
       createdAt: Date.now()
     };
-    await todos.put({ userId: user.username, todoId: ulid }, todo);
+    await todos.put({ userSub: user.userSub, todoId: ulid }, todo);
     return todo;
   },
 
@@ -140,9 +148,11 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       createdAt: 'byCreatedAt' 
     } as const;
     
-    const iterator = sortBy 
-      ? todos.query({ index: indexMap[sortBy], where: { userId: { equals: user.username } } })
-      : todos.scan();
+    // Query the caller's partition: through an index for a sort order, else the
+    // table's primary key. Never scan() per-user data — a scan reads every user's.
+    const iterator = sortBy
+      ? todos.query({ index: indexMap[sortBy], where: { userSub: { equals: user.userSub } } })
+      : todos.query({ where: { userSub: { equals: user.userSub } } });
     
     return await Array.fromAsync(iterator, (entry) => entry.value);
   },
@@ -150,17 +160,26 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async updateTodo(todoId: string, updates: { completed?: boolean; priority?: number; title?: string }) {
     const user = await auth.requireAuth(context);
     
-    const existing = await todos.get({ userId: user.username, todoId });
+    const existing = await todos.get({ userSub: user.userSub, todoId });
     if (!existing) throw new Error('Todo not found');
-    
-    await todos.put({ userId: user.username, todoId }, { ...existing, ...updates });
+
+    // Copy only the editable fields. The RPC layer does not strip properties the
+    // signature doesn't declare, so spreading `updates` would let a caller rewrite
+    // `userSub` / `todoId` and write into another user's partition.
+    const { completed, priority, title } = updates ?? {};
+    await todos.put({ userSub: user.userSub, todoId }, {
+      ...existing,
+      ...(completed !== undefined ? { completed } : {}),
+      ...(priority !== undefined ? { priority } : {}),
+      ...(title !== undefined ? { title } : {}),
+    });
     return { success: true };
   },
 
   async deleteTodo(todoId: string) {
     const user = await auth.requireAuth(context);
 
-    await todos.delete({ userId: user.username, todoId });
+    await todos.delete({ userSub: user.userSub, todoId });
     return { success: true };
   },
 

@@ -13,7 +13,7 @@ import { FileBucket } from '@aws-blocks/bb-file-bucket';
 import { AsyncJob } from '@aws-blocks/bb-async-job';
 import { AppSetting } from '@aws-blocks/bb-app-setting';
 import { Realtime } from '@aws-blocks/bb-realtime';
-import { AuthCognito } from '@aws-blocks/bb-auth-cognito';
+import { Auth } from '@aws-blocks/bb-auth';
 import { Database, sql } from '@aws-blocks/bb-data';
 import { Logger } from '@aws-blocks/bb-logger';
 import { Metrics } from '@aws-blocks/bb-metrics';
@@ -54,7 +54,7 @@ const rt = new Realtime(scope, 'events', {
   },
 });
 
-const auth = new AuthCognito(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 export const authApi = auth.createApi();
 
 const db = new Database(scope, 'db');

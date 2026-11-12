@@ -42,6 +42,25 @@ final class HelpersTests: XCTestCase {
 
     // MARK: - camelCase
 
+    func testDiscriminatorVariantNameKeepsOneCasingForTheStructAndTheCase() {
+        // `re$move` used to give struct `Actionre_move` but case `actionre_Move`.
+        let name = variantNameFromDiscriminator(fieldName: "action", value: "re$move")
+        XCTAssertEqual(name, "ActionRe_Move")
+        XCTAssertEqual(pascalCase(name), name)
+        XCTAssertEqual(camelCase(name), "actionRe_Move")
+    }
+
+    func testDiscriminatorVariantNamesKeepDistinctValuesApart() {
+        // `1.5` and `15` were both `Code15`, `A$B` and `A$$B` both `ActionAB`.
+        let names = [("code", "1.5"), ("code", "15"), ("action", "A$B"), ("action", "A$$B")].map {
+            variantNameFromDiscriminator(fieldName: $0.0, value: $0.1)
+        }
+        XCTAssertEqual(names, ["Code1_5", "Code15", "ActionA_B", "ActionA__B"])
+        for name in names {
+            XCTAssertEqual(pascalCase(name), name)
+        }
+    }
+
     func testCamelCaseSimple() {
         XCTAssertEqual(camelCase("Hello"), "hello")
     }

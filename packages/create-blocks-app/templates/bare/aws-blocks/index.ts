@@ -8,7 +8,7 @@ import { ApiNamespace, Scope } from '@aws-blocks/blocks';
 // Some common getting-started blocks:
 //   • KVStore          — key-value get/put/delete; with a schema and a key,
 //                        records you list or query as a collection (DynamoDB)
-//   • AuthBasic        — username/password auth with JWT sessions
+//   • Auth             — sign-in: email + password, social, OIDC, SAML
 //   • Realtime         — push updates to connected clients (WebSocket)
 //   • FileBucket       — file uploads and downloads (S3)
 //
@@ -28,31 +28,37 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 
 // ─── Examples (uncomment to use) ─────────────────────────────────────────────
 //
-// import { AuthBasic, KVStore, Realtime } from '@aws-blocks/blocks';
+// import { Auth, KVStore, Realtime } from '@aws-blocks/blocks';
 // import { z } from 'zod';  // zod ships with new bare apps; when adding AWS Blocks to an existing project, run npm install zod
 //
-// // Auth (see node_modules/@aws-blocks/bb-auth-basic/README.md for full API):
-// const auth = new AuthBasic(scope, 'auth', {
-//   passwordPolicy: { minLength: 8 },
+// // Auth (see node_modules/@aws-blocks/bb-auth/README.md for full API):
+// const auth = new Auth(scope, 'auth', {
+//   // Email sign-in, matched ignoring case (fixed when the user pool is created).
+//   users: { signInWith: ['email'], caseSensitive: false },
+//   // Local dev only: print verification codes in the terminal (no email is sent).
+//   codeDelivery: async (username, code, purpose) => console.log(`[auth] ${purpose} code for ${username}: ${code}`),
 // });
 // export const authApi = auth.createApi();
 // // Frontend: Authenticator(authApi) from '@aws-blocks/blocks/ui'
-// // Tests/programmatic:
-// //   authApi.setAuthState({ action: 'signUp', username: '...', password: '...' })
+// // Tests/programmatic (sign-up confirms the email with a 6-digit code):
+// //   authApi.setAuthState({ action: 'signUp', username: '...', password: '...', email: '...' })
+// //   authApi.setAuthState({ action: 'confirmSignUp', username: '...', code: '123456' })
+// //   authApi.setAuthState({ action: 'autoSignIn', username: '...' })  → signed in
 // //   authApi.setAuthState({ action: 'signIn', username: '...', password: '...' })
 // //   authApi.setAuthState({ action: 'signOut' })
 // //   authApi.getAuthState() → { state: 'signedIn', user: { username } }
 //
-// // Data (Zod schema + declared key → typed records you list or query; a store fixes its key when you create it):
+// // Data (Zod schema + declared key → typed records you list or query; a store fixes its key when you create it).
+// // Key per-user data on the owner's `userSub`, which is stable for the user's lifetime:
 // const itemSchema = z.object({
-//   userId: z.string(),
+//   userSub: z.string(),
 //   itemId: z.string(),
 //   title: z.string(),
 //   createdAt: z.number(),
 // });
 // const items = new KVStore(scope, 'items', {
 //   schema: itemSchema,
-//   key: { partitionKey: 'userId', sortKey: 'itemId' },
+//   key: { partitionKey: 'userSub', sortKey: 'itemId' },
 // });
 //
 // // Realtime:
@@ -65,15 +71,15 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
 //   async createItem(title: string) {
 //     const user = await auth.requireAuth(context);
 //     const itemId = Date.now().toString(36);
-//     const item = { userId: user.username, itemId, title, createdAt: Date.now() };
-//     await items.put({ userId: user.username, itemId }, item);
-//     await rt.publish('items', user.username, { action: 'created', itemId });
+//     const item = { userSub: user.userSub, itemId, title, createdAt: Date.now() };
+//     await items.put({ userSub: user.userSub, itemId }, item);
+//     await rt.publish('items', user.userSub, { action: 'created', itemId });
 //     return item;
 //   },
 //   async listItems() {
 //     const user = await auth.requireAuth(context);
 //     return await Array.fromAsync(
-//       items.query({ where: { userId: { equals: user.username } } }),
+//       items.query({ where: { userSub: { equals: user.userSub } } }),
 //       (entry) => entry.value,
 //     );
 //   },

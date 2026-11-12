@@ -15,14 +15,25 @@
  *   node_modules/@aws-blocks/blocks/README.md
  * ─────────────────────────────────────────────────────────────────────────────
  */
-import { ApiNamespace, ApiError, Scope, AuthBasic, KVStore, Realtime } from '@aws-blocks/blocks';
+import { ApiNamespace, ApiError, Scope, Auth, KVStore, Realtime } from '@aws-blocks/blocks';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
-const auth = new AuthBasic(scope, 'auth', {
-  passwordPolicy: { minLength: 8 },
+// Email + password sign-in (see node_modules/@aws-blocks/bb-auth/README.md).
+// Sign-up confirms the email address with a 6-digit code; once the user enters
+// it they are signed in automatically. On AWS, Cognito emails the code.
+const auth = new Auth(scope, 'auth', {
+  // Users sign in with their email, matched ignoring case. Both are fixed when
+  // the user pool is created, and this is also the pool shape Amplify's client
+  // libraries expect, so a frontend can later sign in with them too.
+  users: { signInWith: ['email'], caseSensitive: false },
+  // Local dev only: no email is sent, so print the code in the `npm run dev`
+  // terminal. Ignored on AWS.
+  codeDelivery: async (username, code, purpose) => {
+    console.log(`[auth] ${purpose} code for ${username}: ${code}`);
+  },
 });
 export const authApi = auth.createApi();
 
@@ -31,7 +42,7 @@ export const authApi = auth.createApi();
 // The `key` names the fields that identify a todo. A store fixes its key when
 // you create it, so declare it up front for any records you list or query.
 const todoSchema = z.object({
-  userId: z.string(),       // partition key — per-user isolation
+  userSub: z.string(),      // partition key — the owner's stable id (per-user isolation)
   todoId: z.string(),       // sort key — unique within a user
   title: z.string(),
   completed: z.boolean(),
@@ -42,7 +53,7 @@ const todoSchema = z.object({
 
 const todos = new KVStore(scope, 'todos', {
   schema: todoSchema,
-  key: { partitionKey: 'userId', sortKey: 'todoId' },
+  key: { partitionKey: 'userSub', sortKey: 'todoId' },
 });
 
 // ─── Realtime ────────────────────────────────────────────────────────────────
@@ -55,23 +66,23 @@ const rt = new Realtime(scope, 'live', {
   },
 });
 
-// One channel per user. encodeURIComponent keeps a username from adding `/`
+// One channel per user. encodeURIComponent keeps a user id from adding `/`
 // segments, so one user's channel can never sit under another's.
-const todosChannel = (username: string) => encodeURIComponent(username);
+const todosChannel = (userSub: string) => encodeURIComponent(userSub);
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 export const api = new ApiNamespace(scope, 'api', (context) => ({
 
   async subscribeTodos() {
     const user = await auth.requireAuth(context);
-    return rt.getChannel('todos', todosChannel(user.username));
+    return rt.getChannel('todos', todosChannel(user.userSub));
   },
 
   async createTodo(title: string, priority: number = 2) {
     const user = await auth.requireAuth(context);
     const todoId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const todo = {
-      userId: user.username,
+      userSub: user.userSub,
       todoId,
       title,
       completed: false,
@@ -79,8 +90,8 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
       version: 1,
       createdAt: Date.now(),
     };
-    await todos.put({ userId: user.username, todoId }, todo);
-    await rt.publish('todos', todosChannel(user.username), { action: 'created' as const, todoId });
+    await todos.put({ userSub: user.userSub, todoId }, todo);
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'created' as const, todoId });
     return todo;
   },
 
@@ -88,7 +99,7 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async listTodos(sortBy?: 'priority' | 'title') {
     const user = await auth.requireAuth(context);
     const list = await Array.fromAsync(
-      todos.query({ where: { userId: { equals: user.username } } }),
+      todos.query({ where: { userSub: { equals: user.userSub } } }),
       (entry) => entry.value,
     );
     // Sort in the API (not via a secondary index) — a per-user todo list is
@@ -106,36 +117,36 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
    */
   async toggleTodo(todoId: string) {
     const user = await auth.requireAuth(context);
-    const todo = await todos.get({ userId: user.username, todoId });
+    const todo = await todos.get({ userSub: user.userSub, todoId });
     if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
-      { userId: user.username, todoId },
+      { userSub: user.userSub, todoId },
       { ...todo, completed: !todo.completed, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
     );
-    await rt.publish('todos', todosChannel(user.username), { action: 'updated' as const, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'updated' as const, todoId });
     return { success: true };
   },
 
   /** Update a todo's priority with optimistic locking. */
   async updatePriority(todoId: string, priority: number) {
     const user = await auth.requireAuth(context);
-    const todo = await todos.get({ userId: user.username, todoId });
+    const todo = await todos.get({ userSub: user.userSub, todoId });
     if (!todo) throw new ApiError('Todo not found', 404, { name: 'TodoNotFoundException' });
     await todos.put(
-      { userId: user.username, todoId },
+      { userSub: user.userSub, todoId },
       { ...todo, priority, version: todo.version + 1 },
       { ifFieldEquals: { version: todo.version } },
     );
-    await rt.publish('todos', todosChannel(user.username), { action: 'updated' as const, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'updated' as const, todoId });
     return { success: true };
   },
 
   /** Delete a todo. Broadcasts 'deleted' to all connected clients. */
   async deleteTodo(todoId: string) {
     const user = await auth.requireAuth(context);
-    await todos.delete({ userId: user.username, todoId });
-    await rt.publish('todos', todosChannel(user.username), { action: 'deleted' as const, todoId });
+    await todos.delete({ userSub: user.userSub, todoId });
+    await rt.publish('todos', todosChannel(user.userSub), { action: 'deleted' as const, todoId });
     return { success: true };
   },
 }));

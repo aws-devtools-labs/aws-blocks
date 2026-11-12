@@ -43,9 +43,9 @@ const ALLOWLIST = [
 	{ at: 'packages/core/src/scripts/cleanup.ts:22', reason: LSOF_CLEANUP },
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:9', reason: LSOF_CLEANUP },
 	{ at: 'test-apps/native-bindings/aws-blocks/scripts/cleanup.ts:11', reason: LSOF_CLEANUP },
-	{ at: 'packages/core/src/hosting.ts:1181', reason: `Hosting buildCommand. ${APP_COMMAND}` },
+	{ at: 'packages/core/src/hosting.ts:1182', reason: `Hosting buildCommand. ${APP_COMMAND}` },
 	{ at: 'packages/hosting/src/build/runner.ts:61', reason: `Hosting buildCommand. ${APP_COMMAND}` },
-	{ at: 'packages/core/src/scripts/dev-server.ts:838', reason: `Frontend dev command. ${APP_COMMAND}` },
+	{ at: 'packages/core/src/scripts/dev-server.ts:842', reason: `Frontend dev command. ${APP_COMMAND}` },
 	{ at: 'packages/core/src/scripts/sandbox.ts:560', reason: `Sandbox dev-server command. ${APP_COMMAND}` },
 	{ at: 'packages/create-block/src/index.ts:287', reason: `npm view of an @aws-blocks/* name: ${WINDOWS_NPM}` },
 	{ at: 'packages/create-block/src/index.ts:632', reason: `npm run build -w <validated name>: ${WINDOWS_NPM}` },
@@ -65,7 +65,7 @@ const ALLOWLIST = [
 		reason: 'Maintainer planning script: every gh command is a literal in this file, interpolating only the ORG constant and numeric ids.',
 	},
 	{
-		at: 'scripts/publish/publish.ts:106',
+		at: 'scripts/publish/publish.ts:107',
 		reason: 'The only value is a mkdtemp() directory under os.tmpdir() that this script just created, double-quoted.',
 	},
 ];

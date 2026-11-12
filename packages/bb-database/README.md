@@ -20,12 +20,12 @@ Define the blocks in `aws-blocks/index.ts`:
 
 ```ts
 import { ApiNamespace, Scope } from '@aws-blocks/core';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 import { Database, DatabaseCluster, sql } from '@aws-blocks/bb-database';
 
 const scope = new Scope('app');
-const auth = new AuthBasic(scope, 'auth');
-export const authApi = auth.createApi(); // clients sign in with authApi.setAuthState({ action: 'signUp', username, password })
+const auth = new Auth(scope, 'auth');
+export const authApi = auth.createApi(); // clients sign up with authApi.setAuthState({ action: 'signUp', username, password }), then confirm the emailed code
 
 // 1. Default. The block owns an Aurora DSQL cluster.
 const shop = new Database(scope, 'shop');

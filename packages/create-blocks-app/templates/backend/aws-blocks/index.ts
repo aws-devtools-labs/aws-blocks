@@ -7,8 +7,9 @@ import { ApiNamespace, Scope } from '@aws-blocks/blocks';
 const scope = new Scope('my-app');
 
 // Every method below is a public RPC endpoint — no auth by default.
-// To gate one, add an auth block (e.g. @aws-blocks/bb-auth-cognito) and call
-// it first — see its README:
+// To gate one, add the `Auth` block from '@aws-blocks/blocks'
+// (`const auth = new Auth(scope, 'auth')`) and call it first — see
+// node_modules/@aws-blocks/bb-auth/README.md:
 //   const user = await auth.requireAuth(context);
 export const api = new ApiNamespace(scope, 'api', (context) => ({
   async greet(name: string) {

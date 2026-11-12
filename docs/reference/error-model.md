@@ -156,18 +156,18 @@ Anything a route writes itself through `ctx.response` is sent unchanged. A timeo
 
 - `error` — a message to show the user.
 - `errorName` — the Building Block error constant. It is set when the failure was an `ApiError` with a non-default name.
-- `retriable` — `true` when the user can retry the current step. AuthCognito uses this to keep the user on the current challenge instead of starting over.
+- `retriable` — `true` when the user can retry the current step. `Auth` uses this to keep the user on the current challenge instead of starting over.
 
 The state is a plain object, not an `Error`, so use `hasAuthError` rather than `isBlocksError`:
 
 ```typescript
 const next = await authApi.setAuthState({ action: 'signIn', username, password });
-if (hasAuthError(next, AuthCognitoErrors.NotAuthorized)) {
+if (hasAuthError(next, AuthErrors.NotAuthorized)) {
 	// wrong username or password
 }
 ```
 
-Each auth block exports its own constants: `AuthBasicErrors`, `AuthCognitoErrors` and `AuthOIDCErrors`.
+The constants are `AuthErrors`, exported from `@aws-blocks/bb-auth` (and re-exported by `@aws-blocks/blocks`). See the [`Auth` README](../../packages/bb-auth/README.md).
 
 ## Related
 

@@ -1,0 +1,75 @@
+import { ApiNamespace, Scope, isBlocksError } from '@aws-blocks/core';
+import {
+	Auth,
+	AuthErrors,
+	type AuthOptions,
+	type AuthenticatedUser,
+	type MfaPreference,
+} from '@aws-blocks/bb-auth';
+
+const scope = new Scope('app');
+const options = { groups: ['admins'] } as const satisfies AuthOptions;
+const auth = new Auth(scope, 'auth', {
+	mfa: { mode: 'optional', types: ['TOTP'] },
+	users: {
+		groups: ['admins'],
+	},
+	userPool: Auth.fromExisting('us-east-1_abc', 'client'),
+});
+void options;
+
+function describeUser(user: AuthenticatedUser): string {
+	return user.username;
+}
+
+export const api = new ApiNamespace(scope, 'api', (context) => ({
+	async session() {
+		return auth.getAuthSession(context, { forceRefresh: true });
+	},
+	async attributes() {
+		const attrs = await auth.getUserAttributes(context);
+		return attrs;
+	},
+	async mfa(): Promise<MfaPreference> {
+		await auth.setUpTotp(context);
+		await auth.verifyTotpSetup(context, '123456');
+		await auth.updateMfaPreference(context, { totp: 'PREFERRED' });
+		return auth.getMfaPreference(context);
+	},
+	async devices() {
+		return Array.fromAsync(auth.scanDevices(context));
+	},
+	async setTenant(tenant: string) {
+		await auth.updateUserAttributes(context, { 'custom:tenant': tenant });
+	},
+	async setEmail(email: string) {
+		// TODO(aws-blocks-auth-migrate): updateUserAttributes() returns a record keyed by attribute name (was a single outcome): read the outcome for this attribute from it.
+		const outcome = await auth.updateUserAttributes(context, { email: email });
+		return outcome;
+	},
+	async answer(session: string, code: string) {
+		return auth.confirmSignIn(session, code, context);
+	},
+	async register(username: string, password: string) {
+		return auth.signUp(username, password, {}, context);
+	},
+	async registerQuiet(username: string, password: string) {
+		return auth.signUp(username, password, { attributes: { email: username } });
+	},
+	async signIn(username: string, password: string, cognitoSession: string) {
+		// TODO(aws-blocks-auth-migrate): signIn() no longer takes cognitoSession; remove it.
+		return auth.signIn(username, password, context, { cognitoSession });
+	},
+	async whoAmI() {
+		try {
+			return describeUser(await auth.requireAuth(context));
+		} catch (e) {
+			// TODO(aws-blocks-auth-migrate): review this auth error check: Auth renamed some error names and changed which flows return which (see MIGRATION.md, "Error names").
+			if (isBlocksError(e, AuthErrors.NotAuthenticated)) return null;
+			throw e;
+		}
+	},
+	async promote(username: string) {
+		await auth.admin.addUserToGroup(username, 'admins');
+	},
+}));
