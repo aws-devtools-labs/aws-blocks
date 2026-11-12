@@ -76,3 +76,30 @@ When `options.schema` is provided (any `StandardSchemaV1` implementation — Zod
 | Disk I/O vs DynamoDB latency | Local ops are faster and never timeout | No mitigation needed — latency differences don't affect correctness |
 | TTL deletion is immediate on read (vs up to 48 h in DynamoDB) | An expired item's storage is reclaimed sooner locally | Both layers hide expired items from `get`/`scan`, so observable behavior matches; only physical deletion timing differs |
 | Conditional-write composition | When both `ifNotExists` and `ifValueEquals` are set, both runtimes compose them with OR (`attribute_not_exists(pk) OR value = :expected`) — write succeeds if the key is absent OR its value matches (create-or-update) | No mitigation needed — mock and AWS are aligned. (Previously the two layers diverged: AWS silently ignored `ifValueEquals`; the mock rejected the write.) |
+
+## Opt-in AWS Emulator integration tests
+
+`src/emulator.integration.test.ts` adds a small, optional integration layer for the AWS runtime. Unlike the deterministic SDK-stubbed `parity.test.ts`, it sends real SDK requests and checks responses from a running local [AWS Emulator](https://github.com/aws/aws-emulator). It does not replace the existing parity tests or real-AWS sandbox E2E tests, and it does not start an emulator or add one to CI.
+
+Start the emulator using the official [Linux](https://docs.aws.amazon.com/emulator/latest/userguide/getting-started-linux.html) or [container](https://docs.aws.amazon.com/emulator/latest/userguide/getting-started-docker.html) setup. For a container, publish its port only on `127.0.0.1`, and make the generated credential and certificate files available to the host as described in that guide. The host and container ports must match. Keep signature verification enabled; telemetry can be disabled with `--telemetry off`.
+
+With an emulator on port 9297, run from the repository root:
+
+```bash
+export BLOCKS_TEST_AWS_ENDPOINT=https://127.0.0.1:9297
+export AWS_CONFIG_FILE="$HOME/.aws/emulator/9297/config"
+export AWS_SHARED_CREDENTIALS_FILE="$HOME/.aws/emulator/9297/emulator_credentials"
+export NODE_EXTRA_CA_CERTS="$HOME/.aws/emulator/9297/ca.pem"
+npm run build
+node --test packages/bb-kv-store/dist/emulator.integration.test.js
+```
+
+The credential file is named **`emulator_credentials`**, not `credentials`. Set `NODE_EXTRA_CA_CERTS` before starting Node so that HTTPS verification remains enabled; do not use `NODE_TLS_REJECT_UNAUTHORIZED=0`. See the [SDK setup guide](https://docs.aws.amazon.com/emulator/latest/userguide/point-sdk-to-emulator.html).
+
+Without `BLOCKS_TEST_AWS_ENDPOINT`, the integration suite skips and does not create SDK clients or resolve credentials. The small endpoint-safety tests still run. An enabled suite rejects remote or non-HTTPS endpoints, parses the explicitly supplied emulator credential file without resolving an AWS profile, and confines SDK requests to that endpoint. Temporary environment settings are restored during teardown.
+
+The suite creates a uniquely named table with the string partition key `pk`, waits for it with `waitUntilTableExists`, and deletes it afterwards, waiting with `waitUntilTableNotExists`. Cases cover write/read, a conditional conflict, read-side expiry, an oversized item, OR-composed conditions, and deletion. For expiry, TTL cleanup is not enabled on the table: a raw, strongly consistent SDK read first confirms that the expired row still exists, then `KVStore.get()` must hide it. This tests the block's filter rather than the emulator's reaper.
+
+These tests do not establish AWS equivalence. IAM grants, production throttling and eventual-consistency behavior still need real-AWS validation; the HTTP emulator endpoint also does not validate the PostgreSQL wire data path used by DSQL. Consult the emulator release's fidelity results and known issues before attributing a failure to AWS Blocks. The documented whole-item versus serialized-value size difference remains outside this suite: its size case uses an unambiguously oversized 450 KiB value rather than the exact 400 KiB boundary.
+
+After testing, stop the emulator using the setup guide's teardown steps. Its resources are in memory; this suite does not deploy anything to AWS.
