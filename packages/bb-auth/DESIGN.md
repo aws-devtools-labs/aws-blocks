@@ -139,6 +139,25 @@ The non-negotiable: an app switching `AuthCognito` → `Auth` with the same id k
 
 Tests: `native-mock.test.ts` (sessions from before a reset by alias are rejected, other users unaffected, a new sign-in works, the `createApi()` path), `index.aws.flows.test.ts` (the Cognito calls in order, the same scenario against the offline AWS harness, a failed sign-out step never reported as a wrong code), `index.aws.session.test.ts` (`issuedAt` survives a refresh), and `test-apps/comprehensive/test/basic-auth.test.ts` (a cookie captured before a reset, replayed after it, over the wire).
 
+### Audit records (`audit`)
+
+With `audit` set, `AuthBase` writes one record per session lifecycle event through `auditEvent()`: a log line at `info` whose message is the event name and whose fields are an `AuthAuditRecord`. `audit: true` builds a dedicated `Logger(this, 'audit', { level: 'info' })`, so records are written whatever level `logger` runs at (the default block logger is `error`-only); a `ChildLogger` receives them instead. Off by default: CloudWatch Logs bills by volume, and nothing is written unless the app asks.
+
+| Event | Written in | Identifies the user by |
+|---|---|---|
+| `auth.session.issued` | `issueSession`, after `onSignIn` resolves: every store, every provider | `sub` (`identity.userSub`; `<issuer>:<sub>` for a direct-federated session) |
+| `auth.signin.failed` | `passwordSignIn` (the engine refused the credentials), `finishFederatedSignIn` (the provider's callback failed, `reason: 'provider'`) and `issueSession` (`validateUser` or `onSignIn` rejected it, `reason: 'validate-user'` / `'on-sign-in'`) | nothing on a password failure, whose login is only what the caller typed; `sub` when the provider verified the user |
+| `auth.signout` | `signOut`: `success` once the row is deleted; `incomplete` when the secret or the delete failed (the `SignOutIncomplete` paths) | `sub` when the row could be read |
+| `auth.sessions.revoked` | `confirmResetPassword` (`reason: 'password-reset'`), `admin.revokeUserSessions` (`'admin'`), `deleteUser` (`'account-deleted'`) | `username` on the first two, which are keyed by it (the `cognito:username` `signOutEverywhere` returns, or the value the admin passed); `sub` on `deleteUser` |
+
+- **No secrets, no free text.** Fields are the event, the block's `fullId`, the provider id, the user id, an outcome, a fixed `reason` and an error **name**; never a password, code, token, session id or error message (a message can quote the login). A failed password sign-in carries no user id at all.
+- **`sub`, not the email.** A direct-federated session's `username` is the provider's email claim, so `sub` is the field that is always an id; it is also what CloudTrail records for Cognito calls, so the two can be joined.
+- **Fields the event does not know are left out**, not written as `undefined`, so a record's keys say what was known.
+- **Best-effort.** `auditEvent` swallows a logger error: an audit sink that is down must not fail a sign-in or a sign-out.
+- **Not covered:** what never reaches `AuthBase`: failed attempts on Cognito's managed login page (a success comes back through the callback and is recorded), calls a client makes to Cognito directly, and a refresh failure that ends a session. Cognito records its own API calls in CloudTrail.
+
+Tests: `audit.test.ts` (each event against the fake engines, the local pool's `admin.revokeUserSessions` and `deleteUser`, no secrets in any record, nothing written with the option off, a throwing audit logger that changes no result).
+
 ### Bearer tokens (`allowBearerAuth` — `bearer.ts`)
 
 With `allowBearerAuth: true` the guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, and so `getAuthState`) also accept `Authorization: Bearer <access token>`. Off (the default), the header is ignored exactly as before. The wire behaviour is `AuthOIDC`'s, so the native SDKs work unchanged:
