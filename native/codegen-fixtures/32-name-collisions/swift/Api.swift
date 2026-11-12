@@ -192,20 +192,25 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable {
             case pick(Pick)
             case skip(Skip)
+            /// An arm this client was generated without: the object as the server sent it.
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case action
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .pick(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("pick", forKey: .action)
                     try params.encode(to: encoder)
                 case .skip(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("skip", forKey: .action)
                     try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
             }
 
@@ -216,7 +221,7 @@ public final nonisolated class Api: Sendable {
                 case "pick": self = .pick(try Pick(from: decoder))
                 case "skip": self = .skip(try Skip(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .action, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }

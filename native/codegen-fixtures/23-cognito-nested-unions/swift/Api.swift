@@ -284,58 +284,76 @@ public final nonisolated class Api: Sendable {
                 case confirmSignInWithWebAuthn(ConfirmSignInWithWebAuthn)
                 case resetPassword
                 case confirmSignUp(ConfirmSignUp)
+                /// An arm this client was generated without: the object as the server sent it.
+                case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
                     case name
                 }
 
                 public func encode(to encoder: Encoder) throws {
-                    var container = encoder.container(keyedBy: CodingKeys.self)
                     switch self {
                     case .confirmSignInWithSmsCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_SMS_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithTotpCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_TOTP_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithEmailCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_EMAIL_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSetupSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithTotpSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_TOTP_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithEmailSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_EMAIL_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithNewPasswordRequired(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithFirstFactorSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithPassword(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_PASSWORD", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorEmailOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorSmsOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithWebAuthn(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_WEB_AUTHN", forKey: .name)
                         try params.encode(to: encoder)
                     case .resetPassword:
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("RESET_PASSWORD", forKey: .name)
                     case .confirmSignUp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_UP", forKey: .name)
                         try params.encode(to: encoder)
+                    case .unknown(let value):
+                        try value.encode(to: encoder)
                     }
                 }
 
@@ -359,7 +377,7 @@ public final nonisolated class Api: Sendable {
                     case "RESET_PASSWORD": self = .resetPassword
                     case "CONFIRM_SIGN_UP": self = .confirmSignUp(try ConfirmSignUp(from: decoder))
                     default:
-                        throw DecodingError.dataCorruptedError(forKey: .name, in: container, debugDescription: "Unknown value: \(disc)")
+                        self = .unknown(try JSONValue(from: decoder))
                     }
                 }
             }
@@ -376,20 +394,25 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable {
             case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
+            /// An arm this client was generated without: the object as the server sent it.
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case status
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .continueSignIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("continueSignIn", forKey: .status)
                     try params.encode(to: encoder)
                 case .signedIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("signedIn", forKey: .status)
                     try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
             }
 
@@ -400,7 +423,7 @@ public final nonisolated class Api: Sendable {
                 case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 case "signedIn": self = .signedIn(try SignedIn(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }
@@ -661,58 +684,76 @@ public final nonisolated class Api: Sendable {
                 case confirmSignInWithWebAuthn(ConfirmSignInWithWebAuthn)
                 case resetPassword
                 case confirmSignUp(ConfirmSignUp)
+                /// An arm this client was generated without: the object as the server sent it.
+                case unknown(JSONValue)
 
                 enum CodingKeys: String, CodingKey {
                     case name
                 }
 
                 public func encode(to encoder: Encoder) throws {
-                    var container = encoder.container(keyedBy: CodingKeys.self)
                     switch self {
                     case .confirmSignInWithSmsCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_SMS_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithTotpCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_TOTP_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithEmailCode(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_EMAIL_CODE", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithMfaSetupSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithTotpSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_TOTP_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithEmailSetup(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_EMAIL_SETUP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithNewPasswordRequired(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED", forKey: .name)
                         try params.encode(to: encoder)
                     case .continueSignInWithFirstFactorSelection(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithPassword(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_PASSWORD", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorEmailOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithFirstFactorSmsOtp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP", forKey: .name)
                         try params.encode(to: encoder)
                     case .confirmSignInWithWebAuthn(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_IN_WITH_WEB_AUTHN", forKey: .name)
                         try params.encode(to: encoder)
                     case .resetPassword:
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("RESET_PASSWORD", forKey: .name)
                     case .confirmSignUp(let params):
+                        var container = encoder.container(keyedBy: CodingKeys.self)
                         try container.encode("CONFIRM_SIGN_UP", forKey: .name)
                         try params.encode(to: encoder)
+                    case .unknown(let value):
+                        try value.encode(to: encoder)
                     }
                 }
 
@@ -736,7 +777,7 @@ public final nonisolated class Api: Sendable {
                     case "RESET_PASSWORD": self = .resetPassword
                     case "CONFIRM_SIGN_UP": self = .confirmSignUp(try ConfirmSignUp(from: decoder))
                     default:
-                        throw DecodingError.dataCorruptedError(forKey: .name, in: container, debugDescription: "Unknown value: \(disc)")
+                        self = .unknown(try JSONValue(from: decoder))
                     }
                 }
             }
@@ -753,20 +794,25 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable {
             case continueSignIn(ContinueSignIn)
             case signedIn(SignedIn)
+            /// An arm this client was generated without: the object as the server sent it.
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case status
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .continueSignIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("continueSignIn", forKey: .status)
                     try params.encode(to: encoder)
                 case .signedIn(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("signedIn", forKey: .status)
                     try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
             }
 
@@ -777,7 +823,7 @@ public final nonisolated class Api: Sendable {
                 case "continueSignIn": self = .continueSignIn(try ContinueSignIn(from: decoder))
                 case "signedIn": self = .signedIn(try SignedIn(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .status, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }

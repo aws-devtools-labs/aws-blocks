@@ -21,6 +21,8 @@ final class OpenEnumScope {
     var openTypeNames: Set<String> = []
     /// Whether the enums emitted now are open.
     var isOpen = false
+    /// The unions embedded in a hybrid arm (they share the arm's JSON object), which stay closed.
+    var embeddedUnionNames: Set<String> = []
 
     /// Runs `body` with `isOpen` set to `open`, then restores it.
     func with(open: Bool, _ body: () -> Void) {
@@ -188,6 +190,70 @@ extension SwiftCodeGenerator {
 
     /// `unknown`, or `unknownValue` (then `unknownValue2`, …) when a spec value already took it.
     private func openEnumUnknownCaseName(taken: Set<String>) -> String {
+        guard taken.contains("unknown") else { return "unknown" }
+        var candidate = "unknownValue"
+        var suffix = 2
+        while taken.contains(candidate) {
+            candidate = "unknownValue\(suffix)"
+            suffix += 1
+        }
+        return candidate
+    }
+
+    // MARK: - Open unions
+
+    /// The names of every union embedded in a hybrid arm, anywhere in the model.
+    func embeddedUnionNames(_ model: CodegenModel) -> Set<String> {
+        var names: Set<String> = []
+        func walk(_ type: ResolvedType) {
+            switch type {
+            case .record(_, let fields, let extras, let embedded):
+                fields.forEach { walk($0.type) }
+                if let extras { walk(extras) }
+                if let embedded, case .union(let name, _, _) = embedded { names.insert(name) }
+                if let embedded { walk(embedded) }
+            case .union(_, let variants, _):
+                for variant in variants {
+                    variant.fields.forEach { walk($0.type) }
+                    if let embedded = variant.embeddedUnion, case .union(let name, _, _) = embedded { names.insert(name) }
+                    if let embedded = variant.embeddedUnion { walk(embedded) }
+                    variant.nestedTypes.forEach { walk($0.type) }
+                }
+            case .list(let element, _): walk(element)
+            case .nullable(let inner): walk(inner)
+            case .map(let value): walk(value)
+            default: return
+            }
+        }
+        func walkNodes(_ nodes: [NestedTypeNode]) {
+            for node in nodes {
+                walk(node.type)
+                walkNodes(node.children)
+            }
+        }
+        for typeDef in model.typeDefinitions {
+            walk(typeDef.type)
+            walkNodes(typeDef.nestedTypes)
+        }
+        for namespace in model.apiNamespaces {
+            for operation in namespace.operations {
+                walk(operation.result.type)
+                operation.parameters.forEach { walk($0.type) }
+                walkNodes(operation.nestedTypes)
+            }
+        }
+        return names
+    }
+
+    /// The case an open union decodes an unrecognised arm to, or nil when the union is closed. A union is open
+    /// while `openEnums.isOpen` (a response carries it), when its discriminator is a string and every arm is an
+    /// object; a union embedded in a hybrid arm stays closed. The case is `unknown`, or `unknownValue` when an arm
+    /// already has that name.
+    func openUnionCaseName(name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo?) -> String? {
+        guard openEnums.isOpen, let discriminator, discriminator.kind == .string,
+              !variants.contains(where: isBareValue),
+              !openEnums.embeddedUnionNames.contains(name) else { return nil }
+        let taken = Set(variants.map { unescapedSwiftName(unionCaseName($0)) })
         guard taken.contains("unknown") else { return "unknown" }
         var candidate = "unknownValue"
         var suffix = 2

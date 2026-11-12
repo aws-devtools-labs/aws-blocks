@@ -163,20 +163,25 @@ public final nonisolated class Api: Sendable {
         public enum Result: Codable {
             case moved(Moved)
             case flagged(Flagged)
+            /// An arm this client was generated without: the object as the server sent it.
+            case unknown(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case kind
             }
 
             public func encode(to encoder: Encoder) throws {
-                var container = encoder.container(keyedBy: CodingKeys.self)
                 switch self {
                 case .moved(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("moved", forKey: .kind)
                     try params.encode(to: encoder)
                 case .flagged(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("flagged", forKey: .kind)
                     try params.encode(to: encoder)
+                case .unknown(let value):
+                    try value.encode(to: encoder)
                 }
             }
 
@@ -187,7 +192,7 @@ public final nonisolated class Api: Sendable {
                 case "moved": self = .moved(try Moved(from: decoder))
                 case "flagged": self = .flagged(try Flagged(from: decoder))
                 default:
-                    throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "Unknown value: \(disc)")
+                    self = .unknown(try JSONValue(from: decoder))
                 }
             }
         }

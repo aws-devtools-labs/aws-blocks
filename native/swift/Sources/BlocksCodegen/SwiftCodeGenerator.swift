@@ -74,6 +74,7 @@ public struct SwiftCodeGenerator {
             uniquingKeysWith: { first, _ in first }
         )
         generator.openEnums.openTypeNames = generator.openTypeNames(model)
+        generator.openEnums.embeddedUnionNames = generator.embeddedUnionNames(model)
         let output = generator.generateAll(from: model)
         try generator.rejectModulesShadowedByEmittedNames(model)
         return output
@@ -434,9 +435,12 @@ public struct SwiftCodeGenerator {
 
         lines.append("")
         emitDeclaration(name, line: "\(indent)public enum \(name): Codable {", lines: &lines)
-        lines.append(contentsOf: unionCaseLines(variants, indent: indent))
+        let unknownCase = openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
+        lines.append(contentsOf: unionCaseLines(variants, indent: indent, unknownCase: unknownCase))
         if let disc = discriminator {
-            emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
+            emitDiscriminatedCoding(
+                name: name, variants: variants, discriminator: disc, unknownCase: unknownCase, indent: indent, lines: &lines
+            )
         } else {
             emitTransparentUnionCoding(name: name, variants: variants, indent: indent, lines: &lines)
         }
@@ -450,7 +454,8 @@ public struct SwiftCodeGenerator {
 
     // Internal-discriminator unions only: `emitType` routes the others to `emitTransparentUnionCoding`.
     private func emitDiscriminatedCoding(
-        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, indent: String = "", lines: inout [String]
+        name: String, variants: [UnionVariant], discriminator: DiscriminatorInfo, unknownCase: String? = nil,
+        indent: String = "", lines: inout [String]
     ) {
         let discKey = escapedSwiftName(discriminator.fieldName)
         // A value arm (`string`) or a literal arm has no discriminator and encodes as a bare JSON value, so with
@@ -469,7 +474,9 @@ public struct SwiftCodeGenerator {
         lines.append("\(indent)    }")
         lines.append("")
         lines.append("\(indent)    public func encode(to encoder: Encoder) throws {")
-        if valueVariants.isEmpty {
+        // An unknown arm encodes as its whole object, so then each known case opens its own container.
+        let containerPerCase = !valueVariants.isEmpty || unknownCase != nil
+        if !containerPerCase {
             lines.append("\(indent)        \(openContainer)")
         }
         lines.append("\(indent)        switch self {")
@@ -477,7 +484,7 @@ public struct SwiftCodeGenerator {
             if let discVal = variant.discriminatorValue {
                 let hasPayload = unionCasePayload(variant) != nil
                 lines.append("\(indent)        case .\(unionCaseName(variant))\(hasPayload ? "(let params)" : ""):")
-                if !valueVariants.isEmpty {
+                if containerPerCase {
                     lines.append("\(indent)            \(openContainer)")
                 }
                 lines.append("\(indent)            try container.encode(\(tagLiteral(discVal)), forKey: .\(discKey))")
@@ -493,6 +500,10 @@ public struct SwiftCodeGenerator {
                 lines.append("\(indent)            var container = encoder.singleValueContainer()")
                 lines.append("\(indent)            try container.encode(value)")
             }
+        }
+        if let unknownCase {
+            lines.append("\(indent)        case .\(unknownCase)(let value):")
+            lines.append("\(indent)            try value.encode(to: encoder)")
         }
         lines.append("\(indent)        }")
         lines.append("\(indent)    }")
@@ -549,7 +560,10 @@ public struct SwiftCodeGenerator {
             }
         }
         // A boolean discriminator with both values is exhaustive; a `default` would never run (a warning).
-        if !(discriminator.kind == .boolean && Set(tagOrder) == ["true", "false"]) {
+        if let unknownCase {
+            lines.append("\(indent)        default:")
+            lines.append("\(indent)            self = .\(unknownCase)(try \(runtimePrefix)JSONValue(from: decoder))")
+        } else if !(discriminator.kind == .boolean && Set(tagOrder) == ["true", "false"]) {
             let defErr = "Unknown value: \\(disc)"
             lines.append("\(indent)        default:")
             lines.append(
@@ -679,14 +693,20 @@ public struct SwiftCodeGenerator {
     }
 
     /// The `case` lines of a union's enum.
-    private func unionCaseLines(_ variants: [UnionVariant], indent: String) -> [String] {
-        variants.map { variant in
+    /// With `unknownCase`, the union is open and gets that case for an arm the client was generated without.
+    private func unionCaseLines(_ variants: [UnionVariant], indent: String, unknownCase: String? = nil) -> [String] {
+        let cases = variants.map { variant in
             let caseName = unionCaseName(variant)
             if let payload = unionCasePayload(variant) {
                 return "\(indent)    case \(caseName)(\(payload))"
             }
             return "\(indent)    case \(caseName)"
         }
+        guard let unknownCase else { return cases }
+        return cases + [
+            "\(indent)    /// An arm this client was generated without: the object as the server sent it.",
+            "\(indent)    case \(unknownCase)(\(runtimePrefix)JSONValue)"
+        ]
     }
 
     // MARK: - Type Emission
@@ -778,13 +798,16 @@ public struct SwiftCodeGenerator {
             var body: [String] = []
             body.append("")
             emitDeclaration(name, line: "public nonisolated enum \(name): Codable {", lines: &body)
-            body.append(contentsOf: unionCaseLines(variants, indent: ""))
+            let unknownCase = openUnionCaseName(name: name, variants: variants, discriminator: discriminator)
+            body.append(contentsOf: unionCaseLines(variants, indent: "", unknownCase: unknownCase))
             // Internal-discriminator union: write the discriminator at JSON
             // top level alongside the payload.
             // Discriminator-less anonymous oneOf: encode/decode transparently
             // (no envelope) — try each variant in order on decode.
             if let disc = discriminator {
-                emitDiscriminatedCoding(name: name, variants: variants, discriminator: disc, lines: &body)
+                emitDiscriminatedCoding(
+                    name: name, variants: variants, discriminator: disc, unknownCase: unknownCase, lines: &body
+                )
             } else {
                 emitTransparentUnionCoding(name: name, variants: variants, lines: &body)
             }
@@ -1597,9 +1620,13 @@ private extension SwiftCodeGenerator {
             }
             lines.append("")
             emitDeclaration(node.name, line: "\(indent)public enum \(node.name): Codable {", lines: &lines)
-            lines.append(contentsOf: unionCaseLines(variants, indent: indent))
+            let unknownCase = openUnionCaseName(name: node.name, variants: variants, discriminator: discriminator)
+            lines.append(contentsOf: unionCaseLines(variants, indent: indent, unknownCase: unknownCase))
             if let disc = discriminator {
-                emitDiscriminatedCoding(name: node.name, variants: variants, discriminator: disc, indent: indent, lines: &lines)
+                emitDiscriminatedCoding(
+                    name: node.name, variants: variants, discriminator: disc, unknownCase: unknownCase,
+                    indent: indent, lines: &lines
+                )
             } else {
                 emitTransparentUnionCoding(name: node.name, variants: variants, indent: indent, lines: &lines)
             }
