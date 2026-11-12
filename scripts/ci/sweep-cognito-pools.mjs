@@ -48,7 +48,11 @@ const BLOCKS_POOL = /^(blocks-test|blocks-hosting|bb-test|bb-telemetry|bb-vpc-sm
 const AMPLIFY_POOL = /^amplifyAuthUserPool[0-9A-F]{8}-[A-Za-z0-9]{6,}$/;
 
 const minAgeMs = Number(process.env.COGNITO_SWEEP_MIN_AGE_HOURS ?? 6) * 3600_000;
-const deadline = Date.now() + Number(process.env.COGNITO_SWEEP_BUDGET_SECONDS ?? 300) * 1000;
+const budgetMs = Number(process.env.COGNITO_SWEEP_BUDGET_SECONDS ?? 300) * 1000;
+const deadline = Date.now() + budgetMs;
+// Listing stops at half the budget, so the pools it did list still get the
+// other half to be swept.
+const listingDeadline = Date.now() + budgetMs / 2;
 
 const warning = (msg) => console.log(`::warning title=Cognito pool sweep::${msg}`);
 const error = (msg) => console.log(`::error title=Cognito pool sweep::${msg}`);
@@ -149,8 +153,8 @@ async function main() {
 	let truncated = false;
 	let nextToken;
 	do {
-		if (Date.now() >= deadline) {
-			console.log('Time budget reached while listing user pools; sweeping the pools listed so far.');
+		if (Date.now() >= listingDeadline) {
+			console.log('Listing budget reached; sweeping the pools listed so far.');
 			truncated = true;
 			break;
 		}

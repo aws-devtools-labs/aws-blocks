@@ -256,12 +256,36 @@ describe('sweep-cognito-pools.mjs', () => {
 		const r = run({
 			pools: [blocksPool({ Id: 'us-east-1_page1' }), blocksPool({ Id: 'us-east-1_page2' })],
 			pageSize: 1,
-			listDelayMs: 1500,
-			env: { COGNITO_SWEEP_BUDGET_SECONDS: '1' },
+			// Page 1 ends past the 2s listing deadline (half the 4s budget).
+			listDelayMs: 2500,
+			env: { COGNITO_SWEEP_BUDGET_SECONDS: '4' },
 		});
 		assert.equal(r.status, 0, r.out);
 		assert.equal(r.calls.filter((c) => c[1] === 'list-user-pools').length, 1);
 		assert.match(r.summary, /User pools listed: 1 \(1 page, listing truncated by time budget\)/);
+	});
+
+	it('still sweeps the pools it listed when the listing is cut short', () => {
+		// Listing stops at half the 6s budget (after page 1 or 2 of 3); the
+		// pools it did list are swept in the other half, the unlisted one is not.
+		const ids = ['us-east-1_page1', 'us-east-1_page2', 'us-east-1_page3'];
+		const r = run({
+			pools: ids.map((Id) => blocksPool({ Id })),
+			pageSize: 1,
+			listDelayMs: 2000,
+			env: { COGNITO_SWEEP_BUDGET_SECONDS: '6' },
+		});
+		assert.equal(r.status, 0, r.out);
+		const listed = r.calls.filter((c) => c[1] === 'list-user-pools').length;
+		assert.ok(listed >= 1 && listed < ids.length, `listed ${listed} page(s)`);
+		assert.ok(deletes(r.calls).length >= 1, r.out);
+		assert.deepEqual(
+			deletes(r.calls).filter((id) => !ids.slice(0, listed).includes(id)),
+			[],
+			'only listed pools are swept',
+		);
+		assert.ok(r.left.includes(blocksPool().Name) && !deletes(r.calls).includes(ids[2]));
+		assert.match(r.summary, /listing truncated by time budget/);
 	});
 
 	it('reports, and never changes, a pool with deletion protection on', () => {
