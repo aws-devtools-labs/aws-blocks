@@ -65,6 +65,29 @@ final class OIDCMultiBlockE2ETests: BlocksE2ETestCase {
         try await assertRestoreThenSignOut(userId: user.userId, provider: "corp", client: ssoClient)
     }
 
+    /// On `blocks`' one cookie store: `auth-sso` refuses an `auth-oidc` session, and signing out of
+    /// `auth-sso` leaves `auth-oidc` signed in.
+    func testBlocksKeepSeparateSessions() async throws {
+        try skipWithoutHeadlessIdp()
+        let oidc = oidcClient(on: blocks)
+        let sso = ssoClient(on: blocks)
+
+        _ = try await oidc.signIn(provider: "github2", launcher: HttpRelayLauncher())
+        await assertThrowsBlocksError(AuthErrorNames.notAuthenticated) {
+            _ = try await self.api.ssoRequireAuth()
+        }
+        let ssoUser = try await api.ssoGetCurrentUser()
+        XCTAssertNil(ssoUser)
+
+        _ = try await sso.signIn(provider: "corp", launcher: HttpRelayLauncher())
+        _ = try await sso.signOut()
+        let ssoAfter = try await sso.restore()
+        XCTAssertNil(ssoAfter)
+        let oidcAfter = try await api.oidcRequireAuth()
+        XCTAssertEqual(oidcAfter.provider, "github2", "auth-oidc is still signed in")
+        _ = try await oidc.signOut()
+    }
+
     /// A relaunch: a fresh `Blocks` shares the Keychain cookie store, so `restore()` finds the
     /// session; signing out returns the stub IdP's logout URL and ends it.
     private func assertRestoreThenSignOut(
