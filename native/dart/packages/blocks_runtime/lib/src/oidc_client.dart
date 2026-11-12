@@ -277,19 +277,11 @@ class OidcClient implements AuthProvider {
       callbackScheme: Uri.parse(relayTo).scheme,
     );
 
-    // Step 4: validate the callback.
+    // Step 4: validate the callback. The state and the CSRF value inside its
+    // envelope are checked first, so a redirect that didn't come from this
+    // sign-in can't report an IdP error either.
     final qp = resultUri.queryParameters;
 
-    final error = qp['error'];
-    if (error != null) {
-      final description = qp['error_description'] ?? '';
-      throw OidcCallbackException('IdP error: $error — $description');
-    }
-
-    final code = qp['code'];
-    if (code == null) {
-      throw OidcCallbackException("Callback URI missing 'code' parameter");
-    }
     final returnedState = qp['state'];
     if (returnedState == null) {
       throw OidcCallbackException("Callback URI missing 'state' parameter");
@@ -300,6 +292,17 @@ class OidcClient implements AuthProvider {
 
     // Step 5: verify the CSRF value inside the state envelope.
     _verifyCsrf(returnedState, csrf);
+
+    final error = qp['error'];
+    if (error != null) {
+      final description = qp['error_description'] ?? '';
+      throw OidcCallbackException('IdP error: $error: $description');
+    }
+
+    final code = qp['code'];
+    if (code == null) {
+      throw OidcCallbackException("Callback URI missing 'code' parameter");
+    }
 
     // Step 6: exchange the code for the user (forwarding iss per RFC 9207).
     return exchange(

@@ -22,6 +22,10 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- `OidcClient.signInRelay` checks the callback's `state` and the CSRF value
+  in its envelope before it reads an IdP `error`. A redirect to the app's
+  scheme that didn't come from this sign-in now fails the state check
+  instead of reporting an IdP error.
 - **Behaviour change:** with an `authProvider`, `BlocksClient` sends the
   session cookie on every call that has one, and adds
   `Authorization: Bearer` only when the provider returns a token. It used to
