@@ -380,6 +380,8 @@ void main() {
       expect(await sso.getAccessToken(), 'sso-at');
       expect(await store.get('/aws-blocks/auth/refresh_token'), 'main-rt');
       expect(await store.get('/aws-blocks/auth/sso/refresh_token'), 'sso-rt');
+      expect(await store.get('/aws-blocks/auth/provider'), 'google');
+      expect(await store.get('/aws-blocks/auth/sso/provider'), 'corp');
       expect(
         store.keys.where((k) => !k.startsWith('/aws-blocks/auth/')),
         isEmpty,

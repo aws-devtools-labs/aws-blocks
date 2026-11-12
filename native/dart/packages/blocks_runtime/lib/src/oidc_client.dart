@@ -555,6 +555,8 @@ class OidcClient implements AuthProvider {
     // only when they exist.
     if (json['accessToken'] != null) {
       await tokenStore.set(_key('access_token'), json['accessToken'] as String);
+      // Refresh must name the provider when the backend has several.
+      await tokenStore.set(_key('provider'), provider);
     }
     if (json['refreshToken'] != null) {
       await tokenStore.set(
@@ -562,15 +564,7 @@ class OidcClient implements AuthProvider {
         json['refreshToken'] as String,
       );
     }
-    if (json['expiresAt'] != null) {
-      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
-    } else if (json['expiresIn'] != null) {
-      // Relay exchange (Kotlin parity) reports lifetime in seconds.
-      final expiresAt = DateTime.now()
-          .add(Duration(seconds: (json['expiresIn'] as num).toInt()))
-          .millisecondsSinceEpoch;
-      await tokenStore.set(_key('expires_at'), expiresAt.toString());
-    }
+    await _storeExpiry(json);
 
     final userJson = json['user'];
     if (userJson == null) {
@@ -596,10 +590,11 @@ class OidcClient implements AuthProvider {
         return;
       }
 
+      final provider = await tokenStore.get(_key('provider'));
       final response = await _httpClient.post(
         Uri.parse('$_authBaseUrl$refreshPath'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refreshToken': refreshToken}),
+        body: jsonEncode({'refreshToken': refreshToken, 'provider': ?provider}),
       );
 
       if (response.statusCode != 200) {
@@ -610,8 +605,9 @@ class OidcClient implements AuthProvider {
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       await tokenStore.set(_key('access_token'), json['accessToken'] as String);
-      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
-      if (json.containsKey('refreshToken')) {
+      await _storeExpiry(json);
+      // The backend rotates the refresh token: the old one no longer works.
+      if (json['refreshToken'] != null) {
         await tokenStore.set(
           _key('refresh_token'),
           json['refreshToken'] as String,
@@ -901,9 +897,25 @@ class OidcClient implements AuthProvider {
     return DateTime.now().millisecondsSinceEpoch >= expiry;
   }
 
+  /// Stores the access token's expiry, in epoch milliseconds, from a token
+  /// response: `expiresIn` seconds from now, which the auth block sends, or
+  /// an absolute `expiresAt` as a fallback.
+  Future<void> _storeExpiry(Map<String, dynamic> json) async {
+    final expiresIn = json['expiresIn'];
+    if (expiresIn is num) {
+      final expiresAt = DateTime.now()
+          .add(Duration(seconds: expiresIn.toInt()))
+          .millisecondsSinceEpoch;
+      await tokenStore.set(_key('expires_at'), expiresAt.toString());
+    } else if (json['expiresAt'] != null) {
+      await tokenStore.set(_key('expires_at'), json['expiresAt'].toString());
+    }
+  }
+
   Future<void> _clearTokens() async {
     await tokenStore.delete(_key('access_token'));
     await tokenStore.delete(_key('refresh_token'));
     await tokenStore.delete(_key('expires_at'));
+    await tokenStore.delete(_key('provider'));
   }
 }

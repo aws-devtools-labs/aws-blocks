@@ -36,6 +36,13 @@ The next release is 0.2.0, because of the breaking changes marked below.
   status, or a transport error, now throws: the stored tokens are cleared,
   but the session cookie and the state are kept. It used to ignore the
   response and drop the logout URL.
+- `OidcClient.refresh` stores the new token's expiry from `expiresIn`
+  seconds, which the auth block sends, keeping `expiresAt` as a fallback. It
+  read only `expiresAt`, so every refreshed token looked expired and every
+  `getAccessToken()` refreshed again. Refresh now also sends the provider
+  the exchange signed in with (stored under `provider`), which a backend
+  with several providers requires, and stores the rotated refresh token
+  only when the response carries one.
 - **Breaking:** `OidcClient.restore()` returns `Future<OidcUser?>` and reads
   the backend's session route (`GET <exchangePath's directory>/session`, new
   `OidcClient.sessionPath`) with the session cookie, plus the stored access
