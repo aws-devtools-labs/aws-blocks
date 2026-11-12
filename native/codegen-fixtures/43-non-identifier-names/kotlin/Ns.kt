@@ -37,7 +37,7 @@ public class Ns(
     public sealed class Input {
       @Serializable
       @SerialName("cre\"ate")
-      public data class `Cre"ate`(
+      public data class CreAte(
         @SerialName("ti;tle")
         public val tiTle: String,
       ) : Input()

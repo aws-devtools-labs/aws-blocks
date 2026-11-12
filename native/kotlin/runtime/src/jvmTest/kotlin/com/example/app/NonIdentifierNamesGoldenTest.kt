@@ -83,7 +83,7 @@ class NonIdentifierNamesGoldenTest {
         val created = BlocksJson.decodeFromString(serializer, create)
         val removed = BlocksJson.decodeFromString(serializer, remove)
 
-        created shouldBe Ns.DoAction.Input.`Cre"ate`(tiTle = "hello")
+        created shouldBe Ns.DoAction.Input.CreAte(tiTle = "hello")
         removed shouldBe Ns.DoAction.Input.ReMove(`${id}` = "42")
         json(BlocksJson.encodeToString(serializer, created)) shouldBe json(create)
         json(BlocksJson.encodeToString(serializer, removed)) shouldBe json(remove)
