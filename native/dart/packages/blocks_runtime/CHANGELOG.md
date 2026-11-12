@@ -41,7 +41,11 @@
   defaults to `/aws-blocks/auth/signout`; both must be under
   `/aws-blocks/auth/`, or it throws an `ArgumentError`. It returns a plain
   `OidcClient`; wrap it as `TypedOidcClient<E>(client)` to narrow its
-  providers to an enum.
+  providers to an enum. It stores its tokens and sign-in state under keys
+  prefixed with the block's base path (such as
+  `/aws-blocks/auth/access_token`), so clients for several `Auth` blocks can
+  share one token store. Clients built the other ways keep the unprefixed
+  keys.
 - Add `OidcClient.relayTo`, the relay URI `signInRelay` uses when it isn't
   given one. `signInRelay`'s `relayTo` is now optional; with neither set, it
   throws a `StateError` before sending anything.

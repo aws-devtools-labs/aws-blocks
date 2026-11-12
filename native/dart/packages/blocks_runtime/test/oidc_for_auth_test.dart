@@ -292,6 +292,110 @@ void main() {
       expect(user.userId, 'u1');
     });
   });
+
+  group('OidcClient.forAuth token keys', () {
+    /// Answers like `_AuthServer`, with bearer tokens named after the block
+    /// whose exchange route was called.
+    MockClient bearerServer() => MockClient((req) async {
+      final block = req.url.path.contains('/sso/') ? 'sso' : 'main';
+      if (req.url.path.contains('/authorize-params/')) {
+        final csrf = (jsonDecode(req.body) as Map)['csrf'] as String;
+        return http.Response(
+          jsonEncode({
+            'authorizeUrl': 'https://idp.example.com/authorize',
+            'clientId': 'cid',
+            'scopes': ['openid'],
+            'kind': 'oidc-builtin',
+            'state': _envelope(csrf),
+          }),
+          200,
+        );
+      }
+      if (req.url.path.endsWith('/signout')) return http.Response('{}', 200);
+      return http.Response(
+        jsonEncode({
+          'user': {'userId': block, 'username': block},
+          'accessToken': '$block-at',
+          'refreshToken': '$block-rt',
+          'expiresIn': 3600,
+        }),
+        200,
+      );
+    });
+
+    test('two blocks sharing a token store keep their own tokens', () async {
+      final store = _RecordingTokenStore();
+      final blocks = BlocksClient(
+        baseUrl: 'http://localhost:3001/aws-blocks/api',
+        client: bearerServer(),
+        tokenStore: store,
+      );
+      final main = OidcClient.forAuth(
+        blocks,
+        providers: ['google'],
+        relayTo: 'myapp://auth',
+      );
+      final sso = OidcClient.forAuth(
+        blocks,
+        providers: ['corp'],
+        relayTo: 'myapp://auth',
+        callbackPath: '/aws-blocks/auth/sso/callback',
+        signOutPath: '/aws-blocks/auth/sso/signout',
+      );
+
+      await main.signInRelay('google', launcher: _Launcher());
+      await sso.signInRelay('corp', launcher: _Launcher());
+
+      expect(await main.getAccessToken(), 'main-at');
+      expect(await sso.getAccessToken(), 'sso-at');
+      expect(await store.get('/aws-blocks/auth/refresh_token'), 'main-rt');
+      expect(await store.get('/aws-blocks/auth/sso/refresh_token'), 'sso-rt');
+      expect(
+        store.keys.where((k) => !k.startsWith('/aws-blocks/auth/')),
+        isEmpty,
+      );
+
+      await sso.signOut();
+
+      expect(await sso.getAccessToken(), isNull);
+      expect(await main.getAccessToken(), 'main-at');
+      expect(await store.get('/aws-blocks/auth/refresh_token'), 'main-rt');
+    });
+
+    test('a client built with the constructor keeps unprefixed keys', () async {
+      final store = InMemoryTokenStore();
+      final oidc = OidcClient(
+        exchangePath: '/aws-blocks/auth/exchange',
+        refreshPath: '/aws-blocks/auth/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/signout',
+        providers: ['google'],
+        providerConfigs: const {},
+        baseUrl: 'http://localhost:3001/aws-blocks/api',
+        tokenStore: store,
+        httpClient: bearerServer(),
+      );
+
+      await oidc.signInRelay(
+        'google',
+        launcher: _Launcher(),
+        relayTo: 'myapp://auth',
+      );
+
+      expect(await store.get('access_token'), 'main-at');
+      expect(await store.get('refresh_token'), 'main-rt');
+    });
+  });
+}
+
+/// An [InMemoryTokenStore] that records every key written to it.
+class _RecordingTokenStore extends InMemoryTokenStore {
+  final keys = <String>{};
+
+  @override
+  Future<void> set(String key, String value) {
+    keys.add(key);
+    return super.set(key, value);
+  }
 }
 
 enum _Provider implements OidcProvider {
