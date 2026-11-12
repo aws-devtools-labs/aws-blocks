@@ -261,6 +261,7 @@ final class OIDCClientTests: XCTestCase {
             return events
         }
 
+        let before = Int64(Date().timeIntervalSince1970 * 1_000)
         let user = try await client.exchange(
             code: "code-1",
             verifier: "verifier-1",
@@ -278,7 +279,12 @@ final class OIDCClientTests: XCTestCase {
         let expiresAt = await store.get(tokenKey("expires_at"))
         XCTAssertEqual(accessToken, "access-1")
         XCTAssertEqual(refreshToken, "refresh-1")
-        XCTAssertEqual(expiresAt, "3600")
+        // Now plus `expiresIn` seconds, in epoch milliseconds.
+        let expiry = try XCTUnwrap(expiresAt.flatMap { Int64($0) })
+        XCTAssertGreaterThanOrEqual(expiry, before + 3_600_000)
+        XCTAssertLessThan(expiry, before + 3_660_000)
+        let provider = await store.get(tokenKey("provider"))
+        XCTAssertEqual(provider, "google")
 
         let events = await collector.value
         XCTAssertEqual(events, [.signedIn(user)])
@@ -479,15 +485,40 @@ final class OIDCClientTests: XCTestCase {
 
     // MARK: - Refresh
 
-    func testRefreshUpdatesAccessToken() async throws {
+    /// The response the server sends (`federation-routes.ts`): `{ accessToken, refreshToken, expiresIn }`,
+    /// `expiresIn` in seconds, with a rotated refresh token.
+    func testRefreshStoresTheRotatedTokensAndExpiry() async throws {
         OIDCMockURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/auth/refresh")
-            let body: [String: Any] = [
-                "accessToken": "access-2",
-                "expiresAt": 9_999_999_999_000
-            ]
-            let data = try JSONSerialization.data(withJSONObject: body)
-            return (okResponse(for: request.url!), data)
+            XCTAssertEqual(requestJSON(request) as? [String: String], ["refreshToken": "refresh-1", "provider": "github"])
+            let body: [String: Any] = ["accessToken": "access-2", "refreshToken": "refresh-2", "expiresIn": 3_600]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
+        }
+
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("refresh_token"), value: "refresh-1")
+        await store.set(tokenKey("provider"), value: "github")
+        let before = Int64(Date().timeIntervalSince1970 * 1_000)
+
+        try await client.refresh()
+
+        let accessToken = await store.get(tokenKey("access_token"))
+        let refreshToken = await store.get(tokenKey("refresh_token"))
+        let storedExpiry = await store.get(tokenKey("expires_at"))
+        let expiry = try XCTUnwrap(storedExpiry.flatMap { Int64($0) })
+        XCTAssertEqual(accessToken, "access-2")
+        XCTAssertEqual(refreshToken, "refresh-2")
+        XCTAssertGreaterThanOrEqual(expiry, before + 3_600_000)
+        let token = await client.getAccessToken()
+        XCTAssertEqual(token, "access-2", "a refreshed token reads as not expired")
+    }
+
+    func testRefreshFallsBackToExpiresAtAndKeepsAnUnrotatedRefreshToken() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            XCTAssertNil(requestJSON(request)["provider"], "no provider was stored")
+            let body: [String: Any] = ["accessToken": "access-2", "expiresAt": 9_999_999_999_000]
+            return (okResponse(for: request.url!), try JSONSerialization.data(withJSONObject: body))
         }
 
         let client = makeClient(session: makeMockSession())
@@ -496,10 +527,10 @@ final class OIDCClientTests: XCTestCase {
 
         try await client.refresh()
 
-        let accessToken = await store.get(tokenKey("access_token"))
         let refreshToken = await store.get(tokenKey("refresh_token"))
-        XCTAssertEqual(accessToken, "access-2")
+        let expiry = await store.get(tokenKey("expires_at"))
         XCTAssertEqual(refreshToken, "refresh-existing")
+        XCTAssertEqual(expiry, "9999999999000")
     }
 
     func testRefreshFailureClearsTokensAndEmitsSignedOut() async throws {
@@ -531,6 +562,66 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertNil(accessToken)
         XCTAssertNil(refreshToken)
         XCTAssertEqual(events, [.signedOut])
+    }
+
+    /// Only a refusal from the refresh route ends the session: a server error or no network throws and keeps
+    /// the tokens and the state.
+    func testRefreshFailureThatIsNotARefusalKeepsTheSession() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            (errorResponse(for: request.url!, status: 503), Data("{}".utf8))
+        }
+        let client = makeClient(session: makeMockSession())
+        let store = client.client.tokenStore
+        await store.set(tokenKey("access_token"), value: "expired")
+        await store.set(tokenKey("refresh_token"), value: "rt")
+        await store.set(tokenKey("expires_at"), value: "0")
+
+        let events = await states(of: client) {
+            do {
+                try await client.refresh()
+                XCTFail("Expected RawRouteError")
+            } catch let error as RawRouteError {
+                XCTAssertEqual(error.statusCode, 503)
+            } catch {
+                XCTFail("Expected RawRouteError, got \(error)")
+            }
+        }
+
+        let refresh = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(refresh, "rt")
+        XCTAssertEqual(events, [])
+        let token = await client.getAccessToken()
+        XCTAssertNil(token, "getAccessToken has no fresh token to give")
+        let kept = await store.get(tokenKey("refresh_token"))
+        XCTAssertEqual(kept, "rt", "getAccessToken keeps the refresh token too")
+    }
+
+    /// A refresh that a sign-out overtook stores nothing: the signed-out client stays signed out.
+    func testARefreshThatFinishesAfterASignOutStoresNothing() async throws {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let body: [String: Any] = url.path.hasSuffix("/refresh")
+                ? ["accessToken": "at-late", "refreshToken": "rt-late", "expiresIn": 3_600]
+                : [:]
+            return (okResponse(for: url), try JSONSerialization.data(withJSONObject: body))
+        }
+        let (client, store) = try await holdingClient()
+        let key = { (name: String) in tokenKey(name, exchangePath: "/aws-blocks/auth/exchange") }
+        await store.set(key("refresh_token"), value: "rt")
+        await store.arm(key("refresh_token"))
+
+        let refreshing = Task { try await client.refresh() }
+        await store.waitUntilHeld()
+        _ = try await client.signOut()
+        await store.release()
+        try await refreshing.value
+
+        let access = await store.get(key("access_token"))
+        let refresh = await store.get(key("refresh_token"))
+        XCTAssertNil(access)
+        XCTAssertNil(refresh)
+        let state = await client.authState
+        XCTAssertEqual(state, .signedOut)
     }
 
     func testRefreshWithoutTokenEmitsSignedOut() async throws {

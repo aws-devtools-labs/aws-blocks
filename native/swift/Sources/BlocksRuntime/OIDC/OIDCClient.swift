@@ -346,7 +346,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             if let refreshToken = json["refreshToken"] as? String {
                 await storeToken("refresh_token", refreshToken)
             }
-            await storeToken("expires_at", Self.stringifyExpiry(json["expiresIn"]))
+            await storeToken("expires_at", Self.expiresAt(json))
+            await storeToken("provider", provider)
         }
 
         let user = try OIDCUser.fromJSON(userJSON)
@@ -368,32 +369,37 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         try await task.value
     }
 
+    /// Refreshes the bearer tokens. Only a refusal from the refresh route (HTTP 400 or 401) ends the session:
+    /// it clears the stored tokens and emits `.signedOut`. Any other failure (offline, a server error, a
+    /// response without an access token) is thrown and leaves the tokens and the state as they were. A result
+    /// that a sign-in or sign-out on this client overtook while it was in flight is ignored.
     private func performRefresh() async throws {
+        let generation = sessionGeneration
         guard let refreshToken = await storedToken("refresh_token") else {
-            emit(.signedOut)
+            if generation == sessionGeneration { emit(.signedOut) }
             return
         }
 
         let json: [String: Any]
         do {
-            json = try await client.postRawRoute(path: refreshPath, body: ["refreshToken": refreshToken])
-        } catch let error as ClientClosedError {
-            // A closed client says nothing about the session, so the tokens stay.
-            throw error
-        } catch {
+            var body: [String: Any] = ["refreshToken": refreshToken]
+            // Required by a backend with two or more providers.
+            if let provider = await storedToken("provider") { body["provider"] = provider }
+            json = try await client.postRawRoute(path: refreshPath, body: body)
+        } catch let error as RawRouteError where error.statusCode == 400 || error.statusCode == 401 {
+            guard generation == sessionGeneration else { return }
             await clearTokens()
             emit(.signedOut)
             return
         }
+        guard generation == sessionGeneration else { return }
 
         guard let accessToken = json["accessToken"] as? String else {
-            await clearTokens()
-            emit(.signedOut)
-            return
+            throw OIDCError.malformedRefreshResponse
         }
 
         await storeToken("access_token", accessToken)
-        await storeToken("expires_at", Self.stringifyExpiry(json["expiresAt"]))
+        await storeToken("expires_at", Self.expiresAt(json))
         if let newRefresh = json["refreshToken"] as? String {
             await storeToken("refresh_token", newRefresh)
         }
@@ -529,7 +535,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             do {
                 try await refresh()
             } catch {
-                // Only a closed client throws here, and its expired token is no use.
+                // The refresh failed without ending the session (offline, a server error, a closed
+                // client): the expired token is no use, but the refresh token stays for a retry.
                 return nil
             }
             return await storedToken("access_token")
@@ -538,14 +545,8 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     }
 
     public func onAuthFailure() async {
-        do {
-            try await refresh()
-        } catch is ClientClosedError {
-            return
-        } catch {
-            await clearTokens()
-            emit(.signedOut)
-        }
+        // A refused refresh signs out inside `refresh()`; any other failure keeps the tokens for a retry.
+        try? await refresh()
     }
 
     // MARK: - Factory
@@ -626,7 +627,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     private static var sessionCookiesKey: String { "session_cookies" }
 
     // Computed: a generic type can't store a static property.
-    private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at"] }
+    private static var tokenNames: [String] { ["access_token", "refresh_token", "expires_at", "provider"] }
 
     /// Scoped by exchange path, so OIDC blocks sharing one `TokenStore` keep separate sessions.
     private func tokenKey(_ name: String) -> String {
@@ -665,9 +666,15 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         }
     }
 
-    private static func stringifyExpiry(_ value: Any?) -> String {
-        if let number = value as? NSNumber { return number.stringValue }
-        if let str = value as? String { return str }
+    /// The expiry to store, in epoch milliseconds: now plus the response's `expiresIn` seconds, or its
+    /// `expiresAt` (epoch milliseconds) when it has no `expiresIn`. `"0"` (already expired) for neither.
+    private static func expiresAt(_ json: [String: Any]) -> String {
+        if let seconds = json["expiresIn"] as? NSNumber {
+            let nowMs = Int64(Date().timeIntervalSince1970 * 1_000)
+            return String(nowMs + Int64(seconds.doubleValue * 1_000))
+        }
+        if let number = json["expiresAt"] as? NSNumber { return number.stringValue }
+        if let str = json["expiresAt"] as? String { return str }
         return "0"
     }
 }
