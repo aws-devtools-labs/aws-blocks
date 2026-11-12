@@ -97,6 +97,36 @@ void main() {
       expect(oidc.signOutPath, '/aws-blocks/auth/signout');
     });
 
+    test('derives the sso block routes', () async {
+      final server = _AuthServer();
+      final oidc = OidcClient.forAuth(
+        BlocksClient(
+          baseUrl: 'http://localhost:3001/aws-blocks/api',
+          client: server.client,
+        ),
+        providers: ['corp'],
+        relayTo: 'myapp://auth',
+        callbackPath: '/aws-blocks/auth/sso/callback',
+        signOutPath: '/aws-blocks/auth/sso/signout',
+      );
+
+      await oidc.signInRelay('corp', launcher: _Launcher());
+
+      expect(server.requests.map((r) => r.url.toString()), [
+        'http://localhost:3001/aws-blocks/auth/sso/authorize-params/corp',
+        'http://localhost:3001/aws-blocks/auth/sso/exchange',
+      ]);
+      expect(
+        oidc.authorizeParamsBasePath,
+        '/aws-blocks/auth/sso/authorize-params',
+      );
+      expect(oidc.exchangePath, '/aws-blocks/auth/sso/exchange');
+      expect(oidc.sessionPath, '/aws-blocks/auth/sso/session');
+      expect(oidc.refreshPath, '/aws-blocks/auth/sso/exchange/refresh');
+      expect(oidc.callbackPath, '/aws-blocks/auth/sso/callback');
+      expect(oidc.signOutPath, '/aws-blocks/auth/sso/signout');
+    });
+
     test('derives the routes from a custom callbackPath', () async {
       final server = _AuthServer();
       final oidc = OidcClient.forAuth(
