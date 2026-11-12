@@ -18,34 +18,36 @@ npm run sandbox:deploy # Deploy to AWS once and exit (no watch)
 
 Open http://localhost:3000 after `npm run dev`.
 
-**Local sign-in:** in mock/dev there is no real identity provider, so the
-`stubIdp` provider mounts an **in-process stub IdP** that signs real RS256
-tokens with its own keypair — exercising the same JWKS-fetch + token-verify path
-a real provider drives, with no credentials. Its `onAuthorize` hook decides who
-signs in (here, a single demo user). To use a real provider, swap `stubIdp(...)`
-for `google(...)` / `github(...)` / `customOidc(...)` in `aws-blocks/index.ts`
-and supply `clientId` / `clientSecret` from a `Secret`.
+**Local sign-in:** `stubIdp()` serves a real OIDC provider from the dev server
+(and from a sandbox deployment), so sign-in runs the same authorize → callback →
+token-verify path a real provider drives, with no IdP account. Its `onAuthorize`
+hook decides who signs in (here, a single demo user). Synth refuses `stubIdp()`
+for production, so `aws-blocks/index.ts` picks the provider with
+`getDeploymentType()`: before `npm run deploy`, replace the production entry's
+`issuer` and `clientId` with your IdP's (Okta, Entra ID, Auth0, any OIDC
+provider) and register `<your origin>/aws-blocks/auth/callback` as its redirect
+URI. Anyone who can reach a sandbox can sign in as the stub's users.
 
 ## Project Structure
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: AuthOIDC (stub provider), KVStore, requireAuth-gated API |
+| `aws-blocks/index.ts` | Backend: `Auth` (`store: 'builtin'`, stub provider locally), KVStore, requireAuth-gated API |
 | `src/index.ts` | Frontend: Authenticator sign-in + per-user KV demo |
 | `test/e2e.test.ts` | Tests exercising the public and protected API |
 | `index.html` | HTML shell |
 
 ## What's Included
 
-- **AuthOIDC (OpenID Connect sign-in)** — an authorization-code flow turned into
-  a server-side session. The `stubIdp` provider gives credential-free local
-  sign-in; the sign-in kickoff, callback, token exchange and session cookie are
-  all owned by the BB under `/aws-blocks/auth/*`. Sessions outlive the IdP's ID
-  token TTL via background refresh and are invalidated server-side on sign-out.
+- **Auth with direct OIDC federation** (`store: 'builtin'`) — your backend
+  verifies each sign-in itself and the block keeps only sessions: no Cognito
+  user pool. The sign-in kickoff, callback, token exchange and session cookie
+  are all owned by the block under `/aws-blocks/auth/*`. A user's `userId` is
+  `` `${issuer}:${sub}` ``.
 - **requireAuth-gated API** — `whoAmI` returns the signed-in user's
-  `userId` / `email` / `name` / `provider`; it (and the KV methods) throw `401`
-  for a signed-out caller.
-- **KVStore** — a per-user key/value store, keyed by the OIDC `userId`, gated by
+  `userId`, `email` and `name` (from the provider's claims) and `provider`; it
+  (and the KV methods) throw `401` for a signed-out caller.
+- **KVStore** — a per-user key/value store, keyed by the `userId`, gated by
   `auth.requireAuth(context)` so each user sees only their own namespace.
 
 ## Commands

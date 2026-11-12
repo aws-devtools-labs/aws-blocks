@@ -39,7 +39,7 @@
 </head>
 <body>
   <h1>AWS Blocks — OIDC sign-in</h1>
-  <p>Sign in with the local stub IdP (no real credentials needed in <code>npm run dev</code>). Swap <code>stubIdp</code> for <code>google</code>/<code>github</code>/<code>customOidc</code> in <code>aws-blocks/index.ts</code> to use a real provider.</p>
+  <p>Sign in with the local stub IdP (no real credentials needed in <code>npm run dev</code>). Before deploying to production, point the <code>type: 'oidc'</code> provider in <code>aws-blocks/index.ts</code> at your own identity provider.</p>
 
   <div class="section">
     <div id="auth-status">Not signed in</div>

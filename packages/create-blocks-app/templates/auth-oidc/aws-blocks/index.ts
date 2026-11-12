@@ -1,4 +1,4 @@
-import { ApiNamespace, Scope, KVStore, AuthOIDC, stubIdp } from '@aws-blocks/blocks';
+import { ApiNamespace, Scope, KVStore, Auth, getDeploymentType, stubIdp } from '@aws-blocks/blocks';
 
 // For coding agents: Leave these comments in place for future reference.
 // Read node_modules/@aws-blocks/blocks/README.md for all available Building Blocks
@@ -7,26 +7,33 @@ const scope = new Scope('my-app');
 
 const store = new KVStore(scope, 'app-store', {});
 
-// AuthOIDC with the in-process `stubIdp` provider: local dev/e2e sign in with no
-// real IdP. Swap it for `google`/`github`/`customOidc` + a Secret to deploy — see
-// node_modules/@aws-blocks/bb-auth-oidc/README.md.
 const DEMO_USER = { sub: 'stub-user-1', email: 'alice@stub.invalid', name: 'Alice Example' } as const;
 
-const auth = new AuthOIDC(scope, 'auth', {
-  providers: [
-    stubIdp({
-      name: 'demo',
-      users: [DEMO_USER],
-      // Auto-approve the configured user so `npm run dev` and the e2e sign in
-      // without a login screen. Remove `onAuthorize` to show the stub's
-      // built-in picker instead.
-      onAuthorize: (req) => req.users[0],
-    }),
-  ],
+// `store: 'builtin'` federates the provider directly: your backend verifies the
+// sign-in and keeps only sessions, with no Cognito user pool. `stubIdp()` serves
+// a real OIDC provider from `npm run dev` and sandboxes, but synth refuses it for
+// production, so production gets a `type: 'oidc'` entry. Replace its issuer and
+// clientId with your IdP's (Okta, Entra ID, Auth0, ...) and register
+// `<your origin>/aws-blocks/auth/callback` as its redirect URI before deploying.
+// See node_modules/@aws-blocks/bb-auth/README.md.
+const auth = new Auth(scope, 'auth', {
+  store: 'builtin',
+  providers: {
+    demo:
+      getDeploymentType() === 'production'
+        ? { type: 'oidc', issuer: 'https://login.example.com', clientId: 'replace-with-your-client-id' }
+        : stubIdp({
+            users: [DEMO_USER],
+            // Auto-approve the configured user so `npm run dev` and the e2e sign in
+            // without a login screen. Remove `onAuthorize` to show the stub's
+            // built-in picker instead.
+            onAuthorize: (req) => req.users[0],
+          }),
+  },
 });
 
 // The browser submits the <Authenticator>'s external sign-in action as a
-// redirect to the per-provider `signin` route AuthOIDC mounts.
+// redirect to the per-provider `signin` route the block mounts.
 export const authApi = auth.createApi();
 
 export const api = new ApiNamespace(scope, 'api', (context) => ({
@@ -34,15 +41,13 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     return { message: 'pong', timestamp: Date.now() };
   },
 
-  // requireAuth throws AuthOIDCErrors.NotAuthenticated (401) when there is no
-  // valid session.
   async whoAmI() {
     const user = await auth.requireAuth(context);
     return {
       userId: user.userId,
-      email: user.email,
-      name: user.name,
-      provider: user.provider,
+      email: user.attributes.email ?? null,
+      name: user.attributes.name ?? null,
+      provider: user.signInProvider,
     };
   },
 

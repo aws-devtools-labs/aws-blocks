@@ -2,10 +2,6 @@
 "@aws-blocks/create-blocks-app": patch
 ---
 
-test(auth-oidc): new OIDC template with a stub-IdP sign-in e2e
+New `auth-oidc` template: sign-in through an OpenID Connect provider with `Auth`'s `store: 'builtin'`, so your backend verifies each sign-in and no Cognito user pool is created. Locally and on sandboxes it signs in through `stubIdp()`, and production uses a `type: 'oidc'` entry you point at your own provider.
 
-Adds an `auth-oidc` template that signs in through an OpenID Connect provider.
-Locally it uses the in-process `stubIdp` (real RS256 tokens, no credentials), so
-the shipped e2e drives the full authorize → callback → session flow over HTTP
-and asserts a `requireAuth`-gated call then succeeds. This takes the daily canary
-to 14/20 Building Blocks (AuthOIDC, after DistributedDatabase reached 13).
+Its e2e drives the full authorize → callback → session flow over HTTP and checks that a `requireAuth`-gated call then succeeds.

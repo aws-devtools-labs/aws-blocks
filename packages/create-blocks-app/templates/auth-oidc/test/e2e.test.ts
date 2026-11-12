@@ -19,10 +19,10 @@ const serverPort: number = JSON.parse(readFileSync('package.json', 'utf-8')).blo
 const origin = `http://localhost:${serverPort}`;
 const readinessUrl = `${origin}/.blocks-sandbox/config.json`;
 
-// The AuthOIDC tests below drive the in-process stub IdP, which only exists in
-// the local mock runtime; against a running sandbox the server on :3000 proxies
-// to the deployed Lambda where there is no stub provider. The readiness
-// config.json carries which one we hit.
+// The sign-in tests below drive the stub IdP, which `stubIdp()` serves only in
+// the local mock runtime and on sandboxes; against a deployed stack the server
+// on :3000 proxies to the Lambda, whose provider this test does not control.
+// The readiness config.json carries which one we hit.
 let isLocalMock = false;
 
 test.before(async () => {
@@ -102,7 +102,7 @@ test('api: public method needs no session', async () => {
   assert.ok(typeof result.timestamp === 'number');
 });
 
-test('AuthOIDC - requireAuth rejects a signed-out caller', async () => {
+test('Auth - requireAuth rejects a signed-out caller', async () => {
   await authApi.setAuthState({ action: 'signOut' });
   await assert.rejects(api.whoAmI(), { status: 401 });
   await assert.rejects(api.getValue('k'), { status: 401 });
@@ -135,7 +135,7 @@ async function signInThroughStub(provider: string): Promise<void> {
   throw new Error('sign-in did not land on postSignInPath within the hop budget');
 }
 
-test('AuthOIDC - stub sign-in authorises a requireAuth call', async (t) => {
+test('Auth - stub sign-in authorises a requireAuth call', async (t) => {
   if (!isLocalMock) {
     t.skip('needs the local mock: the stub IdP only exists in `npm run dev`');
     return;
