@@ -1,0 +1,95 @@
+{
+  "openrpc": "1.3.2",
+  "info": { "title": "test", "version": "1.0.0" },
+  "methods": [
+    {
+      "name": "api.getTask",
+      "params": [
+        { "name": "id", "required": true, "schema": { "type": "string" } }
+      ],
+      "result": { "name": "GetTaskResult", "schema": { "$ref": "#/components/schemas/Task" } }
+    },
+    {
+      "name": "api.updateTask",
+      "params": [
+        { "name": "id", "required": true, "schema": { "type": "string" } },
+        { "name": "status", "required": true, "schema": { "$ref": "#/components/schemas/Status" } },
+        { "name": "sort", "required": false, "schema": { "type": "string", "enum": ["newest", "oldest"] } }
+      ],
+      "result": {
+        "name": "UpdateTaskResult",
+        "schema": {
+          "type": "object",
+          "properties": {
+            "ok": { "type": "boolean" }
+          },
+          "required": ["ok"]
+        }
+      }
+    },
+    {
+      "name": "api.getEvent",
+      "params": [],
+      "result": {
+        "name": "GetEventResult",
+        "schema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["moved"] },
+                "to": { "$ref": "#/components/schemas/Status" }
+              },
+              "required": ["kind", "to"]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": { "type": "string", "enum": ["flagged"] },
+                "severity": { "type": "string", "enum": ["low", "high"] }
+              },
+              "required": ["kind", "severity"]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "api.watchTasks",
+      "params": [],
+      "result": {
+        "name": "WatchTasksResult",
+        "schema": {
+          "x-blocks-transferable": "realtime/channel",
+          "x-blocks-type-args": [
+            {
+              "type": "object",
+              "properties": {
+                "taskId": { "type": "string" },
+                "change": { "type": "string", "enum": ["created", "deleted"] }
+              },
+              "required": ["taskId", "change"]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "components": {
+    "schemas": {
+      "Status": { "type": "string", "enum": ["todo", "in-progress", "done"] },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "$ref": "#/components/schemas/Status" },
+          "history": { "type": "array", "items": { "$ref": "#/components/schemas/Status" } },
+          "labels": { "type": "object", "additionalProperties": { "type": "string", "enum": ["red", "green"] } },
+          "priority": { "type": "string", "enum": ["low", "high"] },
+          "source": { "type": "string", "enum": ["web", "unknown"] }
+        },
+        "required": ["id", "status", "history", "labels"]
+      }
+    }
+  }
+}
