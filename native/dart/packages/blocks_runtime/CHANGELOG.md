@@ -22,6 +22,12 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- **Behaviour change:** with an `authProvider`, `BlocksClient` sends the
+  session cookie on every call that has one, and adds
+  `Authorization: Bearer` only when the provider returns a token. It used to
+  drop the cookie whenever an `authProvider` was set, so an app that set an
+  `OidcClient` signed in with the session cookie as its `authProvider` sent
+  neither.
 - **Breaking:** an `OidcClient` from a block's `getClient()` (or
   `OidcClient.fromJson`) stores its tokens and sign-in state under keys
   prefixed with the directory of the block's `exchangePath`, such as
