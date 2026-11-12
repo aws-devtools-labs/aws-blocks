@@ -598,7 +598,9 @@ public struct SwiftCodeGenerator {
         let fieldless = variants.first { unionCasePayload($0) == nil && $0.literal == nil }
         // With a fieldless fallback, a variant's decoding error is never thrown, so it isn't kept; nor is it when
         // only literal arms are tried, which have no error to keep.
-        let keepsLastError = fieldless == nil && variants.contains { unionCasePayload($0) != nil }
+        // An open enum arm is tried with `try?` (see below), so it keeps no error either.
+        let keepsLastError = fieldless == nil
+            && variants.contains { unionCasePayload($0) != nil && $0.literal == nil && openEnumArmValues($0) == nil }
         if keepsLastError {
             lines.append("\(indent)        var lastError: Error?")
         }
@@ -612,8 +614,10 @@ public struct SwiftCodeGenerator {
             let decode = variant.valueType != nil
                 ? "decoder.singleValueContainer().decode(\(payload).self)"
                 : "\(payload)(from: decoder)"
-            if fieldless != nil {
-                lines.append("\(indent)        if let value = try? \(decode) {")
+            // An open enum arm accepts only a value it knows; any other string tries the next arm.
+            let known = openEnumArmValues(variant).map(knownValueCondition)
+            if fieldless != nil || known != nil {
+                lines.append("\(indent)        if let value = try? \(decode)\(known.map { ", \($0)" } ?? "") {")
                 lines.append("\(indent)            self = .\(caseName)(value)")
                 lines.append("\(indent)            return")
                 lines.append("\(indent)        }")

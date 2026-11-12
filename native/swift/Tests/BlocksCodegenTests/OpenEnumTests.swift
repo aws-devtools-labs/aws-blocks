@@ -55,6 +55,18 @@ final class OpenEnumTests: XCTestCase {
         XCTAssertTrue(output.models.contains("    default: self = .unknownValue(rawValue)"))
     }
 
+    func testComponentOnlyAParameterUsesStaysClosedBesideAnInlineResultEnumOfItsName() throws {
+        let output = try generate(fixture: "43-open-enums")
+        XCTAssertTrue(output.models.contains("public nonisolated enum Mode: String, Codable {"))
+        XCTAssertTrue(output.api.contains("public enum Mode: RawRepresentable, Codable, Hashable {"))
+    }
+
+    func testOpenEnumArmOfAUnionWithoutDiscriminatorAcceptsOnlyKnownValues() throws {
+        let api = try generate(fixture: "43-open-enums").api
+        XCTAssertTrue(api.contains(#"if let value = try? Color(from: decoder), ["red", "blue"].contains(value.rawValue) {"#))
+        XCTAssertTrue(api.contains(#"if let value = try? Size(from: decoder), ["small", "large"].contains(value.rawValue) {"#))
+    }
+
     #if os(macOS)
     func testUnknownValuesDecodeAndRoundTrip() throws {
         let output = try generate(fixture: "43-open-enums")
@@ -88,6 +100,14 @@ final class OpenEnumTests: XCTestCase {
         encoder.outputFormatting = [.sortedKeys]
         check(String(decoding: try encoder.encode(task), as: UTF8.self) == wire, "round trip")
         check(Status(rawValue: "done") == .done, "known raw value")
+        // `Color` is open (a direct result), and also an arm of `getSwatch`'s union without a discriminator:
+        // `"small"` is a `Size`, not an unknown `Color`.
+        func swatch(_ text: String) throws -> Api.GetSwatch.Result {
+            try JSONDecoder().decode(Api.GetSwatch.Result.self, from: Data(text.utf8))
+        }
+        if case .size(.small) = try swatch(#""small""#) {} else { check(false, "size arm") }
+        if case .color(.red) = try swatch(#""red""#) {} else { check(false, "color arm") }
+        check((try? swatch(#""green""#)) == nil, "a value no arm knows")
         print("ok")
         """#
         guard let run = try runConsumer(models: output.models, api: output.api, main: main) else { return }
