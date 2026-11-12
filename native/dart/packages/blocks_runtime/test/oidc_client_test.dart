@@ -369,6 +369,13 @@ void main() {
     test('sends a stored access token as a bearer token', () async {
       final store = InMemoryTokenStore();
       await store.set('access_token', 'opaque-token');
+      await store.set(
+        'expires_at',
+        DateTime.now()
+            .add(const Duration(hours: 1))
+            .millisecondsSinceEpoch
+            .toString(),
+      );
       String? authorization;
       final client = sessionClient(
         MockClient((req) async {
@@ -384,6 +391,91 @@ void main() {
       );
       await client.restore();
       expect(authorization, 'Bearer opaque-token');
+    });
+
+    test('leaves out an expired access token', () async {
+      final store = InMemoryTokenStore();
+      await store.set('access_token', 'old-token');
+      await store.set('expires_at', '1');
+      final headers = <String, String>{};
+      final client = sessionClient(
+        MockClient((req) async {
+          headers.addAll(req.headers);
+          return http.Response(
+            jsonEncode({
+              'user': {'userId': 'u1', 'username': 'bob'},
+            }),
+            200,
+          );
+        }),
+        store: store,
+      );
+      await client.restore();
+      expect(headers, isNot(contains('authorization')));
+    });
+
+    for (final (label, body) in [
+      ('a body that is not JSON', '<html>ok</html>'),
+      (
+        'a user without its required fields',
+        jsonEncode({'user': <String, dynamic>{}}),
+      ),
+    ]) {
+      test('200 with $label throws, leaves the state', () async {
+        final client = sessionClient(
+          MockClient((_) async => http.Response(body, 200)),
+        );
+        final states = <OidcAuthState>[];
+        client.authStateChanges.listen(states.add);
+        await expectLater(
+          client.restore(),
+          throwsA(
+            isA<OidcRequestException>().having(
+              (e) => e.statusCode,
+              'statusCode',
+              200,
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(states, isEmpty);
+      });
+    }
+
+    test('a descriptor client reads the session route beside its exchange '
+        'route', () async {
+      Uri? url;
+      final client = OidcClient.fromJson(
+        {
+          'providers': ['corp'],
+          'providerConfigs': <String, dynamic>{},
+          'exchangePath': '/custom/oidc/exchange',
+          'signOutPath': '/custom/oidc/signout',
+        },
+        baseUrl: 'http://localhost:3000',
+        tokenStore: InMemoryTokenStore(),
+        httpClient: MockClient((req) async {
+          url = req.url;
+          return http.Response('', 401);
+        }),
+      );
+      expect(client.sessionPath, '/custom/oidc/session');
+      expect(await client.restore(), isNull);
+      expect(url.toString(), 'http://localhost:3000/custom/oidc/session');
+    });
+
+    test('an exchangePath with no / does not throw at construction', () {
+      final client = OidcClient(
+        exchangePath: 'exchange',
+        refreshPath: 'refresh',
+        signOutPath: 'signout',
+        providers: const [],
+        providerConfigs: const {},
+        baseUrl: 'http://localhost:3000',
+        tokenStore: InMemoryTokenStore(),
+        callbackPath: 'callback',
+      );
+      expect(client.sessionPath, '/session');
     });
 
     test('401: clears tokens, emits OidcSignedOut and returns null', () async {
