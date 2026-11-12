@@ -4,6 +4,7 @@ import com.aws.blocks.kotlin.builder.CodegenModelBuilder
 import com.aws.blocks.kotlin.generator.KotlinCodeGenerator
 import com.aws.blocks.kotlin.parser.OpenRpcParser
 import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.string.shouldNotContain
 import java.io.File
@@ -105,5 +106,18 @@ class OpenEnumTest : FunSpec({
         source shouldContain "public data object Unknown : Mode() {"
         source shouldContain "public data object UnKnown2 : Mode() {"
         source shouldContain "public data class UnknownValue(\n"
+    }
+
+    test("a result union with a string discriminator falls back to an Unknown arm") {
+        val source = fixture("45-open-enums")
+        source shouldContain "public data class Unknown(\n        public val json: JsonObject,\n      ) : Result()"
+        source shouldContain "else -> return Unknown(element)"
+        source shouldContain "is Unknown -> value.json"
+    }
+
+    test("a union only parameters use, or with a boolean discriminator, stays closed") {
+        fixture("18-hybrid-arm") shouldNotContain "return Unknown(element)"
+        // 24 has one union discriminated by the string `type` (open) and one by `isUpdated`.
+        fixture("24-nullable-discriminated-union").split("else -> return Unknown(element)").size shouldBe 2
     }
 })

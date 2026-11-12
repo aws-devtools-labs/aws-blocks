@@ -25,15 +25,17 @@ import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonClassDiscriminator
 import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 
 public class Api(
   private val client: BlocksClient,
@@ -125,9 +127,53 @@ public class Api(
   }
 
   public object GetEvent {
-    @Serializable
-    @JsonClassDiscriminator("kind")
+    @Serializable(with = Result.ResultSerializer::class)
     public sealed class Result {
+      /**
+       * Reads and writes [Result] with its discriminator `kind` as the JSON value
+       * the spec gives it.
+       */
+      public object ResultSerializer : KSerializer<Result> {
+        override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Result")
+
+        override fun serialize(encoder: Encoder, `value`: Result) {
+          val output = encoder as? JsonEncoder ?: throw SerializationException("Result can only be written as JSON")
+          val element = when (value) {
+            is Moved -> buildJsonObject {
+              put("kind", JsonPrimitive("moved"))
+              output.json.encodeToJsonElement(Moved.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is Flagged -> buildJsonObject {
+              put("kind", JsonPrimitive("flagged"))
+              output.json.encodeToJsonElement(Flagged.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is Unknown -> value.json
+          }
+          output.encodeJsonElement(element)
+        }
+
+        override fun deserialize(decoder: Decoder): Result {
+          val input = decoder as? JsonDecoder ?: throw SerializationException("Result can only be read from JSON")
+          val element = input.decodeJsonElement()
+          if (element is JsonObject) {
+            val fields = JsonObject(element - "kind")
+            when (element["kind"]) {
+              JsonPrimitive("moved") -> return input.json.decodeFromJsonElement(Moved.serializer(), fields)
+              JsonPrimitive("flagged") -> return input.json.decodeFromJsonElement(Flagged.serializer(), fields)
+              else -> return Unknown(element)
+            }
+          }
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"kind\": \"moved\"; or an object with \"kind\": \"flagged\"")
+        }
+      }
+
+      /**
+       * An arm this client was generated without: the object as the server sent it.
+       */
+      public data class Unknown(
+        public val json: JsonObject,
+      ) : Result()
+
       @Serializable
       @SerialName("moved")
       public data class Moved(
