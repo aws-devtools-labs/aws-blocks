@@ -499,7 +499,7 @@
             "OPEN_NEXT_ORIGIN": "{}"
           }
         },
-        "Handler": "index.handler",
+        "Handler": "blocks_cache_guard_handler.handler",
         "LoggingConfig": {
           "LogGroup": {
             "Ref": "HostingComputedefaultFunctionLogGroup17DE1884"
@@ -518,6 +518,19 @@
       "DependsOn": [
         "HostingComputedefaultFunctionRole851C77D3"
       ]
+    },
+    "HostingCdnSsrOriginVerifySecretF9EA198C": {
+      "Type": "AWS::SecretsManager::Secret",
+      "Properties": {
+        "Description": "The Referer header value CloudFront sends to the server (SSR) origin REST API.",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "IncludeSpace": false,
+          "PasswordLength": 64
+        }
+      },
+      "UpdateReplacePolicy": "Delete",
+      "DeletionPolicy": "Delete"
     },
     "HostingCdnSsrRestApi1DBCCCDD": {
       "Type": "AWS::ApiGateway::RestApi",
@@ -545,7 +558,18 @@
               "Action": "execute-api:Invoke",
               "Condition": {
                 "StringNotEquals": {
-                  "aws:Referer": "<hash>"
+                  "aws:Referer": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "{{resolve:secretsmanager:",
+                        {
+                          "Ref": "HostingCdnSsrOriginVerifySecretF9EA198C"
+                        },
+                        ":SecretString:::}}"
+                      ]
+                    ]
+                  }
                 }
               },
               "Effect": "Deny",
@@ -559,7 +583,7 @@
         }
       }
     },
-    "HostingCdnSsrRestApiDeploymentD26CB3A906e423fe3478a78f61a03ce411e4ceda": {
+    "HostingCdnSsrRestApiDeploymentD26CB3A90ec3e3c244a512882019d764c4adffc2": {
       "Type": "AWS::ApiGateway::Deployment",
       "Properties": {
         "Description": "Automatically created by the RestApi construct",
@@ -580,7 +604,7 @@
       "Type": "AWS::ApiGateway::Stage",
       "Properties": {
         "DeploymentId": {
-          "Ref": "HostingCdnSsrRestApiDeploymentD26CB3A906e423fe3478a78f61a03ce411e4ceda"
+          "Ref": "HostingCdnSsrRestApiDeploymentD26CB3A90ec3e3c244a512882019d764c4adffc2"
         },
         "RestApiId": {
           "Ref": "HostingCdnSsrRestApi1DBCCCDD"
@@ -850,7 +874,7 @@
         "CachePolicyConfig": {
           "Comment": "SSR/ISR/SWR: honor origin Cache-Control; key on Next.js router headers",
           "DefaultTTL": 0,
-          "MaxTTL": 31536000,
+          "MaxTTL": 86400,
           "MinTTL": 0,
           "Name": {
             "Fn::Join": [
@@ -1347,22 +1371,26 @@
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 502,
               "ResponseCode": 502,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 503,
               "ResponseCode": 503,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
             },
             {
-              "ErrorCachingMinTTL": 10,
+              "ErrorCachingMinTTL": 0,
               "ErrorCode": 504,
               "ResponseCode": 504,
               "ResponsePagePath": "/builds/golden-ssr/_error.html"
+            },
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 501
             }
           ],
           "DefaultCacheBehavior": {
@@ -1481,7 +1509,34 @@
               "OriginCustomHeaders": [
                 {
                   "HeaderName": "Referer",
-                  "HeaderValue": "<hash>"
+                  "HeaderValue": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "{{resolve:secretsmanager:",
+                        {
+                          "Ref": "HostingCdnSsrOriginVerifySecretF9EA198C"
+                        },
+                        ":SecretString:::}}"
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "HeaderName": "x-blocks-front-door",
+                  "HeaderValue": {
+                    "Fn::Select": [
+                      2,
+                      {
+                        "Fn::Split": [
+                          "/",
+                          {
+                            "Ref": "AWS::StackId"
+                          }
+                        ]
+                      }
+                    ]
+                  }
                 }
               ],
               "OriginPath": {

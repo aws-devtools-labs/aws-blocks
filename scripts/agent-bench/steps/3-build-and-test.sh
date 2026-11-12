@@ -23,7 +23,7 @@ AGENT_EXEC=(node "$(cd "$(dirname "$0")" && pwd)/lib/agent-exec.mjs")
 agent_run() { "${AGENT_EXEC[@]}" run "$WORKSPACE" "$@"; }
 
 # Pin to the lockfile-resolved version so the browser/runner stay reproducible.
-PW_VERSION="1.60.0"
+PW_VERSION="1.64.1"
 
 # Per-cell scratch dir for the supervisor's captures (runner-owned, 0700: the agent user can't reach
 # or pre-create anything in it).
@@ -32,7 +32,7 @@ CELL_TMP="$(mktemp -d "/tmp/bench-${TASK:-default}-XXXXXX")"
 # Test-only mock switch, inherited by both the dev server and Playwright. Tasks
 # whose grader needs a server-side test backdoor gate that surface on BLOCKS_MOCK
 # and return null otherwise, so it is inert in a real deployment. Example:
-# cognito-profile's api.getLastCode exposes the most-recently delivered OTP
+# cognito-profile's api.getLastCode exposes the most-recently delivered sign-up code
 # (the grader has no mailbox) only when this is set. (BLOCKS_* passes the agent env policy.)
 export BLOCKS_MOCK=true
 

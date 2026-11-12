@@ -39,7 +39,7 @@ import {
   IPX_LAMBDA_PACKAGE_JSON,
 } from './ipx_lambda_template.js';
 import { normalizeBasePath } from './shared/basepath.js';
-import { buildProfile } from './shared/build_profile.js';
+import { buildProfile, shouldSkipBuild } from './shared/build_profile.js';
 import { targetCompute } from './shared/compute_target.js';
 
 export type NitroAdapterOptions = {
@@ -261,7 +261,9 @@ type NitroRouteRule = {
  * @returns framework-agnostic DeployManifest ready for the L3 construct
  */
 export const nitroAdapter = (options: NitroAdapterOptions): DeployManifest => {
-  const { projectDir, skipBuild, preset, buildCommand } = options;
+  const { projectDir, preset, buildCommand } = options;
+  // Reuse a finished build when the deploy profile asks for it (see `shouldSkipBuild`).
+  const skipBuild = shouldSkipBuild(options.skipBuild, () => fs.existsSync(path.join(projectDir, '.output')));
   // Web Functions run a plain Node.js HTTP server → `node-server`. An API
   // Gateway HTTP API invokes the server buffered, which a streaming
   // `aws-lambda` handler (`awsLambda.streaming: true`) can't answer → a
@@ -1505,6 +1507,13 @@ const presetToCompute = (
   };
 };
 
+/** `url` without its trailing slashes: a linear scan, so a long run of `/` costs no regex backtracking. */
+const withoutTrailingSlashes = (url: string): string => {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === '/') end--;
+  return url.slice(0, end);
+};
+
 /**
  * Walk `.output/public/` and emit static routes for prerendered output,
  * then append a catch-all `/* → default` for SSR.
@@ -1537,7 +1546,7 @@ const buildRoutes = (
   // compute resource (it's a reserved target).
   if (hasImageOptimization) {
     addRoute({
-      pattern: `${ipxBaseURL.replace(/\/+$/, '')}/*`,
+      pattern: `${withoutTrailingSlashes(ipxBaseURL)}/*`,
       target: 'image-optimization',
     });
   }

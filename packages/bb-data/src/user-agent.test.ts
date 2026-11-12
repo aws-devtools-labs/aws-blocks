@@ -37,7 +37,7 @@ function cleanEnvVars(fullId: string): void {
 
 class ParentAuthBB extends Scope {
 	constructor(parent: ScopeParent, id: string) {
-		super(id, { parent, bbName: 'AuthBasic', bbVersion: '1.0.1' });
+		super(id, { parent, bbName: 'Auth', bbVersion: '1.0.1-rc.1' });
 	}
 }
 
@@ -65,7 +65,7 @@ describe('Database user-agent integration (real Database, Data API path)', () =>
 		}
 	});
 
-	test('Database nested under AuthBasic includes parent BB in customUserAgent', async () => {
+	test('Database nested under Auth includes parent BB in customUserAgent', async () => {
 		const root = { id: 'my-app' };
 		const auth = new ParentAuthBB(root, 'auth');
 		const fullId = 'my-app/auth/db';
@@ -75,7 +75,7 @@ describe('Database user-agent integration (real Database, Data API path)', () =>
 			const ua = await getCustomUserAgent(db);
 			assert.deepStrictEqual(ua, [
 				['aws-blocks', CORE_VERSION],
-				['bb', 'AuthBasic/1.0.1'],
+				['bb', 'Auth/1.0.1-rc.1'],
 				['bb', `${BB_NAME}/${BB_VERSION}`],
 			]);
 		} finally {
@@ -206,13 +206,13 @@ describe('Database user-agent integration (PgClientEngine / connectionString pat
 		}
 	});
 
-	test('Database nested under AuthBasic includes parent BB in application_name', async () => {
+	test('Database nested under Auth includes parent BB in application_name', async () => {
 		const root = { id: 'my-app' };
 		const auth = new ParentAuthBB(root, 'auth');
 		const db = new Database(auth, 'db', { connection: { connectionString: CONN } });
 
 		const appName = await effectiveApplicationName(db);
-		assert.strictEqual(appName, `aws-blocks/${CORE_VERSION} bb/AuthBasic/1.0.1 bb/${BB_NAME}/${BB_VERSION}`);
+		assert.strictEqual(appName, `aws-blocks/${CORE_VERSION} bb/Auth/1.0.1-rc.1 bb/${BB_NAME}/${BB_VERSION}`);
 	});
 
 	test('custom (non-official) ancestor BB is excluded from application_name', async () => {

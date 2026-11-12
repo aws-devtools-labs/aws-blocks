@@ -97,7 +97,7 @@ This stack creates, in each of them:
 | Resource | Purpose |
 |----------|---------|
 | GitHub OIDC identity provider | Lets GitHub Actions exchange its OIDC token for AWS credentials (skipped if `GITHUB_OIDC_PROVIDER_ARN` is set) |
-| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies, orphaned Lambda/RDS log groups), Cognito admin calls, Supabase test secret |
+| `blocks-github-e2e` role | Assumable only by jobs in this repo's `e2e` GitHub environment; CDK deploys, E2E stack/bucket cleanup, the `cleanup-stacks.yml` quota sweeps (REST APIs, API Gateway CloudWatch roles, CloudFront response headers policies, orphaned Lambda/RDS log groups) and its describe-only check on Amplify sandbox tables a stuck delete left behind, Cognito admin calls, Supabase test secret |
 | `blocks-github-bench` role | Account 1 only (`E2E_AGENT_BENCH=1`). Agent bench (`agent-bench.yml`), assumable only by jobs in this repo's `agent-bench` GitHub environment; Bedrock model invocation and `bench/*` in the bench bucket |
 | Agent bench bucket | Account 1 only (`E2E_AGENT_BENCH=1`). Per-cell bench results and the baseline the PR scoreboard compares against |
 
@@ -157,7 +157,10 @@ can't assume `blocks-github-e2e` and jobs in `e2e` can't assume
 
 PR E2E jobs are spread over a pool of E2E accounts, all behind the same `e2e`
 GitHub environment. `.github/actions/e2e-slot` maps each PR to one account (PR
-number mod the number of accounts); runs without a PR use account 1. Every pool
+number mod the number of accounts); runs without a PR use account 1. The E2E
+Hosting legs add a fixed per-leg offset (0 to 2) to the PR number, so one
+run's Hosting stacks, and their REST API deletes (one every 30 seconds per
+account), use three accounts. Every pool
 account runs this stack unchanged, so every account's role has the same
 permissions and trusts the same `e2e` environment. The pool spreads quota; it
 does not separate the accounts from each other, so give every pool account the

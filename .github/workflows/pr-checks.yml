@@ -54,7 +54,9 @@ jobs:
   #
   # Only the head commit counts: a later commit without the trailer goes back
   # to the default. Each PR uses a fixed E2E account from the pool (PR number
-  # mod the pool size, see .github/actions/e2e-slot), so parallel PRs spread across it.
+  # mod the pool size, see .github/actions/e2e-slot), so parallel PRs spread
+  # across it. The E2E Hosting legs spread one run over the pool too, each at
+  # a fixed offset from the PR's account (see e2e-hosting).
   #
   # A job the changes call for is never skipped: if the trailer leaves it out,
   # or names an unknown job, it fails in its first step instead. E2E Sandbox
@@ -257,10 +259,10 @@ jobs:
 
       # The Harbor agent check and agent bench only run from main or with model credentials, so
       # their cache-scope hardening (the Harbor build container and output guard, agent bench's
-      # lockfile-pinned Playwright matching PW_VERSION) and the Harbor approval gate are checked
-      # here on every PR.
-      - name: Test the benchmark workflows' cache-scope hardening and approval gate
-        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/agent-bench-playwright.test.mjs
+      # lockfile-pinned Playwright matching PW_VERSION), the Harbor approval gate and the bounds on
+      # the Harbor model credentials are checked here on every PR.
+      - name: Test the benchmark workflows' cache-scope hardening, approval gate and credentials
+        run: node --test scripts/ci/harbor-packages-isolation.test.mjs scripts/ci/harbor-approval-gate.test.mjs scripts/ci/harbor-credentials.test.mjs scripts/ci/agent-bench-playwright.test.mjs
 
       # Every BB with an aws-runtime export (and the create-block template) must
       # call assertNotMockInDeployedEnv at the top of its mock entry.
@@ -275,15 +277,38 @@ jobs:
       - name: Check client user-agent middleware consistency
         run: npm run check:client-user-agent
 
+      # publish:local empties dist-registry/ before every run; this pins that the
+      # reset can never delete anything outside it.
+      - name: Test the local-registry reset guard
+        run: npx tsx --test scripts/publish/local-registry.test.ts
+
       # A test app whose stacks the stale-stack sweeper can't match leaks every
       # stack whose teardown fails.
       - name: Test that cleanup-stacks.yml covers the E2E stacks
         run: node --test scripts/ci/e2e-stack-prefixes.test.mjs
 
+      # The scheduled stack cleanup (cleanup-stacks.yml) runs this script to
+      # unblock Amplify sandboxes stuck in DELETE_FAILED.
+      - name: Test the stuck Amplify sandbox delete
+        run: node --test scripts/ci/amplify-stuck-delete.test.mjs
+
       # Decides which E2E jobs run, and which a PR can't skip by leaving them
       # out of its E2E trailer.
       - name: Test the E2E job selection
         run: node --test scripts/ci/e2e-selection.test.mjs
+
+      # Maps a PR, and each E2E Hosting leg, to its E2E account.
+      - name: Test the E2E account slot
+        run: node --test scripts/ci/e2e-slot.test.mjs
+      # Secret values reach $GITHUB_ENV only masked, and pull request workflows
+      # grant id-token: write only to the jobs that assume an AWS role.
+      - name: Test workflow secret handling and OIDC scope
+        run: node --test scripts/ci/workflow-secrets.test.mjs
+
+      # No value is interpolated unescaped into a RegExp, a shell command, a
+      # workflow run: script, generated Kotlin/Swift/Dart source or HTML.
+      - name: Check injection sink guards
+        run: node --test scripts/sink-guards/regex.test.mjs scripts/sink-guards/shell.test.mjs scripts/sink-guards/workflows.test.mjs scripts/sink-guards/codegen.test.mjs scripts/sink-guards/html.test.mjs
 
       # Deletes the stacks a cancelled or crashed E2E job leaves behind.
       - name: Test the E2E teardown
@@ -308,6 +333,11 @@ jobs:
       - name: Test the Hosting teardown replay
         run: node --test scripts/ci/hosting-teardown-replay.test.mjs
 
+      # The wait the hosting E2E suites run between deploy and their first test
+      # (scripts/ci/hosting-ready.ts).
+      - name: Test the hosting readiness wait
+        run: npx tsx --test scripts/ci/hosting-ready.test.ts
+
       - name: Test the E2E cleanup wrapper
         run: node --test scripts/ci/e2e-cleanup.test.mjs
 
@@ -316,6 +346,16 @@ jobs:
       # as "nothing to sweep".
       - name: Test the stack cleanup's listing failures
         run: node --test scripts/ci/rest-api-quota.test.mjs scripts/ci/cleanup-listings.test.mjs
+
+      # The Windows E2E driver's teardown failure reporting and the stack tag
+      # cleanup-stacks.yml needs to reclaim a stack it leaks.
+      - name: Test the CI template driver helpers
+        run: node --test scripts/ci/_proc.test.mjs scripts/ci/_scaffold-tag.test.mjs
+
+      # .puppeteerrc.cjs skips Puppeteer's browser download on GitHub Actions,
+      # but only for installs under the repo's own node_modules.
+      - name: Test the Puppeteer download gate
+        run: node --test scripts/ci/puppeteerrc.test.mjs
 
       # Runs on the root build output, before Unit Tests: a package `pretest` that
       # bundles an asset would otherwise hide a bundle the release build skips.
@@ -462,6 +502,14 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # tsx runs the e2e suites without type-checking them, so a test's
+      # `@ts-expect-error` (a typed-DX assertion: "this call must not
+      # compile") would go unchecked. Type-check the backend, the frontend and
+      # the tests together.
+      - name: Type-check the comprehensive app and its e2e tests
+        working-directory: test-apps/comprehensive
+        run: npx tsc --noEmit -p tsconfig.json
 
       - name: E2E Test Local
         run: npm run test:e2e:local
@@ -650,6 +698,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      - name: Generate the test-support secret
+        # This run's test-support secret: random per run, masked in the logs, never
+        # stored. The deploy registers it as config for the e2e build's gated
+        # test-only methods, and the tests send it, so nothing reads it from AWS.
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
+
       - name: E2E Test Sandbox
         run: npm run test:e2e:sandbox
 
@@ -792,12 +849,20 @@ jobs:
       max-parallel: 1
       matrix:
         front-door: [apigateway, cloudfront]
+        # The cloudfront leg also turns on `defaults.strictNamespacePlacement`, so
+        # the bare endpoint's refusal of placed namespaces is proven on AWS while
+        # the apigateway leg keeps proving the default (off) behaviour, with no
+        # extra deploy.
+        include:
+          - front-door: cloudfront
+            strict-namespace-placement: 'true'
     env:
       # `pr-`, not `compute-`: the stack name already starts `bb-test-compute-`, and
       # the app adds the leg (`-cf` / `-gw`) itself; the extra characters pushed
       # the app's FileBucket name past S3's 63 at four-digit PR numbers.
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ github.run_attempt }}
       COMPUTE_API_FRONT_DOOR: ${{ matrix.front-door }}
+      COMPUTE_STRICT_NAMESPACE_PLACEMENT: ${{ matrix.strict-namespace-placement || 'false' }}
     # No BLOCKS_SANDBOX_KEEP: ending the job once the delete has started would
     # release the concurrency group above while this stack's endpoints are
     # still in the shared VPC. The suite destroys its stacks and waits. (The
@@ -1001,6 +1066,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      - name: Generate the test-support secret
+        # This run's test-support secret: random per run, masked in the logs, never
+        # stored. The deploy registers it as config for the e2e build's gated
+        # test-only methods, and the tests send it, so nothing reads it from AWS.
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
+
       - name: E2E Test Production
         run: npm run test:e2e:production
 
@@ -1100,12 +1174,15 @@ jobs:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
           index: ${{ needs.detect-changes.outputs.e2e-index }}
 
+      # Masks every value (line by line) before exporting it to later steps;
+      # see scripts/ci/secret-to-env.sh.
       - name: Fetch Supabase secrets
         run: |
-          SECRET=$(aws secretsmanager get-secret-value \
+          set -euo pipefail
+          aws secretsmanager get-secret-value \
             --secret-id blocks/supabase-e2e \
-            --query SecretString --output text)
-          echo "$SECRET" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_ENV"
+            --query SecretString --output text \
+            | scripts/ci/secret-to-env.sh
 
       - name: Apply test schema
         run: npx tsx packages/bb-data/test/apply-schema.ts
@@ -1126,17 +1203,32 @@ jobs:
     environment: e2e
     strategy:
       fail-fast: false
-      # The legs run in one account, which allows one REST API delete every 30
-      # seconds, so their stack deletes can queue behind each other. They are
-      # not spread on purpose: fixed delays would need re-tuning whenever the
-      # suites' durations change. scripts/ci/hosting-teardown-replay.mjs
-      # replays recent runs' deletes through that quota, to check how long
-      # they wait or to evaluate a schedule (its header lists the inputs).
+      # API Gateway allows one REST API delete every 30 seconds per account,
+      # and CloudFormation fails a REST API delete it can't make in about 4.5
+      # minutes (DELETE_FAILED, 429 Too Many Requests). The legs' stacks hold
+      # 14 REST APIs (DefaultCompute/API, plus Cdn/SsrRestApi on the nextjs,
+      # nuxt and sveltekit legs), and other PRs' runs delete theirs in the
+      # same accounts. So each leg uses the account `account-offset` after
+      # the PR's own (see .github/actions/e2e-slot), spreading every run's
+      # deletes over three accounts. The offsets keep the 2-API legs apart and
+      # put the fewest REST APIs (4, against 5 and 5) on offset 0, which also
+      # takes the PR's Sandbox, Production, Telemetry and Compute Smoke stacks.
+      # A leg's offset must stay fixed: changing it moves the leg's stack to
+      # another account, and the old account's cleanup-stacks.yml leg then
+      # has to remove anything left there.
+      #
+      # Teardown waits (`teardown-at`) are not set on purpose: fixed delays
+      # would need re-tuning whenever the suites' durations change, and most
+      # failed deletes queue behind other runs, which no delay inside one run
+      # avoids. scripts/ci/hosting-teardown-replay.mjs replays recent runs'
+      # deletes through that quota, to check how long they wait or to evaluate
+      # a schedule or other offsets (its header lists the inputs).
       matrix:
         include:
           - framework: spa
             app-dir: test-apps/hosting-spa
             script: test:e2e:hosting-spa
+            account-offset: 1
           # The same SPA suite behind the regional ALB door (HOSTING_FRONT_DOOR),
           # then a redeploy of the kept sandbox. The other built-in doors are
           # covered by template tests and run as follow-up lanes.
@@ -1144,38 +1236,48 @@ jobs:
             app-dir: test-apps/hosting-spa
             script: test:e2e:hosting-spa
             front-door: alb
+            account-offset: 2
           - framework: nextjs
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
+            account-offset: 1
           - framework: nuxt
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
+            account-offset: 2
           - framework: astro
             app-dir: test-apps/hosting-ssr-astro
             script: test:e2e:hosting-ssr-astro
+            account-offset: 2
           - framework: astro-default404
             app-dir: test-apps/hosting-ssr-astro-default404
             script: test:e2e:hosting-ssr-astro-default404
+            account-offset: 0
           - framework: sveltekit
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
+            account-offset: 0
           - framework: preview
             app-dir: test-apps/hosting-preview
             script: test:e2e:hosting-preview
+            account-offset: 1
           # Same suite with the SSR server on AWS Lambda Web Functions
           # (compute.type: 'web-function'); the app reads HOSTING_COMPUTE_TYPE.
           - framework: sveltekit-web-function
             app-dir: test-apps/hosting-ssr-sveltekit
             script: test:e2e:hosting-ssr-sveltekit
             compute-type: web-function
+            account-offset: 2
           - framework: nextjs-web-function
             app-dir: test-apps/hosting-ssr
             script: test:e2e:hosting-ssr
             compute-type: web-function
+            account-offset: 0
           - framework: nuxt-web-function
             app-dir: test-apps/hosting-ssr-nuxt
             script: test:e2e:hosting-ssr-nuxt
             compute-type: web-function
+            account-offset: 1
     env:
       BLOCKS_STACK_SUFFIX: pr-${{ github.event.pull_request.number || github.run_id }}-${{ matrix.framework }}
       HOSTING_COMPUTE_TYPE: ${{ matrix.compute-type || 'lambda' }}
@@ -1208,12 +1310,18 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # This leg's account: the PR's, moved by the leg's account-offset.
+      - id: e2e-slot
+        uses: ./.github/actions/e2e-slot
+        with:
+          offset: ${{ matrix.account-offset }}
+
       - name: Configure AWS credentials
         id: aws-creds
         uses: ./.github/actions/e2e-aws-credentials
         with:
           role-arns: ${{ secrets.AWS_ROLE_ARNS }}
-          index: ${{ needs.detect-changes.outputs.e2e-index }}
+          index: ${{ steps.e2e-slot.outputs.index }}
 
       # Bounded: an apt mirror can stall silently (once for 57 min, until the job
       # timeout). The wrapper retries an attempt that prints nothing for 8 min and
@@ -1222,6 +1330,15 @@ jobs:
       - name: Install Playwright
         timeout-minutes: 25
         run: node scripts/ci/install-playwright.mjs chromium
+
+      - name: Generate the test-support secret
+        # This run's test-support secret: random per run, masked in the logs, never
+        # stored. The deploy registers it as config for the e2e build's gated
+        # test-only methods, and the tests send it, so nothing reads it from AWS.
+        run: |
+          secret="$(openssl rand -hex 32)"
+          echo "::add-mask::$secret"
+          echo "BLOCKS_TEST_SUPPORT_SECRET=$secret" >> "$GITHUB_ENV"
 
       - name: E2E Test Hosting (${{ matrix.framework }})
         id: e2e

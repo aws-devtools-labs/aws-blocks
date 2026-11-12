@@ -391,7 +391,7 @@ describe('telemetry/opt-out persists no identifiers even with --telemetry-file',
         assert.ok(!existsSync(join(project, '.blocks', 'config.json')), 'project config.json must not be written');
         assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
         assert.doesNotMatch(result.stderr, /sending event to/, 'no event should be sent');
-        assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+        assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(project, { recursive: true, force: true });
@@ -435,7 +435,7 @@ describe('telemetry/trackCommand honors a mid-run opt-out', () => {
         'installation-id must not be written',
       );
       assert.ok(!existsSync(telemetryFile), '--telemetry-file must not be written');
-      assert.ok(!result.stderr.includes('AWS Blocks collects anonymous usage data'), 'no first-run notice');
+      assert.ok(!result.stderr.includes('AWS Blocks collects usage data'), 'no first-run notice');
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(project, { recursive: true, force: true });
@@ -1055,10 +1055,55 @@ describe('telemetry/identifiers first-run notice', () => {
       cwd: __dirname,
     });
 
-    assert.ok(result.stderr.includes('AWS Blocks collects anonymous usage data to improve the product.'));
-    assert.ok(result.stderr.includes('No customer content or PII is collected.'));
+    assert.ok(result.stderr.includes('AWS Blocks collects usage data to improve the product.'));
     assert.ok(result.stderr.includes('AWS_BLOCKS_DISABLE_TELEMETRY=1'));
     assert.ok(result.stdout.trim().length > 0, 'Should output an installation ID');
+
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('first-run notice states what is sent, does not claim "no PII", and gives opt-outs that work everywhere', () => {
+    const tmp = join(tmpdir(), `blocks-test-firstrun-wording-${Date.now()}`);
+    mkdirSync(tmp, { recursive: true });
+
+    const script = `
+      import { getInstallationId } from './identifiers.js';
+      getInstallationId();
+    `;
+
+    const result = spawnSync(process.execPath, [
+      '--input-type=module',
+      '-e', script,
+    ], {
+      encoding: 'utf-8',
+      env: { ...process.env, HOME: tmp },
+      cwd: __dirname,
+    });
+    const notice = result.stderr;
+
+    // The endpoint sees the source IP of every request, so the notice must not
+    // promise that no personal data reaches it, and must say so in full.
+    assert.doesNotMatch(notice, /\bPII\b/);
+    assert.doesNotMatch(notice, /anonymous/i);
+    assert.ok(notice.includes('The collection endpoint also receives your IP address, as with any HTTPS request.'), notice);
+    // What the service keeps, and for how long: the IP address is dropped from accepted requests,
+    // events are kept for up to 1 year and logs of all requests for up to 10 years.
+    assert.match(notice, /It is not stored, except in logs of requests that the endpoint's firewall blocks\./);
+    assert.match(notice, /Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years\./);
+    // The sender sets no User-Agent header, so only the payload's package manager user agent is claimed.
+    assert.doesNotMatch(notice, /IP address and user agent/);
+    // What the event itself carries, and what it never carries.
+    assert.match(notice, /random installation and project IDs, and an event ID and timestamp/);
+    assert.match(notice, /the template name and version/);
+    assert.match(notice, /names and versions of the official Building Blocks the app uses, how many Building Blocks it uses/);
+    assert.match(notice, /custom Building Block names are never sent/);
+    assert.match(notice, /never include names, email addresses, AWS account IDs, ARNs, file paths, file contents or source code/);
+    // Opt-outs that work from any directory, and the scope of the commands without --global.
+    assert.ok(notice.includes('export AWS_BLOCKS_DISABLE_TELEMETRY=1'), notice);
+    assert.ok(notice.includes('npx --no -- cdk-blocks telemetry disable --global'), notice);
+    assert.ok(notice.includes('npx --no -- blocks-telemetry --disable --global'), notice);
+    assert.doesNotMatch(notice, /npx blocks-telemetry/, 'an unscoped npx name could resolve to a package from the registry');
+    assert.match(notice, /Without --global, these commands opt out the current app only\./);
 
     rmSync(tmp, { recursive: true, force: true });
   });

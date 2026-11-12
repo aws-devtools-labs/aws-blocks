@@ -1,0 +1,3690 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Public types for the unified `Auth` Building Block.
+ *
+ * TYPES ONLY: this module uses `import type` exclusively and declares no
+ * values (no `const`, `function` or `class`), so every entry point — mock,
+ * AWS, CDK and browser — can re-export it without pulling in runtime code.
+ *
+ * Status: published as `@aws-blocks/bb-auth` and exported from the
+ * `@aws-blocks/blocks` umbrella. The option groups and the gated method surface
+ * below are the contract the runtime layers implement. `types-test.ts` is the compile-time proof
+ * that the mode gates work and that `Auth<O>` stays covariant in `O`.
+ */
+
+import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
+import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Options
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Options for the `Auth` Building Block.
+ *
+ * **First, choose where your users live** — the block's {@link AuthStore}:
+ *
+ * - `store: 'cognito'` — the default, so usually omitted
+ *   ({@link CognitoAuthOptions}). Users are records in an Amazon Cognito user
+ *   pool: email + password, MFA, passkeys, social sign-in (`type: 'google'`,
+ *   `'facebook'`, `'amazon'`, `'apple'`), SAML (`type: 'saml'`) and OIDC
+ *   federated through Cognito (`type: 'oidc'`). Cognito groups, `auth.admin`
+ *   and Cognito-issued tokens work for every user.
+ * - `store: 'builtin'` ({@link BuiltinAuthOptions}). No user pool: your backend
+ *   federates each provider itself — OIDC (`type: 'oidc'`), bare OAuth 2.0
+ *   (`github()`, `customOauth2()`) and the local stub IdP (`stubIdp()`) — and
+ *   keeps only the session. No Cognito charge, works offline in `npm run dev`,
+ *   and supports public (PKCE-only) clients. A user's `userId` is
+ *   `` `${issuer}:${sub}` ``.
+ *
+ * Every sign-in provider goes in one `providers` map, keyed by the provider id
+ * you use in `getSignInUrl(context, '<id>')` and in the `signIn:<id>` UI
+ * action, and tagged with its `type`. The compiler accepts only the options
+ * and provider types the chosen store supports: `emailPassword` or
+ * `type: 'google'` with `store: 'builtin'` is a compile error, and so is
+ * `stubIdp()` without it.
+ *
+ * One block holds one kind of user. An app that wants both password users and
+ * backend-verified IdP users uses two `Auth` blocks (two session cookies, two
+ * `createApi()`s; the frontend picks one per sign-in).
+ *
+ * The remaining capabilities are opt-in through their own named groups.
+ * `emailPassword: false` on a `'cognito'` block does not stop you from
+ * configuring providers.
+ *
+ * **The zero-config default is email + password.** `new Auth(scope, 'auth')`
+ * gives you self-service sign-up (with an emailed confirmation code), sign-in
+ * and password reset, with no AWS account needed locally.
+ *
+ * **What gets provisioned.** A `'cognito'` block creates a Cognito user pool
+ * (or wraps an existing one, `userPool`), plus a hosted-UI domain and client
+ * once a `providers` entry federates through it. A `'builtin'` block
+ * provisions **no** Cognito resources — only the session table and the
+ * session-signing secret. Adding a provider later adds its resources; it never
+ * replaces anything.
+ *
+ * **Type narrowing.** `Auth` captures the options literal (`const O`), so the
+ * compiler knows which methods your configuration supports. Pass the options
+ * inline (or keep them in a variable declared `as const satisfies
+ * AuthOptions`), not through a variable annotated `: AuthOptions`, or the
+ * narrowing is lost. Plain `satisfies AuthOptions` keeps the mode gates but
+ * widens arrays, so declared `users.groups` become `string[]`.
+ *
+ * **Unknown options are an error.** The constructor rejects any key it does not
+ * recognise, at any nesting level, naming its path and the likely intended
+ * option (`preferredChallenge` → `users.preferredChallenge`). The compiler alone
+ * cannot catch these: TypeScript does no excess-property check on the inferred
+ * options type.
+ *
+ * @example Minimal (email + password)
+ * ```ts
+ * const auth = new Auth(scope, 'auth');
+ * export const authApi = auth.createApi();
+ * ```
+ *
+ * @example Email + password, Google and a SAML IdP, all in the Cognito user pool
+ * ```ts
+ * const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+ * const auth = new Auth(scope, 'auth', {
+ *   providers: {
+ *     google: { type: 'google', clientId: '1234.apps.googleusercontent.com', clientSecret: googleSecret },
+ *     corp: { type: 'saml', metadataUrl: 'https://idp.example.com/saml/metadata' },
+ *   },
+ * });
+ * ```
+ *
+ * @example Okta only, no Cognito pool
+ * ```ts
+ * const auth = new Auth(scope, 'auth', {
+ *   store: 'builtin',
+ *   providers: { okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa…' } },
+ * });
+ * ```
+ */
+// Cognito last: with no `store` in a literal, TypeScript reports errors against the last best-matching member.
+export type AuthOptions = BuiltinAuthOptions | CognitoAuthOptions;
+
+/**
+ * Where an `Auth` block's users live. Chosen once per block with the `store`
+ * option; see {@link AuthOptions}.
+ *
+ * - `'cognito'` (the default) — an Amazon Cognito user pool
+ *   ({@link CognitoAuthOptions}).
+ * - `'builtin'` — no user pool: identity providers your backend verifies
+ *   itself, and this block's own sessions ({@link BuiltinAuthOptions}).
+ */
+export type AuthStore = 'cognito' | 'builtin';
+
+/**
+ * The options every store accepts — the shared part of
+ * {@link CognitoAuthOptions} and {@link BuiltinAuthOptions}.
+ */
+export interface AuthCommonOptions {
+	/**
+	 * A single policy hook called for **every** sign-in and sign-up, whatever the
+	 * mechanism — email + password, social, OIDC or SAML. Throw to reject; a
+	 * thrown `ApiError` reaches the client by its `name`.
+	 *
+	 * This is the one place a rule such as "corporate domains only" or "must be
+	 * on the allowlist" can live without being repeated per provider.
+	 *
+	 * @remarks
+	 * On the **sign-in** path this runs in your own Lambda after the token
+	 * exchange and before the session cookie is issued, so rejecting prevents
+	 * the session. On the **self-service sign-up** path, blocking before the
+	 * user record exists needs a Cognito PreSignUp trigger; the CDK layer
+	 * provisions that trigger **only when this option is set**.
+	 *
+	 * In detail (`phase` tells the two apart):
+	 * - **`phase: 'signUp'`** — `auth.signUp()` and `auth.admin.createUser()`
+	 *   call it first, in-process, before anything reaches Cognito, so a
+	 *   rejection reaches the client exactly as locally. On a pool this block
+	 *   creates, the CDK layer also wires the pool's Cognito PreSignUp trigger to
+	 *   your backend Lambda, which calls it for every pool user Cognito is about
+	 *   to create that the app did not: a `SignUp` sent straight to Cognito with
+	 *   the app client id, an `AdminCreateUser` from the console or CLI, and the
+	 *   **first** sign-in of a user of a `providers` entry.
+	 *   One sign-up runs it once: the in-process call marks the Cognito request
+	 *   (a signed `ClientMetadata` entry), and the trigger skips a marked one. A
+	 *   rejection in the trigger reaches the client with the same `name` and
+	 *   message. The trigger never confirms or verifies a user.
+	 * - **`phase: 'signIn'`** — every sign-in, whatever the mechanism, including
+	 *   a federated user's first one (which therefore runs both phases), that
+	 *   goes **through this block** (its sign-in API or its federation routes).
+	 *   A frontend that signs in directly against Cognito (an Amplify client
+	 *   library, with its own app client) is not seen: no trigger backs this
+	 *   phase. Its tokens still reach the guards with
+	 *   {@link CognitoAuthOptions.allowBearerAuth}, so gate per request there.
+	 *   On either store, a bearer token is verified per request and does not run
+	 *   `validateUser`; gate per request (e.g. check `user.attributes.email`)
+	 *   when you rely on it.
+	 *
+	 * **By store.** A `'cognito'` block runs both phases. A `store: 'builtin'`
+	 * block's providers (OIDC, OAuth 2.0 and `stubIdp()`) create no pool user, so
+	 * its `validateUser` only ever sees `phase: 'signIn'`, and no trigger is
+	 * provisioned for it. A pool
+	 * wrapped with `userPool` gets no trigger (its triggers are its owner's):
+	 * the in-process checks still run, users created directly in Cognito are not
+	 * seen, and synth warns. The trigger runs in your backend Lambda and Cognito
+	 * waits at most 5 seconds for it, so keep the check fast; a cold start counts.
+	 *
+	 * **Limitation — the 5-second trigger timeout.** Cognito gives a trigger 5
+	 * seconds, and that budget includes a cold start of your shared backend
+	 * Lambda (loading its config and importing your backend). If the trigger
+	 * does not answer in time, the sign-up fails with a generic 500
+	 * (`InternalErrorException`) and no user is created; nothing is let through.
+	 * Mitigation: keep `validateUser` fast (no slow network calls; cache any
+	 * allowlist you fetch), and if cold starts still exceed the budget, configure
+	 * provisioned concurrency on the backend Lambda.
+	 *
+	 * @example
+	 * ```ts
+	 * validateUser: async ({ email, provider }) => {
+	 *   if (provider !== 'password' && !email?.endsWith('@example.com')) {
+	 *     throw new ApiError('Corporate accounts only', 403, { name: AuthErrors.NotAuthorized });
+	 *   }
+	 * }
+	 * ```
+	 */
+	validateUser?: (candidate: UserCandidate) => Promise<void>;
+
+	/** Session cookie and server-side session record behaviour. */
+	session?: SessionOptions;
+
+	/** HTTP paths for the federated redirect flow. All must sit under `/aws-blocks/auth/`. */
+	redirects?: RedirectOptions;
+
+	/**
+	 * Called after a successful sign-in, before the response is returned. Throwing rolls the sign-in back.
+	 *
+	 * Runs only for sign-ins that go through this block (its sign-in API or its
+	 * federation routes) — not for a frontend that signs in directly against
+	 * Cognito, such as an Amplify client library with its own app client.
+	 */
+	onSignIn?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+
+	/**
+	 * Called before the session is destroyed. Errors are logged and never block sign-out.
+	 *
+	 * Like {@link AuthCommonOptions.onSignIn}, only for this block's own sessions: a
+	 * frontend that holds Cognito tokens itself signs out without the backend.
+	 */
+	onSignOut?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+
+	/**
+	 * What happens to the user pool and the session table when the block is
+	 * removed from the stack.
+	 *
+	 * When omitted, the stack's defaults apply — the same as every other
+	 * Building Block (for example, `BlocksPresets.production` retains,
+	 * `BlocksPresets.sandbox` destroys). Set `'retain'` explicitly for any pool
+	 * holding real users.
+	 *
+	 * @default the stack's `defaults.removalPolicy`
+	 */
+	removalPolicy?: 'destroy' | 'retain';
+
+	/**
+	 * Whether CloudFormation deletion protection is enabled on the user pool and
+	 * the session table.
+	 *
+	 * On the user pool, only `true` is written to the template (`DeletionProtection:
+	 * ACTIVE`); `false` leaves the property out, which Cognito treats as inactive.
+	 * Changing an already-protected pool to `false` deactivates its protection on
+	 * the next deploy.
+	 *
+	 * @default the stack's `defaults.deletionProtection`
+	 */
+	deletionProtection?: boolean;
+
+	/** Optional logger. When omitted, a default `Logger` at `error` level is created. */
+	logger?: ChildLogger;
+
+	/**
+	 * @deprecated Replaced by `providers`: move each entry there, keyed as
+	 * before, with `type: 'google' | 'facebook' | 'amazon' | 'apple'`. See
+	 * {@link ERROR_replaced_by_providers}.
+	 */
+	socialProviders?: ERROR_replaced_by_providers;
+
+	/**
+	 * @deprecated Replaced by `providers`: move each entry there, keyed as
+	 * before, with `type: 'oidc'`. A `federateVia: 'cognito'` entry stays on the
+	 * default store; a directly federated one (the old default), `github()`,
+	 * `customOauth2()` and `stubIdp()` move to a block with `store: 'builtin'`.
+	 * See {@link ERROR_replaced_by_providers}.
+	 */
+	oidcProviders?: ERROR_replaced_by_providers;
+
+	/**
+	 * @deprecated Replaced by `providers`: move each entry there, keyed as
+	 * before, with `type: 'saml'`. See {@link ERROR_replaced_by_providers}.
+	 */
+	samlProviders?: ERROR_replaced_by_providers;
+}
+
+/**
+ * Options of a block whose users live in a Cognito user pool — `store:
+ * 'cognito'`, the default. See {@link AuthOptions}.
+ */
+export interface CognitoAuthOptions extends AuthCommonOptions {
+	/** Where this block's users live: a Cognito user pool. The default, so usually omitted. See {@link AuthStore}. @default 'cognito' */
+	store?: 'cognito';
+
+	/**
+	 * Email/username + password sign-in, backed by a Cognito user pool.
+	 *
+	 * `true` (or omitted) enables it with defaults; an {@link EmailPasswordOptions}
+	 * object enables it with settings. `false` disables it: the password
+	 * methods (`signUp`, `signIn`, `resetPassword`, …) become **compile errors**
+	 * on this instance (see {@link PasswordGate}), and the sign-in UI offers only
+	 * the configured federated providers. The pool is still created — every
+	 * `providers` entry of a `'cognito'` block federates through it — with
+	 * self-service sign-up turned off.
+	 *
+	 * Sign-up always verifies the user's email with an emailed code.
+	 *
+	 * @default true
+	 */
+	emailPassword?: boolean | EmailPasswordOptions;
+
+	/**
+	 * Sign-in providers, keyed by provider id — the id you use in
+	 * `getSignInUrl(context, '<id>')` and in the `signIn:<id>` UI action. Each
+	 * entry's `type` selects the provider:
+	 *
+	 * - `'google'`, `'facebook'`, `'amazon'`, `'apple'` — social sign-in that
+	 *   Cognito supports natively ({@link SocialProvider}). Key each entry by
+	 *   its type (`google: { type: 'google', … }`), so there is at most one per
+	 *   type.
+	 * - `'saml'` — a SAML 2.0 identity provider ({@link SamlProvider}).
+	 * - `'oidc'` — any OIDC identity provider, federated through Cognito
+	 *   ({@link CognitoOidcProvider}); `clientSecret` is required.
+	 *
+	 * Every one of them federates through Cognito: the user signs in through
+	 * Cognito managed login and becomes a pool user, so Cognito groups,
+	 * `requireRole()` and `auth.admin` work as for email + password users.
+	 * Locally (`npm run dev`) managed login is unavailable — sign-in answers an
+	 * actionable `501`.
+	 *
+	 * For an IdP your backend should verify itself — no Cognito charge, offline
+	 * sign-in with `stubIdp()`, public (PKCE-only) clients, `github()` — use a
+	 * separate block with `store: 'builtin'` ({@link BuiltinAuthOptions}).
+	 *
+	 * An `undefined` entry is skipped, so a map picked per environment
+	 * (`isProd ? { okta: … } : { local: … }`) keeps both ids narrow.
+	 */
+	// `| undefined`: a ternary between two maps normalizes to `{ a: …; b?: undefined } | …`.
+	providers?: Record<string, CognitoProvider | undefined>;
+
+	/**
+	 * Multi-factor authentication. `'off' | 'optional' | 'required'` is shorthand
+	 * for `{ mode }`.
+	 *
+	 * ⚠️ **Email + password sign-in only.** Cognito hands authentication of
+	 * federated users entirely to their IdP and offers them no additional
+	 * factors, so MFA never applies to a user who signed in through a
+	 * `providers` entry. Enforce MFA at the IdP for those users.
+	 *
+	 * @default 'off'
+	 */
+	mfa?: MfaMode | MfaOptions;
+
+	/**
+	 * WebAuthn passkeys. Requires `users.authFlow: 'USER_AUTH'` and a
+	 * `featurePlan` above `'lite'`; both are checked at synth.
+	 *
+	 * ⚠️ Email + password sign-in only — see {@link CognitoAuthOptions.mfa}.
+	 *
+	 * @default false
+	 */
+	passkeys?: false | PasskeyOptions;
+
+	/** User pool shape: what counts as a username, which attributes exist, which groups exist. */
+	users?: UserPoolOptions;
+
+	/** Cognito hosted-UI settings, used only when a provider federates through Cognito. */
+	hostedUi?: HostedUiOptions;
+
+	/**
+	 * Enables the privileged `auth.admin` handle and grants the matching
+	 * `Admin*`/`List*` IAM on the pool. Omit for the client-facing surface with
+	 * no admin grant — the default. Carried over from `AuthCognito`, where it is
+	 * already compiler-verified.
+	 */
+	admin?: AdminOptions;
+
+	/**
+	 * Accept `Authorization: Bearer <access token>` in addition to the session
+	 * cookie, for native and CLI clients that cannot hold a cookie.
+	 *
+	 * Bearer tokens are validated from their claims and are **not** checked
+	 * against the session store, so a bearer token outlives `signOut()` until it
+	 * expires.
+	 *
+	 * What is accepted (the same as `AuthOIDC`, so the native SDKs work
+	 * unchanged): a directly federated OIDC provider's JWT access token — the
+	 * one `/aws-blocks/auth/exchange` returns and `/aws-blocks/auth/refresh`
+	 * renews — verified against the provider's JWKS (issuer, audience = its
+	 * client id, expiry); or, for a user-pool user, the Cognito access token.
+	 * The session cookie takes precedence when a request carries both. A token
+	 * that does not verify is answered like a missing session: 401
+	 * `NotAuthenticatedException`. Only the guards (`requireAuth`, `requireRole`,
+	 * `checkAuth`, `getCurrentUser`, `getAuthSession`) accept a bearer token; the
+	 * signed-in user's account methods still need the session cookie. When
+	 * `false`, an `Authorization` header is ignored.
+	 *
+	 * Pass an object instead of `true` to also accept access tokens that other
+	 * Cognito app clients of the **same pool** issued — for example a frontend
+	 * that signs in directly with an Amplify client library and calls this
+	 * backend with the user's access token. See {@link BearerAuthOptions}.
+	 *
+	 * @example
+	 * ```typescript
+	 * new Auth(scope, 'auth', {
+	 *   userPool: Auth.fromExisting('us-east-1_AbCdEf123', '1example23456789abcdefghij'),
+	 *   allowBearerAuth: { clientIds: ['2example34567890bcdefghijk'] },
+	 * });
+	 * ```
+	 *
+	 * @default false
+	 */
+	allowBearerAuth?: boolean | BearerAuthOptions;
+
+	/** Wrap a pre-existing Cognito user pool instead of provisioning one. Build the reference with `Auth.fromExisting()`. */
+	userPool?: ExternalUserPoolRef;
+
+	/**
+	 * Cognito feature plan for the user pool. Always set explicitly on the pool
+	 * (never left to the service default) so the pool cannot drift on
+	 * `UpdateUserPool`.
+	 *
+	 * ⚠️ **This option is a pricing decision.** `'lite'` is the cheapest but
+	 * cannot run passkeys, `USER_AUTH` (choice-based / passwordless) sign-in,
+	 * email MFA, password history, refresh-token rotation or managed login — the
+	 * block throws at synth if you combine `'lite'` with any of them.
+	 *
+	 * Ignored when no user pool is provisioned.
+	 *
+	 * @default 'essentials'
+	 */
+	featurePlan?: 'lite' | 'essentials' | 'plus';
+
+	/**
+	 * Send the user pool's email (sign-up and password-reset codes, email MFA,
+	 * the `EMAIL_OTP` first factor) through your own Amazon SES identity instead
+	 * of Cognito's default sender.
+	 *
+	 * Cognito's default sender is limited to **50 emails per day**: enough for
+	 * development, not for production. Set this before real users sign up.
+	 *
+	 * Setting it is also what allows email MFA (`mfa.types: ['EMAIL']`) and
+	 * `users.preferredChallenge: 'EMAIL_OTP'` on a pool this block creates —
+	 * Cognito sends those codes only through SES.
+	 *
+	 * **Prerequisites (in SES, not in this stack):** `fromAddress` (or
+	 * `sesVerifiedDomain`) must be a verified SES identity in `sesRegion`. A new
+	 * SES account is in the sandbox and only delivers to verified recipients;
+	 * request production access before launch. On the first deploy Cognito
+	 * creates its email service-linked role (`AWSServiceRoleForAmazonCognitoIdpEmailService`),
+	 * so the deploying role needs `iam:CreateServiceLinkedRole` (CDK's default
+	 * deployment role has it).
+	 *
+	 * Adding, changing or removing it later updates the pool in place: no user,
+	 * session or token is affected.
+	 *
+	 * Only for a pool this block creates; a pool wrapped with `userPool` keeps
+	 * its owner's email configuration (synth refuses `email` there), and a
+	 * configuration that creates no pool has nothing to configure.
+	 *
+	 * Locally (`npm run dev`) codes are delivered the usual way (`codeDelivery`);
+	 * SES is not involved.
+	 *
+	 * @example
+	 * ```ts
+	 * new Auth(scope, 'auth', {
+	 *   email: { fromAddress: 'no-reply@example.com', fromName: 'Example App' },
+	 * });
+	 * ```
+	 *
+	 * @default Cognito's default email sender
+	 */
+	email?: EmailSenderOptions;
+}
+
+/**
+ * Options of a block that keeps no user pool — `store: 'builtin'`. Every user
+ * signs in through a `providers` entry that your backend federates itself.
+ *
+ * Your backend performs OIDC discovery, PKCE and JWKS verification itself.
+ * That path involves no Cognito resources, works fully offline in `npm run
+ * dev` against the built-in stub IdP (`stubIdp()`), and supports public
+ * (PKCE-only) clients. The users have no Cognito pool record: their `userId`
+ * is `` `${issuer}:${sub}` ``, `requireRole()` reads their groups from each
+ * provider's `groupsClaim`, and email + password, MFA, passkeys and
+ * `auth.admin` do not exist here — those options are compile errors on this
+ * arm.
+ *
+ * @example
+ * ```ts
+ * const githubSecret = new AppSetting(scope, 'github-secret', { secret: true });
+ * const auth = new Auth(scope, 'auth', {
+ *   store: 'builtin',
+ *   providers: {
+ *     okta: { type: 'oidc', issuer: 'https://dev-12345.okta.com', clientId: '0oa…', groupsClaim: 'groups' },
+ *     github: github({ clientId: 'Iv1.abc', clientSecret: githubSecret }),
+ *   },
+ *   users: { groups: ['admin'] },
+ * });
+ * ```
+ */
+export interface BuiltinAuthOptions extends AuthCommonOptions {
+	/** Where this block's users live: at their identity providers, verified by your backend; no user pool. See {@link AuthStore}. */
+	store: 'builtin';
+
+	/**
+	 * Sign-in providers, keyed by provider id — the id you use in
+	 * `getSignInUrl(context, '<id>')` and in the `signIn:<id>` UI action. Each
+	 * entry's `type` selects the provider:
+	 *
+	 * - `'oidc'` — any OIDC identity provider ({@link DirectOidcProvider}).
+	 *   `clientSecret` is optional (omit it for a public, PKCE-only client).
+	 * - `'oauth2'` — a bare OAuth 2.0 provider, built with `github()` or
+	 *   `customOauth2()` ({@link OAuth2Provider}).
+	 * - `'stub'` — the local stub IdP, built with `stubIdp()`
+	 *   ({@link StubProvider}).
+	 *
+	 * An `undefined` entry is skipped, so a map picked per environment
+	 * (`isProd ? { okta: … } : { local: … }`) keeps both ids narrow.
+	 */
+	// `| undefined`: a ternary between two maps normalizes to `{ a: …; b?: undefined } | …`.
+	providers: Record<string, BuiltinProvider | undefined>;
+
+	/** The groups `requireRole()` accepts. Only `groups`: there is no user pool to shape. See {@link BuiltinUserOptions}. */
+	users?: BuiltinUserOptions;
+
+	/**
+	 * Accept `Authorization: Bearer <access token>` in addition to the session
+	 * cookie, for native and CLI clients that cannot hold a cookie: the
+	 * provider's JWT access token that `/aws-blocks/auth/exchange` returns and
+	 * `/aws-blocks/auth/refresh` renews, verified against the provider's JWKS
+	 * (issuer, audience = its client id, expiry). See
+	 * {@link CognitoAuthOptions.allowBearerAuth} for the details. The object
+	 * form (extra Cognito app clients) needs `store: 'cognito'`.
+	 *
+	 * A bearer token is verified per request and does not run `validateUser`;
+	 * gate per request (e.g. check `user.attributes.email`) when you rely on it.
+	 * Its groups for `requireRole()` are the token's `groupsClaim`, and the
+	 * returned user's `groups` is narrowed to the declared `users.groups`, as for
+	 * a session.
+	 *
+	 * @default false
+	 */
+	allowBearerAuth?: boolean | ERROR_needs_store_cognito<'allowBearerAuth (object form)'>;
+
+	/**
+	 * Email + password needs `store: 'cognito'`: a `'builtin'` block has no user pool.
+	 * `false` (what the block is anyway) is accepted, so options shared between
+	 * blocks can spell it out.
+	 */
+	// `false & {}`, not `false`: with a bare literal here, TypeScript reports a default-store block's
+	// unrelated option errors against this arm ("Property 'store' is missing").
+	emailPassword?: ERROR_needs_store_cognito<'emailPassword'> | (false & {});
+	/** @deprecated MFA needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	mfa?: ERROR_needs_store_cognito<'mfa'>;
+	/** @deprecated Passkeys needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	passkeys?: ERROR_needs_store_cognito<'passkeys'>;
+	/** @deprecated The Cognito hosted UI needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	hostedUi?: ERROR_needs_store_cognito<'hostedUi'>;
+	/** @deprecated `auth.admin` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	admin?: ERROR_needs_store_cognito<'admin'>;
+	/** @deprecated Wrapping an existing user pool needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	userPool?: ERROR_needs_store_cognito<'userPool'>;
+	/** @deprecated A Cognito feature plan needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	featurePlan?: ERROR_needs_store_cognito<'featurePlan'>;
+	/** @deprecated An SES email sender needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	email?: ERROR_needs_store_cognito<'email'>;
+}
+
+/**
+ * The type of an option that a `store: 'builtin'` block does not have (it has
+ * no user pool). No value has this type, so setting the option is a compile
+ * error whose message names the option and the fix: `K` needs
+ * `store: 'cognito'` — the default, so drop `store: 'builtin'`, or move the
+ * option to a separate `'cognito'` block.
+ *
+ * A building block of the public option types, exported because they are
+ * built from it, and stable like them.
+ */
+export type ERROR_needs_store_cognito<K extends string> = {
+	readonly __blocksOptionError: `${K} needs store: 'cognito'`;
+};
+
+/**
+ * The type of `socialProviders`, `oidcProviders` and `samlProviders`, the
+ * options `providers` replaced. No value has this type, so a leftover key is
+ * a compile error. Move each entry into `providers`, keyed as before, with its
+ * `type` (`'google'`, `'oidc'`, `'saml'`, …); a `federateVia: 'direct'` OIDC
+ * provider moves to a block with `store: 'builtin'`.
+ *
+ * A building block of the public option types, exported because they are
+ * built from it, and stable like them.
+ */
+export type ERROR_replaced_by_providers = string & {
+	readonly __blocksOptionError: 'replaced by providers (each entry tagged with its type)';
+};
+
+/**
+ * The type of an OIDC provider's former `federateVia`. No value has this type,
+ * so a leftover key is a compile error: the block's `store` decides it now —
+ * `'cognito'` (the default) federates through Cognito, `'builtin'` directly.
+ *
+ * A building block of the public option types, exported because they are
+ * built from it, and stable like them.
+ */
+export type ERROR_federateVia_replaced_by_store = string & {
+	readonly __blocksOptionError: "replaced by the block's store";
+};
+
+/**
+ * Settings for {@link BuiltinAuthOptions.users}: only `groups`. The other
+ * {@link UserPoolOptions} describe a user pool, which a `'builtin'` block does
+ * not have, so they are compile errors there.
+ */
+// Listed, not mapped: a mapped member's JSDoc (`@deprecated`, which sorts it last in completions) does not reach its keys.
+// `types-test.ts` pins that the keys stay those of `UserPoolOptions`.
+export type BuiltinUserOptions = Pick<UserPoolOptions, 'groups'> & {
+	/** @deprecated `users.signInWith` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	signInWith?: ERROR_needs_store_cognito<'users.signInWith'>;
+	/** @deprecated `users.attributes` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	attributes?: ERROR_needs_store_cognito<'users.attributes'>;
+	/** @deprecated `users.authFlow` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	authFlow?: ERROR_needs_store_cognito<'users.authFlow'>;
+	/** @deprecated `users.preferredChallenge` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	preferredChallenge?: ERROR_needs_store_cognito<'users.preferredChallenge'>;
+	/** @deprecated `users.deviceTracking` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	deviceTracking?: ERROR_needs_store_cognito<'users.deviceTracking'>;
+	/** @deprecated `users.caseSensitive` needs `store: 'cognito'`: a `'builtin'` block has no user pool. */
+	caseSensitive?: ERROR_needs_store_cognito<'users.caseSensitive'>;
+};
+
+/**
+ * Settings for {@link CognitoAuthOptions.email}: the Amazon SES identity the user pool
+ * sends from. The CDK layer maps them to `UserPoolEmail.withSES()`.
+ */
+export interface EmailSenderOptions {
+	/**
+	 * The sender address, for example `no-reply@example.com`. It must be a
+	 * verified SES identity, or an address in {@link EmailSenderOptions.sesVerifiedDomain}.
+	 * The same address an `EmailClient` sends from (its `fromAddress`) works here.
+	 */
+	fromAddress: string;
+	/** Display name shown with the address (`Example App <no-reply@example.com>`). */
+	fromName?: string;
+	/** Address replies go to, when it differs from {@link EmailSenderOptions.fromAddress}. */
+	replyTo?: string;
+	/**
+	 * Region of the SES identity. Cognito can send from SES in the pool's own
+	 * Region and, for some Regions, in a designated other one (see "SES Region"
+	 * in the Cognito developer guide).
+	 *
+	 * @default the pool's Region
+	 */
+	sesRegion?: string;
+	/**
+	 * A verified SES **domain** identity to send from, instead of the address
+	 * identity. Must be the domain of {@link EmailSenderOptions.fromAddress}.
+	 * Exactly that domain: a subdomain sender is refused, so
+	 * `no-reply@mail.example.com` with `sesVerifiedDomain: 'example.com'` fails
+	 * synth. Verify `mail.example.com` in SES and name it here.
+	 */
+	sesVerifiedDomain?: string;
+	/** SES configuration set applied to every email the pool sends (for event publishing or a dedicated IP pool). */
+	configurationSetName?: string;
+}
+
+/** Settings for {@link CognitoAuthOptions.emailPassword}. */
+export interface EmailPasswordOptions {
+	/**
+	 * Allow users to register themselves. When `false`, users are created only
+	 * through `auth.admin`.
+	 *
+	 * @default true
+	 */
+	selfSignUp?: boolean;
+
+	/**
+	 * Password strength requirements enforced by the pool.
+	 *
+	 * A password that breaks them is rejected with `InvalidPasswordException`,
+	 * and its message describes this policy (the same locally and on AWS), for
+	 * example `Password must be at least 8 characters and include an uppercase
+	 * letter, a lowercase letter, a number and a symbol.` for the defaults.
+	 * With `userPool: Auth.fromExisting(…)` the pool's policy is yours, so the
+	 * message stays the fixed `Password does not meet the password policy`.
+	 */
+	passwordPolicy?: PasswordPolicy;
+
+	/**
+	 * Sign the user in automatically once they enter the emailed confirmation
+	 * code, instead of asking them to type their password again.
+	 *
+	 * This does **not** skip email verification — every sign-up still confirms
+	 * the address with an emailed code. It only removes the second password
+	 * entry after `confirmSignUp`.
+	 *
+	 * @default true
+	 */
+	autoSignIn?: boolean;
+
+	/**
+	 * Whether the sign-in UI's sign-up form may tell the visitor that a username
+	 * is already registered.
+	 *
+	 * With the default `false`, submitting the sign-up form for an existing
+	 * account answers exactly like a new sign-up — "enter the code we emailed
+	 * you" — so the form cannot be used to discover which accounts exist.
+	 * Set `true` to surface `UsernameExistsException` instead (friendlier when
+	 * account existence is not sensitive for your app).
+	 *
+	 * Applies to the `setAuthState({ action: 'signUp' })` path the UI drives.
+	 * Calling `auth.signUp()` from your own server code always throws
+	 * `UsernameExistsException` for an existing user: that code is inside your
+	 * trust boundary and usually needs to know.
+	 *
+	 * The steps that follow the sign-up form are covered too, both through
+	 * `setAuthState` and when you call the methods directly: with the default
+	 * `false`, an unknown user, an unconfirmed user and an already-confirmed
+	 * user get identical answers from `confirmSignUp` (a wrong code — also for
+	 * an expired code), `resendSignUpCode` (a silent success; no code is sent
+	 * to a confirmed user), `resetPassword` (the same delivery details) and
+	 * `confirmResetPassword` (a wrong code). Set `true` to surface Cognito's
+	 * informative answers there as well (for example `NotAuthorizedException`
+	 * "User cannot be confirmed. Current status is CONFIRMED", or
+	 * `ExpiredCodeException`).
+	 *
+	 * @default false
+	 */
+	revealExistingUsers?: boolean;
+}
+
+/** Password strength requirements. */
+export interface PasswordPolicy {
+	/** @default 8 */
+	minLength?: number;
+	/** @default true */
+	requireUppercase?: boolean;
+	/** @default true */
+	requireLowercase?: boolean;
+	/** @default true */
+	requireDigits?: boolean;
+	/** @default true */
+	requireSymbols?: boolean;
+}
+
+/**
+ * A reference to an `AppSetting` holding a secret.
+ *
+ * Provider secrets are `AppSetting` references rather than strings: a literal
+ * string in your backend module would be committed to source and baked into
+ * the CloudFormation template. The reference also exposes `fullId`, so the CDK
+ * layer can grant read access to the underlying parameter.
+ *
+ * Pass an `AppSetting` created with `secret: true` — at its default name, with
+ * an explicit `name`, or via `AppSetting.fromExisting(scope, id, { name, secret: true })`.
+ * At synth `Auth` reads the SSM name from the `AppSetting`'s `parameterName`,
+ * and refuses a non-secret `AppSetting` or an object that is not an `AppSetting`.
+ *
+ * A `Secret` (AWS Secrets Manager) is accepted wherever a provider secret is:
+ * see {@link SecretRef} and {@link ProviderSecretRef}.
+ */
+export interface AppSettingRef {
+	/** The `AppSetting`'s scoped id. */
+	readonly fullId: string;
+	/** Read the secret value at request time. */
+	get(): Promise<string>;
+}
+
+/**
+ * A reference to a `Secret` (AWS Secrets Manager) holding a provider secret.
+ *
+ * Pass a string-valued `Secret` — `new Secret(scope, id)`, with or without an
+ * explicit `name`, or one wrapping `Secret.fromExisting(arn)`. A `Secret` with
+ * a `schema` holds JSON, not a single string, and is refused by the type.
+ *
+ * For a provider federated through Cognito (a social provider,
+ * or a `type: 'oidc'` provider of a `'cognito'` block), the deploy reads the secret's current value from Secrets
+ * Manager and registers it with the user pool. The deploy-time registration's
+ * own grant covers exactly that secret; the app's execution role can read it
+ * too, as it can every `Secret` the app declares. Set the value with the AWS CLI or `npm run secret`, then
+ * deploy again to re-register the provider with it. For a directly federated
+ * provider the value is read at request time through the `Secret` itself.
+ * Locally, the value comes from the `Secret`'s local store
+ * (`.bb-data/settings.json`).
+ */
+export interface SecretRef {
+	/** The `Secret`'s scoped id. */
+	readonly fullId: string;
+	/** Read the secret value at request time; `null` while no value is set. */
+	get(): Promise<string | null>;
+}
+
+/**
+ * A provider secret: an `AppSetting` created with `secret: true` (an SSM
+ * SecureString), or a `Secret` (AWS Secrets Manager). Never a plain string —
+ * a literal would be committed to source and baked into the template.
+ *
+ * @see AppSettingRef
+ * @see SecretRef
+ */
+export type ProviderSecretRef = AppSettingRef | SecretRef;
+
+/** The social providers Cognito registers natively. */
+export type SocialProviderId = 'google' | 'apple' | 'facebook' | 'amazon';
+
+/**
+ * A social identity provider that Cognito supports natively: a `providers`
+ * entry of a `'cognito'` block, keyed by its `type`
+ * (`google: { type: 'google', … }`), one entry per type. Closed set — each
+ * provider's options are fully typed.
+ *
+ * Social sign-in always federates through Cognito, so configuring any social
+ * provider provisions the user pool.
+ *
+ * The user signs in through Cognito managed login (the sign-in button goes
+ * straight to the provider) and becomes a user-pool user: Cognito groups,
+ * `requireRole()` and `auth.admin` work as for email + password users.
+ * Locally (`npm run dev`) managed login is unavailable — sign-in answers an
+ * actionable `501`; use a `store: 'builtin'` block with `stubIdp()` offline.
+ * MFA is the provider's: Cognito never challenges a federated user, so
+ * enforce MFA at your IdP.
+ *
+ * **Billing:** social sign-in shares Cognito's 10,000-free-MAU tier with
+ * direct (email + password) sign-in. It does not move you onto the separate,
+ * much smaller meter that Cognito-federated OIDC and SAML use.
+ *
+ * For any other IdP that speaks OIDC, use a `type: 'oidc'` entry
+ * ({@link CognitoOidcProvider}).
+ */
+export type SocialProvider = GoogleProvider | FacebookProvider | AmazonProvider | AppleProvider;
+
+/** Sign in with Google. See {@link SocialProvider}. */
+export interface GoogleProvider extends OAuthCredentials, ProviderCommon {
+	/** Sign in with Google. */
+	type: 'google';
+}
+
+/** Sign in with Facebook. See {@link SocialProvider}. */
+export interface FacebookProvider extends OAuthCredentials, ProviderCommon {
+	/** Sign in with Facebook. */
+	type: 'facebook';
+}
+
+/** Login with Amazon. See {@link SocialProvider}. */
+export interface AmazonProvider extends OAuthCredentials, ProviderCommon {
+	/** Login with Amazon. */
+	type: 'amazon';
+}
+
+/** Sign in with Apple. Apple uses a signed JWT client assertion instead of a shared secret. See {@link SocialProvider}. */
+export interface AppleProvider extends AppleCredentials, ProviderCommon {
+	/** Sign in with Apple. */
+	type: 'apple';
+}
+
+/** A `providers` entry of a `'cognito'` block ({@link CognitoAuthOptions.providers}). */
+export type CognitoProvider = SocialProvider | SamlProvider | CognitoOidcProvider;
+
+/** A `providers` entry of a `'builtin'` block ({@link BuiltinAuthOptions.providers}). */
+export type BuiltinProvider = DirectOidcProvider | OAuth2Provider | StubProvider;
+
+/** Client credentials for an OAuth 2.0 / OIDC provider. */
+export interface OAuthCredentials {
+	/** Public client identifier. Not a secret; a literal string is fine. */
+	clientId: string;
+	/**
+	 * Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference.
+	 * @see AppSettingRef
+	 * @see SecretRef
+	 */
+	clientSecret: ProviderSecretRef;
+}
+
+/** Sign in with Apple credentials. */
+export interface AppleCredentials {
+	/** Services ID. */
+	clientId: string;
+	/** Apple Developer team id. */
+	teamId: string;
+	/** Key id for `privateKey`. */
+	keyId: string;
+	/** The `.p8` signing key, as an `AppSetting` (`secret: true`) or `Secret` reference. */
+	privateKey: ProviderSecretRef;
+}
+
+/** Settings shared by every federated provider. */
+export interface ProviderCommon {
+	/**
+	 * Scopes requested from the IdP. Defaults to `['openid', 'email', 'profile']`
+	 * for OIDC providers and to the provider's documented minimum for social ones.
+	 */
+	scopes?: readonly string[];
+
+	/**
+	 * Maps IdP claims onto **profile** attributes, e.g. `{ email: 'email', name: 'name' }`.
+	 *
+	 * Identity is deliberately not mappable: `userId`, `userSub` and `sub` are
+	 * typed `never`, so a mapping can change only what is known *about* a user,
+	 * never *who* the user is. Identity comes from the provider's subject.
+	 *
+	 * ⚠️ For providers federated through Cognito, claims are mapped, not passed
+	 * through, and mapping loses data: unmapped claims are dropped, multi-valued
+	 * claims are flattened to a string, each attribute is capped at 2,048 bytes,
+	 * and a mapped email is unverified unless `email_verified` is mapped too.
+	 */
+	attributeMapping?: Readonly<ProfileAttributeMapping>;
+
+	/** Label for the generated `signIn:<id>` UI action. @default the provider id, title-cased */
+	label?: string;
+}
+
+/** Profile-only claim mapping. Identity keys are closed off at the type level. */
+export type ProfileAttributeMapping = Record<string, string> & {
+	sub?: never;
+	userSub?: never;
+	userId?: never;
+};
+
+/** What {@link AuthCommonOptions.validateUser} receives. Identity fields are read-only. */
+export interface UserCandidate {
+	/**
+	 * `'password'` for email + password, otherwise the provider id. A user
+	 * created with `auth.admin.createUser()` (or `AdminCreateUser`) is `'password'`.
+	 */
+	readonly provider: string;
+	/**
+	 * The provider's immutable subject. Empty on the email + password sign-up
+	 * path, where no account (and so no subject) exists yet. Empty on every
+	 * other `phase: 'signUp'` check too (an admin-created user, a federated
+	 * first sign-in seen by the PreSignUp trigger), for the same reason.
+	 */
+	readonly subject: string;
+	/** The user's email address, when known. */
+	readonly email: string | null;
+	/**
+	 * The username the user signs in with. On a pool that signs in with email
+	 * or phone only (`users.signInWith` without `'username'`), that address. For
+	 * a federated first sign-in (PreSignUp trigger), Cognito's
+	 * `<ProviderName>_<provider user id>` username.
+	 */
+	readonly username: string;
+	/**
+	 * Which path triggered the check: `'signUp'` before a pool user is created
+	 * (sign-up, admin-created user, a federated user's first sign-in), `'signIn'`
+	 * before a session is issued. See {@link AuthCommonOptions.validateUser}.
+	 */
+	readonly phase: 'signUp' | 'signIn';
+	/**
+	 * Claims as received from the IdP, before any attribute mapping. On a
+	 * `phase: 'signUp'` check these are the user attributes Cognito is about to
+	 * store (for a federated first sign-in: after the provider's attribute
+	 * mapping, which is all Cognito passes to the trigger).
+	 */
+	readonly claims: Readonly<Record<string, unknown>>;
+}
+
+/** Settings shared by both OIDC engines: {@link DirectOidcProvider} and {@link CognitoOidcProvider}. */
+export interface OidcProviderBase extends ProviderCommon {
+	/** Issuer URL. Endpoints are discovered from `{issuer}/.well-known/openid-configuration`. */
+	issuer: string;
+	/** Public client identifier. Not a secret; a literal string is fine. */
+	clientId: string;
+	/** Override discovery for a non-conformant IdP. All four are required together. */
+	endpoints?: {
+		authorization: string;
+		token: string;
+		userInfo: string;
+		jwks: string;
+	};
+	/**
+	 * @deprecated Replaced by the block's `store`: `'cognito'` (the default)
+	 * federates every `type: 'oidc'` entry through Cognito, `'builtin'` directly.
+	 * See {@link ERROR_federateVia_replaced_by_store}.
+	 */
+	federateVia?: ERROR_federateVia_replaced_by_store;
+}
+
+/**
+ * An OIDC provider federated directly by your backend: a `type: 'oidc'` entry
+ * of a `store: 'builtin'` block ({@link BuiltinAuthOptions.providers}).
+ *
+ * Your backend performs OIDC discovery, PKCE and JWKS verification itself. No
+ * Cognito resources are involved, it works fully offline in `npm run dev`
+ * against the built-in stub IdP, and it supports public (PKCE-only) clients.
+ * The user has no Cognito pool record, so `auth.admin` does not apply to them;
+ * their `userId` is `` `${issuer}:${sub}` ``.
+ */
+export interface DirectOidcProvider extends OidcProviderBase {
+	/** An OIDC identity provider, verified by your backend. */
+	type: 'oidc';
+	/** Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. Omit for a public (PKCE-only) client. */
+	clientSecret?: ProviderSecretRef;
+	/**
+	 * ID-token claim to read group membership from, so `requireRole()` works for
+	 * this provider's users (they have no Cognito groups). Read at sign-in and
+	 * narrowed to the groups declared in `users.groups`.
+	 *
+	 * @example groupsClaim: 'groups'   // Okta, Entra ID
+	 */
+	groupsClaim?: string;
+}
+
+/**
+ * An OIDC provider federated through Cognito: a `type: 'oidc'` entry of a
+ * `'cognito'` block ({@link CognitoAuthOptions.providers}).
+ *
+ * The user becomes a Cognito pool record, so Cognito groups and `auth.admin`
+ * work the same as for email + password users, and your backend receives
+ * Cognito-issued tokens. In exchange: a client secret is mandatory (Cognito
+ * acts as a confidential client and performs no PKCE toward the IdP, so a
+ * PKCE-only IdP cannot be federated this way), the user is billed on Cognito's
+ * federated-MAU meter, and the hosted sign-in hop cannot run offline.
+ *
+ * Cognito delegates authentication of federated users to the IdP and never
+ * challenges them with MFA: enforce MFA at your IdP.
+ *
+ * ⚠️ **Billing.** Cognito meters federated OIDC and SAML users separately
+ * from direct and social sign-in: 50 free MAUs, then a per-MAU charge. Check
+ * current Cognito pricing before shipping.
+ */
+export interface CognitoOidcProvider extends OidcProviderBase {
+	/** An OIDC identity provider, federated through the Cognito user pool. */
+	type: 'oidc';
+	/** Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. Required: Cognito is a confidential client. */
+	clientSecret: ProviderSecretRef;
+	/** How Cognito fetches the userinfo endpoint. @default 'GET' */
+	attributesRequestMethod?: 'GET' | 'POST';
+}
+
+/**
+ * What a bare OAuth 2.0 provider's `mapClaims` returns: the identity and the
+ * profile, read from the provider's userinfo response.
+ */
+export interface MappedClaims {
+	/** The provider-local subject; the `sub` in `` userId = `${issuer}:${sub}` ``. */
+	providerSub: string;
+	/** The user's email address, or `null` if the provider did not supply one. */
+	email: string | null;
+	/** The user's display name, or `null` if the provider did not supply one. */
+	name: string | null;
+}
+
+/**
+ * A bare OAuth 2.0 provider (no ID token — e.g. GitHub), federated directly.
+ * Build one with `github()` or `customOauth2()` and put it in a
+ * `store: 'builtin'` block's `providers`; Cognito cannot federate bare OAuth 2.0.
+ *
+ * There is no ID token to verify, so the identity comes from the provider's
+ * userinfo endpoint, called with the access token over TLS, and `mapClaims`
+ * turns that response into a user. `issuer` is the synthetic
+ * `` `oauth2:${name}` ``, so `userId` is `` `oauth2:${name}:${providerSub}` `` —
+ * the same value `AuthOIDC` produced.
+ */
+export interface OAuth2Provider extends Omit<DirectOidcProvider, 'type'> {
+	/** A bare OAuth 2.0 provider, verified by your backend. Set by `github()` and `customOauth2()`. */
+	type: 'oauth2';
+	/** Synthetic issuer `` `oauth2:${name}` `` — the identity namespace for `userId`. */
+	issuer: `oauth2:${string}`;
+	/** The OAuth 2.0 endpoints and the userinfo → user mapping. */
+	oauth2: {
+		endpoints: {
+			/** Authorization endpoint (`response_type=code` + PKCE S256). */
+			authorization: string;
+			/** Token endpoint. */
+			token: string;
+			/** Userinfo endpoint, called with `Authorization: Bearer <access token>`. */
+			userInfo: string;
+		};
+		/** Turn the userinfo response into the user's identity and profile. */
+		mapClaims: (raw: unknown) => MappedClaims;
+	};
+}
+
+/** A local identity the stub IdP can sign in. */
+export interface StubUser {
+	/** The provider-local subject identifier, surfaced as the ID token `sub`. */
+	readonly sub: string;
+	/** The user's email address, folded into the ID token `email` claim. */
+	readonly email: string;
+	/** The user's display name, folded into the ID token `name` claim. */
+	readonly name: string;
+	/** Extra claims folded into the ID token (e.g. `{ groups: ['admin'] }`). */
+	readonly extra?: Record<string, unknown>;
+}
+
+/**
+ * The authorize request handed to `stubIdp({ onAuthorize })`. `users` is the
+ * configured local directory, so the callback can pick from it; `loginHint`
+ * is the standard OIDC `login_hint` parameter.
+ */
+export interface StubAuthorizeRequest {
+	/** The provider id this authorize request targets. */
+	readonly provider: string;
+	/** The OAuth scopes requested by the client. */
+	readonly scopes: readonly string[];
+	/** The client's redirect URI the stub sends the code back to. */
+	readonly redirectUri: string;
+	/** The opaque OAuth `state` parameter, round-tripped to the callback. */
+	readonly state: string;
+	/** The OIDC `nonce` parameter, echoed into the issued ID token. */
+	readonly nonce: string;
+	/** The standard OIDC `login_hint` parameter, if the client supplied one. */
+	readonly loginHint?: string;
+	/** The configured local directory the callback can pick a user from. */
+	readonly users: readonly StubUser[];
+}
+
+/**
+ * Decide what the stub IdP's `/authorize` does:
+ *   return a user    → sign in as them, skip the account picker
+ *   return undefined → show the account picker (default)
+ *   throw            → deny the sign-in (`error=access_denied`)
+ */
+export type OnStubAuthorize = (req: StubAuthorizeRequest) => StubUser | undefined | Promise<StubUser | undefined>;
+
+/** Settings of a {@link StubProvider}. */
+export interface StubIdpSettings {
+	/**
+	 * The local identity directory for the account picker and `onAuthorize`.
+	 * When set (and non-empty) it wins over a `.bb-data/<fullId>/users.json`
+	 * fixture, which in turn wins over the single built-in default user.
+	 */
+	users?: readonly StubUser[];
+	/** Decide the `/authorize` response. See {@link OnStubAuthorize}. */
+	onAuthorize?: OnStubAuthorize;
+}
+
+/**
+ * A provider served by the built-in **stub IdP** — a real, local OIDC
+ * provider (ES256-signed ID tokens, discovery, JWKS, PKCE S256) mounted on the
+ * dev server under `/aws-blocks/auth/idp/<id>/`. Build one with `stubIdp()`
+ * and put it in a `store: 'builtin'` block's `providers`.
+ *
+ * Local development and sandbox deployments only: in `npm run dev` it gives
+ * `emailPassword: false` apps an offline sign-in, and a sandbox (`npm run
+ * sandbox`, CDK context `sandboxMode`) serves it from the deployed backend.
+ * Synthesizing any other deployment with a stub provider fails; select
+ * providers with `getDeploymentType()` so the same backend module also
+ * deploys. Users' `userId` is `` `${issuer}:${sub}` `` with the stub's issuer
+ * URL.
+ *
+ * In a sandbox, the issuer is the API Gateway's own HTTPS URL plus
+ * `/aws-blocks/auth/idp/<id>`, the same value `AuthOIDC`'s deployed stub used,
+ * so `userId`s carry over. A sandbox stub signs users in **without
+ * credentials** — see `stubIdp()`.
+ */
+export interface StubProvider extends Omit<DirectOidcProvider, 'type'> {
+	/** The built-in stub IdP. Set by `stubIdp()`. */
+	type: 'stub';
+	/** Placeholder; the real issuer is the stub's local URL, derived per request. */
+	issuer: 'aws-blocks:stub-idp';
+	/** The stub's user directory and authorize hook. */
+	stubIdp: StubIdpSettings;
+}
+
+/** Options for `stubIdp()`. */
+export interface StubIdpOptions extends StubIdpSettings {
+	/** Scopes requested from the stub. @default ['openid', 'email', 'profile'] */
+	scopes?: readonly string[];
+	/** Label for the generated `signIn:<id>` UI action. */
+	label?: string;
+	/**
+	 * ID-token claim the stub's groups are read from (set it per user with
+	 * `extra: { groups: [...] }`), so `requireRole()` works locally.
+	 *
+	 * @default 'groups'
+	 */
+	groupsClaim?: string;
+	/** Profile-attribute mapping, as for any OIDC provider. */
+	attributeMapping?: Readonly<ProfileAttributeMapping>;
+}
+
+/** Credentials for `github()`. */
+export interface GitHubOptions {
+	/** The OAuth app's client id. Not a secret; a literal string is fine. */
+	clientId: string;
+	/** The OAuth app's client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. */
+	clientSecret: ProviderSecretRef;
+	/** @default ['read:user', 'user:email'] */
+	scopes?: readonly string[];
+	/** Label for the generated `signIn:<id>` UI action. @default 'Sign in with GitHub' */
+	label?: string;
+}
+
+/** Options for `customOauth2()`. */
+export interface CustomOauth2Options {
+	/**
+	 * The identity namespace: users get `` userId = `oauth2:${name}:${providerSub}` ``.
+	 * Use the same value as the `providers` key (and as `AuthOIDC`'s
+	 * provider `name`, so existing user ids are unchanged).
+	 */
+	name: string;
+	/** Public client id. Not a secret; a literal string is fine. */
+	clientId: string;
+	/** Client secret, as an `AppSetting` (`secret: true`) or `Secret` reference. Omit for a public (PKCE-only) client. */
+	clientSecret?: ProviderSecretRef;
+	/** The provider's authorization, token and userinfo endpoints. */
+	endpoints: OAuth2Provider['oauth2']['endpoints'];
+	/** Scopes requested from the provider. */
+	scopes: readonly string[];
+	/** Turn the userinfo response into the user's identity and profile. */
+	mapClaims: (raw: unknown) => MappedClaims;
+	/** Label for the generated `signIn:<id>` UI action. */
+	label?: string;
+}
+
+/**
+ * A validated relay-target origin for native and CLI clients (e.g.
+ * `myapp://auth`). Build one with `relayOrigin()`; a plain string is rejected
+ * at compile time so every entry has been checked.
+ */
+export type RelayOrigin = string & { readonly __brand: 'RelayOrigin' };
+
+/**
+ * A SAML 2.0 identity provider: a `type: 'saml'` entry of a `'cognito'` block
+ * ({@link CognitoAuthOptions.providers}). SAML always federates through
+ * Cognito, so configuring one provisions the user pool.
+ *
+ * Signs in through Cognito managed login, like a {@link SocialProvider} (a
+ * user-pool user; unavailable in `npm run dev`). Enforce MFA at your IdP.
+ *
+ * ⚠️ Metered on the same separate 50-free-MAU tier as Cognito-federated
+ * OIDC (see {@link CognitoOidcProvider}).
+ */
+export interface SamlProvider extends ProviderCommon {
+	/** A SAML 2.0 identity provider. */
+	type: 'saml';
+	/** IdP metadata document URL. Mutually exclusive with `metadataFile`. */
+	metadataUrl?: string;
+	/** Inline IdP metadata XML. Mutually exclusive with `metadataUrl`. */
+	metadataFile?: string;
+	/** Require signed SAML requests. @default false */
+	signRequest?: boolean;
+}
+
+/** MFA enforcement level. */
+export type MfaMode = 'off' | 'optional' | 'required';
+
+/** Settings for {@link CognitoAuthOptions.mfa}. */
+export interface MfaOptions {
+	/** @default 'off' */
+	mode?: MfaMode;
+	/**
+	 * Permitted second factors. `'EMAIL'` requires an existing pool with a
+	 * configured email sender — the CDK layer throws at synth otherwise and
+	 * points at `Auth.fromExisting`.
+	 *
+	 * @default ['SMS', 'TOTP']
+	 */
+	types?: readonly ('SMS' | 'TOTP' | 'EMAIL')[];
+	/**
+	 * The issuer an authenticator app shows next to this app's codes: the
+	 * `issuer` of the `otpauth://` URI (the QR code) that `createApi()`'s
+	 * `setUpTotp` action returns. Runtime-only: changing it changes no
+	 * infrastructure, and codes already enrolled keep working.
+	 *
+	 * @default the id of the app's root `Scope` (`new Scope('my-app')` → `'my-app'`)
+	 */
+	totpIssuer?: string;
+}
+
+/** Settings for {@link CognitoAuthOptions.passkeys}. */
+export interface PasskeyOptions {
+	/** Relying-party id: the apex domain, no scheme and no port. There is no safe default. */
+	relyingPartyId: string;
+	/** Exact allowed origins, e.g. `['https://example.com']`. */
+	origins: readonly string[];
+	/**
+	 * Whether the authenticator must verify the user (biometric or PIN).
+	 * Cognito supports only `'required'` and `'preferred'`; WebAuthn's
+	 * `'discouraged'` is deliberately not accepted (`AuthCognito` silently
+	 * treated it as `'preferred'`).
+	 *
+	 * @default 'preferred'
+	 */
+	userVerification?: 'required' | 'preferred';
+}
+
+/** A custom user-pool attribute. */
+export interface UserAttribute {
+	/** Attribute name without the `custom:` prefix. */
+	name: string;
+	/** Attribute type. @default 'String' */
+	type?: 'String' | 'Number';
+	/** Whether the attribute is mutable after creation. @default true */
+	mutable?: boolean;
+	/** Whether the attribute is required at sign-up. @default false */
+	required?: boolean;
+}
+
+/** Settings for {@link CognitoAuthOptions.users}. */
+export interface UserPoolOptions {
+	/**
+	 * What a user types as their username.
+	 *
+	 * ⚠️ **Fixed once the pool exists.** Cognito cannot change sign-in or alias
+	 * attributes on an existing pool. CloudFormation reports the change as
+	 * "No interruption", then `UpdateUserPool` rejects it and the stack rolls
+	 * back. Changing this means a new pool and a user migration, so the block
+	 * refuses the change at synth.
+	 *
+	 * Without `'username'` (e.g. `['email']`), users sign up and in with their
+	 * email / phone, but Cognito stores a **generated** username equal to
+	 * `userSub` — so `username` / `userId` is that id, not the email; read the
+	 * email from `attributes.email`. With `'username'`, the email / phone is an
+	 * alias: it signs in only once verified, and a username may not look like
+	 * one. The local runtime behaves the same way.
+	 *
+	 * @default ['username', 'email']
+	 */
+	signInWith?: readonly ('username' | 'email' | 'phone')[];
+
+	/**
+	 * **Custom** attributes only — standard OIDC attributes are implicit.
+	 *
+	 * ⚠️ **Additive only.** Existing custom attributes and required attributes
+	 * cannot be renamed, retyped or removed (the same "No interruption", then
+	 * rollback trap as `signInWith`). Limits: 50 custom attributes, 20-character
+	 * names, 2,048 bytes each.
+	 *
+	 * Writes (`signUp`, `updateUserAttributes`, `admin.createUser`) may name
+	 * only standard attributes and the attributes declared here, with string
+	 * values; anything else is rejected with `InvalidParameterException`, by
+	 * the local runtime as by Cognito.
+	 *
+	 * ⚠️ **Not a profile database.** Keep profile data in `KVStore` or
+	 * `DistributedTable`, keyed on `user.userSub`.
+	 */
+	attributes?: readonly UserAttribute[];
+
+	/**
+	 * Groups to create. `requireRole()`'s `role` parameter narrows to this
+	 * literal union (see {@link GroupOf}).
+	 *
+	 * @remarks `requireRole()` reads the user's **current** group membership on
+	 * each guarded request (deduplicated within a request), so a group change
+	 * applies on the user's next request without a re-login. The `groups` on the
+	 * user returned by `requireAuth()` / `getCurrentUser()` is the snapshot taken
+	 * at sign-in. Users of a directly federated OIDC provider have no pool
+	 * record; their groups come from that provider's `groupsClaim`.
+	 */
+	groups?: readonly (string | { name: string; description?: string; precedence?: number })[];
+
+	/**
+	 * The Cognito authentication flow for email + password sign-in.
+	 * `'USER_AUTH'` is required for passkeys and choice-based / passwordless
+	 * sign-in, and itself requires a `featurePlan` above `'lite'`.
+	 *
+	 * @default 'USER_PASSWORD_AUTH'
+	 */
+	authFlow?: 'USER_PASSWORD_AUTH' | 'USER_AUTH';
+
+	/**
+	 * Default first-factor hint for {@link UserPoolOptions.authFlow} `'USER_AUTH'`. When
+	 * omitted, the first `signIn` call returns
+	 * `CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION` and the user picks a
+	 * factor. When set, that factor is requested directly (e.g.
+	 * `'EMAIL_OTP'` → Cognito sends a code and `signIn` returns
+	 * `CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP`).
+	 *
+	 * Ignored for `'USER_PASSWORD_AUTH'` (the classic flow has no factor
+	 * choice). The per-call override on `auth.signIn` takes precedence.
+	 *
+	 * @remarks Carried over from `AuthCognito`'s top-level `preferredChallenge`
+	 * (renamed: it sits next to `authFlow`). As there, `'EMAIL_OTP'` /
+	 * `'SMS_OTP'` also enable that factor in the pool's `USER_AUTH`
+	 * `AllowedFirstAuthFactors`, alongside the factors `mfa.types` lists.
+	 * Cognito sends the `'EMAIL_OTP'` code only through Amazon SES, so under
+	 * `'USER_AUTH'` it needs a pool with an SES sender: on a pool this block
+	 * creates, set {@link CognitoAuthOptions.email}; without it, synth fails.
+	 */
+	preferredChallenge?: PreferredChallenge;
+
+	/** Remember devices to skip MFA on a known device. ⚠️ Email + password sign-in only. */
+	deviceTracking?: { challengeRequiredOnNewDevice?: boolean; deviceOnlyRememberedOnUserPrompt?: boolean };
+
+	/**
+	 * Whether usernames — and the email / phone a user signs in with — match
+	 * case-sensitively. `false` lets `Alice@Example.com` sign in as
+	 * `alice@example.com`, which is what users expect of an email address and
+	 * what Amplify Gen 2 pools use.
+	 *
+	 * ⚠️ **Fixed once the pool exists** (Cognito's
+	 * `UsernameConfiguration.CaseSensitive`: "This configuration is immutable
+	 * after you set it"), so the block refuses a change at synth and again at
+	 * deploy. Choose it when the pool is created.
+	 *
+	 * Unset leaves Cognito's own default, case-sensitive, and emits nothing, so
+	 * an existing pool (including one created by `AuthCognito`) is unchanged.
+	 * The local runtime matches usernames and sign-in emails the same way.
+	 *
+	 * For a pool wrapped with `userPool`, the block cannot set it: state the
+	 * pool's own setting here so the local runtime and session revocation
+	 * match names the way that pool does.
+	 *
+	 * @default true (Cognito's default)
+	 */
+	caseSensitive?: boolean;
+}
+
+/** Settings for {@link AuthCommonOptions.session}. */
+export interface SessionOptions {
+	/** Session record and cookie lifetime, in seconds. @default 34_560_000 (400 days) */
+	ttlSeconds?: number;
+	/**
+	 * Set `true` only when the frontend and the API are on different registrable
+	 * domains. Switches the cookie to `SameSite=None; Secure; Partitioned`.
+	 *
+	 * @default false
+	 */
+	crossDomain?: boolean;
+	/**
+	 * How recently the user must have signed in for
+	 * `requireAuth(context, { fresh: true })` to succeed, in seconds. Use it to
+	 * demand a recent sign-in before destructive actions without keeping a
+	 * second session.
+	 *
+	 * @default 900 (15 minutes)
+	 */
+	freshAgeSeconds?: number;
+}
+
+/** Settings for {@link AuthCommonOptions.redirects}. */
+export interface RedirectOptions {
+	/** @default '/aws-blocks/auth/callback' — must start with `/aws-blocks/auth/`. */
+	callbackPath?: string;
+	/** @default '/aws-blocks/auth/signout' — must start with `/aws-blocks/auth/`. */
+	signOutPath?: string;
+	/** Where the browser lands after a successful federated sign-in. @default '/' */
+	postSignInPath?: string;
+	/**
+	 * Where the browser lands after a federated sign-out: the sign-out route
+	 * redirects here, and — for a provider with an `end_session_endpoint` — it is
+	 * sent to the IdP as `post_logout_redirect_uri` (as `<app origin><path>`),
+	 * so register that URI with the IdP. Must be a same-origin path starting
+	 * with `/`.
+	 *
+	 * For a provider federated through Cognito (any `providers` entry of a
+	 * `'cognito'` block), sign-out first goes to Cognito's `/logout`, which
+	 * returns to `<app origin><signOutPath>` (the URL registered on the Cognito
+	 * app client); that route then redirects here.
+	 *
+	 * @default '/'
+	 */
+	postSignOutPath?: string;
+	/**
+	 * Origins a native or CLI client's relay sign-in may redirect back to
+	 * (`POST /aws-blocks/auth/authorize-params/<id>` with `relayTo`), each built
+	 * with `relayOrigin()`. Loopback (`http://127.0.0.1`, `http://[::1]`, any
+	 * port) and the API's own origin are always allowed.
+	 *
+	 * @example allowedRelayOrigins: [relayOrigin('myapp://auth')]
+	 * @default []
+	 */
+	allowedRelayOrigins?: readonly RelayOrigin[];
+}
+
+/** Settings for {@link CognitoAuthOptions.hostedUi}. */
+export interface HostedUiOptions {
+	/**
+	 * The Cognito domain prefix: the hosted UI is served at
+	 * `https://<domainPrefix>.auth.<region>.amazoncognito.com`, and each upstream
+	 * IdP must allow `https://<domainPrefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse`
+	 * (`/saml2/idpresponse` for SAML) as its redirect URI. 1–63 lowercase letters,
+	 * digits and hyphens, not starting or ending with a hyphen, and not containing
+	 * `aws`, `amazon` or `cognito`.
+	 *
+	 * ⚠️ **Create-only.** `UserPoolDomain.Domain` is replace-only and globally
+	 * unique: changing this after the first deploy deletes the domain, signs out
+	 * every hosted-UI session, and breaks the redirect URI registered in every
+	 * upstream IdP console until you register the new one. Set it before the first
+	 * deploy that adds a `providers` entry to a `'cognito'` block, or not
+	 * at all.
+	 *
+	 * @default derived from the block's `fullId` plus a short hash — deterministic and stable
+	 */
+	domainPrefix?: string;
+}
+
+/** The admin action groups that {@link AdminOptions.actions} can scope. */
+export type AdminAction = 'groups' | 'lifecycle';
+
+/**
+ * Opt-in configuration for the admin surface. Presence of this object on
+ * {@link CognitoAuthOptions.admin} enables `auth.admin` and the matching IAM grant.
+ */
+export interface AdminOptions {
+	/**
+	 * Scopes the IAM grant and the compile-time method gate. Omit to grant
+	 * everything. `['groups']` grants only the group-membership actions;
+	 * `['lifecycle']` grants only the user-lifecycle actions.
+	 */
+	actions?: readonly AdminAction[];
+}
+
+/**
+ * Reference to an externally provisioned Cognito user pool. Returned by
+ * `Auth.fromExisting()`; pass it as {@link CognitoAuthOptions.userPool}.
+ */
+export interface ExternalUserPoolRef {
+	readonly __brand: 'ExternalUserPoolRef';
+	readonly userPoolId: string;
+	/**
+	 * An app client of that pool — typically the one its frontend signs in
+	 * with. With {@link CognitoAuthOptions.allowBearerAuth} on, the guards accept
+	 * access tokens this client issued, as if it were listed in
+	 * {@link BearerAuthOptions.clientIds}. The block still creates its own
+	 * `client` for its server-side sign-in; this id is not used for that.
+	 * May be a CDK token at synth (forwarded through config, like `clientIds`).
+	 */
+	readonly clientId?: string;
+}
+
+/**
+ * Settings for {@link CognitoAuthOptions.allowBearerAuth} given as an object
+ * (equivalent to `true`, plus the fields below).
+ */
+export interface BearerAuthOptions {
+	/**
+	 * Extra Cognito app-client ids of this block's user pool whose **access
+	 * tokens** the guards accept, besides the block's own `client` and its
+	 * hosted-UI client. Use it when another frontend signs users in directly
+	 * against the same pool — an Amplify client library, a native app with its
+	 * own app client — and calls this backend with `Authorization: Bearer`.
+	 *
+	 * Each token is still fully verified: RS256 signature against the pool's
+	 * JWKS, issuer = this pool, `token_use: access`, unexpired, and `client_id`
+	 * one of the accepted clients. A token from any other client, or another
+	 * pool, is treated as signed out. ID tokens are never accepted.
+	 *
+	 * Each entry is a literal app-client id (1–128 letters, digits, `_` or `+`)
+	 * or a CDK token for one — for example the `userPoolClientId` of a client
+	 * created elsewhere in the same CDK app, such as Amplify Gen 2's. The CDK
+	 * layer forwards the list through the block's config, so tokens resolve at
+	 * deploy time; in the Lambda, where the backend module runs again and no
+	 * token exists, the guards use that deployed list (plus any literal ids
+	 * here). The id of `Auth.fromExisting(userPoolId, clientId)` is accepted
+	 * too.
+	 *
+	 * The frontend sends the **access** token, never the ID token. With
+	 * Amplify JS: `(await fetchAuthSession()).tokens?.accessToken.toString()`.
+	 *
+	 * Locally (`npm run dev`) only the local pool's own tokens exist, so this
+	 * list has no effect there.
+	 *
+	 * @default []
+	 */
+	clientIds?: readonly string[];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Options-literal projections
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These project `O` (the options literal captured by `Auth<const O>`) into the
+// narrow unions individual methods accept. Each falls back to a wide type when
+// `O` is the wide `AuthOptions` (or was widened by a `: AuthOptions` variable),
+// so `Auth` with no type argument stays a supertype of every configured
+// instance. That covariance is load-bearing — `types-test.ts` pins it.
+
+/**
+ * The union of configured federated provider ids — the keys of `providers`.
+ *
+ * `never` when `O` configures no provider; `string` for the wide
+ * `AuthOptions` (any id may be configured).
+ */
+export type ProviderIdOf<O extends AuthOptions> = O extends { providers?: infer P }
+	? [P] extends [undefined]
+		? never
+		: keyof NonNullable<P> & string
+	: never;
+
+/**
+ * The declared group names: a literal union when `users.groups` is a literal
+ * tuple (inline options, captured by `const O`), otherwise `string`.
+ */
+export type GroupOf<O extends AuthOptions> = O extends {
+	users: { groups: infer L extends readonly [unknown, ...unknown[]] };
+}
+	? L[number] extends infer G
+		? G extends string
+			? G
+			: G extends { name: infer N extends string }
+				? N
+				: string
+		: never
+	: string;
+
+/** Standard Cognito user-attribute names. */
+export type StandardUserAttributeKey =
+	| 'address'
+	| 'birthdate'
+	| 'email'
+	| 'email_verified'
+	| 'family_name'
+	| 'gender'
+	| 'given_name'
+	| 'locale'
+	| 'middle_name'
+	| 'name'
+	| 'nickname'
+	| 'phone_number'
+	| 'phone_number_verified'
+	| 'picture'
+	| 'preferred_username'
+	| 'profile'
+	| 'sub'
+	| 'updated_at'
+	| 'website'
+	| 'zoneinfo';
+
+/** The custom-attribute names declared in `users.attributes`; `never` when none are. */
+export type CustomAttrNames<O extends AuthOptions> = O extends { users: { attributes: readonly (infer U)[] } }
+	? U extends { name: infer N extends string }
+		? N
+		: never
+	: never;
+
+/**
+ * Attribute names accepted on **write** APIs (e.g. `signUp` attributes). Accepts
+ * a declared custom attribute with or without its `custom:` prefix. `string`
+ * when `users.attributes` is not a literal tuple.
+ */
+export type AttrOf<O extends AuthOptions> = O extends { users: { attributes: readonly [unknown, ...unknown[]] } }
+	? StandardUserAttributeKey | CustomAttrNames<O> | `custom:${CustomAttrNames<O>}`
+	: string;
+
+/**
+ * Attribute names as returned from **read** APIs. Cognito stores custom
+ * attributes with the `custom:` prefix, so reads only see the prefixed form.
+ */
+export type ReadAttrOf<O extends AuthOptions> = O extends { users: { attributes: readonly [unknown, ...unknown[]] } }
+	? StandardUserAttributeKey | `custom:${CustomAttrNames<O>}`
+	: string;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Mode gates
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// A gated method takes a trailing rest parameter typed by a gate. When the mode
+// is enabled the gate resolves to the method's ordinary trailing parameters, so
+// the method reads and calls normally. When it is disabled the gate resolves to
+// a single `never` parameter, so every call is a compile error — and the rest
+// parameter is *named* after the error, so the compiler's diagnostic carries the
+// message: "Arguments for the rest parameter
+// 'ERROR_emailPassword_is_disabled_on_this_Auth_instance' were not provided."
+//
+// Why a parameter and not a conditional property type: a conditional over the
+// class's own `O` in a property position makes the class invariant in `O`
+// (that regressed 14 call sites when `AuthCognito`'s admin surface tried it).
+// A rest parameter keeps `Auth<O>` assignable to `Auth`.
+//
+// Why the gate absorbs the trailing optional parameters (the `T` argument): if
+// an optional parameter preceded the gate, a call that omits it would be
+// reported as "An argument for 'options' was not provided" — pointing the user
+// at the wrong fix.
+
+/**
+ * Whether email + password sign-in is enabled for options `O`.
+ *
+ * - `false` — the options literal says `emailPassword: false`, or
+ *   `store: 'builtin'` (no user pool, so no password users).
+ * - `true` — `emailPassword` is omitted, `true`, or an options object, on a
+ *   `'cognito'` block.
+ * - `boolean` — unknown at compile time: the wide `AuthOptions`, or a
+ *   `boolean`-typed value. Gated methods stay callable (a runtime check backs
+ *   them) and every configured instance stays assignable to the wide type.
+ */
+export type EmailPasswordEnabled<O extends AuthOptions> = O extends { store: 'builtin' }
+	? false
+	: O extends { emailPassword: false }
+		? false
+		: 'emailPassword' extends keyof O
+			? false extends O['emailPassword']
+				? boolean
+				: true
+			: true;
+
+/**
+ * Compile-time gate for the email + password methods, used as their trailing
+ * rest parameter. `T` is the method's ordinary trailing (optional) parameters.
+ *
+ * Resolves to `T` when email + password is enabled, and to
+ * `[ERROR_emailPassword_is_disabled_on_this_Auth_instance: never]` when it is
+ * disabled (`emailPassword: false`, or `store: 'builtin'`). When unknown at compile time it accepts
+ * both, so calls compile and a runtime `EmailPasswordNotEnabledException`
+ * backs the check.
+ */
+export type PasswordGate<O extends AuthOptions, T extends unknown[] = []> = [EmailPasswordEnabled<O>] extends [true]
+	? T
+	: [EmailPasswordEnabled<O>] extends [false]
+		? [ERROR_emailPassword_is_disabled_on_this_Auth_instance: never]
+		: T | [ERROR_emailPassword_is_disabled_on_this_Auth_instance: never];
+
+/**
+ * Whether options `O` configure at least one federated provider.
+ *
+ * `false` for the wide `AuthOptions`: an `Auth` whose configuration the
+ * compiler cannot see is treated like the zero-config default, which has no
+ * federated provider. That keeps the wide type a supertype of every configured
+ * instance, and makes `new Auth(scope, 'auth').getSignInUrl(…)` a compile
+ * error. Use the instance's own type (`typeof auth`) to call federation
+ * methods through a helper.
+ */
+export type HasFederatedProvider<O extends AuthOptions> = [ProviderIdOf<O>] extends [never]
+	? false
+	: AuthOptions extends O
+		? false
+		: true;
+
+/**
+ * Compile-time gate for the federated sign-in methods, used as their trailing
+ * rest parameter. `T` is the method's ordinary trailing (optional) parameters.
+ *
+ * Resolves to `T` when `O` configures at least one federated provider, and to
+ * `[ERROR_no_federated_provider_is_configured: never]` otherwise.
+ */
+export type FederationGate<O extends AuthOptions, T extends unknown[] = []> = [HasFederatedProvider<O>] extends [true]
+	? T
+	: [ERROR_no_federated_provider_is_configured: never];
+
+/** The {@link MfaMode} that options `O` select (`'off'` when `mfa` is omitted). A union when not a literal. */
+export type MfaModeOf<O extends AuthOptions> = O extends { mfa?: infer M } ? MfaModeOfOption<M> : 'off';
+
+/** The mode an `mfa` option value selects: `'optional'` is `{ mode: 'optional' }`; `{}` is `'off'`. */
+export type MfaModeOfOption<M> = M extends MfaMode
+	? M
+	: M extends { mode?: infer X }
+		? X extends MfaMode
+			? X
+			: 'off'
+		: 'off';
+
+/**
+ * Whether options `O` turn MFA on (`mfa` is `'optional'` or `'required'`, and
+ * email + password is enabled — MFA applies to email + password sign-in only).
+ *
+ * - `false` — `mfa` omitted, `'off'`, `{}` / `{ mode: 'off' }`, or
+ *   `emailPassword: false`.
+ * - `true` — MFA is on.
+ * - `boolean` — unknown at compile time: a `MfaMode`-typed value, or the wide
+ *   `AuthOptions` (including `new Auth(scope, id)` with no options, which the
+ *   compiler cannot tell apart from it). The methods stay callable and a
+ *   runtime `MfaNotEnabledException` backs them — the same trade-off as
+ *   {@link EmailPasswordEnabled}. Resolving the wide type to *both* gate
+ *   tuples, rather than closing it, is what keeps a generic `Auth<O>`
+ *   assignable to the wide `Auth`: a closed `[never]` gate cannot be related
+ *   to the deferred `MfaGate<O>` of a generic instance.
+ */
+export type MfaEnabled<O extends AuthOptions> = AuthOptions extends O
+	? boolean
+	: [EmailPasswordEnabled<O>] extends [false]
+		? false
+		: [EmailPasswordEnabled<O>] extends [true]
+			? MfaModeEnabled<O>
+			: MfaModeEnabled<O> extends false
+				? false
+				: boolean;
+
+/** {@link MfaEnabled} without the email + password check. */
+export type MfaModeEnabled<O extends AuthOptions> = [MfaModeOf<O>] extends ['off']
+	? false
+	: 'off' extends MfaModeOf<O>
+		? boolean
+		: true;
+
+/**
+ * Compile-time gate for the MFA management methods (`setUpTotp`,
+ * `verifyTotpSetup`, `updateMfaPreference`, `getMfaPreference`), used as their
+ * trailing rest parameter. `T` is the method's ordinary trailing (optional)
+ * parameters.
+ *
+ * Resolves to `T` when MFA is on (see {@link MfaEnabled}), and to
+ * `[ERROR_mfa_is_off_on_this_Auth_instance: never]` when it is off. When unknown
+ * at compile time it accepts both, and a runtime `MfaNotEnabledException`
+ * backs the check.
+ */
+export type MfaGate<O extends AuthOptions, T extends unknown[] = []> = [MfaEnabled<O>] extends [true]
+	? T
+	: [MfaEnabled<O>] extends [false]
+		? [ERROR_mfa_is_off_on_this_Auth_instance: never]
+		: T | [ERROR_mfa_is_off_on_this_Auth_instance: never];
+
+/**
+ * Whether options `O` enable authenticator-app (TOTP) MFA: MFA is on
+ * ({@link MfaEnabled}) and `mfa.types` includes `'TOTP'` (as it does by
+ * default). `boolean` when unknown at compile time — see {@link MfaEnabled}.
+ * Gates `createApi()`'s `setUpTotp` and `verifyTotpSetup` actions.
+ */
+export type TotpEnabled<O extends AuthOptions> = [MfaEnabled<O>] extends [false]
+	? false
+	: 'TOTP' extends MfaTypeOf<O>
+		? MfaEnabled<O>
+		: false;
+
+/**
+ * Whether options `O` enable passkeys (`passkeys` is an options object, and
+ * email + password is enabled). `boolean` when unknown at compile time,
+ * including the wide `AuthOptions` — see {@link MfaEnabled} for why.
+ */
+export type PasskeysEnabled<O extends AuthOptions> = AuthOptions extends O
+	? boolean
+	: [EmailPasswordEnabled<O>] extends [false]
+		? false
+		: [Extract<PasskeysOptionOf<O>, object>] extends [never]
+			? false
+			: [Exclude<PasskeysOptionOf<O>, object>] extends [never]
+				? [EmailPasswordEnabled<O>] extends [true]
+					? true
+					: boolean
+				: boolean;
+
+/** The `passkeys` option value of `O` (`undefined` when omitted). */
+export type PasskeysOptionOf<O extends AuthOptions> = O extends { passkeys?: infer P } ? P : undefined;
+
+/**
+ * Compile-time gate for the passkey management methods
+ * (`startPasskeyRegistration`, `completePasskeyRegistration`, `listPasskeys`,
+ * `deletePasskey`), used as their trailing rest parameter.
+ *
+ * Resolves to `T` when passkeys are enabled (see {@link PasskeysEnabled}), and
+ * to `[ERROR_passkeys_are_not_enabled_on_this_Auth_instance: never]` otherwise.
+ * When unknown at compile time it accepts both, and a runtime
+ * `PasskeysNotEnabledException` backs the check.
+ */
+export type PasskeyGate<O extends AuthOptions, T extends unknown[] = []> = [PasskeysEnabled<O>] extends [true]
+	? T
+	: [PasskeysEnabled<O>] extends [false]
+		? [ERROR_passkeys_are_not_enabled_on_this_Auth_instance: never]
+		: T | [ERROR_passkeys_are_not_enabled_on_this_Auth_instance: never];
+
+/**
+ * The `confirmSignIn` challenge (`AuthActionPayloadMap.confirmSignIn`'s
+ * `challenge`) that answers a sign-in step named `N` — the hidden `challenge`
+ * field of the `confirmSignIn` action the sign-in UI renders for that step.
+ * `never` for `RESET_PASSWORD` and `CONFIRM_SIGN_UP`, which continue with
+ * their own actions.
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type ConfirmSignInChallengeOf<N extends AnySignInNextStep['name']> =
+	N extends 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED'
+		? 'newPassword'
+		: N extends
+					| 'CONFIRM_SIGN_IN_WITH_SMS_CODE'
+					| 'CONFIRM_SIGN_IN_WITH_TOTP_CODE'
+					| 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE'
+					| 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP'
+					| 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP'
+			? 'code'
+			: N extends 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION' | 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION'
+				? 'mfaType'
+				: N extends 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP'
+					? 'totpSetup'
+					: N extends 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP'
+						? 'email'
+						: N extends 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION'
+							? 'firstFactor'
+							: N extends 'CONFIRM_SIGN_IN_WITH_PASSWORD'
+								? 'password'
+								: N extends 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN'
+									? 'webauthn'
+									: never;
+
+/**
+ * The `confirmSignIn` payloads options `O` can produce: one per challenge
+ * answering a step of {@link SignInNextStep}`<O>` (mapped by
+ * {@link ConfirmSignInChallengeOf}), so the input and the steps `signIn`
+ * returns never disagree:
+ *
+ * - `newPassword` — always (an administrator-created user's first sign-in).
+ * - `code` — MFA is on, or `users.authFlow` is `'USER_AUTH'` (first-factor codes).
+ * - `mfaType` — MFA is on; `mfaType` is one of the configured `mfa.types`.
+ * - `totpSetup` / `email` — MFA is on and `mfa.types` includes `'TOTP'` / `'EMAIL'`.
+ * - `password` / `firstFactor` — `users.authFlow` is `'USER_AUTH'`.
+ * - `webauthn` — passkeys are enabled.
+ *
+ * With `userPool: Auth.fromExisting(…)` every challenge is kept, as for
+ * {@link SignInNextStep}: the wrapped pool's own settings decide them.
+ */
+export type ConfirmSignInInputOf<O extends AuthOptions> =
+	| Extract<
+			AuthActionInput,
+			{ action: 'confirmSignIn'; challenge: Exclude<ConfirmSignInChallengeOf<SignInStepNameOf<O>>, 'mfaType'> }
+	  >
+	| ('mfaType' extends ConfirmSignInChallengeOf<SignInStepNameOf<O>>
+			? Extract<AuthActionInput, { action: 'confirmSignIn'; challenge: 'mfaType' }> & {
+					/** The second factor to use: one of the configured `mfa.types`. */
+					mfaType: MfaTypeOf<O>;
+				}
+			: never);
+
+/**
+ * The `setAuthState` input an `Auth` configured with options `O` accepts —
+ * {@link AuthActionInput} narrowed by the same gates as the server-side
+ * methods:
+ *
+ * - `signOut` — always.
+ * - `signIn`, `signUp`, `confirmSignUp`, `resendSignUpCode`, `autoSignIn`,
+ *   `resetPassword`, `confirmResetPassword` and `confirmSignIn` — email +
+ *   password is enabled ({@link EmailPasswordEnabled}). `confirmSignIn` takes
+ *   only the challenges `O` can produce ({@link ConfirmSignInInputOf}).
+ * - `signInWithPasskey`, `startPasskeyRegistration`,
+ *   `completePasskeyRegistration`, `listPasskeys`, `deletePasskey` — passkeys
+ *   are enabled ({@link PasskeysEnabled}).
+ * - `setUpTotp`, `verifyTotpSetup` — MFA is on and `mfa.types` includes
+ *   `'TOTP'` ({@link TotpEnabled}).
+ * - `getMfaPreference`, `updateMfaPreference` — MFA is on ({@link MfaEnabled});
+ *   `updateMfaPreference` takes only the factors in `mfa.types`
+ *   ({@link MfaPreferenceInput}).
+ *
+ * A gate the compiler cannot resolve (a `boolean`-typed option, or the wide
+ * `AuthOptions`) keeps its actions, and the wide type is exactly
+ * {@link AuthActionInput}. Federated sign-in is not a `setAuthState` action:
+ * it is the `signIn:<id>` URL action in `getAuthState()`'s `actions` (see
+ * {@link FederatedActionNameOf}).
+ *
+ * @example
+ * ```ts
+ * const auth = new Auth(scope, 'auth', { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } });
+ * export const authApi = auth.createApi();
+ *
+ * // frontend
+ * await authApi.setAuthState({ action: 'signOut' });
+ * // @ts-expect-error — a 'builtin' block has no email + password
+ * await authApi.setAuthState({ action: 'signIn', username, password });
+ * ```
+ */
+export type AuthActionInputOf<O extends AuthOptions> = AuthOptions extends O
+	? AuthActionInput
+	:
+			| Extract<AuthActionInput, { action: 'signOut' }>
+			| (true extends EmailPasswordEnabled<O>
+					?
+							| Extract<
+									AuthActionInput,
+									{
+										action:
+											| 'signIn'
+											| 'signUp'
+											| 'confirmSignUp'
+											| 'resendSignUpCode'
+											| 'autoSignIn'
+											| 'resetPassword'
+											| 'confirmResetPassword';
+									}
+							  >
+							| ConfirmSignInInputOf<O>
+					: never)
+			| (true extends PasskeysEnabled<O>
+					? Extract<
+							AuthActionInput,
+							{
+								action:
+									| 'signInWithPasskey'
+									| 'startPasskeyRegistration'
+									| 'completePasskeyRegistration'
+									| 'listPasskeys'
+									| 'deletePasskey';
+							}
+						>
+					: never)
+			| (true extends TotpEnabled<O>
+					? Extract<AuthActionInput, { action: 'setUpTotp' | 'verifyTotpSetup' }>
+					: never)
+			| (true extends MfaEnabled<O>
+					?
+							| Extract<AuthActionInput, { action: 'getMfaPreference' }>
+							| (Extract<AuthActionInput, { action: 'updateMfaPreference' }> & MfaPreferenceInput<O>)
+					: never);
+
+/**
+ * The name of the federated sign-in action options `O` put in
+ * `getAuthState()`'s `actions`: `` `signIn:${id}` `` for each configured
+ * provider id (`never` when there is none; `` `signIn:${string}` `` for the
+ * wide `AuthOptions`). The action carries a `url`; the client navigates to it
+ * rather than calling `setAuthState`. Narrows `@aws-blocks/bb-auth/ui`'s
+ * `AuthFederatedActionName` to this block's providers.
+ *
+ * @example
+ * ```ts
+ * const authOptions = { store: 'builtin', providers: { okta: { type: 'oidc', issuer, clientId } } } as const satisfies AuthOptions;
+ * const auth = new Auth(scope, 'auth', authOptions);
+ *
+ * const okta: FederatedActionNameOf<typeof authOptions> = 'signIn:okta'; // a typo is a compile error
+ * const action = (await authApi.getAuthState()).actions.find((a) => a.name === okta);
+ * if (action?.url) window.location.assign(action.url);
+ * ```
+ */
+export type FederatedActionNameOf<O extends AuthOptions> = `signIn:${ProviderIdOf<O>}`;
+
+/**
+ * The signed-in user as `AuthState.user` carries it to the client: the
+ * {@link AuthenticatedUser} of options `O` without the server-only `claims`
+ * and `federatedIdentity`, plus the `displayName` the sign-in UI shows. What
+ * `onAuthChange(authApi, (user) => …)` and `AuthUserOf<typeof authApi>` give
+ * a frontend, so it reads roles and attributes with no extra endpoint:
+ *
+ * @example
+ * ```typescript
+ * import { onAuthChange } from '@aws-blocks/bb-auth/ui';
+ * import { authApi } from 'aws-blocks';
+ *
+ * onAuthChange(authApi, (user) => {
+ *   const isAdmin = user?.groups.includes('admins') ?? false; // groups typed by users.groups
+ * });
+ * ```
+ *
+ * An `AuthUser`, so helpers typed with the plain `AuthUser` accept it.
+ */
+export interface AuthStateUser<O extends AuthOptions = AuthOptions> extends Omit<AuthUser, 'displayName'> {
+	/** The Cognito `sub`, or `` `${issuer}:${sub}` `` for a directly federated user (see {@link AuthenticatedUser.userSub}). */
+	userSub: string;
+	/** The user's groups, typed by `users.groups` (see {@link AuthenticatedUser.groups}). */
+	groups: GroupOf<O>[];
+	/** The user's attributes, keyed by the declared ones (see {@link AuthenticatedUser.attributes}). */
+	attributes: Partial<Record<ReadAttrOf<O>, string>>;
+	/** `'password'` for email + password sign-in, otherwise the federated provider id (only the latter on a `store: 'builtin'` block). */
+	signInProvider: O extends { store: 'builtin' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
+	/** The name the sign-in UI shows ("Signed in as …"): see `AuthUser.displayName`. */
+	displayName: string;
+}
+
+/**
+ * The `createApi()` surface of an `Auth` with options `O`: {@link AuthStateApi}
+ * over {@link AuthActionInputOf}, returning {@link AuthStateUser} users.
+ */
+export type AuthStateApiOf<O extends AuthOptions> = AuthStateApi<AuthActionInputOf<O>, AuthStateUser<O>>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Users and sessions
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The signed-in user, as returned by `requireAuth`, `requireRole`,
+ * `getCurrentUser` and a completed `signIn`.
+ *
+ * Identity by sign-in method:
+ *
+ * | Signed in with | `userId` | `userSub` |
+ * |---|---|---|
+ * | a `'cognito'` block: email + password, social, SAML or OIDC | the username — on a pool whose `users.signInWith` omits `'username'`, the one Cognito generates, equal to `userSub` | the Cognito `sub` (a UUID) |
+ * | a `store: 'builtin'` block: OIDC, OAuth 2.0 or the stub IdP (no pool record) | `` `${issuer}:${sub}` `` | `` `${issuer}:${sub}` `` |
+ *
+ * Key your own data on `userSub`: it is stable for the user's lifetime.
+ *
+ * ⚠️ **Naming across Amplify.** For a user-pool user, `userSub` is the
+ * Cognito `sub` — what the Amplify client libraries' `getCurrentUser()`
+ * returns as **`userId`**. This block's `userId` is the Cognito *username*
+ * (Amplify's `username`). Share `userSub` between the two.
+ *
+ * It has no `displayName`: that is the sign-in UI's value, set on
+ * `AuthState.user` only. To show the user's email server-side, read
+ * `attributes.email`.
+ */
+export interface AuthenticatedUser<O extends AuthOptions = AuthOptions> extends Omit<AuthUser, 'displayName'> {
+	/** Stable unique identifier — key your data on this. See the table above. */
+	userSub: string;
+	/** Group memberships, narrowed to the declared `users.groups`. See {@link UserPoolOptions.groups}. */
+	groups: GroupOf<O>[];
+	/**
+	 * Standard OIDC attributes plus `custom:*` attributes.
+	 *
+	 * For a user-pool session these are the ID token's string claims, so
+	 * `email_verified` / `phone_number_verified` (boolean claims in a Cognito
+	 * ID token) are not included — on AWS and locally alike. Read them with
+	 * `getUserAttributes`, which returns them as `'true'` / `'false'`.
+	 * Likewise `updated_at` (a number in the ID token) and `address` (an
+	 * object, `{ formatted }`) are not included; `getUserAttributes` returns
+	 * both as strings.
+	 */
+	attributes: Partial<Record<ReadAttrOf<O>, string>>;
+	/**
+	 * `'password'` for email + password sign-in, otherwise the federated provider id.
+	 *
+	 * `'password'` stays in the type with `emailPassword: false` too, because
+	 * the guards can still return it: for an access token another app client
+	 * of the pool issued (`allowBearerAuth`), and for a session issued before
+	 * email + password was turned off.
+	 *
+	 * A `store: 'builtin'` block has no password users, so its type is the
+	 * provider ids alone.
+	 */
+	signInProvider: O extends { store: 'builtin' } ? ProviderIdOf<O> : 'password' | ProviderIdOf<O>;
+	/**
+	 * The provider's verified identity claims, for a user who signed in
+	 * through a `providers` entry of a `store: 'builtin'` block — what `AuthOIDC`'s user carried as `claims`. `sub` and `iss`
+	 * are the provider's own, unprefixed (`userId` is `` `${iss}:${sub}` ``):
+	 * the ID token's claims, or, from a provider that issued no ID token (an
+	 * OAuth 2.0 provider), `iss`, `sub` and the profile claims it returned.
+	 *
+	 * Absent for every user-pool user (a `'cognito'` block's users): their Cognito ID-token claims are in
+	 * `getAuthSession(context)`'s `tokens.idToken.payload`.
+	 *
+	 * Server-side only: `getAuthState()` and the sign-in routes never send it
+	 * to the browser.
+	 *
+	 * @example
+	 * ```typescript
+	 * const user = await auth.requireAuth(context);
+	 * const providerSub = user.claims?.sub ?? user.userId; // the IdP's raw `sub` when federated directly
+	 * ```
+	 */
+	claims?: Readonly<Record<string, unknown>>;
+	/**
+	 * Who the user is at their identity provider, the same way for both
+	 * federation engines: `providerId` is the provider's key in this block's
+	 * `providers`, `sub` is
+	 * the provider's own subject for the user (the OIDC `sub`, the social
+	 * account id, the SAML `NameID`).
+	 *
+	 * Unlike `userId` / `userSub`, it does not change if a provider moves
+	 * between a `store: 'builtin'` block and a `'cognito'` block, so it is
+	 * the key to store alongside your data if that switch is possible — for
+	 * example to adopt the Amplify client libraries later, which sign users in
+	 * through Cognito only.
+	 *
+	 * Absent for email + password users, and for a Cognito-federated user of a
+	 * provider this block does not configure. Server-side only: `getAuthState()`
+	 * and the sign-in routes never send it to the browser.
+	 *
+	 * @example
+	 * ```typescript
+	 * const user = await auth.requireAuth(context);
+	 * const key = user.federatedIdentity
+	 *   ? `${user.federatedIdentity.providerId}:${user.federatedIdentity.sub}`
+	 *   : user.userSub;
+	 * ```
+	 */
+	federatedIdentity?: FederatedIdentity;
+}
+
+/** See {@link AuthenticatedUser.federatedIdentity}. */
+export interface FederatedIdentity {
+	/** The provider's key in this block's options, e.g. `'okta'` or `'google'`. */
+	readonly providerId: string;
+	/** The provider's own, unprefixed subject for the user. */
+	readonly sub: string;
+}
+
+/**
+ * A decoded JWT. `payload` is the token's claims after signature verification;
+ * `expiresAt` is the `exp` claim in milliseconds since the epoch.
+ */
+export interface JWT {
+	toString(): string;
+	payload: Record<string, unknown>;
+	expiresAt: number;
+}
+
+/**
+ * Return shape of `getAuthSession`. `tokens` is `undefined` when the caller is
+ * not signed in.
+ */
+export interface AuthSession {
+	tokens?: {
+		idToken: JWT;
+		accessToken: JWT;
+	};
+	userSub?: string;
+}
+
+/** Options for `requireAuth` / `requireRole`. */
+export interface RequireAuthOptions {
+	/**
+	 * Require a recent sign-in (within `session.freshAgeSeconds`). Throws 401
+	 * `ReauthenticationRequiredException` when the session is older.
+	 */
+	fresh?: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Deny-by-default API namespaces (`protect`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The method map an API handler returns: the same shape an `ApiNamespace`
+ * handler returns (`{ async listNotes() { … }, … }`).
+ */
+export type ApiMethods = Record<string, (...args: any[]) => any>;
+
+/**
+ * Makes a method name that is in both `public` and `methods` a compile error:
+ * each such name must be `never` in `methods`.
+ */
+export type NoSharedMethodNames<P extends ApiMethods, M extends ApiMethods> = {
+	// `[P][P extends unknown ? 0 : never]` is `P`, written so TypeScript doesn't infer `P` from here.
+	[K in keyof M & keyof [P][P extends unknown ? 0 : never]]: never;
+};
+
+/**
+ * The two method factories of {@link AuthShape.protect}.
+ *
+ * @typeParam P - The public methods.
+ * @typeParam M - The protected methods.
+ * @typeParam O - The `Auth` block's options, which type `user`.
+ */
+export interface ProtectHandlers<P extends ApiMethods, M extends ApiMethods, O extends AuthOptions = AuthOptions> {
+	/**
+	 * Methods anyone may call, with no session — for example a health check or a
+	 * public listing. Runs as an `ApiNamespace` handler does: per request, with
+	 * no check. Call `auth.getCurrentUser(context)` in a method for an optional
+	 * user. Omit when every method needs a signed-in user.
+	 */
+	public?: (context: BlocksContext) => P;
+	/**
+	 * The protected methods. Runs only after the session check has passed, once
+	 * per call, with the signed-in user (typed by this block's options) — so
+	 * nothing in it, the factory body included, runs for an anonymous caller.
+	 * A name may not also be one of the `public` methods: a compile error. In
+	 * untyped code that defines one anyway, a call to that name runs the public
+	 * method, and the clash is reported only when another protected method is
+	 * called (see `protect`).
+	 */
+	methods: (context: BlocksContext, user: AuthenticatedUser<O>) => M & NoSharedMethodNames<P, M>;
+}
+
+/**
+ * The client-facing type of a namespace {@link AuthShape.protect} returns:
+ * every method, async. The same mapping `new ApiNamespace(...)` returns, so
+ * the frontend imports and calls it exactly like any other namespace.
+ */
+export type ProtectedApi<T extends ApiMethods> = {
+	[K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<Awaited<R>> : never;
+};
+
+/**
+ * Options for {@link AuthShape.protect}: the `ApiNamespace` options (such as
+ * `compute`), plus the group every protected method requires.
+ *
+ * @typeParam O - The `Auth` block's options; `role` may name only its declared `users.groups`.
+ */
+export interface ProtectOptions<O extends AuthOptions = AuthOptions> extends ApiNamespaceOptions {
+	/**
+	 * Require membership of this group (one of `users.groups`) for every
+	 * protected method, as `requireRole(context, role)` does: a caller with no
+	 * session gets 401 `NotAuthenticatedException` first, and a signed-in user
+	 * outside the group 403 `NotAuthorizedException`. Omit to require only a
+	 * signed-in user (`requireAuth(context)`). Public methods are unaffected.
+	 */
+	role?: GroupOf<O>;
+}
+
+/** Options for `getAuthSession`. */
+export interface GetAuthSessionOptions {
+	/** Refresh the tokens even if the access token has not expired yet. */
+	forceRefresh?: boolean;
+}
+
+/** Options for `signOut`. */
+export interface SignOutOptions {
+	/** Also revoke the user's sessions on every other device. */
+	global?: boolean;
+}
+
+/** Options for `getSignInUrl`. */
+export interface SignInUrlOptions {
+	/** Path to land on after sign-in. Must be same-origin. */
+	redirectPath?: string;
+	/** Opaque application state, returned unchanged after the redirect. */
+	state?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Email + password results
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Where a verification code was sent. */
+export interface CodeDeliveryDetails {
+	destination: string;
+	deliveryMedium: 'EMAIL' | 'SMS' | 'PHONE_NUMBER';
+	attributeName: string;
+}
+
+/** Options for `signUp`. */
+export interface SignUpOptions<O extends AuthOptions = AuthOptions> {
+	/** Standard or declared custom attributes. Custom attributes are auto-prefixed `custom:`. */
+	attributes?: Partial<Record<AttrOf<O>, string>>;
+	/** Passed through to Cognito's `ClientMetadata`, for any Lambda trigger on the pool. */
+	clientMetadata?: Record<string, string>;
+}
+
+/** Result of `signUp`. Every sign-up continues with an emailed confirmation code. */
+export interface SignUpResult {
+	isSignUpComplete: boolean;
+	userId?: string;
+	nextStep?: {
+		name: 'CONFIRM_SIGN_UP';
+		codeDeliveryDetails: CodeDeliveryDetails;
+	};
+}
+
+/**
+ * Result of `confirmSignUp`. `COMPLETE_AUTO_SIGN_IN` means the user can be
+ * signed in without re-entering their password (see
+ * {@link EmailPasswordOptions.autoSignIn}).
+ */
+export interface ConfirmSignUpResult {
+	isSignUpComplete: boolean;
+	nextStep: {
+		signUpStep: 'DONE' | 'COMPLETE_AUTO_SIGN_IN';
+	};
+}
+
+/**
+ * First-factor choices for the `USER_AUTH` flow.
+ *
+ * First-factor hint sent to Cognito's `USER_AUTH` `InitiateAuth` call. When
+ * set, Cognito skips the `SELECT_CHALLENGE` step and issues the chosen
+ * challenge directly — e.g. `EMAIL_OTP` delivers a code to the user's
+ * verified email without asking for a password, and `WEB_AUTHN` issues a
+ * passkey assertion challenge that the browser answers via
+ * `navigator.credentials.get(...)`.
+ *
+ * `PASSWORD_SRP` is intentionally omitted: SRP is tracked as a separate PR.
+ */
+export type PreferredChallenge = 'PASSWORD' | 'EMAIL_OTP' | 'SMS_OTP' | 'WEB_AUTHN';
+
+/** Options for `confirmSignIn`. */
+export interface ConfirmSignInOptions<O extends AuthOptions = AuthOptions> {
+	/** Passed through to Cognito's `ClientMetadata`, for any Lambda trigger on the pool. */
+	clientMetadata?: Record<string, string>;
+	/** Device name recorded when the answer completes an authenticator-app (TOTP) setup. */
+	friendlyDeviceName?: string;
+	/** Attributes to set when answering a new-password-required challenge. */
+	userAttributes?: Partial<Record<AttrOf<O>, string>>;
+}
+
+/**
+ * A registered passkey, as listed by the passkey management actions and
+ * {@link AuthShape.listPasskeys}. Mirrors the fields Cognito's
+ * `ListWebAuthnCredentials` response carries, normalised to camelCase.
+ */
+export interface PasskeyDescription {
+	/** Server-assigned credential id, base64url-encoded. */
+	credentialId: string;
+	/** User-supplied friendly name (for example "iPhone"). May be empty. */
+	friendlyName?: string;
+	/** When the passkey was registered, as an ISO-8601 string. */
+	createdAt?: string;
+	/** Authenticator transports the credential supports. */
+	transports?: ('usb' | 'nfc' | 'ble' | 'internal' | 'hybrid' | string)[];
+	/**
+	 * Authenticator attachment. Cognito reports the general category — e.g.
+	 * `'platform'` for an on-device biometric, `'cross-platform'` for a
+	 * roaming security key.
+	 */
+	authenticatorAttachment?: string;
+}
+
+/**
+ * Result of {@link AuthShape.startPasskeyRegistration}. The browser must
+ * pass `credentialCreationOptions` (a JSON-stringified
+ * `PublicKeyCredentialCreationOptionsJSON`) to
+ * `navigator.credentials.create(...)`, then forward the resulting
+ * `PublicKeyCredential` back through {@link AuthShape.completePasskeyRegistration}.
+ *
+ * Cognito's `StartWebAuthnRegistration` returns the options as an object
+ * with already-base64url-encoded fields (challenge, user.id, …). The BB
+ * passes them through verbatim — the browser's `parseCreationOptionsFromJSON`
+ * helper turns the JSON back into the structured form
+ * `navigator.credentials.create` expects.
+ */
+export interface StartPasskeyRegistrationResult {
+	/** JSON-stringified `PublicKeyCredentialCreationOptionsJSON` from Cognito. */
+	credentialCreationOptions: string;
+}
+
+/**
+ * Result of {@link AuthShape.completePasskeyRegistration}.
+ */
+export interface CompletePasskeyRegistrationResult {
+	/** Server-assigned credential identifier, base64url-encoded. */
+	credentialId: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// User attributes, MFA, devices
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-attribute result of {@link AuthShape.updateUserAttributes}. Changing a
+ * contact attribute (`email`, `phone_number`) does not take effect until the
+ * user confirms it with the code sent to the new value
+ * ({@link AuthShape.confirmUserAttribute}).
+ */
+export type UpdateAttributeOutcome =
+	| { isUpdated: true }
+	| {
+			isUpdated: false;
+			nextStep: { name: 'CONFIRM_ATTRIBUTE_WITH_CODE'; codeDeliveryDetails: CodeDeliveryDetails };
+	  };
+
+/** A second factor Cognito supports. */
+export type MfaFactor = 'SMS' | 'TOTP' | 'EMAIL';
+
+/**
+ * Narrow MFA factors to the configured subset. Falls back to the full
+ * `'SMS' | 'TOTP' | 'EMAIL'` union when `mfa.types` isn't a literal tuple.
+ */
+export type MfaTypeOf<O extends AuthOptions> = O extends { mfa: { types: readonly [unknown, ...unknown[]] } }
+	? O extends { mfa: { types: readonly (infer M)[] } }
+		? M extends MfaFactor
+			? M
+			: MfaFactor
+		: MfaFactor
+	: MfaFactor;
+
+/**
+ * Per-factor setting in {@link MfaPreferenceInput}. Compatible with Amplify-JS v6's
+ * `updateMFAPreference` input vocabulary for interoperability.
+ *
+ * - `'ENABLED'` — factor is available for sign-in challenges but not preferred.
+ * - `'DISABLED'` — factor is removed; the user cannot be challenged for it.
+ * - `'PREFERRED'` — factor is enabled AND the default challenge for
+ *   sign-in. Setting PREFERRED on one factor auto-demotes any previously
+ *   preferred factor to `'NOT_PREFERRED'` (Cognito's documented behavior).
+ * - `'NOT_PREFERRED'` — explicit alias of `'ENABLED'`. Mostly useful when
+ *   you want to read as "present on the preference list but not default."
+ */
+export type MfaSetting = 'ENABLED' | 'DISABLED' | 'PREFERRED' | 'NOT_PREFERRED';
+
+/**
+ * Input for {@link AuthShape.updateMfaPreference}. Per-factor delta
+ * matching Amplify-JS v6.
+ *
+ * Factors you omit are left unchanged. At most **one** factor may be
+ * set to `'PREFERRED'` per call — setting two raises
+ * `InvalidParameterException` at the call site (matches Cognito).
+ *
+ * When `mfa.types` is a literal tuple (inline options), factors the pool
+ * doesn't advertise are compile errors: a pool declared
+ * `mfa: { mode: 'optional', types: ['TOTP', 'EMAIL'] }` rejects
+ * `updateMfaPreference(ctx, { sms: 'ENABLED' })` at compile time.
+ *
+ * Native clients get the wide form (every factor) whatever the options; the
+ * server rejects a factor the pool does not offer.
+ *
+ * @blocksCodegenDefaultTypeArgs
+ */
+export type MfaPreferenceInput<O extends AuthOptions = AuthOptions> = {
+	sms?: 'SMS' extends MfaTypeOf<O> ? MfaSetting : ERROR_SMS_is_not_in_mfa_types;
+} & { totp?: 'TOTP' extends MfaTypeOf<O> ? MfaSetting : ERROR_TOTP_is_not_in_mfa_types } & {
+	email?: 'EMAIL' extends MfaTypeOf<O> ? MfaSetting : ERROR_EMAIL_is_not_in_mfa_types;
+};
+
+/**
+ * The {@link MfaPreferenceInput} value type of a factor `mfa.types` leaves out.
+ * No value is assignable to it, and its name carries the error into the
+ * diagnostic: "Type '"ENABLED"' is not assignable to type
+ * 'ERROR_SMS_is_not_in_mfa_types | undefined'."
+ *
+ * It is an {@link MfaSetting} subtype (not an unrelated brand) so that every
+ * narrowed `Auth` stays assignable to the wide `Auth`, whose input accepts
+ * every factor.
+ */
+export type ERROR_SMS_is_not_in_mfa_types = MfaSetting & { readonly __factorNotInMfaTypes: 'SMS' };
+/** See {@link ERROR_SMS_is_not_in_mfa_types}. */
+export type ERROR_TOTP_is_not_in_mfa_types = MfaSetting & { readonly __factorNotInMfaTypes: 'TOTP' };
+/** See {@link ERROR_SMS_is_not_in_mfa_types}. */
+export type ERROR_EMAIL_is_not_in_mfa_types = MfaSetting & { readonly __factorNotInMfaTypes: 'EMAIL' };
+
+/**
+ * Return shape of {@link AuthShape.getMfaPreference}.
+ *
+ * - `enabled` — any number of factors; order is stable across calls.
+ * - `preferred` — exactly zero-or-one. When absent, the user has no
+ *   default factor and sign-in with MFA asks the user to pick
+ *   (`CONTINUE_SIGN_IN_WITH_MFA_SELECTION`).
+ *
+ * `'NOMFA'` on `preferred` is the sentinel returned when the user has
+ * explicitly disabled MFA; Cognito itself doesn't surface this, but
+ * Blocks uses it to distinguish "user chose no MFA" from "user has no
+ * preference yet."
+ *
+ * Native clients get the wide form (every factor) whatever the options.
+ *
+ * @blocksCodegenDefaultTypeArgs
+ */
+export interface MfaPreference<O extends AuthOptions = AuthOptions> {
+	enabled: MfaTypeOf<O>[];
+	preferred?: MfaTypeOf<O> | 'NOMFA';
+}
+
+/** A device remembered for the signed-in user (see {@link AuthShape.scanDevices}). */
+export interface DeviceRecord {
+	deviceKey: string;
+	deviceGroupKey?: string;
+	attributes: Record<string, string>;
+	createDate?: string;
+	lastModifiedDate?: string;
+	lastAuthenticatedDate?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Local development (mock runtime only)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Which flow a locally generated verification code belongs to. */
+export type CodeDeliveryPurpose = 'signUp' | 'resetPassword' | 'mfa' | 'attribute';
+
+/**
+ * Callback invoked whenever the mock generates a verification code
+ * (sign-up, password reset, MFA, attribute verification).
+ *
+ * In the AWS runtime Cognito handles delivery via email/SMS; this hook is
+ * mock-only. Useful for e2e tests that need to retrieve the code out-of-band.
+ *
+ * `username` is what the user signs in with: on a pool whose
+ * `users.signInWith` omits `'username'`, their email / phone (not the
+ * generated username).
+ */
+export type CodeDeliveryFn = (username: string, code: string, purpose: CodeDeliveryPurpose) => Promise<void>;
+
+/**
+ * Mock-only options. Extends the cross-runtime {@link AuthOptions} with fields
+ * that only make sense for the local (mock) runtime — `npm run dev` and tests.
+ *
+ * The default entry's `Auth` accepts these; the AWS runtime ignores them
+ * (Cognito delivers codes itself). Locally, every code is also written to
+ * `.bb-data/<fullId>/last-code.json`.
+ *
+ * Both fields belong to the user pool, so only the Cognito arm
+ * ({@link CognitoAuthMockOptions}) has them.
+ */
+export type AuthMockOptions = BuiltinAuthMockOptions | CognitoAuthMockOptions;
+
+/** The Cognito arm of {@link AuthMockOptions}: {@link CognitoAuthOptions} plus the mock-only fields. */
+export interface CognitoAuthMockOptions extends CognitoAuthOptions {
+	/**
+	 * Mock-only hook. Called whenever the mock generates a verification code
+	 * (sign-up, password reset, MFA, attribute verification).
+	 *
+	 * In AWS Cognito handles delivery via email/SMS natively — this hook is
+	 * dev-only. Useful for e2e tests that need to retrieve the code
+	 * out-of-band (e.g. by capturing it in a local variable).
+	 */
+	codeDelivery?: CodeDeliveryFn;
+	/**
+	 * Mock-only. How the local user pool checks authenticator-app (TOTP)
+	 * codes — in `verifyTotpSetup`, the `createApi()` `verifyTotpSetup`
+	 * action, the sign-in TOTP challenge and the mid-sign-in TOTP setup:
+	 *
+	 * - `'any'` (default) — any six digits pass, so a test can type a fixed
+	 *   code.
+	 * - `'rfc6238'` — the code must be the shared secret's RFC 6238 code
+	 *   (HMAC-SHA-1, 6 digits, 30 s steps, one step of clock skew either way),
+	 *   as Cognito and authenticator apps compute it. Compute one in a test
+	 *   with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils`.
+	 *   Catches a wrong secret or `otpauth://` URI locally instead of only on a
+	 *   deployed pool.
+	 *
+	 * In AWS Cognito always verifies the code; the AWS runtime ignores this.
+	 *
+	 * @default 'any'
+	 *
+	 * @example
+	 * ```typescript
+	 * const auth = new Auth(scope, 'auth', {
+	 *   mfa: { mode: 'optional', types: ['TOTP'] },
+	 *   totpVerification: 'rfc6238',
+	 * });
+	 * ```
+	 */
+	totpVerification?: 'any' | 'rfc6238';
+}
+
+/** The `'builtin'` arm of {@link AuthMockOptions}: the mock-only fields need a user pool. */
+export interface BuiltinAuthMockOptions extends BuiltinAuthOptions {
+	/** @deprecated The mock-only `codeDelivery` hook needs `store: 'cognito'`: a `'builtin'` block sends no codes. */
+	codeDelivery?: ERROR_needs_store_cognito<'codeDelivery'>;
+	/** @deprecated The mock-only `totpVerification` needs `store: 'cognito'`: a `'builtin'` block has no MFA. */
+	totpVerification?: ERROR_needs_store_cognito<'totpVerification'>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin surface (opt-in `auth.admin` handle)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The server-side admin operations (group membership + user lifecycle) live on
+// an opt-in handle, `auth.admin`, rather than a separate class/package. The
+// handle is gated by the `admin` options object so:
+//
+//   - a pool that never opts in gets NO `Admin*` IAM grant (least privilege),
+//     and `auth.admin` is a compile error whose message names the fix;
+//   - `admin.actions` scopes the IAM grant (CDK) to just the group or just the
+//     lifecycle actions.
+//
+// Group names on the admin methods narrow via `GroupOf<O>`, mirroring the
+// literal-tuple projection style of `GroupOf` / `MfaTypeOf` above. Carried over
+// from `AuthCognito`.
+
+/**
+ * Whether options `O` grant admin action group `A`. An omitted
+ * `admin.actions` (or a widened `readonly AdminAction[]`) grants everything.
+ */
+export type AdminGrants<O extends AuthOptions, A extends AdminAction> = O extends {
+	admin: { actions: infer L extends readonly string[] };
+}
+	? A extends L[number]
+		? true
+		: false
+	: true;
+
+/**
+ * Compile-time gate applied as a trailing rest parameter on each admin method.
+ * `T` is the method's ordinary trailing (optional) parameters. When `O` grants
+ * action group `A`, this resolves to `T` (the method is callable normally).
+ * When it doesn't, the method requires an extra argument of type `never`, so
+ * the call is a type error whose parameter name explains why.
+ *
+ * This lives in a **parameter** position on individual methods (not as a
+ * conditional over the surface *shape*), which is why it does not make
+ * `Auth<O>` invariant — verified against the same call sites the earlier
+ * shape-narrowing attempt regressed. It absorbs the trailing optional
+ * parameters for the same reason as {@link PasswordGate}: the diagnostic then
+ * names the gate, not an optional argument. For the wide `AuthOptions` it
+ * accepts both resolutions, so an instance whose `actions` withhold a group
+ * stays assignable to the wide `Auth`.
+ */
+export type AdminActionGate<
+	O extends AuthOptions,
+	A extends AdminAction,
+	T extends unknown[] = [],
+> = AuthOptions extends O
+	? T | [ERROR_admin_action_not_granted: never]
+	: [AdminGrants<O, A>] extends [true]
+		? T
+		: [ERROR_admin_action_not_granted: never];
+
+/**
+ * A user as seen by the admin surface (group + lifecycle reads). Mirrors the
+ * client-side {@link AuthenticatedUser} narrowing: `groups` narrows to the
+ * configured group union and `attributes` to the declared attribute keys when
+ * `O` is narrowed (inline literal); both fall back to the wide types otherwise.
+ */
+export interface AdminUser<O extends AuthOptions = AuthOptions> {
+	username: string;
+	userSub: string;
+	enabled: boolean;
+	attributes: Partial<Record<ReadAttrOf<O>, string>>;
+	/** Group memberships, narrowed to the declared `users.groups`. Absent when unknown. */
+	groups?: GroupOf<O>[];
+}
+
+/** Initial state for {@link LifecycleAdmin.createUser}. */
+export interface AdminCreateInit<O extends AuthOptions = AuthOptions> {
+	/** Temporary password. When omitted, the runtime generates one. */
+	temporaryPassword?: string;
+	/**
+	 * Attributes to seed on the new user. Narrows to the pool's declared
+	 * attribute keys (standard + `custom:*`) when `O` is narrowed, catching
+	 * typos the same way `signUp`'s attributes do.
+	 */
+	attributes?: Partial<Record<AttrOf<O>, string>>;
+	/** Suppress the Cognito invitation email/SMS (AWS runtime only). */
+	suppressInvite?: boolean;
+}
+
+/** Options for {@link LifecycleAdmin.setUserPassword}. */
+export interface SetPasswordOptions {
+	/**
+	 * When `true`, the password is permanent and the user signs in with it
+	 * directly. When `false`/omitted, the password is temporary and the user is
+	 * forced to change it on next sign-in (Cognito `FORCE_CHANGE_PASSWORD`).
+	 */
+	permanent?: boolean;
+}
+
+/**
+ * Server-side filter for {@link LifecycleAdmin.scan}. Maps to Cognito's
+ * `ListUsers` `Filter` expression, so the pool does the filtering rather than
+ * the caller pulling every user and filtering in memory.
+ *
+ * Cognito supports a single filter clause on one attribute; `match: 'startsWith'`
+ * maps to the `^=` prefix operator and `match: 'equals'` to `=`.
+ */
+export interface AdminUserFilter {
+	/**
+	 * Attribute to filter on — e.g. `'email'`, `'username'`, `'status'`. Must be
+	 * one Cognito can search on: `username`, `email`, `phone_number`, `name`,
+	 * `given_name`, `family_name`, `preferred_username`, `cognito:user_status`,
+	 * `status` or `sub` (custom attributes are not searchable). Anything else is
+	 * refused with `InvalidParameterException` (400), in both runtimes.
+	 */
+	attribute: string;
+	/** Comparison operator. Cognito supports prefix (`^=`) and exact (`=`). */
+	match: 'startsWith' | 'equals';
+	/**
+	 * Value to compare against. Sent inside a quoted Cognito filter. A value
+	 * containing a double quote, a backslash or a control character is refused
+	 * with `InvalidParameterException` (400): Cognito does not honour the `\"`
+	 * escape its reference documents (an escaped quote still ends the value),
+	 * and documents no escape for a literal backslash. So is a filter longer than Cognito's 256
+	 * characters once encoded. For `cognito:user_status` the value is the
+	 * account's `UserStatus` (`UNCONFIRMED`, `CONFIRMED`, `FORCE_CHANGE_PASSWORD`,
+	 * `RESET_REQUIRED`, …, matched ignoring case); for `status` it is `Enabled` or
+	 * `Disabled` (case-sensitive).
+	 */
+	value: string;
+}
+
+/**
+ * Group-membership admin operations. Group names narrow via `GroupOf<O>`, so
+ * `addUserToGroup(user, 'typo')` is a compile error on a narrowed pool. Each
+ * method is gated on the `'groups'` action (see {@link AdminActionGate}).
+ *
+ * `auth.admin` is inside your trust boundary: unlike the public flows, it
+ * reports `UserNotFoundException` (404) for an unknown user and
+ * `ResourceNotFoundException` (404) for an unknown group.
+ */
+export interface GroupAdmin<O extends AuthOptions = AuthOptions> {
+	/** Add `username` to `group`. Idempotent. */
+	addUserToGroup(
+		username: string,
+		group: GroupOf<O>,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'groups'>
+	): Promise<void>;
+	/** Remove `username` from `group`. Idempotent. */
+	removeUserFromGroup(
+		username: string,
+		group: GroupOf<O>,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'groups'>
+	): Promise<void>;
+	/** The groups `username` belongs to, narrowed to the declared `users.groups`. */
+	listGroupsForUser(
+		username: string,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'groups'>
+	): Promise<GroupOf<O>[]>;
+	/** Every member of `group`. Paginates internally. */
+	listUsersInGroup(
+		group: GroupOf<O>,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'groups'>
+	): Promise<AdminUser<O>[]>;
+}
+
+/**
+ * User-lifecycle admin operations — create/delete/enable/disable, password
+ * management, enumeration, and session revocation. Each method is gated on the
+ * `'lifecycle'` action (see {@link AdminActionGate}).
+ */
+export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
+	/**
+	 * Create a confirmed user with a temporary password. The user must choose a
+	 * new password on first sign-in (`CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED`).
+	 *
+	 * @throws {ApiError} 409 `UsernameExistsException` when the username is taken.
+	 * @throws {ApiError} 400 `AliasExistsException` when `attributes` marks an email / phone verified that is already
+	 *   another user's verified sign-in alias (`signInWith` with `'username'`).
+	 */
+	createUser(
+		username: string,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [init?: AdminCreateInit<O>]>
+	): Promise<AdminUser<O>>;
+	/** Delete `username` from the pool. Their existing sessions end at the next refresh. */
+	deleteUser(username: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	/** Disable `username`: sign-in is refused and existing sessions end at the next refresh. */
+	disableUser(username: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	/** Re-enable a disabled user. */
+	enableUser(username: string, ...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>): Promise<void>;
+	/** Force a password reset: the user must reset their password before they can sign in again. */
+	resetUserPassword(
+		username: string,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>
+	): Promise<void>;
+	/** Set `username`'s password. Temporary unless `{ permanent: true }`. */
+	setUserPassword(
+		username: string,
+		password: string,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [options?: SetPasswordOptions]>
+	): Promise<void>;
+	/** Look up a user. Returns `null` when the user does not exist (never throws `UserNotFoundException`). */
+	getUser(
+		username: string,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>
+	): Promise<AdminUser<O> | null>;
+	/**
+	 * Every user in the pool, optionally filtered server-side. Unbounded, so it
+	 * is an `AsyncIterable` that pages through `ListUsers` lazily.
+	 *
+	 * @example
+	 * ```ts
+	 * for await (const u of auth.admin.scan({ attribute: 'email', match: 'startsWith', value: 'a' })) {
+	 *   console.log(u.username);
+	 * }
+	 * ```
+	 */
+	scan(
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle', [filter?: AdminUserFilter]>
+	): AsyncIterable<AdminUser<O>>;
+	/**
+	 * Sign `username` out everywhere: revokes their refresh tokens at the pool
+	 * and deletes every session this block holds for them, so their next request
+	 * is unauthenticated.
+	 */
+	revokeUserSessions(
+		username: string,
+		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>
+	): Promise<void>;
+}
+
+/**
+ * The typed `auth.admin` surface for a given configuration — the full set of
+ * group + lifecycle operations, each gated on its action group at compile time
+ * via {@link AdminActionGate}. Group names narrow via `GroupOf<O>` and returned
+ * user shapes narrow via {@link AdminUser}.
+ *
+ * The action gate lives in method **parameter** positions rather than as a
+ * conditional over this surface's *shape*, so `Auth<O>` stays covariant
+ * in `O` (an earlier shape-narrowing attempt made it invariant and regressed 14
+ * call sites). `actions` therefore gates the methods AND scopes the CDK IAM
+ * grant from the same source.
+ */
+export type AdminSurface<O extends AuthOptions = AuthOptions> = GroupAdmin<O> & LifecycleAdmin<O>;
+
+/**
+ * Returned by `auth.admin` when the configuration did NOT opt in. Calling any
+ * member is a compile error whose text names the fix — friendlier than a
+ * bare `never`.
+ *
+ * It lists every {@link AdminSurface} method, each ending in an
+ * {@link AdminOff} rest parameter, so a call is reported the way the other
+ * gates are: "Expected 2 arguments, but got 1. Arguments for the rest
+ * parameter 'ERROR_admin_is_not_enabled__construct_Auth_with_admin_options'
+ * were not provided." (rather than "Property 'createUser' does not exist").
+ * The getter throws at runtime.
+ */
+export type AdminDisabled = {
+	// Both fixes: the wide `Auth` (`AdminGetterOf<AuthOptions>`) reports this type for a block of either store.
+	readonly __adminNotEnabled: 'construct Auth with { admin: {} }' | "auth.admin needs store: 'cognito'";
+	addUserToGroup(
+		username: string,
+		group: string,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
+	removeUserFromGroup(
+		username: string,
+		group: string,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
+	listGroupsForUser(
+		username: string,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
+	listUsersInGroup(group: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	createUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	deleteUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	disableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	enableUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	resetUserPassword(
+		username: string,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
+	setUserPassword(
+		username: string,
+		password: string,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
+	getUser(username: string, ...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	scan(...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff): never;
+	revokeUserSessions(
+		username: string,
+		...ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: AdminOff
+	): never;
+};
+
+/**
+ * The trailing rest parameter of every {@link AdminDisabled} method: a single
+ * `never`, so no call compiles, named after the fix (`admin: {}` in the
+ * `Auth` options).
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type AdminOff = [ERROR_admin_is_not_enabled__construct_Auth_with_admin_options: never];
+
+/**
+ * Returned by `auth.admin` on a `store: 'builtin'` block, which has no user
+ * pool to administer — its users live at their identity providers. Like
+ * {@link AdminDisabled}, every call is a compile error, here naming the real
+ * fix (`store: 'cognito'`) rather than `admin: {}`, which that store refuses.
+ * The getter throws at runtime.
+ */
+export type AdminDisabledOnBuiltin = {
+	readonly __adminNotEnabled: "auth.admin needs store: 'cognito'";
+	addUserToGroup(username: string, group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	removeUserFromGroup(
+		username: string,
+		group: string,
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin
+	): never;
+	listGroupsForUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	listUsersInGroup(group: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	createUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	deleteUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	disableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	enableUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	resetUserPassword(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	setUserPassword(
+		username: string,
+		password: string,
+		...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin
+	): never;
+	getUser(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	scan(...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+	revokeUserSessions(username: string, ...ERROR_auth_admin_needs_store_cognito: AdminOffOnBuiltin): never;
+};
+
+/**
+ * The trailing rest parameter of every {@link AdminDisabledOnBuiltin} method: a
+ * single `never`, so no call compiles, named after the fix.
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type AdminOffOnBuiltin = [ERROR_auth_admin_needs_store_cognito: never];
+
+/**
+ * The `auth.admin` getter's return type — the gate.
+ *
+ * - The check is `{ admin: object }`, NOT `{ admin: any }`: a primitive like
+ *   `admin: true` fails the gate, so the opt-in MUST be an object (`admin: {}`).
+ *   It also requires the Cognito arm ({@link CognitoAuthOptions}): a
+ *   `store: 'builtin'` block has no user pool to administer, and gets
+ *   {@link AdminDisabledOnBuiltin}, whose errors name `store: 'cognito'`.
+ * - The gate condition tests a **fixed shape** and the positive branch is a
+ *   plain generic interface (`AdminSurface<O>`), so `Auth<O>` stays
+ *   covariant in `O`.
+ * - For the wide `AuthOptions` (a helper typed `(auth: Auth)`) it is the union
+ *   of every branch: no member is reachable without narrowing — like the
+ *   zero-config default — and every configured instance, admin-enabled or not
+ *   (and of either store), stays assignable to the wide type. (`AuthCognito`'s gate made an
+ *   admin-enabled instance unassignable to the wide type.) The disabled half
+ *   is {@link AdminDisabled} alone, whose `__adminNotEnabled` names both fixes
+ *   ({@link AdminDisabledOnBuiltin} is assignable to it), so the error on a
+ *   zero-config `new Auth(scope, 'auth')` does not depend on which union
+ *   member the compiler happens to report.
+ */
+export type AdminGetterOf<O extends AuthOptions> = AuthOptions extends O
+	? AdminSurface<O> | AdminDisabled
+	: O extends { store: 'builtin' }
+		? AdminDisabledOnBuiltin
+		: O extends { admin: object; store?: 'cognito' }
+			? AdminSurface<O>
+			: AdminDisabled;
+
+/** Options for `signIn`. */
+export interface SignInOptions {
+	/** Passed through to Cognito's `ClientMetadata`, for any Lambda trigger on the pool. */
+	clientMetadata?: Record<string, string>;
+	/**
+	 * First factor to request under `users.authFlow: 'USER_AUTH'`. Ignored otherwise.
+	 *
+	 * Per-call override of the pool's {@link UserPoolOptions.preferredChallenge}.
+	 *
+	 * Ignored by `USER_PASSWORD_AUTH` (classic flow). For `USER_AUTH`:
+	 *   - When set, Cognito skips the `SELECT_CHALLENGE` step and issues the
+	 *     chosen factor directly.
+	 *   - When omitted here AND on the pool options, Cognito returns
+	 *     `CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION`.
+	 */
+	preferredChallenge?: PreferredChallenge;
+}
+
+/**
+ * Result of `signIn`. `status` is a string discriminator on purpose: the native
+ * client generators (Swift, Kotlin, Dart) build named variants only from a
+ * string discriminator, never from a boolean.
+ */
+export type SignInResult<O extends AuthOptions = AuthOptions> =
+	| { status: 'signedIn'; user: AuthenticatedUser<O> }
+	| { status: 'continueSignIn'; nextStep: SignInNextStep<O> };
+
+/**
+ * A challenge or continuation `signIn` / `confirmSignIn` / `autoSignIn` can
+ * return, narrowed to the steps options `O` can produce — so a `switch` on
+ * `nextStep.name` handles only those:
+ *
+ * | Step | Kept when |
+ * |---|---|
+ * | `CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED`, `RESET_PASSWORD`, `CONFIRM_SIGN_UP` | always |
+ * | `CONTINUE_SIGN_IN_WITH_MFA_SELECTION`, `CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION` | MFA is on ({@link MfaEnabled}) |
+ * | `CONFIRM_SIGN_IN_WITH_SMS_CODE` | MFA is on and `'SMS'` is in {@link MfaTypeOf} |
+ * | `CONFIRM_SIGN_IN_WITH_TOTP_CODE`, `CONTINUE_SIGN_IN_WITH_TOTP_SETUP` | MFA is on and `'TOTP'` is in {@link MfaTypeOf} |
+ * | `CONFIRM_SIGN_IN_WITH_EMAIL_CODE`, `CONTINUE_SIGN_IN_WITH_EMAIL_SETUP` | MFA is on and `'EMAIL'` is in {@link MfaTypeOf} |
+ * | `CONFIRM_SIGN_IN_WITH_WEB_AUTHN` | passkeys are enabled ({@link PasskeysEnabled}) |
+ * | `CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION`, `CONFIRM_SIGN_IN_WITH_PASSWORD`, `CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP`, `CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP` | `users.authFlow` is `'USER_AUTH'` ({@link AuthFlowOf}) |
+ *
+ * A setting the compiler cannot see (a `boolean`- or union-typed value, or
+ * the wide `AuthOptions`) keeps its steps, so the wide `SignInNextStep` — the
+ * default — is every step, and every narrowed result stays assignable to it.
+ *
+ * With `userPool: Auth.fromExisting(…)` every step is kept: the block does not
+ * configure a pool it wraps, so the pool's own MFA, passkey and first-factor
+ * settings decide which challenges Cognito issues, whatever `O` says.
+ *
+ * Native clients get every step whatever the options, so differently
+ * configured blocks generate the same native types.
+ *
+ * @example
+ * ```typescript
+ * const auth = new Auth(scope, 'auth', { mfa: { mode: 'optional', types: ['TOTP'] } });
+ * const result = await auth.signIn(username, password, context);
+ * if (result.status === 'continueSignIn') {
+ *   switch (result.nextStep.name) {
+ *     case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE': // …
+ *     case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP': // …
+ *     case 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION': // …
+ *     case 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION': // …
+ *     case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED': // …
+ *     case 'RESET_PASSWORD': // …
+ *     case 'CONFIRM_SIGN_UP': // …
+ *   }
+ * }
+ * ```
+ *
+ * @blocksCodegenDefaultTypeArgs
+ */
+export type SignInNextStep<O extends AuthOptions = AuthOptions> = Extract<
+	AnySignInNextStep,
+	{ name: SignInStepNameOf<O> }
+>;
+
+/**
+ * The `users.authFlow` that options `O` select (`'USER_PASSWORD_AUTH'` when
+ * omitted). A union when not a literal, including for the wide `AuthOptions`.
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type AuthFlowOf<O extends AuthOptions> = O extends { users?: infer U }
+	? U extends { authFlow?: infer F }
+		? F extends 'USER_PASSWORD_AUTH' | 'USER_AUTH'
+			? F
+			: 'USER_PASSWORD_AUTH'
+		: 'USER_PASSWORD_AUTH'
+	: 'USER_PASSWORD_AUTH';
+
+/**
+ * The `nextStep.name`s options `O` can produce — see {@link SignInNextStep}.
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type SignInStepNameOf<O extends AuthOptions> = O extends { userPool: ExternalUserPoolRef }
+	? AnySignInNextStep['name']
+	:
+			| 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED'
+			| 'RESET_PASSWORD'
+			| 'CONFIRM_SIGN_UP'
+			| ([MfaEnabled<O>] extends [false] ? never : MfaStepNameOf<MfaTypeOf<O>>)
+			| ([PasskeysEnabled<O>] extends [false] ? never : 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN')
+			| ('USER_AUTH' extends AuthFlowOf<O>
+					?
+							| 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION'
+							| 'CONFIRM_SIGN_IN_WITH_PASSWORD'
+							| 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP'
+							| 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP'
+					: never);
+
+/**
+ * The MFA `nextStep.name`s for the second factors `M` (MFA on).
+ *
+ * A building block of the public gate types, exported because they are built
+ * from it, and stable like them.
+ */
+export type MfaStepNameOf<M extends MfaFactor> =
+	| 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION'
+	| 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION'
+	| ('SMS' extends M ? 'CONFIRM_SIGN_IN_WITH_SMS_CODE' : never)
+	| ('TOTP' extends M ? 'CONFIRM_SIGN_IN_WITH_TOTP_CODE' | 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP' : never)
+	| ('EMAIL' extends M ? 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE' | 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP' : never);
+
+/**
+ * Every challenge or continuation `signIn` can return, whatever the
+ * configuration — the wide {@link SignInNextStep}. Carried over unchanged from
+ * `AuthCognito`.
+ */
+export type AnySignInNextStep =
+	| { name: 'CONFIRM_SIGN_IN_WITH_SMS_CODE'; session: string; codeDeliveryDetails: CodeDeliveryDetails }
+	| { name: 'CONFIRM_SIGN_IN_WITH_TOTP_CODE'; session: string }
+	| { name: 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE'; session: string; codeDeliveryDetails: CodeDeliveryDetails }
+	| { name: 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION'; session: string; allowedMFATypes: ('SMS' | 'TOTP' | 'EMAIL')[] }
+	| { name: 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION'; session: string; allowedMFATypes: ('TOTP' | 'EMAIL')[] }
+	| { name: 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP'; session: string; sharedSecret: string }
+	| { name: 'CONTINUE_SIGN_IN_WITH_EMAIL_SETUP'; session: string }
+	| { name: 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED'; session: string; requiredAttributes?: string[] }
+	| {
+			name: 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION';
+			session: string;
+			availableChallenges: PreferredChallenge[];
+	  }
+	| { name: 'CONFIRM_SIGN_IN_WITH_PASSWORD'; session: string }
+	| { name: 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_EMAIL_OTP'; session: string; codeDeliveryDetails: CodeDeliveryDetails }
+	| { name: 'CONFIRM_SIGN_IN_WITH_FIRST_FACTOR_SMS_OTP'; session: string; codeDeliveryDetails: CodeDeliveryDetails }
+	| { name: 'CONFIRM_SIGN_IN_WITH_WEB_AUTHN'; session: string; credentialRequestOptions: string }
+	| { name: 'RESET_PASSWORD' }
+	| { name: 'CONFIRM_SIGN_UP'; codeDeliveryDetails?: CodeDeliveryDetails };
+
+/** Result of `resetPassword`. Never reveals whether the user exists. */
+export interface ResetPasswordResult {
+	isPasswordReset: boolean;
+	nextStep?: {
+		name: 'CONFIRM_RESET_PASSWORD_WITH_CODE';
+		codeDeliveryDetails: CodeDeliveryDetails;
+	};
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The class shape
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The public instance surface of `Auth<O>`, implemented by every entry point.
+ *
+ * Methods marked *email + password* end in a {@link PasswordGate} rest
+ * parameter; methods marked *federated* end in a {@link FederationGate}. On a
+ * configuration where the mode is off, calling them is a compile error.
+ *
+ * This is the gated surface, plus `confirmSignIn` / `autoSignIn`
+ * (which the sign-in UI's state machine needs), plus the native account
+ * surface carried over from `AuthCognito`: user attributes,
+ * `deleteUser`, MFA ({@link MfaGate}), devices, passkeys ({@link PasskeyGate})
+ * and the opt-in `auth.admin` handle ({@link AdminGetterOf}). The federated
+ * exchange/refresh methods use the same gates.
+ *
+ * Renamed from `AuthCognito` (G14 — avoid `fetch`): `fetchAuthSession` →
+ * `getAuthSession`, `fetchUserAttributes` → `getUserAttributes`,
+ * `fetchMFAPreference` → `getMfaPreference`, `fetchDevices` → `scanDevices`;
+ * and `setUpTOTP` / `verifyTOTPSetup` / `updateMFAPreference` →
+ * `setUpTotp` / `verifyTotpSetup` / `updateMfaPreference`.
+ */
+export interface AuthShape<O extends AuthOptions = AuthOptions> extends BlocksAuth {
+	// ── Session & identity — every configuration ────────────────────────────
+
+	/**
+	 * Require a signed-in user, or throw 401.
+	 *
+	 * | Session state | `requireAuth(ctx)` | `requireAuth(ctx, { fresh: true })` |
+	 * |---|---|---|
+	 * | no cookie, unknown session, or an unreadable cookie | throws 401 `NotAuthenticated` (an unreadable cookie is also cleared) | same |
+	 * | valid, signed in within `session.freshAgeSeconds` | returns the user | returns the user |
+	 * | valid, signed in longer ago than `session.freshAgeSeconds` | returns the user | throws 401 `ReauthenticationRequired` (session kept) |
+	 * | valid, but the user was disabled or deleted upstream **after** the access token was issued | returns the user — not detected until the next refresh (below) | as the two rows above |
+	 * | needs a refresh (access token expired) and the identity service **rejects** it: user disabled or deleted, refresh token revoked or expired | throws 401 `NotAuthenticated`; the session is deleted and the cookie cleared | same |
+	 * | needs a refresh and the refresh fails **transiently** (throttling, a Cognito 5xx, a network error) | throws the mapped, typically retriable error (e.g. 500 `InternalError`); the session and cookie are kept | same |
+	 *
+	 * A disabled or deleted user is detected **only when the session next
+	 * refreshes**, which happens once its access token expires: up to the
+	 * access-token lifetime (Cognito's default is one hour). `requireAuth` makes no
+	 * per-request call to the identity service to check that the user is still
+	 * active — `AuthCognito` has the same limitation. `requireRole` reads live group
+	 * membership on every call, so it fails closed (403) for a *deleted* user
+	 * straight away; a *disabled* user keeps their memberships and is caught at the
+	 * refresh, like everywhere else.
+	 *
+	 * @throws {ApiError} 401 `NotAuthenticatedException` when there is no valid session.
+	 * @throws {ApiError} 401 `ReauthenticationRequiredException` with `{ fresh: true }` and a stale session.
+	 */
+	requireAuth(context: BlocksContext, options?: RequireAuthOptions): Promise<AuthenticatedUser<O>>;
+
+	/**
+	 * Require a signed-in user who belongs to `role`. Reads current group
+	 * membership on each guarded request.
+	 *
+	 * @throws {ApiError} 401 `NotAuthenticatedException` when there is no valid session.
+	 * @throws {ApiError} 403 `NotAuthorizedException` when the user is not in `role`, or no longer exists.
+	 */
+	requireRole(context: BlocksContext, role: GroupOf<O>, options?: RequireAuthOptions): Promise<AuthenticatedUser<O>>;
+
+	/** `true` when the request carries a valid session. Never throws for a missing session. */
+	checkAuth(context: BlocksContext): Promise<boolean>;
+
+	/** The signed-in user, or `null` when there is no valid session. */
+	getCurrentUser(context: BlocksContext): Promise<AuthenticatedUser<O> | null>;
+
+	/** The current session's tokens. Never throws; `{ tokens: undefined }` when signed out. */
+	getAuthSession(context: BlocksContext, options?: GetAuthSessionOptions): Promise<AuthSession>;
+
+	/** End the session and clear the cookie. Federated sessions are also signed out at the provider. */
+	signOut(context: BlocksContext, options?: SignOutOptions): Promise<void>;
+
+	/**
+	 * The two-method RPC surface (`getAuthState` / `setAuthState`) that drives the sign-in UI.
+	 * `setAuthState` takes only the actions these options allow ({@link AuthActionInputOf}).
+	 */
+	createApi(): AuthStateApiOf<O>;
+
+	/**
+	 * Define an API namespace that is deny by default: its `methods` run only
+	 * after the session check, and only its `public` methods are callable
+	 * without a signed-in user. Use it instead of `new ApiNamespace(...)` so a
+	 * forgotten (or un-awaited) `requireAuth` can't leave a method open.
+	 *
+	 * A protected call with no valid session fails with 401
+	 * `NotAuthenticatedException` before `methods` is called (with `role`, a
+	 * signed-in user outside the group gets 403 `NotAuthorizedException`). An
+	 * anonymous call to a name that isn't a public method gets the same 401,
+	 * whether or not the method exists. See {@link ProtectHandlers} and
+	 * {@link ProtectOptions}.
+	 */
+	protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(
+		scope: ScopeParent,
+		name: string,
+		handlers: ProtectHandlers<P, M, O>,
+		options?: ProtectOptions<O>,
+	): ProtectedApi<P & M>;
+
+	// ── Federated sign-in ───────────────────────────────────────────────────
+
+	/**
+	 * Build the IdP authorize URL for `provider`. *Federated.* Most apps never
+	 * call this — the `signIn:<id>` action in `getAuthState()` carries the URL.
+	 *
+	 * @throws {ApiError} 400 `ProviderNotConfiguredException` for an unknown provider id.
+	 */
+	getSignInUrl(
+		context: BlocksContext,
+		provider: ProviderIdOf<O>,
+		...ERROR_no_federated_provider_is_configured: FederationGate<O, [options?: SignInUrlOptions]>
+	): Promise<string>;
+
+	// ── Email + password ────────────────────────────────────────────────────
+
+	/** Register a user. An emailed confirmation code follows. *Email + password.* */
+	signUp(
+		username: string,
+		password: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<
+			O,
+			[options?: SignUpOptions<O>, context?: BlocksContext]
+		>
+	): Promise<SignUpResult>;
+
+	/**
+	 * Confirm a sign-up with the emailed code. *Email + password.*
+	 *
+	 * @throws {ApiError} 400 `AliasExistsException` when the code is right but the email / phone it verifies is
+	 *   already another user's verified sign-in alias (`signInWith` with `'username'`). The user stays unconfirmed.
+	 */
+	confirmSignUp(
+		username: string,
+		code: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O, [context?: BlocksContext]>
+	): Promise<ConfirmSignUpResult>;
+
+	/** Send a new sign-up confirmation code. *Email + password.* */
+	resendSignUpCode(
+		username: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<void>;
+
+	/**
+	 * Sign in with a username and password. *Email + password.*
+	 *
+	 * @throws {ApiError} 401 `NotAuthorizedException` for unknown user, wrong password or disabled user alike.
+	 */
+	signIn(
+		username: string,
+		password: string,
+		context: BlocksContext,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O, [options?: SignInOptions]>
+	): Promise<SignInResult<O>>;
+
+	/**
+	 * Answer a sign-in challenge (an MFA code, a new password, an MFA choice, …)
+	 * returned by `signIn` as `{ status: 'continueSignIn', nextStep }`.
+	 * `session` is `nextStep.session`. *Email + password.*
+	 *
+	 * @throws {ApiError} 400 `CodeMismatchException` (retriable) for a wrong code.
+	 */
+	confirmSignIn(
+		session: string,
+		response: string,
+		context: BlocksContext,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O, [options?: ConfirmSignInOptions<O>]>
+	): Promise<SignInResult<O>>;
+
+	/**
+	 * Sign the user in right after `confirmSignUp` returned
+	 * `nextStep.signUpStep === 'COMPLETE_AUTO_SIGN_IN'`, without asking for the
+	 * password again (see {@link EmailPasswordOptions.autoSignIn}). The
+	 * short-lived bridge cookie `signUp` set is consumed and cleared whatever
+	 * the outcome. *Email + password.*
+	 *
+	 * @throws {ApiError} 401 `NotAuthenticatedException` when no sign-up is pending on this browser.
+	 */
+	autoSignIn(
+		context: BlocksContext,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<SignInResult<O>>;
+
+	/** Start a password reset. Never reveals whether the user exists. *Email + password.* */
+	resetPassword(
+		username: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<ResetPasswordResult>;
+
+	/**
+	 * Finish a password reset with the emailed code. *Email + password.*
+	 *
+	 * A completed reset signs the user out everywhere: every session they had
+	 * is rejected from the next request on (401 `NotAuthenticatedException`),
+	 * and on AWS their Cognito refresh tokens are revoked. They sign in again
+	 * with the new password.
+	 */
+	confirmResetPassword(
+		username: string,
+		code: string,
+		newPassword: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<void>;
+
+	/** Change the signed-in user's password. *Email + password.* */
+	updatePassword(
+		context: BlocksContext,
+		oldPassword: string,
+		newPassword: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<void>;
+
+	// ── User attributes & account — every configuration ─────────────────────
+
+	/**
+	 * Read the signed-in user's attributes directly from the user pool
+	 * (Cognito `GetUser`). Costs one extra call per invocation but always
+	 * returns fresh data — the session's attributes (`requireAuth().attributes`)
+	 * are only as current as the last ID-token issue, so `updateUserAttributes`
+	 * followed by a read of the session would otherwise return stale values
+	 * until the next refresh or sign-in.
+	 *
+	 * For a user of a directly federated OIDC provider (no pool record) this
+	 * returns the profile claims captured at sign-in.
+	 *
+	 * @throws {ApiError} 401 `NotAuthenticatedException` when signed out, or when the user no longer exists.
+	 */
+	getUserAttributes(context: BlocksContext): Promise<Partial<Record<ReadAttrOf<O>, string>>>;
+
+	/**
+	 * Update the signed-in user's attributes. Declared custom attributes are
+	 * auto-prefixed `custom:`. Changing a contact attribute (`email`,
+	 * `phone_number`) sends a verification code to the new value; its entry in
+	 * the result is `{ isUpdated: false, nextStep: { name:
+	 * 'CONFIRM_ATTRIBUTE_WITH_CODE', … } }` until {@link AuthShape.confirmUserAttribute}
+	 * is called. Every other attribute is `{ isUpdated: true }`. Result keys are
+	 * the stored names (`custom:`-prefixed for custom attributes).
+	 *
+	 * @throws {ApiError} 401 `NotAuthenticatedException` when signed out.
+	 * @throws {ApiError} 400 `InvalidParameterException` for a directly federated user (their profile lives at the IdP).
+	 * @throws {ApiError} 400 `AliasExistsException` on a pool that signs in with email / phone instead of a username
+	 *   (`signInWith` without `'username'`), when another user already has that email / phone.
+	 */
+	updateUserAttributes(
+		context: BlocksContext,
+		attributes: Partial<Record<AttrOf<O>, string>>,
+	): Promise<Partial<Record<AttrOf<O>, UpdateAttributeOutcome>>>;
+
+	/**
+	 * Confirm a changed contact attribute (`email`, `phone_number`) with the code
+	 * sent by `updateUserAttributes` or `sendUserAttributeVerificationCode`.
+	 *
+	 * On a pool with sign-in aliases (`signInWith` with `'username'`), confirming
+	 * an email / phone that another user holds as a verified alias moves the
+	 * alias to this user, as Cognito does: it becomes unverified on the other
+	 * account, which can no longer sign in with it.
+	 *
+	 * @throws {ApiError} 400 `CodeMismatchException` (retriable) / `ExpiredCodeException`.
+	 */
+	confirmUserAttribute(context: BlocksContext, name: AttrOf<O>, code: string): Promise<void>;
+
+	/** Send (or re-send) a verification code for a contact attribute of the signed-in user. */
+	sendUserAttributeVerificationCode(context: BlocksContext, name: AttrOf<O>): Promise<void>;
+
+	/**
+	 * Delete the signed-in user's own account from the user pool, end their
+	 * session and clear the cookie. Consider `requireAuth(context, { fresh: true })`
+	 * first, so a stolen long-lived session cannot delete the account.
+	 *
+	 * @throws {ApiError} 401 `NotAuthenticatedException` when signed out.
+	 * @throws {ApiError} 400 `InvalidParameterException` for a directly federated user (no pool record to delete).
+	 */
+	deleteUser(context: BlocksContext): Promise<void>;
+
+	// ── MFA — email + password, `mfa` on ────────────────────────────────────
+
+	/**
+	 * Start authenticator-app (TOTP) enrolment for the signed-in user: returns
+	 * the shared secret to show as a QR code / setup key (Cognito
+	 * `AssociateSoftwareToken`). Finish with {@link AuthShape.verifyTotpSetup}.
+	 * *Email + password, `mfa` on.*
+	 */
+	setUpTotp(
+		context: BlocksContext,
+		...ERROR_mfa_is_off_on_this_Auth_instance: MfaGate<O>
+	): Promise<{ sharedSecret: string }>;
+
+	/**
+	 * Finish authenticator-app (TOTP) enrolment with a code from the app
+	 * (Cognito `VerifySoftwareToken`), and enrol TOTP as an MFA factor so
+	 * subsequent sign-ins can challenge it. *Email + password, `mfa` on.*
+	 *
+	 * @throws {ApiError} 400 `EnableSoftwareTokenMFAException` / `CodeMismatchException` (retriable) for a wrong code.
+	 * @throws {ApiError} 400 `SoftwareTokenMFANotFoundException` when `setUpTotp` was not called first.
+	 */
+	verifyTotpSetup(
+		context: BlocksContext,
+		code: string,
+		...ERROR_mfa_is_off_on_this_Auth_instance: MfaGate<O>
+	): Promise<void>;
+
+	/**
+	 * Update the MFA preferences for the signed-in user.
+	 *
+	 * Per-factor delta compatible with Amplify-JS v6. Factors omitted from the
+	 * input are left unchanged. At most one factor may be set to
+	 * `'PREFERRED'` per call — setting two raises
+	 * `InvalidParameterException`. Setting `'PREFERRED'` on a new factor
+	 * automatically demotes the previously-preferred factor to
+	 * `'NOT_PREFERRED'` (matches Cognito's documented behavior).
+	 *
+	 * *Email + password, `mfa` on.*
+	 *
+	 * @throws {ApiError} 400 `InvalidParameterException` for multiple `'PREFERRED'`
+	 *   factors in one call, OR a factor the pool doesn't advertise in `mfa.types`.
+	 * @throws {ApiError} 400 `SoftwareTokenMFANotFoundException` when enabling TOTP before `setUpTotp` + `verifyTotpSetup`.
+	 */
+	updateMfaPreference(
+		context: BlocksContext,
+		input: MfaPreferenceInput<O>,
+		...ERROR_mfa_is_off_on_this_Auth_instance: MfaGate<O>
+	): Promise<void>;
+
+	/**
+	 * Read the signed-in user's current MFA preferences.
+	 *
+	 * `enabled` may contain any number of factors. `preferred` is
+	 * zero-or-one of those factors (or the `'NOMFA'` sentinel). Verified
+	 * contact attributes (`email_verified`, `phone_number_verified`) are
+	 * surfaced as enabled factors if the pool's `mfa.types` allows them —
+	 * this matches Cognito's behavior where a verified email auto-enables
+	 * Email MFA without an explicit preference call.
+	 *
+	 * *Email + password, `mfa` on.*
+	 */
+	getMfaPreference(
+		context: BlocksContext,
+		...ERROR_mfa_is_off_on_this_Auth_instance: MfaGate<O>
+	): Promise<MfaPreference<O>>;
+
+	// ── Devices — email + password ──────────────────────────────────────────
+
+	/**
+	 * The signed-in user's remembered devices (Cognito `ListDevices`), paged
+	 * lazily. *Email + password.*
+	 *
+	 * @example
+	 * ```ts
+	 * const devices = await Array.fromAsync(auth.scanDevices(context));
+	 * ```
+	 */
+	scanDevices(
+		context: BlocksContext,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): AsyncIterable<DeviceRecord>;
+
+	/**
+	 * Mark the current device as "remembered" so Cognito can skip MFA on
+	 * future sign-ins from the same device. *Email + password.*
+	 *
+	 * ⚠️ Cognito's device-tracking flow needs the device key Cognito issues at
+	 * sign-in (`NewDeviceMetadata`) plus a client-derived device verifier. The
+	 * local mock implements a synthetic version (it mints a device key); on AWS
+	 * this throws a `501` — a known gap carried over from `AuthCognito`, see
+	 * `DESIGN.md` ("Known gaps").
+	 */
+	rememberDevice(
+		context: BlocksContext,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<void>;
+
+	/** Forget one of the signed-in user's remembered devices. *Email + password.* */
+	forgetDevice(
+		context: BlocksContext,
+		deviceKey: string,
+		...ERROR_emailPassword_is_disabled_on_this_Auth_instance: PasswordGate<O>
+	): Promise<void>;
+
+	// ── Passkeys — email + password, `passkeys` set ─────────────────────────
+
+	/**
+	 * Begin a passkey enrolment. The signed-in user proves session ownership
+	 * via the access token; Cognito returns a
+	 * `PublicKeyCredentialCreationOptionsJSON` blob the browser passes to
+	 * `navigator.credentials.create(...)`. Pair with
+	 * {@link AuthShape.completePasskeyRegistration} to persist the resulting public
+	 * key on the pool.
+	 *
+	 * Most apps never call this directly — the sign-in UI drives it through
+	 * `createApi()`'s `startPasskeyRegistration` action.
+	 *
+	 * @throws {ApiError} 409 `PasskeysNotEnabledException` when passkeys are not configured (no
+	 *   `passkeys` option; untyped callers), and `WebAuthnNotEnabledException` when the user pool
+	 *   itself lacks the WebAuthn configuration — call sites
+	 *   should surface this as "passkeys aren't configured for this app" rather than silently failing.
+	 */
+	startPasskeyRegistration(
+		context: BlocksContext,
+		...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>
+	): Promise<StartPasskeyRegistrationResult>;
+
+	/**
+	 * Complete a passkey enrolment. `credential` is the JSON-encoded
+	 * `PublicKeyCredential` returned by `navigator.credentials.create(...)`.
+	 *
+	 * @throws {ApiError} 400 `InvalidParameterException` when `credential` is not JSON with an `id`.
+	 */
+	completePasskeyRegistration(
+		context: BlocksContext,
+		credential: string,
+		...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>
+	): Promise<CompletePasskeyRegistrationResult>;
+
+	/**
+	 * List the signed-in user's registered passkeys. Paginates internally
+	 * — callers receive the full set in one call.
+	 */
+	listPasskeys(
+		context: BlocksContext,
+		...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>
+	): Promise<PasskeyDescription[]>;
+
+	/** Delete a registered passkey by `credentialId`. */
+	deletePasskey(
+		context: BlocksContext,
+		credentialId: string,
+		...ERROR_passkeys_are_not_enabled_on_this_Auth_instance: PasskeyGate<O>
+	): Promise<void>;
+
+	// ── Admin — opt-in ──────────────────────────────────────────────────────
+
+	/**
+	 * Opt-in server-side admin surface (group membership + user lifecycle).
+	 *
+	 * Returns `AdminDisabled` (calling any of its methods is a compile error) unless the
+	 * block was constructed with an `admin` options object, and throws at
+	 * runtime for untyped JS callers that reach past the type system. The set
+	 * of methods is narrowed by `admin.actions`; the runtime object always
+	 * carries every method (the type hides the ungranted ones), and an ungranted
+	 * call fails fast with 403 `NotAuthorizedException` rather than a cryptic
+	 * AWS `AccessDenied`.
+	 *
+	 * `auth.admin` is inside your trust boundary — never expose it to clients
+	 * without your own authorization check (e.g. `requireRole(context, 'admins')`).
+	 * It is the one surface that reports `UserNotFoundException` for an unknown
+	 * user; every public flow hides whether an account exists.
+	 *
+	 * @example
+	 * ```ts
+	 * const auth = new Auth(scope, 'auth', { users: { groups: ['admins'] }, admin: {} });
+	 * await auth.admin.addUserToGroup('alice', 'admins');
+	 * ```
+	 */
+	readonly admin: AdminGetterOf<O>;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Browser redirect client (`@aws-blocks/bb-auth/browser-client`)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The signed-in user as a browser sees it: the same fields `getAuthState()`
+ * already sends a signed-in browser. The server-only `claims` and
+ * `federatedIdentity` are never sent.
+ */
+export interface BrowserUser extends Omit<AuthenticatedUser, 'claims' | 'federatedIdentity'> {
+	/** A name to show the user, chosen as `getAuthState()` chooses it: a chosen username, else a verified email or phone, else `preferred_username`, else the username. */
+	displayName: string;
+}
+
+/** What {@link AuthClient.fetchAuthSession} returns. */
+export type BrowserAuthSession = { signedIn: true; user: BrowserUser } | { signedIn: false };
+
+/** Input to {@link AuthClient.signInWithRedirect}. */
+export interface SignInWithRedirectInput<P extends string = string> {
+	/** The provider's key in the `Auth` block's options, e.g. `'okta'` or `'google'`. */
+	provider: P;
+	/**
+	 * Opaque app state handed back by {@link AuthClient.handleSignInRedirect}
+	 * (for example the page to return to). It travels inside the signed `state`
+	 * envelope, so the provider and the address bar see it: put no secrets in it.
+	 */
+	customState?: string;
+	/** Overrides {@link AuthClientOptions.redirectUri} for this sign-in. */
+	redirectUri?: string;
+}
+
+/** What {@link AuthClient.handleSignInRedirect} returns after a successful sign-in. */
+export interface SignInRedirectResult {
+	/** The user who just signed in. */
+	user: BrowserUser;
+	/** The `customState` passed to `signInWithRedirect()`, if any. */
+	customState?: string;
+}
+
+/** What {@link AuthClient.signOut} returns. */
+export interface SignOutResult {
+	/**
+	 * The provider's logout URL, when the provider keeps its own session
+	 * (Cognito managed login, or an OIDC provider with an `end_session_endpoint`).
+	 * Navigate to it, or pass `endProviderSession: true`, so the provider's
+	 * session cannot sign the user straight back in. The provider then returns
+	 * the browser to `redirects.postSignOutPath` on the API's origin.
+	 */
+	logoutUrl?: string;
+}
+
+/**
+ * The browser APIs {@link createAuthClient} uses, replaceable for tests or
+ * non-browser runtimes. Each defaults to the browser's own (`fetch`,
+ * `sessionStorage`, `location`, `history`).
+ */
+export interface AuthClientEnvironment {
+	/** Send a request (`fetch`). The client passes `credentials: 'include'` where the session cookie must travel. */
+	fetch(input: string, init?: RequestInit): Promise<Response>;
+	/** Holds the pending sign-in (CSRF value, PKCE verifier) between the two page loads. */
+	storage: {
+		getItem(key: string): string | null;
+		setItem(key: string, value: string): void;
+		removeItem(key: string): void;
+	};
+	/** The current page URL. */
+	currentUrl(): string;
+	/** Navigate the page (`location.assign`). */
+	navigate(url: string): void;
+	/** Rewrite the address bar without navigating (`history.replaceState`). */
+	replaceUrl(url: string): void;
+}
+
+/** Options for {@link createAuthClient}. */
+export interface AuthClientOptions {
+	/**
+	 * Where the `Auth` block's routes (`/aws-blocks/auth/*`) are served: the
+	 * API's origin, plus the API Gateway stage when you call the gateway URL
+	 * directly. For example `'https://api.example.com'` or
+	 * `'https://abc123.execute-api.us-east-1.amazonaws.com/prod'`. Defaults to
+	 * the page's own origin.
+	 */
+	baseUrl?: string;
+	/** The block's `redirects.callbackPath`. @default '/aws-blocks/auth/callback' */
+	callbackPath?: string;
+	/** The block's `redirects.signOutPath`. @default '/aws-blocks/auth/signout' */
+	signOutPath?: string;
+	/**
+	 * Where the provider's answer returns in this app: the page that calls
+	 * {@link AuthClient.handleSignInRedirect}. Its origin must be in the block's
+	 * `redirects.allowedRelayOrigins` (loopback `http://127.0.0.1` is always
+	 * allowed). Defaults to the current page, without its query and fragment.
+	 */
+	redirectUri?: string;
+	/** Replace the browser APIs the client uses (tests, other runtimes). */
+	environment?: Partial<AuthClientEnvironment>;
+}
+
+/**
+ * Redirect sign-in for a web frontend on another origin than the `Auth`
+ * block's API. Created by `createAuthClient()` from
+ * `@aws-blocks/bb-auth/browser-client`. The method names follow Amplify JS v6.
+ */
+export interface AuthClient<P extends string = string> {
+	/**
+	 * Start a sign-in with a federated provider: fetch a signed `state` from the
+	 * block, then navigate to the provider. The provider returns to the block's
+	 * callback, which sends the browser to `redirectUri`.
+	 *
+	 * @throws `InvalidRelayException` when `redirectUri`'s origin is not in the
+	 * block's `redirects.allowedRelayOrigins`; `ProviderNotConfiguredException`
+	 * for an unknown provider.
+	 */
+	signInWithRedirect(input: SignInWithRedirectInput<P>): Promise<void>;
+	/**
+	 * Finish a sign-in on the return page. Returns `null` when the URL carries
+	 * no sign-in response, so it is safe to call on every page load. Removes the
+	 * one-time parameters from the address bar.
+	 *
+	 * @throws `InvalidStateException` when the response is not for the sign-in
+	 * this tab started; `InvalidCallbackException` when no sign-in was started
+	 * (or it is older than 10 minutes); `IdpErrorException` when the provider
+	 * refused the sign-in; `InternalErrorException` when the exchange succeeded
+	 * but the session cookie did not come back on the next request (a
+	 * cross-domain frontend without `session.crossDomain: true` or the CORS
+	 * allowlist, or a browser that blocks third-party cookies).
+	 */
+	handleSignInRedirect(): Promise<SignInRedirectResult | null>;
+	/**
+	 * The signed-in user.
+	 *
+	 * @throws `NotAuthenticatedException` when no one is signed in.
+	 */
+	getCurrentUser(): Promise<BrowserUser>;
+	/** Whether someone is signed in, and who. Never throws for a signed-out browser. */
+	fetchAuthSession(): Promise<BrowserAuthSession>;
+	/**
+	 * End the block's session. With `endProviderSession: true`, also navigate
+	 * to the provider's logout URL when there is one (see {@link SignOutResult}).
+	 */
+	signOut(options?: { endProviderSession?: boolean }): Promise<SignOutResult>;
+}

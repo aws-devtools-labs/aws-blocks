@@ -191,3 +191,176 @@ describe('ApiNamespaceClient — per-namespace request path', () => {
     }
   });
 });
+
+describe('ApiNamespaceClient — an RPC error decodes the same whatever the HTTP status', () => {
+  // A namespace with `httpErrorStatus: true` answers a 4xx ApiError with that
+  // HTTP status; the body is unchanged. The client must read the body either
+  // way, so the error a caller sees does not depend on the option.
+  const errorBody = JSON.stringify({
+    jsonrpc: '2.0',
+    error: { code: 401, message: 'Authentication required', data: { name: 'NotAuthenticated' } },
+    id: 1,
+  });
+
+  async function callWithStatus(status: number): Promise<unknown> {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(errorBody, { status, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ whoami(): Promise<string> }>('api', { url: '/aws-blocks/api' });
+      await api.whoami();
+      assert.fail('expected the call to reject');
+    } catch (e) {
+      return e;
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  it('a 401 body on HTTP 401 and on HTTP 200 rejects with the same ApiError', async () => {
+    const { ApiError, isBlocksError } = await import('./index.js');
+    const on401 = await callWithStatus(401);
+    const on200 = await callWithStatus(200);
+    for (const e of [on401, on200]) {
+      assert.ok(e instanceof ApiError);
+      assert.strictEqual(e.status, 401);
+      assert.strictEqual(e.name, 'NotAuthenticated');
+      assert.strictEqual(e.message, 'Authentication required');
+      assert.ok(isBlocksError(e, 'NotAuthenticated'));
+    }
+  });
+});
+
+describe('ApiNamespaceClient namespace identity', () => {
+  it('answers Symbol.for("aws-blocks.apiNamespace") with its namespace, plus the URL when overridden', async () => {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const key = Symbol.for('aws-blocks.apiNamespace');
+    assert.strictEqual(Reflect.get(ApiNamespaceClient('pwAuth'), key), 'pwAuth');
+    assert.strictEqual(
+      Reflect.get(ApiNamespaceClient('pwAuth', { url: 'https://api.example.com' }), key),
+      'https://api.example.com#pwAuth',
+    );
+    assert.strictEqual(Reflect.get(ApiNamespaceClient('pwAuth'), Symbol.for('other')), undefined, 'other symbols stay undefined');
+  });
+});
+
+describe('ApiNamespaceClient — per-call fetch (test clients)', () => {
+  // `@aws-blocks/blocks/utils`'s createTestClient runs each call inside an
+  // AsyncLocalStorage whose store is the fetch to use (one cookie jar per test
+  // user). The client reads it through a `Symbol.for` key on globalThis
+  // (client/fetch-store.ts).
+  const KEY = Symbol.for('blocks:ClientFetch');
+
+  it('the key is exported once, from @aws-blocks/core/bb-utils', async () => {
+    const { CLIENT_FETCH_STORE } = await import('../bb-utils.js');
+    assert.strictEqual(CLIENT_FETCH_STORE, KEY);
+  });
+  const ok = () =>
+    new Response(JSON.stringify({ jsonrpc: '2.0', result: 'ok', id: 1 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  it('a call made inside the store uses its fetch; other calls keep the global one', async () => {
+    const { AsyncLocalStorage } = await import('node:async_hooks');
+    const { ApiNamespaceClient } = await import('./index.js');
+    const store = new AsyncLocalStorage<typeof fetch>();
+    const calls: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls.push('global');
+      return ok();
+    }) as typeof fetch;
+    const scoped = (async () => {
+      calls.push('scoped');
+      return ok();
+    }) as typeof fetch;
+    Reflect.set(globalThis, KEY, store);
+    try {
+      for (const retryStaleConnection of [true, false]) {
+        calls.length = 0;
+        const api = ApiNamespaceClient<{ ping(): Promise<string> }>('api', {
+          url: 'http://127.0.0.1:1/aws-blocks/api',
+          retryStaleConnection,
+        });
+        assert.strictEqual(await store.run(scoped, () => api.ping()), 'ok');
+        assert.strictEqual(await api.ping(), 'ok');
+        assert.deepStrictEqual(calls, ['scoped', 'global'], `retryStaleConnection: ${retryStaleConnection}`);
+      }
+    } finally {
+      Reflect.deleteProperty(globalThis, KEY);
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('ApiNamespaceClient — non-JSON-RPC response bodies', () => {
+  // A gateway or proxy in front of the handler can answer on its own (throttling,
+  // auth, timeouts, a crashed integration). Those bodies carry no JSON-RPC
+  // envelope; the client must reject with the HTTP status rather than resolve
+  // `undefined`. These stub `fetch` (test plumbing — not customer code).
+  async function callWith(body: string, status: number, contentType = 'application/json'): Promise<unknown> {
+    const { ApiNamespaceClient } = await import('./index.js');
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(body, {
+      status,
+      headers: { 'Content-Type': contentType },
+    })) as typeof fetch;
+    try {
+      const api = ApiNamespaceClient<{ hello(): Promise<unknown> }>('reports', {
+        url: 'https://d123.cloudfront.net/aws-blocks/api',
+      });
+      return await api.hello();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  }
+
+  const gatewayResponses: Array<[number, string]> = [
+    [502, 'Internal server error'],
+    [429, 'Too Many Requests'],
+    [403, 'Forbidden'],
+    [504, 'Endpoint request timed out'],
+  ];
+  for (const [status, message] of gatewayResponses) {
+    it(`rejects with ApiError ${status} for a gateway body {"message":"${message}"}`, async () => {
+      const { ApiError } = await import('./index.js');
+      await assert.rejects(callWith(JSON.stringify({ message }), status), (err: unknown) => {
+        assert.ok(err instanceof ApiError, `expected ApiError, got ${String(err)}`);
+        assert.strictEqual(err.status, status);
+        assert.strictEqual(err.message, message);
+        return true;
+      });
+    });
+  }
+
+  it('rejects with ApiError carrying the status for a non-JSON body', async () => {
+    const { ApiError } = await import('./index.js');
+    await assert.rejects(callWith('<html><body>502 Bad Gateway</body></html>', 502, 'text/html'), (err: unknown) => {
+      assert.ok(err instanceof ApiError, `expected ApiError, got ${String(err)}`);
+      assert.strictEqual(err.status, 502);
+      assert.strictEqual(err.message, 'HTTP 502');
+      return true;
+    });
+  });
+
+  it('rejects with status 502 when a 200 response carries no envelope', async () => {
+    const { ApiError } = await import('./index.js');
+    await assert.rejects(callWith(JSON.stringify({ hello: 'world' }), 200), (err: unknown) => {
+      assert.ok(err instanceof ApiError, `expected ApiError, got ${String(err)}`);
+      assert.strictEqual(err.status, 502);
+      assert.strictEqual(err.message, 'HTTP 502');
+      return true;
+    });
+  });
+
+  it('resolves a valid void result (no `result` member)', async () => {
+    assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', id: 1 }), 200), undefined);
+  });
+
+  it('resolves a valid result envelope sent with a custom non-200 status', async () => {
+    assert.deepStrictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: { queued: true }, id: 1 }), 202), { queued: true });
+    assert.strictEqual(await callWith(JSON.stringify({ jsonrpc: '2.0', result: 'teapot', id: 1 }), 418), 'teapot');
+  });
+});

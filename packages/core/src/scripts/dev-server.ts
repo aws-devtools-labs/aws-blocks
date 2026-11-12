@@ -15,17 +15,18 @@ import { BLOCKS_SANDBOX_DIR } from '../common/constants.js';
 import { matchRoute, lockRouteRegistry } from '../raw-route.js';
 import { CORS_MAX_AGE } from '../cors.js';
 import { registerBuiltinRoutes } from '../builtin-routes.js';
+import { createDispatcher, rpcResponseHeaders, type Dispatcher } from '../dispatch.js';
 import {
-  parseRpcRequest,
-  successResponse,
-  errorResponseFromCatch,
-  methodNotFoundResponse,
-  rawRouteErrorFromCatch,
-} from '../rpc.js';
+  clientGoneSignal,
+  discardRemainingBody,
+  readBody,
+  toDispatchRequest,
+  writeInternalServerError,
+  writeResponse,
+} from '../http-server.js';
+import { MAX_RPC_BODY_BYTES, payloadTooLargeResponse } from '../rpc.js';
 import { redactToJson } from '../redact.js';
-import { errorResponseSetCookies } from '../set-cookie.js';
-import { isLoopbackHost, isWildcardHost } from '../common/loopback.js';
-import { isDispatchableExport, resolveApiMethod } from '../rpc-dispatch.js';
+import { isIpLiteral, isLoopbackHost, isWildcardHost } from '../common/loopback.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { applyDevMigrations } from './external-migrations-step.js';
 import {
@@ -37,16 +38,7 @@ import {
   waitForProcessGroupExit,
 } from './process-tree.js';
 import { isCuratedLevel, log, resolveLogLevel } from './log.js';
-
-function toBodyStream(text: string): ReadableStream<Uint8Array> | null {
-  if (!text) return null;
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-      controller.close();
-    },
-  });
-}
+import { installDevRejectionHandler, runDevRequest } from './dev-unhandled-rejection.js';
 
 export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
@@ -62,6 +54,58 @@ export function resolveDevHost(option: string | undefined, env: NodeJS.ProcessEn
 
 /** Re-exported for callers/tests; the single definition lives in `common/loopback.ts`. */
 export { isLoopbackHost } from '../common/loopback.js';
+
+/** A `Host` header: a bracketed IPv6 literal or a name/IPv4, then an optional port (range-checked below). */
+const HOST_HEADER = /^(\[[0-9a-f:.]+\]|[^\s:/?#@[\]\\]+)(?::(\d{1,5}))?$/i;
+
+/** Lowercase, and strip IPv6 brackets and a trailing root dot (`Mybox.` → `mybox`). */
+function normalizeHostname(host: string): string {
+  return host.trim().replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+}
+
+/**
+ * Whether the dev server should serve a request with this `Host` header. This is
+ * the DNS-rebinding check: binding loopback keeps other machines out, but a page
+ * on an attacker's origin can re-point its own DNS name at `127.0.0.1` and then
+ * call the dev server as a same-origin page. The browser still sends the
+ * attacker's name in `Host`, so only these are served:
+ *
+ * - a loopback host — `localhost`, `127.x.x.x`, `[::1]`, with or without a port
+ *   (and in the FQDN form with a trailing root dot, `localhost.`);
+ * - the concrete host the dev server was told to bind (`bindHost`, from
+ *   `startDevServer({ host })` or `BLOCKS_DEV_HOST`), or the one in
+ *   `BLOCKS_DEV_HOST` (`devHost`);
+ * - with a wildcard bind (`0.0.0.0` / `::`), any IP address literal. A literal
+ *   can't be re-pointed by DNS; a DNS name is refused, and opening the app by a
+ *   name needs `BLOCKS_DEV_HOST` set to that name.
+ *
+ * A missing or malformed `Host`, or one with a port above 65535, is refused. Loopback, wildcard and IP
+ * classification is the same one the realtime WebSocket's `Origin` check uses
+ * (`common/loopback.ts`), so the two can't disagree.
+ */
+export function isAllowedDevRequestHost(
+  hostHeader: string | undefined,
+  bindHost: string,
+  devHost: string | undefined = process.env.BLOCKS_DEV_HOST,
+): boolean {
+  const match = HOST_HEADER.exec(hostHeader?.trim() ?? '');
+  if (!match) return false;
+  if (match[2] !== undefined && Number(match[2]) > 65535) return false;
+  const hostname = match[1];
+  // `normalizeHostname` strips the FQDN root dot, so `localhost.` is loopback here
+  // as it is for `BLOCKS_DEV_HOST=mybox` vs `Host: mybox.`.
+  if (isLoopbackHost(normalizeHostname(hostname))) return true;
+  for (const configured of [bindHost, devHost]) {
+    const optIn = configured?.trim();
+    if (!optIn) continue;
+    if (isWildcardHost(optIn)) {
+      if (isIpLiteral(hostname)) return true;
+    } else if (normalizeHostname(optIn) === normalizeHostname(hostname)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Resolve the CORS origin for the dev server.
@@ -644,6 +688,9 @@ export async function startDevServer(options: DevServerOptions) {
     frontendPort = 3100,
   } = options;
   const devStartTime = Date.now();
+  // A request's unhandled rejection (e.g. a guard called without `await`) is
+  // logged with its method instead of ending the process (dev server only).
+  installDevRejectionHandler();
 
   // ── Singleton guard ─────────────────────────────────────────────────────
   // Prevent two fighting supervisors: a second `npm run dev` must not spawn a
@@ -754,14 +801,9 @@ export async function startDevServer(options: DevServerOptions) {
     await deployLocal(backend);
   }
 
-  // 5. Collect APIs for runtime
-  const apis = new Map<string, any>();
-  for (const [exportName, exportValue] of Object.entries(backend)) {
-    // Same rule as the Lambda handler: no Building Block instances or `_`-private exports.
-    if (isDispatchableExport(exportName, exportValue)) {
-      apis.set(exportName, exportValue);
-    }
-  }
+  // 5. Create the request dispatcher. It resolves APIs with the same rule as the
+  // Lambda handler: no Building Block instances or `_`-private exports.
+  const dispatch = createDevDispatcher(backend);
 
   registerBuiltinRoutes({ localDev: true });
   lockRouteRegistry();
@@ -983,6 +1025,17 @@ export async function startDevServer(options: DevServerOptions) {
   }
 
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    // DNS-rebinding guard: refuse a Host that isn't loopback or the configured
+    // dev host before anything is dispatched, proxied or given CORS headers
+    // (see isAllowedDevRequestHost).
+    if (!isAllowedDevRequestHost(req.headers.host, host)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', 'Connection': 'close' });
+      res.end(
+        'Forbidden: the AWS Blocks dev server only answers requests addressed to localhost, 127.0.0.1, [::1] ' +
+          'or the host set in BLOCKS_DEV_HOST.\n',
+      );
+      return;
+    }
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const method = req.method || 'GET';
 
@@ -1019,7 +1072,7 @@ export async function startDevServer(options: DevServerOptions) {
         apiProxy.web(req, res);
         return;
       }
-      handleApiRequest(req, res, url, method, apis);
+      handleApiRequest(req, res, url, method, dispatch);
       return;
     }
 
@@ -1487,225 +1540,120 @@ export function devRequestLogging(env: NodeJS.ProcessEnv = process.env): {
 
 // ── Local API handler ────────────────────────────────────────────────────────
 
+/**
+ * The dispatcher behind the local API: the same RawRoute and JSON-RPC handling
+ * as the deployed handlers, with the dev server's CORS policy (reflect a
+ * localhost origin, never refuse one), its request logging, and the available
+ * APIs named in an unknown-namespace error.
+ */
+function createDevDispatcher(backend: unknown): Dispatcher {
+  return createDispatcher(backend, {
+    cors: { rejects: () => false, headers: buildDevCorsHeaders },
+    listApisWhenNotFound: true,
+    // A request's unhandled rejection is logged with its method (see installDevRejectionHandler).
+    runHandler: runDevRequest,
+    rpcTrace: {
+      parseError(response) {
+        if (devRequestLogging().traffic) console.log('[rpc-out parse-error]', response);
+      },
+      call(apiNamespace, method, args) {
+        if (devRequestLogging().traffic) {
+          // redactToJson handles circulars and serialization failures itself.
+          console.log('[rpc-call]', `${apiNamespace}.${method}`, redactToJson(args));
+        }
+      },
+      result(apiNamespace, method, value) {
+        if (devRequestLogging().traffic) {
+          // Log a redacted copy of the response value — never the raw
+          // payload, which can carry challenge `session` tokens, MFA shared
+          // secrets, etc. that the client legitimately round-trips.
+          const okLog = redactToJson(value);
+          console.log('[rpc-ok]', `${apiNamespace}.${method}`,
+            okLog.length > 800 ? okLog.slice(0, 800) + '…' : okLog);
+        }
+      },
+    },
+    logHandlerError(failure) {
+      const logging = devRequestLogging();
+      if (!logging.errors) return;
+      const error: any = failure.error;
+      if (failure.source === 'rpc') {
+        console.log('[rpc-err]', `${failure.apiNamespace}.${failure.method}`, error?.name ?? 'Error', '-', error?.message);
+        // A re-tagged/branded error carries a stable BB message; the raw driver/SDK
+        // text lives on `cause` (server-side only). Surface it here so a SQL typo or
+        // connection error shows useful text in the local terminal.
+        if (error?.cause) console.log('  cause:', error.cause);
+        if (logging.stacks && error?.stack) console.log(error.stack);
+        return;
+      }
+      console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);
+      // A branded error carries a stable BB message; the raw driver/SDK text
+      // lives on `cause` (server-side only). Surface it here, matching the RPC
+      // log above, so a developer debugging a raw-route failure sees it.
+      if (error?.cause) console.error('  cause:', error.cause);
+      if (logging.stacks && error?.stack) console.error(error.stack);
+    },
+  });
+}
+
 function handleApiRequest(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   method: string,
-  apis: Map<string, any>,
+  dispatch: Dispatcher,
 ): void {
-  if (method === 'POST' && isRpcPath(url.pathname)) {
-    let body = '';
-    req.on('data', chunk => body += chunk);
-    req.on('end', async () => {
-      const rpcHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  const isRpc = method === 'POST' && isRpcPath(url.pathname);
+  if (isRpc || matchRoute(method, url.pathname)) {
+    const signal = clientGoneSignal(res);
+    // The server's request handler set these on `res`; a dispatcher 500 clears every header
+    // set so far, so it is handed them again to keep the answer readable by the
+    // browser.
+    const corsHeaders = buildDevCorsHeaders(req.headers.origin || '');
+    // JSON-RPC bodies are capped at MAX_RPC_BODY_BYTES, as in the deployed
+    // handlers; RawRoute bodies are read whole.
+    readBody(req, isRpc ? MAX_RPC_BODY_BYTES : Infinity).then(async (body) => {
+      if (body === undefined) {
+        // Drain the rest before answering, so the response isn't lost to a
+        // reset, then answer with the JSON-RPC 413 envelope the dispatcher
+        // gives (see parseRpcRequest).
+        await discardRemainingBody(req);
+        if (!req.complete) res.setHeader('Connection', 'close');
+        const envelope = payloadTooLargeResponse();
+        if (devRequestLogging().traffic) console.log('[rpc-out parse-error]', envelope);
+        writeResponse(res, { status: 200, headers: rpcResponseHeaders(corsHeaders), cookies: [], body: envelope }, undefined, corsHeaders);
+        return;
+      }
       // Verbose request/response logging — useful when debugging cross-stack
       // wire format mismatches (e.g. native client codegen vs server). Set
       // BLOCKS_DEV_QUIET=1 to suppress (BLOCKS_LOG_LEVEL=quiet|normal keeps only
       // the error lines; see devRequestLogging). Sensitive fields (passwords, session
       // tokens, OTP codes) are redacted so they never reach the log stream.
-      const logging = devRequestLogging();
-      if (logging.traffic) {
+      if (isRpc && devRequestLogging().traffic) {
+        const text = body.toString('utf-8');
         let inLog: string;
         try {
-          inLog = redactToJson(JSON.parse(body || '{}'));
+          inLog = redactToJson(JSON.parse(text || '{}'));
         } catch {
-          // Body isn't valid JSON (parse error surfaced below) — fall back to
-          // the raw text. A malformed body can't carry a structured secret,
-          // but truncate it like before to keep logs readable.
-          inLog = body;
+          // Body isn't valid JSON (the dispatcher answers with a parse error) —
+          // fall back to the raw text. A malformed body can't carry a structured
+          // secret, but truncate it like before to keep logs readable.
+          inLog = text;
         }
         console.log('[rpc-in]', inLog.length > 800 ? inLog.slice(0, 800) + '…' : inLog);
       }
-      // Same path/body namespace check as the Lambda handler (see parseRpcRequest).
-      const parsed = parseRpcRequest(body, { pathname: url.pathname });
-
-      if (!parsed.ok) {
-        if (logging.traffic) console.log('[rpc-out parse-error]', parsed.response);
-        res.writeHead(200, rpcHeaders);
-        res.end(parsed.response);
-        return;
-      }
-
-      const { apiNamespace, method: rpcMethod, args, id: rpcId } = parsed.request;
-      if (logging.traffic) {
-        // redactToJson handles circulars and serialization failures itself.
-        console.log('[rpc-call]', `${apiNamespace}.${rpcMethod}`, redactToJson(args));
-      }
-
-      // Declared outside the try so the error path can still deliver cookies
-      // the method set before throwing (matches the Lambda handler).
-      let responseHeaders: Headers | undefined;
-
-      try {
-        const headers = new Headers();
-        Object.entries(req.headers).forEach(([k, v]) => {
-          headers.set(k, Array.isArray(v) ? v[0] : v || '');
-        });
-
-        let responseStatus = 200;
-        responseHeaders = new Headers({ 'Content-Type': 'application/json' });
-        let responseBody: any;
-
-        const context = {
-          request: {
-            headers,
-            body: toBodyStream(body),
-            json: async () => JSON.parse(body),
-            text: async () => body,
-            url: new URL(req.url || BLOCKS_RPC_PREFIX, `http://${req.headers.host}`),
-            params: {},
-          },
-          response: {
-            headers: responseHeaders,
-            get status() { return responseStatus; },
-            set status(code: number) { responseStatus = code; },
-            send: (b: any) => { responseBody = b; },
-          },
-        };
-
-        const apiHandler = apis.get(apiNamespace);
-        if (!apiHandler) {
-          res.writeHead(200, rpcHeaders);
-          res.end(methodNotFoundResponse(`API '${apiNamespace}' not found. Available: ${Array.from(apis.keys()).join(', ')}`, rpcId));
-          return;
-        }
-
-        const apiMethods = typeof apiHandler === 'function' ? apiHandler(context) : apiHandler;
-
-        // Only a method the API itself defines is callable: an inherited name
-        // (`constructor`, `toString`, `__proto__`, …) is answered exactly like
-        // an unknown one. Same helper as the Lambda handler.
-        const apiMethod = resolveApiMethod(apiMethods, rpcMethod);
-        if (!apiMethod) {
-          res.writeHead(200, rpcHeaders);
-          res.end(methodNotFoundResponse(`'${rpcMethod}' on API '${apiNamespace}'`, rpcId));
-          return;
-        }
-
-        const result = await apiMethod(...args);
-
-        const headerObj: Record<string, string | string[]> = {};
-        for (const [key, value] of responseHeaders.entries()) {
-          if (key === 'set-cookie') continue;
-          headerObj[key] = value;
-        }
-        const setCookies = responseHeaders.getSetCookie?.() ?? [];
-        if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
-
-        const successPayload = successResponse(responseBody ?? result, rpcId);
-        if (logging.traffic) {
-          // Log a redacted copy of the response value — never the raw
-          // payload, which can carry challenge `session` tokens, MFA shared
-          // secrets, etc. that the client legitimately round-trips.
-          const okLog = redactToJson(responseBody ?? result);
-          console.log('[rpc-ok]', `${apiNamespace}.${rpcMethod}`,
-            okLog.length > 800 ? okLog.slice(0, 800) + '…' : okLog);
-        }
-        res.writeHead(responseStatus, headerObj);
-        res.end(successPayload);
-      } catch (error: any) {
-        const errPayload = errorResponseFromCatch(error, rpcId);
-        if (logging.errors) {
-          console.log('[rpc-err]', `${apiNamespace}.${rpcMethod}`, error?.name ?? 'Error', '-', error?.message);
-          // A re-tagged/branded error carries a stable BB message; the raw driver/SDK
-          // text lives on `cause` (server-side only). Surface it here so a SQL typo or
-          // connection error shows useful text in the local terminal.
-          if (error?.cause) console.log('  cause:', error.cause);
-          if (logging.stacks && error?.stack) console.log(error.stack);
-        }
-        // Only Set-Cookie values that DELETE a cookie survive into the error
-        // response (e.g. a 401 that also clears a dead session cookie) — a
-        // failed call must never issue a live session. Its other headers are
-        // dropped, as before. Same helper as the Lambda handler.
-        const errHeaders: Record<string, string | string[]> = { 'Content-Type': 'application/json' };
-        const errCookies = errorResponseSetCookies(responseHeaders);
-        if (errCookies.length > 0) errHeaders['set-cookie'] = errCookies;
-        res.writeHead(200, errHeaders);
-        res.end(errPayload);
-      }
-    });
-    return;
-  }
-
-  // RawRoute dispatch
-  const matched = matchRoute(method, url.pathname);
-  if (matched) {
-    let body = '';
-    req.on('data', (chunk: string) => body += chunk);
-    req.on('end', async () => {
-      const logging = devRequestLogging();
-      // Hoisted above the try so the error catch below can reuse any headers
-      // the handler set on `ctx.response` before throwing (CORS, Set-Cookie,
-      // custom) — matching the production lambda-handler error path, which also
-      // re-emits `responseHeaders`. Declared inside the try, they would be out
-      // of catch scope and the error response would drop those headers in local
-      // dev while production kept them, hiding a CORS/cookie bug locally.
-      let responseStatus = 200;
-      const responseHeaders = new Headers({ 'Content-Type': 'application/json' });
-
-      try {
-        const headers = new Headers();
-        Object.entries(req.headers).forEach(([k, v]) => {
-          headers.set(k, Array.isArray(v) ? v[0] : v || '');
-        });
-
-        let responseBody: any;
-
-        const context = {
-          request: {
-            headers,
-            body: toBodyStream(body),
-            json: async () => JSON.parse(body),
-            text: async () => body,
-            url,
-            params: matched.params,
-          },
-          response: {
-            headers: responseHeaders,
-            get status() { return responseStatus; },
-            set status(code: number) { responseStatus = code; },
-            send: (b: any) => { responseBody = b; },
-          },
-        };
-
-        await matched.route.handler(context);
-
-        const headerObj: Record<string, string | string[]> = {};
-        for (const [key, value] of responseHeaders.entries()) {
-          if (key === 'set-cookie') continue;
-          headerObj[key] = value;
-        }
-        const setCookies = responseHeaders.getSetCookie?.() ?? [];
-        if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
-
-        res.writeHead(responseStatus, headerObj);
-        res.end(responseBody !== undefined ? (typeof responseBody === 'string' ? responseBody : JSON.stringify(responseBody)) : '');
-      } catch (error: any) {
-        if (logging.errors) {
-          console.error('RawRoute Error:', error?.name ?? 'Error', '-', error?.message);
-          // A branded error carries a stable BB message; the raw driver/SDK text
-          // lives on `cause` (server-side only). Surface it here, matching the RPC
-          // catch above, so a developer debugging a raw-route failure sees it.
-          if (error?.cause) console.error('  cause:', error.cause);
-          if (logging.stacks && error?.stack) console.error(error.stack);
-        }
-        const { status, body: errBody } = rawRouteErrorFromCatch(error);
-        // Reuse any headers the handler set on `ctx.response` before throwing
-        // (CORS, Set-Cookie, custom), the same way the success path and the
-        // production lambda-handler error path do. The sanitized error body is
-        // JSON, so Content-Type is forced to application/json on top.
-        const headerObj: Record<string, string | string[]> = {};
-        for (const [key, value] of responseHeaders.entries()) {
-          if (key === 'set-cookie') continue;
-          headerObj[key] = value;
-        }
-        const setCookies = responseHeaders.getSetCookie?.() ?? [];
-        if (setCookies.length > 0) headerObj['set-cookie'] = setCookies;
-        headerObj['content-type'] = 'application/json';
-        res.writeHead(status, headerObj);
-        res.end(errBody);
-      }
+      dispatch(toDispatchRequest(req, body, { path: url.pathname, signal })).then(
+        (response) => writeResponse(res, response, undefined, corsHeaders),
+        (error: unknown) => {
+          console.error('Dev server error:', error);
+          if (res.headersSent) res.destroy();
+          else writeInternalServerError(res, corsHeaders);
+        },
+      );
+    }, () => {
+      // An aborted upload never emits 'end'; close the response instead of
+      // leaving it open.
+      res.destroy();
     });
     return;
   }

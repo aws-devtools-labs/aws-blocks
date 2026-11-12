@@ -88,11 +88,13 @@ export const FileBucketErrors: {
 // @public (undocumented)
 export interface FileBucketOptions {
     accessLogging?: boolean;
+    allowedContentTypes?: string[];
     bucket?: ExternalBucketRef;
     corsRules?: CorsRule[];
     encryption?: 'aws-managed' | 'customer-managed' | ExternalKmsKeyRef;
     lifecycleRules?: LifecycleRule[];
     logger?: ChildLogger;
+    maxUploadBytes?: number;
     noncurrentVersionExpirationDays?: number;
     objectLock?: ObjectLockOptions;
     removalPolicy?: 'destroy' | 'retain';
@@ -142,7 +144,6 @@ export interface FileUploadClient {
 export interface FileUploadDescriptor {
     // (undocumented)
     readonly __blocks: 'file-bucket/upload';
-    // (undocumented)
     readonly contentType?: string;
     // (undocumented)
     readonly url: string;
@@ -163,6 +164,7 @@ export type GetOptionsFor<O extends FileBucketOptions> = O extends {
 
 // @public (undocumented)
 export interface GetUrlOptions {
+    attachment?: boolean | string;
     expiresIn?: number;
 }
 
@@ -193,6 +195,7 @@ export interface PutOptions {
 
 // @public (undocumented)
 export interface PutUrlOptions {
+    contentLength?: number;
     contentType?: string;
     expiresIn?: number;
 }

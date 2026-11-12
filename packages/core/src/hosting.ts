@@ -43,7 +43,7 @@ import * as cdk from 'aws-cdk-lib';
 import type { AddBehaviorOptions, Distribution } from 'aws-cdk-lib/aws-cloudfront';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import { Construct } from 'constructs';
-import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint } from './cdk/api-front-door.js';
+import { API_BEHAVIOR_OPTIONS, httpOriginFromEndpoint, publicHostStamp, registerPublicHosts } from './cdk/api-front-door.js';
 import { type ApiDirectRoute, addDirectApiBehaviors } from './cdk/api-direct-routes.js';
 import { registerSharedConfig } from './cdk/config-registry.js';
 import { coverHosting, snapshotForHosting } from './cdk/blocks-roles.js';
@@ -62,7 +62,9 @@ import {
   wireManagedValue,
 } from './hosting-secrets.js';
 import { getRegisteredRoutes } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 import { writeFrameworkSink } from './telemetry/framework-sink.js';
+import { REUSE_FRONTEND_BUILD_CONTEXT, SKIP_FRONTEND_BUILD_ENV, frontendBuildReuse } from './common/frontend-build.js';
 
 // ─── Public types ────────────────────────────────────────────────
 
@@ -232,6 +234,11 @@ export interface HostingProps {
    * When provided, it is executed during CDK synth with `BLOCKS_API_URL`
    * injected into the environment.
    * Omit if the app is already pre-built.
+   *
+   * Not run on a destroy (`npm run destroy`, `npm run sandbox:destroy`) when a
+   * build output already exists, or on a deploy with
+   * `BLOCKS_SKIP_FRONTEND_BUILD=1`, which deploys the existing build output
+   * as is (a destroy ignores the variable). The framework adapter's own build is skipped the same way.
    */
   buildCommand?: string;
 
@@ -917,11 +924,63 @@ function contentBuildId(manifest: DeployManifest, errorPageFiles: readonly strin
 
 // ─── Default build output directories per framework ──────────────
 
+/**
+ * The path whose existence means a reusable build exists, for a destroy's
+ * `if-present` reuse. It must be the marker the framework adapter itself checks
+ * (see `shouldSkipBuild` in `@aws-blocks/hosting`), or `Hosting` could skip
+ * `buildCommand` while the adapter still runs its full build. The built-in
+ * Next.js adapter deploys the OpenNext output, not `.next`; every other
+ * framework (and a custom adapter) is keyed on the build output dir.
+ *
+ * @internal
+ */
+export function frontendReuseMarker(
+  framework: string,
+  root: string,
+  expectedOutputDir: string,
+  hasCustomAdapter: boolean,
+): string {
+  if (framework === 'nextjs' && !hasCustomAdapter) return join(root, '.open-next', 'open-next.output.json');
+  return expectedOutputDir;
+}
+
 const DEFAULT_BUILD_DIRS: Record<string, string> = {
   nextjs: '.next',
   sveltekit: 'build',
   spa: 'dist',
   static: 'dist',
+};
+
+/**
+ * A framework adapter error for a build output that isn't there: the
+ * SPA/static output dir, OpenNext's `.open-next/`, Nitro's `.output/`, the
+ * SvelteKit and Astro build dirs.
+ */
+const MISSING_BUILD_OUTPUT_ERROR = /^[A-Za-z]*(?:OutputNotFound|OutputMissing)Error$/;
+
+/**
+ * Run the adapter. Under `BLOCKS_SKIP_FRONTEND_BUILD=1` the adapter doesn't
+ * build either, and the output it deploys can differ from the dir checked
+ * above (Next.js deploys `.open-next/`, not `.next/`). So a missing-output
+ * error from the adapter also says the variable skipped the build.
+ */
+const runAdapterNamingSkippedBuild = (
+  run: () => DeployManifest,
+  reuseBuild: ReturnType<typeof frontendBuildReuse>,
+): DeployManifest => {
+  try {
+    return run();
+  } catch (error) {
+    if (reuseBuild !== 'required' || !(error instanceof Error) || !MISSING_BUILD_OUTPUT_ERROR.test(error.name)) {
+      throw error;
+    }
+    const message = `${error.message}\n${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`;
+    // Keep the adapter's structured error (code, name, resolution) for callers that key on it.
+    if (error instanceof HostingError) {
+      throw new HostingError(error.code, { message, resolution: error.resolution }, error);
+    }
+    throw new Error(message, { cause: error });
+  }
 };
 
 // ─── Construct ───────────────────────────────────────────────────
@@ -1090,7 +1149,26 @@ export class Hosting extends Construct {
     writeFrameworkSink(framework);
 
     // ── 2. Optionally run the build ──────────────────────────────
-    if (props.buildCommand) {
+    // A destroy reuses an existing build, and `BLOCKS_SKIP_FRONTEND_BUILD=1`
+    // makes a deploy reuse it (see common/frontend-build.ts). The adapter gets
+    // the same decision through the build profile below.
+    const reuseBuild = frontendBuildReuse(this.node.tryGetContext(REUSE_FRONTEND_BUILD_CONTEXT));
+    const expectedOutputDir = props.buildOutputDir
+      ? resolve(root, props.buildOutputDir)
+      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
+    // A destroy reuses a build only when the adapter will too, so it checks the
+    // adapter's own marker (OpenNext's output for Next.js), not just the dir.
+    const reuseMarker = frontendReuseMarker(framework, root, expectedOutputDir, Boolean(props.customAdapter));
+    const skipBuildCommand =
+      reuseBuild === 'required' || (reuseBuild === 'if-present' && existsSync(reuseMarker));
+    if (props.buildCommand && skipBuildCommand) {
+      console.log(
+        reuseBuild === 'required'
+          ? `⏭️  Skipping frontend build (${SKIP_FRONTEND_BUILD_ENV} is set): using ${relative(root, expectedOutputDir) || '.'}`
+          : `⏭️  Skipping frontend build: this synth doesn't deploy the frontend, reusing ${relative(root, reuseMarker) || '.'}`,
+      );
+    }
+    if (props.buildCommand && !skipBuildCommand) {
       console.log(`🏗️  Building frontend (${framework}): ${props.buildCommand}`);
       const apiUrl = props.api?.apiUrl;
       // Strip CDK's --conditions=cdk from NODE_OPTIONS to prevent it
@@ -1117,17 +1195,15 @@ export class Hosting extends Construct {
       }
     }
 
-    // ── 3. Resolve build output dir (for validation only) ────────
+    // ── 3. Validate the build output dir ─────────────────────────
     const buildOutputDir = props.buildOutputDir;
-
-    const expectedOutputDir = buildOutputDir
-      ? resolve(root, buildOutputDir)
-      : resolve(root, DEFAULT_BUILD_DIRS[framework] ?? 'dist');
 
     if (!existsSync(expectedOutputDir)) {
       throw new Error(
         `Build output directory not found: ${expectedOutputDir}\n` +
-          `Provide a buildCommand or ensure the directory exists before synthesis.`,
+          (reuseBuild === 'required'
+            ? `${SKIP_FRONTEND_BUILD_ENV} is set, so the frontend build is skipped: build the frontend first or unset it.`
+            : `Provide a buildCommand or ensure the directory exists before synthesis.`),
       );
     }
 
@@ -1161,8 +1237,9 @@ export class Hosting extends Construct {
           ...(props.incrementalRegeneration === false ? { skipIsr: true } : {}),
           ...(props.imageOptimization === false ? { skipImageOptimization: true } : {}),
           ...(fixedBuildId ? { deterministicBuildId: FIXED_BUILD_ID } : {}),
+          ...(reuseBuild ? { reuseBuild } : {}),
         },
-        () => adapter(root),
+        () => runAdapterNamingSkippedBuild(() => adapter(root), reuseBuild),
       ),
     );
 
@@ -1396,6 +1473,15 @@ export class Hosting extends Construct {
       // limits, or a second gateway — and silently drop the distribution the
       // app asked for. They publish the browser origin only (below).
       props.api.claimApiFrontDoor?.(publicUrl);
+    }
+
+    // A CloudFront distribution's custom error responses apply to every path,
+    // the proxied API included: with an `httpErrorStatus` namespace, a 403/404
+    // from the API would come back as the error page (HTML) instead of its
+    // JSON-RPC body. CloudFront can't scope error responses away from
+    // `/aws-blocks/*`, so the combination fails synth.
+    if (props.api && publicDistribution) {
+      assertHttpErrorStatusNotShadowed(publicDistribution, props.api);
     }
 
     // ── 7a. Inject Blocks env vars into compute functions ───────────
@@ -1785,10 +1871,16 @@ export class Hosting extends Construct {
     // to the viewer with no security headers, while the static root has them —
     // the gap reported for the proxied `/aws-blocks/api` and `/aws-blocks/auth/*`
     // behaviors.
+    // The viewer-request function stamps the viewer's host for the handlers behind
+    // the gateway (CloudFront forwards the gateway's own `Host`): they take it when
+    // it is one of this distribution's hosts, registered on the backend it fronts —
+    // the same owner the origin config below resolves to.
     const apiBehaviorOptions: AddBehaviorOptions = {
       ...API_BEHAVIOR_OPTIONS,
       responseHeadersPolicy: hosting.securityHeadersPolicy,
+      functionAssociations: publicHostStamp(distribution, 'ApiPublicHost'),
     };
+    registerPublicHosts(isBlocksBackendRoot(api) ? api : this, distribution);
 
     // On the `cloudfront` tier, a namespace on a container compute skips the
     // gateway: its exact path goes straight to the container's load balancer.
@@ -1833,6 +1925,47 @@ export class Hosting extends Construct {
   private ownerRootIdFor(api: BlocksStackApi): string {
     return isBlocksBackendRoot(api) ? api.node.path : getBlocksRoot(this).node.path;
   }
+}
+
+/**
+ * Fail synth when `distribution` has custom error responses for 4xx codes and the
+ * backend it fronts has namespaces created with `httpErrorStatus: true`:
+ * CloudFront applies error responses distribution-wide, so such a namespace's
+ * 403 / 404 (whichever codes are mapped) reaches the browser as the error page
+ * instead of the JSON-RPC body, and the typed client cannot read it.
+ *
+ * This was a synth warning; it is an error because a warning still deploys a
+ * client that receives HTML where it expects a JSON-RPC body, and CloudFront
+ * cannot scope error responses away from `/aws-blocks/*`.
+ *
+ * @throws HostingError('HttpErrorStatusErrorPagesError') naming the namespaces and the mapped codes.
+ */
+function assertHttpErrorStatusNotShadowed(distribution: Distribution, api: object): void {
+  const exports: unknown = Reflect.get(api, HTTP_ERROR_STATUS_EXPORTS);
+  if (!Array.isArray(exports) || exports.length === 0) return;
+  const cfn = distribution.node.defaultChild;
+  if (!(cfn instanceof cdk.aws_cloudfront.CfnDistribution)) return;
+  // Resolve only the error responses (fixed at construction), never the whole
+  // config: resolving would cache lazies, such as the behaviors, before they are final.
+  const config: unknown = cfn.distributionConfig;
+  const raw: unknown = config && typeof config === 'object' ? Reflect.get(config, 'customErrorResponses') : undefined;
+  const responses: unknown = raw === undefined ? undefined : cdk.Stack.of(distribution).resolve(raw);
+  const codes = (Array.isArray(responses) ? responses : [])
+    .map((r: unknown) => (r && typeof r === 'object' ? Reflect.get(r, 'errorCode') : undefined))
+    .filter((c): c is number => typeof c === 'number' && c >= 400 && c <= 499);
+  if (codes.length === 0) return;
+  const list = [...new Set(codes)].sort().join(', ');
+  const resolution =
+    "Remove the 4xx error pages (`errorPages.notFound`, a build's own 404 page), " +
+    'or turn `httpErrorStatus` off for these namespaces.';
+  throw new HostingError('HttpErrorStatusErrorPagesError', {
+    message:
+      `API namespace${exports.length > 1 ? 's' : ''} ${exports.map((e) => `'${e}'`).join(', ')} ` +
+      `use${exports.length > 1 ? '' : 's'} \`httpErrorStatus: true\`, but this CloudFront distribution maps HTTP ${list} to an error page, ` +
+      'and CloudFront applies that to the proxied API too (`/aws-blocks/*`): such a response would reach the client as the HTML page ' +
+      `instead of its JSON-RPC error, which the typed client cannot read. ${resolution}`,
+    resolution,
+  });
 }
 
 /**

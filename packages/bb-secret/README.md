@@ -77,6 +77,8 @@ try {
 }
 ```
 
+A `ValidationFailed` error's message is fixed and never contains the secret value or the schema library's issue text, because schema libraries often quote the received value and the message reaches the client. It doesn't name the failing field either, because a record or map schema reports the value's own keys as the path: the message is always `ValidationFailedException: The secret value did not match the schema`. The original issues and the first failing path stay on the error's non-enumerable `cause` (`cause.issues`, `cause.path`) for server-side logging.
+
 `get()` returns `null` for a missing value rather than throwing, so a missing secret is normal control flow, not an exception:
 
 ```typescript
@@ -191,6 +193,10 @@ The Blocks app **creates** the secret (empty/random) when you deploy, so the val
 
 Without an explicit `name`, the secret name is derived from the scope tree; find it in the settings resource group, the console, or `aws secretsmanager list-secrets`.
 
+### As an `Auth` provider secret
+
+A string-valued `Secret` can be the `clientSecret` (or Sign in with Apple's `privateKey`) of an `Auth` provider. For a provider that federates through Cognito (a social or `type: 'oidc'` entry on `Auth`'s default store), the deploy reads the value and registers it with the user pool, so set the value and **deploy again** for a new value to take effect — and give the secret `generate: true`, so the first deploy has a placeholder value to register. See the `Auth` README's social sign-in recipe (`@aws-blocks/bb-auth`).
+
 ### Rotating & removing
 
 - **Rotate:** set a new value (console or `put-secret-value`); a warm runtime that already cached the old value picks up the change once its cache entry expires (`cacheTtlSeconds`, default 300 s) — no redeploy needed. (A `put()` from within the app clears that instance's cache immediately.)
@@ -244,3 +250,7 @@ For anything deeper than the current/previous pair (full history, custom staging
 The mock stores the current value as **plaintext** in the shared `.bb-data/settings.json` (the same file `AppSetting` uses, keyed by the secret's `name` or `fullId`) and logs a one-time warning. This is why the local `/aws-blocks/settings` route surfaces secrets alongside settings. The previous value (for `get({ version: 'previous' })` / `listVersions()`) is kept in a small `.bb-data/secret-versions.json` sidecar — current + previous only; deeper history is an AWS-only capability. It is **not** secure — never use real credentials in local development. Wipe with `rm -rf .bb-data`.
 
 `Secret` runs server-side only. Importing and instantiating it in browser/client code throws `SecretErrors.NotSupported` — a secret read in the browser would expose it to the client.
+
+## Keys AWS Blocks generates for its own blocks
+
+Keys that AWS Blocks generates for its own blocks are created through an internal part of this package. Where they are stored follows the stack's `defaults.secretsStore`: a `Secret` in Secrets Manager (`'secrets-manager'`, the production preset) or an `AppSetting` SSM SecureString (`'ssm'`, the sandbox preset). Today this covers the `Realtime` connection token key; other generated keys will move to it. That internal part is for AWS Blocks' own blocks only and is not a public API; it does not change the defaults of a `Secret` you declare.

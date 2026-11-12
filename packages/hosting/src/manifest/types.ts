@@ -10,7 +10,15 @@
 export type DeployManifest = {
   version: 1;
 
-  /** Named compute resources */
+  /**
+   * Named compute resources. `default` and `server` are the reserved names of
+   * the SSR server compute: only a compute with one of these names gets the
+   * SSR server settings (REST API origin, Web Functions, provisioned
+   * concurrency). The SSR cache guard goes in front of the SSR server compute
+   * and of every other regional compute a route targets (e.g. a Next.js split
+   * function built regional), except the image function. Computes no route
+   * targets (revalidation) and edge computes do not get it.
+   */
   compute: Record<string, ComputeResource>;
 
   /** Static asset configuration */

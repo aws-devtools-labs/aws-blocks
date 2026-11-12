@@ -8,7 +8,12 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import type * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import type { Construct } from 'constructs';
-import { BLOCKS_RPC_PREFIX, FORWARDED_HOST_HEADER, FORWARDED_STAGE_HEADER } from '../constants.js';
+import {
+	BLOCKS_RPC_PREFIX,
+	FORWARDED_HOST_HEADER,
+	FORWARDED_STAGE_HEADER,
+	PUBLIC_HOST_HEADER,
+} from '../constants.js';
 import { API_LISTENER_PORTS, type LoadBalancerIngress } from './api-vpc-link.js';
 
 /**
@@ -70,13 +75,16 @@ export interface DirectRouteBehaviorQuota {
  * them (see `serveHttp`'s `trustForwardedHeaders`). It also drops the client's
  * `X-Forwarded-Host`: the container takes a loopback value of it ahead of the
  * stamped host (the local-dev path), and nothing between the edge and the
- * container sets one. The viewer host is read here,
+ * container sets one. It stamps the same host as `PUBLIC_HOST_HEADER` as well,
+ * as the door's gateway behaviors do, overwriting a client copy that could name
+ * another of the app's front-door hosts. The viewer host is read here,
  * at the edge: the `Host` CloudFront forwards to a VPC origin carries the origin
  * port (`<domain>:10000`).
  */
 const FORWARDED_HOST_FUNCTION = `function handler(event) {
   var request = event.request;
   request.headers['${FORWARDED_HOST_HEADER}'] = { value: request.headers.host.value };
+  request.headers['${PUBLIC_HOST_HEADER}'] = { value: request.headers.host.value };
   delete request.headers['${FORWARDED_STAGE_HEADER}'];
   delete request.headers['x-forwarded-host'];
   return request;

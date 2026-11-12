@@ -121,6 +121,31 @@ class BlocksEntryPointTest : FunSpec({
             "public operator fun Blocks.Companion.invoke(): Blocks = Blocks(Servers.local)"
     }
 
+    test("the spec's default server is also emitted as a value a configuration can name") {
+        val source = generate(spec(servers = """[{ "name": "local", "url": "http://localhost:3001" }]"""))
+
+        // The zero-argument accessor covers a client that configures nothing. Anything that builds
+        // a BlocksConfig has to name a server, so the default has to be reachable as a value too,
+        // or configuring one value means hardcoding a server the spec is free to rename.
+        source shouldContain
+            "public val Blocks.Companion.defaultServer: BlocksServer\n  get() = Servers.local"
+    }
+
+    test("the emitted default server value follows the same server the accessor does") {
+        val twoServers = """
+            [
+              { "name": "sandbox", "url": "https://api.example.com/prod" },
+              { "name": "local", "url": "http://localhost:3001" }
+            ]
+        """.trimIndent()
+
+        val source = generate(spec(servers = twoServers))
+
+        source shouldContain "Blocks.Companion.invoke(): Blocks = Blocks(Servers.sandbox)"
+        source shouldContain
+            "public val Blocks.Companion.defaultServer: BlocksServer\n  get() = Servers.sandbox"
+    }
+
     test("the default server is the first the spec declares, whatever it is named") {
         val twoServers = """
             [
@@ -157,6 +182,7 @@ class BlocksEntryPointTest : FunSpec({
 
         source shouldContain "internal val Blocks.todos: Todos"
         source shouldContain "internal operator fun Blocks.Companion.invoke(): Blocks"
+        source shouldContain "internal val Blocks.Companion.defaultServer: BlocksServer"
         source.contains("public val Blocks.") shouldBe false
         source.contains("public operator fun") shouldBe false
     }
@@ -182,11 +208,23 @@ class BlocksEntryPointTest : FunSpec({
         source shouldContain "public val Blocks.typesApi: TypesApi\n  get() = TypesApi(client())"
     }
 
-    test("a namespace that would collide with a renamed one fails rather than overwriting it") {
-        val failure = runCatching {
-            result(spec(namespaces = listOf("types", "typesApi"), withSharedType = true))
-        }.exceptionOrNull()
+    // Namespace class names are allocated like every other generated name: a namespace that would
+    // collide with a renamed one gets the next free name instead of failing the generation.
+    test("a namespace that would collide with a renamed one gets its own name rather than overwriting it") {
+        val generated = result(spec(namespaces = listOf("types", "typesApi"), withSharedType = true))
+        val names = generated.files.map { it.name }
 
-        failure!!.message!! shouldContain "TypesApi"
+        names shouldContain "TypesApi"
+        names shouldContain "TypesApi_2"
+        names shouldBe names.distinct()
+    }
+
+    // Which namespace gets the suffix depends on spec order, so adding one can rename another.
+    test("a namespace whose class name gets a suffix is a warning naming both") {
+        val generated = result(spec(namespaces = listOf("types", "typesApi"), withSharedType = true))
+
+        val warning = generated.warnings.single { "TypesApi_2" in it }
+        warning shouldContain "\"typesApi\""
+        warning shouldContain "blocks.typesApi_2"
     }
 })

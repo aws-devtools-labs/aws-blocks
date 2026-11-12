@@ -23,6 +23,18 @@ export interface EmailOptions {
 	configurationSet?: string;
 	/** Optional logger for internal operations. When omitted, a default Logger at error level is created. */
 	logger?: ChildLogger;
+	/**
+	 * Maximum number of messages one `sendBatch()` call accepts. A larger batch is
+	 * rejected as a whole with `EmailErrors.InvalidInput` before any message is sent.
+	 * Must be a positive integer. Defaults to 100.
+	 *
+	 * The cap bounds how many SES sends a single call can trigger, which limits the
+	 * damage if `sendBatch()` is reachable by an untrusted caller. Raise it only for
+	 * trusted server-side jobs that need larger batches.
+	 *
+	 * @defaultValue 100
+	 */
+	maxBatchSize?: number;
 }
 
 /**
@@ -75,7 +87,11 @@ export interface SendBatchResult {
 		status: 'success' | 'failed';
 		/** The SES message ID, present when status is 'success'. */
 		messageId?: string;
-		/** Error description, present when status is 'failed'. */
+		/**
+		 * Error description, present when status is 'failed'. A stable message naming the
+		 * `EmailErrors` code or SES entry status — never the raw SES error text, which is
+		 * logged server-side.
+		 */
 		error?: string;
 	}>;
 }

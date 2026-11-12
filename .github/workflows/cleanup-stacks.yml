@@ -61,8 +61,9 @@ jobs:
         include: ${{ fromJSON(needs.legs.outputs.matrix) }}
     environment: ${{ matrix.environment }}
     steps:
-      # The steps below source scripts/ci/aws-error.sh, and the REST API sweep
-      # runs scripts/ci/rest-api-quota.sh.
+      # The steps below source scripts/ci/aws-error.sh, the REST API sweep runs
+      # scripts/ci/rest-api-quota.sh and the Amplify sweep runs
+      # scripts/ci/amplify-stuck-delete.sh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: |
@@ -206,8 +207,10 @@ jobs:
           retry_delete_failed() {
             local STACK="$1" FAILED_JSON RETAIN_IDS RETAIN_JSON OTHER
             # Logical ids CloudFormation flagged with a DELETE_FAILED resource status.
-            FAILED_JSON=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
-              --query "StackResources[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceType]" \
+            # list-stack-resources (paginated by the CLI): describe-stack-resources returns
+            # only the first 100 resources, so a larger stack's blockers could be missed.
+            FAILED_JSON=$(aws cloudformation list-stack-resources --stack-name "$STACK" \
+              --query "StackResourceSummaries[?ResourceStatus=='DELETE_FAILED'].[LogicalResourceId,ResourceType]" \
               --output json 2>/dev/null || echo "[]")
             # Keep ONLY the allowlisted types (those with a reclaiming sweep) as retain
             # candidates; everything else is reported, not orphaned.
@@ -407,15 +410,23 @@ jobs:
           # at 40 min and defer the remainder to the next scheduled run.
           DEADLINE=$((SECONDS + 2400)) # 40 minutes
           # Of that, at most 15 minutes waiting on deletes (see the delete loop).
-          # The wait settings are overridable for scripts/ci/amplify-sweep.test.mjs.
+          # The wait settings are overridable for the step tests
+          # (scripts/ci/amplify-sweep.test.mjs, amplify-stuck-delete.test.mjs).
           WAIT_DEADLINE=$((SECONDS + ${AMPLIFY_SWEEP_WAIT_BUDGET_SECONDS:-900}))
           PER_STACK_WAIT=${AMPLIFY_SWEEP_STACK_WAIT_SECONDS:-360}
           POLL=${AMPLIFY_SWEEP_POLL_SECONDS:-15}
+          # A DELETE_FAILED sandbox created more than 6 h ago gets the nested
+          # retain below (the same gate as the e2e step's retain path). What proves
+          # it stuck is the event signature amplify-stuck-delete.sh checks.
+          STUCK_CUTOFF=$(date -d '6 hours ago' +%s)
           TRIGGERED=0
           DELETED=0
           DEFERRED=0
           BLOCKED=""
           TRIGGER_FAILED=0
+          NESTED_DEFERRED=0
+          SCRIPT_FAILED=0
+          RETAINED_FILE=$(mktemp)
 
           # Empty every S3 bucket in a stack and its nested children. Amplify
           # sandboxes stick in DELETE_FAILED on a non-empty versioned bucket that
@@ -477,6 +488,13 @@ jobs:
           fi
           rm -f "$LIST_ERR"
 
+          # Tables retained on earlier runs, reported again on every run until
+          # CloudFormation drops the deleted stack's record (90 days). Read before
+          # the loop, so a table retained in this run is reported once, as
+          # retained, and not also as a leftover.
+          AMPLIFY_RETAINED_FILE="$RETAINED_FILE" bash scripts/ci/amplify-stuck-delete.sh --leftovers ||
+            echo "::warning::amplify-stuck-delete.sh --leftovers failed; tables retained on earlier runs are not reported this run"
+
           for STACK in $STACKS; do
             # Stop if we've spent the time budget; remaining stacks are picked up on
             # the next scheduled run (so this step can't starve the REST-API sweep).
@@ -500,6 +518,7 @@ jobs:
               continue
             fi
 
+            CREATED_TS=0
             if [ -n "$CREATION_TIME" ] && [ "$CREATION_TIME" != "None" ]; then
               CREATED_TS=$(date -d "$CREATION_TIME" +%s 2>/dev/null || echo "0")
               # DELETE_FAILED stacks are always stale (already torn down once); delete regardless of age.
@@ -528,7 +547,7 @@ jobs:
             # one keep the shared job budget; whatever is left is deferred, never
             # triggered alongside a delete still in progress.
             #
-            # We intentionally do NOT retry with --retain-resources here: at the
+            # We intentionally do NOT retry the ROOT with --retain-resources: at the
             # root level the only stuck child is the nested data stack, which
             # *contains* the AppSync GraphQLApi we are trying to reclaim — retaining
             # it would orphan that API (and the managed DynamoDB table), leaking the
@@ -536,10 +555,43 @@ jobs:
             # nested buckets above so the plain delete succeeds; a persistent failure
             # after that is usually the Amplify managed DynamoDB table (its
             # table-manager Lambda role lacks dynamodb:DescribeTable) — a real
-            # upstream bug surfaced by the warning below, not orphaned away.
+            # upstream bug surfaced by the warning below. The one shape of it that
+            # never clears is handled by the nested retain that follows.
+            #
+            # That shape: the deploy failed while the table was being created, so
+            # CloudFormation holds a placeholder id that the table manager may not
+            # describe. For such a stack, amplify-stuck-delete.sh deletes the nested
+            # model stack retaining only that table resource, and the root is
+            # deleted on the next run. The real table survives the retain and no
+            # sweep deletes tables, so it is named in a warning and the step summary
+            # for deletion by hand, on this run and every later one (--leftovers
+            # below). The script runs from the job's checkout, which includes
+            # scripts/ci on every leg.
+            #
+            # It runs behind the one-at-a-time gate above, so it never starts while
+            # an earlier root delete may still be running. Its own nested delete is
+            # not awaited (so it can overlap a later root delete, or another nested
+            # one): the model stack holds the AppSync resolvers, IAM roles and the
+            # table, but no API Gateway resource, so it doesn't compete for the REST
+            # API delete quota the wait protects. The root, whose `blocks` nested
+            # stack holds the REST API, is deleted (and awaited) on the next run.
             echo "🧹 Emptying nested buckets for $STACK"
             _VISITED_STACKS=""
             empty_stack_buckets "$STACK"
+
+            if [ "$STATUS" = "DELETE_FAILED" ] && [ "$CREATED_TS" -ne 0 ] && [ "$CREATED_TS" -lt "$STUCK_CUTOFF" ]; then
+              RC=0
+              AMPLIFY_RETAINED_FILE="$RETAINED_FILE" bash scripts/ci/amplify-stuck-delete.sh "$STACK" || RC=$?
+              if [ "$RC" -eq 3 ]; then
+                # Not deleting the root now: its delete would race the nested one.
+                echo "Nested stack delete started for $STACK; root delete deferred to the next run"
+                NESTED_DEFERRED=$((NESTED_DEFERRED + 1))
+                continue
+              elif [ "$RC" -ne 0 ]; then
+                echo "::warning::amplify-stuck-delete.sh exited $RC for $STACK; plain retry only"
+                SCRIPT_FAILED=$((SCRIPT_FAILED + 1))
+              fi
+            fi
 
             if aws cloudformation delete-stack --stack-name "$STACK"; then
               echo "🗑️  Delete triggered: $STACK (status $STATUS, created $CREATION_TIME)"
@@ -589,7 +641,18 @@ jobs:
           echo "- Deleted (confirmed): $DELETED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Deferred to the next run: $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Delete-stack call failed: $TRIGGER_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Root delete deferred (nested stack delete started): $NESTED_DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "- Nested retain script failed: $SCRIPT_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Still DELETE_FAILED: $STILL_FAILED" | tee -a "$GITHUB_STEP_SUMMARY"
+          # What amplify-stuck-delete.sh retained, this run or earlier (with the
+          # DynamoDB table to delete by hand), and the failed resources it left
+          # in place.
+          if [ -s "$RETAINED_FILE" ]; then
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "Retained, leftover, left-in-place and bucket-blocked resources of stuck sandboxes:" | tee -a "$GITHUB_STEP_SUMMARY"
+            tee -a "$GITHUB_STEP_SUMMARY" < "$RETAINED_FILE"
+          fi
+          rm -f "$RETAINED_FILE"
           if [ "$TRIGGER_FAILED" -gt 0 ]; then
             # A delete-stack call that keeps failing (e.g. AccessDenied for a stack
             # prefix the CI role can't delete) never self-heals, and every such
@@ -599,7 +662,7 @@ jobs:
           echo "" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "_Each delete is awaited (bounded) before the next; stacks that don't finish (commonly a throttled REST API delete, or the Amplify managed DynamoDB table) are retried on the next scheduled run._" | tee -a "$GITHUB_STEP_SUMMARY"
           if [ "$STILL_FAILED" != unknown ] && [ "$STILL_FAILED" -gt 0 ]; then
-            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup; AppSync API quota may be at risk"
+            echo "::warning::$STILL_FAILED Amplify sandbox stack(s) still in DELETE_FAILED after cleanup, nested ones included ($NESTED_DEFERRED root(s) deferred after a nested retain); AppSync API quota may be at risk"
           fi
 
       - name: Cleanup orphaned API Gateway REST APIs
@@ -630,7 +693,7 @@ jobs:
           # the destructive gate collapsed to name-prefix + age. Matching by id closes
           # that: "orphan" now means genuinely stack-less.
           #
-          # FAIL-SAFE ON A DESCRIBE ERROR. DescribeStackResources is one call per
+          # FAIL-SAFE ON A DESCRIBE ERROR. ListStackResources is one call per
           # stack. This job runs precisely under quota/throttle pressure (that is why
           # it exists), so a throttled describe on a LIVE stack is likely, not
           # hypothetical — and if we treated an errored describe as "unowned", that
@@ -658,13 +721,16 @@ jobs:
             # Capture stderr/exit separately so a throttled/errored describe on a live
             # stack is treated as "ownership unknown → do not delete this run", NOT as
             # "this stack owns no API".
-            if IDS=$(aws cloudformation describe-stack-resources --stack-name "$S" \
-              --query "StackResources[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId" \
+            # list-stack-resources, paginated by the CLI: describe-stack-resources stops at
+            # 100 resources, so a larger live stack's RestApi would read as unowned (and be
+            # deleted).
+            if IDS=$(aws cloudformation list-stack-resources --stack-name "$S" \
+              --query "StackResourceSummaries[?ResourceType=='AWS::ApiGateway::RestApi'].PhysicalResourceId" \
               --output text 2>/dev/null); then
               IDS=$(echo "$IDS" | tr '\t' '\n')
               [ -n "$IDS" ] && OWNED_IDS="$OWNED_IDS"$'\n'"$IDS"
             else
-              echo "  ⚠️ describe-stack-resources failed for $S — ownership set is incomplete this run"
+              echo "  ⚠️ list-stack-resources failed for $S — ownership set is incomplete this run"
               OWNERSHIP_INCOMPLETE=1
             fi
           done
@@ -696,6 +762,10 @@ jobs:
           SKIPPED_UNMATCHED=0
           SKIPPED_OWNED=0
           DEFERRED=0
+          # Why each deferral happened, for the summary: an incomplete ownership set
+          # (every unowned API waits) or the 15-min budget (delete candidates only).
+          DEFERRED_OWNERSHIP=0
+          DEFERRED_BUDGET=0
 
           # Wall-clock budget for this step (mirrors the e2e step's DEADLINE). This
           # if: always() step runs THIRD in the job, after the e2e and Amplify steps
@@ -734,6 +804,7 @@ jobs:
             # id check so a KNOWN-owned API is still logged as owned, not deferred.)
             if [ "$OWNERSHIP_INCOMPLETE" -ne 0 ]; then
               DEFERRED=$((DEFERRED + 1))
+              DEFERRED_OWNERSHIP=$((DEFERRED_OWNERSHIP + 1))
               continue
             fi
 
@@ -775,6 +846,7 @@ jobs:
             # summary below still runs.
             if [ "$SECONDS" -ge "$SWEEP_DEADLINE" ]; then
               DEFERRED=$((DEFERRED + 1))
+              DEFERRED_BUDGET=$((DEFERRED_BUDGET + 1))
               continue
             fi
 
@@ -800,13 +872,19 @@ jobs:
           echo "- Skipped (< 6h old): $SKIPPED_YOUNG" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (owned by live stack): $SKIPPED_OWNED" | tee -a "$GITHUB_STEP_SUMMARY"
           echo "- Skipped (non-test name): $SKIPPED_UNMATCHED" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "- Deferred to next run (incomplete ownership set or 15-min budget): $DEFERRED" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$DEFERRED_OWNERSHIP" -gt 0 ]; then
+            echo "- Deferred to next run (ownership set incomplete, so no deletes this run): $DEFERRED_OWNERSHIP" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- Deferred to next run (15-min budget reached): $DEFERRED_BUDGET" | tee -a "$GITHUB_STEP_SUMMARY"
           # Headroom against the 120-EDGE cap, every run, with a warning from 80.
           # A count it cannot read fails the step instead of printing "?".
           QUOTA_FAILED=0
           bash scripts/ci/rest-api-quota.sh || QUOTA_FAILED=1
-          if [ "$DEFERRED" -gt 0 ] 2>/dev/null; then
-            echo "::warning::REST-API sweep deferred $DEFERRED candidate(s) to the next scheduled run (incomplete ownership set or 15-min budget)"
+          if [ "$DEFERRED_OWNERSHIP" -gt 0 ]; then
+            echo "::warning::REST-API sweep deleted nothing: a list-stacks or list-stack-resources call failed, so $DEFERRED_OWNERSHIP unowned API(s) defer to the next scheduled run"
+          fi
+          if [ "$DEFERRED_BUDGET" -gt 0 ]; then
+            echo "::warning::REST-API sweep hit its 15-min budget with $DEFERRED_BUDGET candidate(s) left — remainder defers to the next scheduled run"
           fi
           if [ "$LIST_FAILED" -ne 0 ] || [ "$QUOTA_FAILED" -ne 0 ]; then
             exit 1

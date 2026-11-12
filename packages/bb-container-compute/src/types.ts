@@ -24,6 +24,19 @@ export interface ContainerComputeProps {
 	 * as an S3 asset and fetched at boot, so the image only supplies the runtime
 	 * environment and must provide a Node 24 runtime on `PATH`. Defaults to a
 	 * stock public Node 24 image when omitted.
+	 *
+	 * ECS pulls the image at every task start, and the container runs with the
+	 * stack's shared execution role, so pin a custom image by digest
+	 * (`registry/repo@sha256:<digest>`) rather than a tag that can be
+	 * re-pushed. The default, `public.ecr.aws/docker/library/node:24-slim`, is
+	 * pinned by digest (`DEFAULT_CONTAINER_IMAGE`), so it doesn't change between
+	 * deploys.
+	 *
+	 * The default image runs as its unprivileged `node` user (uid/gid 1000) and
+	 * boots from `/home/node/app`. A custom image runs as its own default user
+	 * (Blocks sets no `user` for it) and boots from `/app`, so an image that
+	 * needs root keeps it; setting `image` to the stock Node image explicitly is
+	 * the opt-out for an app that needs root on the default image.
 	 */
 	image?: string;
 	/**

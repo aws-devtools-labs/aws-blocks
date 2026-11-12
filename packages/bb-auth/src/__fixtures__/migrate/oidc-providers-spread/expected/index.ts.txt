@@ -1,0 +1,20 @@
+import { Scope } from '@aws-blocks/core';
+// TODO(aws-blocks-auth-migrate): google() is gone in Auth: a generic OIDC provider is a plain { type: 'oidc', issuer, clientId, clientSecret? } entry in providers.
+import { Auth, google, stubIdp } from '@aws-blocks/bb-auth';
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+
+const scope = new Scope('app');
+const googleSecret = new AppSetting(scope, 'google-secret', { secret: true });
+
+// Built outside the block, and spread into its providers.
+// TODO(aws-blocks-auth-migrate): this provider is built outside an Auth block's providers list; move it into the block's providers record keyed by its id and convert it (MIGRATION.md, "Option mapping").
+const shared = [stubIdp({ name: 'dev' })];
+
+export const auth = new Auth(scope, 'sso', {
+	store: 'builtin',
+	// TODO(aws-blocks-auth-migrate): `providers` is not an array literal (or spreads one in), so the codemod could not key it. Rewrite it as a providers
+	//   record keyed by provider id, each entry tagged with its type. Not seeing the providers, the codemod chose
+	//   store: 'builtin' (AuthOIDC federated directly by default); if every provider is a cognitoFederated() one, replace
+	//   store: 'builtin' with emailPassword: false, which keeps the block on a Cognito user pool.
+	providers: [...shared, google({ clientId: 'g', clientSecret: () => googleSecret.get() })],
+});
