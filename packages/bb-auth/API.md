@@ -14,6 +14,7 @@ import type { BlocksAuth } from '@aws-blocks/auth-common';
 import type { BlocksContext } from '@aws-blocks/core';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
 import { isAuthError } from '@aws-blocks/auth-common';
+import type { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import { Scope } from '@aws-blocks/core';
 import type { ScopeParent } from '@aws-blocks/core';
 
@@ -312,9 +313,14 @@ export interface AuthClientOptions {
 export interface AuthCommonOptions {
     deletionProtection?: boolean;
     logger?: ChildLogger;
+    metrics?: Pick<MetricsEmitter, 'emit'>;
     // @deprecated (undocumented)
     oidcProviders?: ERROR_replaced_by_providers;
+    onPasswordChanged?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+    onPasswordReset?: (reset: PasswordResetEvent) => Promise<void>;
+    onPasswordResetRequested?: (request: PasswordResetEvent) => Promise<void>;
     onSignIn?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+    onSignInFailed?: (failure: SignInFailure, context: BlocksContext) => Promise<void>;
     onSignOut?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
     redirects?: RedirectOptions;
     removalPolicy?: 'destroy' | 'retain';
@@ -927,6 +933,11 @@ export interface PasswordPolicy {
 }
 
 // @public
+export interface PasswordResetEvent {
+    readonly username: string;
+}
+
+// @public
 export type PreferredChallenge = 'PASSWORD' | 'EMAIL_OTP' | 'SMS_OTP' | 'WEB_AUTHN';
 
 // @public
@@ -1032,6 +1043,17 @@ export interface SessionOptions {
 export interface SetPasswordOptions {
     permanent?: boolean;
 }
+
+// @public
+export interface SignInFailure {
+    readonly errorName: string;
+    readonly reason: SignInFailureReason;
+    readonly step: 'signIn' | 'confirmSignIn' | 'autoSignIn';
+    readonly username?: string;
+}
+
+// @public
+export type SignInFailureReason = 'invalidCredentials' | 'invalidCode' | 'userNotConfirmed' | 'passwordResetRequired' | 'throttled' | 'rejected' | 'error';
 
 // @public
 export type SignInNextStep<O extends AuthOptions = AuthOptions> = Extract<AnySignInNextStep, {

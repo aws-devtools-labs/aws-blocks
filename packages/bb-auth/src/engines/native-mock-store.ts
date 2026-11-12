@@ -92,6 +92,19 @@ export function parseCodeKey(key: string): { purpose: CodeDeliveryPurpose; usern
 
 /** Verification-code lifetime (`AuthCognito`'s mock): 10 minutes. */
 export const CODE_TTL_MS = 600_000;
+/**
+ * Wrong guesses a code key (`<purpose>:<username>`) accepts before its code is
+ * invalidated and further answers get `LimitExceededException` — roughly
+ * Cognito's behaviour ("Attempt limit exceeded, please try after some time").
+ */
+export const MAX_CODE_ATTEMPTS = 5;
+/**
+ * How long a key's wrong guesses count, from its first one; once the cap is
+ * reached, from that last guess (the lockout). The count belongs to the key,
+ * not to one code: a code issued again within the window inherits it, so
+ * requesting new codes does not buy new guesses.
+ */
+export const CODE_ATTEMPT_WINDOW_MS = 900_000;
 /** Sign-in challenge lifetime (Cognito's): 3 minutes. */
 export const CHALLENGE_TTL_MS = 180_000;
 /** ID / access token lifetime (Cognito's default): 1 hour. Expired tokens are refreshed through the engine. */
@@ -155,9 +168,20 @@ export interface MockUserRecord {
 
 /** A pending verification code. */
 export interface CodeRecord {
+	/** The code; `''` once it was invalidated (expired or capped) while its wrong guesses still count. */
 	code: string;
 	/** Expiry, ms since the epoch. */
 	exp: number;
+	/** Wrong guesses counted against this key (see {@link MAX_CODE_ATTEMPTS}); absent when none. */
+	failures?: number;
+	/** When the counted guesses started (or the lockout began), ms since the epoch (see {@link CODE_ATTEMPT_WINDOW_MS}). */
+	failuresSince?: number;
+}
+
+/** The wrong guesses of `entry` that still count at `now` (0 once the window has passed). */
+function countedFailures(entry: CodeRecord | undefined, now: number): number {
+	if (!entry?.failures || entry.failuresSince === undefined) return 0;
+	return now - entry.failuresSince < CODE_ATTEMPT_WINDOW_MS ? entry.failures : 0;
 }
 
 /** A pending sign-in challenge, keyed by the `session` token handed to the client. */
@@ -212,6 +236,10 @@ export function serviceError(name: string, message: string): Error {
 
 /** @internal */
 export const userNotFound = (): Error => serviceError(AuthErrors.UserNotFound, 'User does not exist.');
+
+/** Cognito's answer once a code key's wrong guesses reach {@link MAX_CODE_ATTEMPTS}. @internal */
+export const attemptLimitExceeded = (): Error =>
+	serviceError(AuthErrors.LimitExceeded, 'Attempt limit exceeded, please try after some time.');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Parsing (tolerant)
@@ -388,7 +416,12 @@ export function parseState(raw: Record<string, unknown>): {
 	const codes: Record<string, CodeRecord> = {};
 	for (const [key, value] of Object.entries(isRecord(raw.codes) ? raw.codes : {})) {
 		if (isRecord(value) && typeof value.code === 'string' && typeof value.exp === 'number') {
-			setOwn(codes, key, { code: value.code, exp: value.exp });
+			const record: CodeRecord = { code: value.code, exp: value.exp };
+			if (typeof value.failures === 'number' && typeof value.failuresSince === 'number') {
+				record.failures = value.failures;
+				record.failuresSince = value.failuresSince;
+			}
+			setOwn(codes, key, record);
 		} else dropped++;
 	}
 	const challenges: Record<string, ChallengeRecord> = {};
@@ -731,6 +764,10 @@ export class MockStore {
 	 * Issue a 6-digit code for `purpose`: store it, write `last-code.json`, and
 	 * call the `codeDelivery` hook (else log it at info level). `username` is
 	 * the stored username; the hook and the file receive {@link signInNameOf}.
+	 *
+	 * The new code replaces the key's previous one but inherits its counted
+	 * wrong guesses ({@link CODE_ATTEMPT_WINDOW_MS}), so a capped key stays
+	 * capped until its window ends however many codes are requested.
 	 */
 	async generateCode(
 		purpose: CodeDeliveryPurpose,
@@ -738,7 +775,14 @@ export class MockStore {
 		key = codeKey(purpose, username),
 	): Promise<string> {
 		const code = String(crypto.randomInt(100000, 1000000));
-		this.state.codes[key] = { code, exp: Date.now() + CODE_TTL_MS };
+		const now = Date.now();
+		const previous = Object.hasOwn(this.state.codes, key) ? this.state.codes[key] : undefined;
+		const failures = countedFailures(previous, now);
+		this.state.codes[key] = {
+			code,
+			exp: now + CODE_TTL_MS,
+			...(failures > 0 ? { failures, failuresSince: previous?.failuresSince } : {}),
+		};
 		this.flush();
 		const name = this.signInNameOf(username);
 		this.writeLastCode(purpose, name, code);
@@ -755,6 +799,12 @@ export class MockStore {
 	 * (with Cognito's wording, the same an unknown user gets on the confirm-code
 	 * flows); an expired one is `ExpiredCodeException` and is discarded.
 	 *
+	 * Wrong guesses are capped per key: the {@link MAX_CODE_ATTEMPTS}th wrong
+	 * guess invalidates the code and is answered `LimitExceededException` (429,
+	 * the name the Cognito engine passes through), and so is every answer — even
+	 * the right code, or one issued since — until {@link CODE_ATTEMPT_WINDOW_MS}
+	 * has passed. A correct code clears the count.
+	 *
 	 * `beforeConsume` runs once the code has matched, before it is consumed: a
 	 * throw from it rejects the call and leaves the code valid (a
 	 * confirmation the code allows but the pool refuses, such as an alias
@@ -763,14 +813,40 @@ export class MockStore {
 	verifyCode(key: string, code: string, beforeConsume?: () => void): void {
 		const entry = Object.hasOwn(this.state.codes, key) ? this.state.codes[key] : undefined;
 		if (!entry) throw serviceError(AuthErrors.CodeMismatch, WRONG_CODE_MESSAGE);
-		if (entry.exp < Date.now()) {
-			delete this.state.codes[key];
-			this.flush();
+		const now = Date.now();
+		const failures = countedFailures(entry, now);
+		if (failures >= MAX_CODE_ATTEMPTS) throw attemptLimitExceeded();
+		// Invalidated earlier (expired while wrong guesses still counted): no code to match.
+		if (entry.code === '') throw serviceError(AuthErrors.CodeMismatch, WRONG_CODE_MESSAGE);
+		if (entry.exp < now) {
+			this.discardCode(key, entry, failures);
 			throw serviceError(AuthErrors.ExpiredCode, 'Invalid code provided, please request a code again.');
 		}
-		if (entry.code !== code) throw serviceError(AuthErrors.CodeMismatch, WRONG_CODE_MESSAGE);
+		if (entry.code !== code) {
+			const next = failures + 1;
+			entry.failures = next;
+			// The window runs from the first counted guess; at the cap, the lockout starts now.
+			if (failures === 0 || next >= MAX_CODE_ATTEMPTS) entry.failuresSince = now;
+			if (next >= MAX_CODE_ATTEMPTS) {
+				entry.code = '';
+				this.flush();
+				throw attemptLimitExceeded();
+			}
+			this.flush();
+			throw serviceError(AuthErrors.CodeMismatch, WRONG_CODE_MESSAGE);
+		}
 		beforeConsume?.();
 		delete this.state.codes[key];
+		this.flush();
+	}
+
+	/**
+	 * Drop an unusable code. Its counted wrong guesses outlive it (as an
+	 * invalidated `''` entry), so a code issued next inherits them.
+	 */
+	private discardCode(key: string, entry: CodeRecord, failures: number): void {
+		if (failures > 0) entry.code = '';
+		else delete this.state.codes[key];
 		this.flush();
 	}
 

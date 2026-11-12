@@ -298,6 +298,11 @@ function cognitoPool(h: Pick<AwsAuthHarness<CognitoAuthOptions>, 'on' | 'idp'>, 
 		const [name, user] = requireUser(input.Username);
 		return { Username: name, Enabled: true, UserAttributes: toList(user) };
 	});
+	// `admin.setUserPassword` ends the user's sessions (as `AdminUserGlobalSignOut`).
+	h.on('AdminUserGlobalSignOutCommand', (input) => {
+		requireUser(input.Username);
+		return {};
+	});
 	h.on('AdminListGroupsForUserCommand', (input) => {
 		requireUser(input.Username);
 		return { Groups: [] };

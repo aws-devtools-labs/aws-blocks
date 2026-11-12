@@ -54,13 +54,23 @@ describe('AWS admin — lifecycle command shapes', () => {
 		]);
 	});
 
-	test('setUserPassword sends Permanent (default false)', async () => {
+	test('setUserPassword sends Permanent (default false), then ends the user’s sessions', async () => {
 		const h = makeAwsAuth({ admin: {} });
 		h.on('AdminSetUserPasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'bob', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await h.auth.admin.setUserPassword('bob', 'Temp!1234');
 		await h.auth.admin.setUserPassword('bob', 'Final!1234', { permanent: true });
+		assert.deepStrictEqual(h.sentNames(), [
+			'AdminSetUserPasswordCommand',
+			'AdminGetUserCommand',
+			'AdminUserGlobalSignOutCommand',
+			'AdminSetUserPasswordCommand',
+			'AdminGetUserCommand',
+			'AdminUserGlobalSignOutCommand',
+		]);
 		assert.deepStrictEqual(
-			h.sent.map((c) => c.input),
+			h.sent.filter((c) => c.name === 'AdminSetUserPasswordCommand').map((c) => c.input),
 			[
 				{ UserPoolId: TEST_POOL_ID, Username: 'bob', Password: 'Temp!1234', Permanent: false },
 				{ UserPoolId: TEST_POOL_ID, Username: 'bob', Password: 'Final!1234', Permanent: true },

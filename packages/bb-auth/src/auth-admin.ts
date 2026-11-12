@@ -8,8 +8,8 @@
  *
  * Owns: the runtime half of the `admin.actions` gate (403 before any engine
  * call), `custom:` prefixing of attributes, narrowing groups to the declared
- * `users.groups`, paging, and `revokeUserSessions`' deletion of this block's
- * session rows.
+ * `users.groups`, paging, `revokeUserSessions`' deletion of this block's
+ * session rows, and ending a user's sessions after `setUserPassword`.
  *
  * Inside the trust boundary: errors are mapped **without** enumeration masking,
  * so an unknown user is `UserNotFoundException` (404) and an unknown group
@@ -50,6 +50,11 @@ export interface AdminDeps<O extends AuthOptions> {
 	readAttributes(attrs: Record<string, string>): Partial<Record<ReadAttrOf<O>, string>>;
 	/** Delete every session row of `username` (`SessionStore.deleteByUsername`). */
 	deleteSessionsOf(username: string): Promise<number>;
+	/**
+	 * End every password session of the pool user `username` issued until now
+	 * (`SessionStore.revokeSessionsOf`, one marker row — no table scan).
+	 */
+	revokeSessionsOf(username: string): Promise<void>;
 	/**
 	 * Run `validateUser` for a user about to be created (`phase: 'signUp'`,
 	 * `provider: 'password'`) — the in-process half of the PreSignUp check.
@@ -166,9 +171,13 @@ export function buildAdminSurface<O extends AuthOptions>(deps: AdminDeps<O>): Ad
 			...rest: AdminActionGate<O, 'lifecycle', [options?: SetPasswordOptions]>
 		): Promise<void> => {
 			const [options]: [SetPasswordOptions?] = rest;
-			return run('lifecycle', (n) =>
-				n.admin.setUserPassword(username, password, { permanent: options?.permanent ?? false }),
-			);
+			return run('lifecycle', async (n) => {
+				await n.admin.setUserPassword(username, password, { permanent: options?.permanent ?? false });
+				// A new password ends the user's sessions, as a completed reset does:
+				// resolve the pool username the sessions carry, revoke the refresh
+				// tokens upstream, and reject every session issued before now.
+				await deps.revokeSessionsOf(await n.signOutEverywhere(username));
+			});
 		},
 		getUser: (username: string, ...gate: AdminActionGate<O, 'lifecycle'>) => {
 			void gate;

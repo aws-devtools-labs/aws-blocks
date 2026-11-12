@@ -342,8 +342,11 @@ describe('AWS session refresh (expired access token)', () => {
 		const fresh = h.idp.authResult('alice');
 		h.on('InitiateAuthCommand', () => ({ AuthenticationResult: fresh }));
 		h.on('ChangePasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await b.request((ctx) => changePassword(h, ctx));
-		assert.deepStrictEqual(h.sentNames(), ['InitiateAuthCommand', 'ChangePasswordCommand']);
+		// Then the other sessions end and this one is re-issued (password-change.test.ts).
+		assert.deepStrictEqual(h.sentNames().slice(0, 2), ['InitiateAuthCommand', 'ChangePasswordCommand']);
 		assert.deepStrictEqual(h.sent[1].input, {
 			AccessToken: fresh.AccessToken,
 			PreviousPassword: 'Old!pass1',
@@ -559,7 +562,8 @@ describe('AWS session cookie parse/verify — bad cookies mean signed-out, never
 
 describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', () => {
 	/** An SDK-shaped store failure whose text names an account and a table. */
-	const STORE_FAILURE = 'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
+	const STORE_FAILURE =
+		'ProvisionedThroughputExceededException: arn:aws:dynamodb:us-east-1:123456789012:table/sessions';
 
 	/** Make the session store's deletes fail, as a transient DynamoDB fault would. */
 	function failSessionDeletes(h: ReturnType<typeof makeAwsAuth>): void {
@@ -593,7 +597,9 @@ describe('AWS sign-out that cannot invalidate the session (SignOutIncomplete)', 
 		await signInAs(h, b, 'alice');
 		failSessionDeletes(h);
 		const state = await b.request((ctx) =>
-			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({ action: 'signOut' }),
+			(h.auth.createApi() as unknown as (c: BlocksContext) => AuthStateApi)(ctx).setAuthState({
+				action: 'signOut',
+			}),
 		);
 		assert.strictEqual(state.state, 'signedOut');
 		assert.strictEqual(state.errorName, AuthErrors.SignOutIncomplete);

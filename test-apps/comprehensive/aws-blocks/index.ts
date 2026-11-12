@@ -151,6 +151,29 @@ async function purgeDeliveredCodes(username?: string): Promise<number> {
   return keys.length;
 }
 
+// ── Auth audit events (e2e read-back) ───────────────────────────────────────
+//
+// The `auth` instance's audit hooks (`onSignInFailed`, `onPasswordResetRequested`,
+// `onPasswordReset`, `onPasswordChanged`) record what they were told, per
+// username, in the shared KVStore — for the same reason the codes live there:
+// the hook and the read-back may run on different Lambda instances.
+
+type AuthAuditEvent = { hook: string; step?: string; reason?: string };
+
+const AUDIT_KEY_PREFIX = '__auth-audit';
+const auditKey = (username: string) => `${AUDIT_KEY_PREFIX}:auth:${username}`;
+
+async function recordAuthAudit(username: string, event: AuthAuditEvent): Promise<void> {
+  const key = auditKey(username);
+  const events = parseStoredRecord<AuthAuditEvent[]>(key, await store.get(key)) ?? [];
+  await store.put(key, JSON.stringify([...events, event]));
+}
+
+async function readAuthAudit(username: string): Promise<AuthAuditEvent[]> {
+  const key = auditKey(username);
+  return parseStoredRecord<AuthAuditEvent[]>(key, await store.get(key)) ?? [];
+}
+
 // ── Auth instances ──────────────────────────────────────────────────────────
 //
 // Every instance is the unified `Auth` block. Each keeps the id it had under
@@ -180,6 +203,13 @@ const auth = new Auth(scope, 'auth', {
   },
   session: { ttlSeconds: 86400 },
   admin: { actions: e2eBuild ? ['lifecycle'] : [] },
+  // Audit hooks, read back by `authGetAuditEvents`. They report; they never decide.
+  onSignInFailed: async ({ username, step, reason }) => {
+    if (username !== undefined) await recordAuthAudit(username, { hook: 'onSignInFailed', step, reason });
+  },
+  onPasswordResetRequested: async ({ username }) => recordAuthAudit(username, { hook: 'onPasswordResetRequested' }),
+  onPasswordReset: async ({ username }) => recordAuthAudit(username, { hook: 'onPasswordReset' }),
+  onPasswordChanged: async (user) => recordAuthAudit(user.username, { hook: 'onPasswordChanged' }),
   codeDelivery: async (username, code, purpose) => {
     await recordDeliveredCode('auth', { username, code, purpose });
     logCodeLocally(`[Auth] ${purpose} code for "${username}": ${code}`);
@@ -1443,6 +1473,16 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
   async authConfirmResetPassword(username: string, code: string, newPassword: string) {
     await auth.confirmResetPassword(username, code, newPassword);
     return { success: true };
+  },
+
+  async authUpdatePassword(oldPassword: string, newPassword: string) {
+    await auth.updatePassword(context, oldPassword, newPassword);
+    return { success: true };
+  },
+
+  /** What the `auth` instance's audit hooks recorded for `username`, oldest first. */
+  async authGetAuditEvents(username: string) {
+    return await readAuthAudit(username);
   },
 
   async authConfirmSignUp(username: string, code: string) {

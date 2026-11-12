@@ -52,6 +52,7 @@
  */
 
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import type {
 	AdminOptions,
 	AmazonProvider,
@@ -146,6 +147,7 @@ type Opaque =
 	| SecretRef
 	| ExternalUserPoolRef
 	| ChildLogger
+	| Pick<MetricsEmitter, 'emit'>
 	| ((...args: never[]) => unknown)
 	| { readonly __blocksOptionError: string };
 
@@ -442,6 +444,11 @@ export const AUTH_OPTIONS_SHAPE = {
 	userPool: 'value',
 	onSignIn: 'value',
 	onSignOut: 'value',
+	onSignInFailed: 'value',
+	onPasswordResetRequested: 'value',
+	onPasswordReset: 'value',
+	onPasswordChanged: 'value',
+	metrics: 'value',
 	removalPolicy: 'value',
 	deletionProtection: 'boolean',
 	featurePlan: 'value',

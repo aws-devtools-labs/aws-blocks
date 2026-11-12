@@ -148,6 +148,8 @@ import type {
 	ReadAttrOf,
 	RequireAuthOptions,
 	ResetPasswordResult,
+	SignInFailure,
+	SignInFailureReason,
 	SignInNextStep,
 	SignInOptions,
 	SignInResult,
@@ -332,6 +334,53 @@ function notAuthenticated(): ApiError {
 	return new ApiError('Authentication required', 401, { name: AuthErrors.NotAuthenticated });
 }
 
+/** The sign-in outcome metrics the `metrics` option emits. */
+type SignInMetricName = 'SignInSuccess' | 'SignInFailure' | 'SignInLocked';
+
+/**
+ * The {@link SignInFailureReason} for a failed email + password sign-in, from
+ * the name of the error the client receives — never from the engine's own
+ * error, so the reason tells an audit hook no more about the account than the
+ * client was told.
+ *
+ * @internal
+ */
+export function signInFailureReason(clientErrorName: string): SignInFailureReason {
+	switch (clientErrorName) {
+		case AuthErrors.NotAuthorized:
+		case AuthErrors.UserNotFound:
+			return 'invalidCredentials';
+		case AuthErrors.CodeMismatch:
+		case AuthErrors.ExpiredCode:
+		case AuthErrors.EnableSoftwareTokenMFA:
+			return 'invalidCode';
+		case AuthErrors.UserNotConfirmed:
+			return 'userNotConfirmed';
+		case AuthErrors.PasswordResetRequired:
+			return 'passwordResetRequired';
+		case AuthErrors.LimitExceeded:
+		case AuthErrors.TooManyRequests:
+		case AuthErrors.TooManyFailedAttempts:
+			return 'throttled';
+		default:
+			return 'error';
+	}
+}
+
+/**
+ * Whether the engine refused a sign-in because of too many attempts: the
+ * throttling names, or Cognito's lockout answer (`NotAuthorizedException`,
+ * "Password attempts exceeded"), which the client sees as a plain wrong
+ * password. Only the aggregate `SignInLocked` metric reads this.
+ *
+ * @internal
+ */
+export function isSignInLockout(e: unknown): boolean {
+	if (!(e instanceof Error)) return false;
+	if (signInFailureReason(e.name) === 'throttled') return true;
+	return e.name === AuthErrors.NotAuthorized && /password attempts exceeded/i.test(e.message);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AuthBase
 // ─────────────────────────────────────────────────────────────────────────────
@@ -404,6 +453,13 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 
 	/** The `admin` surface, built on first access (see {@link AuthBase.admin}). */
 	private adminSurface?: AdminSurface<O>;
+
+	/**
+	 * The errors `validateUser` and `onSignIn` rejected a sign-in with (as
+	 * mapped), so a failed sign-in is reported as `'rejected'` rather than by
+	 * the error's name (see {@link SignInFailureReason}).
+	 */
+	private readonly policyRejections = new WeakSet<object>();
 
 	/**
 	 * @param scope - The parent scope.
@@ -1002,9 +1058,11 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					: {}),
 			});
 		} catch (e) {
-			throw this.mapError(e, 'challenge');
+			const mapped = this.mapError(e, 'challenge');
+			await this.signInFailed(context, { step: 'confirmSignIn' }, mapped, isSignInLockout(e));
+			throw mapped;
 		}
-		return this.completeNativeSignIn(outcome, context);
+		return this.completeSignInAttempt(outcome, context, { step: 'confirmSignIn' });
 	}
 
 	/**
@@ -1035,7 +1093,14 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			});
 		}
 		const password = this.config.users?.authFlow === 'USER_AUTH' ? '' : (payload.password ?? '');
-		return this.passwordSignIn(payload.username, password, context, undefined, payload.cognitoSession);
+		return this.passwordSignIn(
+			payload.username,
+			password,
+			context,
+			undefined,
+			payload.cognitoSession,
+			'autoSignIn',
+		);
 	}
 
 	/**
@@ -1045,6 +1110,9 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * yet (unconfirmed — no verified contact — disabled, or admin-created and never
 	 * signed in) gets the same plausible delivery details as an unknown one, on
 	 * pools that report those states instead of masking them.
+	 *
+	 * Then runs `onPasswordResetRequested` with the username as supplied — for a
+	 * known and an unknown user alike.
 	 */
 	async resetPassword(
 		username: string,
@@ -1052,22 +1120,25 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	): Promise<ResetPasswordResult> {
 		void ERROR_emailPassword_is_disabled_on_this_Auth_instance;
 		const native = this.nativeFor('resetPassword');
+		let result: ResetPasswordResult;
 		try {
-			return await native.resetPassword(username);
+			result = await native.resetPassword(username);
 		} catch (e) {
 			const hidden = this.hideAccountState && isAccountStateAnswer(e);
 			if (hidden) this.logHiddenAccountState('resetPassword', e, username);
-			if (isBlocksError(e, AuthErrors.UserNotFound) || hidden) {
-				return {
-					isPasswordReset: false,
-					nextStep: {
-						name: 'CONFIRM_RESET_PASSWORD_WITH_CODE',
-						codeDeliveryDetails: fabricateCodeDelivery(username, await this.sessionSecret()),
-					},
-				};
-			}
-			throw this.mapError(e, undefined, username);
+			if (!(isBlocksError(e, AuthErrors.UserNotFound) || hidden)) throw this.mapError(e, undefined, username);
+			result = {
+				isPasswordReset: false,
+				nextStep: {
+					name: 'CONFIRM_RESET_PASSWORD_WITH_CODE',
+					codeDeliveryDetails: fabricateCodeDelivery(username, await this.sessionSecret()),
+				},
+			};
 		}
+		// Every answered request, known user or not: the hook running reveals nothing.
+		const hook = this.config.onPasswordResetRequested;
+		if (hook) await this.runAuditHook('onPasswordResetRequested', () => hook({ username }));
+		return result;
 	}
 
 	/**
@@ -1082,6 +1153,12 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	 * is rejected from the next request on (401 `NotAuthenticatedException`,
 	 * cookie cleared), and on AWS their Cognito refresh tokens are revoked
 	 * (`AdminUserGlobalSignOut`). They sign in again with the new password.
+	 *
+	 * Then runs `onPasswordReset` with the username as supplied.
+	 *
+	 * The local engine invalidates a code after 5 wrong attempts (429
+	 * `LimitExceededException`, as Cognito answers); see the README's
+	 * "Local development" notes.
 	 *
 	 * @throws {ApiError} 5xx when the password changed but ending the other
 	 *   sessions failed (logged at error). Reset again to end them.
@@ -1108,13 +1185,36 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			});
 			throw this.mapError(e);
 		}
+		const hook = this.config.onPasswordReset;
+		if (hook) await this.runAuditHook('onPasswordReset', () => hook({ username }));
 	}
 
 	/**
 	 * Change the signed-in user's password.
 	 *
+	 * A changed password ends the user's **other** sessions and keeps the
+	 * caller signed in:
+	 *
+	 * - every other session the user had is rejected from its next request on
+	 *   (401 `NotAuthenticatedException`, cookie cleared), as after
+	 *   `confirmResetPassword`, and on AWS their Cognito refresh tokens are
+	 *   revoked (`AdminUserGlobalSignOut`), so a bearer client must sign in again;
+	 * - the caller's session is re-issued: the user is signed in again with the
+	 *   new password, and the request's cookie is replaced by one naming the new
+	 *   session. The old session id stops working. The global sign-out revokes the
+	 *   current session's tokens too, which is why it is replaced rather than kept.
+	 *
+	 * When that sign-in needs a further step — MFA, or a sign-in step this block
+	 * cannot answer on the user's behalf — the current session cannot be
+	 * re-issued, so it ends too: the cookie is cleared and the user signs in
+	 * again with the new password. The password change itself still succeeded.
+	 *
+	 * Then runs `onPasswordChanged` with the signed-in user.
+	 *
 	 * @throws {ApiError} 401 `NotAuthenticatedException` when signed out.
 	 * @throws {ApiError} 400 `InvalidParameterException` for a federated session (no password).
+	 * @throws {ApiError} 5xx when the password changed but ending the other
+	 *   sessions failed (logged at error). Change the password again to end them.
 	 */
 	async updatePassword(
 		context: BlocksContext,
@@ -1124,11 +1224,87 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 	): Promise<void> {
 		void ERROR_emailPassword_is_disabled_on_this_Auth_instance;
 		const native = this.nativeFor('updatePassword');
-		const accessToken = await this.passwordAccessToken(context);
+		const { session, user, accessToken } = await this.passwordSession(context);
 		try {
 			await native.updatePassword({ accessToken, oldPassword, newPassword });
 		} catch (e) {
 			throw this.mapError(e);
+		}
+		// The password changed: end every session issued before it, this one
+		// included (the marker covers it), then re-issue this one below.
+		let username: string;
+		try {
+			username = await native.signOutEverywhere(session.identity.username);
+			await this.sessions.revokeSessionsOf(username);
+		} catch (e) {
+			this.log.error('[bb-auth] password change: the password changed but ending the other sessions failed', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			throw this.mapError(e);
+		}
+		await this.reissueSession(context, session.sessionId, native, username, newPassword);
+		const hook = this.config.onPasswordChanged;
+		if (hook) await this.runAuditHook('onPasswordChanged', () => hook(user, context));
+	}
+
+	/**
+	 * Replace the caller's session after `updatePassword` ended every session of
+	 * the user: sign the user in again with the new password and point the
+	 * cookie at a new session row (issued after the revocation marker, so it is
+	 * not ended). Not a new sign-in for the hooks or the metrics: `validateUser`,
+	 * `onSignIn` and `SignInSuccess` do not run. When the sign-in needs a step
+	 * only the user can answer (MFA), or fails, the current session ends instead.
+	 */
+	private async reissueSession(
+		context: BlocksContext,
+		oldSessionId: string,
+		native: NativeEngine,
+		username: string,
+		password: string,
+	): Promise<void> {
+		let outcome: NativeSignInOutcome | undefined;
+		try {
+			outcome = await native.signIn({ username, password, preferredChallenge: 'PASSWORD' });
+			// Choice-based sign-in (USER_AUTH) may still ask for the password as a step.
+			if (outcome.status === 'continueSignIn' && outcome.nextStep.name === 'CONFIRM_SIGN_IN_WITH_PASSWORD') {
+				outcome = await native.confirmSignIn({ session: outcome.nextStep.session, response: password });
+			}
+		} catch (e) {
+			this.log.warn('[bb-auth] password change: re-issuing the current session failed; it ends too', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			outcome = undefined;
+		}
+		await this.sessions.delete(oldSessionId).catch((e: unknown) => {
+			// The revocation marker already ends it; this only tidies the row.
+			this.log.warn('[bb-auth] password change: deleting the replaced session row failed', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+		});
+		if (outcome?.status !== 'signedIn') {
+			if (outcome) {
+				this.log.info('[bb-auth] password change: signing in again needs a further step; the session ends', {
+					step: outcome.nextStep.name,
+				});
+			}
+			clearSessionCookie(context, this.fullId, this.crossDomain);
+			return;
+		}
+		try {
+			const sessionId = await this.sessions.create({ ...outcome.tokens });
+			setSessionCookie(
+				context,
+				this.fullId,
+				signSessionId(sessionId, await this.sessionSecret()),
+				this.sessionTtlSeconds,
+				this.crossDomain,
+			);
+		} catch (e) {
+			// The password changed and the old session is ended: report a signed-out caller, not a failure.
+			this.log.error('[bb-auth] password change: writing the re-issued session failed; the session ends', {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+			clearSessionCookie(context, this.fullId, this.crossDomain);
 		}
 	}
 
@@ -1507,6 +1683,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 					resolveSignInMode(this.config.users?.signInWith),
 					this.config.users?.caseSensitive !== false,
 				),
+			revokeSessionsOf: (username) => this.sessions.revokeSessionsOf(username),
 			validateNewUser: (login, attributes) => this.validateSignUp(login, attributes, undefined),
 		});
 		const surface = this.adminSurface;
@@ -1684,6 +1861,7 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		context: BlocksContext,
 		options: SignInOptions | undefined,
 		bridgeSession?: string,
+		step: 'signIn' | 'autoSignIn' = 'signIn',
 	): Promise<SignInResult<O>> {
 		const native = this.nativeFor('signIn');
 		// The per-call hint wins over the pool default (`users.preferredChallenge`),
@@ -1699,9 +1877,91 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 				...(bridgeSession ? { bridgeSession } : {}),
 			});
 		} catch (e) {
-			throw this.mapError(e, 'signIn', username);
+			const mapped = this.mapError(e, 'signIn', username);
+			await this.signInFailed(context, { step, username }, mapped, isSignInLockout(e));
+			throw mapped;
 		}
-		return this.completeNativeSignIn(outcome, context);
+		return this.completeSignInAttempt(outcome, context, { step, username });
+	}
+
+	/**
+	 * {@link completeNativeSignIn}, reporting a failure (a `validateUser` /
+	 * `onSignIn` rejection, a step this block does not enable, a store fault)
+	 * through {@link signInFailed}.
+	 */
+	private async completeSignInAttempt(
+		outcome: NativeSignInOutcome,
+		context: BlocksContext,
+		attempt: Pick<SignInFailure, 'step' | 'username'>,
+	): Promise<SignInResult<O>> {
+		try {
+			return await this.completeNativeSignIn(outcome, context);
+		} catch (e) {
+			await this.signInFailed(context, attempt, e instanceof ApiError ? e : this.mapError(e), false);
+			throw e;
+		}
+	}
+
+	/**
+	 * Report a failed email + password sign-in: the `SignInFailure` /
+	 * `SignInLocked` metric (none for a server-side fault) and the
+	 * `onSignInFailed` hook. Never throws: the caller rethrows the sign-in error.
+	 *
+	 * @param clientError - The error the client receives; the reason is derived from it alone.
+	 * @param lockout - The engine refused the attempt for too many tries (metric only).
+	 */
+	private async signInFailed(
+		context: BlocksContext,
+		attempt: Pick<SignInFailure, 'step' | 'username'>,
+		clientError: ApiError,
+		lockout: boolean,
+	): Promise<void> {
+		const reason: SignInFailureReason = this.policyRejections.has(clientError)
+			? 'rejected'
+			: signInFailureReason(clientError.name);
+		if (lockout || reason === 'throttled') this.emitSignInMetric('SignInLocked');
+		else if (reason !== 'error' || clientError.status < 500) this.emitSignInMetric('SignInFailure');
+		const hook = this.config.onSignInFailed;
+		if (!hook) return;
+		const failure: SignInFailure = {
+			step: attempt.step,
+			...(attempt.username !== undefined ? { username: attempt.username } : {}),
+			reason,
+			errorName: clientError.name,
+		};
+		await this.runAuditHook('onSignInFailed', () => hook(failure, context));
+	}
+
+	/**
+	 * Emit one sign-in outcome metric (the `metrics` option). Best-effort: an
+	 * emit error is logged, never thrown, so metrics can't change a sign-in result.
+	 */
+	private emitSignInMetric(name: SignInMetricName): void {
+		const metrics = this.config.metrics;
+		if (!metrics) return;
+		try {
+			metrics.emit(name, 1, { unit: 'Count', dimensions: { AuthBlock: this.fullId } });
+		} catch (e) {
+			this.log.error('[bb-auth] failed to emit a sign-in metric', {
+				metric: name,
+				error: e instanceof Error ? e.name : typeof e,
+			});
+		}
+	}
+
+	/**
+	 * Run an audit hook (`onSignInFailed`, `onPasswordResetRequested`,
+	 * `onPasswordReset`, `onPasswordChanged`): awaited, and a throw is logged and
+	 * swallowed — the outcome it reports is already decided.
+	 */
+	private async runAuditHook(name: string, call: () => Promise<void>): Promise<void> {
+		try {
+			await call();
+		} catch (e) {
+			this.log.error(`[bb-auth] ${name} threw; the result is unchanged`, {
+				error: e instanceof Error ? e.name : typeof e,
+			});
+		}
 	}
 
 	private async completeNativeSignIn(outcome: NativeSignInOutcome, context: BlocksContext): Promise<SignInResult<O>> {
@@ -1806,9 +2066,12 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 			} catch (e) {
 				await this.sessions.delete(sessionId);
 				clearSessionCookie(context, this.fullId, this.crossDomain);
-				throw this.mapError(e);
+				const mapped = this.mapError(e);
+				this.policyRejections.add(mapped);
+				throw mapped;
 			}
 		}
+		this.emitSignInMetric('SignInSuccess');
 		return user;
 	}
 
@@ -1817,7 +2080,9 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		try {
 			await this.config.validateUser(candidate);
 		} catch (e) {
-			throw this.mapError(e);
+			const mapped = this.mapError(e);
+			this.policyRejections.add(mapped);
+			throw mapped;
 		}
 	}
 
@@ -2101,16 +2366,18 @@ export class AuthBase<const O extends AuthOptions = AuthOptions> extends Scope i
 		}
 	}
 
-	/** The access token of a password (pool, native) session, or 401/400. */
-	private async passwordAccessToken(context: BlocksContext): Promise<string> {
-		const { session } = await this.requireSession(context);
+	/** A password (pool, native) session with its access token, or 401/400. */
+	private async passwordSession(
+		context: BlocksContext,
+	): Promise<{ session: ResolvedSession; user: AuthenticatedUser<O>; accessToken: string }> {
+		const { session, user } = await this.requireSession(context);
 		const { record } = session;
 		if ('kind' in record || record.provider !== undefined) {
 			throw new ApiError('This account signs in through an identity provider and has no password here.', 400, {
 				name: AuthErrors.InvalidParameter,
 			});
 		}
-		return record.accessToken;
+		return { session, user, accessToken: record.accessToken };
 	}
 
 	private isDeclaredGroup(g: string): g is GroupOf<O> {

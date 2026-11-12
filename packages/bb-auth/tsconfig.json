@@ -12,6 +12,7 @@
     { "path": "../bb-app-setting" },
     { "path": "../bb-kv-store" },
     { "path": "../bb-logger" },
+    { "path": "../bb-metrics" },
     { "path": "../bb-secret" }
   ]
 }

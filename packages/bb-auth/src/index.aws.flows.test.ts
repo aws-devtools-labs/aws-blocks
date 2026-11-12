@@ -682,14 +682,16 @@ describe('AWS password reset and change — command shapes', () => {
 		assert.ok(entries.some((l) => l.level === 'error' && /password reset/.test(l.message)));
 	});
 
-	test('updatePassword → ChangePassword with the session access token', async () => {
+	test('updatePassword → ChangePassword with the session access token, then ends the other sessions', async () => {
 		const h = makeAwsAuth();
 		const b = new Browser();
 		const tokens = h.idp.authResult('alice');
 		await signInAs(h, b, 'alice', tokens);
 		h.on('ChangePasswordCommand', () => ({}));
+		h.on('AdminGetUserCommand', () => ({ Username: 'alice', UserAttributes: [] }));
+		h.on('AdminUserGlobalSignOutCommand', () => ({}));
 		await b.request((ctx) => h.auth.updatePassword(ctx, 'Old!pass1', 'New!pass1'));
-		assert.deepStrictEqual(h.sent, [
+		assert.deepStrictEqual(h.sent.slice(0, 1), [
 			{
 				name: 'ChangePasswordCommand',
 				input: {
@@ -698,6 +700,12 @@ describe('AWS password reset and change — command shapes', () => {
 					ProposedPassword: 'New!pass1',
 				},
 			},
+		]);
+		// The sign-out and re-issue steps are pinned in password-change.test.ts.
+		assert.deepStrictEqual(h.sentNames().slice(1), [
+			'AdminGetUserCommand',
+			'AdminUserGlobalSignOutCommand',
+			'InitiateAuthCommand',
 		]);
 	});
 

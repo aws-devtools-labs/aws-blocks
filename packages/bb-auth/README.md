@@ -246,6 +246,65 @@ export const authApi = auth.createApi();
 2. **Register the callback URL** with the provider. Google calls it an *authorized redirect URI*: `https://my-app-auth.auth.<region>.amazoncognito.com/oauth2/idpresponse` (`/saml2/idpresponse` for SAML). Without `hostedUi.domainPrefix` the prefix is derived from the block's `fullId`; read it from the `UserPoolDomain` resource in the synthesized template. `hostedUi.domainPrefix` is create-only: choose it before the first deploy.
 3. **Test on a sandbox** (`npm run sandbox`). Cognito managed login needs a deployed user pool, so locally (`npm run dev`) the `Authenticator` shows the Google button disabled, with the hint "Google sign-in works after deploy (npm run sandbox), or use stubIdp() in a store: 'builtin' block locally." (`getAuthState()` marks the action `unavailable`). The sign-in route itself answers `501`: an explanatory page for a browser, the `ProviderUnavailableException` JSON error for an API client. For an offline federated sign-in flow, use `stubIdp()` in a `store: 'builtin'` block ([below](#usage)).
 
+### Audit sign-in and password events, and alarm on failed sign-ins
+
+The audit hooks tell you about sign-in failures and password events; the opt-in `metrics` option counts sign-in outcomes in CloudWatch so you can alarm on a spike in failures:
+
+```ts
+// aws-blocks/index.ts
+import { Auth, Metrics, Scope } from '@aws-blocks/blocks';
+
+const scope = new Scope('my-app');
+const authMetrics = new Metrics(scope, 'authMetrics', { namespace: 'MyApp/Auth' });
+
+const auth = new Auth(scope, 'auth', {
+  metrics: authMetrics, // SignInSuccess / SignInFailure / SignInLocked counts
+  onSignInFailed: async ({ username, step, reason }) => {
+    console.warn('sign-in failed', { username, step, reason }); // e.g. 'invalidCredentials', 'invalidCode'
+  },
+  onPasswordResetRequested: async ({ username }) => console.info('password reset requested', { username }),
+  onPasswordReset: async ({ username }) => console.info('password reset', { username }),
+  onPasswordChanged: async (user) => console.info('password changed', { userSub: user.userSub }),
+});
+export const authApi = auth.createApi();
+```
+
+- **The hooks report; they never decide.** Each is awaited, and a throw is logged at error and never changes the result. (Only `validateUser` and `onSignIn` can reject a sign-in.) No payload carries a password, a code or a challenge session.
+- **`onSignInFailed`** runs when an email + password sign-in fails: `signIn`, a `confirmSignIn` answer, or `autoSignIn` (and the matching `createApi()` actions). It gets the username exactly as supplied (absent for `confirmSignIn`, which supplies none), the `step`, the `errorName` the client got and a coarse `reason` derived from that error alone, so it knows no more than the client: an unknown user and a wrong password are both `'invalidCredentials'`. A rejection by `validateUser` or `onSignIn` is `'rejected'`. Federated sign-ins are not reported.
+- **`onPasswordResetRequested`** runs for every answered `resetPassword`, whether or not the user exists, with the username as supplied. **`onPasswordReset`** runs after a completed `confirmResetPassword`, **`onPasswordChanged`** after `updatePassword` (with the signed-in user). `resetPassword` and `confirmResetPassword` take no request context, so their hooks get none.
+- **Metrics.** Each sign-in through this block emits one `Count` of `1` with the dimension `AuthBlock` set to the block's `fullId`:
+
+| Metric | Emitted when |
+|---|---|
+| `SignInSuccess` | A session is issued: email + password, a challenge answer, `autoSignIn`, or a federated sign-in. |
+| `SignInFailure` | An email + password sign-in is refused: unknown user or wrong password (one name for both, so the metric does not reveal which usernames exist), a wrong challenge code, an unconfirmed user, or a `validateUser` / `onSignIn` rejection. |
+| `SignInLocked` | An email + password sign-in is refused for too many attempts (the user pool's lockout or throttling). |
+
+A server-side fault emits nothing, and with no `metrics` option nothing is emitted. Emitting is best-effort: an emitter error is logged and never changes the sign-in result. The `Metrics` block writes CloudWatch Embedded Metric Format log lines, so this works on any compute it supports. On deployed compute the block's `fullId` starts with the stack name you pass to `BlocksStack.create`: with stack `production`, `new Auth(new Scope('my-app'), 'auth')` emits `AuthBlock=production-my-app-auth` (locally, with no stack, `my-app-auth`). A CloudWatch alarm must name the same dimensions, plus any `defaultDimensions` of the `Metrics` instance. In `aws-blocks/index.cdk.ts`:
+
+```typescript
+import { Duration } from 'aws-cdk-lib';
+import { Alarm, ComparisonOperator, Metric, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
+
+const stackName = 'production';
+export const blocksStack = await BlocksStack.create(app, stackName, { /* ... */ });
+
+new Alarm(blocksStack, 'SignInFailureAlarm', {
+  metric: new Metric({
+    namespace: 'MyApp/Auth', // the Metrics instance's namespace
+    metricName: 'SignInFailure',
+    dimensionsMap: { AuthBlock: `${stackName}-my-app-auth` }, // the deployed Auth fullId
+    statistic: 'Sum',
+    period: Duration.minutes(5),
+  }),
+  threshold: 100,
+  evaluationPeriods: 1,
+  comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+  // SignInFailure only has data points when a sign-in fails, so treat a quiet period as OK.
+  treatMissingData: TreatMissingData.NOT_BREACHING,
+});
+```
+
 ### End-to-end tests: emailed codes and two users at once
 
 Against the local pool (`npm run dev`), a test reads the code a user was "sent" with `getLastAuthCode`, and acts as several users at once with `createTestClient`, which gives each user the app's typed clients with their own cookie jar. Both come from `@aws-blocks/blocks/utils` (`getLastAuthCode` also from `@aws-blocks/bb-auth/testing`), are Node-only, and belong in test code:
@@ -322,7 +381,8 @@ Choose this first, once per block, with `store`. It decides which sign-in method
 | `userPool` (wrap an existing pool), `admin`, `hostedUi`, `featurePlan` | Yes | No |
 | `allowBearerAuth` | `true` (Cognito access tokens) or `{ clientIds }` (other app clients of the pool) | `true` (the provider's access token) |
 | `validateUser` | Sign-up and sign-in | Sign-in only (no user is ever created) |
-| `session`, `redirects`, `onSignIn` / `onSignOut`, `removalPolicy`, `deletionProtection` | Yes | Yes |
+| `session`, `redirects`, `onSignIn` / `onSignOut`, `onSignInFailed`, `metrics`, `removalPolicy`, `deletionProtection` | Yes | Yes |
+| `onPasswordResetRequested` / `onPasswordReset` / `onPasswordChanged` | Yes | Never called (no passwords) |
 | What is provisioned | A user pool (or the one you wrap), plus a Cognito domain and hosted-UI client once a `providers` entry needs them; the session table and secret | The session table and secret only |
 
 Choose the store before the first deploy. Switching a deployed block from the default store to `store: 'builtin'` removes its user pool and every user in it; the immutability guard refuses that at synth once a committed baseline records the pool ([DESIGN.md](./DESIGN.md#renaming-or-removing-an-auth-block)).
@@ -423,7 +483,8 @@ const sso = new Auth(scope, 'sso', {
 - The session layer, the guards (`requireAuth`, `requireRole`, `checkAuth`, `getCurrentUser`, `getAuthSession`, `signOut`) and the `createApi()` state machine work the same for every sign-in method, and existing `AuthCognito` sessions are accepted.
 - `auth.protect(...)` defines an API namespace that is deny by default: its `methods` run only after the session check (and the group check, with `role`), and only its `public` methods are callable without a session ([Protect every method](#protect-every-method)).
 - **Sign-out reports a session it could not end.** `signOut()` clears the session cookie first, then deletes the session row, which is what stops a copied cookie from authenticating. If that delete fails (a transient session-store error), it rejects with `AuthErrors.SignOutIncomplete` (`SignOutIncompleteException`, 503): this device is signed out, but the session is not. `setAuthState({ action: 'signOut' })` returns a signed-out state with that `errorName`, and `POST /aws-blocks/auth/signout` answers `503 { error, name }` to an API client.
-- **A password reset signs the user out everywhere.** Once `confirmResetPassword` (or the `createApi()` action of that name) succeeds, every session the user had is rejected from the next request on, with 401 `NotAuthenticatedException` and the cookie cleared, locally and on AWS. On AWS their Cognito refresh tokens are also revoked, so an Amplify or native client using bearer tokens can't refresh; an access token it already holds stays valid until it expires (an hour by default). The user signs in again with the new password. If the password changed but ending the sessions failed, `confirmResetPassword` throws a 5xx: reset again. Not covered: `updatePassword` (a signed-in password change) and `auth.admin.setUserPassword` leave other sessions signed in; after an admin password set, call `auth.admin.revokeUserSessions(username)` if they should end.
+- **A password reset signs the user out everywhere.** Once `confirmResetPassword` (or the `createApi()` action of that name) succeeds, every session the user had is rejected from the next request on, with 401 `NotAuthenticatedException` and the cookie cleared, locally and on AWS. On AWS their Cognito refresh tokens are also revoked, so an Amplify or native client using bearer tokens can't refresh; an access token it already holds stays valid until it expires (an hour by default). The user signs in again with the new password. If the password changed but ending the sessions failed, `confirmResetPassword` throws a 5xx: reset again.
+- **A password change ends the user's other sessions.** After `updatePassword`, every other session the user had is rejected from its next request on, exactly as after a reset (on AWS their refresh tokens are revoked too), and the caller stays signed in: their session is re-issued — the user is signed in again with the new password and the response replaces the session cookie, so the old session id stops working. When that sign-in needs a step only the user can answer (an MFA code), the caller's session ends too and they sign in again; the password change still succeeded. `auth.admin.setUserPassword` ends every session of the user. If the password changed but ending the sessions failed, either method throws a 5xx: run it again.
 - **Locally** (`npm run dev`, tests), email + password works end to end with no AWS account: sign-up with an emailed code, sign-in and its challenges, password reset, MFA (TOTP / SMS / email), devices, user attributes, `deleteUser`, passkeys, and the opt-in `auth.admin` surface. The local user pool lives in `.bb-data/<fullId>/state.json` — the same file `AuthCognito`'s mock writes, so local users survive the switch.
 - On AWS, email + password runs against Amazon Cognito: sign-up and confirmation (with automatic sign-in after the emailed code), sign-in with every challenge `AuthCognito` supports (MFA, new-password-required, `USER_AUTH` choice-based and passwordless sign-in, passkey sign-in), password reset and change, token refresh, live group reads for `requireRole`, global sign-out and passkey management, user attributes, `deleteUser`, authenticator-app (TOTP) setup and MFA preferences, devices, and the opt-in `auth.admin` surface. `rememberDevice` throws a `501` on AWS, as it did in `AuthCognito` ([why](./DESIGN.md#known-gaps-documented-not-built)).
 - Directly federated sign-in (a `store: 'builtin'` block) works, locally and deployed: any `type: 'oidc'` entry (OIDC discovery, PKCE, JWKS-verified ID tokens; public PKCE-only clients included), bare OAuth 2.0 through `github()` / `customOauth2()`, and the local stub IdP (`stubIdp()`), which gives a block with no password users an offline sign-in.
@@ -595,7 +656,9 @@ const auth = new Auth(scope, 'auth', {
 });
 ```
 
-The AWS runtime ignores `codeDelivery`: Cognito delivers the codes. ⚠️ Local passwords are stored in plain text in `.bb-data/` (git-ignored) — never point the local runtime at real credentials. The local pool also accepts any 6-digit authenticator-app code and does not verify passkey signatures; see the mock-vs-AWS table in [DESIGN.md](./DESIGN.md#mock-vs-aws-behaviour-differences).
+The AWS runtime ignores `codeDelivery`: Cognito delivers the codes.
+
+A local code accepts 5 wrong answers. The 5th wrong answer invalidates it, and every answer for that user and purpose — even the right code, or a code requested since — gets 429 `LimitExceededException` (the name Cognito answers with) for the next 15 minutes. Requesting a new code does not reset the count: it carries over to the new code until the 15 minutes from the first wrong answer have passed. A correct answer clears it. The count is kept in `state.json`, so restarting the dev server does not clear it either; delete `.bb-data/` to start over. ⚠️ Local passwords are stored in plain text in `.bb-data/` (git-ignored) — never point the local runtime at real credentials. The local pool also accepts any 6-digit authenticator-app code and does not verify passkey signatures; see the mock-vs-AWS table in [DESIGN.md](./DESIGN.md#mock-vs-aws-behaviour-differences).
 
 To check authenticator-app codes locally as Cognito does (RFC 6238: HMAC-SHA-1, 6 digits, 30-second steps), set the local-only `totpVerification: 'rfc6238'`. A wrong secret or `otpauth://` URI then fails in `npm run dev` and in tests, not only on a deployed pool. Tests answer with `totpCodeFor(sharedSecret)` from `@aws-blocks/blocks/utils` (also `@aws-blocks/bb-auth/testing`), the code an authenticator app would show:
 

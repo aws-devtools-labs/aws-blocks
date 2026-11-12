@@ -16,6 +16,7 @@
 
 import type { AuthActionInput, AuthStateApi, AuthUser, BlocksAuth } from '@aws-blocks/auth-common';
 import type { ChildLogger } from '@aws-blocks/bb-logger';
+import type { MetricsEmitter } from '@aws-blocks/bb-metrics';
 import type { ApiNamespaceOptions, BlocksContext, ScopeParent } from '@aws-blocks/core';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,6 +214,90 @@ export interface AuthCommonOptions {
 	 * frontend that holds Cognito tokens itself signs out without the backend.
 	 */
 	onSignOut?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+
+	/**
+	 * Called after an email + password sign-in attempt fails — `signIn`, the
+	 * `confirmSignIn` answer to a challenge, or `autoSignIn` (and the matching
+	 * `setAuthState` actions). An audit hook: it is awaited, but a throw is logged
+	 * and never changes the result — the caller still gets the original error.
+	 *
+	 * The payload holds only what the caller supplied plus a coarse
+	 * {@link SignInFailureReason} derived from the error the client receives, so
+	 * it tells you no more about the account than the client was told: an unknown
+	 * user and a wrong password are both `'invalidCredentials'`. It never carries
+	 * a password, a code or a challenge session.
+	 *
+	 * Federated sign-ins are not reported: the identity provider decides those.
+	 *
+	 * @example
+	 * ```ts
+	 * onSignInFailed: async ({ username, reason }) => {
+	 *   console.warn('sign-in failed', { username, reason });
+	 * }
+	 * ```
+	 */
+	onSignInFailed?: (failure: SignInFailure, context: BlocksContext) => Promise<void>;
+
+	/**
+	 * Called after `resetPassword` answers, for **every** request — a known user
+	 * or not, so the hook running reveals nothing either. An audit hook: it is
+	 * awaited, but a throw is logged and never changes the answer. Not called when
+	 * the call itself fails (for example, throttled).
+	 *
+	 * `resetPassword` takes no request context, so neither does this hook. The
+	 * payload never carries the code.
+	 */
+	onPasswordResetRequested?: (request: PasswordResetEvent) => Promise<void>;
+
+	/**
+	 * Called after `confirmResetPassword` changed the password and ended the
+	 * user's sessions. An audit hook: it is awaited, but a throw is logged and
+	 * never changes the result (the password has already changed). Not called
+	 * for a wrong or expired code.
+	 *
+	 * `confirmResetPassword` takes no request context, so neither does this hook.
+	 * The payload never carries the code or the password.
+	 */
+	onPasswordReset?: (reset: PasswordResetEvent) => Promise<void>;
+
+	/**
+	 * Called after `updatePassword` changed the signed-in user's password and
+	 * ended their other sessions. An audit hook: it is awaited, but a throw is
+	 * logged and never changes the result (the password has already changed).
+	 * The payload never carries either password.
+	 */
+	onPasswordChanged?: (user: AuthenticatedUser, context: BlocksContext) => Promise<void>;
+
+	/**
+	 * Optional metrics emitter for sign-in outcomes, so you can alarm on failed
+	 * sign-ins. Pass a `Metrics` instance from `@aws-blocks/bb-metrics` (or a
+	 * child of one); only its `emit` method is used. When omitted, no metrics
+	 * are emitted.
+	 *
+	 * Each sign-in through this block emits one `Count` data point of `1` with
+	 * the dimension `AuthBlock: <this instance's fullId>`:
+	 *
+	 * - `SignInSuccess` — a session was issued (email + password, a challenge
+	 *   answer, `autoSignIn`, or a federated sign-in).
+	 * - `SignInFailure` — an email + password sign-in was refused: unknown user
+	 *   or wrong password (one name for both, so the metric does not reveal which
+	 *   usernames exist), a wrong challenge code, an unconfirmed user, or a
+	 *   rejection by `validateUser` / `onSignIn`.
+	 * - `SignInLocked` — an email + password sign-in was refused because of too
+	 *   many attempts (the user pool's lockout or throttling).
+	 *
+	 * A server-side fault (a `5xx`) emits nothing. Emitting is best-effort: an
+	 * emit error is logged and never changes the sign-in result. Metrics are
+	 * written as CloudWatch Embedded Metric Format log lines, so they work on
+	 * any compute the `Metrics` block supports.
+	 *
+	 * @example
+	 * ```ts
+	 * const metrics = new Metrics(scope, 'authMetrics', { namespace: 'MyApp/Auth' });
+	 * const auth = new Auth(scope, 'auth', { metrics });
+	 * ```
+	 */
+	metrics?: Pick<MetricsEmitter, 'emit'>;
 
 	/**
 	 * What happens to the user pool and the session table when the block is
@@ -934,6 +1019,53 @@ export interface UserCandidate {
 	 * mapping, which is all Cognito passes to the trigger).
 	 */
 	readonly claims: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Why an email + password sign-in failed, as {@link AuthCommonOptions.onSignInFailed}
+ * reports it. Derived from the error the client receives, so it reveals no more:
+ *
+ * - `'invalidCredentials'` — unknown user, wrong password or disabled user (one
+ *   reason for all three, as the client gets one `NotAuthorizedException`).
+ * - `'invalidCode'` — a wrong or expired challenge answer (an MFA or one-time code).
+ * - `'userNotConfirmed'` — the user has not confirmed their sign-up yet.
+ * - `'passwordResetRequired'` — the user must reset their password first.
+ * - `'throttled'` — refused because of too many attempts or requests.
+ * - `'rejected'` — `validateUser` or `onSignIn` rejected the sign-in.
+ * - `'error'` — anything else (a malformed request, a server-side fault).
+ */
+export type SignInFailureReason =
+	| 'invalidCredentials'
+	| 'invalidCode'
+	| 'userNotConfirmed'
+	| 'passwordResetRequired'
+	| 'throttled'
+	| 'rejected'
+	| 'error';
+
+/** What {@link AuthCommonOptions.onSignInFailed} receives. Never carries a password, a code or a challenge session. */
+export interface SignInFailure {
+	/**
+	 * The username exactly as the caller supplied it — not verified, not
+	 * normalized, and not a sign that the account exists. Absent for a
+	 * `confirmSignIn` answer, which supplies no username.
+	 */
+	readonly username?: string;
+	/** The step that failed: `signIn`, `confirmSignIn` (a challenge answer) or `autoSignIn`. */
+	readonly step: 'signIn' | 'confirmSignIn' | 'autoSignIn';
+	/** Why, in the coarse categories of {@link SignInFailureReason}. */
+	readonly reason: SignInFailureReason;
+	/** The error `name` the client receives (e.g. `NotAuthorizedException`). */
+	readonly errorName: string;
+}
+
+/**
+ * What {@link AuthCommonOptions.onPasswordResetRequested} and
+ * {@link AuthCommonOptions.onPasswordReset} receive. Never carries a code or a password.
+ */
+export interface PasswordResetEvent {
+	/** The username (or sign-in email / phone) exactly as the caller supplied it. */
+	readonly username: string;
 }
 
 /** Settings shared by both OIDC engines: {@link DirectOidcProvider} and {@link CognitoOidcProvider}. */
@@ -2746,7 +2878,13 @@ export interface LifecycleAdmin<O extends AuthOptions = AuthOptions> {
 		username: string,
 		...ERROR_admin_action_not_granted: AdminActionGate<O, 'lifecycle'>
 	): Promise<void>;
-	/** Set `username`'s password. Temporary unless `{ permanent: true }`. */
+	/**
+	 * Set `username`'s password. Temporary unless `{ permanent: true }`.
+	 *
+	 * Ends the user's sessions, as a completed password reset does: every
+	 * session they had is rejected from its next request on, and on AWS their
+	 * Cognito refresh tokens are revoked (`AdminUserGlobalSignOut`).
+	 */
 	setUserPassword(
 		username: string,
 		password: string,

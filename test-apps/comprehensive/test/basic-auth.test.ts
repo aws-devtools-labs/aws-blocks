@@ -388,6 +388,75 @@ export function basicAuthTests(getApi: () => typeof apiType) {
         await api.authSignOut();
       });
 
+      test('updatePassword ends the user’s other sessions and keeps the caller signed in', async () => {
+        const baseUrl = getBaseUrl();
+        const api = getApi();
+        const username = uniqueUser();
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
+        const code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code.code);
+
+        // Another device: a session over raw RPC, its cookie captured outside the shared jar.
+        const other = await rpcRaw(baseUrl, 'authSignIn', [username, 'password123']);
+        assert.ok(!other.error, `authSignIn failed: ${JSON.stringify(other.error)}`);
+        const otherCookie = other.setCookies.find((c) => /^auth_[^=]+=[^;]+/.test(c))?.split(';')[0];
+        assert.ok(otherCookie, `a session cookie, got: ${other.setCookies.join(' | ')}`);
+        assert.strictEqual((await rpcRaw(baseUrl, 'authCheckAuth', [], otherCookie)).result, true);
+
+        // This device changes the password.
+        await api.authSignIn(username, 'password123');
+        await api.authUpdatePassword('password123', 'newpass123');
+
+        // The other device is signed out; this one stays signed in.
+        assert.strictEqual((await rpcRaw(baseUrl, 'authCheckAuth', [], otherCookie)).result, false);
+        const gated = await rpcRaw(baseUrl, 'authRequired', [], otherCookie);
+        assert.strictEqual(gated.error?.code, 401, `requireAuth rejects the other session: ${JSON.stringify(gated)}`);
+        assert.strictEqual(gated.error?.data?.name, AuthErrors.NotAuthenticated);
+        assert.strictEqual(await api.authCheckAuth(), true, 'the caller keeps a working session');
+        const me = await api.authRequired();
+        assert.strictEqual(me.user.username, username);
+
+        // The change was reported to the audit hook.
+        const events = await api.authGetAuditEvents(username);
+        assert.ok(events.some((e) => e.hook === 'onPasswordChanged'), `onPasswordChanged ran: ${JSON.stringify(events)}`);
+        await api.authSignOut();
+
+        // The new password signs in.
+        const user = await api.authSignIn(username, 'newpass123');
+        assert.strictEqual(user.username, username);
+        await api.authSignOut();
+      });
+
+      test('audit hooks: a failed sign-in is reported alike for a wrong password and an unknown user; reset events', async () => {
+        const api = getApi();
+        const username = uniqueUser();
+        const unknown = uniqueUser();
+        await api.authSignUp(username, 'password123', `${username}@example.com`);
+        let code = await pollForCode(api, username);
+        await api.authConfirmSignUp(username, code.code);
+
+        for (const name of [username, unknown]) {
+          try {
+            await api.authSignIn(name, 'wrong-password');
+            assert.fail('Expected error');
+          } catch (e) {
+            assert.ok(isAuthError(e, AuthErrors.NotAuthorized), `Expected ${AuthErrors.NotAuthorized}, got ${e}`);
+          }
+        }
+        const failed = { hook: 'onSignInFailed', step: 'signIn', reason: 'invalidCredentials' };
+        assert.deepStrictEqual(await api.authGetAuditEvents(username), [failed]);
+        assert.deepStrictEqual(await api.authGetAuditEvents(unknown), [failed]);
+
+        await api.authResetPassword(username);
+        code = await pollForCode(api, username, { not: code.code });
+        await api.authConfirmResetPassword(username, code.code, 'newpass123');
+        assert.deepStrictEqual(await api.authGetAuditEvents(username), [
+          failed,
+          { hook: 'onPasswordResetRequested' },
+          { hook: 'onPasswordReset' },
+        ]);
+      });
+
       test('confirmResetPassword rejects invalid code', async () => {
         const api = getApi();
         const username = uniqueUser();
