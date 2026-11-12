@@ -191,11 +191,35 @@ What changes:
 - **Providers are a record keyed by id.** The key is the id used by `getSignInUrl(context, '<id>')` and by the `signIn:<id>` UI action, the same string the old `name` held. `google()` and `customOidc()` are gone: a generic OIDC provider is a plain `{ type: 'oidc', issuer, clientId, clientSecret? }` entry. `github()` and `customOauth2()` return `type: 'oauth2'` and `stubIdp()` `type: 'stub'`, so they need no `type` of your own. `github()`, `customOauth2()` and `stubIdp()` stay. `customOauth2()` takes `endpoints: { authorization, token, userInfo }` (was `authUrl` / `tokenUrl` / `userInfoUrl`), and `stubIdp()` takes no `name`.
 - **Secrets are `AppSetting` references,** never strings or functions. The codemod rewrites `() => setting.get()` to `setting`. It leaves a TODO for a literal or any other form. `clientId` is a plain string.
 - **The user object:** `OIDCUser` becomes `AuthenticatedUser`. `user.userId` and `user.username` are unchanged. `email` / `name` are now `user.attributes.email` / `user.attributes.name`, and `provider` is now `user.signInProvider`. `iss` and `sub` are gone: `userId` still carries `` `${iss}:${sub}` ``, `attributes` holds the string claims, and `user.claims` is still there: the provider's verified ID-token claims, so `user.claims.sub` is the raw provider `sub`. It is optional on `AuthenticatedUser` (set for users of a `store: 'builtin'` block, absent for user-pool users), so read it as `user.claims?.sub`. It is server-side only: `getAuthState()` and the sign-in routes don't send it to the browser.
-- **No client handle.** `authApi.getClient()` and the `@aws-blocks/bb-auth-oidc/middleware` (or `/client`) import are gone. Federated sign-in buttons come from `getAuthState()`: each provider is a `signIn:<id>` action that carries a `url`, and the `Authenticator` renders it. `auth.handleCallback*`, `handleExchange`, `getAuthorizeParams` and `refreshBearerTokens` are gone too, because `Auth` serves those routes itself under the same `/aws-blocks/auth/*` paths.
+- **No client handle.** `authApi.getClient()` and the `@aws-blocks/bb-auth-oidc/middleware` (or `/client`) import are gone. Federated sign-in buttons come from `getAuthState()`: each provider is a `signIn:<id>` action that carries a `url`, and the `Authenticator` renders it. `auth.handleCallback*`, `handleExchange`, `getAuthorizeParams` and `refreshBearerTokens` are gone too, because `Auth` serves those routes itself under the same `/aws-blocks/auth/*` paths. Native apps: see [Native apps (Dart, Swift, Kotlin)](#native-apps-dart-swift-kotlin).
 - **A frontend on a different origin than the API** used `getClient()`'s browser PKCE flow, which `AuthOIDC`'s README said was required there. Use `createAuthClient()` from `@aws-blocks/bb-auth/browser-client` (also in `@aws-blocks/blocks/ui`) instead; see the README, *Frontend on a different origin*. The calls map as follows: `getClient().signIn(provider)` → `signInWithRedirect({ provider })`; `handleRedirectCallback()` → `handleSignInRedirect()`; reading the user → `getCurrentUser()` / `fetchAuthSession()`; sign-out → `signOut()`. On the backend, add the frontend's origin to `redirects.allowedRelayOrigins` with `relayOrigin()`. The provider's `redirect_uri` is now the block's own callback, not a page of the frontend, so update it in the provider's console if you had registered the frontend's page.
 - **Redirect options** (`callbackPath`, `signOutPath`, `postSignInPath`, `allowedRelayOrigins`) move under `redirects`. `crossDomain` moves to `session.crossDomain`.
 - **The old cookie secret is deleted.** `AuthOIDC` signed its session cookie with an SSM parameter `/<fullId>-cookie-secret-<id>`. `Auth` doesn't use it, so the first deploy deletes it. It only signed the old cookie, which is already ignored, so users see nothing beyond the one re-login.
 - **`stubIdp()` is local and sandbox only** — as with `AuthOIDC`; see below.
+
+### Native apps (Dart, Swift, Kotlin)
+
+A native app that called `authApi.getClient()` stops compiling once it regenerates its client against an `Auth` backend. This applies to a `cognitoFederated()` block too.
+
+- **Build the OIDC client with `forAuth`.** `OidcClient.forAuth(...)` (`OIDCClient.forAuth(...)` in Swift) takes the app's Blocks client, so it shares its HTTP client and cookie store, plus the block's provider ids and the app's `relayTo`. It derives every auth route itself and makes no network call. If the backend moves its routes with `redirects.callbackPath` / `redirects.signOutPath`, pass the same paths to `forAuth`. The Kotlin runtime has `forAuth`; the Dart and Swift runtimes get it in their next releases.
+
+  ```kotlin
+  val oidc = OidcClient.forAuth(blocksClient, providers = listOf("google", "github"), relayTo = "myapp://auth")
+  ```
+
+  ```dart
+  final oidc = OidcClient.forAuth(client, providers: ['google', 'github'], relayTo: 'myapp://auth');
+  ```
+
+  ```swift
+  let oidc = OIDCClient.forAuth(client: client, providers: ["google", "github"], relayTo: "myapp://auth")
+  ```
+
+- **`signIn:<id>` actions are browser URLs.** Each provider shows up in `getAuthState()` as a `signIn:<id>` action whose `url` starts a browser-cookie sign-in, so opening it would leave the session cookie in the system browser, not in the app. A native app calls its OIDC client with the id instead (`oidc.signIn("google")`), then calls `getAuthState()` again.
+- **Keep `relayTo` allowed.** The app's `relayTo` (its custom scheme, for example `myapp://auth`) must stay in `redirects.allowedRelayOrigins`, as `relayOrigin('myapp://auth')`. A desktop app's loopback `http://127.0.0.1:<port>` is always allowed.
+- **Users sign in once more** after the upgrade, as on the web: the old session cookie is ignored.
+- **Restore on launch** through `GET /aws-blocks/auth/session`, sent with the session cookie: `200 { user }` means signed in, `401` means signed out. The OIDC client's `restore()` makes this call in the releases that add `forAuth`. Don't derive the user from a stored token.
+- **The session is the cookie.** Bearer tokens from the native SDKs aren't supported yet, so a native app needs no `allowBearerAuth`.
 
 ### `stubIdp()` is local and sandbox only
 
