@@ -305,66 +305,194 @@ void main() {
   });
 
   group('OidcClient restore', () {
-    test('emits OidcSignedOut when no tokens stored', () async {
+    OidcClient sessionClient(
+      MockClient http, {
+      TokenStore? store,
+      SessionStore? session,
+    }) => OidcClient(
+      exchangePath: '/aws-blocks/auth/exchange',
+      refreshPath: '/aws-blocks/auth/exchange/refresh',
+      signOutPath: '/aws-blocks/auth/signout',
+      providers: ['google'],
+      providerConfigs: {},
+      baseUrl: 'http://localhost:3000/aws-blocks/api',
+      tokenStore: store ?? InMemoryTokenStore(),
+      sessionStore: session,
+      httpClient: http,
+    );
+
+    test(
+      '200: emits OidcSignedIn with the server user and returns it',
+      () async {
+        final session = InMemorySessionStore()
+          ..setCookies(
+            'blocks_session=live; Path=/',
+            requestUri: Uri.parse('http://localhost:3000/'),
+          );
+        http.Request? sent;
+        final client = sessionClient(
+          MockClient((req) async {
+            sent = req;
+            return http.Response(
+              jsonEncode({
+                'user': {
+                  'userId': 'https://idp.example.com:sub-1',
+                  'username': 'bob',
+                  'groups': ['dev'],
+                },
+              }),
+              200,
+            );
+          }),
+          session: session,
+        );
+        final states = <OidcAuthState>[];
+        client.authStateChanges.listen(states.add);
+
+        final user = await client.restore();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(sent!.method, 'GET');
+        expect(
+          sent!.url.toString(),
+          'http://localhost:3000/aws-blocks/auth/session',
+        );
+        expect(sent!.headers['cookie'], 'blocks_session=live');
+        expect(sent!.headers.containsKey('authorization'), isFalse);
+        expect(user!.userId, 'https://idp.example.com:sub-1');
+        expect(user.groups, ['dev']);
+        expect(states, [isA<OidcSignedIn>()]);
+        expect((states.single as OidcSignedIn).user.username, 'bob');
+      },
+    );
+
+    test('sends a stored access token as a bearer token', () async {
       final store = InMemoryTokenStore();
-      final client = OidcClient(
-        exchangePath: '/auth/exchange',
-        refreshPath: '/auth/refresh',
-        signOutPath: '/auth/signout',
-        providers: [],
-        providerConfigs: {},
-        baseUrl: 'http://localhost:3000',
-        tokenStore: store,
+      await store.set('access_token', 'opaque-token');
+      String? authorization;
+      final client = sessionClient(
+        MockClient((req) async {
+          authorization = req.headers['authorization'];
+          return http.Response(
+            jsonEncode({
+              'user': {'userId': 'u1', 'username': 'bob'},
+            }),
+            200,
+          );
+        }),
+        store: store,
       );
-
-      final states = <OidcAuthState>[];
-      client.authStateChanges.listen(states.add);
-
       await client.restore();
-      await Future.delayed(Duration.zero);
-      expect(states.last, isA<OidcSignedOut>());
+      expect(authorization, 'Bearer opaque-token');
     });
 
-    test('emits OidcSignedIn when valid JWT token exists', () async {
+    test('401: clears tokens, emits OidcSignedOut and returns null', () async {
       final store = InMemoryTokenStore();
-      // Create a fake JWT with payload
-      final payload = base64Url.encode(
-        utf8.encode(
-          jsonEncode({
-            'sub': 'user-1',
-            'username': 'bob',
-            'groups': ['dev'],
-          }),
+      await store.set('access_token', 'at');
+      await store.set('refresh_token', 'rt');
+      await store.set('expires_at', '1');
+      final client = sessionClient(
+        MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'error': 'Not signed in',
+              'name': 'NotAuthenticatedException',
+            }),
+            401,
+          ),
         ),
+        store: store,
       );
-      final fakeJwt = 'header.$payload.signature';
-      await store.set('access_token', fakeJwt);
-      await store.set('refresh_token', 'rt_valid');
-      await store.set(
-        'expires_at',
-        (DateTime.now().add(Duration(hours: 1)).millisecondsSinceEpoch)
-            .toString(),
-      );
-
-      final client = OidcClient(
-        exchangePath: '/auth/exchange',
-        refreshPath: '/auth/refresh',
-        signOutPath: '/auth/signout',
-        providers: [],
-        providerConfigs: {},
-        baseUrl: 'http://localhost:3000',
-        tokenStore: store,
-      );
-
       final states = <OidcAuthState>[];
       client.authStateChanges.listen(states.add);
 
+      expect(await client.restore(), isNull);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(states, [isA<OidcSignedOut>()]);
+      expect(await store.get('access_token'), isNull);
+      expect(await store.get('refresh_token'), isNull);
+      expect(await store.get('expires_at'), isNull);
+    });
+
+    test('404: throws an error naming the missing session route', () async {
+      final client = sessionClient(
+        MockClient((_) async => http.Response('Not Found', 404)),
+      );
+      final states = <OidcAuthState>[];
+      client.authStateChanges.listen(states.add);
+
+      await expectLater(
+        client.restore(),
+        throwsA(
+          isA<OidcRequestException>()
+              .having((e) => e.statusCode, 'statusCode', 404)
+              .having((e) => e.message, 'message', contains('session route')),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(states, isEmpty);
+    });
+
+    test('any other status throws and leaves the state unchanged', () async {
+      final store = InMemoryTokenStore();
+      await store.set('access_token', 'at');
+      final client = sessionClient(
+        MockClient(
+          (_) async => http.Response(
+            jsonEncode({'error': 'boom', 'name': 'InternalError'}),
+            500,
+          ),
+        ),
+        store: store,
+      );
+      final states = <OidcAuthState>[];
+      client.authStateChanges.listen(states.add);
+
+      await expectLater(
+        client.restore(),
+        throwsA(
+          isA<OidcRequestException>()
+              .having((e) => e.statusCode, 'statusCode', 500)
+              .having((e) => e.name, 'name', 'InternalError'),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(states, isEmpty);
+      expect(await store.get('access_token'), 'at');
+    });
+
+    test('a transport error throws and leaves the state unchanged', () async {
+      final client = sessionClient(
+        MockClient((_) async => throw http.ClientException('offline')),
+      );
+      final states = <OidcAuthState>[];
+      client.authStateChanges.listen(states.add);
+
+      await expectLater(client.restore(), throwsA(isA<http.ClientException>()));
+      await Future<void>.delayed(Duration.zero);
+      expect(states, isEmpty);
+    });
+
+    test('derives the session route from a custom callbackPath', () async {
+      Uri? url;
+      final client = OidcClient(
+        exchangePath: '/aws-blocks/auth/sso/exchange',
+        refreshPath: '/aws-blocks/auth/sso/exchange/refresh',
+        signOutPath: '/aws-blocks/auth/sso/signout',
+        callbackPath: '/aws-blocks/auth/sso/callback',
+        providers: ['google'],
+        providerConfigs: {},
+        baseUrl: 'https://host/prod/aws-blocks/api',
+        tokenStore: InMemoryTokenStore(),
+        httpClient: MockClient((req) async {
+          url = req.url;
+          return http.Response('{}', 401);
+        }),
+      );
+      expect(client.sessionPath, '/aws-blocks/auth/sso/session');
       await client.restore();
-      await Future.delayed(Duration.zero);
-      expect(states.last, isA<OidcSignedIn>());
-      final signedIn = states.last as OidcSignedIn;
-      expect(signedIn.user.userId, 'user-1');
-      expect(signedIn.user.username, 'bob');
+      expect(url.toString(), 'https://host/prod/aws-blocks/auth/sso/session');
     });
   });
 

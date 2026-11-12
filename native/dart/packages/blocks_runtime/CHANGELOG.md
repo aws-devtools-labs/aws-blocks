@@ -22,6 +22,21 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   `@aws-blocks/core` 0.6.0 fixed; every backend this version supports
   (`@aws-blocks/core` 0.8.0 or later) allows it. The presigned upload and
   download and the WebSocket upgrade are unchanged.
+- **Breaking:** `OidcClient.restore()` returns `Future<OidcUser?>` and reads
+  the backend's session route (`GET <callbackPath's directory>/session`, new
+  `OidcClient.sessionPath`) with the session cookie, plus the stored access
+  token as a bearer token when there is one. On 200 it emits `OidcSignedIn`
+  with the server's user and returns it; on 401 it clears the stored tokens,
+  emits `OidcSignedOut` and returns null; any other status throws an
+  `OidcRequestException` without changing the state (a 404 means the block
+  has no sign-in providers). It no longer builds the user from the access
+  token's JWT claims, so the user id is the server's, and it no longer emits
+  `OidcLoading` first. It used to report signed out for a valid cookie
+  session, because a cookie session stores no tokens.
+- **Breaking for exhaustive `switch` statements over `OidcException`:** add
+  `OidcRequestException`, thrown when an auth route answers with a status
+  the client doesn't accept. It carries the `statusCode` and the error
+  `name` the server sent.
 - `OidcClient` resolves the auth routes against its base URL cut at the
   first path segment that is `aws-blocks`, keeping any API Gateway stage. It
   used to strip one trailing `/aws-blocks/api`, so a base URL that repeated
