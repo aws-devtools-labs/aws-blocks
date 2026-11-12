@@ -12,7 +12,7 @@ import com.squareup.kotlinpoet.TypeSpec
 
 /**
  * Wire mapping for a tuple: a schema with `prefixItems` (or array-form `items`), such as
- * TypeScript's `[number, number]` (`KVStore`'s `where.between`).
+ * TypeScript's `[number, number]` (`DistributedTable`'s `where.between`).
  *
  * The generated class keeps one property per element (`item0`, `item1`, …), but on the wire a
  * tuple is a JSON array of their values, in order: `[1, 2]`, never `{"item0":1,"item1":2}`. The
