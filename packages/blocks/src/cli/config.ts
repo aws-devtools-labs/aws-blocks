@@ -75,7 +75,7 @@ function readPackageJson(root: string): AppPackageJson {
 }
 
 /** A port: an integer from 1 to 65535, written in decimal digits when it is a string (a flag value). */
-function parsePort(value: unknown, where: string): number | undefined {
+export function parsePort(value: unknown, where: string): number | undefined {
 	if (value === undefined) return undefined;
 	const port =
 		typeof value === 'number' ? value : typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : NaN;

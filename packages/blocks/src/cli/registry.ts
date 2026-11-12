@@ -232,6 +232,48 @@ export const COMMANDS: readonly CommandSpec[] = [
 		handler: commands.devStop,
 	},
 	{
+		path: ['dashboard'],
+		group: 'Develop',
+		summary: 'Open the Blocks dashboard for this app, on loopback',
+		description:
+			'Start the Blocks Admin UI for this app and open it in the browser. It serves on\n' +
+			'127.0.0.1 only, and every request carries a session token that lives as long as the\n' +
+			'process. The dashboard reads the app and the stages it has deployed; it deploys nothing.\n' +
+			'It is opt-in: @aws-blocks/admin-ui is resolved from the app, and offered for install\n' +
+			'when it is missing, so an app that never runs it carries none of its dependencies.',
+		flags: [
+			{
+				name: 'port',
+				type: 'string',
+				value: 'N',
+				description: 'Port to serve on; used verbatim, never scanned past [first free from 4400]',
+			},
+			{ name: 'no-open', type: 'boolean', description: 'Print the URL instead of opening the browser' },
+			{
+				name: 'allow-origin',
+				type: 'string',
+				value: 'origin',
+				multiple: true,
+				description: 'Browser origin to trust for mutating requests, for a proxied dashboard',
+			},
+		],
+		examples: [
+			{ command: 'cdk-blocks dashboard', description: 'Open the dashboard for this app' },
+			{ command: 'cdk-blocks dashboard --port 4500 --no-open', description: 'Serve on :4500 and print the URL' },
+		],
+		handler: commands.dashboard,
+	},
+	{
+		path: ['dashboard', 'doctor'],
+		group: 'Develop',
+		summary: 'Diagnose the dashboard instead of starting it',
+		description:
+			'Check what the dashboard needs — the app, its @aws-blocks/admin-ui install, and the\n' +
+			'credentials it would read — and print a report. Run it when the dashboard will not start.',
+		examples: [{ command: 'cdk-blocks dashboard doctor', description: 'Print the diagnosis and exit' }],
+		handler: commands.dashboardDoctor,
+	},
+	{
 		path: ['sandbox'],
 		group: 'Develop',
 		summary: 'Deploy your personal sandbox, watch for changes, and run the local server against it',

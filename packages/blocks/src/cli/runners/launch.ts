@@ -55,7 +55,14 @@ export const DEV_UNDER_WATCH_ENV = 'BLOCKS_DEV_UNDER_WATCH';
 /** The environment variable that names the `tsx` loader for core's client-generation worker. */
 export const TSX_IMPORT_ENV = 'BLOCKS_TSX_IMPORT';
 
-export type RunnerName = 'dev-server' | 'sandbox' | 'sandbox-destroy' | 'deploy' | 'destroy' | 'generate-spec';
+export type RunnerName =
+	| 'dev-server'
+	| 'sandbox'
+	| 'sandbox-destroy'
+	| 'deploy'
+	| 'destroy'
+	| 'generate-spec'
+	| 'dashboard';
 
 /** The absolute path of a compiled runner. */
 export function runnerPath(name: RunnerName): string {

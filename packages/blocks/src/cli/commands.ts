@@ -12,10 +12,11 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AwsIdentity } from '@aws-blocks/core/scripts';
+import type { AwsIdentity, DashboardCommand, DashboardOptions } from '@aws-blocks/core/scripts';
 import {
 	frontendPortWarning,
 	keepsOwnClient,
+	parsePort,
 	resolveDevConfig,
 	resolveDevPort,
 	unknownDevConfigWarnings,
@@ -503,6 +504,41 @@ export async function devStop(ctx: Context, input: CommandInput): Promise<number
 		text,
 	);
 	return results.some((r) => !r.alreadyStopped && !r.portFree) ? ExitCode.Failure : ExitCode.Ok;
+}
+
+/**
+ * The dashboard runner's options. Core parses the dashboard's own flags out of
+ * `DashboardOptions.argv`, so the subcommand travels there too: core reads it as
+ * a leading positional rather than an option. `--profile` and `--region` reach
+ * the dashboard the way they reach every other command, as AWS_PROFILE and
+ * AWS_REGION in the child environment.
+ */
+function dashboardRun(ctx: Context, input: CommandInput, command: DashboardCommand): RunnerRun {
+	const root = ctx.requireRoot();
+	const port = parsePort(input.flags.port, 'option --port');
+	const allowOrigins = input.flags['allow-origin'];
+	const options: DashboardOptions = {
+		projectRoot: root,
+		argv: command === 'serve' ? [] : [command],
+		...(port === undefined ? {} : { port }),
+		...(input.flags['no-open'] === true ? { open: false } : {}),
+		...(Array.isArray(allowOrigins) ? { allowOrigins } : {}),
+	};
+	return {
+		runner: 'dashboard',
+		operation: command === 'serve' ? 'cdk-blocks dashboard' : `cdk-blocks dashboard ${command}`,
+		options,
+		where: [`project: ${root}`],
+	};
+}
+
+export async function dashboard(ctx: Context, input: CommandInput): Promise<number> {
+	// The server runs until Ctrl-C, like the dev server: a clean exit is not a completed operation.
+	return runRunner(ctx, { ...dashboardRun(ctx, input, 'serve'), longRunning: true });
+}
+
+export async function dashboardDoctor(ctx: Context, input: CommandInput): Promise<number> {
+	return runRunner(ctx, dashboardRun(ctx, input, 'doctor'));
 }
 
 /** How `cdk-blocks sandbox` runs: watch mode, or one deploy (`deploy`), or one deploy with a hosted preview (`preview`). */
