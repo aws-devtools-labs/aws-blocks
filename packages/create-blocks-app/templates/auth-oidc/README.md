@@ -61,7 +61,7 @@ URI. Anyone who can reach a sandbox can sign in as the stub's users.
 | `npm run sandbox` | Deploy backend to AWS, serve frontend locally |
 | `npm run sandbox:deploy` | Deploy the backend to AWS once and exit (no watch, no dev server); for scripts and CI |
 | `npm run sandbox:preview` | Deploy a hosted preview: the sandbox backend plus the app in preview shape (API Gateway, no CloudFront); prints the URL. Same stack as `sandbox`: a plain sandbox deploy removes the preview, and re-adding it gives a new URL. Tear down with `npm run sandbox:destroy` |
-| `npm run deploy` | Full production deploy |
+| `npm run deploy` | Deploy to production (configure the real OIDC provider in `aws-blocks/index.ts` first) |
 | `npm run sandbox:destroy` | Tear down sandbox resources; asks first in a terminal (`-- --yes` skips it) |
 | `npm run destroy` | Tear down the production stack (asks first; `-- --yes` in CI) |
 | `npm run secret -- set KEY` | Set a secret (also `list`, `remove KEY`) |
