@@ -105,7 +105,7 @@ This enables PostgreSQL RLS policies to filter rows based on the authenticated u
 
 | Resource | Purpose |
 |----------|---------|
-| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **opt-in**: emitted (`storageEncrypted: true`) only when the `@aws-blocks/bb-data:encryptStorageByDefault` context flag is set (new `create-blocks-app` projects set it) or a `storageEncryptionKeyArn` is supplied; otherwise the `StorageEncrypted` property is left unset so existing clusters are not replaced. Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
+| Aurora Serverless v2 cluster | PostgreSQL database. Storage encryption at rest is **always enabled** (`storageEncrypted: true`, no opt-out). Uses the AWS-managed `aws/rds` key by default, or a customer-managed key via `storageEncryptionKeyArn` |
 | VPC + private subnets | Network isolation |
 | Security group | No ingress — reached over the RDS Data API (HTTPS), not a socket |
 | Secrets Manager secret | Auto-generated credentials; encrypted with `storageEncryptionKeyArn` when one is supplied |
@@ -119,27 +119,25 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
 
 ### Security posture (Aurora)
 
-- **Encryption at rest** is **opt-in**, gated so new projects are secure by
-  default without replacing an existing cluster. The CDK layer emits
-  `storageEncrypted: true` only when the `@aws-blocks/bb-data:encryptStorageByDefault`
-  context flag is set (the `create-blocks-app` templates set it) or a
-  customer-managed key is supplied; otherwise it leaves the `StorageEncrypted`
-  property unset — CloudFormation renders no key, and an explicit `false` is never
-  emitted, because either would be a template change that forces a destructive
-  replacement of an existing, implicitly-unencrypted cluster. A synth warning
-  (`@aws-blocks/bb-data:StorageEncryptionOptIn`) fires when neither is set. A
-  customer-managed KMS key, when supplied, encrypts both the storage volume and
-  the auto-generated credentials secret and forces encryption on regardless of the
-  flag.
+- **Encryption at rest is always enabled.** The CDK layer emits
+  `storageEncrypted: true` unconditionally — with the account's AWS-managed
+  `aws/rds` key by default, or a customer-managed key when
+  `storageEncryptionKeyArn` is supplied. There is no option to turn it off. The
+  `@aws-blocks/bb-data:encryptStorageByDefault` context flag is no longer read to
+  enable it; an explicit `false` value fails synth with an error, since that
+  intent can no longer be honored. A customer-managed KMS key, when supplied,
+  encrypts both the storage volume and the auto-generated credentials secret.
 - **`iamAuthentication` is intentionally NOT enabled.** The cluster is reached
   exclusively over the RDS Data API (HTTPS + Secrets Manager credentials), never a
   direct DB socket, so database-level IAM authentication does not apply to this
-  access path.
+  access path. This is a deliberate deviation from a raw-socket Aurora baseline.
 - **Automatic secret rotation is a deliberate follow-up**, not implemented here.
   Rotation requires a rotation Lambda wired into the cluster VPC — a larger change
   than this hardening pass. Supplying a `storageEncryptionKeyArn` does encrypt the
   generated secret today.
-- **Upgrade note (destructive replacement):** RDS cannot encrypt an
+- **Upgrade note (destructive replacement):** a stack whose cluster was first
+  deployed unencrypted is replaced on its next deploy now that encryption is
+  always on. RDS cannot encrypt an
   already-provisioned, unencrypted cluster in place, so enabling storage
   encryption (or changing the key) makes CloudFormation create a **new, empty**
   encrypted cluster and repoint the stack. There is no in-place path. The
@@ -154,11 +152,11 @@ Removal policy: DESTROY in sandbox, RETAIN in production.
   production's `deletionProtection: true` the follow-up delete may fail and leave
   it in place (this cleanup path is unverified on a real deploy). Adding or
   changing the key also replaces the generated credentials secret (new logical id,
-  new generated password). The replacement is symmetric: removing the flag (or
-  `storageEncryptionKeyArn`) from a project that already deployed encrypted —
-  deleting the `cdk.json` line, a merge dropping it — also changes
-  `StorageEncrypted` and so **likewise replaces the cluster** (back to
-  unencrypted), with the same new-empty-cluster / no-schema outcome. The only safe
+  new generated password). Removing the `encryptStorageByDefault` flag no
+  longer changes `StorageEncrypted`, so it does not replace an encrypted cluster;
+  adding, changing, or removing `storageEncryptionKeyArn` still changes the KMS
+  key and replaces the cluster with the same new-empty-cluster / no-schema
+  outcome. The only safe
   route is to snapshot the existing cluster, restore it with encryption enabled,
   then cut over. Review the diff and snapshot first.
 

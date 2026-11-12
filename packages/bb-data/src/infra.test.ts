@@ -48,21 +48,14 @@ test('CDK: default capacity is 0.5-2 ACUs', () => {
 
 // --- Storage encryption, backups, and log exports ---
 
-test('CDK: no storageEncrypted/CMK leaves StorageEncrypted unset (upgrade-safe, no replacement)', () => {
-  // With neither an explicit storageEncrypted nor a CMK, materialize must NOT
-  // emit a StorageEncrypted property at all (and never an explicit `false`), so an
-  // existing, implicitly-unencrypted cluster is not forced into a destructive
-  // replacement by a template change.
+test('CDK: Aurora cluster is always storage-encrypted (no CMK → AWS-managed key)', () => {
+  // Storage encryption at rest is unconditional: with no customer-managed key,
+  // materialize still emits StorageEncrypted: true (using the AWS-managed
+  // `aws/rds` key, so no KmsKeyId is set).
   const template = synthTemplate({ databaseName: 'mydb' });
-  const clusters = template.findResources('AWS::RDS::DBCluster');
-  const props = Object.values(clusters)[0].Properties;
-  assert.ok(!('StorageEncrypted' in props), 'StorageEncrypted must be absent, not false');
-});
-
-test('CDK: storageEncrypted:true emits StorageEncrypted:true (opt-in path)', () => {
-  const template = synthTemplate({ databaseName: 'mydb', storageEncrypted: true });
   template.hasResourceProperties('AWS::RDS::DBCluster', {
     StorageEncrypted: true,
+    KmsKeyId: Match.absent(),
   });
 });
 

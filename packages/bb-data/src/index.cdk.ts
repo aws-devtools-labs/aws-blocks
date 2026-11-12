@@ -193,35 +193,23 @@ export class Database extends BuildingBlockScope {
       backupRetentionDays = AURORA_ENABLED_BACKUP_DAYS;
     }
 
-    // Storage encryption: secure-by-default for NEW projects without forcing a
-    // destructive replacement on EXISTING ones. Emit `storageEncrypted: true`
-    // only when the project has opted in via the
-    // `@aws-blocks/bb-data:encryptStorageByDefault` context flag (set in the
-    // create-blocks-app cdk.json templates, so new apps are encrypted by default)
-    // OR a customer-managed `storageEncryptionKeyArn` is supplied. Otherwise leave
-    // the property unset (undefined) so an existing, implicitly-unencrypted
-    // cluster keeps its current template and is not replaced — and warn, pointing
-    // at the snapshot → restore-with-encryption → cut-over migration steps.
-    // Accept both the JSON boolean `true` (cdk.json / setContext) and the string
-    // 'true' (a `--context @aws-blocks/bb-data:encryptStorageByDefault=true` CLI
-    // override, which arrives as a string), matching the `sandboxMode` precedent in
-    // core's stack-metadata.ts. Only these two count as on: everything else —
-    // including the string 'false' and undefined — is off, so a `--context ...=false`
-    // override is never read as enabled and a cdk.json boolean `true` is never
-    // silently flipped off by a string `--context ...=true` override.
-    const ctx = this.node.tryGetContext('@aws-blocks/bb-data:encryptStorageByDefault');
-    const encryptByDefault = ctx === true || ctx === 'true';
-    const hasCmk = options?.storageEncryptionKeyArn !== undefined;
-    const storageEncrypted = encryptByDefault || hasCmk ? true : undefined;
-    if (!encryptByDefault && !hasCmk) {
-      cdk.Annotations.of(this).addWarningV2(
-        '@aws-blocks/bb-data:StorageEncryptionOptIn',
-        `Aurora storage-at-rest encryption is not enabled for Database "${this.fullId}". ` +
-          `Set the context flag "@aws-blocks/bb-data:encryptStorageByDefault": true in cdk.json ` +
-          `(new create-blocks-app projects set it already), or pass storageEncryptionKeyArn, to enable it. ` +
-          `Enabling it on an already-provisioned cluster requires a destructive replacement ` +
-          `(snapshot → restore-with-encryption → cut over), so it is left opt-in. ` +
-          `See the README "Enabling encryption on an existing unencrypted cluster" note.`,
+    // Storage encryption at rest is always on (materialize() emits
+    // `storageEncrypted: true` unconditionally), using the account's AWS-managed
+    // `aws/rds` key or the customer-managed `storageEncryptionKeyArn` when one is
+    // supplied. The `@aws-blocks/bb-data:encryptStorageByDefault` context flag
+    // that previously gated it is no longer read for enabling — but an explicit
+    // `false` (the JSON boolean from cdk.json / setContext, or the string 'false'
+    // from a `--context ...=false` CLI override) states an intent this block no
+    // longer honors, so fail synth with a clear message rather than silently
+    // deploying an encrypted cluster the project asked not to have.
+    const encryptionCtx = this.node.tryGetContext('@aws-blocks/bb-data:encryptStorageByDefault');
+    if (encryptionCtx === false || encryptionCtx === 'false') {
+      throw new Error(
+        `Database "${this.fullId}": the context flag "@aws-blocks/bb-data:encryptStorageByDefault" is set to false, ` +
+          `but Aurora storage encryption is always enabled and cannot be turned off. ` +
+          `Remove the flag (or set it to true) in cdk.json / --context. ` +
+          `A cluster first deployed unencrypted is replaced on deploy — snapshot and migrate its data first ` +
+          `(see the README "Enabling encryption on an existing unencrypted cluster" note).`,
       );
     }
 
@@ -240,7 +228,6 @@ export class Database extends BuildingBlockScope {
       // cdk.Duration backup window.
       // A single Database provisions exactly one cluster, so the fixed
       // 'db-storage-key' construct id for the imported key is unique in this scope.
-      storageEncrypted,
       storageEncryptionKey: options?.storageEncryptionKeyArn
         ? kms.Key.fromKeyArn(this, 'db-storage-key', options.storageEncryptionKeyArn)
         : undefined,

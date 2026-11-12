@@ -270,16 +270,14 @@ the transaction should continue.
 ## What It Provisions (AWS)
 
 - **Aurora Serverless v2** — PostgreSQL-compatible, scales 0.5-128 ACUs. Storage
-  encryption at rest is **opt-in via a context flag** so new projects are secure by
-  default without replacing an existing cluster. New `create-blocks-app` projects
-  set `"@aws-blocks/bb-data:encryptStorageByDefault": true` in `cdk.json`, which
-  turns on encryption with the account's AWS-managed `aws/rds` key. Passing a
-  `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) also turns
-  encryption on regardless of the flag and uses that key instead (it also encrypts
-  the generated credentials secret). When neither the flag nor a key is set, the
-  cluster is synthesized without the `StorageEncrypted` property (an existing,
-  unencrypted cluster is left untouched) and a synth warning explains how to opt
-  in. The key is **imported** (Blocks can't modify its policy), so its policy
+  encryption at rest is **always enabled** (`StorageEncrypted: true`) and cannot
+  be turned off. By default it uses the account's AWS-managed `aws/rds` key; pass
+  a `storageEncryptionKeyArn` (the ARN of a customer-managed KMS key) to use that
+  key instead (it also encrypts the generated credentials secret). The
+  `"@aws-blocks/bb-data:encryptStorageByDefault"` context flag is no longer needed
+  (a `true` value is ignored); setting it to `false` fails synth. A cluster that
+  was first deployed **unencrypted** is replaced on the next deploy — see the
+  upgrade note below and snapshot/migrate its data first. The key is **imported** (Blocks can't modify its policy), so its policy
   must already grant the deploying principal `kms:CreateGrant` + `kms:DescribeKey`
   (RDS uses a grant to encrypt the storage volume) and grant `kms:Decrypt` to the
   principal that reads the credentials secret over the Data API. The key must be in
@@ -307,7 +305,10 @@ the transaction should continue.
 > does not apply to the Data API access path.
 >
 > **Enabling encryption on an existing unencrypted cluster requires a
-> replacement — and a replacement is destructive.** RDS cannot encrypt an
+> replacement — and a replacement is destructive.** Because storage encryption is
+> now always on, deploying this version to a stack whose Aurora cluster was
+> created unencrypted (no `encryptStorageByDefault` flag and no
+> `storageEncryptionKeyArn`) triggers exactly this replacement. RDS cannot encrypt an
 > already-provisioned unencrypted cluster in place, so turning storage encryption
 > on (or changing the KMS key) makes CloudFormation create a **new, empty**
 > encrypted cluster and repoint the stack at it. There is **no in-place path**.
@@ -326,13 +327,13 @@ the transaction should continue.
 >   delete of the old cluster may fail and leave it in place; this cleanup path is
 >   unverified on a real deploy.
 >
-> **The replacement is symmetric.** Turning encryption back **off** — removing the
-> flag (or `storageEncryptionKeyArn`) from a project that already deployed
-> encrypted, whether by deleting the `cdk.json` line or by a merge that drops it —
-> also changes the `StorageEncrypted` property, so it **likewise replaces the
-> cluster** (back to unencrypted) with the same new-empty-cluster / no-schema
-> outcome described above. Review the diff and snapshot before removing the flag
-> too, not only before adding it.
+> **Encryption cannot be turned back off.** Removing the
+> `encryptStorageByDefault` flag from `cdk.json` no longer changes the
+> `StorageEncrypted` property, so it does not replace an encrypted cluster.
+> Adding, changing, or removing `storageEncryptionKeyArn` still changes the
+> cluster's KMS key and **replaces the cluster** with the same
+> new-empty-cluster / no-schema outcome described above — review the diff and
+> snapshot first.
 >
 > The only safe route is to carry the data across yourself: **snapshot** the
 > existing cluster, **restore** that snapshot into a new cluster with encryption
@@ -426,10 +427,9 @@ interface DatabaseOptions {
   extensions?: string[];
   /**
    * ARN of a customer-managed KMS key for the cluster's storage-at-rest encryption
-   * (also encrypts the auto-generated credentials secret). Supplying it turns
-   * storage encryption on regardless of the `@aws-blocks/bb-data:encryptStorageByDefault`
-   * context flag. When omitted, encryption follows that flag — on with the
-   * account's AWS-managed `aws/rds` key when set, otherwise left unset. The key is
+   * (also encrypts the auto-generated credentials secret). Storage encryption is
+   * always on: when omitted, the cluster is encrypted with the account's
+   * AWS-managed `aws/rds` key. The key is
    * imported, so its policy must already grant the deploying principal
    * `kms:CreateGrant` + `kms:DescribeKey` and grant `kms:Decrypt` to the principal
    * reading the credentials secret; it must be in the same account + region.
