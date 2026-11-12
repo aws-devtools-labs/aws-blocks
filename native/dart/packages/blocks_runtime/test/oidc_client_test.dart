@@ -735,9 +735,10 @@ void main() {
     }
 
     test('keeps the cookies of other Auth blocks in the store', () async {
+      // Each Auth block names its session cookie auth_<its id>.
       final session = InMemorySessionStore()
-        ..setCookies('blocks_session=main; Path=/', requestUri: origin)
-        ..setCookies('sso_session=other; Path=/', requestUri: origin);
+        ..setCookies('auth_app-auth=main; Path=/', requestUri: origin)
+        ..setCookies('auth_app-sso=other; Path=/', requestUri: origin);
       OidcClient block(String base, String cookie) => OidcClient.fromJson(
         {
           '__blocks': 'oidc/client',
@@ -759,10 +760,10 @@ void main() {
         ),
       );
 
-      await block('/aws-blocks/auth/sso', 'sso_session').signOut();
+      await block('/aws-blocks/auth/sso', 'auth_app-sso').signOut();
 
-      expect(session.cookies, {'blocks_session': 'main'});
-      await block('/aws-blocks/auth', 'blocks_session').signOut();
+      expect(session.cookies, {'auth_app-auth': 'main'});
+      await block('/aws-blocks/auth', 'auth_app-auth').signOut();
       expect(session.cookies, isEmpty);
     });
 

@@ -48,23 +48,22 @@ These changes ship in 0.3.0, not a 0.2.x patch, because of the `toJson()` remova
   POSTs `{signOutPath}?format=json`. On a 2xx it clears the stored tokens and
   emits `OidcSignedOut`. It doesn't clear the session store, which may hold
   other `Auth` blocks' cookies; the server's `Set-Cookie` removes this
-  block's cookie. On a 503
-  `SignOutIncompleteException` (the cookie was cleared but the server-side
-  session was not removed) it does the same, then throws an
-  `OidcRequestException` with that `errorName`. Any other status, or a transport
-  error, now throws: the stored tokens are cleared, but the session cookie
-  and the state are kept. It used to ignore the response and drop the
-  logout URL.
+  block's cookie. On a 503 `SignOutIncompleteException` (the cookie was
+  cleared but the server-side session was not removed) it does the same,
+  then throws an `OidcRequestException` with that `errorName`. Any other
+  status, or a transport error, now throws: the stored tokens are cleared,
+  but the session cookie and the state are kept. It used to ignore the
+  response and drop the logout URL.
 - **Breaking:** `OidcClient.restore()` returns `Future<OidcUser?>` and reads
   the backend's session route (`GET <exchangePath's directory>/session`, new
   `OidcClient.sessionPath`) with the session cookie, plus the stored access
   token as a bearer token when there is one and it hasn't expired. A client
-  from a custom block's `getClient()` now needs that route on the block. On 200 it emits `OidcSignedIn`
-  with the server's user and returns it; on 401 it clears the stored tokens,
-  emits `OidcSignedOut` and returns null; any other status throws an
-  `OidcRequestException` without changing the state (a 404 means the block
-  serves no session route), as does a 200 whose body has no readable
-  `user`. It no longer builds the user from the access
+  from a custom block's `getClient()` now needs that route on the block. On
+  200 it emits `OidcSignedIn` with the server's user and returns it; on 401
+  it clears the stored tokens, emits `OidcSignedOut` and returns null; any
+  other status throws an `OidcRequestException` without changing the state
+  (a 404 means the block serves no session route), as does a 200 whose body
+  has no readable `user`. It no longer builds the user from the access
   token's JWT claims, so the user id is the server's, and it no longer emits
   `OidcLoading` first. It used to report signed out for a valid cookie
   session, because a cookie session stores no tokens.
