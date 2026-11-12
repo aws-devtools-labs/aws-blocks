@@ -12,6 +12,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteReadChannel
 import kotlin.test.Test
+import kotlinx.io.IOException
+import kotlinx.serialization.SerializationException
 import kotlinx.coroutines.test.runTest
 
 /** [OidcClient.restore] reads the backend's session for the client's cookie. */
@@ -129,5 +131,26 @@ class OidcClientRestoreTest {
         client.restore()
 
         requests shouldBe listOf("GET /aws-blocks/auth/sso/session")
+    }
+
+    @Test
+    fun `restore throws on a session body it cannot read and leaves the state alone`() = runTest {
+        for (body in listOf("not json", """{"session":{}}""")) {
+            val client = client(HttpStatusCode.OK, body)
+
+            shouldThrow<SerializationException> { client.restore() }
+            client.authState.value shouldBe OidcAuthState.Loading
+        }
+    }
+
+    @Test
+    fun `restore throws when the backend cannot be reached and leaves the state alone`() = runTest {
+        val unreachable = HttpClient(MockEngine) {
+            engine { addHandler { throw IOException("connection refused") } }
+        }
+        val client = OidcClient.forAuth(unreachable, server, listOf("google"))
+
+        shouldThrow<IOException> { client.restore() }
+        client.authState.value shouldBe OidcAuthState.Loading
     }
 }

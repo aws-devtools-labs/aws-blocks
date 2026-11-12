@@ -6,15 +6,18 @@ import io.kotest.matchers.shouldBe
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
-import io.ktor.client.plugins.cookies.AcceptAllCookiesStorage
+import com.aws.blocks.kotlin.InMemoryKeyValueStore
+import com.aws.blocks.kotlin.PersistentCookiesStorage
+import io.ktor.client.plugins.cookies.CookiesStorage
 import io.ktor.client.plugins.cookies.HttpCookies
-import io.ktor.http.Cookie
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Url
 import io.ktor.http.content.TextContent
 import io.ktor.http.headersOf
+import io.ktor.http.parseServerSetCookieHeader
+import kotlinx.io.IOException
 import io.ktor.utils.io.ByteReadChannel
 import kotlin.test.Test
 import kotlinx.coroutines.test.runTest
@@ -32,7 +35,7 @@ class OidcClientSignOutTest {
         status: HttpStatusCode,
         body: String = "{}",
         headers: Headers = headersOf(HttpHeaders.ContentType, "application/json"),
-        cookies: AcceptAllCookiesStorage = AcceptAllCookiesStorage(),
+        cookies: CookiesStorage = PersistentCookiesStorage(InMemoryKeyValueStore()),
     ): HttpClient = HttpClient(MockEngine) {
         install(HttpCookies) { storage = cookies }
         engine {
@@ -112,32 +115,77 @@ class OidcClientSignOutTest {
         client.authState.value shouldBe before
     }
 
+    /**
+     * The jar the SDK ships, holding the session cookies of two `Auth` blocks. Each block names
+     * its cookie after itself and sets it on `/`, so isolation rests on the names being distinct:
+     * the jar replaces or removes a cookie by name and URL match.
+     */
+    private suspend fun twoBlockJar(): PersistentCookiesStorage =
+        PersistentCookiesStorage(InMemoryKeyValueStore()).also {
+            it.addCookie(origin, parseServerSetCookieHeader("blocks-session-auth=a; Path=/; HttpOnly"))
+            it.addCookie(origin, parseServerSetCookieHeader("blocks-session-sso=b; Path=/; HttpOnly"))
+        }
+
     @Test
     fun `signing out of one Auth block keeps another block's cookie`() = runTest {
-        val jar = AcceptAllCookiesStorage()
-        jar.addCookie(origin, Cookie("blocks-session-auth", "a", path = "/"))
-        jar.addCookie(origin, Cookie("blocks-session-sso", "b", path = "/"))
-        // The backend clears only the cookie of the block signed out of.
-        val clearsAuthCookie = Headers.build {
+        val jar = twoBlockJar()
+        // The backend clears only the cookie of the block signed out of, as it sends it.
+        val clearsSsoCookie = Headers.build {
             append(HttpHeaders.ContentType, "application/json")
-            append(HttpHeaders.SetCookie, "blocks-session-auth=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+            append(HttpHeaders.SetCookie, "blocks-session-sso=; Path=/; HttpOnly; Max-Age=0")
         }
-        val client = OidcClient.forAuth(backend(HttpStatusCode.OK, headers = clearsAuthCookie, cookies = jar), server, listOf("google"))
+        val client = OidcClient.forAuth(
+            backend(HttpStatusCode.OK, headers = clearsSsoCookie, cookies = jar), server, listOf("corp"),
+            callbackPath = "/aws-blocks/auth/sso/callback",
+            signOutPath = "/aws-blocks/auth/sso/signout",
+        )
 
         client.signOut()
 
-        jar.get(origin).map { it.name } shouldBe listOf("blocks-session-sso")
+        jar.get(origin).map { it.name } shouldBe listOf("blocks-session-auth")
     }
 
     @Test
     fun `signOut clears no cookie the backend did not`() = runTest {
-        val jar = AcceptAllCookiesStorage()
-        jar.addCookie(origin, Cookie("blocks-session-auth", "a", path = "/"))
-        jar.addCookie(origin, Cookie("blocks-session-sso", "b", path = "/"))
+        val jar = twoBlockJar()
         val client = OidcClient.forAuth(backend(HttpStatusCode.OK, cookies = jar), server, listOf("google"))
 
         client.signOut()
 
         jar.get(origin).map { it.name }.sorted() shouldBe listOf("blocks-session-auth", "blocks-session-sso")
+    }
+
+    @Test
+    fun `a 503 that names no incomplete sign-out leaves the user signed in`() = runTest {
+        val client = signedIn(signedInBackend(HttpStatusCode.ServiceUnavailable, """{"error":"Unavailable"}"""))
+        val before = client.authState.value
+
+        shouldThrow<OidcSignOutException> { client.signOut() }.errorName shouldBe null
+
+        client.authState.value shouldBe before
+    }
+
+    @Test
+    fun `a sign-out that never reaches the backend leaves the user signed in`() = runTest {
+        var signedInYet = false
+        val unreachable = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    if (signedInYet) throw IOException("connection refused")
+                    signedInYet = request.url.encodedPath.endsWith("/exchange")
+                    respond(
+                        ByteReadChannel("""{"user":{"userId":"google:1","username":"alice"}}"""),
+                        HttpStatusCode.OK,
+                        headersOf(HttpHeaders.ContentType, "application/json"),
+                    )
+                }
+            }
+        }
+        val client = signedIn(unreachable)
+        val before = client.authState.value
+
+        shouldThrow<IOException> { client.signOut() }
+
+        client.authState.value shouldBe before
     }
 }
