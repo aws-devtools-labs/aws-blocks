@@ -117,14 +117,13 @@ final class NestedTransferableDecodeTests: XCTestCase {
         return try JSONDecoder().decode(GetSession.Result.self, from: Data(("{" + fields.joined(separator: ",") + "}").utf8))
     }
 
-    private func assertReadOnly(_ encode: @autoclosure () throws -> Data, at path: [String], file: StaticString = #filePath, line: UInt = #line) {
-        XCTAssertThrowsError(try encode(), file: file, line: line) { error in
-            guard case EncodingError.invalidValue(_, let context) = error else {
-                return XCTFail("Expected EncodingError.invalidValue, got \(error)", file: file, line: line)
-            }
-            XCTAssertEqual(context.debugDescription, "Transferables are read-only", file: file, line: line)
-            XCTAssertEqual(context.codingPath.map(\.stringValue), path, file: file, line: line)
+    /// The JSON object `encode` writes at `path`.
+    private func encodedObject(_ data: Data, at path: [String]) throws -> [String: Any] {
+        var value: Any = try JSONSerialization.jsonObject(with: data)
+        for key in path {
+            value = try XCTUnwrap((value as? [String: Any])?[key], "no \(key) in \(value)")
         }
+        return try XCTUnwrap(value as? [String: Any])
     }
 
     // MARK: - Realtime channels
@@ -189,9 +188,10 @@ final class NestedTransferableDecodeTests: XCTestCase {
     func testNestedChannelWithBadDescriptorThrowsInsteadOfTrapping() {
         let missingToken = Data(#"{"channel":{"channel":"app/c","wsUrl":"wss://example.com/rt"}}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(GetSession.Result.Inner.self, from: missingToken)) { error in
-            guard case DecodingError.dataCorrupted(let context) = error else {
-                return XCTFail("Expected DecodingError.dataCorrupted, got \(error)")
+            guard case DecodingError.keyNotFound(let key, let context) = error else {
+                return XCTFail("Expected DecodingError.keyNotFound, got \(error)")
             }
+            XCTAssertEqual(key.stringValue, "token")
             XCTAssertEqual(context.codingPath.map(\.stringValue), ["channel"])
         }
 
@@ -232,24 +232,33 @@ final class NestedTransferableDecodeTests: XCTestCase {
         XCTAssertTrue(head.lowercased().contains("\r\ncontent-type: image/png\r\n"), "upload must send the descriptor's content type; got: \(head)")
     }
 
-    func testNestedFileHandleWithoutURLThrowsLikeFromJSON() {
+    func testNestedFileHandleWithoutURLThrowsADecodingError() {
         let data = Data(#"{"download":{"__blocks":"file-bucket/download"},"uploads":[]}"#.utf8)
         XCTAssertThrowsError(try JSONDecoder().decode(Files.self, from: data)) { error in
-            guard case FileBucketError.invalidURL = error else {
-                return XCTFail("Expected FileBucketError.invalidURL, got \(error)")
+            guard case DecodingError.keyNotFound(let key, let context) = error else {
+                return XCTFail("Expected DecodingError.keyNotFound, got \(error)")
             }
+            XCTAssertEqual(key.stringValue, "url")
+            XCTAssertEqual(context.codingPath.map(\.stringValue), ["download"])
         }
     }
 
     // MARK: - Encoding and descriptor values
 
-    func testEncodingANestedTransferableThrows() throws {
+    /// A transferable encodes back to the descriptor the server sent, so a model holding one can be sent as a
+    /// parameter (the server re-hydrates it from `__blocks`).
+    func testEncodingANestedTransferableWritesItsDescriptor() throws {
         let result = try decodeSession(event: #"{"kind":"message","channel":"# + channelDescriptor("messages") + "}")
         let files = try JSONDecoder().decode(Files.self, from: Data(#"{"download":{"url":"https://s3.example/get"},"uploads":[]}"#.utf8))
 
-        assertReadOnly(try JSONEncoder().encode(result), at: ["channel"])
-        assertReadOnly(try JSONEncoder().encode(result.event), at: ["channel"])
-        assertReadOnly(try JSONEncoder().encode(files), at: ["download"])
+        let channel = try encodedObject(JSONEncoder().encode(result), at: ["channel"])
+        XCTAssertEqual(channel["__blocks"] as? String, "realtime/channel")
+        XCTAssertEqual(channel["channel"] as? String, result.channel.channel)
+        let eventChannel = try encodedObject(JSONEncoder().encode(result.event), at: ["channel"])
+        XCTAssertEqual(eventChannel["__blocks"] as? String, "realtime/channel")
+        let download = try encodedObject(JSONEncoder().encode(files), at: ["download"])
+        XCTAssertEqual(download["__blocks"] as? String, "file-bucket/download")
+        XCTAssertEqual(download["url"] as? String, "https://s3.example/get")
     }
 
     func testDescriptorReadsAsJSONSerializationDoes() throws {

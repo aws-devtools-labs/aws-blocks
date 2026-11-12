@@ -602,6 +602,22 @@ Some apps need the CloudFront door:
   `aws-lambda` preset with `awsLambda.streaming: true`, or a hand-written
   `open-next.config.ts` with a streaming wrapper).
 
+**CloudFront error pages and the API.** A CloudFront distribution's custom
+error responses apply to every path it serves, the proxied API (`/aws-blocks/*`)
+included. The CloudFront door maps 403 / 404 to a page when the app has one —
+`errorPages.notFound`, a static build's own `404.html` — and, for a static
+multi-page site with no server, no SPA fallback and no 404 page of its own, to
+the built-in not-found page. The Blocks API normally answers every call with
+HTTP 200, so this never touches it; but an `ApiNamespace` created with
+`httpErrorStatus: true` (`@aws-blocks/core`) answers a 4xx `ApiError` with that
+status, and its 403 / 404 then reach the browser as that HTML page instead of
+the JSON-RPC error, which the typed client cannot read. CloudFront cannot
+scope error responses away from `/aws-blocks/*`, so `Hosting` from
+`@aws-blocks/core` fails synth when it sees both, with a `HostingError` named
+`HttpErrorStatusErrorPagesError` that names the namespaces and the mapped codes.
+Remove the 4xx error pages, or leave `httpErrorStatus` off for those
+namespaces.
+
 ### Settings per door kind
 
 Each door kind takes its settings as `features`, typed for that kind: a
@@ -658,14 +674,16 @@ Every door except `'none'` serves the API on the app's own origin: `/aws-blocks/
 `Hosting` (`DoorInput.origins.api.paths`, the same set the CloudFront door turns
 into behaviors). A door served over plain HTTP with an API (an ALB without a
 certificate) warns at synth (`@aws-blocks/hosting:PlainHttpFrontDoor`): sign-in,
-cookies and every RPC then travel unencrypted.
+cookies and every RPC then travel unencrypted. `'none'` warns with the same id
+whether or not the app has an API: the S3 website can't serve over TLS, so the
+pages and scripts themselves can be read or altered in transit (see
+[the `'none'` door](#the-none-door)).
 
 The session cookie can't be `Secure` behind such a door either: a browser
-discards a `Secure` cookie set by a plain-HTTP origin. `AuthBasic` therefore
+discards a `Secure` cookie set by a plain-HTTP origin. `Auth` therefore
 omits `Secure` from its same-origin session cookie behind a standalone
 `{ kind: 'alb' }` door with no certificate, so the cookie and the session it
-carries cross the network in clear text. `AuthCognito` and `AuthOIDC` keep
-`Secure`, so the browser drops their session cookie and sign-in doesn't persist.
+carries cross the network in clear text.
 Use a plain-HTTP door for testing only: for anything else, give the ALB door a
 `certificate` and `features.domain` (an HTTPS listener), or use the CloudFront
 or stacked door. The stacked door's edge is HTTPS, so its session cookies keep
@@ -819,6 +837,20 @@ build's hashed assets: a tab opened before a deploy that then lazy-loads one of
 its chunks gets a 404 (the website's error document) and needs a reload. The page is plain HTTP and the
 API is cross-site, so an auth Building Block needs `crossDomain: true`; its
 session cookie is then set by the API's own HTTPS response.
+
+The website endpoint takes no certificate, so `'none'` always warns at synth
+(`@aws-blocks/hosting:PlainHttpFrontDoor`), with or without a backend API: the
+HTML and scripts travel unencrypted and can be altered in transit, and a
+tampered script sees everything the user enters, even when the API it calls is
+HTTPS. Use `'none'` for testing or public, non-interactive content; use the
+CloudFront door for HTTPS. If you chose `'none'` deliberately, acknowledge the
+warning on the stack:
+
+```ts
+import { Annotations } from 'aws-cdk-lib';
+
+Annotations.of(stack).acknowledgeWarning('@aws-blocks/hosting:PlainHttpFrontDoor');
+```
 
 **The server behind the HTTP API.** An HTTP API Lambda integration sends the
 payload format 2.0 event and can't stream, so the server is built for it: the

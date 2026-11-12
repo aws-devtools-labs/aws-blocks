@@ -84,7 +84,7 @@ function run(
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ): void {
   console.log(`\n$ ${cmd} ${cmdArgs.join(" ")}`);
-  execFileSync(cmd, cmdArgs, { stdio: "inherit", ...opts });
+  execFileSync(cmd, cmdArgs, { stdio: "inherit", cwd: opts.cwd, env: opts.env });
 }
 
 /** Run a command and capture trimmed stdout. */
@@ -93,7 +93,11 @@ function capture(
   cmdArgs: string[],
   opts: { cwd: string; env: NodeJS.ProcessEnv },
 ): string {
-  return execFileSync(cmd, cmdArgs, { encoding: "utf-8", ...opts }).trim();
+  return execFileSync(cmd, cmdArgs, {
+    encoding: "utf-8",
+    cwd: opts.cwd,
+    env: opts.env,
+  }).trim();
 }
 
 // ── Main ────────────────────────────────────────────────────────────

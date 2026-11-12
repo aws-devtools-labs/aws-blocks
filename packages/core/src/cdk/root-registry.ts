@@ -3,6 +3,7 @@
 
 import { Stack } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
+import { markBlocksOwned } from './blocks-roles.js';
 
 /**
  * Brand identifying a Blocks **backend root** — a `BlocksStack` or an embedded
@@ -88,7 +89,12 @@ export function getOrCreateOnRoot<T>(scope: Construct, key: symbol, factory: (ro
 	const root = getBlocksRoot(scope);
 	const store = root as unknown as Record<symbol, unknown>;
 	if (!Object.hasOwn(store, key)) {
+		const before = new Set(root.node.children);
 		store[key] = factory(root);
+		// Shared per-backend infrastructure is the framework's, not the app's:
+		// mark what the factory added on the root so the service-principal trust
+		// check treats its roles as AWS Blocks roles (see isAppOwnedRole).
+		for (const child of root.node.children) if (!before.has(child)) markBlocksOwned(child);
 	}
 	return store[key] as T;
 }

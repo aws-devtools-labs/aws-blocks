@@ -4,7 +4,7 @@ This folder contains a TypeScript backend and a Swift iOS app that demonstrates 
 
 ## Features
 
-- **Authentication** — sign-up/sign-in via AuthBasic
+- **Authentication** — email + password sign-up (confirmed with an emailed code) and sign-in via `Auth`
 - **Todo List** — CRUD with priority, sorting by index (DistributedTable)
 - **Realtime Cursors** — collaborative cursor tracking (Realtime pub/sub)
 - **File Storage** — upload/download via presigned URLs (FileBucket)
@@ -17,6 +17,8 @@ This folder contains a TypeScript backend and a Swift iOS app that demonstrates 
 - Xcode 26+
 - iOS Simulator
 
+> **Upgrading a deployed stack:** todos are now keyed on the owner's `userSub` instead of `userId`. A table's key can't change in place, so a stack deployed from an earlier version of this demo fails to update — destroy it (`npm run sandbox:destroy` for a sandbox, `npm run destroy` for a deployed app) and deploy again. Existing todos are not carried over.
+
 ## 1. Start the TypeScript Backend
 
 ```bash
@@ -25,7 +27,7 @@ npm install
 npm run dev
 ```
 
-The server starts at `http://localhost:3001`. It serves the Blocks API (JSON-RPC) and the web frontend.
+The server starts at `http://localhost:3001`. It serves the Blocks API (JSON-RPC) and the web frontend. Sign-up sends a verification code; locally no email is sent, and the dev-server console prints the code instead.
 
 ## 2. Generate the Spec File
 

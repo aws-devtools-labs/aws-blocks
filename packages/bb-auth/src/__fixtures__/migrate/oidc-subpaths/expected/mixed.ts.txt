@@ -1,0 +1,7 @@
+// TODO(aws-blocks-auth-migrate): Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.
+// TODO(aws-blocks-auth-migrate): AuthOIDCClient has no equivalent in @aws-blocks/bb-auth: remove its uses.
+import { AuthOIDCClient } from '@aws-blocks/bb-auth-oidc/middleware';
+import { stubIdp } from '@aws-blocks/bb-auth';
+
+export const stub = stubIdp;
+export type Client = AuthOIDCClient;

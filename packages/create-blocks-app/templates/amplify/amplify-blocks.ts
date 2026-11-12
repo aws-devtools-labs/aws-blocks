@@ -5,9 +5,17 @@
  * Passes Cognito config so Blocks can verify bearer tokens.
  */
 import { registerConfig } from '@aws-blocks/blocks/cdk';
+import type { Stack } from 'aws-cdk-lib';
 import { createBlocksBackend } from '../aws-blocks/index.cdk.js';
 
-export async function initBlocks(backend: any) {
+/** The parts of Amplify Gen 2's `defineBackend(...)` result this file uses. */
+interface AmplifyBackend {
+  createStack(name: string): Stack;
+  auth?: { resources?: { cfnResources?: { cfnUserPool: { ref: string }; cfnUserPoolClient: { ref: string } } } };
+  addOutput(output: { custom: Record<string, unknown> }): void;
+}
+
+export async function initBlocks(backend: AmplifyBackend) {
   const blocksStack = backend.createStack('blocks');
   const sandboxMode = process.env.AMPLIFY_SANDBOX === 'true';
   const blocks = await createBlocksBackend(blocksStack, sandboxMode);

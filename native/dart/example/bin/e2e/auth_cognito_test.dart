@@ -1,19 +1,18 @@
-import 'dart:io';
-
 import 'harness.dart';
 
-/// AuthCognito E2E.
+/// Cognito-style `Auth` E2E (native-bindings' `auth-cognito` block).
 ///
 /// native-bindings configures: passwordPolicy { minLength: 8, requireDigits },
-/// email attribute, selfSignUp, MFA off.
+/// self sign-up, groups `admins` / `users`, MFA off.
 ///
 /// The suite runs two complementary paths, selected by the target backend
 /// (detected from BLOCKS_URL via [isLocalEndpoint]):
 ///
 ///   * LOCAL dev server — the full sign-up → confirmation-code → confirm → sign-in
-///     dance. The dev server's `codeDelivery` hook stashes the last code,
-///     retrievable via `cognitoGetLastCode`. Real Cognito emails the code
-///     instead, so this leg can ONLY be verified against the local dev server.
+///     dance. `Auth`'s local runtime hands the code to the backend's
+///     `codeDelivery` hook, retrievable via `cognitoGetLastCode`. Real Cognito
+///     emails the code instead, so this leg can ONLY be verified against the
+///     local dev server.
 ///
 ///   * DEPLOYED sandbox/prod — a returning-customer sign-in with a
 ///     PRE-PROVISIONED, CONFIRMED user. No emailed code is needed: the user is
@@ -23,16 +22,7 @@ import 'harness.dart';
 ///
 /// The returning-customer flow also runs locally — it self-provisions the user
 /// through the dev sign-up/confirm flow — so the new assertions get exercised in
-/// both run modes.
-
-/// Default credentials for the pre-provisioned returning-customer user. These
-/// MUST match the defaults in `seed-cognito-user.ts`. Override both sides with
-/// COGNITO_TEST_USERNAME / COGNITO_TEST_PASSWORD. The password satisfies the
-/// pool policy (>= 8 chars, contains a digit). Not a secret — a deterministic
-/// test fixture for a throwaway test pool.
-const _defaultReturningUsername = 'e2e-returning-user';
-const _defaultReturningPassword = 'Returning1Pass!';
-
+/// both run modes. Errors are asserted by their canonical name (`AuthErrors`).
 void main() async {
   final blocks = createBlocks();
   final local = isLocalEndpoint();
@@ -40,11 +30,12 @@ void main() async {
   if (local) {
     await _signUpConfirmFlow(blocks);
   } else {
-    group('AuthCognito: sign up → emailed-code → confirm (dev-server only)');
+    group(
+      'Auth (Cognito-style): sign up → emailed-code → confirm (dev-server only)',
+    );
     skip(
-      'cognitoGetLastCode is a dev-server affordance — real Cognito emails '
-      'the confirmation code, so this leg cannot run against a deployed pool. '
-      'The returning-customer sign-in below covers the real Cognito path.',
+      '$needsLocalCode. The returning-customer sign-in below covers the real '
+      'Cognito path.',
     );
   }
 
@@ -56,16 +47,13 @@ void main() async {
 /// Full local-only sign-up/confirm dance. Relies on the dev server's
 /// `cognitoGetLastCode` hook, which real Cognito cannot satisfy.
 Future<void> _signUpConfirmFlow(Blocks blocks) async {
-  final suffix = DateTime.now().millisecondsSinceEpoch.toString();
-  final username = 'cognitouser_$suffix';
-  final password =
-      'Passw0rd!'; // upper+lower+digit+symbol, >=8 (Cognito default policy)
+  final username = uniqueUsername('cognitouser');
   final email = '$username@example.com';
 
-  group('AuthCognito: sign up');
+  group('Auth (Cognito-style): sign up');
   final signUp = await blocks.api.cognitoSignUp(
     username: username,
-    password: password,
+    password: e2ePassword,
     email: email,
   );
   check(
@@ -73,32 +61,55 @@ Future<void> _signUpConfirmFlow(Blocks blocks) async {
     'signUp pending confirmation (isSignUpComplete=false)',
   );
 
-  group('AuthCognito: get verification code');
-  final codeResult = await blocks.api.cognitoGetLastCode();
+  group('Auth (Cognito-style): get verification code');
+  final codeResult = await blocks.api.cognitoGetLastCode(username: username);
   check(codeResult != null, 'code was delivered');
-  check(codeResult?.username == username, 'code is for correct user');
+  check(
+    codeResult?.purpose == DeliveredCodePurpose.signUp,
+    'code is a sign-up code',
+  );
   final code = codeResult!.code;
 
-  group('AuthCognito: confirm sign up');
+  group('Auth (Cognito-style): wrong code');
+  await expectErrorNamed(
+    () => blocks.api.cognitoConfirmSignUp(
+      username: username,
+      code: code == '000000' ? '111111' : '000000',
+    ),
+    AuthErrorNames.codeMismatch,
+    label: 'confirmSignUp with a wrong code throws',
+  );
+
+  group('Auth (Cognito-style): confirm sign up');
   final confirm = await blocks.api.cognitoConfirmSignUp(
     username: username,
     code: code,
   );
   check(confirm.success, 'confirmSignUp returns success');
 
-  group('AuthCognito: sign in');
-  // cognitoSignIn returns a dynamic sign-in result; with MFA off it completes.
+  group('Auth (Cognito-style): sign in');
+  // With MFA off, sign-in completes in one step.
   final signIn = await blocks.api.cognitoSignIn(
     username: username,
-    password: password,
+    password: e2ePassword,
   );
-  check(signIn != null, 'signIn returns a result');
+  check(
+    signIn is SignedInCognitoSignInResult,
+    'signIn completes (status=signedIn)',
+  );
+  if (signIn is SignedInCognitoSignInResult) {
+    check(signIn.user.username == username, 'signIn returns the user');
+    check(
+      signIn.user.attributes['email'] == email,
+      'signIn returns the email attribute',
+    );
+  }
 
-  group('AuthCognito: checkAuth (authenticated)');
+  group('Auth (Cognito-style): checkAuth (authenticated)');
   final authed = await blocks.api.cognitoCheckAuth();
   check(authed == true, 'checkAuth returns true when signed in');
 
-  group('AuthCognito: get current user (authenticated)');
+  group('Auth (Cognito-style): get current user (authenticated)');
   final current = await blocks.api.cognitoGetCurrentUser();
   check(current != null, 'getCurrentUser returns user');
   check(
@@ -106,33 +117,48 @@ Future<void> _signUpConfirmFlow(Blocks blocks) async {
     'current user matches (got: ${current?.username})',
   );
 
-  group('AuthCognito: requireAuth (authenticated)');
+  group('Auth (Cognito-style): requireAuth (authenticated)');
   final required = await blocks.api.cognitoRequireAuth();
   check(required.username == username, 'requireAuth returns current user');
 
-  group('AuthCognito: sign out');
+  group('Auth (Cognito-style): requireRole (not a member)');
+  await expectErrorNamed(
+    () => blocks.api.cognitoRequireRole(role: ApiCognitoRequireRoleRole.admins),
+    AuthErrorNames.notAuthorized,
+    label: 'requireRole throws for a group the user is not in',
+  );
+
+  group('Auth (Cognito-style): sign out');
   final out = await blocks.api.cognitoSignOut();
   check(out.success, 'signOut returns success');
 
-  group('AuthCognito: get current user (signed out)');
+  group('Auth (Cognito-style): get current user (signed out)');
   final afterSignOut = await blocks.api.cognitoGetCurrentUser();
   check(afterSignOut == null, 'getCurrentUser returns null after sign out');
 
-  group('AuthCognito: resend sign-up code (idempotent path)');
+  group('Auth (Cognito-style): resend sign-up code (idempotent path)');
   // Re-sign-up a fresh user to exercise resend without a confirmed account.
-  final username2 = 'cognitouser2_$suffix';
+  final username2 = uniqueUsername('cognitouser2');
   await blocks.api.cognitoSignUp(
     username: username2,
-    password: password,
+    password: e2ePassword,
     email: '$username2@example.com',
   );
   final resend = await blocks.api.cognitoResendSignUpCode(username: username2);
   check(resend.success, 'resendSignUpCode returns success');
 
-  group('AuthCognito: wrong password');
-  await expectError(
+  group('Auth (Cognito-style): sign in before confirming');
+  await expectErrorNamed(
+    () => blocks.api.cognitoSignIn(username: username2, password: e2ePassword),
+    AuthErrorNames.userNotConfirmed,
+    label: 'signIn throws until the code is confirmed',
+  );
+
+  group('Auth (Cognito-style): wrong password');
+  await expectErrorNamed(
     () => blocks.api.cognitoSignIn(username: username, password: 'Wrong5678!'),
-    label: 'wrong password throws error',
+    AuthErrorNames.notAuthorized,
+    label: 'wrong password throws',
   );
 }
 
@@ -146,14 +172,11 @@ Future<void> _returningCustomerFlow(
   Blocks blocks, {
   required bool local,
 }) async {
-  final username =
-      Platform.environment['COGNITO_TEST_USERNAME'] ??
-      _defaultReturningUsername;
-  final password =
-      Platform.environment['COGNITO_TEST_PASSWORD'] ??
-      _defaultReturningPassword;
+  final user = returningUser();
+  final username = user.username;
+  final password = user.password;
 
-  group('AuthCognito (returning customer): provision');
+  group('Auth (Cognito-style, returning customer): provision');
   if (local) {
     await _provisionLocalUser(blocks, username, password);
     check(
@@ -167,17 +190,17 @@ Future<void> _returningCustomerFlow(
     );
   }
 
-  group('AuthCognito (returning customer): sign in');
+  group('Auth (Cognito-style, returning customer): sign in');
   final signIn = await blocks.api.cognitoSignIn(
     username: username,
     password: password,
   );
   check(
-    signIn != null,
-    'cognitoSignIn returns a result for the confirmed user',
+    signIn is SignedInCognitoSignInResult,
+    'cognitoSignIn signs the confirmed user in',
   );
 
-  group('AuthCognito (returning customer): authenticated RPC');
+  group('Auth (Cognito-style, returning customer): authenticated RPC');
   final authed = await blocks.api.cognitoCheckAuth();
   check(authed == true, 'checkAuth returns true after sign in');
   final current = await blocks.api.cognitoGetCurrentUser();
@@ -189,7 +212,9 @@ Future<void> _returningCustomerFlow(
   final required = await blocks.api.cognitoRequireAuth();
   check(required.username == username, 'requireAuth returns the current user');
 
-  group('AuthCognito (returning customer): session persists across requests');
+  group(
+    'Auth (Cognito-style, returning customer): session persists across requests',
+  );
   // Re-issue authenticated RPCs after the initial calls — the cookie session
   // must still resolve, proving it persists across round-trips (not just within
   // one in-flight call).
@@ -201,29 +226,42 @@ Future<void> _returningCustomerFlow(
     'getCurrentUser still resolves the same user',
   );
 
-  group('AuthCognito (returning customer): sign out');
+  group('Auth (Cognito-style, returning customer): sign out');
   final out = await blocks.api.cognitoSignOut();
   check(out.success, 'signOut returns success');
   final afterOut = await blocks.api.cognitoGetCurrentUser();
   check(afterOut == null, 'getCurrentUser returns null after sign out');
   final authedAfter = await blocks.api.cognitoCheckAuth();
   check(authedAfter == false, 'checkAuth returns false after sign out');
+  await expectErrorNamed(
+    () => blocks.api.cognitoRequireAuth(),
+    AuthErrorNames.notAuthenticated,
+    label: 'requireAuth throws after sign out',
+  );
 }
 
 /// Provisions the returning-customer user on the LOCAL dev server via the real
 /// sign-up → confirm flow, using the dev-only `cognitoGetLastCode` hook.
+/// Idempotent across runs that share `.bb-data`: an existing user is reused.
 Future<void> _provisionLocalUser(
   Blocks blocks,
   String username,
   String password,
 ) async {
-  final signUp = await blocks.api.cognitoSignUp(
-    username: username,
-    password: password,
-    email: '$username@example.com',
-  );
-  if (signUp.isSignUpComplete) return; // already confirmed
-  final codeResult = await blocks.api.cognitoGetLastCode();
+  try {
+    await blocks.api.cognitoSignUp(
+      username: username,
+      password: password,
+      email: '$username@example.com',
+    );
+  } on BlocksRpcException catch (e) {
+    final data = e.data;
+    if (data is Map && data['name'] == AuthErrorNames.userAlreadyExists) {
+      return; // provisioned by an earlier run
+    }
+    rethrow;
+  }
+  final codeResult = await blocks.api.cognitoGetLastCode(username: username);
   if (codeResult == null) {
     throw StateError(
       'local provisioning expected a dev code from cognitoGetLastCode but got null',

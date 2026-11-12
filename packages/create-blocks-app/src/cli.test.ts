@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import assert from 'node:assert';
-import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN } from './index.js';
+import { SAFE_TO_SCAFFOLD_ENTRIES, SAFE_TO_SCAFFOLD_PATTERN, TEMPLATE_ALIASES } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(__dirname, '../dist/index.js');
@@ -57,7 +57,8 @@ describe('create-blocks-app CLI argument parsing', () => {
     assert.strictEqual(result.exitCode, 0);
     assert.match(result.stdout, /Usage: create-blocks-app/);
     assert.match(result.stdout, /--template/);
-    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth-cognito, agent, cron, observability, amplify, demo/);
+    assert.match(result.stdout, /Available templates: default, bare, react, backend, api-only, sql, nextjs, auth, agent, cron, observability, amplify, demo/);
+    assert.match(result.stdout, /Former names \(still accepted\): auth-cognito → auth/);
     assert.match(result.stdout, /--skip-install/);
     assert.match(result.stdout, /--help/);
     assert.match(result.stdout, /auto-detected/);
@@ -149,6 +150,29 @@ describe('create-blocks-app CLI argument parsing', () => {
       assert.doesNotMatch(result.stderr, /ENOENT/);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('--template auth-cognito (the former name) scaffolds the auth template', () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'create-blocks-app-alias-'));
+    const targetDir = join(tmpDir, 'my-app');
+    try {
+      const result = run([targetDir, '--template', 'auth-cognito', '--skip-install', '-y']);
+      assert.strictEqual(result.exitCode, 0, result.stderr);
+      assert.match(result.stdout, /"auth-cognito" template is now called "auth"/);
+      const pkg = JSON.parse(readFileSync(join(targetDir, 'package.json'), 'utf-8'));
+      assert.strictEqual(pkg.blocksTemplate, 'auth');
+      assert.match(readFileSync(join(targetDir, 'aws-blocks', 'index.ts'), 'utf-8'), /new Auth\(scope, 'auth'/);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  });
+
+  it('every template alias points at a real template and shadows none', () => {
+    const templatesDir = join(__dirname, '..', 'templates');
+    for (const [from, to] of Object.entries(TEMPLATE_ALIASES)) {
+      assert.ok(existsSync(join(templatesDir, to, 'package.json')), `alias ${from} → ${to}: no template "${to}"`);
+      assert.ok(!existsSync(join(templatesDir, from)), `alias ${from} would shadow the template folder "${from}"`);
     }
   });
 
@@ -246,7 +270,7 @@ describe('create-blocks-app template metadata', () => {
       cron: { port: 3001, frontend: false },
       observability: { port: 3001, frontend: false },
       nextjs: frontend,
-      'auth-cognito': frontend,
+      auth: frontend,
       agent: frontend,
       bare: frontend,
       default: frontend,
@@ -271,7 +295,7 @@ describe('create-blocks-app template metadata', () => {
     const vite = (port: number) => `npx vite --port ${port} --strictPort`;
     const next = (port: number) => `npx next dev --webpack --hostname 127.0.0.1 --port ${port}`;
     const commands: Record<string, (port: number) => string> = {
-      nextjs: next, 'auth-cognito': vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
+      nextjs: next, auth: vite, agent: vite, bare: vite, default: vite, demo: vite, react: vite,
     };
     const templatesDir = join(__dirname, '..', 'templates');
     for (const [name, command] of Object.entries(commands)) {
@@ -869,9 +893,9 @@ describe('create-blocks-app auto-detection', () => {
   });
 
   it('every deployable template ships the standard `vendorize` script', () => {
-    // Regression guard: the auth-cognito template was missing `vendorize`
-    // (all other deployable templates had it), so `npm run vendorize` didn't
-    // work in scaffolded auth-cognito apps. A template that can `sandbox`/`deploy`
+    // Regression guard: the auth template (then named auth-cognito) was missing
+    // `vendorize` (all other deployable templates had it), so `npm run vendorize`
+    // didn't work in apps scaffolded from it. A template that can `sandbox`/`deploy`
     // (i.e. has those lifecycle scripts) must also expose `vendorize` so users
     // can inline a Block's source for customization.
     const templatesDir = join(__dirname, '..', 'templates');
@@ -890,6 +914,35 @@ describe('create-blocks-app auto-detection', () => {
       }
     }
     assert.deepStrictEqual(missing, [], `Deployable templates missing "vendorize": ${missing.join(', ')}`);
+  });
+
+  it('every template that constructs Auth creates an email, case-insensitive pool', () => {
+    // `signInWith` and `caseSensitive` are fixed once a Cognito user pool exists,
+    // so the shape new apps start with is permanent. Email sign-in, matched
+    // ignoring case, is also the pool shape Amplify's client libraries expect —
+    // keeping the door open to a client-driven frontend on the same pool.
+    const templatesDir = join(__dirname, '..', 'templates');
+    const offenders: string[] = [];
+    let checked = 0;
+    for (const name of readdirSync(templatesDir)) {
+      const backend = join(templatesDir, name, 'aws-blocks', 'index.ts');
+      if (!existsSync(backend)) continue;
+      const source = readFileSync(backend, 'utf-8');
+      // Live code, and the commented-out example in `bare` (`// const auth = …`).
+      const construct =
+        /^\s*(?:\/\/\s*)?const auth = new Auth\(scope, 'auth', \{([\s\S]*?)\n(?:\/\/ )?\}\);/m.exec(source);
+      if (!construct) continue;
+      checked++;
+      if (!/signInWith: \['email'\]/.test(construct[1]) || !/caseSensitive: false/.test(construct[1])) {
+        offenders.push(name);
+      }
+    }
+    assert.ok(checked >= 6, `expected the auth-using templates to be found, checked ${checked}`);
+    assert.deepStrictEqual(
+      offenders,
+      [],
+      `templates without signInWith ['email'] + caseSensitive false: ${offenders.join(', ')}`,
+    );
   });
 
   it('skips npm install when creating a fresh project with --skip-install', () => {
