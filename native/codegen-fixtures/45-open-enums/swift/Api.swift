@@ -160,11 +160,20 @@ public final nonisolated class Api: Sendable {
             }
         }
 
+        public struct Unknown: Codable {
+            public let note: String
+
+            public init(note: String) {
+                self.note = note
+            }
+        }
+
         public enum Result: Codable {
             case moved(Moved)
             case flagged(Flagged)
+            case unknown(Unknown)
             /// An arm this client was generated without: the object as the server sent it.
-            case unknown(JSONValue)
+            case unknownValue(JSONValue)
 
             enum CodingKeys: String, CodingKey {
                 case kind
@@ -180,7 +189,11 @@ public final nonisolated class Api: Sendable {
                     var container = encoder.container(keyedBy: CodingKeys.self)
                     try container.encode("flagged", forKey: .kind)
                     try params.encode(to: encoder)
-                case .unknown(let value):
+                case .unknown(let params):
+                    var container = encoder.container(keyedBy: CodingKeys.self)
+                    try container.encode("unknown", forKey: .kind)
+                    try params.encode(to: encoder)
+                case .unknownValue(let value):
                     try value.encode(to: encoder)
                 }
             }
@@ -191,8 +204,9 @@ public final nonisolated class Api: Sendable {
                 switch disc {
                 case "moved": self = .moved(try Moved(from: decoder))
                 case "flagged": self = .flagged(try Flagged(from: decoder))
+                case "unknown": self = .unknown(try Unknown(from: decoder))
                 default:
-                    self = .unknown(try JSONValue(from: decoder))
+                    self = .unknownValue(try JSONValue(from: decoder))
                 }
             }
         }

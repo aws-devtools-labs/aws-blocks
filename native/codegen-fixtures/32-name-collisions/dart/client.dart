@@ -247,7 +247,7 @@ sealed class TicketPayload {
     switch (json['type'] as String) {
       case 'text': return TextTicketPayload.fromJson(json);
       case 'count': return CountTicketPayload.fromJson(json);
-      default: return UnknownTicketPayload(json);
+      default: return TicketPayloadUnknown(json);
     }
   }
 }
@@ -321,27 +321,27 @@ class CountTicketPayload extends TicketPayload {
 }
 
 /// A `TicketPayload` arm this client was generated without.
-final class UnknownTicketPayload extends TicketPayload {
+final class TicketPayloadUnknown extends TicketPayload {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownTicketPayload(this.json);
+  const TicketPayloadUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['type'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownTicketPayload && blocksDeepEquals(json, other.json);
+      other is TicketPayloadUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownTicketPayload' '($json)';
+  String toString() => 'TicketPayloadUnknown' '($json)';
 }
 
 
@@ -353,7 +353,7 @@ sealed class TicketPayloads {
     switch (json['format'] as String) {
       case 'plain': return PlainTicketPayloads.fromJson(json);
       case 'rich': return RichTicketPayloads.fromJson(json);
-      default: return UnknownTicketPayloads(json);
+      default: return TicketPayloadsUnknown(json);
     }
   }
 }
@@ -427,27 +427,27 @@ class RichTicketPayloads extends TicketPayloads {
 }
 
 /// A `TicketPayloads` arm this client was generated without.
-final class UnknownTicketPayloads extends TicketPayloads {
+final class TicketPayloadsUnknown extends TicketPayloads {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownTicketPayloads(this.json);
+  const TicketPayloadsUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['format'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownTicketPayloads && blocksDeepEquals(json, other.json);
+      other is TicketPayloadsUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownTicketPayloads' '($json)';
+  String toString() => 'TicketPayloadsUnknown' '($json)';
 }
 
 
@@ -887,7 +887,7 @@ sealed class ActResult {
     switch (json['action'] as String) {
       case 'pick': return PickActResult.fromJson(json);
       case 'skip': return SkipActResult.fromJson(json);
-      default: return UnknownActResult(json);
+      default: return ActResultUnknown(json);
     }
   }
 }
@@ -966,27 +966,27 @@ class SkipActResult extends ActResult {
 }
 
 /// A `ActResult` arm this client was generated without.
-final class UnknownActResult extends ActResult {
+final class ActResultUnknown extends ActResult {
   /// The object as the server sent it.
   final Map<String, dynamic> json;
 
-  const UnknownActResult(this.json);
+  const ActResultUnknown(this.json);
 
   /// The discriminator value that names no known arm.
   String get discriminator => json['action'] as String;
 
   @override
-  Map<String, dynamic> toJson() => json;
+  Map<String, dynamic> toJson() => Map.of(json);
 
   @override
   bool operator ==(Object other) =>
-      other is UnknownActResult && blocksDeepEquals(json, other.json);
+      other is ActResultUnknown && blocksDeepEquals(json, other.json);
 
   @override
   int get hashCode => blocksDeepHash(json);
 
   @override
-  String toString() => 'UnknownActResult' '($json)';
+  String toString() => 'ActResultUnknown' '($json)';
 }
 
 

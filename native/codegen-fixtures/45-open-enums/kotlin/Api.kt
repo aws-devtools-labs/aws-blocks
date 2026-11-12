@@ -147,7 +147,11 @@ public class Api(
               put("kind", JsonPrimitive("flagged"))
               output.json.encodeToJsonElement(Flagged.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
             }
-            is Unknown -> value.json
+            is Unknown -> buildJsonObject {
+              put("kind", JsonPrimitive("unknown"))
+              output.json.encodeToJsonElement(Unknown.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+            }
+            is UnknownValue -> value.json
           }
           output.encodeJsonElement(element)
         }
@@ -160,17 +164,18 @@ public class Api(
             when (element["kind"]) {
               JsonPrimitive("moved") -> return input.json.decodeFromJsonElement(Moved.serializer(), fields)
               JsonPrimitive("flagged") -> return input.json.decodeFromJsonElement(Flagged.serializer(), fields)
-              else -> return Unknown(element)
+              JsonPrimitive("unknown") -> return input.json.decodeFromJsonElement(Unknown.serializer(), fields)
+              else -> return UnknownValue(element)
             }
           }
-          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"kind\": \"moved\"; or an object with \"kind\": \"flagged\"")
+          throw SerializationException("No variant of Result matches this JSON value; expected an object with \"kind\": \"moved\"; an object with \"kind\": \"flagged\"; or an object with \"kind\": \"unknown\"")
         }
       }
 
       /**
        * An arm this client was generated without: the object as the server sent it.
        */
-      public data class Unknown(
+      public data class UnknownValue(
         public val json: JsonObject,
       ) : Result()
 
@@ -234,6 +239,12 @@ public class Api(
           }
         }
       }
+
+      @Serializable
+      @SerialName("unknown")
+      public data class Unknown(
+        public val note: String,
+      ) : Result()
     }
   }
 

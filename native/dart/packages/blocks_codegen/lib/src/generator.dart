@@ -81,10 +81,12 @@ class DartCodeGenerator {
         ..add(classes.$1)
         ..add(classes.$2);
     }
-    // Each open union's `UnknownX` is a top-level name too.
+    // Each open union's `XUnknown` is a top-level name too. It follows the
+    // open enum's `XUnknown`, and an arm's class is `${Arm}${Union}`, so an
+    // arm tagged `unknown` (`UnknownX`) doesn't take it.
     final openUnions = <String, String>{};
     for (final name in _openUnions(model)) {
-      var unknown = 'Unknown$name';
+      var unknown = '${name}Unknown';
       while (declared.contains(unknown)) {
         unknown = '$unknown\$';
       }
@@ -706,7 +708,8 @@ class DartCodeGenerator {
       buf.writeln('  String get discriminator => json[$key] as String;');
       buf.writeln();
       buf.writeln('  @override');
-      buf.writeln('  Map<String, dynamic> toJson() => json;');
+      // A copy, so a caller can't change this value (or its hash) through it.
+      buf.writeln('  Map<String, dynamic> toJson() => Map.of(json);');
       buf.writeln();
       buf.writeln('  @override');
       buf.writeln('  bool operator ==(Object other) =>');
@@ -718,6 +721,7 @@ class DartCodeGenerator {
       buf.writeln('  int get hashCode => blocksDeepHash(json);');
       buf.writeln();
       buf.writeln('  @override');
+      // The class name may end in `$`, which a string literal must escape.
       buf.writeln(
         "  String toString() => ${_dartStringLiteral(unknown)} '(\$json)';",
       );
@@ -1670,7 +1674,7 @@ class DartCodeGenerator {
   /// The unions a response can carry, by the same walk as [_openEnums]: every
   /// union with a string discriminator that an operation's result reaches.
   /// These are generated open (see [_emitSealedClass]), so an arm a newer
-  /// backend adds decodes to `UnknownX` instead of throwing. A union only
+  /// backend adds decodes to `XUnknown` instead of throwing. A union only
   /// parameters reach stays closed, and so does one with a boolean
   /// discriminator (`true`/`false` is already exhaustive) and a union embedded
   /// in a hybrid arm, which shares that arm's JSON object.
