@@ -94,7 +94,13 @@ public class Api(
        */
       public data class Unknown(
         public val json: JsonObject,
-      ) : Result()
+      ) : Result() {
+        /**
+         * The discriminator value that names no known arm.
+         */
+        public val discriminator: String?
+          get() = (json["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+      }
 
       @Serializable
       @SerialName("continueSignIn")
@@ -210,7 +216,13 @@ public class Api(
            */
           public data class Unknown(
             public val json: JsonObject,
-          ) : NextStep()
+          ) : NextStep() {
+            /**
+             * The discriminator value that names no known arm.
+             */
+            public val discriminator: String?
+              get() = (json["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+          }
 
           @Serializable
           @SerialName("CONFIRM_SIGN_IN_WITH_SMS_CODE")
@@ -527,7 +539,13 @@ public class Api(
        */
       public data class Unknown(
         public val json: JsonObject,
-      ) : Result()
+      ) : Result() {
+        /**
+         * The discriminator value that names no known arm.
+         */
+        public val discriminator: String?
+          get() = (json["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+      }
 
       @Serializable
       @SerialName("continueSignIn")
@@ -643,7 +661,13 @@ public class Api(
            */
           public data class Unknown(
             public val json: JsonObject,
-          ) : NextStep()
+          ) : NextStep() {
+            /**
+             * The discriminator value that names no known arm.
+             */
+            public val discriminator: String?
+              get() = (json["name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+          }
 
           @Serializable
           @SerialName("CONFIRM_SIGN_IN_WITH_SMS_CODE")
