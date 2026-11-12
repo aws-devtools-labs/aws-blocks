@@ -42,7 +42,7 @@ final class SendableModelTests: XCTestCase {
         let output = try generate(fixture: "18-hybrid-arm")
 
         assertContains(output.models, "public nonisolated struct AuthState: Codable, Sendable {")
-        assertContains(output.models, "public nonisolated enum AuthStateState: String, Codable, Sendable {")
+        assertContains(output.models, "public nonisolated enum AuthStateState: RawRepresentable, Codable, Hashable, Sendable {")
         assertContains(output.api, "        public enum Input: Codable, Sendable {")
         assertContains(output.api, "        public struct SignIn: Codable, Sendable {")
     }

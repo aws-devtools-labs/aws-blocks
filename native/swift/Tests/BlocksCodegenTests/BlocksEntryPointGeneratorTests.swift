@@ -92,7 +92,7 @@ final class BlocksEntryPointGeneratorTests: XCTestCase {
             "public final nonisolated class Blocks: Sendable {",
             "public nonisolated enum Servers {",
             "public nonisolated struct Todo: Codable, Sendable {",
-            "public nonisolated enum Status: String, Codable, Sendable {"
+            "public nonisolated enum Status: RawRepresentable, Codable, Hashable, Sendable {"
         ])
         let members = (output.api + output.models).split(separator: "\n").filter { $0.hasPrefix(" ") && $0.contains("nonisolated") }
         XCTAssertEqual(members, [], "members inherit nonisolated from their type")

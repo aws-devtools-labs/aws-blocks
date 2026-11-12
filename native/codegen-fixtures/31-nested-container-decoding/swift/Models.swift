@@ -92,9 +92,27 @@ public nonisolated struct Layout: Codable, Sendable {
     }
 }
 
-public nonisolated enum Level: String, Codable, Sendable {
+public nonisolated enum Level: RawRepresentable, Codable, Hashable, Sendable {
     case low
     case high
+    /// A value this client was generated without, as the server sent it.
+    case unknown(String)
+
+    public init(rawValue: String) {
+        switch rawValue {
+        case "low": self = .low
+        case "high": self = .high
+        default: self = .unknown(rawValue)
+        }
+    }
+
+    public var rawValue: String {
+        switch self {
+        case .low: return "low"
+        case .high: return "high"
+        case .unknown(let value): return value
+        }
+    }
 }
 
 public nonisolated struct LoginMenu: Codable, Sendable {
