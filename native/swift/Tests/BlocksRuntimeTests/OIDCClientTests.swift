@@ -240,6 +240,20 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(events, [.signedIn(user)])
     }
 
+    func testExchangeRefusesAnUnknownProviderBeforeAnyRequest() async {
+        let client = makeClient(session: makeMockSession())
+
+        do {
+            _ = try await client.exchange(code: "c", verifier: "v", callbackURL: "x", provider: "github", state: "s", nonce: "n")
+            XCTFail("Expected unknownProvider")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .unknownProvider("github"))
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
     func testExchangeThrowsOnMalformedResponse() async {
         OIDCMockURLProtocol.handler = { request in
             let body: [String: Any] = ["nope": "missing tokens"]
@@ -747,6 +761,154 @@ final class OIDCClientTests: XCTestCase {
         XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
     }
 
+    // MARK: - forAuth
+
+    /// Answers authorize-params with a signed-state envelope carrying the request's `csrf`, as the
+    /// server does, and the exchange with a user.
+    private func stubAuthRoutes() {
+        OIDCMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path.contains("/authorize-params/") {
+                let csrf = requestJSON(request)["csrf"] as? String ?? ""
+                let payload = try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": csrf])
+                let state = Self.base64URL(payload) + ".sig"
+                let body = try JSONSerialization.data(withJSONObject: [
+                    "authorizeUrl": "https://idp.example.com/authorize",
+                    "clientId": "cid",
+                    "scopes": ["openid"],
+                    "kind": "oidc",
+                    "state": state
+                ])
+                return (okResponse(for: url), body)
+            }
+            let body = try JSONSerialization.data(withJSONObject: ["user": ["userId": "u1", "username": "dave"]])
+            return (okResponse(for: url), body)
+        }
+    }
+
+    private static func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    func testForAuthDerivesTheRoutesFromTheDefaultCallbackPath() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/prod/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "nativebindings://auth")
+        let launcher = EchoStateRelayLauncher(relay: "nativebindings://auth?code=c")
+
+        let user = try await client.signIn(provider: "google", launcher: launcher)
+
+        XCTAssertEqual(user.userId, "u1")
+        XCTAssertTrue(client.client === blocksClient, "forAuth shares the app's client")
+        XCTAssertEqual(client.exchangePath, "/aws-blocks/auth/exchange")
+        XCTAssertEqual(client.refreshPath, "/aws-blocks/auth/exchange/refresh")
+        XCTAssertEqual(client.signOutPath, "/aws-blocks/auth/signout")
+        XCTAssertEqual(
+            OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
+            [
+                "https://api.example.com/prod/aws-blocks/auth/authorize-params/google",
+                "https://api.example.com/prod/aws-blocks/auth/exchange"
+            ]
+        )
+        let params = requestJSON(OIDCMockURLProtocol.requests[0])
+        XCTAssertEqual(params["relayTo"] as? String, "nativebindings://auth")
+        let exchange = requestJSON(OIDCMockURLProtocol.requests[1])
+        XCTAssertEqual(exchange["callbackUrl"] as? String, "https://api.example.com/prod/aws-blocks/auth/callback")
+        XCTAssertEqual(exchange["provider"] as? String, "google")
+        let authorizeURL = try XCTUnwrap(launcher.authorizeURL)
+        let redirectURI = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "redirect_uri" }?.value
+        XCTAssertEqual(redirectURI, "https://api.example.com/prod/aws-blocks/auth/callback")
+    }
+
+    /// A custom callback name and a second block's routes: the base is the directory of
+    /// `callbackPath`, not a string replacement on `exchangePath`.
+    func testForAuthDerivesTheRoutesFromACustomCallbackPath() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "http://localhost:3001/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(
+            client: blocksClient,
+            providers: ["corp sso"],
+            relayTo: "myapp://auth",
+            callbackPath: "/aws-blocks/auth/sso/login",
+            signOutPath: "/aws-blocks/auth/sso/signout"
+        )
+        let launcher = EchoStateRelayLauncher(relay: "myapp://auth?code=c")
+
+        _ = try await client.signIn(provider: "corp sso", launcher: launcher)
+
+        XCTAssertEqual(client.exchangePath, "/aws-blocks/auth/sso/exchange")
+        XCTAssertEqual(client.refreshPath, "/aws-blocks/auth/sso/exchange/refresh")
+        XCTAssertEqual(client.signOutPath, "/aws-blocks/auth/sso/signout")
+        XCTAssertEqual(
+            OIDCMockURLProtocol.requests.compactMap { $0.url?.absoluteString },
+            [
+                "http://localhost:3001/aws-blocks/auth/sso/authorize-params/corp%20sso",
+                "http://localhost:3001/aws-blocks/auth/sso/exchange"
+            ]
+        )
+        let exchange = requestJSON(OIDCMockURLProtocol.requests[1])
+        XCTAssertEqual(exchange["callbackUrl"] as? String, "http://localhost:3001/aws-blocks/auth/sso/login")
+    }
+
+    func testForAuthRefusesAnUnknownProviderBeforeAnyRequest() async {
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        do {
+            _ = try await client.signIn(provider: "github", launcher: EchoStateRelayLauncher(relay: "myapp://auth"))
+            XCTFail("Expected unknownProvider")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .unknownProvider("github"))
+        } catch {
+            XCTFail("Expected OIDCError, got \(error)")
+        }
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    func testForAuthWithoutRelayToThrowsAConfigurationErrorOnSignIn() async {
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"])
+
+        do {
+            _ = try await client.signIn(provider: "google", launcher: EchoStateRelayLauncher(relay: "myapp://auth"))
+            XCTFail("Expected OIDCConfigurationError")
+        } catch let error as OIDCConfigurationError {
+            XCTAssertTrue(error.message.contains("relayTo"), error.message)
+        } catch {
+            XCTFail("Expected OIDCConfigurationError, got \(error)")
+        }
+        XCTAssertTrue(OIDCMockURLProtocol.requests.isEmpty)
+    }
+
+    func testForAuthPathValidation() {
+        let problem = OIDCClient<String>.authPathsProblem
+        XCTAssertNil(problem("/aws-blocks/auth/callback", "/aws-blocks/auth/signout"))
+        XCTAssertNil(problem("/aws-blocks/auth/sso/callback", "/aws-blocks/auth/sso/signout"))
+        XCTAssertNotNil(problem("/auth/callback", "/aws-blocks/auth/signout"))
+        XCTAssertNotNil(problem("/aws-blocks/auth/callback", "/signout"))
+        XCTAssertNotNil(problem("/aws-blocks/auth/", "/aws-blocks/auth/signout"))
+        XCTAssertNotNil(problem("/aws-blocks/auth/callback/", "/aws-blocks/auth/signout"))
+    }
+
+    /// The origin raw routes are requested at: the client URL cut at its first `aws-blocks` segment.
+    func testRawRouteBaseKeepsTheStageAndCutsAtTheFirstAwsBlocksSegment() {
+        let cases = [
+            ("https://x.execute-api.us-east-1.amazonaws.com/prod/aws-blocks/api",
+             "https://x.execute-api.us-east-1.amazonaws.com/prod"),
+            ("https://d1.cloudfront.net/aws-blocks/api", "https://d1.cloudfront.net"),
+            ("https://d1.cloudfront.net/aws-blocks/api/aws-blocks/api", "https://d1.cloudfront.net"),
+            ("http://localhost:3001", "http://localhost:3001"),
+            ("http://localhost:3001/", "http://localhost:3001")
+        ]
+        for (url, origin) in cases {
+            XCTAssertEqual(BlocksClient(url: url).rawRouteBase, origin, url)
+        }
+    }
+
     func testFromJSONThrowsOnMissingExchangePath() {
         let descriptor: [String: Any] = ["signOutPath": "/auth/signout"]
         XCTAssertThrowsError(try OIDCClient<String>.fromJSON(descriptor, baseUrl: "x", client: BlocksClient(url: "x"))) { error in
@@ -784,5 +946,24 @@ private final class CapturingRelayLauncher: BrowserLauncher, @unchecked Sendable
     func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
         self.authorizeURL = authorizeURL
         return try XCTUnwrap(URL(string: relay))
+    }
+}
+
+/// Relays back to `relay` with the `state` the authorize URL carried, as the server's callback does.
+private final class EchoStateRelayLauncher: BrowserLauncher, @unchecked Sendable {
+    private let relay: String
+    private(set) var authorizeURL: URL?
+
+    init(relay: String) {
+        self.relay = relay
+    }
+
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        self.authorizeURL = authorizeURL
+        let state = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first { $0.name == "state" }?.value ?? ""
+        var components = try XCTUnwrap(URLComponents(string: relay))
+        components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "state", value: state)]
+        return try XCTUnwrap(components.url)
     }
 }

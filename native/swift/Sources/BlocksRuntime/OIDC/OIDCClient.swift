@@ -44,6 +44,14 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
     nonisolated let client: BlocksClient
     private var tokenStore: TokenStore { client.tokenStore }
 
+    /// The routes' base, the directory of `callbackPath`, for a client built with `forAuth`.
+    /// `nil` for a client built with `init` or `fromJSON`, which derives its routes from `exchangePath`.
+    nonisolated let routeBase: String?
+    /// The IdP `redirect_uri` path, for a client built with `forAuth`.
+    nonisolated let callbackPath: String?
+    /// The `relayTo` that `signIn(provider:launcher:)` uses.
+    nonisolated let relayTo: String?
+
     /// The descriptor this client was hydrated from, as the server sent it. `nil` for a client built with `init`.
     /// `encode(to:)` writes it back unchanged.
     nonisolated let wireDescriptor: [String: JSONValue]?
@@ -80,7 +88,10 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         providerConfigs: [String: OIDCProviderConfig],
         baseUrl: String,
         client: BlocksClient,
-        wireDescriptor: [String: JSONValue]?
+        wireDescriptor: [String: JSONValue]?,
+        routeBase: String? = nil,
+        callbackPath: String? = nil,
+        relayTo: String? = nil
     ) {
         self.exchangePath = exchangePath
         self.refreshPath = refreshPath
@@ -90,6 +101,22 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         self.baseUrl = baseUrl
         self.client = client
         self.wireDescriptor = wireDescriptor
+        self.routeBase = routeBase
+        self.callbackPath = callbackPath
+        self.relayTo = relayTo
+    }
+
+    /// Why `forAuth` refuses these paths, or `nil` when they are valid.
+    static func authPathsProblem(callbackPath: String, signOutPath: String) -> String? {
+        let prefix = "/aws-blocks/auth/"
+        for (name, path) in [("callbackPath", callbackPath), ("signOutPath", signOutPath)] where !path.hasPrefix(prefix) {
+            return "OIDCClient.forAuth: \(name) must start with '\(prefix)', got '\(path)'"
+        }
+        let rest = callbackPath.dropFirst(prefix.count)
+        if rest.isEmpty || rest.hasSuffix("/") {
+            return "OIDCClient.forAuth: callbackPath needs a segment after '\(prefix)' and no trailing '/', got '\(callbackPath)'"
+        }
+        return nil
     }
 
     /// Returns a fresh stream of auth-state transitions. Every active
@@ -153,6 +180,24 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Sign In
 
+    /// Sign in through the server relay, back to the `relayTo` this client was built with
+    /// (`forAuth(client:providers:relayTo:)`).
+    ///
+    /// - Throws: `OIDCError.unknownProvider` for a provider the client wasn't built with, and
+    ///   `OIDCConfigurationError` when the client has no `relayTo`, both before any request.
+    public func signIn(provider: Provider, launcher: BrowserLauncher) async throws -> OIDCUser {
+        guard providers.contains(provider.providerName) else {
+            throw OIDCError.unknownProvider(provider.providerName)
+        }
+        guard let relayTo, !relayTo.isEmpty else {
+            throw OIDCConfigurationError(
+                message: "OIDCClient has no relayTo: pass relayTo to forAuth (a custom scheme listed in the "
+                    + "backend's redirects.allowedRelayOrigins), or call signIn(provider:relayTo:launcher:)"
+            )
+        }
+        return try await signIn(provider: provider, relayTo: relayTo, launcher: launcher)
+    }
+
     /// Sign in using the server-relay flow.
     /// The server signs the state envelope and the IdP redirects to the
     /// server's callback, which then 302s to the app's `relayTo` scheme.
@@ -172,7 +217,11 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
         // Step 1: Fetch signed authorize params from server
         // Raw routes are mounted at the gateway root, not under the RPC prefix.
-        let authorizeParamsPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
+        let authorizeParamsPath = if let routeBase {
+            "\(routeBase)/authorize-params/\(Self.encodeURIComponent(provider))"
+        } else {
+            exchangePath.replacingOccurrences(of: "/exchange", with: "/authorize-params/\(provider)")
+        }
         let paramsBody: [String: Any] = ["csrf": csrf, "relayTo": relayTo]
         let paramsJSON = try await client.postRawRoute(path: authorizeParamsPath, body: paramsBody)
 
@@ -185,7 +234,7 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         let nonce = paramsJSON["nonce"] as? String
 
         // Step 2: Build full authorize URL with server's callback as redirect_uri
-        let callbackPath = exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
+        let callbackPath = callbackPath ?? exchangePath.replacingOccurrences(of: "/exchange", with: "/callback")
         let serverCallbackUrl = client.rawRouteBase + callbackPath
 
         guard var components = URLComponents(string: authorizeUrl) else {
@@ -275,6 +324,9 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
         nonce: String,
         iss: String? = nil
     ) async throws -> OIDCUser {
+        guard providers.contains(provider) else {
+            throw OIDCError.unknownProvider(provider)
+        }
         var body: [String: Any] = [
             "code": code,
             "verifier": verifier,
@@ -435,6 +487,12 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
 
     // MARK: - Factory
 
+    /// `encodeURIComponent`, as the server applies it to a provider id in a route path.
+    private static func encodeURIComponent(_ value: String) -> String {
+        let unreserved = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
+        return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
+    }
+
     /// Hydrates an `OIDCClient` from a server-supplied transferable descriptor.
     ///
     /// Expected shape:
@@ -543,6 +601,60 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return json
+    }
+}
+
+// MARK: - Auth block
+
+public extension OIDCClient where Provider == String {
+    /// A client for the `Auth` block's federated sign-in, on the app's own `BlocksClient`, so it shares
+    /// the app's `URLSession`, cookies and token store. It makes no request until you call it.
+    ///
+    /// ```swift
+    /// let blocks = Blocks()
+    /// let oidc = OIDCClient.forAuth(client: blocks.client, providers: ["google"], relayTo: "myapp://auth")
+    /// let user = try await oidc.signIn(provider: "google", launcher: launcher)
+    /// ```
+    ///
+    /// The routes are derived the way the server derives them: the base is `callbackPath` up to its
+    /// last `/`, and authorize-params, exchange, session and refresh sit under it. Pass the paths only
+    /// when the backend sets `redirects.callbackPath` or `redirects.signOutPath`. The routes are
+    /// requested at the client's URL cut before its first `aws-blocks` path segment, so an API Gateway
+    /// stage prefix is kept.
+    ///
+    /// - Parameters:
+    ///   - client: The app's client, e.g. `blocks.client`.
+    ///   - providers: The block's provider ids. `signIn` refuses any other id before making a request.
+    ///   - relayTo: The URL the server relays the sign-in back to, usually the app's custom scheme. It
+    ///     must be listed in the backend's `redirects.allowedRelayOrigins`.
+    ///   - callbackPath: The backend's `redirects.callbackPath`.
+    ///   - signOutPath: The backend's `redirects.signOutPath`.
+    /// - Precondition: Both paths start with `/aws-blocks/auth/`, and `callbackPath` has a segment
+    ///   after that and no trailing `/`.
+    static func forAuth(
+        client: BlocksClient,
+        providers: [String],
+        relayTo: String? = nil,
+        callbackPath: String = "/aws-blocks/auth/callback",
+        signOutPath: String = "/aws-blocks/auth/signout"
+    ) -> OIDCClient<String> {
+        if let problem = authPathsProblem(callbackPath: callbackPath, signOutPath: signOutPath) {
+            preconditionFailure(problem)
+        }
+        let base = String(callbackPath[..<callbackPath.lastIndex(of: "/")!])
+        return OIDCClient<String>(
+            exchangePath: "\(base)/exchange",
+            refreshPath: "\(base)/exchange/refresh",
+            signOutPath: signOutPath,
+            providers: providers,
+            providerConfigs: [:],
+            baseUrl: client.baseUrl,
+            client: client,
+            wireDescriptor: nil,
+            routeBase: base,
+            callbackPath: callbackPath,
+            relayTo: relayTo
+        )
     }
 }
 
@@ -658,6 +770,15 @@ public enum OIDCError: BlocksError, Equatable {
         case .callbackError(let detail):
             return "OIDC callback error: \(detail)"
         }
+    }
+}
+
+/// A client that is missing configuration a call needs, such as `relayTo` for `signIn(provider:launcher:)`.
+public struct OIDCConfigurationError: BlocksError {
+    public let message: String
+
+    public init(message: String) {
+        self.message = message
     }
 }
 

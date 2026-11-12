@@ -222,6 +222,8 @@ public final class BlocksClient: Sendable {
     /// Derived by stripping the RPC path segments from the end of the URL.
     /// e.g. `https://host/prod/aws-blocks/api` → `https://host/prod`
     ///      `http://localhost:3001/aws-blocks/api` → `http://localhost:3001`
+    /// The cut is at the first `aws-blocks` segment, so a doubled `/aws-blocks/api/aws-blocks/api`
+    /// gives the origin. A URL with no such segment is used as it is, without a trailing `/`.
     var rawRouteBase: String {
         guard let parsed = URL(string: url) else { return url }
         let pathComponents = parsed.pathComponents.filter { $0 != "/" }
@@ -234,7 +236,11 @@ public final class BlocksClient: Sendable {
             let basePath = keepComponents.isEmpty ? "" : "/" + keepComponents.joined(separator: "/")
             return "\(scheme)://\(host)\(port)\(basePath)"
         }
-        return url
+        var trimmed = Substring(url)
+        while trimmed.hasSuffix("/") {
+            trimmed = trimmed.dropLast()
+        }
+        return String(trimmed)
     }
 
     /// POST to a raw route (not JSON-RPC). Handles cookies automatically.
