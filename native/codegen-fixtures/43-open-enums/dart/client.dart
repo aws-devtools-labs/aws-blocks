@@ -133,6 +133,47 @@ final class TaskSourceUnknown implements TaskSource {
 }
 
 
+sealed class NodeKind {
+  static const leaf = NodeKindKnown.leaf;
+  static const branch = NodeKindKnown.branch;
+  static const values = NodeKindKnown.values;
+  static final Map<String, NodeKindKnown> _byJson = NodeKindKnown.values.asNameMap();
+
+  String toJson();
+  static NodeKind fromJson(String json) => _byJson[json] ?? NodeKindUnknown(json);
+}
+
+enum NodeKindKnown implements NodeKind {
+  leaf,
+  branch
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `NodeKind` value this client was generated without.
+final class NodeKindUnknown implements NodeKind {
+  /// The value as the server sent it.
+  final String value;
+
+  const NodeKindUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is NodeKindUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'NodeKindUnknown' '($value)';
+}
+
+
 sealed class FlaggedGetEventResultSeverity {
   static const low = FlaggedGetEventResultSeverityKnown.low;
   static const high = FlaggedGetEventResultSeverityKnown.high;
@@ -253,6 +294,47 @@ class WatchTasksResultMessage {
 }
 
 
+sealed class GetSettingsResultMode {
+  static const light = GetSettingsResultModeKnown.light;
+  static const dark = GetSettingsResultModeKnown.dark;
+  static const values = GetSettingsResultModeKnown.values;
+  static final Map<String, GetSettingsResultModeKnown> _byJson = GetSettingsResultModeKnown.values.asNameMap();
+
+  String toJson();
+  static GetSettingsResultMode fromJson(String json) => _byJson[json] ?? GetSettingsResultModeUnknown(json);
+}
+
+enum GetSettingsResultModeKnown implements GetSettingsResultMode {
+  light,
+  dark
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `GetSettingsResultMode` value this client was generated without.
+final class GetSettingsResultModeUnknown implements GetSettingsResultMode {
+  /// The value as the server sent it.
+  final String value;
+
+  const GetSettingsResultModeUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetSettingsResultModeUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'GetSettingsResultModeUnknown' '($value)';
+}
+
+
 // --- API Namespaces ---
 
 sealed class Status {
@@ -362,6 +444,136 @@ class Task {
 
   @override
   String toString() => 'Task(id: $id, status: $status, history: $history, labels: $labels, priority: $priority, source: $source)';
+}
+
+
+sealed class Color {
+  static const red = ColorKnown.red;
+  static const blue = ColorKnown.blue;
+  static const values = ColorKnown.values;
+  static final Map<String, ColorKnown> _byJson = ColorKnown.values.asNameMap();
+
+  String toJson();
+  static Color fromJson(String json) => _byJson[json] ?? ColorUnknown(json);
+}
+
+enum ColorKnown implements Color {
+  red,
+  blue
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `Color` value this client was generated without.
+final class ColorUnknown implements Color {
+  /// The value as the server sent it.
+  final String value;
+
+  const ColorUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ColorUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'ColorUnknown' '($value)';
+}
+
+
+sealed class Size {
+  static const small = SizeKnown.small;
+  static const large = SizeKnown.large;
+  static const values = SizeKnown.values;
+  static final Map<String, SizeKnown> _byJson = SizeKnown.values.asNameMap();
+
+  String toJson();
+  static Size fromJson(String json) => _byJson[json] ?? SizeUnknown(json);
+}
+
+enum SizeKnown implements Size {
+  small,
+  large
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `Size` value this client was generated without.
+final class SizeUnknown implements Size {
+  /// The value as the server sent it.
+  final String value;
+
+  const SizeUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SizeUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'SizeUnknown' '($value)';
+}
+
+
+enum Mode {
+  auto,
+  manual
+;
+
+  String toJson() => name;
+  static Mode fromJson(String json) => values.byName(json);
+}
+
+
+class Node {
+  final NodeKind kind;
+  final List<Node> children;
+
+  const Node({
+    required this.kind,
+    required this.children,
+  });
+
+  factory Node.fromJson(Map<String, dynamic> json) {
+    return Node(
+      kind: NodeKind.fromJson(json['kind'] as String),
+      children: (json['children'] as List<dynamic>).map((e) => Node.fromJson(e as Map<String, dynamic>)).toList(),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'kind': kind.toJson(),
+      'children': children.map((e) => e.toJson()).toList(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Node &&
+          kind == other.kind &&
+          blocksDeepEquals(children, other.children);
+
+  @override
+  int get hashCode => Object.hash(kind, blocksDeepHash(children));
+
+  @override
+  String toString() => 'Node(kind: $kind, children: $children)';
 }
 
 
@@ -490,6 +702,80 @@ class FlaggedGetEventResult extends GetEventResult {
 
 
 
+class GetSettingsResult {
+  final GetSettingsResultMode mode;
+
+  const GetSettingsResult({
+    required this.mode,
+  });
+
+  factory GetSettingsResult.fromJson(Map<String, dynamic> json) {
+    return GetSettingsResult(
+      mode: GetSettingsResultMode.fromJson(json['mode'] as String),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'mode': mode.toJson(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is GetSettingsResult &&
+          mode == other.mode;
+
+  @override
+  int get hashCode => mode.hashCode;
+
+  @override
+  String toString() => 'GetSettingsResult(mode: $mode)';
+}
+
+
+sealed class GetRangeResult {
+  static const up = GetRangeResultKnown.up;
+  static const down = GetRangeResultKnown.down;
+  static const values = GetRangeResultKnown.values;
+  static final Map<String, GetRangeResultKnown> _byJson = GetRangeResultKnown.values.asNameMap();
+
+  String toJson();
+  static GetRangeResult fromJson(String json) => _byJson[json] ?? GetRangeResultUnknown(json);
+}
+
+enum GetRangeResultKnown implements GetRangeResult {
+  up,
+  down
+;
+
+  @override
+  String toJson() => name;
+}
+
+/// A `GetRangeResult` value this client was generated without.
+final class GetRangeResultUnknown implements GetRangeResult {
+  /// The value as the server sent it.
+  final String value;
+
+  const GetRangeResultUnknown(this.value);
+
+  @override
+  String toJson() => value;
+
+  @override
+  bool operator ==(Object other) =>
+      other is GetRangeResultUnknown && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => 'GetRangeResultUnknown' '($value)';
+}
+
+
 class ApiApi {
   final BlocksClient _client;
   ApiApi(this._client);
@@ -520,6 +806,39 @@ class ApiApi {
   Future<RealtimeChannel<WatchTasksResultMessage>> watchTasks() async {
     final result = await _client.call('api.watchTasks', const <dynamic>[]);
     return RealtimeChannel.fromJson(result as Map<String, dynamic>, (json) => WatchTasksResultMessage.fromJson(json));
+  }
+
+  Future<Color> getColor() async {
+    final result = await _client.call('api.getColor', const <dynamic>[]);
+    return Color.fromJson(result as String);
+  }
+
+  Future<dynamic> getSwatch() async {
+    final result = await _client.call('api.getSwatch', const <dynamic>[]);
+    return result as dynamic;
+  }
+
+  Future<bool> setMode({required Mode mode}) async {
+    final params = <dynamic>[
+      mode.toJson(),
+    ];
+    final result = await _client.call('api.setMode', params);
+    return result as bool;
+  }
+
+  Future<GetSettingsResult> getSettings() async {
+    final result = await _client.call('api.getSettings', const <dynamic>[]);
+    return GetSettingsResult.fromJson(result as Map<String, dynamic>);
+  }
+
+  Future<Node> getTree() async {
+    final result = await _client.call('api.getTree', const <dynamic>[]);
+    return Node.fromJson(result as Map<String, dynamic>);
+  }
+
+  Future<(Size, GetRangeResult)> getRange() async {
+    final result = await _client.call('api.getRange', const <dynamic>[]);
+    return (Size.fromJson((result as List<dynamic>)[0] as String), GetRangeResult.fromJson((result as List<dynamic>)[1] as String));
   }
 }
 

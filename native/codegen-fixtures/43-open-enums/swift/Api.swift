@@ -47,6 +47,54 @@ public final nonisolated class Api: Sendable {
         return try self.client.makeDecoder().decode(RealtimeChannel<WatchTasks.ResultMessage>.self, from: result)
     }
 
+    /// Calls `api.getColor`.
+    public func getColor() async throws -> Color {
+        let request = BlocksRequest(method: "api.getColor", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getColor") }
+        return try JSONDecoder().decode(Color.self, from: result)
+    }
+
+    /// Calls `api.getSwatch`.
+    public func getSwatch() async throws -> GetSwatch.Result {
+        let request = BlocksRequest(method: "api.getSwatch", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getSwatch") }
+        return try JSONDecoder().decode(GetSwatch.Result.self, from: result)
+    }
+
+    /// Calls `api.setMode`.
+    public func setMode(mode: Mode) async throws -> Bool {
+        let request = BlocksRequest(method: "api.setMode", params: [mode], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.setMode") }
+        return try JSONDecoder().decode(Bool.self, from: result)
+    }
+
+    /// Calls `api.getSettings`.
+    public func getSettings() async throws -> GetSettings.Result {
+        let request = BlocksRequest(method: "api.getSettings", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getSettings") }
+        return try JSONDecoder().decode(GetSettings.Result.self, from: result)
+    }
+
+    /// Calls `api.getTree`.
+    public func getTree() async throws -> Node {
+        let request = BlocksRequest(method: "api.getTree", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getTree") }
+        return try JSONDecoder().decode(Node.self, from: result)
+    }
+
+    /// Calls `api.getRange`.
+    public func getRange() async throws -> GetRange.Result {
+        let request = BlocksRequest(method: "api.getRange", params: [], id: BlocksRequest.nextId())
+        let result = try await client.execute(request)
+        guard let result else { throw RPCError(message: "Unexpected null result for api.getRange") }
+        return try JSONDecoder().decode(GetRange.Result.self, from: result)
+    }
+
     public enum UpdateTask {
 
         public enum Sort: String, Codable {
@@ -166,6 +214,120 @@ public final nonisolated class Api: Sendable {
                     switch self {
                     case .created: return "created"
                     case .deleted: return "deleted"
+                    case .unknown(let value): return value
+                    }
+                }
+            }
+        }
+    }
+
+    public enum GetSwatch {
+
+        public enum Result: Codable {
+            case color(Color)
+            case size(Size)
+
+            public func encode(to encoder: Encoder) throws {
+                switch self {
+                case .color(let payload):
+                    try payload.encode(to: encoder)
+                case .size(let payload):
+                    try payload.encode(to: encoder)
+                }
+            }
+
+            public init(from decoder: Decoder) throws {
+                var lastError: Error?
+                do {
+                    self = .color(try Color(from: decoder))
+                    return
+                } catch { lastError = error }
+                do {
+                    self = .size(try Size(from: decoder))
+                    return
+                } catch { lastError = error }
+                throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "No Result variant matched"))
+            }
+
+            private enum EmptyKey: CodingKey {}
+        }
+    }
+
+    public enum GetSettings {
+
+        public struct Result: Codable {
+            public let mode: Mode
+
+            public init(mode: Mode) {
+                self.mode = mode
+            }
+
+            public enum Mode: RawRepresentable, Codable, Hashable {
+                case light
+                case dark
+                /// A value this client was generated without, as the server sent it.
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "light": self = .light
+                    case "dark": self = .dark
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .light: return "light"
+                    case .dark: return "dark"
+                    case .unknown(let value): return value
+                    }
+                }
+            }
+        }
+    }
+
+    public enum GetRange {
+
+        public struct Result: Codable {
+            public let item0: Size
+            public let item1: Item1
+
+            public init(from decoder: Decoder) throws {
+                var c = try decoder.unkeyedContainer()
+                self.item0 = try c.decode(Size.self)
+                self.item1 = try c.decode(Item1.self)
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.unkeyedContainer()
+                try c.encode(self.item0)
+                try c.encode(self.item1)
+            }
+
+            public init(item0: Size, item1: Item1) {
+                self.item0 = item0
+                self.item1 = item1
+            }
+
+            public enum Item1: RawRepresentable, Codable, Hashable {
+                case up
+                case down
+                /// A value this client was generated without, as the server sent it.
+                case unknown(String)
+
+                public init(rawValue: String) {
+                    switch rawValue {
+                    case "up": self = .up
+                    case "down": self = .down
+                    default: self = .unknown(rawValue)
+                    }
+                }
+
+                public var rawValue: String {
+                    switch self {
+                    case .up: return "up"
+                    case .down: return "down"
                     case .unknown(let value): return value
                     }
                 }
