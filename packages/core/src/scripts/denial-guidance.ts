@@ -24,8 +24,17 @@
  */
 export type DenialKind = 'organization-policy' | 'denied';
 
-/** SDK error names for a request that AWS denied. */
-const DENIAL_ERRORS: Record<string, true> = { AccessDenied: true, AccessDeniedException: true };
+/**
+ * SDK error names for a request that AWS denied. Most services use `AccessDenied`
+ * or `AccessDeniedException`; Amazon SNS uses `AuthorizationError` and Amazon EC2
+ * uses `UnauthorizedOperation`.
+ */
+const DENIAL_ERRORS: Record<string, true> = {
+	AccessDenied: true,
+	AccessDeniedException: true,
+	AuthorizationError: true,
+	UnauthorizedOperation: true,
+};
 
 /**
  * The wording that AWS uses when an AWS Organizations policy explicitly denies a
@@ -33,11 +42,41 @@ const DENIAL_ERRORS: Record<string, true> = { AccessDenied: true, AccessDeniedEx
  * an explicit deny in a service control policy". See "Troubleshoot access denied
  * error messages" in the IAM User Guide. A denial "because no service control
  * policy allows" an action is not an explicit deny and counts as `denied`.
+ * Matched after {@link normalize}, so a single space stands for any whitespace.
  */
 const ORGANIZATION_POLICY_DENY = /with an explicit deny in an? (?:service|resource) control policy/i;
 
-/** Wording in CDK and CloudFormation output that shows a denied request. */
-const DENIAL_IN_TEXT = /is not authorized to perform|\bAccessDenied(?:Exception)?\b|\bAccess Denied\b/;
+/** Wording in CDK and CloudFormation output that shows a denied request, matched after {@link normalize}. */
+const DENIAL_IN_TEXT =
+	/not authorized to perform|\b(?:AccessDenied(?:Exception)?|AuthorizationError|UnauthorizedOperation)\b|\baccess denied\b/i;
+
+/**
+ * Terminal control sequences: colors and cursor movement (CSI) and window titles
+ * or links (OSC), which the CDK CLI writes when it runs in a terminal.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the point.
+const TERMINAL_CONTROLS = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
+
+/**
+ * Example error names in the notes that the CDK CLI prints after a failed deploy,
+ * for example "re-run `cdk diagnose` in a few minutes to check for additional
+ * control-plane errors (e.g. AccessDenied)". They show no denial.
+ */
+const CDK_EXAMPLE_ERROR = /\(e\.g\. AccessDenied\)/gi;
+
+/** Remove terminal control sequences from CLI output. */
+export function stripTerminalControls(text: string): string {
+	return text.replace(TERMINAL_CONTROLS, '');
+}
+
+/**
+ * The text to match: without terminal control sequences, with each run of
+ * whitespace (including line breaks, so that a phrase that the CDK CLI wrapped
+ * across lines still matches) as one space, and without the CDK CLI's examples.
+ */
+function normalize(text: string): string {
+	return stripTerminalControls(text).replace(/\s+/g, ' ').replace(CDK_EXAMPLE_ERROR, '');
+}
 
 /**
  * Classify an AWS SDK error. Only an SDK access-denied error is classified, so a
@@ -49,17 +88,23 @@ const DENIAL_IN_TEXT = /is not authorized to perform|\bAccessDenied(?:Exception)
  */
 export function classifyDenialError(error: unknown): DenialKind | undefined {
 	if (!(error instanceof Error) || !Object.hasOwn(DENIAL_ERRORS, error.name)) return undefined;
-	return ORGANIZATION_POLICY_DENY.test(error.message) ? 'organization-policy' : 'denied';
+	return ORGANIZATION_POLICY_DENY.test(normalize(error.message)) ? 'organization-policy' : 'denied';
 }
 
 /**
  * Classify one piece of CDK or CloudFormation output, such as an error line or a
  * resource failure reason. Returns `undefined` when the text shows no denial.
  * The caller decides which text to pass; this does not track lines or chunks.
+ *
+ * The text can span several lines: the CDK CLI hard-wraps the reason in its
+ * error block, so pass the whole block to match a phrase that it split. Terminal
+ * colors and CRLF line endings do not matter, and the CDK CLI's note that names
+ * `AccessDenied` as an example of what `cdk diagnose` finds is not a denial.
  */
 export function classifyDenialText(text: string): DenialKind | undefined {
-	if (ORGANIZATION_POLICY_DENY.test(text)) return 'organization-policy';
-	return DENIAL_IN_TEXT.test(text) ? 'denied' : undefined;
+	const normalized = normalize(text);
+	if (ORGANIZATION_POLICY_DENY.test(normalized)) return 'organization-policy';
+	return DENIAL_IN_TEXT.test(normalized) ? 'denied' : undefined;
 }
 
 /** The explanation and the next step for a denial, one line each, without details from the failure. */

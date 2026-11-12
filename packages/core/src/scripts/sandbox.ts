@@ -5,21 +5,33 @@ import { REUSE_FRONTEND_BUILD_CONTEXT } from '../common/frontend-build.js';
 import { writeFileSync, mkdirSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { ensureSecrets, loadEnvFile } from './ensure-secrets.js';
-import { assertAwsCredentials } from './preflight-credentials.js';
-import { resolveDeploymentTarget } from './deployment-target.js';
+import { assertAwsCredentials, guidanceEnv } from './preflight-credentials.js';
+import { environmentAccessKeys, resolveDeploymentTarget } from './deployment-target.js';
+import {
+  type AwsCliVersionReader,
+  type CredentialFailureInText,
+  credentialFailureMessage,
+} from './credential-guidance.js';
 import { applyExternalMigrations } from './external-migrations-step.js';
 import { trackCommand } from '../telemetry/trackCommand.js';
 import { buildAndSendEvent } from '../telemetry/client.js';
 import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
-import { formatDeploySignal } from './deploy-stream.js';
+import {
+  type CdkOutputStream,
+  createDenialMonitor,
+  createLineAssembler,
+  formatDenialNotice,
+  formatDeploySignal,
+  type OutputSink,
+} from './deploy-stream.js';
 import { outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
-import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
+import { attachCdkWatchOutput, type CdkOutputReader, createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -283,6 +295,12 @@ export function sandboxIsDeployOnly({ deployOnly = false, preview = false }: Pic
  *   needs a deterministic template: a tag or name whose value changes per
  *   synth (a date, a git SHA, a per-deploy build id) forces the fallback
  *   every time. Preview mode pins its build id for this reason.
+ * - `--progress events`: one line per resource event instead of the redrawn
+ *   progress bar. {@link startSandbox} reads the deploy's stderr, where the CDK
+ *   CLI writes its progress, to explain authorization failures, so that stream
+ *   is not a terminal: the bar would redraw itself without the terminal's width
+ *   and height. Event lines are what the CDK CLI prints whenever it has no
+ *   terminal (CI, Windows, a pipe), and what the production deploy prints.
  */
 export function buildSandboxDeployArgs({
   outDir,
@@ -300,6 +318,7 @@ export function buildSandboxDeployArgs({
     "--method", "direct",
     ...(express ? ["--express"] : []),
     "--require-approval", "never",
+    "--progress", "events",
     "--outputs-file", outputsFileIn(outDir, 'sandbox'),
     "--context", `projectRoot=${projectRoot}`,
     "--context", "sandboxMode=true",
@@ -338,6 +357,251 @@ export function sandboxFailureRecoveryHint(
     "   If destroy reports UPDATE_ROLLBACK_FAILED, first run:",
     "     aws cloudformation continue-update-rollback --stack-name <your-sandbox-stack>",
   ].join("\n");
+}
+
+/**
+ * Recovery guidance printed instead of {@link sandboxFailureRecoveryHint} when a
+ * sandbox deploy failed because AWS denied a request (explained just before by
+ * {@link formatDenialNotice}). Running the deploy again does not get past the
+ * denial until its cause is resolved, and destroying a sandbox that existed
+ * before deletes its data, so the Express Mode note does not fit. Whether this
+ * deploy was the sandbox's first is not read from the output, so both cases
+ * are stated.
+ *
+ * Kept pure so it can be asserted in a unit test.
+ *
+ * @param invocation how the user runs the sandbox, as in {@link sandboxFailureRecoveryHint}.
+ * @param destroyInvocation how the user destroys it.
+ */
+export function sandboxDenialRecoveryHint(
+  invocation = "npm run sandbox",
+  destroyInvocation = "npm run sandbox:destroy",
+): string {
+  return [
+    "",
+    `ℹ️  If this was the first deploy of this sandbox, the stack it left holds no data; \`${destroyInvocation}\` removes it.`,
+    `   If the sandbox existed before, do not destroy it (that deletes its data): run \`${invocation}\` again once the cause above is resolved.`,
+  ].join("\n");
+}
+
+/** Input for {@link sandboxCredentialFailureMessage}; the defaults are the real environment. */
+export interface SandboxCredentialMessageOptions {
+  /** The failure happened in `cdk watch`, which keeps running (see `credentialFailureMessage`). */
+  watching?: boolean;
+  /** How the user runs the sandbox, in the guidance. Default: `npm run sandbox`. */
+  invocation?: string;
+  env?: NodeJS.ProcessEnv;
+  projectRoot?: string;
+  readAwsCliVersion?: AwsCliVersionReader;
+}
+
+/**
+ * The source-aware sign-in guidance for a credential failure that the CDK CLI
+ * reported during the sandbox deploy or `cdk watch`: the message of the
+ * pre-deploy credential check, for the same deployment target. As there, with
+ * access keys in the environment (and no profile in `cdk.json`), CDK deploys
+ * with those keys, so the guidance is about them, under the `AWS_` names it
+ * reads. Nothing here signs in, prompts or opens a browser.
+ */
+export async function sandboxCredentialFailureMessage(
+  { errorName, failure }: CredentialFailureInText,
+  {
+    watching = false,
+    invocation,
+    env = process.env,
+    projectRoot = process.cwd(),
+    readAwsCliVersion,
+  }: SandboxCredentialMessageOptions = {},
+): Promise<string> {
+  let region: string | undefined;
+  let profile: string | undefined;
+  try {
+    const target = await resolveDeploymentTarget({ env, projectRoot });
+    region = target.region ?? undefined;
+    profile = target.profile;
+  } catch {
+    // An unreadable cdk.json: the guidance names the source without the target.
+  }
+  return credentialFailureMessage({
+    command: 'sandbox',
+    invocation,
+    errorName,
+    failure,
+    env: guidanceEnv(env, profile ? undefined : environmentAccessKeys(env)),
+    profile,
+    readAwsCliVersion,
+    region,
+    watching,
+  });
+}
+
+/**
+ * Relays the initial sandbox deploy's stderr and reads its output; see
+ * {@link createSandboxDeployObserver}. As a {@link CdkOutputReader}, it is
+ * given to `CdkOutput.run`, which calls {@link SandboxDeployObserver.write} or
+ * {@link SandboxDeployObserver.line} depending on the log level.
+ */
+export interface SandboxDeployObserver extends CdkOutputReader {
+  /** Relay one chunk of the deploy's stderr (not curated). */
+  write(chunk: string): void;
+  /** Read one whole line of the deploy's output, which the curated relay has handled (curated). */
+  line(line: string, from: CdkOutputStream): void;
+  /** The deploy's stderr ended: read a last line that has no newline. */
+  end(): void;
+  /** The deploy failed: explain a denial that was held until then. */
+  failed(): void;
+  /** Whether a denial notice was printed. */
+  denied(): boolean;
+  /** The credential failure that the output showed, if any; its guidance is printed by the caller. */
+  credentialFailure(): CredentialFailureInText | undefined;
+}
+
+/**
+ * Relay the initial sandbox deploy's stderr to `out` and read it, for
+ * {@link startSandbox}.
+ *
+ * Capture strategy, at the default log level (and `verbose`/`debug`): the
+ * deploy keeps this process's stdin and stdout (see `CdkOutputReader` in
+ * `cdk-output.ts`), so the CDK CLI, which decides colors and its terminal
+ * behavior from stdout, sees the same terminal as before. Only stderr is
+ * piped; without `--ci` the CDK CLI writes all of its progress and errors
+ * there. Each chunk is written to `out` unchanged as soon as it arrives, so
+ * colors, partial lines and CRLF line endings pass through as they are. The
+ * chunks are also split into lines (across chunk boundaries) for a
+ * {@link createDenialMonitor}. A denial notice is printed right after the line
+ * that showed the denial, never inside a line. A credential failure is only
+ * recorded: its guidance needs the deployment target, so {@link startSandbox}
+ * prints it once the deploy has failed.
+ *
+ * In CI mode (`CI` set) the CDK CLI moves its progress, including the
+ * CloudFormation events, to stdout, which stays inherited and is not read. Its
+ * error block still goes to stderr, so a denial is then explained from that
+ * block when the deploy fails, not at the resource's `CREATE_FAILED` event.
+ *
+ * At `BLOCKS_LOG_LEVEL=quiet|normal` (the default of the blocks CLI), both
+ * streams are piped and curated instead, and each of their lines comes to
+ * {@link SandboxDeployObserver.line} once the curated relay has handled it;
+ * a notice is then written to `out` after that line, at both levels.
+ *
+ * @param out where the relayed stderr and the notices go.
+ * @param invocation how the user runs the sandbox, in the notice.
+ */
+export function createSandboxDeployObserver(
+  out: OutputSink = process.stderr,
+  invocation = "npm run sandbox",
+): SandboxDeployObserver {
+  const assembler = createLineAssembler();
+  const notices: string[] = [];
+  let denied = false;
+  let credentialFailure: CredentialFailureInText | undefined;
+  let atLineStart = true;
+  const monitor = createDenialMonitor(
+    (kind) => {
+      denied = true;
+      notices.push(formatDenialNotice(kind, invocation));
+    },
+    {
+      onCredentialFailure: (failure) => {
+        credentialFailure = failure;
+      },
+    },
+  );
+  const observe = (lines: string[]): void => {
+    for (const line of lines) monitor.observe(line, 'stderr');
+  };
+  const printNotices = (): void => {
+    if (notices.length === 0) return;
+    if (!atLineStart) out.write("\n");
+    for (const notice of notices.splice(0)) out.write(`${notice}\n`);
+    atLineStart = true;
+  };
+  return {
+    write(chunk) {
+      if (chunk === "") return;
+      observe(assembler.push(chunk));
+      // A notice comes from a line that this chunk completed: print it after
+      // that line's newline and before the start of the next line.
+      const lineEnd = notices.length > 0 ? chunk.lastIndexOf("\n") + 1 : chunk.length;
+      out.write(chunk.slice(0, lineEnd));
+      if (lineEnd < chunk.length) {
+        atLineStart = true;
+        printNotices();
+        out.write(chunk.slice(lineEnd));
+      }
+      atLineStart = chunk.endsWith("\n");
+      printNotices();
+    },
+    line(line, from) {
+      // The curated relay writes whole lines, so `out` is at the start of a line.
+      monitor.observe(line, from);
+      printNotices();
+    },
+    end() {
+      observe(assembler.flush());
+      printNotices();
+    },
+    failed() {
+      monitor.failed();
+      printNotices();
+    },
+    denied: () => denied,
+    credentialFailure: () => credentialFailure,
+  };
+}
+
+/** Reads `cdk watch` output; see {@link createCdkWatchObserver}. */
+export interface CdkWatchObserver {
+  /** Read one whole line of `cdk watch` output, after it was relayed (`attachCdkWatchOutput`'s `onLine`). */
+  line(line: string, from: CdkOutputStream): void;
+  /** Resolves once the credential guidance started so far has been printed. */
+  idle(): Promise<void>;
+}
+
+/** Options for {@link createCdkWatchObserver}; the defaults are the real environment. */
+export interface CdkWatchObserverOptions {
+  /** Prints a notice or credential guidance. Default: `console.error`. */
+  print?: (text: string) => void;
+  /** How the user runs the sandbox, in the notice and the guidance. Default: `npm run sandbox`. */
+  invocation?: string;
+  /** The credential guidance. Default: {@link sandboxCredentialFailureMessage} while watching. */
+  credentialMessage?: (failure: CredentialFailureInText) => Promise<string>;
+}
+
+/**
+ * Read `cdk watch` output, which `attachCdkWatchOutput` relays at every log
+ * level and hands over line by line, for a {@link createDenialMonitor}. The
+ * monitor counts each deployment that `cdk watch` starts as a new attempt, so
+ * an authorization failure is explained once per deployment, through `print`,
+ * right after the output that showed it.
+ *
+ * Credentials can expire while `cdk watch` runs. A failed deploy does not stop
+ * it; it shows the failed asset upload. A credential failure is explained once
+ * per deployment, through `print`, with the source-aware guidance from
+ * `credentialMessage` ({@link sandboxCredentialFailureMessage} by default),
+ * which says whether saving a file or restarting picks up new credentials.
+ *
+ * Both are printed whatever `BLOCKS_LOG_LEVEL` is: they explain a failure.
+ */
+export function createCdkWatchObserver({
+  print = (text) => console.error(text),
+  invocation = "npm run sandbox",
+  credentialMessage = (failure) => sandboxCredentialFailureMessage(failure, { watching: true, invocation }),
+}: CdkWatchObserverOptions = {}): CdkWatchObserver {
+  const notices: string[] = [];
+  // Guidance is printed in order, after the output that led to it.
+  let printing = Promise.resolve();
+  const monitor = createDenialMonitor((kind) => notices.push(formatDenialNotice(kind, invocation)), {
+    onCredentialFailure: (failure) => {
+      printing = printing.then(async () => print(await credentialMessage(failure)));
+    },
+  });
+  return {
+    line(line, from) {
+      monitor.observe(line, from);
+      for (const notice of notices.splice(0)) print(notice);
+    },
+    idle: () => printing,
+  };
 }
 
 export async function startSandbox(options: SandboxOptions) {
@@ -445,6 +709,10 @@ export async function startSandbox(options: SandboxOptions) {
   const cdkEnv = buildSandboxCdkEnv(frameworkSink);
   const argOptions = { outDir, projectRoot: process.cwd(), backendPath, preview };
   const assemblyDir = `${outDir}/cdk.out`;
+  // Reads the deploy's output while it is relayed (unchanged, or curated at
+  // BLOCKS_LOG_LEVEL=quiet|normal), to explain an authorization failure as soon
+  // as the CDK CLI prints it (see createSandboxDeployObserver for the capture).
+  const deployOutput = createSandboxDeployObserver(process.stderr, invocation);
 
   try {
     // Synthesize once, so the deploy decision is based on what is about to be
@@ -469,8 +737,9 @@ export async function startSandbox(options: SandboxOptions) {
       // Argv (including sandbox-only CloudFormation Express Mode, `--express`)
       // is built by buildSandboxDeployArgs — see its doc for why each flag exists.
       buildSandboxDeployArgs({ ...argOptions, express: expressUnsafe.length === 0, assemblyDir, hotswap }),
-      { env: cdkEnv },
+      { env: cdkEnv, reader: deployOutput },
     );
+    deployOutput.end();
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
     buildAndSendEvent({
@@ -480,8 +749,20 @@ export async function startSandbox(options: SandboxOptions) {
       error: { code: 'CDK_DEPLOY_FAILED', phase: 'deploy' },
     });
     cdkOutput.printRetained();
+    // An authorization failure is explained first (the notice is printed by
+    // now); the Express Mode recovery does not fit it, so it gets its own.
+    deployOutput.end();
+    deployOutput.failed();
+    // Expired or rejected credentials (they were valid at the pre-deploy check):
+    // the same source-aware guidance as that check, for this deployment target.
+    const credentials = deployOutput.credentialFailure();
+    if (credentials) console.error(`\n${await sandboxCredentialFailureMessage(credentials, { invocation })}`);
     console.error("\n❌ Deployment failed.");
-    console.error(sandboxFailureRecoveryHint(invocation, destroyInvocation));
+    console.error(
+      deployOutput.denied()
+        ? sandboxDenialRecoveryHint(invocation, destroyInvocation)
+        : sandboxFailureRecoveryHint(invocation, destroyInvocation),
+    );
     throw error;
   }
 
@@ -550,8 +831,14 @@ export async function startSandbox(options: SandboxOptions) {
   });
 
   // Unchanged relay at the default level; condensed and retained (printed when
-  // a watch deploy fails) at BLOCKS_LOG_LEVEL=quiet|normal.
-  attachCdkWatchOutput(cdkWatch, { stopping: () => cleaningUp });
+  // a watch deploy fails) at BLOCKS_LOG_LEVEL=quiet|normal. At every level each
+  // line is also read for authorization and credential failures, explained once
+  // per deployment that `cdk watch` starts.
+  const watchOutput = createCdkWatchObserver({ invocation });
+  attachCdkWatchOutput(cdkWatch, {
+    stopping: () => cleaningUp,
+    onLine: (line, from) => watchOutput.line(line, from),
+  });
 
   const devServerSpawn = buildDevServerSpawn(devCommand);
 
