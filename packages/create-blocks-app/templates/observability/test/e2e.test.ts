@@ -4,7 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
-import { installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
+import { getLastAuthCode, installCookieJar, isServerRunning } from '@aws-blocks/blocks/utils';
 import type { api as apiType, authApi as authApiType } from 'aws-blocks';
 
 // npm is npm.cmd on Windows, which spawn won't resolve without a shell.
@@ -166,7 +166,11 @@ test('placeOrder rejects a signed-out caller', async () => {
 });
 
 test('placeOrder returns an order id and the trace id', async () => {
-  const signedUp = await authApi.setAuthState({ action: 'signUp', ...creds });
+  // Sign-up confirms the email with a code, as the sign-in UI does. Locally no
+  // email is sent: getLastAuthCode reads the code the local auth block issued.
+  await authApi.setAuthState({ action: 'signUp', ...creds });
+  await authApi.setAuthState({ action: 'confirmSignUp', username: creds.username, code: await getLastAuthCode(creds.username) });
+  const signedUp = await authApi.setAuthState({ action: 'autoSignIn', username: creds.username });
   assert.strictEqual(signedUp.state, 'signedIn');
   order = await api.placeOrder('coffee');
   assert.ok(order.orderId, 'orderId should be set');

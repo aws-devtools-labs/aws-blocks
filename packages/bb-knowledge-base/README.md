@@ -160,13 +160,13 @@ Subfolder paths automatically populate the `folder` metadata key. For example, a
 
 ```typescript
 import { Scope, ApiNamespace } from '@aws-blocks/core';
-import { AuthBasic } from '@aws-blocks/bb-auth-basic';
+import { Auth } from '@aws-blocks/bb-auth';
 import { Agent } from '@aws-blocks/bb-agent';
 import { KnowledgeBase } from '@aws-blocks/bb-knowledge-base';
 import { z } from 'zod';
 
 const scope = new Scope('my-app');
-const auth = new AuthBasic(scope, 'auth');
+const auth = new Auth(scope, 'auth');
 const kb = new KnowledgeBase(scope, 'docs', { source: './knowledge' });
 
 const agent = new Agent(scope, 'assistant', {
@@ -185,9 +185,9 @@ export const api = new ApiNamespace(scope, 'api', (context) => ({
     const user = await auth.requireAuth(context);
     // The tool context, and so the search scope, comes from the session: each document carries
     // an `owner` metadata value, and a user searches only their own. For per-tenant scoping, put a
-    // tenant id your app looks up for the user in the context instead (the built-in auth users
-    // carry only `userId`, `username` and `createdAt`).
-    const result = await agent.stream(message, { userId: user.userId, context: { ownerId: user.userId } });
+    // tenant id your app looks up for the user in the context instead (`Auth`'s user carries
+    // no tenant).
+    const result = await agent.stream(message, { userId: user.userSub, context: { ownerId: user.userSub } });
     return { channelId: result.channelId };
   },
 }));

@@ -3,7 +3,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert';
-import { isBlocksError } from '@aws-blocks/core';
+import { isBlocksError, ApiError } from '@aws-blocks/core';
 import { FileBucketErrors } from '@aws-blocks/bb-file-bucket';
 import type { api as apiType } from 'aws-blocks';
 
@@ -119,7 +119,14 @@ export function fileBucketTests(getApi: () => typeof apiType) {
       const api = getApi();
       const url = await api.filePutUrl('test/presigned-put.txt');
       assert.ok(typeof url === 'string');
-      const res = await fetch(url, { method: 'PUT', body: 'uploaded via url' });
+      // putUrl() without a contentType signs application/octet-stream, so the
+      // upload must send exactly that Content-Type (fetch would otherwise send
+      // text/plain for a string body, and S3 / the dev server would answer 403).
+      const res = await fetch(url, {
+        method: 'PUT',
+        body: 'uploaded via url',
+        headers: { 'Content-Type': 'application/octet-stream' },
+      });
       assert.strictEqual(res.status, 200);
       const file = await api.fileVerifyUploaded('test/presigned-put.txt');
       assert.ok(file);
@@ -160,6 +167,129 @@ export function fileBucketTests(getApi: () => typeof apiType) {
       const res = await fetch(url);
       assert.strictEqual(res.status, 200);
       assert.strictEqual(await res.text(), 'fetch me');
+    });
+
+    // ── Request validation, signed upload headers and download disposition ─
+    //
+    // These run over the wire against the dev server (mock) and real S3
+    // (sandbox), so a rejection must reach the client as a 400 ValidationFailed,
+    // and a presigned URL must enforce what it signed in both environments.
+
+    /** A `ValidationFailed` the RPC layer answered with HTTP 400. */
+    const isValidation400 = (e: unknown): boolean => {
+      assert.ok(e instanceof ApiError, `Expected ApiError, got ${e}`);
+      assert.strictEqual(e.status, 400, 'ValidationFailed must be 400, not 500');
+      assert.ok(isBlocksError(e, 'ValidationFailed'), `Expected ValidationFailed, got ${e.name}`);
+      return true;
+    };
+
+    describe('request validation over the wire', () => {
+      test('an invalid key returns ValidationFailed (400)', async () => {
+        const api = getApi();
+        await assert.rejects(() => api.fileGet('a/../b'), isValidation400);
+        await assert.rejects(() => api.filePut('a/../b', 'x'), isValidation400);
+      });
+
+      test('an invalid scan prefix returns ValidationFailed (400)', async () => {
+        const api = getApi();
+        await assert.rejects(() => api.fileScan('a/../'), isValidation400);
+      });
+
+      test('a contentType that is not a single media type returns ValidationFailed (400)', async () => {
+        const api = getApi();
+        await assert.rejects(
+          () => api.filePutUrlWithOptions('test/ct-list.txt', { contentType: 'text/plain, text/html' }),
+          isValidation400,
+        );
+        await assert.rejects(() => api.filePut('test/ct-list.txt', 'x', 'text/plain, text/html'), isValidation400);
+      });
+
+      test('allowedContentTypes and maxUploadBytes reject with ValidationFailed (400)', async () => {
+        const api = getApi();
+        await assert.rejects(
+          () => api.constrainedFilePutUrl('test/c.html', { contentType: 'text/html', contentLength: 1 }),
+          isValidation400,
+        );
+        await assert.rejects(
+          () => api.constrainedFilePutUrl('test/c.png', { contentType: 'image/png, text/html', contentLength: 1 }),
+          isValidation400,
+        );
+        await assert.rejects(() => api.constrainedFilePutUrl('test/c.txt', { contentType: 'text/plain' }), isValidation400);
+        await assert.rejects(
+          () => api.constrainedFilePutUrl('test/c.txt', { contentType: 'text/plain', contentLength: 1025 }),
+          isValidation400,
+        );
+        await assert.rejects(() => api.constrainedFilePut('test/c.html', 'x', 'text/html'), isValidation400);
+      });
+
+      test('a constrained bucket accepts an allowed upload of the signed size', async () => {
+        const api = getApi();
+        const body = 'constrained';
+        const url = await api.constrainedFilePutUrl('test/constrained.txt', {
+          contentType: 'text/plain',
+          contentLength: body.length,
+        });
+        const res = await fetch(url, { method: 'PUT', body, headers: { 'Content-Type': 'text/plain' } });
+        assert.strictEqual(res.status, 200);
+        const file = await api.constrainedFileGet('test/constrained.txt');
+        assert.ok(file);
+        assert.strictEqual(file.body, body);
+        assert.strictEqual(file.contentType, 'text/plain');
+      });
+    });
+
+    describe('presigned uploads enforce the signed headers', () => {
+      test('a different Content-Type than the signed one is rejected (403)', async () => {
+        const api = getApi();
+        const url = await api.filePutUrlWithOptions('test/signed-type.txt', { contentType: 'text/plain' });
+        const res = await fetch(url, { method: 'PUT', body: 'x', headers: { 'Content-Type': 'text/html' } });
+        assert.strictEqual(res.status, 403);
+        assert.strictEqual(await api.fileGet('test/signed-type.txt'), null);
+      });
+
+      test('a body of a different size than the signed contentLength is rejected', async () => {
+        const api = getApi();
+        const url = await api.filePutUrlWithOptions('test/signed-length.txt', { contentType: 'text/plain', contentLength: 5 });
+        const res = await fetch(url, {
+          method: 'PUT',
+          body: 'longer than five bytes',
+          headers: { 'Content-Type': 'text/plain' },
+        });
+        assert.ok(res.status >= 400 && res.status < 500, `expected a 4xx, got ${res.status}`);
+        assert.strictEqual(await api.fileGet('test/signed-length.txt'), null);
+      });
+
+      test('a body of exactly the signed contentLength is accepted', async () => {
+        const api = getApi();
+        const url = await api.filePutUrlWithOptions('test/signed-length-ok.txt', { contentType: 'text/plain', contentLength: 5 });
+        const res = await fetch(url, { method: 'PUT', body: 'exact', headers: { 'Content-Type': 'text/plain' } });
+        assert.strictEqual(res.status, 200);
+        const file = await api.fileGet('test/signed-length-ok.txt');
+        assert.ok(file);
+        assert.strictEqual(file.body, 'exact');
+      });
+
+      test('an upload handle created without contentType uploads via the hydrated handle', async () => {
+        const api = getApi();
+        const handle = await api.fileCreateUploadHandle('test/handle-default-type.bin');
+        await handle.upload(new Blob(['default type upload']));
+        const file = await api.fileVerifyUploaded('test/handle-default-type.bin');
+        assert.ok(file);
+        assert.strictEqual(file.body, 'default type upload');
+        assert.strictEqual(file.contentType, 'application/octet-stream');
+      });
+    });
+
+    test('FileBucket - getUrl({ attachment }) serves Content-Disposition: attachment', async () => {
+      const api = getApi();
+      await api.filePut('test/attachment.txt', 'download me', 'text/plain');
+      const url = await api.fileGetUrlAttachment('test/attachment.txt', 'report.txt');
+      const res = await fetch(url);
+      assert.strictEqual(res.status, 200);
+      const disposition = res.headers.get('content-disposition') ?? '';
+      assert.ok(disposition.includes('attachment'), disposition);
+      assert.ok(disposition.includes('report.txt'), disposition);
+      assert.strictEqual(await res.text(), 'download me');
     });
 
     // ── Filepath pollution: user keys that look like internal markers ─────

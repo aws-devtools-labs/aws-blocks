@@ -326,7 +326,14 @@ class OpenRpcParser {
         final prefixItems = (schema['prefixItems'] as List<dynamic>)
             .map((item) => _parseTypeRef(item as Map<String, dynamic>))
             .toList();
-        if (prefixItems.length == 1) return prefixItems.first;
+        // One element (`[string]`) is the array `["x"]`: a one-element list,
+        // as in Swift, never the element itself.
+        if (prefixItems.length == 1) {
+          return ArrayRef(
+            prefixItems.first,
+            constraints: _parseConstraints(schema),
+          );
+        }
         return TupleRef(prefixItems);
       }
       // Regular array (or array-form items as tuple)
@@ -341,7 +348,12 @@ class OpenRpcParser {
         final tupleItems = items
             .map((item) => _parseTypeRef(item as Map<String, dynamic>))
             .toList();
-        if (tupleItems.length == 1) return tupleItems.first;
+        if (tupleItems.length == 1) {
+          return ArrayRef(
+            tupleItems.first,
+            constraints: _parseConstraints(schema),
+          );
+        }
         return TupleRef(tupleItems);
       }
       final itemsMap = items as Map<String, dynamic>;
@@ -369,8 +381,10 @@ class OpenRpcParser {
       }
     }
 
-    // Object
-    if (type == 'object' && schema.containsKey('properties')) {
+    // Object. One with no properties (`properties: {}`) holds any fields, as
+    // `{type: object}` does: it falls through to `dynamic` below.
+    if (type == 'object' &&
+        (schema['properties'] as Map<String, dynamic>?)?.isNotEmpty == true) {
       final props = (schema['properties'] as Map<String, dynamic>);
       // Detect spread params garbage (numeric keys + "length")
       if (props.containsKey('length') &&
@@ -382,19 +396,10 @@ class OpenRpcParser {
       );
       final required =
           (schema['required'] as List<dynamic>?)?.cast<String>().toSet() ?? {};
-      TypeRef? additionalProps;
-      if (schema.containsKey('additionalProperties')) {
-        final ap = schema['additionalProperties'];
-        if (ap is bool && ap) {
-          additionalProps = const PrimitiveRef('dynamic');
-        } else if (ap is Map<String, dynamic>) {
-          additionalProps = _parseTypeRef(ap);
-        }
-      }
       return InlineObjectRef(
         properties: parsedProps,
         required: required,
-        additionalProperties: additionalProps,
+        additionalProperties: _parseAdditionalProperties(schema),
       );
     }
 
@@ -403,6 +408,16 @@ class OpenRpcParser {
       _mapPrimitive(type),
       constraints: _parseConstraints(schema),
     );
+  }
+
+  /// The value type of an object schema's extra keys (an open record, TS
+  /// `T & Record<string, V>`): `true` admits any value (`dynamic`), a schema
+  /// types them, and `false` or no `additionalProperties` closes the object.
+  TypeRef? _parseAdditionalProperties(Map<String, dynamic> schema) {
+    final ap = schema['additionalProperties'];
+    if (ap is bool && ap) return const PrimitiveRef('dynamic');
+    if (ap is Map<String, dynamic>) return _parseTypeRef(ap);
+    return null;
   }
 
   TypeRef _parseOneOf(List<Map<String, dynamic>> oneOf) {
@@ -470,6 +485,7 @@ class OpenRpcParser {
             properties: filteredProps,
             required: filteredRequired,
             embeddedUnion: embeddedUnion,
+            additionalProperties: _parseAdditionalProperties(v),
           );
         }).toList();
         final union = DiscriminatedUnionRef(

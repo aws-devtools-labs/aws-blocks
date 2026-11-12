@@ -1,0 +1,9 @@
+import { Auth, AuthErrors } from '@aws-blocks/bb-auth';
+import { type AuthenticatedUser } from '@aws-blocks/bb-auth';
+import { Scope } from '@aws-blocks/core';
+
+const scope = new Scope('app');
+export const users = new Auth(scope, 'users', {});
+export const auth = new Auth(scope, 'auth', { emailPassword: { autoSignIn: false } });
+export const codes = [AuthErrors.NotAuthorized, AuthErrors.NotAuthorized];
+export type User = AuthenticatedUser;

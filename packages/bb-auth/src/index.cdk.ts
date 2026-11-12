@@ -1,0 +1,777 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * `@aws-blocks/bb-auth` — `cdk` entry (synth).
+ *
+ * Provisions the same resources as `AuthCognito`, under the same construct
+ * ids, so an existing `AuthCognito` deployment that switches to `Auth` keeps
+ * its user pool, its app client and its signed-in sessions. The frozen
+ * contract: child ids `pool`, `client`, `sessions`, `session-secret`,
+ * `group-<name>`; `userPoolName: this.fullId`; no `GenerateSecret` on
+ * `client`; the `BLOCKS_AUTH_COGNITO_<UPPER_FULLID>_*` config keys.
+ * `resource-identity.cdk.test.ts` pins it against `AuthCognito`'s golden
+ * fixture, and `property-snapshot.cdk.test.ts` compares the full templates.
+ *
+ * Two deliberate differences from `AuthCognito`:
+ * - **Durability:** the pool's removal policy and deletion protection follow the
+ *   stack defaults when the per-block option is unset (`AuthCognito`'s pool is
+ *   `DESTROY` even under `BlocksPresets.production`).
+ * - **No pool when none is needed:** a `store: 'builtin'` configuration (no email + password, and only
+ *   backend-verified OIDC, OAuth 2.0 or stub providers) synthesizes no Cognito
+ *   resources at all.
+ *
+ * Every runtime method is a `synthGuard` stub, so calling one at the top level
+ * of a backend module fails synth with an actionable message instead of a bare
+ * `TypeError`.
+ */
+
+import { AppSetting } from '@aws-blocks/bb-app-setting';
+import { KVStore } from '@aws-blocks/bb-kv-store';
+import type { ScopeParent } from '@aws-blocks/core';
+import {
+	ApiNamespace,
+	BuildingBlockScope,
+	EventSourceMapping,
+	getOrCreateOnRoot,
+	isSandboxContext,
+	registerConfig,
+	synthGuard,
+} from '@aws-blocks/core/cdk';
+import * as cdk from 'aws-cdk-lib';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import { lazyBackendApiUrl } from './cdk/api-url.js';
+import {
+	AUTH_ROUTE_PREFIX,
+	assertBearerClientIds,
+	bearerClientIds,
+	bearerClientIdsConfigKey,
+	cognitoConfigKeys,
+	cognitoFederatedProviderIds,
+	emailPasswordEnabled,
+	federationRedirectPaths,
+	ownsPreSignUpTrigger,
+	preSignUpTriggerConfigKey,
+	requiresUserPool,
+	selfSignUpEnabled,
+	stubIdpConfigKeys,
+} from './cdk/contract.js';
+import { assertEmailSender, mapEmailSender } from './cdk/email-sender.js';
+import { provisionHostedUiFederation } from './cdk/federation.js';
+import { assertProviderIds, assertRedirectPaths } from './cdk/federation-providers.js';
+import { guardUserPool } from './cdk/immutability-guard.js';
+import {
+	adminIamActions,
+	CLIENT_IAM_ACTIONS,
+	mapAutoVerify,
+	mapCustomAttributes,
+	mapFeaturePlan,
+	mapMfaMode,
+	mapMfaTypes,
+	mapPasswordPolicy,
+	mapSignInWith,
+	PASSWORD_RESET_IAM_ACTIONS,
+	resolveMfa,
+} from './cdk/mappers.js';
+import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
+import { stubIssuerPath } from './engines/stub-idp-routes.js';
+import { makeExternalUserPoolRef } from './external-pool.js';
+import { assertKnownAuthOptions } from './option-validation.js';
+import { apiNamespaceOptionsOf } from './protect.js';
+import { type ResolvedAuthOptions, resolveOptions } from './resolve-options.js';
+import type {
+	ApiMethods,
+	AuthOptions,
+	ExternalUserPoolRef,
+	ProtectedApi,
+	ProtectHandlers,
+	ProtectOptions,
+	StubUser,
+} from './types.js';
+import { BB_NAME } from './version.js';
+
+export type { AuthBase } from './auth-base.js';
+export type { AuthErrorName } from './errors.js';
+export { AuthErrors, isAuthError } from './errors.js';
+export { customOauth2, github, stubIdp } from './providers.js';
+export { relayOrigin } from './relay.js';
+export type * from './types.js';
+
+/**
+ * The unified auth Building Block (CDK layer), published as `@aws-blocks/bb-auth`
+ * and exported from `@aws-blocks/blocks`. See the package README.
+ *
+ * Creates, when the configuration needs a user pool (see {@link AuthOptions}):
+ * - `cognito.UserPool` (`pool`), named `fullId` — or `UserPool.fromUserPoolId`
+ *   when wrapping an existing pool via `userPool`.
+ * - `cognito.UserPoolClient` (`client`): no secret, `USER_PASSWORD_AUTH` (plus
+ *   `USER_AUTH` when `users.authFlow` selects it) and refresh, OAuth disabled.
+ *   With `emailPassword: false`, refresh only — no password flow is reachable.
+ * - One `cognito.CfnUserPoolGroup` (`group-<name>`) per `users.groups` entry.
+ *
+ * When a provider federates through Cognito (any `providers` entry of a `'cognito'` block — social, SAML or OIDC):
+ * - `cognito.UserPoolDomain` (`domain`) — prefix derived from `fullId`; create-only.
+ * - `cognito.UserPoolClient` (`hosted-ui-client`): a separate public client,
+ *   authorization-code grant (PKCE), callback/logout URLs on the real front doors.
+ * - One IdP registration per provider (`idp-<id>` custom resource, or `saml-<id>`).
+ *
+ * Always creates:
+ * - `AppSetting(this, 'session-secret', { secret: true })` — the session HMAC key.
+ * - `KVStore(this, 'sessions', { ttl: true })` — the server-side session store.
+ *
+ * Grants the shared execution role the client-facing `cognito-idp:*` actions on
+ * the pool (and the `Admin*`/`List*` set only when `admin` is set).
+ *
+ * Only when `validateUser` is set and the block owns its pool:
+ * - The pool's Cognito **PreSignUp trigger** (`LambdaConfig.PreSignUp`) → the
+ *   app's shared backend Lambda, which runs `validateUser`.
+ * - `AWS::Lambda::Permission` (`pre-sign-up-permission`): `cognito-idp.amazonaws.com`
+ *   may invoke that Lambda, for this pool's ARN only.
+ * - The pool grants above move to a separate `iam.Policy` (`pool-access`) on
+ *   the same role, which breaks the pool → Lambda → role policy → pool cycle.
+ *   See `src/cdk/pre-sign-up.ts`.
+ */
+export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlockScope {
+	/** The user pool — provisioned, or wrapped via `userPool`. `undefined` when the configuration needs no pool. */
+	public readonly userPool?: cognito.IUserPool;
+	/** The native app client (`client`). `undefined` exactly when {@link Auth.userPool} is. */
+	public readonly userPoolClient?: cognito.IUserPoolClient;
+	/**
+	 * The hosted-UI app client (`hosted-ui-client`) used for social, SAML and
+	 * Cognito-federated OIDC sign-in. A separate client from
+	 * {@link Auth.userPoolClient}. `undefined` when no provider federates through Cognito.
+	 */
+	public readonly hostedUiClient?: cognito.IUserPoolClient;
+	/** The hosted-UI domain (`domain`). `undefined` exactly when {@link Auth.hostedUiClient} is. */
+	public readonly userPoolDomain?: cognito.UserPoolDomain;
+
+	/**
+	 * Reference an existing Cognito user pool. Returns a reference object to pass
+	 * as {@link CognitoAuthOptions.userPool}, not an `Auth`.
+	 */
+	static fromExisting(userPoolId: string, clientId?: string): ExternalUserPoolRef {
+		return makeExternalUserPoolRef(userPoolId, clientId);
+	}
+
+	constructor(scope: ScopeParent, id: string, options?: O) {
+		// Before anything is provisioned: an unknown or misplaced option would
+		// otherwise be silently ignored (the same check as the runtime entries).
+		assertKnownAuthOptions(id, options);
+		super(id, {
+			parent: scope,
+			bbName: BB_NAME,
+			vpc: { interfaceEndpoints: [ec2.InterfaceVpcEndpointAwsService.SSM] },
+		});
+		const opts = resolveOptions(options ?? {}, id);
+		const needsPool = requiresUserPool(opts);
+		const mfa = resolveMfa(opts.mfa);
+		const passkeys = opts.passkeys || undefined;
+		const authFlow = opts.users?.authFlow;
+		const preferredChallenge = opts.users?.preferredChallenge;
+		const emailPassword = emailPasswordEnabled(opts);
+		const emailPasswordOpts = typeof opts.emailPassword === 'object' ? opts.emailPassword : undefined;
+		// `validateUser` on a pool this block creates gets a PreSignUp trigger.
+		const preSignUpTrigger = ownsPreSignUpTrigger(opts);
+
+		validateOptions(opts, {
+			mfaMode: mfa.mode,
+			mfaTypes: mfa.types,
+			sandbox: isSandboxContext(this),
+		});
+		// A block with providers mounts the sign-in routes at runtime, on either store (and each stub IdP its
+		// own): check their paths here, and claim them on the backend, so a collision fails synth, not cold start.
+		if (
+			[opts.socialProviders, opts.oidcProviders, opts.samlProviders].some((m) =>
+				Object.values(m ?? {}).some(Boolean),
+			)
+		) {
+			assertProviderIds(opts);
+			assertRedirectPaths(opts);
+			claimAuthRoutes(this, id, opts);
+		}
+		// The SES sender: only for a pool this block creates, and well-formed.
+		assertEmailSender(this.fullId, opts, needsPool);
+		// Extra bearer clients: literal Cognito client ids. (A pool-less `store: 'builtin'` block cannot set
+		// them: assertKnownAuthOptions refuses `allowBearerAuth` as an object there.)
+		assertBearerClientIds(this.fullId, opts);
+
+		// Cognito caps UserPool names at 128 chars. Fail loudly at synth rather
+		// than truncating (two long fullIds differing past 128 would collide).
+		// Checked even when no pool is provisioned, so enabling a pool-backed
+		// sign-in method later never forces a rename of the block — which would
+		// replace `sessions` and sign everyone out.
+		if (this.fullId.length > 128) {
+			throw new Error(
+				`Auth: computed userPoolName '${this.fullId}' is ${this.fullId.length} chars; Cognito's limit is 128. Shorten the BB id or stack name.`,
+			);
+		}
+
+		if (needsPool) {
+			// Email MFA on a BB-created pool needs an SES sender (`email`).
+			// Only trips when EMAIL would actually be advertised.
+			if (mfa.mode !== 'off' && mfa.types.includes('EMAIL') && !opts.userPool && !opts.email) {
+				throw new Error(
+					"Auth: Email MFA on a BB-created pool requires an SES sender: set `email: { fromAddress }` to a verified SES identity. Alternatives: (a) omit 'EMAIL' from `mfa.types` and use TOTP / SMS, or (b) bring a pool you configure yourself via `Auth.fromExisting(userPoolId)`.",
+				);
+			}
+			// The same rule for the passwordless email one-time code: Cognito
+			// sends a USER_AUTH `EMAIL_OTP` first factor only through SES. Only trips
+			// when the factor would actually be enabled (USER_AUTH on a created pool).
+			if (preferredChallenge === 'EMAIL_OTP' && authFlow === 'USER_AUTH' && !opts.userPool && !opts.email) {
+				throw new Error(
+					"Auth: `users.preferredChallenge: 'EMAIL_OTP'` on a BB-created pool requires an SES sender: set `email: { fromAddress }` to a verified SES identity. Alternatives: (a) use 'PASSWORD', 'SMS_OTP' or 'WEB_AUTHN' as the preferred first factor, or (b) bring a pool you configure yourself via `Auth.fromExisting(userPoolId)`.",
+				);
+			}
+
+			// ── 1. User pool ─────────────────────────────────────────────────
+			const signInAliases = mapSignInWith(opts.users?.signInWith);
+			const pool: cognito.IUserPool = opts.userPool
+				? cognito.UserPool.fromUserPoolId(this, 'pool', opts.userPool.userPoolId)
+				: new cognito.UserPool(this, 'pool', {
+						userPoolName: this.fullId,
+						// `emailPassword: false` with a hosted-UI provider (social, SAML,
+						// `federateVia: 'cognito'`) still needs the pool, but nobody may
+						// register a password account in it.
+						selfSignUpEnabled: selfSignUpEnabled(opts),
+						signInAliases,
+						// Unset emits no `UsernameConfiguration` (Cognito: case-sensitive), so
+						// the zero-config pool stays byte-identical to `AuthCognito`'s.
+						signInCaseSensitive: opts.users?.caseSensitive,
+						autoVerify: mapAutoVerify(signInAliases),
+						passwordPolicy: mapPasswordPolicy(emailPasswordOpts?.passwordPolicy),
+						mfa: mapMfaMode(mfa.mode),
+						// Only when MFA is on: `{ email: true }` with MFA off still trips
+						// CDK's EMAIL-requires-SES validator.
+						mfaSecondFactor: mfa.mode !== 'off' ? mapMfaTypes(mfa.types) : undefined,
+						customAttributes: mapCustomAttributes(opts.users?.attributes),
+						deviceTracking: opts.users?.deviceTracking
+							? {
+									challengeRequiredOnNewDevice:
+										opts.users.deviceTracking.challengeRequiredOnNewDevice ?? false,
+									deviceOnlyRememberedOnUserPrompt:
+										opts.users.deviceTracking.deviceOnlyRememberedOnUserPrompt ?? false,
+								}
+							: undefined,
+						// Pinned explicitly — see `mapFeaturePlan`.
+						featurePlan: mapFeaturePlan(opts.featurePlan),
+						// SES sender. Unset emits no `EmailConfiguration` (Cognito's
+						// default sender), so the zero-config pool stays `AuthCognito`'s.
+						email: mapEmailSender(opts.email, cdk.Stack.of(this).region),
+						// USER_AUTH first factors. As in `AuthCognito`, the OTP factors
+						// follow the second factors the caller *listed* (not the defaulted
+						// `mfa.types`), plus the pool's `users.preferredChallenge` (
+						// `AuthCognito`'s `preferredChallenge`). Unset, the template is
+						// byte-identical to `AuthCognito`'s.
+						signInPolicy:
+							authFlow === 'USER_AUTH'
+								? {
+										allowedFirstAuthFactors: {
+											password: true,
+											emailOtp:
+												mfa.explicitTypes?.includes('EMAIL') === true ||
+												preferredChallenge === 'EMAIL_OTP',
+											smsOtp:
+												mfa.explicitTypes?.includes('SMS') === true ||
+												preferredChallenge === 'SMS_OTP',
+											passkey: passkeys !== undefined,
+										},
+									}
+								: undefined,
+						...(passkeys
+							? {
+									passkeyRelyingPartyId: passkeys.relyingPartyId,
+									passkeyUserVerification:
+										passkeys.userVerification === 'required'
+											? cognito.PasskeyUserVerification.REQUIRED
+											: cognito.PasskeyUserVerification.PREFERRED,
+								}
+							: {}),
+						// Follow the stack defaults when unset (AuthCognito: DESTROY).
+						removalPolicy: resolveRemovalPolicy(opts.removalPolicy, this.defaults.removalPolicy),
+						// Emitted only when it resolves to ACTIVE. Unset is already
+						// inactive (Cognito's default), and it is what `AuthCognito` emits, so
+						// writing `INACTIVE` would turn every sandbox upgrade into a no-op
+						// `UpdateUserPool` (and its rollback risk). Dropping it from a pool
+						// that had ACTIVE deactivates protection on the next deploy (DESIGN.md).
+						deletionProtection: (opts.deletionProtection ?? this.defaults.deletionProtection) || undefined,
+					});
+			this.userPool = pool;
+
+			// ── 1b. validateUser's PreSignUp trigger ────────────────────
+			// Only when the option is set and the pool is ours; otherwise nothing
+			// is added and the template is unchanged. See src/cdk/pre-sign-up.ts.
+			if (preSignUpTrigger) {
+				provisionPreSignUpTrigger(this, pool);
+				// Claim the key the Lambda runtime registers the trigger under (the
+				// pool id), so a second claim on the same pool fails synth, not cold start.
+				this.registerLambdaEventHandler(EventSourceMapping.COGNITO_USER_POOL, pool.userPoolId);
+			}
+
+			// ── 2. Native app client — FROZEN: never set `generateSecret: true` ──
+			// (replace-only: it would replace `client` and invalidate every refresh
+			// token stored in `sessions`). Hosted-UI federation gets its own client.
+			this.userPoolClient = new cognito.UserPoolClient(this, 'client', {
+				userPool: pool,
+				generateSecret: false,
+				// Uniform error for unknown user vs wrong password: no enumeration oracle.
+				preventUserExistenceErrors: true,
+				// SDK + session-cookie auth only. Left on, CDK would enable the
+				// implicit grant with a placeholder example.com callback.
+				disableOAuth: true,
+				// `emailPassword: false` leaves refresh as the only flow, so no password
+				// sign-in is reachable through this client. `ExplicitAuthFlows` updates
+				// in place: the client (and its refresh tokens) is not replaced.
+				authFlows: {
+					userPassword: emailPassword,
+					userSrp: false,
+					custom: false,
+					adminUserPassword: false,
+					user: emailPassword && authFlow === 'USER_AUTH',
+				},
+			});
+
+			// ── Hosted-UI federation ────────────────────────────────────────
+			// Only when a provider federates through Cognito (social, SAML,
+			// `federateVia: 'cognito'` OIDC); otherwise nothing is added and the
+			// template is exactly the email + password one. Adds a `UserPoolDomain`,
+			// a SEPARATE hosted-UI app client (never `client`, see above), one IdP
+			// registration per provider, and the federation config keys. See
+			// `src/cdk/federation.ts` and DESIGN.md.
+			if (cognitoFederatedProviderIds(opts).length > 0) {
+				const federation = provisionHostedUiFederation(this, pool, opts);
+				this.userPoolDomain = federation.domain;
+				this.hostedUiClient = federation.hostedUiClient;
+			}
+
+			// ── 3. Groups ────────────────────────────────────────────────────
+			// Cognito groups exist only in a pool. Directly federated users get
+			// their groups from the provider's `groupsClaim` instead.
+			for (const g of opts.users?.groups ?? []) {
+				const spec = typeof g === 'string' ? { name: g } : g;
+				new cognito.CfnUserPoolGroup(this, `group-${spec.name}`, {
+					userPoolId: pool.userPoolId,
+					groupName: spec.name,
+					description: spec.description,
+					precedence: spec.precedence,
+				});
+			}
+		}
+
+		// ── Immutability guard — see src/cdk/immutability-guard.ts ─────
+		// Refuses, at synth and again at deploy, a change Cognito cannot apply to
+		// the existing pool (sign-in attributes, case sensitivity, required or
+		// existing custom attributes) and, at synth, a change that drops the pool.
+		guardUserPool(this, this.userPool);
+
+		// ── Stub IdP on a sandbox deployment ─────────────────────────────────
+		// `validateOptions` refused every stub outside a sandbox. In a sandbox the
+		// deployed backend serves the stub (index.aws.ts), so say loudly what that
+		// exposes, and hand the runtime the gateway URL its issuer is built from.
+		const deployedStubs = stubProviders(opts);
+		for (const { id: providerId, users } of deployedStubs) {
+			const who =
+				users.length > 0
+					? users.map((u) => `'${u.email}'`).join(', ')
+					: `its built-in default user ('${providerId}-user@stub.invalid')`;
+			cdk.Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-auth:StubIdpDeployed',
+				`Auth '${this.fullId}': providers.${providerId} is a stubIdp() provider, served by this sandbox ` +
+					'deployment. The stub IdP signs users in WITHOUT CREDENTIALS: anyone who can reach ' +
+					`this sandbox can sign in as the stub's users (${who}), with every claim and group they carry. ` +
+					'Synth refuses it for any deployment that is not a sandbox.',
+			);
+		}
+		if (deployedStubs.length > 0) {
+			// Without the gateway URL the deployed issuer would fall back to the
+			// request `Host`: refuse the synth instead. The shared gateway
+			// is built by `create()` after this constructor, so the URL is a lazy
+			// token and the refusal happens when synthesis resolves it.
+			const stubIds = deployedStubs.map((s) => s.id).join(', providers.');
+			const apiUrl = lazyBackendApiUrl(
+				this,
+				() =>
+					`Auth '${this.fullId}': providers.${stubIds} ` +
+					'is a stubIdp() provider on a sandbox deployment, but the backend ' +
+					'exposes no API URL. The deployed stub IdP builds its issuer from that URL, so it needs the ' +
+					'API Gateway that `BlocksStack` / `BlocksBackend` creates. Construct the block in a stack with one, or remove ' +
+					'the stub provider.',
+			);
+			registerConfig(this, stubIdpConfigKeys(this.fullId).API_URL, apiUrl);
+		}
+
+		// ── 4. Session HMAC secret — SSM SecureString via AppSetting ─────────
+		// Needed in every configuration: directly federated sessions are signed
+		// with it too. AppSetting grants `ssm:GetParameter` + `kms:Decrypt`.
+		new AppSetting(this, 'session-secret', { secret: true });
+
+		// ── 5. Session store ─────────────────────────────────────────────────
+		// Durability options propagate; unset, KVStore follows the stack defaults.
+		// TTL on, so session records (which hold refresh tokens) expire.
+		new KVStore(this, 'sessions', {
+			removalPolicy: opts.removalPolicy,
+			deletionProtection: opts.deletionProtection,
+			ttl: true,
+		});
+
+		// ── 6. Config + IAM — only when a pool exists ────────────────────────
+		// A pool-less configuration registers no `BLOCKS_AUTH_COGNITO_*` key; the
+		// runtime tells it has no pool via `requiresUserPool()` (see DESIGN.md).
+		if (this.userPool && this.userPoolClient) {
+			const keys = cognitoConfigKeys(this.fullId);
+			registerConfig(this, keys.USER_POOL_ID, this.userPool.userPoolId);
+			registerConfig(this, keys.CLIENT_ID, this.userPoolClient.userPoolClientId);
+			registerConfig(this, keys.REGION, cdk.Stack.of(this).region);
+			// Tell the runtime this block owns the trigger it just wired, so it —
+			// and no other block on the same pool (a second `Auth` wrapping it with
+			// `userPool`) — registers the trigger's Lambda event handler. Only with the
+			// trigger: without `validateUser` the config is unchanged.
+			if (preSignUpTrigger) registerConfig(this, preSignUpTriggerConfigKey(this.fullId), 'true');
+			// Extra bearer clients, literal or CDK tokens (an app client created in the
+			// same CDK app): joined at deploy time so the runtime sees resolved ids.
+			// Only when there are any, so every other configuration's config is unchanged.
+			const extraBearerClients = bearerClientIds(opts);
+			if (extraBearerClients.length > 0) {
+				registerConfig(this, bearerClientIdsConfigKey(this.fullId), cdk.Fn.join(',', extraBearerClients));
+			}
+			this.grantCognitoPermissions(this.userPool.userPoolArn, opts, preSignUpTrigger);
+		}
+
+		// A wrapped pool's triggers are its owner's. `validateUser` still runs
+		// in-process (sign-up, admin-created users, every sign-in), but a sign-up
+		// made directly against Cognito, or a federated first sign-in, is not seen.
+		if (opts.userPool && opts.validateUser !== undefined) {
+			cdk.Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-auth:ValidateUserExternalPool',
+				`Auth '${this.fullId}': \`validateUser\` is set on a pool wrapped with \`userPool\`, so no PreSignUp ` +
+					'trigger is attached (the pool and its triggers belong to its owner). It runs in-process on ' +
+					'`signUp`, `admin.createUser` and every sign-in, but users created directly in Cognito — a `SignUp` ' +
+					'call with the client id, the console, a federated first sign-in — bypass it. Attach a PreSignUp ' +
+					'trigger to the pool yourself if those must be checked too.',
+			);
+		}
+
+		// An unset `removalPolicy` on a pool we own is legal (the stack default
+		// applies) but deserves a nudge: the pool holds every user.
+		if (this.userPool && !opts.userPool && opts.removalPolicy === undefined) {
+			const resolved = this.defaults.removalPolicy === cdk.RemovalPolicy.RETAIN ? 'retain' : 'destroy';
+			cdk.Annotations.of(this).addWarningV2(
+				'@aws-blocks/bb-auth:RemovalPolicyUnset',
+				`Auth '${this.fullId}': \`removalPolicy\` is not set, so the user pool follows the stack default ` +
+					`('${resolved}'). Set \`removalPolicy: 'retain'\` explicitly for any pool that holds real users — ` +
+					'deleting the pool deletes every user in it, and they cannot be recovered.',
+			);
+		}
+	}
+
+	/**
+	 * Synth-time stand-in for the runtime `createApi()`. Returns a function tagged
+	 * with `Symbol.for('blocks:ApiNamespace')` so `export const authApi =
+	 * auth.createApi()` in the backend module still evaluates under
+	 * `--conditions=cdk`, and core's route discovery recognises it as a namespace
+	 * stub rather than emitting a second, broken namespace.
+	 */
+	createApi() {
+		return Object.assign(() => ({}), { [Symbol.for('blocks:ApiNamespace')]: 'auth' });
+	}
+
+	/**
+	 * Synth-time `protect()`: a real `ApiNamespace` (so the shared API gateway
+	 * routes it, honouring `options.compute` and every other `ApiNamespace` option), whose handler is a `synthGuard`
+	 * stub — the methods, and the session check before them, run at request time
+	 * only. Called at the top level of the backend module, so it must not throw.
+	 */
+	protect<M extends ApiMethods, P extends ApiMethods = Record<never, never>>(
+		scope: ScopeParent,
+		name: string,
+		_handlers: ProtectHandlers<P, M, O>,
+		options?: ProtectOptions<O>,
+	): ProtectedApi<P & M> {
+		const guard = (): P & M => synthGuard('Auth', 'protect');
+		return new ApiNamespace(scope, name, guard, apiNamespaceOptionsOf(options));
+	}
+
+	// ── IAM ─────────────────────────────────────────────────────────────────
+
+	/**
+	 * @param detached - With the PreSignUp trigger: put the grants in a
+	 * separate `iam.Policy` (`pool-access`) on the shared role instead of its
+	 * default policy, which the trigger's Lambda depends on (see
+	 * `src/cdk/pre-sign-up.ts`). Same statements, same role, same pool scope.
+	 */
+	private grantCognitoPermissions(poolArn: string, opts: ResolvedAuthOptions, detached: boolean): void {
+		const statements = [new iam.PolicyStatement({ actions: [...CLIENT_IAM_ACTIONS], resources: [poolArn] })];
+		// A completed password reset signs the user out everywhere (#912).
+		if (emailPasswordEnabled(opts)) {
+			statements.push(
+				new iam.PolicyStatement({ actions: [...PASSWORD_RESET_IAM_ACTIONS], resources: [poolArn] }),
+			);
+		}
+		// Admin surface — opt-in only. Omitting `admin` grants no Admin*/List*
+		// action; `admin.actions` scopes the grant the same way it scopes the
+		// typed `auth.admin` surface.
+		if (opts.admin) {
+			const adminActions = adminIamActions(opts.admin.actions);
+			if (adminActions.length > 0) {
+				statements.push(new iam.PolicyStatement({ actions: adminActions, resources: [poolArn] }));
+			}
+		}
+		if (detached) {
+			new iam.Policy(this, 'pool-access', { roles: [this.executionRole], statements });
+			return;
+		}
+		for (const statement of statements) this.executionRole.addToPrincipalPolicy(statement);
+	}
+
+	// ── Runtime methods are not available during CDK synth ──────────────────
+	requireAuth(..._args: unknown[]): never {
+		return synthGuard('Auth', 'requireAuth');
+	}
+	requireRole(..._args: unknown[]): never {
+		return synthGuard('Auth', 'requireRole');
+	}
+	checkAuth(..._args: unknown[]): never {
+		return synthGuard('Auth', 'checkAuth');
+	}
+	getCurrentUser(..._args: unknown[]): never {
+		return synthGuard('Auth', 'getCurrentUser');
+	}
+	getAuthSession(..._args: unknown[]): never {
+		return synthGuard('Auth', 'getAuthSession');
+	}
+	signOut(..._args: unknown[]): never {
+		return synthGuard('Auth', 'signOut');
+	}
+	getSignInUrl(..._args: unknown[]): never {
+		return synthGuard('Auth', 'getSignInUrl');
+	}
+	signUp(..._args: unknown[]): never {
+		return synthGuard('Auth', 'signUp');
+	}
+	confirmSignUp(..._args: unknown[]): never {
+		return synthGuard('Auth', 'confirmSignUp');
+	}
+	resendSignUpCode(..._args: unknown[]): never {
+		return synthGuard('Auth', 'resendSignUpCode');
+	}
+	signIn(..._args: unknown[]): never {
+		return synthGuard('Auth', 'signIn');
+	}
+	confirmSignIn(..._args: unknown[]): never {
+		return synthGuard('Auth', 'confirmSignIn');
+	}
+	autoSignIn(..._args: unknown[]): never {
+		return synthGuard('Auth', 'autoSignIn');
+	}
+	resetPassword(..._args: unknown[]): never {
+		return synthGuard('Auth', 'resetPassword');
+	}
+	confirmResetPassword(..._args: unknown[]): never {
+		return synthGuard('Auth', 'confirmResetPassword');
+	}
+	updatePassword(..._args: unknown[]): never {
+		return synthGuard('Auth', 'updatePassword');
+	}
+	getUserAttributes(..._args: unknown[]): never {
+		return synthGuard('Auth', 'getUserAttributes');
+	}
+	updateUserAttributes(..._args: unknown[]): never {
+		return synthGuard('Auth', 'updateUserAttributes');
+	}
+	confirmUserAttribute(..._args: unknown[]): never {
+		return synthGuard('Auth', 'confirmUserAttribute');
+	}
+	sendUserAttributeVerificationCode(..._args: unknown[]): never {
+		return synthGuard('Auth', 'sendUserAttributeVerificationCode');
+	}
+	deleteUser(..._args: unknown[]): never {
+		return synthGuard('Auth', 'deleteUser');
+	}
+	setUpTotp(..._args: unknown[]): never {
+		return synthGuard('Auth', 'setUpTotp');
+	}
+	verifyTotpSetup(..._args: unknown[]): never {
+		return synthGuard('Auth', 'verifyTotpSetup');
+	}
+	updateMfaPreference(..._args: unknown[]): never {
+		return synthGuard('Auth', 'updateMfaPreference');
+	}
+	getMfaPreference(..._args: unknown[]): never {
+		return synthGuard('Auth', 'getMfaPreference');
+	}
+	scanDevices(..._args: unknown[]): never {
+		return synthGuard('Auth', 'scanDevices');
+	}
+	rememberDevice(..._args: unknown[]): never {
+		return synthGuard('Auth', 'rememberDevice');
+	}
+	forgetDevice(..._args: unknown[]): never {
+		return synthGuard('Auth', 'forgetDevice');
+	}
+	startPasskeyRegistration(..._args: unknown[]): never {
+		return synthGuard('Auth', 'startPasskeyRegistration');
+	}
+	completePasskeyRegistration(..._args: unknown[]): never {
+		return synthGuard('Auth', 'completePasskeyRegistration');
+	}
+	listPasskeys(..._args: unknown[]): never {
+		return synthGuard('Auth', 'listPasskeys');
+	}
+	deletePasskey(..._args: unknown[]): never {
+		return synthGuard('Auth', 'deletePasskey');
+	}
+	/** The admin surface is runtime-only: reading `auth.admin` during synth fails with the actionable message. */
+	get admin(): never {
+		return synthGuard('Auth', 'admin');
+	}
+}
+
+/** A provider's `stubIdp` settings object, read structurally (the declared union does not list it). */
+function stubSettingsOf(provider: object): object | undefined {
+	const settings: unknown = Reflect.get(provider, 'stubIdp');
+	return typeof settings === 'object' && settings !== null ? settings : undefined;
+}
+
+/** The configured `stubIdp()` providers, with their inline users. */
+function stubProviders(opts: ResolvedAuthOptions): Array<{ id: string; users: readonly StubUser[] }> {
+	const out: Array<{ id: string; users: readonly StubUser[] }> = [];
+	for (const [id, provider] of Object.entries(opts.oidcProviders ?? {})) {
+		const settings = provider ? stubSettingsOf(provider) : undefined;
+		if (!settings) continue;
+		const users: unknown = Reflect.get(settings, 'users');
+		out.push({
+			id,
+			users: Array.isArray(users)
+				? users.filter((u): u is StubUser => typeof u === 'object' && u !== null && typeof u.email === 'string')
+				: [],
+		});
+	}
+	return out;
+}
+
+/** The route claims of every `Auth` block on one backend root (one Lambda): `'<METHOD> <path>'` → the claiming block. */
+const AUTH_ROUTE_CLAIMS = Symbol.for('blocks:AuthRouteClaims');
+
+/**
+ * Claim, on the block's backend root, one route of each set the runtime mounts for it, so two blocks that would
+ * collide when the backend loads (`DuplicateRouteException`) fail synth instead, with the fix. Scoped like the
+ * runtime's route table: per backend, so the same paths in two stacks are fine. A route of each set is enough:
+ * the sign-in routes (`exchange`, `session`, …) live beside `callbackPath`, the sign-out route is `signOutPath`, and
+ * a stub IdP's routes are keyed by its provider key alone.
+ */
+function claimAuthRoutes(block: Auth, id: string, opts: ResolvedAuthOptions): void {
+	const claims = getOrCreateOnRoot(block, AUTH_ROUTE_CLAIMS, () => new Map<string, string>());
+	const normalise = (path: string) => path.replace(/\/+/g, '/').replace(/\/$/, '');
+	const { callbackPath, signOutPath } = federationRedirectPaths(opts);
+	const base = callbackPath.slice(0, callbackPath.lastIndexOf('/'));
+	const routes = [
+		{ route: `POST ${normalise(`${base}/exchange`)}`, what: `its sign-in routes (${base}/…) are` },
+		{ route: `GET ${normalise(signOutPath)}`, what: `its sign-out route (${signOutPath}) is` },
+	];
+	const redirectsFix =
+		'Each Auth block with `providers` needs its own `redirects.callbackPath` and `redirects.signOutPath`, e.g. ' +
+		`\`redirects: { callbackPath: '${AUTH_ROUTE_PREFIX}/${id}/callback', signOutPath: '${AUTH_ROUTE_PREFIX}/${id}/signout' }\`.`;
+	for (const { route, what } of routes) {
+		const other = claims.get(route);
+		if (other !== undefined && other !== block.fullId) {
+			throw new Error(`Auth '${block.fullId}': ${what} already mounted by Auth '${other}'. ${redirectsFix}`);
+		}
+	}
+	for (const { id: key } of stubProviders(opts)) {
+		const route = `GET ${normalise(`${stubIssuerPath(key)}/jwks.json`)}`;
+		const other = claims.get(route);
+		if (other !== undefined && other !== block.fullId) {
+			throw new Error(
+				`Auth '${block.fullId}': providers.${key} is a stubIdp() provider, but Auth '${other}' already serves a stub IdP ` +
+					`under that key (${stubIssuerPath(key)}/…). Stub IdP routes are keyed by provider key alone: give each block's stub a different key.`,
+			);
+		}
+		claims.set(route, block.fullId);
+	}
+	for (const { route } of routes) claims.set(route, block.fullId);
+}
+
+/** Per-block `'destroy' | 'retain'` wins; unset falls back to the stack default. */
+function resolveRemovalPolicy(
+	option: 'destroy' | 'retain' | undefined,
+	stackDefault: cdk.RemovalPolicy,
+): cdk.RemovalPolicy {
+	if (option === 'retain') return cdk.RemovalPolicy.RETAIN;
+	if (option === 'destroy') return cdk.RemovalPolicy.DESTROY;
+	return stackDefault;
+}
+
+/**
+ * Synth-time checks for combinations that would deploy a broken pool or a
+ * block nobody can sign in to. Each fails with the reason, not at deploy.
+ * Federation-specific checks (provider ids, redirect paths, per-provider
+ * credentials, the domain prefix) run in `src/cdk/federation-providers.ts`,
+ * only when a provider federates through Cognito.
+ */
+function validateOptions(
+	opts: ResolvedAuthOptions,
+	ctx: { mfaMode: string; mfaTypes: readonly string[]; sandbox: boolean },
+): void {
+	// The stub IdP is a local and sandbox development aid: its account picker
+	// signs anyone in. Fail the synth of any other deployment instead of
+	// deploying an open sign-in (or a sign-in button that answers 501).
+	// (The keys derive from the session secret, so a sandbox can serve it;
+	// `AuthOIDC`'s stub is sandbox-only too.)
+	const stubIds = stubProviders(opts).map((s) => s.id);
+	if (stubIds.length > 0 && !ctx.sandbox) {
+		const list = stubIds.map((id) => `providers.${id}`).join(', ');
+		const what =
+			stubIds.length === 1
+				? `${list} is a stubIdp() provider, which is`
+				: `${list} are stubIdp() providers, which are`;
+		throw new Error(
+			`Auth: ${what} only available in local development and sandbox deployments ` +
+				"(run `npm run sandbox`, i.e. CDK context sandboxMode=true). Configure a real `type: 'oidc'` provider " +
+				'for other deployments, or select providers with getDeploymentType() so the stub is used only for ' +
+				'local and sandbox.',
+		);
+	}
+	const authFlow = opts.users?.authFlow;
+	// Runtime check for untyped callers: `USER_SRP_AUTH` / `CUSTOM_AUTH` would
+	// deploy a pool whose runtime rejects every sign-in.
+	if (authFlow !== undefined && authFlow !== 'USER_PASSWORD_AUTH' && authFlow !== 'USER_AUTH') {
+		throw new Error(
+			`Auth: users.authFlow '${String(authFlow)}' is not supported. Supported: 'USER_PASSWORD_AUTH', 'USER_AUTH'.`,
+		);
+	}
+
+	const passkeys = opts.passkeys || undefined;
+	if (passkeys) {
+		if (authFlow !== 'USER_AUTH') {
+			throw new Error(
+				"Auth: passkeys requires `users.authFlow: 'USER_AUTH'`. Passkeys ride on the USER_AUTH choice-based flow.",
+			);
+		}
+		if (!passkeys.relyingPartyId) {
+			throw new Error(
+				'Auth: passkeys.relyingPartyId is required. There is no safe default — an incorrect rpId silently breaks every browser passkey prompt.',
+			);
+		}
+		if (!passkeys.origins?.length) {
+			throw new Error('Auth: passkeys.origins must be a non-empty list of `https://...` URLs.');
+		}
+	}
+
+	if (opts.featurePlan === 'lite') {
+		const needsEssentials = [
+			passkeys ? 'passkeys' : undefined,
+			authFlow === 'USER_AUTH' ? "users.authFlow: 'USER_AUTH'" : undefined,
+			ctx.mfaMode !== 'off' && ctx.mfaTypes.includes('EMAIL') ? "mfa.types: ['EMAIL']" : undefined,
+		].filter((s): s is string => s !== undefined);
+		if (needsEssentials.length > 0) {
+			throw new Error(
+				`Auth: ${needsEssentials.join(', ')} require \`featurePlan: 'essentials'\` or \`'plus'\`. The 'lite' tier does not include them.`,
+			);
+		}
+	}
+
+	// `emailPassword: false` with no way to sign in, and MFA, passkeys or device
+	// tracking with it, are refused at construction in every layer
+	// (`resolveOptions`, `assertKnownAuthOptions`).
+}

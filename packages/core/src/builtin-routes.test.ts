@@ -10,6 +10,9 @@
  */
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerBuiltinRoutes, _setEditorOpenerForTest } from './builtin-routes.js';
 import { clearRouteRegistry, matchRoute } from './raw-route.js';
 
@@ -56,4 +59,24 @@ describe('built-in /aws-blocks/settings route', () => {
     assert.strictEqual(opened.length, 1);
     assert.match(opened[0], /\.bb-data[\\/]settings\.json$/);
   });
+
+  it(
+    'local dev server: escapes the working directory it shows in the page',
+    { skip: process.platform === 'win32' && 'markup characters are not valid in Windows file names' },
+    async (t) => {
+      const parent = mkdtempSync(join(tmpdir(), 'settings-route-'));
+      const cwd = join(parent, 'app<img src=x onerror="alert(1)">');
+      mkdirSync(cwd);
+      const previous = process.cwd();
+      process.chdir(cwd);
+      t.after(() => {
+        process.chdir(previous);
+        rmSync(parent, { recursive: true, force: true });
+      });
+      registerBuiltinRoutes({ localDev: true });
+      const res = await getSettings();
+      assert.ok(!res.body.includes('<img'), 'a directory name must not inject markup');
+      assert.ok(res.body.includes('app&lt;img src=x onerror=&quot;alert(1)&quot;&gt;'), res.body);
+    },
+  );
 });

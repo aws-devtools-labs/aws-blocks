@@ -1,7 +1,7 @@
 ---
 "@aws-blocks/core": minor
 "@aws-blocks/blocks": minor
-"@aws-blocks/bb-auth-oidc": patch
+"@aws-blocks/bb-auth": patch
 "@aws-blocks/bb-container-compute": patch
 ---
 
@@ -13,6 +13,6 @@ On AWS, a `RawRoute` handler's `ctx.request.url` had the API Gateway stage in fr
 
 This is a `minor` bump because it changes an existing value. If you build an absolute link from `ctx.request.url.pathname` or `href` while clients call the API Gateway URL directly, add the stage yourself, or build the link from your app's configured origin. The likeliest such code resolves a relative path against the request URL: `new URL('next', ctx.request.url)` used to give `/prod/…/next` and now gives `/…/next`. Building Block authors who need the externally reachable base, stage included, can use the new `getRequestBaseUrl(ctx)` from `@aws-blocks/core/bb-utils`; every transport sets it for every request it dispatches.
 
-`@aws-blocks/bb-auth-oidc` now takes the stage for its fallback callback URL and its stub IdP issuer from `getRequestBaseUrl()`, so those URLs are unchanged.
+`@aws-blocks/bb-auth` now takes the stage for its fallback callback URL (the direct engine's `redirect_uri` when no public origin is configured) and its stub IdP issuer from `getRequestBaseUrl()`, so those URLs are unchanged.
 
 The `@aws-blocks/bb-container-compute` design notes now say that the stamped stage goes to `getRequestBaseUrl()`, not to the request path.

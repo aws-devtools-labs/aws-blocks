@@ -10,3 +10,5 @@ Provides:
 - `createKyselyAdapter()` (Kysely backed by any DatabaseEngine)
 - `runMigrations()` / `loadMigrationsFromDir()` (generic migration runner)
 - `Transaction` / `SqlDatabase` interfaces
+
+`@aws-blocks/data-common/core` has every export above except `createKyselyAdapter()`. A block that imports from it does not load Kysely; `@aws-blocks/bb-database` does this.

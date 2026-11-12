@@ -1,7 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import type { DatabaseEngine, TransactionHandle } from '@aws-blocks/data-common';
+import type { TransactionHandle } from '@aws-blocks/data-common/core';
+import type { CountedRows, RowCountingEngine } from '../engines/handle.js';
 
 export interface RecordedCall {
 	method: string;
@@ -16,7 +17,7 @@ export interface RecordedCall {
  * subclass scripts a catalog); `failOn` makes the next run of a matching statement throw, once. The in-transaction
  * methods delegate to the auto-commit ones, with the handle recorded.
  */
-export class RecordingEngine implements DatabaseEngine {
+export class RecordingEngine implements RowCountingEngine {
 	readonly calls: RecordedCall[] = [];
 	/** Statement text, or a pattern it matches → the error its next run throws, once. */
 	readonly failOn = new Map<string | RegExp, Error>();
@@ -78,6 +79,18 @@ export class RecordingEngine implements DatabaseEngine {
 	): Promise<{ rowCount: number }> {
 		this.run('executeInTransaction', sql, params, handle);
 		return { rowCount: 1 };
+	}
+
+	async queryCounted<T>(sql: string, params: unknown[] = []): Promise<CountedRows<T>> {
+		return { rows: this.run<T>('queryCounted', sql, params), rowCount: 0 };
+	}
+
+	async queryCountedInTransaction<T>(
+		handle: TransactionHandle,
+		sql: string,
+		params: unknown[] = [],
+	): Promise<CountedRows<T>> {
+		return { rows: this.run<T>('queryCountedInTransaction', sql, params, handle), rowCount: 0 };
 	}
 
 	async destroy(): Promise<void> {}

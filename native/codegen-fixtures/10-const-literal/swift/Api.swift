@@ -25,10 +25,18 @@ public final nonisolated class Api: Sendable {
 
         public struct Add: Codable {
             public let value: Double
+
+            public init(value: Double) {
+                self.value = value
+            }
         }
 
         public struct Remove: Codable {
             public let id: String
+
+            public init(id: String) {
+                self.id = id
+            }
         }
 
         public enum Input: Codable {
@@ -65,6 +73,10 @@ public final nonisolated class Api: Sendable {
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 }
