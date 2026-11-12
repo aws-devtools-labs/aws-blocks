@@ -289,16 +289,15 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             throw OIDCError.stateMismatch
         }
 
-        // Step 5: Verify CSRF inside state envelope
-        if let dotIndex = signedState.firstIndex(of: ".") {
-            let payloadB64 = String(signedState[signedState.startIndex ..< dotIndex])
-            if let payloadData = Data(base64URLDecoded: payloadB64),
-               let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
-               let returnedCsrf = payload["csrf"] as? String {
-                if returnedCsrf != csrf {
-                    throw OIDCError.stateMismatch
-                }
-            }
+        // Step 5: Verify CSRF inside state envelope. Fail closed: a state whose payload can't be
+        // decoded, or that carries no csrf, is refused like a mismatched one.
+        guard let dotIndex = signedState.firstIndex(of: "."),
+              let payloadData = Data(base64URLDecoded: String(signedState[signedState.startIndex ..< dotIndex])),
+              let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
+              let returnedCsrf = payload["csrf"] as? String,
+              returnedCsrf == csrf
+        else {
+            throw OIDCError.stateMismatch
         }
 
         // Step 6: Exchange code for tokens
