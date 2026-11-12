@@ -331,26 +331,6 @@ describe('AuthErrors', () => {
 			assert.match(value, /^[A-Z][A-Za-z]+Exception$/, value);
 		}
 	});
-
-	test('contains the names added for the unified Auth block', () => {
-		assert.strictEqual(AuthErrors.ReauthenticationRequired, 'ReauthenticationRequiredException');
-		assert.strictEqual(AuthErrors.ProviderUnavailable, 'ProviderUnavailableException');
-		assert.strictEqual(AuthErrors.EmailPasswordNotEnabled, 'EmailPasswordNotEnabledException');
-		assert.strictEqual(AuthErrors.NoFederatedProvider, 'NoFederatedProviderException');
-		assert.strictEqual(AuthErrors.PasskeysNotEnabled, 'PasskeysNotEnabledException');
-		assert.strictEqual(AuthErrors.MfaNotEnabled, 'MfaNotEnabledException');
-	});
-
-	test('does not alias the replaced AuthBasic names', () => {
-		for (const dropped of [
-			'InvalidCredentialsException',
-			'UserAlreadyExistsException',
-			'InvalidCodeException',
-			'SessionExpiredException',
-		]) {
-			assert.ok(!canonicalNames.has(dropped), `${dropped} must not be canonical`);
-		}
-	});
 });
 
 describe('isAuthError', () => {

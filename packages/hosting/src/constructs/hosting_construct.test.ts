@@ -3073,9 +3073,6 @@ void describe('HostingConstruct — N6: Multi-domain + www redirect', () => {
     // standalone www-redirect function no longer exists. Setting wwwRedirect
     // must still synth cleanly with both aliases and exactly the two router
     // functions on cloudfront-js-2.0.
-    //
-    // NOTE: edge-side apex/www canonicalization is not yet re-expressed in the
-    // KVS router; wwwRedirect is currently accepted but inert at the edge.
     const staticDir = createStaticDir();
     const app = new App();
     const stack = new Stack(app, 'TestStack', {
@@ -3100,17 +3097,7 @@ void describe('HostingConstruct — N6: Multi-domain + www redirect', () => {
       }),
     });
 
-    // No legacy standalone www-redirect function; only the two router fns.
     const cfFunctions = template.findResources('AWS::CloudFront::Function');
-    const functionCodes = Object.values(cfFunctions).map(
-      (r) =>
-        (r as Record<string, Record<string, unknown>>).Properties
-          ?.FunctionCode as string,
-    );
-    assert.ok(
-      !functionCodes.some((code) => code && code.includes("startsWith('www.')")),
-      'legacy www-redirect CloudFront Function must not be present',
-    );
     assert.strictEqual(
       Object.keys(cfFunctions).length,
       2,

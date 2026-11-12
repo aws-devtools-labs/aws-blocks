@@ -3,11 +3,11 @@
 "@aws-blocks/blocks": patch
 "@aws-blocks/create-blocks-app": patch
 "@aws-blocks/hosting": patch
+"@aws-blocks/auth-common": patch
+"@aws-blocks/bb-auth": patch
 "@aws-blocks/data-common": patch
 "@aws-blocks/bb-agent": patch
 "@aws-blocks/bb-app-setting": patch
-"@aws-blocks/bb-auth-cognito": patch
-"@aws-blocks/bb-auth-oidc": patch
 "@aws-blocks/bb-container-compute": patch
 "@aws-blocks/bb-data": patch
 "@aws-blocks/bb-distributed-data": patch
