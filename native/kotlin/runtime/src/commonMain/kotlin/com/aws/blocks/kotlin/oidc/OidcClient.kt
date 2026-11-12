@@ -510,6 +510,32 @@ class OidcClient<P : OidcProvider> internal constructor(
         const val DEFAULT_SIGN_OUT_PATH: String = "/aws-blocks/auth/signout"
 
         /**
+         * The provider id in an `Auth` block's `signIn:<id>` action name, or `null` for any other
+         * action. An action with a `url` that this returns an id for is a federated sign-in, which
+         * the app runs through [signIn] rather than `setAuthState`:
+         *
+         * ```kotlin
+         * val state = blocks.authApi.getAuthState()
+         * for (action in state.actions) {
+         *     val providerId = OidcClient.providerIdOf(action.name) ?: continue
+         *     Button(onClick = { scope.launch { oidc.signIn(providerId); refresh() } }) {
+         *         Text("Sign in with $providerId")
+         *     }
+         * }
+         * ```
+         *
+         * @param actionName the action's `name`, as `getAuthState()` reports it.
+         * @return the text after `signIn:`, or `null` when [actionName] does not start with it or
+         *   names no provider.
+         */
+        fun providerIdOf(actionName: String): String? =
+            actionName.removePrefix(SIGN_IN_ACTION_PREFIX)
+                .takeIf { actionName.startsWith(SIGN_IN_ACTION_PREFIX) && it.isNotEmpty() }
+
+        /** How an `Auth` block names the action that signs in through one provider. */
+        private const val SIGN_IN_ACTION_PREFIX = "signIn:"
+
+        /**
          * Creates a client for the federation routes of an AWS Blocks `Auth` block.
          *
          * `Auth` serves the relay sign-in routes at fixed paths in the directory of [callbackPath]

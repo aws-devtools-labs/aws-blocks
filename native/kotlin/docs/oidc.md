@@ -22,7 +22,7 @@ oidc.signOut()
 
 The client is an `OidcClient<AnyProvider>`: its providers are the ids you pass, not names a spec
 declared, so it signs in by id. That `signIn(String)` is an extension on `OidcClient<AnyProvider>`,
-hence the `signIn` import (see [Typed providers](#typed-providers)).
+hence the `signIn` import (see [Typed providers](#typed-providers-custom-blocks)).
 
 Sign-in stores the backend's session cookie in the `Blocks` instance's cookie jar, which every API
 reached through that instance sends, so methods the backend gates with `requireAuth` work after it.
@@ -113,7 +113,11 @@ in the address bar and in `document.location` while that page is open. Markup yo
 `Html` can therefore read the authorization code; prefer `Redirect` if the page runs anything you
 would not want to see it, such as third-party analytics.
 
-## Typed providers
+## Typed providers (custom blocks)
+
+An `Auth` block needs none of this: build its client with `forAuth`, as above, and drive it from
+`getAuthState()` (see [Using Auth](../README.md#using-auth)). This section is for a custom block
+whose method returns an OIDC client (`oidc/client`) for the app to sign in with.
 
 `OidcClient` is generic over the providers it signs in with, which are `OidcProvider`s. A client
 from `forAuth` is an `OidcClient<AnyProvider>`, as above. When a method of the spec returns an OIDC

@@ -359,4 +359,13 @@ class OidcClientForAuthTest {
         }
     }
 
+    @Test
+    fun `providerIdOf reads the provider of a federated sign-in action`() {
+        OidcClient.providerIdOf("signIn:google") shouldBe "google"
+        OidcClient.providerIdOf("signIn:login.gov") shouldBe "login.gov"
+        OidcClient.providerIdOf("signIn") shouldBe null
+        OidcClient.providerIdOf("signIn:") shouldBe null
+        OidcClient.providerIdOf("signOut") shouldBe null
+        OidcClient.providerIdOf("signUp") shouldBe null
+    }
 }

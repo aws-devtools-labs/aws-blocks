@@ -24,7 +24,7 @@ import kotlinx.coroutines.test.runTest
  * Stands in for a browser by walking the redirect chain the stub IdP produces. The stub
  * auto-approves, so every hop is a 302 until the backend relays to the custom scheme.
  */
-private class RedirectFollowingLauncher : OidcPlatformLauncher {
+internal class RedirectFollowingLauncher : OidcPlatformLauncher {
 
     override suspend fun openSession(
         configuredRelayTo: String,

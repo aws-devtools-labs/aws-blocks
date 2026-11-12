@@ -67,6 +67,77 @@ closing the engine it owns — is covered in
 
 > **On JVM and desktop, give the client an [`applicationId`](docs/runtime-configuration.md#identifying-your-application)** — without one it keeps the session in memory and the user signs in again on every launch, with no warning.
 
+## Using Auth
+
+An AWS Blocks `Auth` block exposes its sign-in flow as a state machine (`export const authApi =
+auth.createApi()` in the backend). `getAuthState()` reports the current state and the actions
+available from it; the app renders those actions and submits each one through `setAuthState`:
+
+```kotlin
+import com.aws.blocks.kotlin.oidc.OidcClient
+import com.aws.blocks.kotlin.oidc.signIn
+
+val blocks = Blocks(BlocksConfig(server = Blocks.defaultServer, applicationId = "com.example.myapp"))
+val oidc = OidcClient.forAuth(
+    blocks.client(),
+    providers = listOf("google"), // the keys of the backend's providers
+    relayTo = "com.example.myapp://auth/callback",
+)
+
+// On launch: getAuthState() reports a session from an earlier launch, for every Auth block.
+var state = blocks.authApi.getAuthState()
+// Render state.actions. Skip passkey (WebAuthn) ones (action.capability != null), and show an
+// action with action.unavailable disabled, with that text as the reason.
+
+// When the user picks an action:
+suspend fun submit(action: AuthAction): AuthState {
+    val providerId = OidcClient.providerIdOf(action.name)
+    when {
+        action.url != null && providerId != null -> oidc.signIn(providerId) // opens the browser
+        action.url != null && action.name == "signOut" -> {
+            val logoutUrl = oidc.signOut()
+            // Open logoutUrl, if any, to end the identity provider's session too.
+        }
+        // A plain action, such as signing in with a password. username and password are the
+        // values the user entered for the action's fields.
+        else -> return blocks.authApi.setAuthState(AuthApi.SetAuthState.Input.SignIn(username, password))
+    }
+    return blocks.authApi.getAuthState()
+}
+```
+
+- **Plain actions** (no `url`) go through `setAuthState`, with the action's `fields` as input. The
+  response is the next state.
+- **`signIn:<id>` with a `url`** is a federated sign-in. `OidcClient.providerIdOf(action.name)`
+  gives the provider id; run `oidc.signIn(id)`, which opens the browser, then call `getAuthState()`.
+- **`signOut` with a `url`** belongs to a federated session. Run `oidc.signOut()`, then call
+  `getAuthState()`. It returns the identity provider's logout URL, or `null`; the SDK does not open
+  it, so open it yourself if the provider's own session should end too. Never submit this action
+  through `setAuthState`: that signs out without the logout URL, so the provider's session stays
+  and can sign the user straight back in.
+- **`unavailable`** on an action means the backend offers it but can't run it now. Show the action
+  disabled, with that text as the reason.
+- **`capability: webauthn-*`** actions need a passkey ceremony the Kotlin SDK does not run. Hide
+  them.
+- **New actions are additive.** A backend can add actions to `setAuthState` over time, so treat an
+  action name you don't recognize as one to skip, not as an error.
+
+Call `getAuthState()` on launch to learn whether a session from an earlier launch is still signed
+in. It works for every `Auth` block. `oidc.restore()` returns the same user and settles
+`oidc.authState`, but only a block with federated providers serves it; any other answers 404.
+
+On Android and iOS, `relayTo` is a custom scheme, which any installed app can also register, so
+another app may receive the sign-in callback. PKCE is what keeps that from becoming a takeover: the
+callback carries only the authorization code, and the backend exchanges it only together with the
+code verifier, which never leaves your app. A verified link (an Android App Link or an iOS universal
+link) would stop other apps from receiving the callback at all, and is the better choice once the
+SDK supports it; the Gradle plugin registers a scheme only today, so don't set `relayTo` to an
+`https` URL.
+
+Every API reached through `blocks` shares one cookie jar, so methods the backend gates with
+`requireAuth` work after either path signs in. See [OIDC](docs/oidc.md) for the relay scheme,
+JVM landing pages and custom callback paths.
+
 ## Generated types
 
 A schema with both `properties` and `additionalProperties` (TypeScript `T & Record<string, V>`) generates a class whose known properties are typed and whose `attributes: Map<String, V>` holds every other key. Those keys are flat on the wire, next to the properties, in both directions. For example, the `signUp` action of an `Auth` block's `createApi()` takes custom attributes this way; with `export const authApi = auth.createApi()`, `AuthApi.SetAuthState.Input.SignUp(username, password, attributes = mapOf("email" to email))` sends `{"action":"signUp","username":…,"password":…,"email":…}`. An `attributes` entry named like a property, or like the union's discriminator, isn't sent: the property wins. If the schema has a property named `attributes` itself, that property keeps the name and the map is `attributes_2`.
