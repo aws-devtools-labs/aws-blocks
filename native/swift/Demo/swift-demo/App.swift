@@ -58,17 +58,25 @@ final class AppState: ObservableObject {
     /// `redirects.allowedRelayOrigins`.
     static let relayTo = "blocksdemo://auth"
 
-    /// The `Auth` block's provider ids, as the backend configures them. The demo backend has none,
-    /// so no `signIn:<id>` action appears; list yours here.
-    static let providers: [String] = []
+    private var oidcClient: OIDCClient<String>?
 
-    /// One OIDC client for the app's lifetime, on the app's own client.
-    private lazy var oidc = OIDCClient.forAuth(client: blocks.client, providers: Self.providers, relayTo: Self.relayTo)
+    /// The `Auth` block's OIDC client, on the app's own client. It is built for the providers the
+    /// state's `signIn:<id>` actions name, and rebuilt only when a state names one it lacks.
+    private func oidc() -> OIDCClient<String> {
+        let offered = Set(authState?.actions.compactMap { OIDCClient.providerIdOf($0.name) } ?? [])
+        if let client = oidcClient, offered.isSubset(of: client.providers) {
+            return client
+        }
+        let providers = offered.union(oidcClient?.providers ?? []).sorted()
+        let client = OIDCClient.forAuth(client: blocks.client, providers: providers, relayTo: Self.relayTo)
+        oidcClient = client
+        return client
+    }
 
     /// A `signIn:<id>` action: sign in through the backend's relay, then read the new state.
     func federatedSignIn(provider: String) async {
         do {
-            _ = try await oidc.signIn(provider: provider, launcher: WebAuthenticationLauncher())
+            _ = try await oidc().signIn(provider: provider, launcher: WebAuthenticationLauncher())
             await refreshAuth()
         } catch {
             self.error = error.localizedDescription
@@ -78,7 +86,7 @@ final class AppState: ObservableObject {
     /// A federated user's `signOut` action: sign out, open the provider's logout page, then read the new state.
     func federatedSignOut() async {
         do {
-            if let logoutURL = try await oidc.signOut() {
+            if let logoutURL = try await oidc().signOut() {
                 await UIApplication.shared.open(logoutURL)
             }
             await refreshAuth()

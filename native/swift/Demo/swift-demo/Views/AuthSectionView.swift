@@ -82,7 +82,8 @@ struct AuthActionFormView: View {
             }
         }
         .buttonStyle(.borderedProminent)
-        .disabled(isLoading)
+        // An action that carries `unavailable` can't run in this state.
+        .disabled(isLoading || action.unavailable != nil)
         .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
         .onAppear {
             for field in action.fields {
@@ -90,6 +91,12 @@ struct AuthActionFormView: View {
                     fieldValues[field.name] = defaultValue
                 }
             }
+        }
+
+        if let reason = action.unavailable {
+            Text(reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
