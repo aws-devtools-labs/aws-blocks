@@ -98,7 +98,9 @@ internal class EncryptedFileKeyValueStore(
     override suspend fun clear() {
         withContext(Dispatchers.IO) {
             Files.newDirectoryStream(storageDir).use { entries ->
-                entries.forEach { if (it.fileName.toString() != ".key") Files.deleteIfExists(it) }
+                entries.forEach {
+                    if (it.fileName.toString() != KeyFile.KEY_FILE) Files.deleteIfExists(it)
+                }
             }
         }
     }

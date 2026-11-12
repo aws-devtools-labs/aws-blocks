@@ -102,8 +102,13 @@ private fun passesSelfTest(candidate: KeyCustody): Boolean {
     val alias = "self-test:" + UUID.randomUUID()
     val probe = ByteArray(AES_KEY_SIZE).also { SecureRandom().nextBytes(it) }
     return try {
-        candidate.storeIfAbsent(alias, probe)
-        candidate.load(alias)?.contentEquals(probe) == true
+        // Both halves are checked. Nothing else can hold a random alias, so a store that honours
+        // its contract has to report the probe as the key now held rather than something already
+        // there — and reading it back has to produce the same bytes. Checking only what the store
+        // returned would pass for one that echoes the key without keeping it; checking only what
+        // comes back would leave the documented return value unexamined.
+        val held = candidate.storeIfAbsent(alias, probe)
+        held.contentEquals(probe) && candidate.load(alias)?.contentEquals(probe) == true
     } catch (_: Throwable) {
         false
     } finally {

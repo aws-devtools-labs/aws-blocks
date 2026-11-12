@@ -16,12 +16,18 @@ import java.util.Base64
  */
 internal class KeyFile(private val directory: Path) {
 
-    private companion object {
-        const val KEY_FILE = ".key"
+    companion object {
+        /**
+         * The name a key is stored under, and the one entry a store's `clear` must leave alone.
+         *
+         * Not private, because that store has to name the same file to know which entry to keep.
+         * Two independent spellings would mean a rename here silently deleted the key there.
+         */
+        internal const val KEY_FILE = ".key"
 
         /** Attempts to read a key another process has created but not yet finished writing. */
-        const val READ_ATTEMPTS = 5
-        const val READ_RETRY_MILLIS = 20L
+        private const val READ_ATTEMPTS = 5
+        private const val READ_RETRY_MILLIS = 20L
     }
 
     private val path: Path get() = directory.resolve(KEY_FILE)
