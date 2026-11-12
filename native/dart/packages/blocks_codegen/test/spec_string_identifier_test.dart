@@ -254,11 +254,11 @@ void main() {
         base,
         contains(r"      case 'a\$b': return A$bEvent.fromJson(json);"),
       );
+      // `Event` is a result, so it is open: an unknown arm keeps the object.
+      expect(base, contains('      default: return UnknownEvent(json);'));
       expect(
-        base,
-        contains(
-          r"      default: throw ArgumentError('Unknown k\$ind: ${json['k\$ind']}');",
-        ),
+        _decl(output, 'UnknownEvent'),
+        contains(r"  String get discriminator => json['k\$ind'] as String;"),
       );
     });
 

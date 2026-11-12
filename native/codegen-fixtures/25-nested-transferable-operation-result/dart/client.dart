@@ -149,7 +149,7 @@ sealed class GetSessionResultEvent {
     switch (json['kind'] as String) {
       case 'message': return MessageGetSessionResultEvent.fromJson(json);
       case 'presence': return PresenceGetSessionResultEvent.fromJson(json);
-      default: throw ArgumentError('Unknown kind: ${json['kind']}');
+      default: return UnknownGetSessionResultEvent(json);
     }
   }
 }
@@ -220,6 +220,30 @@ class PresenceGetSessionResultEvent extends GetSessionResultEvent {
 
   @override
   String toString() => 'PresenceGetSessionResultEvent(channel: $channel)';
+}
+
+/// A `GetSessionResultEvent` arm this client was generated without.
+final class UnknownGetSessionResultEvent extends GetSessionResultEvent {
+  /// The object as the server sent it.
+  final Map<String, dynamic> json;
+
+  const UnknownGetSessionResultEvent(this.json);
+
+  /// The discriminator value that names no known arm.
+  String get discriminator => json['kind'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => json;
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnknownGetSessionResultEvent && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'UnknownGetSessionResultEvent' '($json)';
 }
 
 
