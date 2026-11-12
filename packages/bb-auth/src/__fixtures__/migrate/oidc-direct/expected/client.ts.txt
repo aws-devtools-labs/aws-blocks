@@ -1,9 +1,9 @@
-// TODO(aws-blocks-auth-migrate): Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.
+// TODO(aws-blocks-auth-migrate): Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage. Native apps: build the client with OidcClient.forAuth (MIGRATION.md, "Native apps").
 import '@aws-blocks/bb-auth-oidc/middleware';
 import { oidcAuthApi } from 'aws-blocks';
 
 export async function signIn(): Promise<void> {
-	// TODO(aws-blocks-auth-migrate): getClient() is gone with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url).
+	// TODO(aws-blocks-auth-migrate): getClient() is gone with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Native apps: build the client with OidcClient.forAuth (MIGRATION.md, "Native apps").
 	const client = await oidcAuthApi.getClient();
 	await client.signIn('google');
 }

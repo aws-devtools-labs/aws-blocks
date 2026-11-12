@@ -62,9 +62,9 @@ export const SUBPATH_NAME_RULES: Readonly<Record<string, Readonly<Record<string,
  */
 export const DEAD_SUBPATHS: Readonly<Record<string, string>> = {
 	'@aws-blocks/bb-auth-oidc/middleware':
-		'Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.',
+		'Auth has no client middleware: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage. Native apps: build the client with OidcClient.forAuth (MIGRATION.md, "Native apps").',
 	'@aws-blocks/bb-auth-oidc/client':
-		'Auth has no OIDC client handle: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage.',
+		'Auth has no OIDC client handle: sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Delete this import and any getClient() usage. Native apps: build the client with OidcClient.forAuth (MIGRATION.md, "Native apps").',
 };
 
 /** Old packages' unexported sub-paths, and anything else under them: never compiled, so only flagged. */
@@ -570,7 +570,7 @@ export const TODOS = {
 		'signIn() now returns { status: "signedIn", user } or { status: "continueSignIn", nextStep } instead of the user.',
 	buildApi: 'buildApi() is gone: export auth.createApi() and drive it with the Authenticator UI.',
 	getClient:
-		'getClient() is gone with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url).',
+		'getClient() is gone with AuthOIDC: federated sign-in buttons come from getAuthState() (signIn:<id> actions carry a url). Native apps: build the client with OidcClient.forAuth (MIGRATION.md, "Native apps").',
 	oidcUserField: (field: string): string =>
 		`OIDCUser.${field} is gone: AuthenticatedUser has signInProvider, attributes (string claims), claims (iss, sub, …) and userId (still \`\${iss}:\${sub}\`).`,
 	oidcUserClaims:
