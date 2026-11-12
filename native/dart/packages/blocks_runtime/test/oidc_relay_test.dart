@@ -699,6 +699,47 @@ void main() {
     }
 
     test(
+      'an IdP error with an undecodable state envelope fails the state check',
+      () async {
+        // authorize-params issues a state whose envelope isn't valid, and the
+        // callback echoes it with an IdP error. The CSRF check runs before
+        // the error is read, so the error never reaches the caller.
+        const undecodable = 'not-base64-json.sig';
+        final httpClient = MockClient((req) async {
+          if (req.url.path.contains('/auth/authorize-params/')) {
+            return http.Response(
+              jsonEncode({
+                'authorizeUrl': 'https://idp.example.com/authorize',
+                'clientId': 'cid',
+                'scopes': ['openid'],
+                'kind': 'oidc-builtin',
+                'state': undecodable,
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 200);
+        });
+        final client = buildClient(httpClient: httpClient);
+        final launcher = FakeLauncher(
+          onLaunch: (_, __) =>
+              Uri.parse('$_relayTo?error=access_denied&state=$undecodable'),
+        );
+
+        await expectLater(
+          client.signInRelay('google', launcher: launcher, relayTo: _relayTo),
+          throwsA(
+            isA<OidcCallbackException>().having(
+              (e) => e.message,
+              'message',
+              isNot(contains('access_denied')),
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
       'throws OidcCallbackException when authorize-params request fails',
       () async {
         final httpClient = MockClient((req) async {
