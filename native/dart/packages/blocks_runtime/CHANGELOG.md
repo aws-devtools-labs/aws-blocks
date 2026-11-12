@@ -2,6 +2,10 @@
 
 The next release is 0.2.0, because of the breaking changes marked below.
 
+- `OidcClient.signIn` throws `OidcCallbackException` for a callback that
+  carries an IdP `error` or no `code`. It threw a `TypeError` from a null
+  check. It also deletes the attempt's stored PKCE values whatever happens,
+  where a launcher error or a state mismatch left them in the token store.
 - Add `OidcClient.authState`, the current sign-in state: the state most
   recently added to `authStateChanges`, or `OidcLoading` before the first one.
   An app can read it once, such as on launch after `restore()`, without

@@ -324,24 +324,41 @@ class OidcClient implements AuthProvider {
       },
     );
 
-    final callbackUri = await launcher.launch(
-      authorizeUri,
-      callbackScheme: Uri.parse(redirectUri).scheme,
-    );
+    final Uri callbackUri;
+    final String storedState;
+    final String storedVerifier;
+    final String storedNonce;
+    try {
+      callbackUri = await launcher.launch(
+        authorizeUri,
+        callbackScheme: Uri.parse(redirectUri).scheme,
+      );
 
-    final returnedState = callbackUri.queryParameters['state'];
-    final storedState = await tokenStore.get(_key('oidc_state'));
-    if (storedState == null || returnedState != storedState) {
-      throw StateError('OIDC state mismatch: possible CSRF attack');
+      final returnedState = callbackUri.queryParameters['state'];
+      final state = await tokenStore.get(_key('oidc_state'));
+      if (state == null || returnedState != state) {
+        throw StateError('OIDC state mismatch: possible CSRF attack');
+      }
+      storedState = state;
+      storedVerifier = (await tokenStore.get(_key('oidc_verifier')))!;
+      storedNonce = (await tokenStore.get(_key('oidc_nonce')))!;
+    } finally {
+      // Whatever happened, this attempt's PKCE values are spent.
+      await tokenStore.delete(_key('oidc_verifier'));
+      await tokenStore.delete(_key('oidc_state'));
+      await tokenStore.delete(_key('oidc_nonce'));
     }
 
-    final code = callbackUri.queryParameters['code']!;
-    final storedVerifier = (await tokenStore.get(_key('oidc_verifier')))!;
-    final storedNonce = (await tokenStore.get(_key('oidc_nonce')))!;
-
-    await tokenStore.delete(_key('oidc_verifier'));
-    await tokenStore.delete(_key('oidc_state'));
-    await tokenStore.delete(_key('oidc_nonce'));
+    final error = callbackUri.queryParameters['error'];
+    if (error != null) {
+      throw OidcCallbackException(
+        _idpError(error, callbackUri.queryParameters['error_description']),
+      );
+    }
+    final code = callbackUri.queryParameters['code'];
+    if (code == null) {
+      throw OidcCallbackException("Callback URI missing 'code' parameter");
+    }
 
     return exchange(
       code: code,
@@ -432,8 +449,7 @@ class OidcClient implements AuthProvider {
 
     final error = qp['error'];
     if (error != null) {
-      final description = qp['error_description'] ?? '';
-      throw OidcCallbackException('IdP error: $error: $description');
+      throw OidcCallbackException(_idpError(error, qp['error_description']));
     }
 
     final code = qp['code'];
@@ -452,6 +468,13 @@ class OidcClient implements AuthProvider {
       iss: qp['iss'],
     );
   }
+
+  /// The message for an IdP `error` in a callback, with its description
+  /// when it has one.
+  static String _idpError(String error, String? description) =>
+      description == null || description.isEmpty
+      ? 'IdP error: $error'
+      : 'IdP error: $error: $description';
 
   Future<AuthorizeParamsResponse> _fetchAuthorizeParams(
     String provider,

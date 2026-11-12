@@ -392,6 +392,80 @@ void main() {
     });
   });
 
+  group('OidcClient signIn callback errors', () {
+    OidcClient directClient(TokenStore store) => OidcClient(
+      exchangePath: '/aws-blocks/auth/exchange',
+      refreshPath: '/aws-blocks/auth/exchange/refresh',
+      signOutPath: '/aws-blocks/auth/signout',
+      providers: ['google'],
+      providerConfigs: {
+        'google': ProviderConfig(
+          authorizeUrl: 'https://idp.example.com/authorize',
+          clientId: 'cid',
+          scopes: const ['openid'],
+          kind: 'oidc-builtin',
+        ),
+      },
+      baseUrl: 'http://localhost:3000',
+      tokenStore: store,
+      httpClient: MockClient((_) async => http.Response('{}', 200)),
+    );
+
+    Future<void> expectPkceCleared(InMemoryTokenStore store) async {
+      for (final key in ['oidc_verifier', 'oidc_state', 'oidc_nonce']) {
+        expect(await store.get(key), isNull, reason: key);
+      }
+    }
+
+    test(
+      'an IdP error with the right state throws OidcCallbackException',
+      () async {
+        final store = InMemoryTokenStore();
+        await expectLater(
+          directClient(store).signIn(
+            'google',
+            launcher: _ErrorLauncher(),
+            redirectUri: 'myapp://auth',
+          ),
+          throwsA(
+            isA<OidcCallbackException>().having(
+              (e) => e.message,
+              'message',
+              'IdP error: access_denied',
+            ),
+          ),
+        );
+        await expectPkceCleared(store);
+      },
+    );
+
+    test('a launcher that throws leaves no PKCE values behind', () async {
+      final store = InMemoryTokenStore();
+      await expectLater(
+        directClient(store).signIn(
+          'google',
+          launcher: _ThrowingLauncher(),
+          redirectUri: 'myapp://auth',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await expectPkceCleared(store);
+    });
+
+    test('a state mismatch leaves no PKCE values behind', () async {
+      final store = InMemoryTokenStore();
+      await expectLater(
+        directClient(store).signIn(
+          'google',
+          launcher: _ForgedStateLauncher(),
+          redirectUri: 'myapp://auth',
+        ),
+        throwsA(isA<StateError>()),
+      );
+      await expectPkceCleared(store);
+    });
+  });
+
   group('OidcClient restore', () {
     OidcClient sessionClient(
       MockClient http, {
@@ -996,4 +1070,29 @@ class _StateDroppingLauncher implements BrowserLauncher {
     await _store.delete('oidc_state');
     return Uri.parse('$callbackScheme://auth?code=c');
   }
+}
+
+/// Returns an IdP error redirect that carries the issued state.
+class _ErrorLauncher implements BrowserLauncher {
+  @override
+  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) async {
+    final state = Uri.encodeComponent(authorizeUrl.queryParameters['state']!);
+    return Uri.parse('$callbackScheme://auth?error=access_denied&state=$state');
+  }
+}
+
+/// Fails as a launcher does when no browser could be opened.
+class _ThrowingLauncher implements BrowserLauncher {
+  @override
+  Future<Uri> launch(Uri authorizeUrl, {required String callbackScheme}) =>
+      throw StateError('no browser');
+}
+
+/// Returns a callback with a state this sign-in didn't issue.
+class _ForgedStateLauncher implements BrowserLauncher {
+  @override
+  Future<Uri> launch(
+    Uri authorizeUrl, {
+    required String callbackScheme,
+  }) async => Uri.parse('$callbackScheme://auth?code=c&state=forged');
 }
