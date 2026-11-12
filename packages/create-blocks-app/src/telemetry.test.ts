@@ -711,6 +711,16 @@ describe('create-blocks-app telemetry/first-run notice', () => {
     );
   });
 
+  it('states the same retention as the @aws-blocks/blocks README', () => {
+    // The README telemetry paragraph repeats the retention lines of the notice word for word.
+    const readme = readFileSync(new URL('../../blocks/README.md', import.meta.url), 'utf-8');
+    for (const sentence of [
+      "It is not stored, except in logs of requests that the endpoint's firewall blocks.",
+      'Events are kept for up to 1 year, and logs of all requests, blocked or not, for up to 10 years.',
+    ]) {
+      assert.ok(readme.includes(sentence), `README is missing: ${sentence}`);
+    }
+  });
 });
 
 describe('create-blocks-app telemetry/global × project precedence (shared case table)', () => {
