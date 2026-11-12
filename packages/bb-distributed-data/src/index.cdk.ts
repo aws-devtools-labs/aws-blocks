@@ -9,6 +9,7 @@
 
 import { BuildingBlockScope, DEFAULT_NODE_RUNTIME, synthGuard, blocksNodejsBundling, registerConfig } from '@aws-blocks/core/cdk';
 import { deployTimeLambdaEntry, markAddedChildrenBlocksOwned } from '@aws-blocks/core/cdk/internal';
+import { copyMigrationsCommand } from '@aws-blocks/data-common/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
@@ -20,7 +21,6 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { DistributedDatabaseOptions } from './types.js';
 import { LAMBDA_MIGRATIONS_DIR, MIGRATION_LAMBDA_TIMEOUT_MINUTES, ENV_SANITIZE, sanitizeDbRoleName } from './constants.js';
-import { copyMigrationsCommand } from './migrations-copy.js';
 import { validateMigrations } from './validation.js';
 import { BB_NAME } from './version.js';
 

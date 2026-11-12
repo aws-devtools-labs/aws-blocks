@@ -1,6 +1,7 @@
 ---
 "@aws-blocks/bb-data": patch
 "@aws-blocks/bb-distributed-data": patch
+"@aws-blocks/data-common": patch
 ---
 
 fix: `Database` and `DistributedDatabase` with `migrationsPath` synthesize in a project path that contains a space, `"` or `$`
