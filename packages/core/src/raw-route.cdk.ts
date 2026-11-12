@@ -1,6 +1,7 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+import { markBlocksOwned } from './cdk/blocks-roles.js';
 import { Scope } from './cdk/index.js';
 import { getBlocksRootId } from './cdk/root-registry.js';
 import type { ScopeParent } from './common/index.js';
@@ -51,6 +52,8 @@ export class RawRoute extends Scope {
 
   constructor(scope: ScopeParent, id: string, options: RawRouteOptions) {
     super(id, { parent: scope });
+    // First-party construct: its roles are AWS Blocks' own (see isAppOwnedRole).
+    markBlocksOwned(this);
     this.path = resolveRoutePath(scope, id, options);
     // Tag the route with its owning backend root so Hosting can filter the
     // process-global registry to the backend its distribution fronts (a

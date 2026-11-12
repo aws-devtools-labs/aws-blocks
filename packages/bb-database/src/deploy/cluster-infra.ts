@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type BuildingBlockScope, blocksNodejsBundling, DEFAULT_NODE_RUNTIME } from '@aws-blocks/core/cdk';
-import { deployTimeLambdaEntry } from '@aws-blocks/core/cdk/internal';
+import { deployTimeLambdaEntry, scopeProviderWaiterTrust } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { CfnFunction } from 'aws-cdk-lib/aws-lambda';
@@ -245,6 +245,7 @@ export class ClusterInfra {
 			queryInterval: cdk.Duration.seconds(MIGRATION_POLL_INTERVAL_SECONDS),
 			totalTimeout: cdk.Duration.minutes(MIGRATION_TOTAL_TIMEOUT_MINUTES),
 		});
+		scopeProviderWaiterTrust(this.provider);
 		cdk.Aspects.of(stack).add(new FunctionsWaitForMigrations(stack, this.appRole, () => this.lastCustomResource));
 	}
 
