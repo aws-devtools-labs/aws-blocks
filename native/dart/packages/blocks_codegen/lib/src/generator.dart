@@ -81,6 +81,16 @@ class DartCodeGenerator {
         ..add(classes.$1)
         ..add(classes.$2);
     }
+    // Each open union's `UnknownX` is a top-level name too.
+    final openUnions = <String, String>{};
+    for (final name in _openUnions(model)) {
+      var unknown = 'Unknown$name';
+      while (declared.contains(unknown)) {
+        unknown = '$unknown\$';
+      }
+      openUnions[name] = unknown;
+      declared.add(unknown);
+    }
 
     // Classify types: schema-defined or multi-use → shared; single-use → namespace-scoped
     final typeUsage =
@@ -121,6 +131,7 @@ class DartCodeGenerator {
         emittedTypes,
         declared,
         openEnums,
+        openUnions,
       );
       if (code.isNotEmpty) {
         buf.writeln(code);
@@ -148,6 +159,7 @@ class DartCodeGenerator {
           emittedTypes,
           declared,
           openEnums,
+          openUnions,
         );
         if (code.isNotEmpty) {
           buf.writeln(code);
@@ -182,6 +194,7 @@ class DartCodeGenerator {
     Set<String> emitted,
     Set<String> declared,
     Map<String, (String, String)> openEnums,
+    Map<String, String> openUnions,
   ) {
     return switch (type) {
       RecordType() => _emitRecord(type, allTypes, emitted, declared),
@@ -192,7 +205,13 @@ class DartCodeGenerator {
         declared,
       ),
       EnumType() => _emitEnum(type, emitted, declared),
-      SealedClassType() => _emitSealedClass(type, allTypes, emitted, declared),
+      SealedClassType() => _emitSealedClass(
+        type,
+        allTypes,
+        emitted,
+        declared,
+        unknown: openUnions[type.name],
+      ),
       _ => '',
     };
   }
@@ -487,12 +506,16 @@ class DartCodeGenerator {
     return (free('${name}Known'), free('${name}Unknown'));
   }
 
+  /// A union. With [unknown], it is open (see [_openUnions]): an object whose
+  /// discriminator names no arm decodes to the class [unknown], which keeps the
+  /// object and writes it back in `toJson()`, instead of throwing.
   String _emitSealedClass(
     SealedClassType sealed,
     Map<String, ResolvedType> allTypes,
     Set<String> emitted,
-    Set<String> declared,
-  ) {
+    Set<String> declared, {
+    String? unknown,
+  }) {
     if (emitted.contains(sealed.name)) return '';
     emitted.add(sealed.name);
     final buf = StringBuffer();
@@ -528,9 +551,13 @@ class DartCodeGenerator {
           '      case ${_dartStringLiteral(v.discriminantValue)}: return ${v.className}.fromJson(json$clientArg);',
         );
       }
-      buf.writeln(
-        "      default: throw ArgumentError('Unknown ${_escapeStringContent(sealed.discriminant)}: \${$discriminant}');",
-      );
+      if (unknown != null) {
+        buf.writeln('      default: return $unknown(json);');
+      } else {
+        buf.writeln(
+          "      default: throw ArgumentError('Unknown ${_escapeStringContent(sealed.discriminant)}: \${$discriminant}');",
+        );
+      }
       buf.writeln('    }');
     }
     buf.writeln('  }');
@@ -662,6 +689,38 @@ class DartCodeGenerator {
       ];
       _emitEquality(buf, v.className, variantFields);
 
+      buf.writeln('}');
+      buf.writeln();
+    }
+    if (unknown != null) {
+      final name = sealed.name;
+      final key = _dartStringLiteral(sealed.discriminant);
+      buf.writeln('/// A `$name` arm this client was generated without.');
+      buf.writeln('final class $unknown extends $name {');
+      buf.writeln('  /// The object as the server sent it.');
+      buf.writeln('  final Map<String, dynamic> json;');
+      buf.writeln();
+      buf.writeln('  const $unknown(this.json);');
+      buf.writeln();
+      buf.writeln('  /// The discriminator value that names no known arm.');
+      buf.writeln('  String get discriminator => json[$key] as String;');
+      buf.writeln();
+      buf.writeln('  @override');
+      buf.writeln('  Map<String, dynamic> toJson() => json;');
+      buf.writeln();
+      buf.writeln('  @override');
+      buf.writeln('  bool operator ==(Object other) =>');
+      buf.writeln(
+        '      other is $unknown && blocksDeepEquals(json, other.json);',
+      );
+      buf.writeln();
+      buf.writeln('  @override');
+      buf.writeln('  int get hashCode => blocksDeepHash(json);');
+      buf.writeln();
+      buf.writeln('  @override');
+      buf.writeln(
+        "  String toString() => ${_dartStringLiteral(unknown)} '(\$json)';",
+      );
       buf.writeln('}');
       buf.writeln();
     }
@@ -1596,6 +1655,59 @@ class DartCodeGenerator {
         case SchemaReference(name: final n):
           if (model.types[n] case final t?) walk(t);
         case PrimitiveType():
+          break;
+      }
+    }
+
+    for (final ns in model.namespaces) {
+      for (final op in ns.operations) {
+        walk(op.result);
+      }
+    }
+    return open;
+  }
+
+  /// The unions a response can carry, by the same walk as [_openEnums]: every
+  /// union with a string discriminator that an operation's result reaches.
+  /// These are generated open (see [_emitSealedClass]), so an arm a newer
+  /// backend adds decodes to `UnknownX` instead of throwing. A union only
+  /// parameters reach stays closed, and so does one with a boolean
+  /// discriminator (`true`/`false` is already exhaustive) and a union embedded
+  /// in a hybrid arm, which shares that arm's JSON object.
+  Set<String> _openUnions(CodegenModel model) {
+    final open = <String>{};
+    final seen = <ResolvedType>{};
+    void walk(ResolvedType type) {
+      if (!seen.add(type)) return;
+      switch (type) {
+        case TransferableType(blocksType: 'oidc/client'):
+          break;
+        case TransferableType(typeArgs: final args):
+          args.forEach(walk);
+        case RecordType(fields: final fields, additionalProperties: final ap):
+          for (final f in fields) {
+            walk(f.type);
+          }
+          if (ap != null) walk(ap);
+        case SealedClassType(variants: final variants):
+          if (!type.discriminantIsBoolean) open.add(type.name);
+          for (final v in variants) {
+            for (final f in v.fields) {
+              walk(f.type);
+            }
+            if (v.additionalProperties case final ap?) walk(ap);
+          }
+        case NullableType(inner: final i):
+          walk(i);
+        case ListType(items: final i):
+          walk(i);
+        case MapType(valueType: final v):
+          walk(v);
+        case TupleType(items: final items):
+          items.forEach(walk);
+        case SchemaReference(name: final n):
+          if (model.types[n] case final t?) walk(t);
+        case PrimitiveType() || EnumType():
           break;
       }
     }

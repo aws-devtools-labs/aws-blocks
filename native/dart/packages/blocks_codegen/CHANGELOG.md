@@ -1,5 +1,13 @@
 ## Unreleased
 
+- **Breaking:** a union with a string discriminator that a response can
+  carry is now open, so an arm a newer backend adds no longer makes decoding
+  throw `ArgumentError`. An object whose discriminator names no arm decodes
+  to `UnknownX`, whose `json` is the object as sent and whose
+  `discriminator` is its tag; `toJson()` writes the object back, so it
+  round-trips. An exhaustive `switch` over `X` needs an `UnknownX()` case.
+  Unions only parameters use, unions with a boolean discriminator and a
+  union embedded in a hybrid arm stay closed.
 - **Breaking:** a string enum that a response can carry is now open, so a
   value a newer backend adds no longer makes decoding throw. Such an enum
   `X` (reachable from a method result, at any depth) is a sealed class:

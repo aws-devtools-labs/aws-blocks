@@ -959,7 +959,7 @@ sealed class GetEventResult {
     switch (json['kind'] as String) {
       case 'moved': return MovedGetEventResult.fromJson(json);
       case 'flagged': return FlaggedGetEventResult.fromJson(json);
-      default: throw ArgumentError('Unknown kind: ${json['kind']}');
+      default: return UnknownGetEventResult(json);
     }
   }
 }
@@ -1030,6 +1030,30 @@ class FlaggedGetEventResult extends GetEventResult {
 
   @override
   String toString() => 'FlaggedGetEventResult(severity: $severity)';
+}
+
+/// A `GetEventResult` arm this client was generated without.
+final class UnknownGetEventResult extends GetEventResult {
+  /// The object as the server sent it.
+  final Map<String, dynamic> json;
+
+  const UnknownGetEventResult(this.json);
+
+  /// The discriminator value that names no known arm.
+  String get discriminator => json['kind'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => json;
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnknownGetEventResult && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'UnknownGetEventResult' '($json)';
 }
 
 

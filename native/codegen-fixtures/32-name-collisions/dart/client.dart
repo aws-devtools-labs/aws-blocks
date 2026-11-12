@@ -247,7 +247,7 @@ sealed class TicketPayload {
     switch (json['type'] as String) {
       case 'text': return TextTicketPayload.fromJson(json);
       case 'count': return CountTicketPayload.fromJson(json);
-      default: throw ArgumentError('Unknown type: ${json['type']}');
+      default: return UnknownTicketPayload(json);
     }
   }
 }
@@ -320,6 +320,30 @@ class CountTicketPayload extends TicketPayload {
   String toString() => 'CountTicketPayload(total: $total)';
 }
 
+/// A `TicketPayload` arm this client was generated without.
+final class UnknownTicketPayload extends TicketPayload {
+  /// The object as the server sent it.
+  final Map<String, dynamic> json;
+
+  const UnknownTicketPayload(this.json);
+
+  /// The discriminator value that names no known arm.
+  String get discriminator => json['type'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => json;
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnknownTicketPayload && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'UnknownTicketPayload' '($json)';
+}
+
 
 
 sealed class TicketPayloads {
@@ -329,7 +353,7 @@ sealed class TicketPayloads {
     switch (json['format'] as String) {
       case 'plain': return PlainTicketPayloads.fromJson(json);
       case 'rich': return RichTicketPayloads.fromJson(json);
-      default: throw ArgumentError('Unknown format: ${json['format']}');
+      default: return UnknownTicketPayloads(json);
     }
   }
 }
@@ -400,6 +424,30 @@ class RichTicketPayloads extends TicketPayloads {
 
   @override
   String toString() => 'RichTicketPayloads(html: $html)';
+}
+
+/// A `TicketPayloads` arm this client was generated without.
+final class UnknownTicketPayloads extends TicketPayloads {
+  /// The object as the server sent it.
+  final Map<String, dynamic> json;
+
+  const UnknownTicketPayloads(this.json);
+
+  /// The discriminator value that names no known arm.
+  String get discriminator => json['format'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => json;
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnknownTicketPayloads && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'UnknownTicketPayloads' '($json)';
 }
 
 
@@ -839,7 +887,7 @@ sealed class ActResult {
     switch (json['action'] as String) {
       case 'pick': return PickActResult.fromJson(json);
       case 'skip': return SkipActResult.fromJson(json);
-      default: throw ArgumentError('Unknown action: ${json['action']}');
+      default: return UnknownActResult(json);
     }
   }
 }
@@ -915,6 +963,30 @@ class SkipActResult extends ActResult {
 
   @override
   String toString() => 'SkipActResult(reason: $reason)';
+}
+
+/// A `ActResult` arm this client was generated without.
+final class UnknownActResult extends ActResult {
+  /// The object as the server sent it.
+  final Map<String, dynamic> json;
+
+  const UnknownActResult(this.json);
+
+  /// The discriminator value that names no known arm.
+  String get discriminator => json['action'] as String;
+
+  @override
+  Map<String, dynamic> toJson() => json;
+
+  @override
+  bool operator ==(Object other) =>
+      other is UnknownActResult && blocksDeepEquals(json, other.json);
+
+  @override
+  int get hashCode => blocksDeepHash(json);
+
+  @override
+  String toString() => 'UnknownActResult' '($json)';
 }
 
 
