@@ -273,24 +273,14 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
             }
         )
 
-        if let error = resultParams["error"] {
-            let desc = resultParams["error_description"] ?? ""
-            throw OIDCError.callbackError("\(error): \(desc)")
-        }
-
-        guard let code = resultParams["code"] else {
-            throw OIDCError.missingAuthorizationCode
-        }
-        guard let returnedState = resultParams["state"] else {
+        // The state comes first: only a relay carrying the state this sign-in was given can report
+        // an IdP error, so another page can't end the sign-in with a message of its choosing.
+        guard let returnedState = resultParams["state"], returnedState == signedState else {
             throw OIDCError.stateMismatch
         }
 
-        if returnedState != signedState {
-            throw OIDCError.stateMismatch
-        }
-
-        // Step 5: Verify CSRF inside state envelope. Fail closed: a state whose payload can't be
-        // decoded, or that carries no csrf, is refused like a mismatched one.
+        // Then the CSRF inside the state envelope, also before the error. Fail closed: a state whose
+        // payload can't be decoded, or that carries no csrf, is refused like a mismatched one.
         guard let dotIndex = signedState.firstIndex(of: "."),
               let payloadData = Data(base64URLDecoded: String(signedState[signedState.startIndex ..< dotIndex])),
               let payload = try? JSONSerialization.jsonObject(with: payloadData) as? [String: Any],
@@ -298,6 +288,15 @@ public actor OIDCClient<Provider: OIDCProviderName>: AuthProvider {
               returnedCsrf == csrf
         else {
             throw OIDCError.stateMismatch
+        }
+
+        if let error = resultParams["error"] {
+            let desc = resultParams["error_description"] ?? ""
+            throw OIDCError.callbackError("\(error): \(desc)")
+        }
+
+        guard let code = resultParams["code"] else {
+            throw OIDCError.missingAuthorizationCode
         }
 
         // Step 6: Exchange code for tokens

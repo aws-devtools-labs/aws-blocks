@@ -1180,6 +1180,64 @@ final class OIDCClientTests: XCTestCase {
         }
     }
 
+    func testSignInChecksTheStateBeforeTheIdPError() async throws {
+        stubAuthRoutes()
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        // An error without the sign-in's state is refused as a mismatch, whatever its text.
+        do {
+            _ = try await client.signIn(
+                provider: "google",
+                launcher: FixedRelayLauncher(relay: "myapp://auth?error=access_denied&error_description=chosen-text")
+            )
+            XCTFail("Expected stateMismatch")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .stateMismatch)
+        }
+
+        // With the sign-in's state, the IdP error is reported.
+        do {
+            _ = try await client.signIn(
+                provider: "google",
+                launcher: EchoStateRelayLauncher(relay: "myapp://auth?error=access_denied&error_description=denied")
+            )
+            XCTFail("Expected callbackError")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .callbackError("access_denied: denied"))
+        }
+        XCTAssertFalse(
+            OIDCMockURLProtocol.requests.contains { $0.url?.path.hasSuffix("/exchange") == true },
+            "no exchange after a refused relay"
+        )
+    }
+
+    /// A relay with the right state and an IdP error, but whose envelope carries another sign-in's
+    /// csrf, is refused as a mismatch: the csrf is checked before the error is reported.
+    func testSignInChecksTheEnvelopeCsrfBeforeTheIdPError() async throws {
+        let state = Self.base64URL(try JSONSerialization.data(withJSONObject: ["v": 1, "csrf": "someone-elses"])) + ".sig"
+        OIDCMockURLProtocol.handler = { request in
+            let body = try JSONSerialization.data(withJSONObject: [
+                "authorizeUrl": "https://idp.example.com/authorize", "clientId": "cid",
+                "scopes": ["openid"], "kind": "oidc", "state": state
+            ])
+            return (okResponse(for: request.url!), body)
+        }
+        let blocksClient = BlocksClient(url: "https://api.example.com/aws-blocks/api", session: makeMockSession())
+        let client = OIDCClient.forAuth(client: blocksClient, providers: ["google"], relayTo: "myapp://auth")
+
+        do {
+            _ = try await client.signIn(
+                provider: "google",
+                launcher: EchoStateRelayLauncher(relay: "myapp://auth?error=access_denied&error_description=chosen-text")
+            )
+            XCTFail("Expected stateMismatch")
+        } catch let error as OIDCError {
+            XCTAssertEqual(error, .stateMismatch)
+        }
+        XCTAssertEqual(OIDCMockURLProtocol.requests.count, 1, "no exchange")
+    }
+
     func testForAuthPathValidation() {
         let problem = OIDCClient<String>.authPathsProblem
         XCTAssertNil(problem("/aws-blocks/auth/callback", "/aws-blocks/auth/signout"))
@@ -1267,5 +1325,14 @@ private final class EchoStateRelayLauncher: BrowserLauncher, @unchecked Sendable
         var components = try XCTUnwrap(URLComponents(string: relay))
         components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "state", value: state)]
         return try XCTUnwrap(components.url)
+    }
+}
+
+/// Relays back to `relay` unchanged, without the sign-in's state.
+private struct FixedRelayLauncher: BrowserLauncher {
+    let relay: String
+
+    func launch(authorizeURL: URL, callbackScheme: String) async throws -> URL {
+        try XCTUnwrap(URL(string: relay))
     }
 }
