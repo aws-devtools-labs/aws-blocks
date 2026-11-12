@@ -43,7 +43,7 @@ import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { lazyBackendApiUrl } from './cdk/api-url.js';
-import { authRoutes } from './cdk/auth-routes.js';
+import { authRoutes, stubProviders } from './cdk/auth-routes.js';
 import {
 	AUTH_ROUTE_PREFIX,
 	assertBearerClientIds,
@@ -89,7 +89,6 @@ import type {
 	ProtectedApi,
 	ProtectHandlers,
 	ProtectOptions,
-	StubUser,
 } from './types.js';
 import { BB_NAME } from './version.js';
 
@@ -635,29 +634,6 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 	get admin(): never {
 		return synthGuard('Auth', 'admin');
 	}
-}
-
-/** A provider's `stubIdp` settings object, read structurally (the declared union does not list it). */
-function stubSettingsOf(provider: object): object | undefined {
-	const settings: unknown = Reflect.get(provider, 'stubIdp');
-	return typeof settings === 'object' && settings !== null ? settings : undefined;
-}
-
-/** The configured `stubIdp()` providers, with their inline users. */
-function stubProviders(opts: ResolvedAuthOptions): Array<{ id: string; users: readonly StubUser[] }> {
-	const out: Array<{ id: string; users: readonly StubUser[] }> = [];
-	for (const [id, provider] of Object.entries(opts.oidcProviders ?? {})) {
-		const settings = provider ? stubSettingsOf(provider) : undefined;
-		if (!settings) continue;
-		const users: unknown = Reflect.get(settings, 'users');
-		out.push({
-			id,
-			users: Array.isArray(users)
-				? users.filter((u): u is StubUser => typeof u === 'object' && u !== null && typeof u.email === 'string')
-				: [],
-		});
-	}
-	return out;
 }
 
 /**

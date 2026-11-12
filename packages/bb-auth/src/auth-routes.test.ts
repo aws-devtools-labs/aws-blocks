@@ -11,7 +11,7 @@ import assert from 'node:assert';
 import { rmSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { clearRouteRegistry, getRegisteredRoutes } from '@aws-blocks/core';
-import { authRoutes } from './cdk/auth-routes.js';
+import { authRoutes, stubProviders } from './cdk/auth-routes.js';
 import { Auth, github, stubIdp } from './index.mock.js';
 import { resolveOptions } from './resolve-options.js';
 import type { AppSettingRef, AuthOptions } from './types.js';
@@ -25,7 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
-const CASES: Array<{ name: string; options: AuthOptions; stubKeys: string[] }> = [
+const CASES: Array<{ name: string; options: AuthOptions }> = [
 	{
 		name: 'builtin: stub, two OIDC (one id needing encoding), github(), bearer, own paths',
 		options: {
@@ -39,7 +39,6 @@ const CASES: Array<{ name: string; options: AuthOptions; stubKeys: string[] }> =
 			},
 			redirects: { callbackPath: '/aws-blocks/auth/sso/callback', signOutPath: '/aws-blocks/auth/sso/signout' },
 		},
-		stubKeys: ['corp'],
 	},
 	{
 		name: 'user pool: social, SAML, bearer, default paths',
@@ -51,12 +50,10 @@ const CASES: Array<{ name: string; options: AuthOptions; stubKeys: string[] }> =
 				acme: { type: 'saml', metadataUrl: 'https://acme.example.com/metadata.xml' },
 			},
 		},
-		stubKeys: [],
 	},
 	{
 		name: 'builtin: two stubs, default paths, no bearer',
 		options: { store: 'builtin', providers: { google: stubIdp(), github2: stubIdp() } },
-		stubKeys: ['google', 'github2'],
 	},
 	{
 		name: 'builtin: unusual but valid paths (double slash, trailing slash)',
@@ -65,18 +62,22 @@ const CASES: Array<{ name: string; options: AuthOptions; stubKeys: string[] }> =
 			providers: { corp: stubIdp() },
 			redirects: { callbackPath: '/aws-blocks/auth//deep/cb', signOutPath: '/aws-blocks/auth/out/' },
 		},
-		stubKeys: ['corp'],
 	},
 ];
 
 describe('claimed Auth routes match the mounted ones', () => {
-	for (const { name, options, stubKeys } of CASES) {
+	for (const { name, options } of CASES) {
 		test(name, () => {
 			new Auth({ id: `routes${process.pid}` }, 'auth', options);
 			const mounted = getRegisteredRoutes()
 				.map((r) => `${r.method} ${r.path}`)
 				.sort();
-			const r = authRoutes(resolveOptions(options, 'auth'), stubKeys);
+			// The stub keys come from the same lookup synth uses, so a stub it missed would leave its routes unclaimed here.
+			const resolved = resolveOptions(options, 'auth');
+			const r = authRoutes(
+				resolved,
+				stubProviders(resolved).map((s) => s.id),
+			);
 			const claimed = [...r.signIn, ...r.signOut, ...r.stubs.flatMap((s) => s.routes)].sort();
 			assert.deepStrictEqual(claimed, mounted);
 		});
