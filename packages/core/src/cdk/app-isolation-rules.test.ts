@@ -160,6 +160,77 @@ describe('app-isolation rules — APIs', () => {
 	});
 });
 
+describe('app-isolation rules — wildcard grants on more data services', () => {
+	const grant = (Action: string | string[], Resource: unknown) => ({ Effect: 'Allow', Action, Resource });
+	const wildcard = (Action: string, arn: string) => {
+		assert.deepStrictEqual(rules(checkStatement(grant(Action, '*'), 'appa', 'p')), ['wildcard-data-grant'], `${Action} on *`);
+		assert.deepStrictEqual(rules(checkStatement(grant(Action, arn), 'appa', 'p')), ['wildcard-data-grant'], `${Action} on ${arn}`);
+	};
+
+	test('dsql: DbConnect on * or cluster/* is flagged; on its own cluster it is not', () => {
+		wildcard('dsql:DbConnect', 'arn:aws:dsql:us-east-1:111111111111:cluster/*');
+		const own = { 'Fn::Join': ['', ['arn:aws:dsql:', { Ref: 'AWS::Region' }, ':', { Ref: 'AWS::AccountId' }, ':cluster/', { Ref: 'Cluster' }]] };
+		assert.deepStrictEqual(checkStatement(grant(['dsql:DbConnect', 'dsql:DbConnectAdmin'], own), 'appa', 'p'), []);
+	});
+
+	test('rds-data: ExecuteStatement on * or cluster:* is flagged', () => {
+		wildcard('rds-data:ExecuteStatement', 'arn:aws:rds:us-east-1:111111111111:cluster:*');
+	});
+
+	test('rds: on * or db:* is flagged', () => {
+		wildcard('rds:ModifyDBInstance', 'arn:aws:rds:us-east-1:111111111111:db:*');
+	});
+
+	test('bedrock: Retrieve on * or knowledge-base/* is flagged', () => {
+		wildcard('bedrock:Retrieve', 'arn:aws:bedrock:us-east-1:111111111111:knowledge-base/*');
+	});
+
+	test('bedrock-agentcore: on * or runtime/* is flagged, except InvokeAgentRuntime on runtime/*', () => {
+		wildcard('bedrock-agentcore:UpdateAgentRuntime', 'arn:aws:bedrock-agentcore:us-east-1:111111111111:runtime/*');
+		const runtimes = ['arn:*:bedrock-agentcore:*:*:runtime/*', 'arn:*:bedrock-agentcore:*:*:runtime/*/*'];
+		assert.deepStrictEqual(checkStatement(grant('bedrock-agentcore:InvokeAgentRuntime', runtimes), 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkStatement(grant('bedrock-agentcore:InvokeAgentRuntime', '*'), 'appa', 'p')), [
+			'wildcard-data-grant',
+		]);
+	});
+
+	test('s3vectors: on * or bucket/* is flagged', () => {
+		wildcard('s3vectors:CreateIndex', 'arn:aws:s3vectors:us-east-1:111111111111:bucket/*');
+	});
+
+	test('sns: Publish on * or arn:…:* is flagged', () => {
+		wildcard('sns:Publish', 'arn:aws:sns:us-east-1:111111111111:*');
+	});
+
+	test('ecs: on * or cluster/* is flagged', () => {
+		wildcard('ecs:RunTask', 'arn:aws:ecs:us-east-1:111111111111:cluster/*');
+	});
+
+	test('ses: anything but sending, on * or identity/*, is flagged; sending is an accepted exception', () => {
+		wildcard('ses:DeleteEmailIdentity', 'arn:aws:ses:us-east-1:111111111111:identity/*');
+		const send = ['ses:SendEmail', 'ses:SendBulkEmail'];
+		const identities = ['arn:aws:ses:*:111111111111:identity/*', 'arn:aws:ses:*:111111111111:configuration-set/*'];
+		assert.deepStrictEqual(checkStatement(grant(send, identities), 'appa', 'p'), []);
+		assert.deepStrictEqual(checkStatement(grant(send, '*'), 'appa', 'p'), []);
+	});
+
+	test('cloudfront-keyvaluestore: on * or key-value-store/* is flagged', () => {
+		wildcard('cloudfront-keyvaluestore:UpdateKeys', 'arn:aws:cloudfront::111111111111:key-value-store/*');
+	});
+
+	test('AWS-owned Bedrock models and system inference profiles are exempt; other model resources are not', () => {
+		const models = ['arn:*:bedrock:*::foundation-model/*', 'arn:*:bedrock:*:*:inference-profile/*'];
+		const invoke = ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream', 'bedrock:GetFoundationModel'];
+		assert.deepStrictEqual(checkStatement(grant(invoke, models), 'appa', 'p'), []);
+		assert.deepStrictEqual(rules(checkStatement(grant('bedrock:InvokeModel', '*'), 'appa', 'p')), ['wildcard-data-grant']);
+		assert.deepStrictEqual(
+			rules(checkStatement(grant('bedrock:InvokeModel', 'arn:aws:bedrock:us-east-1:111111111111:application-inference-profile/*'), 'appa', 'p')),
+			['wildcard-data-grant'],
+		);
+		assert.deepStrictEqual(rules(checkStatement(grant('bedrock:DeleteKnowledgeBase', models[0]), 'appa', 'p')), ['wildcard-data-grant']);
+	});
+});
+
 describe('app-isolation rules — resource policies and trust', () => {
 	test("a Lambda permission or queue policy on another app's resource is flagged", () => {
 		assert.deepStrictEqual(

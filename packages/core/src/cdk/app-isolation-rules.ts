@@ -169,6 +169,38 @@ const DATA_SERVICES = new Set([
 	'kms',
 	'execute-api',
 	'apigateway',
+	'sns',
+	'ses',
+	'rds',
+	'rds-data',
+	'dsql',
+	'bedrock',
+	'bedrock-agentcore',
+	's3vectors',
+	'ecs',
+	'cloudfront-keyvaluestore',
+]);
+
+/**
+ * Data services whose resource names the check doesn't read: named by id (DSQL
+ * clusters, knowledge bases, AgentCore runtimes, KeyValueStores), or by names
+ * CloudFormation generates without a `-` after the app id (ECS task-definition
+ * families), or fenced by name in the platform's policies rather than here. For
+ * these, only a wildcard counts: `*`, or a resource whose name after its type
+ * (`cluster/`, `cluster:`, `knowledge-base/`, `bucket/`, `identity/`, …) starts
+ * with `*`.
+ */
+const WILDCARD_ONLY_SERVICES = new Set([
+	'sns',
+	'ses',
+	'rds',
+	'rds-data',
+	'dsql',
+	'bedrock',
+	'bedrock-agentcore',
+	's3vectors',
+	'ecs',
+	'cloudfront-keyvaluestore',
 ]);
 
 /** Placeholder for a reference to one of the template's own resources inside a rendered ARN. */
@@ -276,6 +308,10 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 			name = m ? m[2] : undefined;
 			break;
 		}
+		case 'cloudfront':
+			// Only KeyValueStores hold data (`key-value-store/<id>`, named by id): a wildcard is checked.
+			name = /^key-value-store\/\*/.test(rest) ? '*' : undefined;
+			break;
 		case 'execute-api':
 			// `<api id>/<stage>/<method>/<path>`: an API id is never a name under the app's
 			// prefix, so a literal one is always outside the app — reference the API instead.
@@ -283,7 +319,8 @@ function arnResourceName(arn: string): { service: string; name: string } | undef
 			break;
 		default:
 			// cognito-idp and kms name resources by id, not by name: only `*` is checked.
-			name = undefined;
+			// The services in WILDCARD_ONLY_SERVICES are checked for a wildcard name too.
+			name = WILDCARD_ONLY_SERVICES.has(service) && /^(?:[a-z][a-z-]*[/:])?\*/.test(rest) ? '*' : undefined;
 	}
 	return name === undefined ? undefined : { service, name };
 }
@@ -302,8 +339,23 @@ export interface ResolvedStatement {
 
 const asList = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
+/** Action prefixes whose resources live under another service's ARNs. */
+const ARN_SERVICE_OF: Readonly<Record<string, string>> = {
+	// The Data API runs statements on an RDS cluster (`arn:aws:rds:…:cluster:<name>`).
+	'rds-data': 'rds',
+	// KeyValueStore data-plane actions name the store's CloudFront ARN (`arn:aws:cloudfront::…:key-value-store/<id>`).
+	'cloudfront-keyvaluestore': 'cloudfront',
+};
+
+/** The services of `actions`, plus the ARN services their resources live under ({@link ARN_SERVICE_OF}). */
 function servicesOf(actions: string[]): Set<string> {
-	return new Set(actions.map((a) => (a === '*' ? '*' : a.split(':')[0].toLowerCase())));
+	const out = new Set<string>();
+	for (const a of actions) {
+		const service = a === '*' ? '*' : a.split(':')[0].toLowerCase();
+		out.add(service);
+		if (Object.hasOwn(ARN_SERVICE_OF, service)) out.add(ARN_SERVICE_OF[service]);
+	}
+	return out;
 }
 
 function touchesData(actions: string[]): boolean {
@@ -369,6 +421,42 @@ function isKnownExemption(actions: string[], name: string, arn = ''): boolean {
 	if (only(['logs:DescribeLogGroups'])) return true;
 	// CDK's log-retention provider grants these on `*`; the boundary caps them to the app's own log groups.
 	if (name === '*' && only(['logs:PutRetentionPolicy', 'logs:DeleteRetentionPolicy'])) return true;
+	// Bedrock foundation models (`foundation-model/*`, no account) and system-defined
+	// inference profiles (`inference-profile/*`) are AWS-owned and hold no app's data;
+	// an Agent's loop invokes whichever the app picks. Application inference profiles
+	// (`application-inference-profile/…`), custom and imported models stay flagged.
+	if (
+		/^arn:[^:]*:bedrock:[^:]*:[^:]*:(foundation-model|inference-profile)\/\*$/.test(arn) &&
+		only([
+			'bedrock:InvokeModel',
+			'bedrock:InvokeModelWithResponseStream',
+			'bedrock:GetFoundationModel',
+			'bedrock:ListFoundationModels',
+			'bedrock:GetInferenceProfile',
+			'bedrock:ListInferenceProfiles',
+		])
+	) {
+		return true;
+	}
+	// An Agent's RPC handler invokes its runtimes on `runtime/*`: the runtime runs as
+	// the same shared role, so naming its ARN would be a dependency cycle. Runtime ids
+	// are generated, and the boundary caps the call to runtimes tagged as the app.
+	if (
+		/^arn:[^:]*:bedrock-agentcore:[^:]*:[^:]*:runtime\/\*(\/\*)?$/.test(arn) &&
+		only(['bedrock-agentcore:InvokeAgentRuntime'])
+	) {
+		return true;
+	}
+	// SES sending authorizes against account-level identities and configuration sets
+	// that no app's name or tag scopes; EmailClient grants sending only. An accepted
+	// exception the core README lists under the limits (one app can send as an
+	// identity another app verified).
+	if (
+		(arn === '*' || /^arn:[^:]*:ses:[^:]*:[^:]*:(identity|configuration-set)\/\*$/.test(arn)) &&
+		only(['ses:SendEmail', 'ses:SendRawEmail', 'ses:SendBulkEmail'])
+	) {
+		return true;
+	}
 	// AgentCore runtimes write to AWS-named log groups (`/aws/bedrock-agentcore/runtimes/<runtime id>-…`)
 	// that can't carry the app's prefix: write access only, which the boundary also allows.
 	if (
