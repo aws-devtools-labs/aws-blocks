@@ -1,5 +1,11 @@
 ## Unreleased
 
+- **Behaviour change:** with an `authProvider`, `BlocksClient` sends the
+  session cookie on every call that has one, and adds
+  `Authorization: Bearer` only when the provider returns a token. It used to
+  drop the cookie whenever an `authProvider` was set, so an app that set an
+  `OidcClient` signed in with the session cookie as its `authProvider` sent
+  neither.
 - `OidcUser` gains the optional fields the backend sends: `displayName`,
   `userSub`, `signInProvider` and `attributes`. Each is null when the server
   doesn't send it.

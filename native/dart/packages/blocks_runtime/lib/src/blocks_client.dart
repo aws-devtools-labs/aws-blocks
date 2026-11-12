@@ -16,7 +16,11 @@ class BlocksClient {
   final SessionStore sessionStore;
   final TokenStore tokenStore;
 
-  /// Optional bearer token auth provider. Takes priority over cookie auth.
+  /// Optional bearer token auth provider.
+  ///
+  /// When it has an access token, calls send it as an `Authorization: Bearer`
+  /// header, alongside the session cookie when there is one. It used to
+  /// replace the cookie; the server prefers the cookie when both are sent.
   AuthProvider? authProvider;
 
   /// The HTTP client this client sends its requests with. An
@@ -86,16 +90,17 @@ class BlocksClient {
       ...rpcUserAgentHeaders(),
     };
 
-    // Bearer token takes priority
+    // The session cookie goes on every call that has one, and a bearer token
+    // as well when the auth provider has one: the server prefers the cookie,
+    // and some auth methods accept only the cookie.
+    final cookie = sessionStore.cookieHeaderFor(requestUri);
+    if (cookie != null) {
+      headers['cookie'] = cookie;
+    }
     if (authProvider != null) {
       final token = await authProvider!.getAccessToken();
       if (token != null) {
         headers['authorization'] = 'Bearer $token';
-      }
-    } else {
-      final cookie = sessionStore.cookieHeaderFor(requestUri);
-      if (cookie != null) {
-        headers['cookie'] = cookie;
       }
     }
 
