@@ -49,7 +49,7 @@ jobs:
     needs: legs
     runs-on: ubuntu-latest
     # The steps' own time budgets (stack sweep 40 min, Amplify sandbox sweep
-    # 40, Cognito pool sweep 5, REST API and CloudWatch role sweeps 15 each,
+    # 40, Cognito pool sweep 5 (step timeout 11), REST API and CloudWatch role sweeps 15 each,
     # log group sweep 5) add
     # up to more than this. They only bind on a backlog run: then the timeout
     # can land during the Amplify sandbox sweep or earlier, and the steps
@@ -674,7 +674,10 @@ jobs:
       # still owns is the stack sweeps' (above). See scripts/ci/sweep-cognito-pools.mjs.
       - name: Cleanup orphaned E2E Cognito user pools
         if: always()
-        timeout-minutes: 6
+        # The script's budget is 5 minutes, checked between pools; one pool takes
+        # up to five calls of up to 60 s each, so the step allows 5 + 5 + 1 for
+        # the last pool to finish and the summary to be written.
+        timeout-minutes: 11
         env:
           AWS_ROLE_ARNS: ${{ secrets.AWS_ROLE_ARNS }}
           AWS_RETRY_MODE: adaptive
