@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import type { BlocksContext } from './api.js';
 import { escapeHtml } from './common/escape.js';
+import { isLoopbackHost } from './common/loopback.js';
 import { getRegisteredRoutes, registerRoute } from './raw-route.js';
 
 /**
@@ -37,17 +38,31 @@ export function _setEditorOpenerForTest(opener: (filePath: string) => void): voi
  * so opening the editor needs, on the request itself:
  *
  * - `Sec-Fetch-Site` absent (a non-browser client), `none` (a typed-in URL or a
- *   bookmark) or `same-origin` (a link in the app). `cross-site` and `same-site`
- *   are refused;
- * - `Origin` absent, or the request's own origin.
+ *   bookmark) or `same-origin` (a link in the app). `same-site` is accepted only
+ *   when the dev server was reached by a loopback host, which covers the app's
+ *   frontend on its own port (`localhost:5173` → `localhost:3000`). `cross-site`
+ *   is refused;
+ * - `Origin` absent, the request's own origin, or, when the dev server was
+ *   reached by a loopback host, a loopback origin on another port.
  */
 function isSameOriginRequest(ctx: BlocksContext): boolean {
+	let requestUrl: URL;
+	try {
+		requestUrl = new URL(ctx.request.url);
+	} catch {
+		return false;
+	}
+	const loopbackRequest = isLoopbackHost(requestUrl.hostname);
 	const site = ctx.request.headers.get('sec-fetch-site');
-	if (site !== null && site !== 'none' && site !== 'same-origin') return false;
+	if (site !== null && site !== 'none' && site !== 'same-origin' && !(site === 'same-site' && loopbackRequest)) {
+		return false;
+	}
 	const origin = ctx.request.headers.get('origin');
 	if (origin === null) return true;
 	try {
-		return new URL(origin).origin === new URL(ctx.request.url).origin;
+		const from = new URL(origin);
+		if (from.origin === requestUrl.origin) return true;
+		return loopbackRequest && from.protocol === requestUrl.protocol && isLoopbackHost(from.hostname);
 	} catch {
 		return false; // `null` or another value that isn't a URL
 	}
@@ -62,8 +77,9 @@ export interface BuiltinRoutesOptions {
 	 * there.
 	 *
 	 * Registration alone doesn't open the editor: each request must also come
-	 * from the developer (no cross-site `Sec-Fetch-Site`, no foreign `Origin`), or
-	 * it gets a `403` and nothing is opened.
+	 * from the developer (no cross-site `Sec-Fetch-Site`, no foreign `Origin`; a
+	 * loopback frontend on another port counts as the developer's own app), or it
+	 * gets a `403` and nothing is opened.
 	 */
 	localDev?: boolean;
 }

@@ -88,17 +88,49 @@ describe('built-in /aws-blocks/settings route', () => {
   // needs the local-dev signal on the request itself, not only at registration.
   it('local dev server: refuses a cross-site request without opening the editor', async () => {
     registerBuiltinRoutes({ localDev: true });
-    for (const site of ['cross-site', 'same-site']) {
-      const res = await getSettings({ 'Sec-Fetch-Site': site });
-      assert.strictEqual(res.status, 403, `Sec-Fetch-Site: ${site}`);
-      assert.ok(!res.body.includes(process.cwd()), 'a refused request must not disclose the working directory');
-    }
+    const res = await getSettings({ 'Sec-Fetch-Site': 'cross-site' });
+    assert.strictEqual(res.status, 403);
+    assert.ok(!res.body.includes(process.cwd()), 'a refused request must not disclose the working directory');
     assert.deepStrictEqual(opened, [], 'a cross-site request must never open the editor');
+  });
+
+  // The app's frontend on its own port (`localhost:5173` -> `localhost:3000`) is
+  // same-site, not same-origin. Both ends are loopback, so a link or fetch from
+  // it is still the developer's own app.
+  it('local dev server: opens the editor for a same-site request from a loopback frontend', async () => {
+    registerBuiltinRoutes({ localDev: true });
+    const link = await getSettings({ 'Sec-Fetch-Site': 'same-site' });
+    assert.strictEqual(link.status, 200, 'a link from localhost:5173 (no Origin on a navigation)');
+    const fetched = await getSettings({ 'Sec-Fetch-Site': 'same-site', Origin: 'http://localhost:5173' });
+    assert.strictEqual(fetched.status, 200, 'a fetch from localhost:5173');
+    const byIp = await getSettings(
+      { 'Sec-Fetch-Site': 'same-site', Origin: 'http://127.0.0.1:5173' },
+      'http://127.0.0.1:3000/aws-blocks/settings',
+    );
+    assert.strictEqual(byIp.status, 200, 'a fetch from 127.0.0.1:5173');
+    assert.strictEqual(opened.length, 3);
+  });
+
+  it('local dev server: refuses same-site when either end is not loopback', async () => {
+    registerBuiltinRoutes({ localDev: true });
+    const foreignOrigin = await getSettings(
+      { 'Sec-Fetch-Site': 'same-site', Origin: 'http://other.example.com' },
+      'http://mybox.example.com:3000/aws-blocks/settings',
+    );
+    assert.strictEqual(foreignOrigin.status, 403, 'a sibling subdomain of a configured dev host');
+    const namedHost = await getSettings(
+      { 'Sec-Fetch-Site': 'same-site' },
+      'http://mybox.example.com:3000/aws-blocks/settings',
+    );
+    assert.strictEqual(namedHost.status, 403, 'same-site against a non-loopback dev host');
+    const nonLoopbackOrigin = await getSettings({ 'Sec-Fetch-Site': 'same-site', Origin: 'http://192.168.1.10:5173' });
+    assert.strictEqual(nonLoopbackOrigin.status, 403, 'a non-loopback Origin');
+    assert.deepStrictEqual(opened, []);
   });
 
   it('local dev server: refuses a request whose Origin is another origin', async () => {
     registerBuiltinRoutes({ localDev: true });
-    for (const origin of ['https://evil.example', 'null', 'http://localhost:5173']) {
+    for (const origin of ['https://evil.example', 'null', 'http://192.168.1.10:3000']) {
       const res = await getSettings({ Origin: origin });
       assert.strictEqual(res.status, 403, `Origin: ${origin}`);
     }
