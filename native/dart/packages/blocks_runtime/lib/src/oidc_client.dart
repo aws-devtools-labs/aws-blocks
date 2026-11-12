@@ -592,12 +592,16 @@ class OidcClient implements AuthProvider {
   /// otherwise the next sign-in can complete without asking the user. This
   /// client doesn't open it.
   ///
-  /// - 2xx: clears the stored tokens and the session store, emits
-  ///   [OidcSignedOut] and returns the `logoutUrl` the server sent.
+  /// - 2xx: clears the stored tokens, emits [OidcSignedOut] and returns the
+  ///   `logoutUrl` the server sent.
   /// - 503 with `SignOutIncompleteException`: the server cleared the cookie
-  ///   but couldn't remove its session. Clears the stored tokens and the
-  ///   session store, emits [OidcSignedOut], then throws an
-  ///   [OidcRequestException] with that [OidcRequestException.name].
+  ///   but couldn't remove its session. Clears the stored tokens, emits
+  ///   [OidcSignedOut], then throws an [OidcRequestException] with that
+  ///   [OidcRequestException.name].
+  ///
+  /// The session store is never cleared, because it may hold the cookies of
+  /// other `Auth` blocks on the same app. This block's cookie is removed by
+  /// the `Set-Cookie` the server sends on the response.
   /// - Any other status throws an [OidcRequestException], and a transport
   ///   failure throws the HTTP client's error. Both clear the stored tokens
   ///   but keep the session cookie and the state.
@@ -625,13 +629,11 @@ class OidcClient implements AuthProvider {
 
     final status = response.statusCode;
     if (status >= 200 && status < 300) {
-      sessionStore.clear();
       _controller.add(OidcSignedOut());
       return _logoutUrl(response.body);
     }
     final name = _errorName(response);
     if (status == 503 && name == 'SignOutIncompleteException') {
-      sessionStore.clear();
       _controller.add(OidcSignedOut());
       throw OidcRequestException(
         'Signed out locally, but the backend could not remove its session',

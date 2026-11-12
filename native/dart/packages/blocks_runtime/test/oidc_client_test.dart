@@ -545,6 +545,7 @@ void main() {
         (_) async => http.Response(
           jsonEncode({'logoutUrl': 'https://idp.example.com/logout?x=1'}),
           200,
+          headers: {'set-cookie': _clearSession},
         ),
       );
 
@@ -591,6 +592,7 @@ void main() {
               'name': 'SignOutIncompleteException',
             }),
             503,
+            headers: {'set-cookie': _clearSession},
           ),
         );
 
@@ -635,6 +637,34 @@ void main() {
         },
       );
     }
+
+    test('keeps the cookies of other Auth blocks in the store', () async {
+      final session = InMemorySessionStore()
+        ..setCookies('blocks_session=main; Path=/', requestUri: origin)
+        ..setCookies('sso_session=other; Path=/', requestUri: origin);
+      OidcClient block(String base, String cookie) => OidcClient.forAuth(
+        BlocksClient(
+          baseUrl: 'http://localhost:3000/aws-blocks/api',
+          sessionStore: session,
+          client: MockClient(
+            (_) async => http.Response(
+              '{}',
+              200,
+              headers: {'set-cookie': '$cookie=; Path=/; Max-Age=0'},
+            ),
+          ),
+        ),
+        providers: ['google'],
+        callbackPath: '$base/callback',
+        signOutPath: '$base/signout',
+      );
+
+      await block('/aws-blocks/auth/sso', 'sso_session').signOut();
+
+      expect(session.cookies, {'blocks_session': 'main'});
+      await block('/aws-blocks/auth', 'blocks_session').signOut();
+      expect(session.cookies, isEmpty);
+    });
 
     test('a transport error throws, clears tokens, keeps the state', () async {
       final t = await signOutClient(
@@ -754,3 +784,6 @@ void main() {
     });
   });
 }
+
+/// The `Set-Cookie` an `Auth` block sends to remove its session cookie.
+const _clearSession = 'blocks_session=; Path=/; HttpOnly; Max-Age=0';
