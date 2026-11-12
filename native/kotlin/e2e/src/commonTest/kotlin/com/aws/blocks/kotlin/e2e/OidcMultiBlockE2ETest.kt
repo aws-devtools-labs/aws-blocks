@@ -49,6 +49,8 @@ class OidcMultiBlockE2ETest {
             markSkipped(NEEDS_HEADLESS_IDP)
             return@runTest
         }
+        // The suite shares one cookie jar: start from no session, whatever ran before.
+        e2eBlocks().clearStoredState()
         val client = oidcClient()
 
         val user = client.signIn("github2")
@@ -67,6 +69,8 @@ class OidcMultiBlockE2ETest {
             markSkipped(NEEDS_HEADLESS_IDP)
             return@runTest
         }
+        // The suite shares one cookie jar: start from no session, whatever ran before.
+        e2eBlocks().clearStoredState()
         val client = ssoClient()
 
         val user = client.signIn("corp")
@@ -86,6 +90,8 @@ class OidcMultiBlockE2ETest {
             markSkipped(NEEDS_HEADLESS_IDP)
             return@runTest
         }
+        // The suite shares one cookie jar: start from no session, whatever ran before.
+        e2eBlocks().clearStoredState()
         val oidc = oidcClient()
         val sso = ssoClient()
         oidc.signIn("github2")
@@ -95,7 +101,14 @@ class OidcMultiBlockE2ETest {
 
         sso.restore().shouldBeNull()
         api.oidcRequireAuth().provider shouldBe "github2"
+
+        // The other direction: signing out of auth-oidc leaves auth-sso signed in.
+        sso.signIn("corp")
         oidc.signOut()
+
+        oidc.restore().shouldBeNull()
+        api.ssoRequireAuth().provider shouldBe "corp"
+        sso.signOut()
     }
 
     /**
@@ -123,8 +136,11 @@ class OidcMultiBlockE2ETest {
             markSkipped(NEEDS_HEADLESS_IDP)
             return@runTest
         }
+        // The suite shares one cookie jar: start from no session, whatever ran before.
+        e2eBlocks().clearStoredState()
         val client = oidcClient()
         client.signIn("github2")
+        api.oidcRequireAuth().provider shouldBe "github2"
 
         val e = shouldThrow<ApiException> { api.ssoRequireAuth() }
         e.name shouldBe AuthErrorNames.NotAuthenticated
