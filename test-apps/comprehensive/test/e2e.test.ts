@@ -54,6 +54,7 @@ import { loggingTests } from './logging.test.js';
 import { multiComputeTests } from './multi-compute.test.js';
 import { backgroundSuites } from './background-suites.js';
 import { httpErrorStatusTests } from './http-error-status.test.js';
+import { apiUrlStageTests } from './api-url-stage.test.js';
 import { authSocialLocalTests } from './auth-social-local.test.js';
 import { testApiUrl } from './api-url.js';
 
@@ -365,6 +366,9 @@ responseCookieTests(() => api);
 
 // The e2e build's test-only support endpoints are secret-gated (separate file)
 testSupportGateTests();
+
+// The deployed suites resolve their target from the stage config, never config.json (separate file)
+apiUrlStageTests();
 
 // CORS preflight allow-list tests (separate file)
 corsPreflightTests(() => api);
