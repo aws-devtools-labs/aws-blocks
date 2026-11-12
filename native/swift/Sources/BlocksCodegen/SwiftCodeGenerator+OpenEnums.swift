@@ -51,18 +51,15 @@ extension SwiftCodeGenerator {
         func walk(_ type: ResolvedType) { collectReachableTypeNames(type, into: &names, followed: &followed) }
         switch type {
         case .record(let name, let fields, let additionalPropertiesType, let embeddedUnion):
-            names.insert(name)
+            if isDefinition(type, named: name) { names.insert(name) }
             fields.forEach { walk($0.type) }
             if let additionalPropertiesType { walk(additionalPropertiesType) }
             if let embeddedUnion { walk(embeddedUnion) }
         case .enum(let name, _):
-            names.insert(name)
-        case .union(let name, let variants, let discriminator):
-            names.insert(name)
+            if isDefinition(type, named: name) { names.insert(name) }
+        case .union(let name, let variants, _):
+            if isDefinition(type, named: name) { names.insert(name) }
             for variant in variants {
-                // Without a discriminator the decoder tries each arm in turn, so an enum arm stays closed: open,
-                // it would take every string.
-                if discriminator == nil, isEnumArm(variant) { continue }
                 if let payload = variant.payloadTypeName { walk(.typeReference(name: payload)) }
                 variant.fields.forEach { walk($0.type) }
                 if let extras = variant.additionalPropertiesType { walk(extras) }
@@ -87,14 +84,37 @@ extension SwiftCodeGenerator {
         }
     }
 
-    /// Whether a union arm is a bare enum: an enum value arm, or an arm that is an enum schema.
-    private func isEnumArm(_ variant: UnionVariant) -> Bool {
-        if case .enum? = variant.valueType { return true }
-        if let payload = variant.payloadTypeName, case .enum? = typesByName[payload] { return true }
-        return false
+    /// Whether `type`, an inline type named `name`, is the component schema of that name and not a type nested
+    /// in an operation or another schema that only shares its name (a result's inline `mode` enum beside a
+    /// component `Mode` that only a parameter uses). Compared by shape: kind, then values, fields or arms.
+    private func isDefinition(_ type: ResolvedType, named name: String) -> Bool {
+        switch (type, typesByName[name]) {
+        case (.enum(_, let values), .enum(_, let other)?):
+            return values == other
+        case (.record(_, let fields, _, _), .record(_, let other, _, _)?):
+            return fields.map(\.name) == other.map(\.name)
+        case (.union(_, let variants, _), .union(_, let other, _)?):
+            return variants.map(\.name) == other.map(\.name)
+        default:
+            return false
+        }
     }
 
-    /// Emits a union value arm's own type. An enum there stays closed (see `isEnumArm`); any other type keeps the
+    /// The known values of `variant`'s payload when it is an open enum schema (a `$ref` arm), else nil. A union
+    /// without a discriminator decodes by trying each arm in turn, and an open enum takes every string, so the
+    /// arm accepts only these values; any other string falls through to the next arm.
+    func openEnumArmValues(_ variant: UnionVariant) -> [String]? {
+        guard let payload = variant.payloadTypeName, openEnums.openTypeNames.contains(payload),
+              case .enum(_, let values)? = typesByName[payload] else { return nil }
+        return values
+    }
+
+    /// `["a", "b"].contains(value.rawValue)`: the guard for an open enum arm (see `openEnumArmValues`).
+    func knownValueCondition(_ values: [String]) -> String {
+        "[\(values.map { "\"\(swiftStringContent($0))\"" }.joined(separator: ", "))].contains(value.rawValue)"
+    }
+
+    /// Emits a union value arm's own type. An inline enum there stays closed, since the arms are tried in turn; any other type keeps the
     /// enclosing type's openness.
     func emitValueArmType(_ node: NestedTypeNode, _ emit: () -> Void) {
         if case .enum = node.type {

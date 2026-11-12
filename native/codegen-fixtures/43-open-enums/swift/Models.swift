@@ -24,27 +24,9 @@ public nonisolated enum Color: RawRepresentable, Codable, Hashable, Sendable {
     }
 }
 
-public nonisolated enum Mode: RawRepresentable, Codable, Hashable, Sendable {
+public nonisolated enum Mode: String, Codable, Sendable {
     case auto
     case manual
-    /// A value this client was generated without, as the server sent it.
-    case unknown(String)
-
-    public init(rawValue: String) {
-        switch rawValue {
-        case "auto": self = .auto
-        case "manual": self = .manual
-        default: self = .unknown(rawValue)
-        }
-    }
-
-    public var rawValue: String {
-        switch self {
-        case .auto: return "auto"
-        case .manual: return "manual"
-        case .unknown(let value): return value
-        }
-    }
 }
 
 public nonisolated enum NodeKind: RawRepresentable, Codable, Hashable, Sendable {

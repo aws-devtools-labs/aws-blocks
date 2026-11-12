@@ -237,16 +237,15 @@ public final nonisolated class Api: Sendable {
             }
 
             public init(from decoder: Decoder) throws {
-                var lastError: Error?
-                do {
-                    self = .color(try Color(from: decoder))
+                if let value = try? Color(from: decoder), ["red", "blue"].contains(value.rawValue) {
+                    self = .color(value)
                     return
-                } catch { lastError = error }
-                do {
-                    self = .size(try Size(from: decoder))
+                }
+                if let value = try? Size(from: decoder), ["small", "large"].contains(value.rawValue) {
+                    self = .size(value)
                     return
-                } catch { lastError = error }
-                throw lastError ?? DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "No Result variant matched"))
+                }
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "No Result variant matched"))
             }
 
             private enum EmptyKey: CodingKey {}
