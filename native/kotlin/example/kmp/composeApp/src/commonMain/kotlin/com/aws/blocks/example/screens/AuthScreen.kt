@@ -20,7 +20,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import blocks.testapp.AuthState
 import com.aws.blocks.kotlin.oidc.AnyProvider
 import com.aws.blocks.kotlin.oidc.OidcAuthState
 import com.aws.blocks.kotlin.oidc.OidcClient
@@ -35,13 +34,12 @@ import kotlinx.coroutines.launch
  * redirect on a loopback address.
  *
  * [client] is supplied by the caller, which owns it for the app's lifetime: it holds the
- * signed-in user in memory, so recreating it per screen would drop the session. [restoredState]
- * is the server's view of the session cookie, used until the client has a sign-in of its own.
+ * signed-in user in memory, so recreating it per screen would drop the session. The caller
+ * calls [OidcClient.restore] on launch, which settles its state from the session cookie.
  */
 @Composable
 fun AuthScreen(
     client: OidcClient<AnyProvider>,
-    restoredState: AuthState?,
     modifier: Modifier = Modifier
 ) {
     var output by remember { mutableStateOf("") }
@@ -57,16 +55,8 @@ fun AuthScreen(
         Spacer(Modifier.height(16.dp))
 
         val authState by client.authState.collectAsState()
-        // Loading means the client has not signed in or out yet, so it has no opinion and
-        // the restored session stands in. Signing in or out gives it one, and it wins.
-        val username = when (val state = authState) {
-            is OidcAuthState.SignedIn -> state.user.username
-            OidcAuthState.SignedOut -> null
-            OidcAuthState.Loading -> restoredState
-                ?.takeIf { it.state == AuthState.State.SignedIn }
-                ?.user
-                ?.username
-        }
+        // Loading means restore() has not answered yet, so the screen offers sign-in meanwhile.
+        val username = (authState as? OidcAuthState.SignedIn)?.user?.username
 
         if (username != null) {
             Text("Signed in as: $username")
