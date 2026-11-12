@@ -1083,21 +1083,27 @@ class KotlinCodeGenerator(
         opContext: OperationTypeContext? = null,
         serializerRegistry: TransferableSerializerRegistry,
         serializerContext: OperationTypeContext? = opContext,
+        embedded: Boolean = false,
     ): TypeSpec {
         val sealedBuilder = TypeSpec.classBuilder(name)
             .addModifiers(KModifier.SEALED)
 
         val discriminator = union.discriminator
+        // An open union (a response carries it) falls back to an `Unknown` arm, which kotlinx's
+        // sealed serializer can't do. A union embedded in a hybrid arm shares that arm's object,
+        // so it stays closed.
+        val unknown = if (!embedded && openEnums) UnionSerializerGenerator.unknownArmName(union) else null
         // kotlinx's sealed serializer writes the spec's wire format only for a string discriminator
         // over object arms; every other union reads and writes its own (UnionSerializerGenerator).
-        val customSerializer = UnionSerializerGenerator.needsCustomSerializer(union)
+        val customSerializer = UnionSerializerGenerator.needsCustomSerializer(union) || unknown != null
         if (customSerializer) {
             sealedBuilder.addAnnotation(UnionSerializerGenerator.serializableAnnotation(name))
             sealedBuilder.addType(
-                UnionSerializerGenerator.generate(name, union) { variant ->
+                UnionSerializerGenerator.generate(name, union, unknown) { variant ->
                     unionValueCoding(variant, index, opContext, serializerRegistry, serializerContext)
                 },
             )
+            if (unknown != null) sealedBuilder.addType(UnionSerializerGenerator.unknownArm(name, unknown))
         } else {
             sealedBuilder.addAnnotation(ClassNames.serializable)
             if (discriminator != null) {
@@ -1307,6 +1313,7 @@ class KotlinCodeGenerator(
                 opContext,
                 serializerRegistry,
                 serializerContext,
+                embedded = true,
             )
             variantBuilder.addType(embeddedSpec)
         }

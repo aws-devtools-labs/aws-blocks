@@ -76,6 +76,33 @@ internal object UnionSerializerGenerator {
         return union.variants.any { it.isBare }
     }
 
+    /**
+     * The name of the arm an open [union] decodes an unrecognised object to: `Unknown`, or
+     * `UnknownValue` (then numbered) when an arm already has it. Null when the union can't be
+     * open: it needs a JSON string discriminator and object arms only, since with a bare value
+     * arm or a boolean discriminator there is no tag to call unknown.
+     */
+    fun unknownArmName(union: ResolvedType.Union): String? {
+        val discriminator = union.discriminator ?: return null
+        if (discriminator.type != DiscriminatorType.STRING || union.variants.any { it.isBare }) return null
+        val taken = union.variants.map { it.name }.toSet()
+        if ("Unknown" !in taken) return "Unknown"
+        var candidate = "UnknownValue"
+        var attempt = 2
+        while (candidate in taken) candidate = "UnknownValue${attempt++}"
+        return candidate
+    }
+
+    /** `data class <name>(val json: JsonObject) : <unionName>()`: an arm this client doesn't know. */
+    fun unknownArm(unionName: String, name: String): TypeSpec =
+        TypeSpec.classBuilder(name)
+            .addModifiers(KModifier.DATA)
+            .addKdoc("An arm this client was generated without: the object as the server sent it.\n")
+            .superclass(ClassName("", unionName))
+            .primaryConstructor(FunSpec.constructorBuilder().addParameter("json", jsonObjectClass).build())
+            .addProperty(PropertySpec.builder("json", jsonObjectClass).initializer("json").build())
+            .build()
+
     /** A value or literal arm: on the wire it is a bare JSON value, not an object. */
     val UnionVariant.isBare: Boolean get() = valueType != null || literal != null
 
@@ -113,6 +140,7 @@ internal object UnionSerializerGenerator {
     fun generate(
         unionName: String,
         union: ResolvedType.Union,
+        unknown: String? = null,
         valueCoding: (UnionVariant) -> ValueCoding,
     ): TypeSpec {
         val owner = ClassName("", unionName)
@@ -143,8 +171,8 @@ internal object UnionSerializerGenerator {
                     .initializer("%M(%S)", MemberNames.buildClassSerialDescriptor, unionName)
                     .build(),
             )
-            .addFunction(serialize(unionName, owner, union, valueCoding))
-            .addFunction(deserialize(unionName, owner, union, valueCoding, expected))
+            .addFunction(serialize(unionName, owner, union, unknown, valueCoding))
+            .addFunction(deserialize(unionName, owner, union, unknown, valueCoding, expected))
             .build()
     }
 
@@ -152,6 +180,7 @@ internal object UnionSerializerGenerator {
         unionName: String,
         owner: ClassName,
         union: ResolvedType.Union,
+        unknown: String?,
         valueCoding: (UnionVariant) -> ValueCoding,
     ): FunSpec {
         val discriminator = union.discriminator
@@ -189,6 +218,7 @@ internal object UnionSerializerGenerator {
                 else -> body.addStatement("is %N -> output.json.%M(%N.serializer(), value)", variant.name, MemberNames.encode, variant.name)
             }
         }
+        if (unknown != null) body.addStatement("is %N -> value.json", unknown)
         body.endControlFlow()
             .addStatement("output.encodeJsonElement(element)")
         return FunSpec.builder("serialize")
@@ -203,6 +233,7 @@ internal object UnionSerializerGenerator {
         unionName: String,
         owner: ClassName,
         union: ResolvedType.Union,
+        unknown: String?,
         valueCoding: (UnionVariant) -> ValueCoding,
         expected: String,
     ): FunSpec {
@@ -281,7 +312,11 @@ internal object UnionSerializerGenerator {
                     )
                 }
             }
-            body.addStatement("else -> {}")
+            if (unknown != null) {
+                body.addStatement("else -> return %N(element)", unknown)
+            } else {
+                body.addStatement("else -> {}")
+            }
             body.endControlFlow()
             body.endControlFlow()
         }

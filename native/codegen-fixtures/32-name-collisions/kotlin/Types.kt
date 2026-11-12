@@ -11,12 +11,21 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
-import kotlinx.serialization.json.JsonClassDiscriminator
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 
 /**
  * A string enum that keeps a value this client was generated without as [Unknown].
@@ -306,9 +315,53 @@ public data class Ticket(
     }
   }
 
-  @Serializable
-  @JsonClassDiscriminator("type")
+  @Serializable(with = Payload.PayloadSerializer::class)
   public sealed class Payload {
+    /**
+     * Reads and writes [Payload] with its discriminator `type` as the JSON value
+     * the spec gives it.
+     */
+    public object PayloadSerializer : KSerializer<Payload> {
+      override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Payload")
+
+      override fun serialize(encoder: Encoder, `value`: Payload) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("Payload can only be written as JSON")
+        val element = when (value) {
+          is Text -> buildJsonObject {
+            put("type", JsonPrimitive("text"))
+            output.json.encodeToJsonElement(Text.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Count -> buildJsonObject {
+            put("type", JsonPrimitive("count"))
+            output.json.encodeToJsonElement(Count.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Unknown -> value.json
+        }
+        output.encodeJsonElement(element)
+      }
+
+      override fun deserialize(decoder: Decoder): Payload {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Payload can only be read from JSON")
+        val element = input.decodeJsonElement()
+        if (element is JsonObject) {
+          val fields = JsonObject(element - "type")
+          when (element["type"]) {
+            JsonPrimitive("text") -> return input.json.decodeFromJsonElement(Text.serializer(), fields)
+            JsonPrimitive("count") -> return input.json.decodeFromJsonElement(Count.serializer(), fields)
+            else -> return Unknown(element)
+          }
+        }
+        throw SerializationException("No variant of Payload matches this JSON value; expected an object with \"type\": \"text\"; or an object with \"type\": \"count\"")
+      }
+    }
+
+    /**
+     * An arm this client was generated without: the object as the server sent it.
+     */
+    public data class Unknown(
+      public val json: JsonObject,
+    ) : Payload()
+
     @Serializable
     @SerialName("text")
     public data class Text(
@@ -322,9 +375,53 @@ public data class Ticket(
     ) : Payload()
   }
 
-  @Serializable
-  @JsonClassDiscriminator("format")
+  @Serializable(with = Payloads.PayloadsSerializer::class)
   public sealed class Payloads {
+    /**
+     * Reads and writes [Payloads] with its discriminator `format` as the JSON value
+     * the spec gives it.
+     */
+    public object PayloadsSerializer : KSerializer<Payloads> {
+      override val descriptor: SerialDescriptor = buildClassSerialDescriptor("Payloads")
+
+      override fun serialize(encoder: Encoder, `value`: Payloads) {
+        val output = encoder as? JsonEncoder ?: throw SerializationException("Payloads can only be written as JSON")
+        val element = when (value) {
+          is Plain -> buildJsonObject {
+            put("format", JsonPrimitive("plain"))
+            output.json.encodeToJsonElement(Plain.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Rich -> buildJsonObject {
+            put("format", JsonPrimitive("rich"))
+            output.json.encodeToJsonElement(Rich.serializer(), value).jsonObject.forEach { (key, field) -> put(key, field) }
+          }
+          is Unknown -> value.json
+        }
+        output.encodeJsonElement(element)
+      }
+
+      override fun deserialize(decoder: Decoder): Payloads {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Payloads can only be read from JSON")
+        val element = input.decodeJsonElement()
+        if (element is JsonObject) {
+          val fields = JsonObject(element - "format")
+          when (element["format"]) {
+            JsonPrimitive("plain") -> return input.json.decodeFromJsonElement(Plain.serializer(), fields)
+            JsonPrimitive("rich") -> return input.json.decodeFromJsonElement(Rich.serializer(), fields)
+            else -> return Unknown(element)
+          }
+        }
+        throw SerializationException("No variant of Payloads matches this JSON value; expected an object with \"format\": \"plain\"; or an object with \"format\": \"rich\"")
+      }
+    }
+
+    /**
+     * An arm this client was generated without: the object as the server sent it.
+     */
+    public data class Unknown(
+      public val json: JsonObject,
+    ) : Payloads()
+
     @Serializable
     @SerialName("plain")
     public data class Plain(
