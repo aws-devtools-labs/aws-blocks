@@ -11,7 +11,7 @@ import { createChat, realtimeTransport } from './index.chat.js';
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { DisconnectReason } from '@aws-blocks/bb-realtime';
 import type { AgentStreamChunk, ModelConfig } from './types.js';
-import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, walkCauseChain } from './errors.js';
+import { agentErrorFromChunk, classifyModelAccessError, persistedTurnError, rowContinuesTurn, walkCauseChain } from './errors.js';
 import { SIMULATE_MODEL_ACCESS_DENIED } from './providers/throwing.js';
 import { CannedProvider } from './providers/canned.js';
 import { AgentBase } from './agent.js';
@@ -195,6 +195,49 @@ describe('persistedTurnError', () => {
 		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '', metadata: '{"error":"x"}' }), undefined);
 		assert.strictEqual(persistedTurnError({ role: 'assistant', content: '' }), undefined);
 		assert.strictEqual(persistedTurnError(undefined), undefined);
+	});
+});
+
+describe('rowContinuesTurn', () => {
+	const user = (content: string) => ({ role: 'user', content });
+	const answer = (content: string) => ({ role: 'assistant', content });
+	// The client's view: earlier turns, then the in-flight user bubble and its empty bubble.
+	const shown = (...turns: [string, string][]) => [
+		...turns.flatMap(([q, a], i) => [{ id: `u${i}`, ...user(q) }, { id: `a${i}`, ...answer(a) }]),
+		{ id: 'u-now', ...user('now') },
+		{ id: 'a-now', ...answer('') },
+	];
+
+	test('with text streamed, the row must continue it', () => {
+		const messages = shown(['Q1', 'A1']);
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1'), user('now'), answer('Hello there')], messages, 'a-now', 'Hello'), true);
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1')], messages, 'a-now', 'Hello'), false);
+	});
+
+	test('a read behind the client ending at the previous answer is that turn\'s row', () => {
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1')], shown(['Q1', 'A1']), 'a-now', ''), false);
+	});
+
+	test('a current read ending at an answer equal to the previous one is adopted', () => {
+		const messages = shown(['hi', 'Hello!']);
+		assert.strictEqual(rowContinuesTurn([user('hi'), answer('Hello!'), user('now'), answer('Hello!')], messages, 'a-now', ''), true);
+	});
+
+	test('the previous answer is the latest one before the in-flight bubble', () => {
+		const messages = shown(['Q1', 'A1'], ['Q2', 'A2']);
+		assert.strictEqual(rowContinuesTurn([user('Q1'), answer('A1'), user('Q2'), answer('A2')], messages, 'a-now', ''), false);
+	});
+
+	test('with no earlier answer, a new answer is adopted', () => {
+		assert.strictEqual(rowContinuesTurn([user('now'), answer('First')], shown(), 'a-now', ''), true);
+	});
+
+	test('when the counts drift, the content check still applies', () => {
+		// A send that failed before its row was written leaves an extra user bubble.
+		const messages = [{ id: 'u-failed', ...user('lost') }, ...shown(['Q1', 'A1'])];
+		const current = [user('Q1'), answer('A1'), user('now')];
+		assert.strictEqual(rowContinuesTurn([...current, answer('New')], messages, 'a-now', ''), true);
+		assert.strictEqual(rowContinuesTurn([...current, answer('A1')], messages, 'a-now', ''), false);
 	});
 });
 
@@ -2976,6 +3019,73 @@ describe('useChat', () => {
 		chat.destroy();
 	});
 
+	test('reconnect adopts a new answer identical to the previous one when the done chunk was missed', async () => {
+		const errors: string[] = [];
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The read includes the second turn's rows, so its answer is the second turn's.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'hi' },
+					{ role: 'assistant', content: 'Hello!' },
+					{ role: 'user', content: 'hi' },
+					{ role: 'assistant', content: 'Hello!' },
+				] }),
+			},
+			subscribe,
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hi');
+		cap.handler!({ type: 'text-delta', text: 'Hello!' });
+		cap.handler!({ type: 'done' });
+		await chat.sendMessage('hi');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Hello!', "the second turn's saved answer is adopted");
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+	});
+
+	test('reconnect does not adopt the latest earlier answer when the read is a turn behind', async () => {
+		const { cap, subscribe } = subscribeCapture();
+
+		const chat = useChat({
+			api: {
+				sendMessage: async () => {},
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The third turn's user row is not in the read yet, so it ends at the second answer.
+				getConversation: async () => ({ messages: [
+					{ role: 'user', content: 'Q1' },
+					{ role: 'assistant', content: 'Answer to Q1' },
+					{ role: 'user', content: 'Q2' },
+					{ role: 'assistant', content: 'Answer to Q2' },
+				] }),
+			},
+			subscribe,
+		});
+
+		for (const n of [1, 2]) {
+			await chat.sendMessage(`Q${n}`);
+			cap.handler!({ type: 'text-delta', text: `Answer to Q${n}` });
+			cap.handler!({ type: 'done' });
+		}
+		await chat.sendMessage('Q3');
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the third turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the second turn's answer is not copied into the third turn");
+		chat.destroy();
+	});
+
 	test('a loaded conversation ending in an error row makes the next reconnect wait for the chunk', async () => {
 		const errors: string[] = [];
 		const { cap, subscribe } = subscribeCapture();
@@ -4775,6 +4885,83 @@ describe('createChat', () => {
 
 		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
 		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Answer to Q2', "the second turn's saved answer is adopted");
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect adopts a new answer identical to the previous one when the done chunk was missed', async () => {
+		const errors: string[] = [];
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The read includes the second turn's rows, so its answer is the second turn's.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'hi' },
+						{ role: 'assistant', content: 'Hello!' },
+						{ role: 'user', content: 'hi' },
+						{ role: 'assistant', content: 'Hello!' },
+					],
+				}),
+			},
+			onError: (message) => { errors.push(message); },
+		});
+
+		await chat.sendMessage('hi');
+		await flush();
+		cap.chunk({ type: 'text-delta', text: 'Hello!' });
+		cap.chunk({ type: 'done' });
+		await flush();
+		await chat.sendMessage('hi');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), false, 'the finished second turn clears loading');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, 'Hello!', "the second turn's saved answer is adopted");
+		assert.deepStrictEqual(errors, []);
+		chat.destroy();
+		await flush();
+	});
+
+	test('reconnect does not adopt the latest earlier answer when the read is a turn behind', async () => {
+		const { cap, transport } = reconnectCapture();
+
+		const chat = createChat({
+			transport,
+			api: {
+				createConversation: async () => ({ conversationId: 'conv-1' }),
+				// The third turn's user row is not in the read yet, so it ends at the second answer.
+				getConversation: async () => ({
+					messages: [
+						{ role: 'user', content: 'Q1' },
+						{ role: 'assistant', content: 'Answer to Q1' },
+						{ role: 'user', content: 'Q2' },
+						{ role: 'assistant', content: 'Answer to Q2' },
+					],
+				}),
+			},
+		});
+
+		for (const n of [1, 2]) {
+			await chat.sendMessage(`Q${n}`);
+			await flush();
+			cap.chunk({ type: 'text-delta', text: `Answer to Q${n}` });
+			cap.chunk({ type: 'done' });
+			await flush();
+		}
+		await chat.sendMessage('Q3');
+		await flush();
+		cap.disconnect!('error');
+		cap.reconnect!();
+		await flush();
+
+		assert.strictEqual(chat.isLoading(), true, 'the third turn is still running');
+		assert.strictEqual(chat.getMessages().at(-1)?.content, '', "the second turn's answer is not copied into the third turn");
 		chat.destroy();
 		await flush();
 	});

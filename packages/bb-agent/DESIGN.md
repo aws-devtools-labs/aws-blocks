@@ -202,12 +202,17 @@ options object to the overloaded `channel.subscribe`; `useChat` wires it through
   assistant message if the turn completed during the gap) and `getPendingInterrupts` (recovers a
   missed interrupt). Two guards protect the eventually-consistent DynamoDB read: `stillSameInFlightTurn`
   (ignore a read that resolves after a live terminal chunk already resolved the turn) and
-  `extendsStream` (refuse to overwrite the live bubble with a prior-turn row; with nothing streamed
-  yet, a row that repeats the previous turn's answer counts as that turn's row, because the read can
-  miss the in-flight turn's user row. A new answer identical to the previous one is therefore not
-  adopted from the read: the turn ends on its live `done` chunk, or on the failsafe below if that
-  chunk was lost too). A re-sync failure is
+  `extendsStream` (refuse to overwrite the live bubble with a prior-turn row). A re-sync failure is
   surfaced through `reportError` so the once-per-turn `onError` contract holds.
+- **A completed row read before anything streamed** (`rowContinuesTurn`). The in-flight turn's user
+  row is written after `stream()` returns, so an early read can end at the previous turn's answer.
+  The read is behind when it holds fewer user rows than the client shows, and only then is a row
+  equal to the previous answer treated as that turn's: the client keeps waiting. A current read is
+  adopted even when its answer repeats the previous one. The counts drift when a send failed before
+  its row was written (an extra bubble); an identical answer whose `done` was lost then ends on the
+  failsafe's `Timed out` error. Rows carry no turn id, so two stale reads still slip through: one two
+  or more turns behind, and one ending at a previous turn that ended on the failsafe with less text
+  than it saved.
 - **A turn that failed during the gap** is recovered from the row the backend saves for it: an
   assistant row with a string `metadata.error` (`persistedTurnError`). Its `content` is empty when the
   turn threw, and holds the partial text when a runaway cap (`maxLlmCalls` / `maxToolIterations`)

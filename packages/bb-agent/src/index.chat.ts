@@ -28,7 +28,7 @@
 
 import type { ChatTransport, ChunkStream, RealtimeChannelDescriptor } from './transport.js';
 import type { AgentStreamChunk, InterruptResponse, JSONValue } from './types.js';
-import { AgentErrors, agentErrorFromChunk, blocksAgentError, persistedTurnError } from './errors.js';
+import { AgentErrors, agentErrorFromChunk, blocksAgentError, persistedTurnError, rowContinuesTurn } from './errors.js';
 
 export type { ChatTransport, ChunkStream, TurnRequest, RealtimeChannelDescriptor } from './transport.js';
 export { realtimeTransport } from './transport.js';
@@ -341,19 +341,6 @@ export function createChat(options: CreateChatOptions): ChatController {
 	}
 
 	/**
-	 * The text of the last answer shown before the in-flight turn's bubble, or undefined when
-	 * there is none.
-	 */
-	function previousAnswer(): string | undefined {
-		const at = messages.findIndex((m) => m.id === assistantId);
-		for (let i = (at === -1 ? messages.length : at) - 1; i >= 0; i--) {
-			const m = messages[i];
-			if (m.role === 'assistant' && m.content) return m.content;
-		}
-		return undefined;
-	}
-
-	/**
 	 * End the in-flight turn as failed: from a live `error` chunk, or from the error row a
 	 * reconnect re-sync finds when that chunk was missed.
 	 */
@@ -459,11 +446,9 @@ export function createChat(options: CreateChatOptions): ChatController {
 				// custom getConversation adapter that role-filters to user/assistant (as
 				// loadConversation does client-side) could re-expose this by dropping the interrupt
 				// row and surfacing a prior assistant row as `last`.
-				// With nothing streamed, a row repeating the previous turn's answer is that turn's
-				// row: the in-flight turn's user row is written after stream() returns, so the read
-				// can miss it. A new answer identical to the previous one waits for its live `done`.
-				const extendsStream =
-					assistantText === '' ? last.content !== previousAnswer() : last.content.startsWith(assistantText);
+				// With nothing streamed, a read missing this turn's user row can end at the previous
+				// turn's answer; rowContinuesTurn rejects that row (see its doc).
+				const extendsStream = rowContinuesTurn(history, messages, assistantId, assistantText);
 				if (extendsStream) {
 					// Turn finished while we were disconnected; the terminal `done` chunk was lost.
 					// Replace the in-flight assistant bubble with the persisted final text.
