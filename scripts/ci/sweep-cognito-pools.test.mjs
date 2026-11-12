@@ -51,6 +51,7 @@ switch (args[0] + ' ' + args[1]) {
 		break;
 	}
 	case 'cognito-idp describe-user-pool': {
+		if (state.describeDelayMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, state.describeDelayMs);
 		const p = pool();
 		out({ UserPool: { Id: p.Id, Name: p.Name, UserPoolTags: p.tags || {}, DeletionProtection: p.protection || 'INACTIVE', Domain: p.domain } });
 		break;
@@ -286,6 +287,27 @@ describe('sweep-cognito-pools.mjs', () => {
 		);
 		assert.ok(r.left.includes(blocksPool().Name) && !deletes(r.calls).includes(ids[2]));
 		assert.match(r.summary, /listing truncated by time budget/);
+	});
+
+	it('reports the pools the time budget deferred to the next run', () => {
+		// Each describe takes 1.5s against a 4s budget, so the loop stops before
+		// the last pool (or two, on a slow host) and the summary says how many.
+		const ids = ['us-east-1_a', 'us-east-1_b', 'us-east-1_c', 'us-east-1_d'];
+		const r = run({
+			pools: ids.map((Id) => blocksPool({ Id })),
+			describeDelayMs: 1500,
+			env: { COGNITO_SWEEP_BUDGET_SECONDS: '4' },
+		});
+		assert.equal(r.status, 0, r.out);
+		const deferred = Number(/Deferred to the next run \(time budget reached\): (\d+)/.exec(r.summary)?.[1]);
+		assert.ok(deferred >= 1, r.summary);
+		assert.equal(deletes(r.calls).length + deferred, ids.length, r.summary);
+		assert.deepEqual(deletes(r.calls), ids.slice(0, ids.length - deferred));
+	});
+
+	it('adds no deferred line when the sweep finishes', () => {
+		const r = run({ pools: [blocksPool()] });
+		assert.doesNotMatch(r.summary, /Deferred/);
 	});
 
 	it('reports, and never changes, a pool with deletion protection on', () => {

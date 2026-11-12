@@ -187,11 +187,13 @@ async function main() {
 		protected: 0,
 		unknown: 0,
 		failed: 0,
+		deferred: 0,
 	};
 
-	for (const { Id: id, Name: name, CreationDate: created } of candidates) {
+	for (const [i, { Id: id, Name: name, CreationDate: created }] of candidates.entries()) {
 		if (Date.now() >= deadline) {
-			console.log('Time budget reached; the remaining pools are swept on the next run.');
+			counts.deferred = candidates.length - i;
+			console.log(`Time budget reached; ${counts.deferred} pool(s) are swept on the next run.`);
 			break;
 		}
 		const createdMs = Date.parse(created);
@@ -270,6 +272,9 @@ function summary(counts) {
 					`- Skipped (not tagged as CI): ${counts.untagged}`,
 					`- Skipped (deletion protection on): ${counts.protected}`,
 					`- Skipped (owner or details unreadable): ${counts.unknown}`,
+					...(counts.deferred > 0
+						? [`- Deferred to the next run (time budget reached): ${counts.deferred}`]
+						: []),
 				]),
 	];
 	console.log(lines.join('\n'));
