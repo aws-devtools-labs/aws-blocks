@@ -333,7 +333,8 @@ describe('create-blocks-app template metadata', () => {
       const testPath = join(templatesDir, entry.name, 'test', 'e2e.test.ts');
       if (!entry.isDirectory() || !existsSync(testPath)) continue;
       const source = readFileSync(testPath, 'utf-8');
-      const load = source.indexOf("import('aws-blocks')");
+      // The awaited import loads the client; `let app: typeof import('aws-blocks')` is only a type.
+      const load = source.indexOf("await import('aws-blocks')");
       if (load === -1) continue; // builds its own client from the server's URL (nextjs)
       const pinned = source.indexOf(pin);
       if (pinned === -1 || pinned > load) problems.push(`${entry.name}: does not set BLOCKS_API_URL before it loads the client`);
