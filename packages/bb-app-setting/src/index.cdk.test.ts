@@ -359,6 +359,36 @@ test('CDK: bulk-init role can read + re-key secrets (ssm:GetParameter + kms:Encr
 	);
 });
 
+test('CDK: parameterName is the derived default /<fullId> when no name is given', () => {
+	const { parent } = setup();
+	const secret = new AppSetting(parent, 'api-key', { secret: true });
+	const plain = new AppSetting(parent, 'flag', { value: 'on' });
+	assert.equal(secret.parameterName, `/${secret.fullId}`);
+	assert.equal(plain.parameterName, `/${plain.fullId}`);
+});
+
+test('CDK: parameterName is the explicit name, and matches the registered config value', () => {
+	const { stack, parent } = setup();
+	const named = new AppSetting(parent, 'named', { secret: true, name: '/my-app/google-secret' });
+	assert.equal(named.parameterName, '/my-app/google-secret');
+	const registry = (stack as any)[Symbol.for('BLOCKS_CONFIG_REGISTRY')] as { entries: Map<string, unknown> };
+	assert.equal(registry.entries.get('BLOCKS_SSM_PARAM_NAMED'), named.parameterName);
+});
+
+test('CDK: fromExisting exposes the external parameterName', () => {
+	const { parent } = setup();
+	const ext = AppSetting.fromExisting(parent, 'ext', { name: '/shared/google', secret: true });
+	assert.equal(ext.parameterName, '/shared/google');
+});
+
+test('CDK: secret reflects the secret option for created and external settings', () => {
+	const { parent } = setup();
+	assert.equal(new AppSetting(parent, 's', { secret: true }).secret, true);
+	assert.equal(new AppSetting(parent, 'p', { value: 'x' }).secret, false);
+	assert.equal(AppSetting.fromExisting(parent, 'es', { name: '/x/s', secret: true }).secret, true);
+	assert.equal(AppSetting.fromExisting(parent, 'ep', { name: '/x/p' }).secret, false);
+});
+
 test('CDK: the secret-init Lambda sets an explicit timeout (not the 3 s Lambda default)', () => {
 	const { stack, parent } = setup();
 	new AppSetting(parent, 'my-secret', { secret: true, name: '/myapp/secret-key' });

@@ -38,6 +38,7 @@ import {
   waitForProcessGroupExit,
 } from './process-tree.js';
 import { isCuratedLevel, log, resolveLogLevel } from './log.js';
+import { installDevRejectionHandler, runDevRequest } from './dev-unhandled-rejection.js';
 
 export const LOCALHOST_PATTERN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
@@ -635,6 +636,9 @@ export async function startDevServer(options: DevServerOptions) {
     frontendPort = 3100,
   } = options;
   const devStartTime = Date.now();
+  // A request's unhandled rejection (e.g. a guard called without `await`) is
+  // logged with its method instead of ending the process (dev server only).
+  installDevRejectionHandler();
 
   // ── Singleton guard ─────────────────────────────────────────────────────
   // Prevent two fighting supervisors: a second `npm run dev` must not spawn a
@@ -1483,6 +1487,8 @@ function createDevDispatcher(backend: unknown): Dispatcher {
   return createDispatcher(backend, {
     cors: { rejects: () => false, headers: buildDevCorsHeaders },
     listApisWhenNotFound: true,
+    // A request's unhandled rejection is logged with its method (see installDevRejectionHandler).
+    runHandler: runDevRequest,
     rpcTrace: {
       parseError(response) {
         if (devRequestLogging().traffic) console.log('[rpc-out parse-error]', response);

@@ -114,6 +114,17 @@ export function foreignTransactionHandle(engineName: string): Error {
 	return reTagged(DatabaseErrors.TransactionFailed, new Error(`not a ${engineName} transaction handle`));
 }
 
+// Local mode only: the statement would otherwise wait forever (DESIGN §4.4).
+export function sessionTransactionOpen(waitedMs: number): Error {
+	return brandedError(
+		DatabaseErrors.QueryFailed,
+		`A statement waited ${waitedMs / 1000} s for the local database while a Kysely transaction was open. ` +
+			'Inside a Kysely transaction, run every statement on `trx`. A statement on the block or on the root ' +
+			'Kysely instance is not part of that transaction: locally it waits for it to end, and on AWS it runs ' +
+			'outside it on another connection.',
+	);
+}
+
 export const asError = (e: unknown): Error => (e instanceof Error ? e : new Error(String(e)));
 
 /** Wraps an engine operation so a driver error it throws is translated by `translatePgError` under `engineName`. */

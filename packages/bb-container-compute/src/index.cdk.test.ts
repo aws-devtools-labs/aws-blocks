@@ -982,7 +982,7 @@ describe('ContainerCompute — ecs-tasks trust on the shared role', () => {
 // roles and any other stack or helper stack's roles included) must carry the
 // configured boundary and be listed in the synth-time IAM report.
 //
-// Keep in sync: the same helper is copied in the bb-auth-oidc (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
+// Keep in sync: the same helper is copied in the bb-auth (`boundary.cdk.test.ts`), bb-compute, bb-cron-job and bb-dashboard
 // cdk test files, and mirrors core's `assertEveryRoleBounded` in
 // `packages/core/src/cdk/permissions-boundary.test.ts`. A fix to one copy
 // belongs in all of them.

@@ -39,6 +39,7 @@ import { BLOCKS_BUILD_ID_CONFIG_KEY } from './common/constants.js';
 import { type BlocksStackApi, buildConfigJson, frontendReuseMarker, Hosting, type HostingProps } from './hosting.js';
 import { buildEventUrl } from './lambda-handler.js';
 import { clearRouteRegistry, compilePath, registerRoute, type RegisteredRoute } from './raw-route.js';
+import { HTTP_ERROR_STATUS_EXPORTS } from './rpc-dispatch.js';
 
 // ================================================================
 // Hosting construct tests
@@ -2039,6 +2040,34 @@ describe('Hosting', () => {
       const has404 = errorResponses.some((r: any) => r.ErrorCode === 404);
       assert.ok(has404, 'Should configure 404 error response');
       template.resourceCountIs('AWS::CloudFront::Distribution', 1);
+    });
+
+    it('fails synth when CloudFront 4xx error pages would replace an httpErrorStatus namespace response', () => {
+      createSpaBuildOutput(tmpDir);
+      const notFoundPath = path.join(tmpDir, '404.html');
+      fs.writeFileSync(notFoundPath, '<!DOCTYPE html><html><body>Not Found</body></html>');
+      const synth = (exports: string[] | undefined, errorPages: boolean) => () => {
+        const app = new App();
+        const stack = new Stack(app, `HttpErrorStatusPages${exports?.length ?? 'X'}${errorPages ? 'P' : 'N'}`);
+        // What BlocksStack / BlocksBackend record from the imported backend module; plumbing only.
+        const api: BlocksStackApi = { ...MOCK_API };
+        if (exports) Reflect.set(api, HTTP_ERROR_STATUS_EXPORTS, exports);
+        new Hosting(stack, 'Hosting', { root: tmpDir, api, ...(errorPages ? { errorPages: { notFound: notFoundPath } } : {}) });
+        return Annotations.fromStack(stack).findWarning('*', Match.stringLikeRegexp('httpErrorStatus'));
+      };
+
+      assert.throws(synth(['api'], true), (err: Error) => {
+        assert.strictEqual(err.name, 'HttpErrorStatusErrorPagesError');
+        assert.match(err.message, /'api'/);
+        assert.match(err.message, /404/);
+        assert.match(err.message, /aws-blocks/);
+        assert.match(err.message, /errorPages\.notFound/, 'the message names the fix');
+        return true;
+      });
+
+      assert.deepStrictEqual(synth([], true)(), [], 'no httpErrorStatus namespace: synths, no warning');
+      assert.deepStrictEqual(synth(undefined, true)(), [], 'a plain { apiUrl } backend: synths, no warning');
+      assert.deepStrictEqual(synth(['api'], false)(), [], 'no 4xx error page: synths, no warning');
     });
 
     it('does not produce duplicate 404 responses when 404.html is in build output', () => {

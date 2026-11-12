@@ -32,7 +32,7 @@ provider in `aws-blocks/index.ts`. The deployed model is `model.deployed`
 
 | Path | Purpose |
 |------|---------|
-| `aws-blocks/index.ts` | Backend: Agent (canned local model) + a `saveNote` tool, AuthBasic, requireAuth-gated API |
+| `aws-blocks/index.ts` | Backend: Agent (canned local model) + a `saveNote` tool, Auth, requireAuth-gated API |
 | `src/index.ts` | Frontend: Authenticator sign-in + a chat box |
 | `test/e2e.test.ts` | Tests exercising a plain-text turn and a tool-calling turn |
 | `index.html` | HTML shell |
@@ -48,8 +48,9 @@ provider in `aws-blocks/index.ts`. The deployed model is `model.deployed`
 - **A tool with a side effect** — `saveNote` writes into the KVStore. The e2e
   asserts the note landed, proving the model requested the call and the handler
   ran end to end.
-- **AuthBasic** — `chat` is gated by `auth.requireAuth(context)`, so each turn
-  is tied to a signed-in user.
+- **Auth** — `chat` is gated by `auth.requireAuth(context)`, so each turn
+  is tied to a signed-in user. Sign-up confirms the email with a 6-digit code,
+  which `npm run dev` prints in its terminal locally.
 
 ## Commands
 

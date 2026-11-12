@@ -734,7 +734,7 @@ export function listWorkflowFiles() {
  * and Dart source. Spec values (names, enum values, URLs, descriptions) reach
  * the generated code only through each language's emitters:
  * - Kotlin: `kotlinStringLiteral` / `kotlinMessageLiteral` (or KotlinPoet `%S`), `neutraliseKdoc` for KDoc;
- * - Swift: `swiftStringLiteral`;
+ * - Swift: `swiftStringLiteral`, or `swiftStringContent` inside a literal the line opens (`"\"\(swiftStringContent(x))\""`);
  * - Dart: `_dartStringLiteral`.
  */
 export function listCodegenFiles() {
@@ -757,7 +757,7 @@ const CODEGEN_PATTERNS = {
 };
 
 // Interpolations that already went through an emitter (or are diagnostics text).
-const CODEGEN_SAFE = /^(?:kotlinStringLiteral|kotlinMessageLiteral|swiftStringLiteral|_dartStringLiteral|escapeForDiagnostic|escapedForDiagnostic)\(|\.forDiagnostic\(\)$/;
+const CODEGEN_SAFE = /^(?:kotlinStringLiteral|kotlinMessageLiteral|swiftStringLiteral|swiftStringContent|_dartStringLiteral|escapeForDiagnostic|escapedForDiagnostic)\(|\.forDiagnostic\(\)$/;
 
 // A line that hands text to the generated source (as opposed to building an
 // error message for the person running the generator).

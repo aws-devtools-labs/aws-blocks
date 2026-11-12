@@ -67,6 +67,21 @@ public final nonisolated class Api: Sendable {
                 case `var` = "var"
                 case when
             }
+
+            public init(`class`: String, `default`: String, `in`: String, `is`: Bool, `return`: Int, `self` self_: String, `super`: String, `switch`: String, `type`: String, val: String, `var`: String, when: String) {
+                self.`class` = `class`
+                self.`default` = `default`
+                self.`in` = `in`
+                self.`is` = `is`
+                self.`return` = `return`
+                self.`self` = self_
+                self.`super` = `super`
+                self.`switch` = `switch`
+                self.`type` = `type`
+                self.val = val
+                self.`var` = `var`
+                self.when = when
+            }
         }
     }
 
@@ -92,10 +107,25 @@ public final nonisolated class Api: Sendable {
                 case `for` = "for"
                 case `while` = "while"
             }
+
+            public init(abstract: Bool, `do`: Bool, `else`: String, `enum`: String, extends: String, final: String, `for`: String, `while`: Int) {
+                self.abstract = abstract
+                self.`do` = `do`
+                self.`else` = `else`
+                self.`enum` = `enum`
+                self.extends = extends
+                self.final = final
+                self.`for` = `for`
+                self.`while` = `while`
+            }
         }
 
         public struct Result: Codable {
             public let ok: Bool
+
+            public init(ok: Bool) {
+                self.ok = ok
+            }
         }
     }
 
@@ -122,6 +152,18 @@ public final nonisolated class Api: Sendable {
                 case this
                 case `throw` = "throw"
                 case `true` = "true"
+            }
+
+            public init(`false`: Bool, `internal`: String, null: String, object: String, `operator`: String, package: String, this: String, `throw`: String, `true`: Bool) {
+                self.`false` = `false`
+                self.`internal` = `internal`
+                self.null = null
+                self.object = object
+                self.`operator` = `operator`
+                self.package = package
+                self.this = this
+                self.`throw` = `throw`
+                self.`true` = `true`
             }
         }
     }

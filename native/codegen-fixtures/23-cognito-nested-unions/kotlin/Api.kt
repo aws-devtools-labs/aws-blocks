@@ -177,7 +177,7 @@ public class Api(
       @Serializable
       @SerialName("signedIn")
       public data class SignedIn(
-        public val user: CognitoUser,
+        public val user: AuthenticatedUser,
       ) : Result()
     }
   }
@@ -328,7 +328,7 @@ public class Api(
       @Serializable
       @SerialName("signedIn")
       public data class SignedIn(
-        public val user: CognitoUser,
+        public val user: AuthenticatedUser,
       ) : Result()
     }
   }

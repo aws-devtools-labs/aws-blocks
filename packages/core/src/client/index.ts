@@ -4,6 +4,7 @@
 export type BlocksContext = any;
 export type ApiHandler<T extends Record<string, (...args: any[]) => any>> = any;
 import { encodeRpcRequest, decodeRpcResponse } from '../rpc.js';
+import { contextFetch } from './fetch-store.js';
 import { fetchWithStaleConnectionRetry } from './stale-connection.js';
 
 const IS_SSR = typeof window === 'undefined';
@@ -292,6 +293,12 @@ function namespaceRequestUrl(baseUrl: string, namespace: string): string {
 }
 
 /**
+ * The key under which an {@link ApiNamespaceClient} answers with its namespace (and URL, when
+ * overridden). A `Symbol.for` key, so a package reads it without importing this one.
+ */
+const API_NAMESPACE_ID = Symbol.for('aws-blocks.apiNamespace');
+
+/**
  * Client-side API proxy. Creates a typed proxy that sends method calls
  * to the backend API over HTTP and hydrates Transferable descriptors
  * in responses via registered middleware.
@@ -330,11 +337,18 @@ export function ApiNamespaceClient<T extends Record<string, (...args: any[]) => 
 ): AsyncAPI<T> {
   const urlOverride = options?.url;
   // Look `fetch` up at call time (not when the client is built), as the retrying path does,
-  // so a `fetch` installed later (a polyfill, a test spy) is the one used.
+  // so a `fetch` installed later (a polyfill, a test spy) is the one used. A test client's
+  // call brings its own (see ./fetch-store.ts).
   const send: (url: string, init: RequestInit) => Promise<Response> =
-    options?.retryStaleConnection === false ? (url, init) => fetch(url, init) : fetchWithStaleConnectionRetry;
+    options?.retryStaleConnection === false
+      ? (url, init) => (contextFetch() ?? fetch)(url, init)
+      : (url, init) => fetchWithStaleConnectionRetry(url, init, contextFetch());
+  // The namespace this client calls, the same in every tab: `@aws-blocks/auth-common` tags its
+  // sign-in / sign-out broadcasts with it, so one auth API's listeners skip another's.
+  const namespaceId = urlOverride ? `${urlOverride}#${name}` : name;
   return new Proxy({} as any, {
     get(target, method: string | symbol) {
+      if (method === API_NAMESPACE_ID) return namespaceId;
       if (typeof method === 'symbol') return undefined;
       return async (...args: any[]) => {
         const baseUrl = urlOverride ?? await getApiUrl();

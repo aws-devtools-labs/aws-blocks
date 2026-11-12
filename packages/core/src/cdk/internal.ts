@@ -96,7 +96,7 @@ export { type DeployTimeLambda, deployTimeLambdaCode, deployTimeLambdaEntry } fr
 // which the synth-time service-principal trust check requires (bb-distributed-table,
 // bb-database), and builds the aws:SourceAccount / aws:SourceArn conditions blocks
 // put on the service-principal trusts they create (bb-knowledge-base, bb-agent,
-// bb-cron-job, bb-container-compute, bb-auth-cognito).
+// bb-cron-job, bb-container-compute, bb-auth).
 export {
 	type SourceScopedConditionsOptions,
 	scopeProviderWaiterTrust,
