@@ -14,13 +14,14 @@ import { classifyError } from '../telemetry/trackCommand.js';
 import { getCdkTelemetryEnv, getFrameworkSinkEnv } from './cdk-telemetry-env.js';
 import { createFrameworkSink, registerFrameworkFromSink } from '../telemetry/framework-sink.js';
 import { formatDeploySignal } from './deploy-stream.js';
-import { outputsFileIn } from './deploy-outputs.js';
+import { BACKEND_OUTPUT_KEY, outputsFileIn } from './deploy-outputs.js';
 import type { DeployedStack } from './deploy.js';
 import { spawnCommand } from './run-command.js';
 import { terminateProcessTree } from './process-tree.js';
 import { generateDeployClient } from './deploy-client-codegen.js';
 import { attachCdkWatchOutput, createCdkOutput } from './cdk-output.js';
 import { log } from './log.js';
+import { createDeployRecorder } from './deploy-history.js';
 import type { CloudFormationClient } from '@aws-sdk/client-cloudformation';
 import type { S3Client } from '@aws-sdk/client-s3';
 
@@ -340,7 +341,53 @@ export function sandboxFailureRecoveryHint(
   ].join("\n");
 }
 
+/** One terminal deploy-history record per sandbox run, whoever reports it first. */
+interface SandboxHistory {
+  fail(error: unknown): void;
+  succeed(): void;
+}
+
+/**
+ * Starts a sandbox, recording the run in `.blocks/deploy-history.jsonl`.
+ *
+ * The recorder starts HERE, before any work, as `deploy()` does. It used to be
+ * created just before the CDK deploy, after credential and bootstrap preflight,
+ * secret provisioning, external migrations and client generation — so a sandbox
+ * that failed in any of those left no record at all, and CloudFormation
+ * backfill could not recover it either because nothing reached CloudFormation.
+ * Those pre-CloudFormation failures are the reason first-party history exists.
+ *
+ * Terminal states are recorded once: the recorder appends on every call, and
+ * both the CDK-deploy catch and the guard here can reach `fail`. Recording
+ * success at CloudFormation success rather than at return is deliberate, so a
+ * later failure parsing outputs does not retroactively fail a deploy that
+ * actually happened.
+ */
 export async function startSandbox(options: SandboxOptions) {
+  const recorder = createDeployRecorder(process.cwd(), 'sandbox');
+  recorder.start();
+  let done = false;
+  const history: SandboxHistory = {
+    fail(error) {
+      if (done) return;
+      done = true;
+      recorder.fail(error);
+    },
+    succeed() {
+      if (done) return;
+      done = true;
+      recorder.succeed();
+    },
+  };
+  try {
+    return await runStartSandbox(options, history);
+  } catch (error) {
+    history.fail(error);
+    throw error;
+  }
+}
+
+async function runStartSandbox(options: SandboxOptions, history: SandboxHistory) {
   const {
     backendPath,
     outDir = ".blocks-sandbox",
@@ -473,6 +520,7 @@ export async function startSandbox(options: SandboxOptions) {
     );
   } catch (error) {
     registerFrameworkFromSink(frameworkSink);
+    history.fail(error);
     buildAndSendEvent({
       command: 'sandbox',
       state: 'FAIL',
@@ -487,15 +535,19 @@ export async function startSandbox(options: SandboxOptions) {
 
   registerFrameworkFromSink(frameworkSink);
 
+  // The CloudFormation deploy itself succeeded; output parsing below is a
+  // separate concern and doesn't retroactively fail the deployment record.
+  history.succeed();
+
   const outputs = JSON.parse(readFileSync(outputsFileIn(outDir, 'sandbox'), "utf-8"));
   // `--all` can write more than one stack's outputs (e.g. the us-east-1 edge /
   // monitoring stacks). Pick the group that carries `ApiUrl` rather than relying
   // on the outputs file's write order; fall back to the first group so a
   // single-stack app is unchanged.
   const stackGroups = Object.entries(outputs) as [string, Record<string, string>][];
-  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.ApiUrl) ?? stackGroups[0] ?? ['', {}];
+  const [stack, stackOutputs] = stackGroups.find(([, group]) => group?.[BACKEND_OUTPUT_KEY]) ?? stackGroups[0] ?? ['', {}];
 
-  const apiUrl = stackOutputs.ApiUrl;
+  const apiUrl = stackOutputs[BACKEND_OUTPUT_KEY];
   if (!apiUrl) {
     throw new Error("Could not find API URL in CDK outputs");
   }

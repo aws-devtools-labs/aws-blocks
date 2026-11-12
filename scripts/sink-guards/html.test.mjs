@@ -58,6 +58,11 @@ const ALLOWLIST = [
 		at: 'packages/bb-auth/src/engines/stub-idp.ts:534',
 		reason: "Form action is this stub IdP's own authorize URL (stubIssuerUrl: the request's base URL or BLOCKS_API_URL plus a fixed path), so it always has an http(s) scheme.",
 	},
+	{
+		at: 'packages/core/src/scripts/dashboard.ts:152',
+		reason:
+			'Loopback dashboard URL this process built itself: `http://127.0.0.1:<port>` from the server it just started, plus a hex session token from randomBytes. No external input reaches it, and it is escaped for &, " and < before entering the attribute.',
+	},
 	...[41, 43, 45, 50].map((l) => ({ at: `native/kotlin/example/typescript/src/index.ts:${l}`, reason: TODO_ID })),
 	...[41, 43, 45, 50].map((l) => ({ at: `native/swift/Demo/typescript-demo/src/index.ts:${l}`, reason: TODO_ID })),
 	...[66, 68, 70, 75].map((l) => ({ at: `packages/create-blocks-app/templates/demo/src/index.ts:${l}`, reason: TODO_ID })),
