@@ -31,6 +31,14 @@ export const OUTPUTS_FILE: Readonly<Record<OutputsStage, string>> = Object.freez
 });
 
 /**
+ * The output every Blocks backend stack publishes. It identifies the backend
+ * stack among the stacks of one deploy without knowing its name, which matters
+ * because the name is the CDK app's choice rather than ours: `--all` writes the
+ * edge and monitoring stacks into the same document.
+ */
+export const BACKEND_OUTPUT_KEY = 'ApiUrl';
+
+/**
  * A stage's outputs document inside `outDir`, for the sandbox commands, whose
  * out directory is an option rather than always {@link OUTPUTS_DIR}.
  */

@@ -127,6 +127,9 @@ export const ensureApiGatewayAccount = (stack: Stack): CfnAccount => {
   const registry = stack as unknown as Record<symbol, CfnAccount | undefined>;
   const existing = registry[ACCOUNT_KEY];
   if (existing) return existing;
+  // Same trust as `@aws-blocks/core`'s role under this id. No
+  // aws:SourceAccount/aws:SourceArn condition: API Gateway does not send either
+  // key when it delivers logs with this role, so a condition stops log delivery.
   const role = new iam.Role(stack, 'BlocksApiGatewayCloudWatchRole', {
     assumedBy: new iam.ServicePrincipal('apigateway.amazonaws.com'),
     managedPolicies: [

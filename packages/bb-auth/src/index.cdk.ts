@@ -76,6 +76,7 @@ import {
 	resolveMfa,
 } from './cdk/mappers.js';
 import { provisionPreSignUpTrigger } from './cdk/pre-sign-up.js';
+import { scopeSmsRoleTrust } from './cdk/sms-role.js';
 import { stubIssuerPath } from './engines/stub-idp-routes.js';
 import { makeExternalUserPoolRef } from './external-pool.js';
 import { assertKnownAuthOptions } from './option-validation.js';
@@ -298,6 +299,9 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 						deletionProtection: (opts.deletionProtection ?? this.defaults.deletionProtection) || undefined,
 					});
 			this.userPool = pool;
+			// CDK's own SMS role (phone sign-in / verification, SMS MFA): scope its
+			// trust to this account's user pools. See src/cdk/sms-role.ts.
+			if (pool instanceof cognito.UserPool) scopeSmsRoleTrust(pool);
 
 			// ── 1b. validateUser's PreSignUp trigger ────────────────────
 			// Only when the option is set and the pool is ours; otherwise nothing

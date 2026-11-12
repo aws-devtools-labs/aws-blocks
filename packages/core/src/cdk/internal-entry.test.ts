@@ -23,6 +23,10 @@ const INTERNAL_ONLY = [
 	'registerSharedConfig',
 	'deployTimeLambdaCode',
 	'deployTimeLambdaEntry',
+	'scopeProviderWaiterTrust',
+	'sourceScopedConditions',
+	'markBlocksOwned',
+	'markAddedChildrenBlocksOwned',
 ] as const;
 
 describe('@aws-blocks/core/cdk/internal', () => {

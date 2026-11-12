@@ -10,6 +10,7 @@ import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cr from 'aws-cdk-lib/custom-resources';
 import { BuildingBlockScope, registerConfig, synthGuard } from '@aws-blocks/core/cdk';
+import { sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import type { ScopeParent } from '@aws-blocks/core';
 import type { KnowledgeBaseOptions, ChunkingConfig, KnowledgeBaseAgentTool, KnowledgeBaseAgentToolOptions } from './types.js';
 import { createAgentTool } from './agent-tool.js';
@@ -285,18 +286,14 @@ export class KnowledgeBase extends BuildingBlockScope {
 		vectorIndex.applyRemovalPolicy(vectorRemovalPolicy);
 
 		// ── 3. IAM Role for Bedrock ────────────────────────────────────────
-		// Scoped to this account via aws:SourceAccount to prevent confused-deputy.
-		// Ideally we'd also add aws:SourceArn scoped to the KB ARN, but that
-		// creates a circular dependency (Role ↔ KB). aws:SourceAccount is sufficient
-		// since it limits the role to this account's Bedrock service principal.
-
+		// Trust is limited to Bedrock knowledge bases in this account and region:
+		// aws:SourceAccount pins the account, aws:SourceArn matches any knowledge
+		// base ARN there. The wildcard names no concrete knowledge base, so the role
+		// does not depend on the CfnKnowledgeBase that assumes it.
+		const stack = cdk.Stack.of(this);
 		const bedrockRole = new iam.Role(this, 'BedrockRole', {
 			assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
-				conditions: {
-					StringEquals: {
-						'aws:SourceAccount': cdk.Stack.of(this).account,
-					},
-				},
+				conditions: sourceScopedConditions(stack, 'bedrock', 'knowledge-base/*'),
 			}),
 		});
 

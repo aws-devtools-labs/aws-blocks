@@ -6,7 +6,7 @@ import { ContainerCompute } from '@aws-blocks/bb-container-compute/cdk';
 import { LambdaCompute } from '@aws-blocks/bb-lambda-compute/cdk';
 import type { ScopeParent } from '@aws-blocks/core';
 import { blocksError, getOrCreateOnRoot, registerConfig, Scope } from '@aws-blocks/core/cdk';
-import { foreignComputeProblem } from '@aws-blocks/core/cdk/internal';
+import { foreignComputeProblem, sourceScopedConditions } from '@aws-blocks/core/cdk/internal';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
@@ -144,12 +144,7 @@ function getOrCreateSchedulerRole(scope: Construct): iam.Role {
 		const stack = cdk.Stack.of(root);
 		const role = new iam.Role(root, 'BlocksSchedulerRole', {
 			assumedBy: new iam.ServicePrincipal('scheduler.amazonaws.com', {
-				conditions: {
-					StringEquals: { 'aws:SourceAccount': stack.account },
-					ArnLike: {
-						'aws:SourceArn': `arn:${stack.partition}:scheduler:${stack.region}:${stack.account}:schedule-group/*`,
-					},
-				},
+				conditions: sourceScopedConditions(stack, 'scheduler', 'schedule-group/*'),
 			}),
 		});
 		return role;
