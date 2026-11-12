@@ -583,15 +583,33 @@ class OidcClient implements AuthProvider {
 
   // --- Sign out ---
 
-  Future<void> signOut() async {
+  /// Signs out on the backend and locally, and returns the identity
+  /// provider's logout URL, or null when the provider has none.
+  ///
+  /// POSTs `{signOutPath}?format=json` with the session cookie, and the
+  /// stored refresh token when there is one. The app may open the returned
+  /// URL with its launcher to end the identity provider's own session too;
+  /// otherwise the next sign-in can complete without asking the user. This
+  /// client doesn't open it.
+  ///
+  /// - 2xx: clears the stored tokens and the session store, emits
+  ///   [OidcSignedOut] and returns the `logoutUrl` the server sent.
+  /// - 503 with `SignOutIncompleteException`: the server cleared the cookie
+  ///   but couldn't remove its session. Clears the stored tokens and the
+  ///   session store, emits [OidcSignedOut], then throws an
+  ///   [OidcRequestException] with that [OidcRequestException.name].
+  /// - Any other status throws an [OidcRequestException], and a transport
+  ///   failure throws the HTTP client's error. Both clear the stored tokens
+  ///   but keep the session cookie and the state.
+  Future<Uri?> signOut() async {
     final refreshToken = await tokenStore.get('refresh_token');
+    final url = Uri.parse('$_authBaseUrl$signOutPath?format=json');
+    final http.Response response;
     try {
       // Carries the session cookie via _jsonHeaders so the backend can
       // invalidate the server-side session (cookie flow). Bearer flow sends
-      // the refresh token. Status/errors are ignored — local sign-out always
-      // proceeds (matches Kotlin).
-      final url = Uri.parse('$_authBaseUrl$signOutPath');
-      await _httpClient.post(
+      // the refresh token.
+      response = await _httpClient.post(
         url,
         headers: _jsonHeaders(url),
         body: jsonEncode(
@@ -599,11 +617,45 @@ class OidcClient implements AuthProvider {
         ),
       );
     } catch (_) {
-      // best-effort
+      await _clearTokens();
+      rethrow;
     }
     await _clearTokens();
-    sessionStore.clear();
-    _controller.add(OidcSignedOut());
+    sessionStore.setCookies(response.headers['set-cookie'], requestUri: url);
+
+    final status = response.statusCode;
+    if (status >= 200 && status < 300) {
+      sessionStore.clear();
+      _controller.add(OidcSignedOut());
+      return _logoutUrl(response.body);
+    }
+    final name = _errorName(response);
+    if (status == 503 && name == 'SignOutIncompleteException') {
+      sessionStore.clear();
+      _controller.add(OidcSignedOut());
+      throw OidcRequestException(
+        'Signed out locally, but the backend could not remove its session',
+        statusCode: status,
+        name: name,
+      );
+    }
+    throw OidcRequestException(
+      'Sign-out failed: HTTP $status',
+      statusCode: status,
+      name: name,
+    );
+  }
+
+  /// The `logoutUrl` of a sign-out response body, or null when it has none.
+  static Uri? _logoutUrl(String body) {
+    if (body.trim().isEmpty) return null;
+    try {
+      final json = jsonDecode(body);
+      final url = json is Map<String, dynamic> ? json['logoutUrl'] : null;
+      return url is String && url.isNotEmpty ? Uri.tryParse(url) : null;
+    } on FormatException {
+      return null;
+    }
   }
 
   /// JSON content-type headers, plus the current session cookie when present so
