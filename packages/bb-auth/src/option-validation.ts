@@ -359,6 +359,7 @@ const USER_ATTRIBUTE = {
 	type: 'value',
 	mutable: 'boolean',
 	required: 'boolean',
+	userWritable: 'boolean',
 } as const satisfies ShapeOf<UserAttribute>;
 
 const USER_GROUP = {
@@ -1011,5 +1012,15 @@ function assertConsistentOptions(id: string, options: unknown): void {
 		throw new Error(
 			`Auth '${id}': passkeys requires \`users.authFlow: 'USER_AUTH'\`. Passkeys ride on the USER_AUTH choice-based flow.`,
 		);
+	}
+	// The sign-up form asks for a required attribute, which a `userWritable: false` one refuses.
+	const attributes = field(field(options, 'users'), 'attributes');
+	for (const attr of Array.isArray(attributes) ? attributes : []) {
+		if (field(attr, 'required') === true && field(attr, 'userWritable') === false) {
+			throw new Error(
+				`Auth '${id}': users.attributes '${String(field(attr, 'name'))}' can't be both \`required: true\` and \`userWritable: false\`: ` +
+					'users could not sign up. Drop `required`, and set the attribute server-side with `admin.createUser`.',
+			);
+		}
 	}
 }

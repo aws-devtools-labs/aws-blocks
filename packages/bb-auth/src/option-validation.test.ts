@@ -1318,3 +1318,26 @@ describe('emailPassword: false with an email + password only option is rejected 
 		);
 	});
 });
+
+describe('users.attributes: userWritable', () => {
+	test('`userWritable: false` with `required: true` is refused at construction: users could not sign up', () => {
+		const options = { users: { attributes: [{ name: 'role', required: true, userWritable: false }] } };
+		assert.throws(
+			() => assertKnownAuthOptions('auth', options),
+			/'role' can't be both `required: true` and `userWritable: false`/,
+		);
+		assert.throws(() => new Auth(root(), 'auth', untyped(options)), /can't be both/);
+	});
+
+	test('`userWritable` must be a boolean; `false` alone is accepted', () => {
+		assert.doesNotThrow(() =>
+			assertKnownAuthOptions('auth', { users: { attributes: [{ name: 'role', userWritable: false }] } }),
+		);
+		assert.deepStrictEqual(
+			findInvalidAuthOptions({ users: { attributes: [{ name: 'role', userWritable: 'false' }] } }).map(
+				(v) => v.path,
+			),
+			['users.attributes[0].userWritable'],
+		);
+	});
+});

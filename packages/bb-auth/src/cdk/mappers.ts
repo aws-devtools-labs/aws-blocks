@@ -83,6 +83,42 @@ export function mapCustomAttributes(
 }
 
 /**
+ * The native app client's write attributes: every standard attribute except
+ * the `*_verified` flags, plus the declared custom attributes not marked
+ * `userWritable: false`. With no `WriteAttributes` Cognito lets the client
+ * write every standard and custom attribute, so an end user could set an
+ * attribute the app authorizes on. The runtime refuses the same names first
+ * (`checkAttributeValues` in `engines/attribute-write-rules.ts`).
+ *
+ * @internal
+ */
+export function endUserWriteAttributes(attrs?: readonly UserAttribute[]): cognito.ClientAttributes {
+	return new cognito.ClientAttributes()
+		.withStandardAttributes({
+			address: true,
+			birthdate: true,
+			email: true,
+			emailVerified: false,
+			familyName: true,
+			gender: true,
+			givenName: true,
+			locale: true,
+			middleName: true,
+			fullname: true,
+			nickname: true,
+			phoneNumber: true,
+			phoneNumberVerified: false,
+			profilePicture: true,
+			preferredUsername: true,
+			profilePage: true,
+			lastUpdateTime: true,
+			website: true,
+			timezone: true,
+		})
+		.withCustomAttributes(...(attrs ?? []).filter((a) => a.userWritable !== false).map((a) => a.name));
+}
+
+/**
  * Resolve `users.signInWith` to Cognito's `signInAliases`. `undefined` falls
  * back to `['username', 'email']` — `AuthCognito`'s default, so the zero-config
  * pool is unchanged (a changed `signInWith` is a rollback-on-update, not a

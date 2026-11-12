@@ -32,7 +32,9 @@
  *   write, Amazon Cognito returns `NotAuthorizedException`"). With no
  *   `WriteAttributes` the client writes the standard and custom attributes,
  *   not `email_verified` / `phone_number_verified` (those are only in the
- *   default *read* set). Applies to the self-service calls only; the admin API
+ *   default *read* set). The CDK layer sets the client's `WriteAttributes`,
+ *   which also leaves out a custom attribute marked `userWritable: false`.
+ *   Applies to the self-service calls only; the admin API
  *   is authorized by IAM, and an administrator may mark a contact verified.
  * - **Immutable attribute after creation** → `InvalidParameterException`: "You
  *   can only write a value to an immutable attribute when you create a user"
@@ -40,8 +42,11 @@
  *   no call writes it.
  *
  * **External pool** (`userPool` set, `Auth.fromExisting`): the mock cannot see
- * that pool's schema, so any `custom:` name is accepted (an attribute declared
- * `mutable: false` is still immutable); every other rule applies.
+ * that pool's schema, so any `custom:` name is accepted from `admin.createUser`
+ * (an attribute declared `mutable: false` is still immutable); every other rule
+ * applies. Through the app client (`signUp`, `update`) only a declared custom
+ * attribute is accepted, since the client's `WriteAttributes` lists only those
+ * (`NotAuthorizedException` otherwise).
  *
  * The rules that need no schema (string value, length, the verified flags,
  * `sub`) live in `attribute-write-rules.ts`, which the Cognito engine applies
@@ -66,6 +71,7 @@ import { AuthErrors } from '../errors.js';
 import type { UserAttribute } from '../types.js';
 import {
 	type AttributeWrite,
+	adminOnlyAttributes,
 	checkAttributeValues,
 	immutableAttributeError,
 	VERIFIED_FLAGS,
@@ -104,12 +110,14 @@ const STANDARD_ATTRIBUTES: ReadonlySet<string> = new Set([
 export class MockAttributeSchema {
 	private readonly custom: ReadonlyMap<string, { mutable: boolean }>;
 	private readonly externalPool: boolean;
+	private readonly adminOnly: ReadonlySet<string>;
 
 	constructor(options: { attributes?: readonly UserAttribute[]; externalPool?: boolean }) {
 		this.custom = new Map(
 			(options.attributes ?? []).map((a) => [`custom:${a.name}`, { mutable: a.mutable ?? true }]),
 		);
 		this.externalPool = options.externalPool === true;
+		this.adminOnly = adminOnlyAttributes(options.attributes);
 	}
 
 	/**
@@ -122,9 +130,20 @@ export class MockAttributeSchema {
 	 * below, each in input order.
 	 */
 	check(attributes: Readonly<Record<string, unknown>>, write: AttributeWrite): void {
-		// Non-string, too long, a verified flag through the app client, `sub`:
-		// the rules the Cognito engine checks too (`attribute-write-rules.ts`).
-		checkAttributeValues(attributes, write);
+		// Non-string, too long, a verified flag or `userWritable: false` attribute
+		// through the app client, `sub`: the rules the Cognito engine checks too
+		// (`attribute-write-rules.ts`).
+		checkAttributeValues(attributes, write, this.adminOnly);
+		// External pool: the block's app client may write only the declared custom
+		// attributes (`endUserWriteAttributes`), so Cognito refuses another `custom:`
+		// name through it, though the pool may have it.
+		if (this.externalPool && write !== 'adminCreateUser') {
+			for (const [name, value] of Object.entries(attributes)) {
+				if (value !== undefined && name.startsWith('custom:') && !this.custom.has(name)) {
+					throw serviceError(AuthErrors.NotAuthorized, 'A client attempted to write unauthorized attribute');
+				}
+			}
+		}
 		for (const [name, value] of Object.entries(attributes)) {
 			// Absent on the wire (JSON drops it; the SDK treats it as absent).
 			if (value === undefined) continue;

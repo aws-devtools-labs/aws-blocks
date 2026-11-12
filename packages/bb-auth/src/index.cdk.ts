@@ -65,6 +65,7 @@ import { guardUserPool } from './cdk/immutability-guard.js';
 import {
 	adminIamActions,
 	CLIENT_IAM_ACTIONS,
+	endUserWriteAttributes,
 	mapAutoVerify,
 	mapCustomAttributes,
 	mapFeaturePlan,
@@ -337,6 +338,9 @@ export class Auth<const O extends AuthOptions = AuthOptions> extends BuildingBlo
 					adminUserPassword: false,
 					user: emailPassword && authFlow === 'USER_AUTH',
 				},
+				// Only what end users may set (no `*_verified` flag, no `userWritable: false`
+				// attribute); Cognito's default is every attribute. Updates in place.
+				writeAttributes: endUserWriteAttributes(opts.users?.attributes),
 			});
 
 			// ── Hosted-UI federation ────────────────────────────────────────

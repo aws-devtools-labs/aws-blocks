@@ -1183,6 +1183,7 @@ export interface UserAttribute {
     name: string;
     required?: boolean;
     type?: 'String' | 'Number';
+    userWritable?: boolean;
 }
 
 // @public

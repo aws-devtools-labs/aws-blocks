@@ -158,6 +158,18 @@ export const adminApi = new ApiNamespace(scope, 'adminApi', (context) => ({
 
 `auth.admin` checks only that the block opted in and that the action was granted, never who is calling, so every method that calls it must authorize its caller first, as `listUsers` does above. The handle itself is never an API: exporting `auth.admin`, or returning it from an `ApiNamespace` handler, answers *method not found*. Copying its methods into your own object (`{ ...auth.admin }`) exposes them like any other method you write.
 
+**Authorizing on a custom attribute instead of a group.** End users write their own attributes at sign-up, through `updateUserAttributes` and in the new-password step of `confirmSignIn`. Declare a role, tenant id, plan tier or similar with `userWritable: false` and set it server-side with `auth.admin.createUser(username, { attributes })` (or Cognito's `AdminUpdateUserAttributes` from your own backend code). `Auth` then refuses an end-user write of it with `NotAuthorizedException`, locally too, and the app client's write attributes leave it out, so Cognito refuses it as well. Add `mutable: false` when the value must never change after creation. `userWritable: false` can't be combined with `required: true`.
+
+```typescript
+users: {
+  attributes: [
+    { name: 'department' },                                  // end users may set it
+    { name: 'role', userWritable: false },                   // admin-only
+    { name: 'tenantId', userWritable: false, mutable: false }, // admin-only, set once
+  ],
+},
+```
+
 ### The first admin
 
 `requireRole(context, 'admin')` needs someone in `admin` already. Make the first one with the `users` command, once: sign up as yourself, then add your account to the group. It works the same on the local pool and on a deployed one:
@@ -183,7 +195,7 @@ npx @aws-blocks/bb-auth users add-to-group you@example.com admin --stage prod --
 
 - `user.attributes.email` is not proof that the user owns the address. A signed-in user can change their own email (`updateUserAttributes`), and a pool this block creates does not turn on Cognito's verification-before-update, so the new address applies at once, unverified (`email_verified: false` until the user confirms the code). `user.attributes` does not carry `email_verified`, so read the pool's record with `auth.admin.getUser` (or, for the signed-in user, `getUserAttributes`) and require `email_verified === 'true'`. The same holds for `phone_number`.
 - A federated user's email is the identity provider's claim, not a verification by this pool: leave federated users out, or trust only a provider whose claims you control.
-- With `userPool: Auth.fromExisting(…)`, check that the app client's `WriteAttributes` does not include `email_verified` (Cognito allows it): a user who can write the flag can mark any address verified. The client of a pool this block creates sets no `WriteAttributes`, and Cognito's default write set leaves both verified flags out, so its users cannot write them (`NotAuthorizedException`, locally too).
+- The app client this block creates lists its `WriteAttributes` explicitly: the standard attributes except `email_verified` / `phone_number_verified`, plus the declared custom attributes not marked `userWritable: false`. Its users can't write the verified flags (`NotAuthorizedException`, locally too). With `userPool: Auth.fromExisting(…)`, attributes are shared by every app client in that pool, so check that the pool's other clients leave `email_verified` out of their `WriteAttributes` as well (Cognito's default, with no `WriteAttributes`, is every attribute): a user who can write the flag can mark any address verified.
 
 ```ts
 // aws-blocks/index.ts

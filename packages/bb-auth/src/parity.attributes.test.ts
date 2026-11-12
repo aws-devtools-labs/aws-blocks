@@ -42,9 +42,12 @@ const PASSWORD = 'Passw0rd!';
 let n = 0;
 const root = (): ScopeParent => ({ id: `parityattr${process.pid}x${++n}` });
 
-/** A pool with one mutable and one immutable custom attribute, and the admin surface. */
+/**
+ * A pool with one mutable and one immutable custom attribute, one only an
+ * administrator may write (`userWritable: false`), and the admin surface.
+ */
 const OPTIONS = {
-	users: { attributes: [{ name: 'team' }, { name: 'tier', mutable: false }] },
+	users: { attributes: [{ name: 'team' }, { name: 'tier', mutable: false }, { name: 'role', userWritable: false }] },
 	admin: {},
 } as const;
 
@@ -114,7 +117,10 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 	const custom = new Map([
 		['custom:team', { mutable: true }],
 		['custom:tier', { mutable: false }],
+		['custom:role', { mutable: true }],
 	]);
+	// Left out of the client's `WriteAttributes` (`userWritable: false`, see `endUserWriteAttributes`).
+	const adminOnly = new Set(['custom:role']);
 	const validate = (list: unknown, write: 'create' | 'adminCreate' | 'update') => {
 		const entries = (Array.isArray(list) ? list : []).map((entry: unknown) => ({
 			key: String(Reflect.get(Object(entry), 'Name')),
@@ -138,7 +144,7 @@ function cognitoSchema(h: Pick<AwsAuthHarness<AuthOptions>, 'on' | 'idp'>, pool:
 		}
 		// 3. The app client's write permissions.
 		for (const { key } of entries) {
-			if (write !== 'adminCreate' && verifiedFlags.has(key)) {
+			if (write !== 'adminCreate' && (verifiedFlags.has(key) || adminOnly.has(key))) {
 				throw cognitoError('NotAuthorizedException', 'A client attempted to write unauthorized attribute');
 			}
 		}
@@ -296,6 +302,17 @@ describe('parity: attributes on signUp (SignUp)', () => {
 		['a 2,048-character value', { email: 'bob@example.com', name: 'x'.repeat(2048) }, 'ok'],
 		['`email_verified` (not client-writable)', { email: 'bob@example.com', email_verified: 'true' }, UNAUTHORIZED],
 		['`phone_number_verified`', { phone_number: '+15555550100', phone_number_verified: 'true' }, UNAUTHORIZED],
+		['a `userWritable: false` attribute (bare name)', { email: 'bob@example.com', role: 'admin' }, UNAUTHORIZED],
+		[
+			'a `userWritable: false` attribute (`custom:` prefix)',
+			{ email: 'bob@example.com', 'custom:role': 'admin' },
+			UNAUTHORIZED,
+		],
+		[
+			'a standard attribute name with a `custom:` prefix (`custom:email`)',
+			{ 'custom:email': 'bob@example.com' },
+			INVALID,
+		],
 	] as const) {
 		test(label, async () => {
 			const mock = new MockAuth(root(), 'auth', OPTIONS);
@@ -377,6 +394,8 @@ describe('parity: attributes on updateUserAttributes (UpdateUserAttributes)', ()
 		['an immutable custom attribute (`tier`)', { tier: 'platinum' }, INVALID],
 		['`sub`', { sub: 'mine' }, INVALID],
 		['`email_verified` (not client-writable)', { email_verified: 'true' }, UNAUTHORIZED],
+		['a `userWritable: false` attribute', { role: 'admin' }, UNAUTHORIZED],
+		['a `userWritable: false` attribute (`custom:` prefix)', { 'custom:role': 'admin' }, UNAUTHORIZED],
 	] as const) {
 		test(label, async () => {
 			const mock = await mockSignedIn();
@@ -410,6 +429,11 @@ describe('parity: attributes on admin.createUser (AdminCreateUser)', () => {
 		[
 			'`email_verified` (an administrator may mark a contact verified)',
 			{ email: 'bob@example.com', email_verified: 'true' },
+			'ok',
+		],
+		[
+			'a `userWritable: false` attribute (an administrator may set it)',
+			{ email: 'bob@example.com', role: 'admin' },
 			'ok',
 		],
 	] as const) {
@@ -466,6 +490,7 @@ describe('parity: userAttributes on the new-password challenge (RespondToAuthCha
 		['an undeclared `custom:` attribute', { 'custom:dept': 'x' }, INVALID],
 		['an immutable custom attribute (`tier`)', { tier: 'platinum' }, INVALID],
 		['`email_verified` (not client-writable)', { email_verified: 'true' }, UNAUTHORIZED],
+		['a `userWritable: false` attribute', { role: 'admin' }, UNAUTHORIZED],
 	] as const) {
 		test(label, async () => {
 			const views = [];
@@ -639,10 +664,10 @@ describe('parity: signUp on a `selfSignUp: false` pool', () => {
 });
 
 describe('mock: an external pool (`Auth.fromExisting`) — its schema is not known locally', () => {
-	test('any `custom:` attribute is accepted; every other rule still applies', async () => {
-		const auth = new MockAuth(root(), 'auth', { userPool: MockAuth.fromExisting('us-east-1_Existing') });
+	test('admin.createUser accepts any `custom:` attribute; every other rule still applies', async () => {
+		const auth = new MockAuth(root(), 'auth', { userPool: MockAuth.fromExisting('us-east-1_Existing'), admin: {} });
 		assert.strictEqual(
-			await outcome(untyped(auth, 'signUp', 'bob', PASSWORD, { attributes: { 'custom:dept': 'x' } })),
+			await outcome(untyped(auth.admin, 'createUser', 'bob', { attributes: { 'custom:dept': 'x' } })),
 			'ok',
 		);
 		assert.deepStrictEqual(
@@ -652,6 +677,21 @@ describe('mock: an external pool (`Auth.fromExisting`) — its schema is not kno
 		assert.deepStrictEqual(
 			await outcome(untyped(auth, 'signUp', 'dave', PASSWORD, { attributes: { 'custom:dept': 1 } })),
 			INVALID,
+		);
+	});
+
+	test('through the app client only a declared custom attribute is accepted (its WriteAttributes)', async () => {
+		const auth = new MockAuth(root(), 'auth', {
+			userPool: MockAuth.fromExisting('us-east-1_Existing'),
+			users: { attributes: [{ name: 'team' }] },
+		});
+		assert.strictEqual(
+			await outcome(untyped(auth, 'signUp', 'bob', PASSWORD, { attributes: { team: 'ops' } })),
+			'ok',
+		);
+		assert.deepStrictEqual(
+			await outcome(untyped(auth, 'signUp', 'carol', PASSWORD, { attributes: { 'custom:dept': 'x' } })),
+			UNAUTHORIZED,
 		);
 	});
 });

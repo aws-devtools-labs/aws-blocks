@@ -325,3 +325,23 @@ describe('Auth — pool durability follows the stack defaults', () => {
 		}
 	});
 });
+
+describe('the native app client writes only what end users may set', () => {
+	const STANDARD = [
+		...['address', 'birthdate', 'email', 'family_name', 'gender', 'given_name', 'locale', 'middle_name'],
+		...['name', 'nickname', 'phone_number', 'picture', 'preferred_username', 'profile', 'updated_at'],
+		...['website', 'zoneinfo'],
+	];
+	const clientOf = (template: CfnTemplateJson) => only(template, 'AWS::Cognito::UserPoolClient');
+
+	test('default: every standard attribute except the `*_verified` flags', () => {
+		assert.deepStrictEqual(clientOf(synth(CONFIGS.default).template).Properties?.WriteAttributes, STANDARD);
+	});
+
+	test('declared custom attributes are writable unless `userWritable: false`', () => {
+		const s = synth(
+			"new Auth(stack, 'auth', { users: { attributes: [{ name: 'team' }, { name: 'role', userWritable: false }] } })",
+		);
+		assert.deepStrictEqual(clientOf(s.template).Properties?.WriteAttributes, [...STANDARD, 'custom:team'].sort());
+	});
+});

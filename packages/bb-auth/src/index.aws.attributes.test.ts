@@ -35,7 +35,10 @@ beforeEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 afterEach(() => rmSync('.bb-data', { recursive: true, force: true }));
 
 const PASSWORD = 'Passw0rd!';
-const OPTIONS = { users: { attributes: [{ name: 'team' }] }, admin: {} } as const;
+const OPTIONS = {
+	users: { attributes: [{ name: 'team' }, { name: 'role', userWritable: false }] },
+	admin: {},
+} as const;
 
 const INVALID = { name: AuthErrors.InvalidParameter, code: 400, retriable: true } as const;
 const UNAUTHORIZED = { name: AuthErrors.NotAuthorized, code: 401, retriable: false } as const;
@@ -180,6 +183,16 @@ describe('AWS: the other schema-independent rules are checked before the SDK cal
 		});
 	}
 
+	for (const write of ['signUp', 'updateUserAttributes', 'newPasswordChallenge'] as const) {
+		test(`${write}: a \`userWritable: false\` attribute is 401 NotAuthorizedException (not client-writable)`, async () => {
+			for (const name of ['role', 'custom:role']) {
+				const { result, sent } = await WRITES[write]({ [name]: 'admin' });
+				assert.deepStrictEqual(result, UNAUTHORIZED, name);
+				assert.deepStrictEqual(sent, [], name);
+			}
+		});
+	}
+
 	test('signUp: a rejected value anywhere in the write sends nothing, valid attributes before it included', async () => {
 		const { result, sent } = await WRITES.signUp({ email: 'bob@example.com', name: 'Bob', team: { x: 1 } });
 		assert.deepStrictEqual(result, INVALID);
@@ -193,6 +206,19 @@ describe('AWS: what the engine leaves to Cognito', () => {
 		h.on('SignUpCommand', () => ({ UserConfirmed: false, UserSub: 'sub-bob' }));
 		await h.auth.signUp('bob', PASSWORD, { attributes: { name: 'x'.repeat(2048) } });
 		assert.deepStrictEqual(h.sentNames(), ['SignUpCommand']);
+	});
+
+	test('admin.createUser may set a `userWritable: false` attribute (IAM-authorized): it is sent', async () => {
+		const h = makeAwsAuth(OPTIONS);
+		h.on('AdminCreateUserCommand', (input) => ({
+			User: { Username: String(input.Username), Enabled: true, Attributes: [] },
+		}));
+		await h.auth.admin.createUser('bob', { attributes: { email: 'bob@example.com', role: 'admin' } });
+		const input = h.sent.find((c) => c.name === 'AdminCreateUserCommand')?.input;
+		assert.deepStrictEqual(input?.UserAttributes, [
+			{ Name: 'email', Value: 'bob@example.com' },
+			{ Name: 'custom:role', Value: 'admin' },
+		]);
 	});
 
 	test('admin.createUser may mark a contact verified (IAM-authorized): the flag is sent', async () => {
