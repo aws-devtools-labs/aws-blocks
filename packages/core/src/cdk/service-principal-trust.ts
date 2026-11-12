@@ -3,7 +3,7 @@
 
 import * as cdk from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
-import { forEachBlocksRole, isAppOwnedRole, markBlocksOwned } from './blocks-roles.js';
+import { forEachBlocksKmsKey, forEachBlocksRole, isAppOwnedRole, markBlocksOwned } from './blocks-roles.js';
 
 /**
  * Acknowledgement id of the warning reported for an app-owned role in a
@@ -13,6 +13,15 @@ import { forEachBlocksRole, isAppOwnedRole, markBlocksOwned } from './blocks-rol
  * @internal
  */
 export const SERVICE_PRINCIPAL_TRUST_WARNING_ID = '@aws-blocks/core:serviceRoleTrustWithoutSourceCondition';
+
+/**
+ * Acknowledgement id of the warning reported for an app-owned KMS key whose key
+ * policy lets a service principal use the key without a source condition. Stable:
+ * apps acknowledge it with `Annotations.of(scope).acknowledgeWarning(id)`.
+ *
+ * @internal
+ */
+export const KMS_KEY_POLICY_WARNING_ID = '@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition';
 
 /**
  * Service principals whose trust statements need no source condition: Lambda
@@ -84,13 +93,18 @@ function asArray(value: unknown): unknown[] {
 	return Array.isArray(value) ? value : [value];
 }
 
+/** The resource's rendered property `name` (property overrides included), or `undefined`. */
+function renderedProperty(resource: cdk.CfnResource, name: string): unknown {
+	const rendered = cdk.Stack.of(resource).resolve(resource._toCloudFormation());
+	if (!isObject(rendered) || !isObject(rendered.Resources)) return undefined;
+	const body = Object.values(rendered.Resources)[0];
+	if (!isObject(body) || !isObject(body.Properties)) return undefined;
+	return body.Properties[name];
+}
+
 /** The role's rendered `AssumeRolePolicyDocument` (property overrides included), or `undefined`. */
 function trustDocument(role: cdk.CfnResource): unknown {
-	const rendered = cdk.Stack.of(role).resolve(role._toCloudFormation());
-	if (!isObject(rendered) || !isObject(rendered.Resources)) return undefined;
-	const resource = Object.values(rendered.Resources)[0];
-	if (!isObject(resource) || !isObject(resource.Properties)) return undefined;
-	return resource.Properties.AssumeRolePolicyDocument;
+	return renderedProperty(role, 'AssumeRolePolicyDocument');
 }
 
 function hasSourceCondition(condition: unknown): boolean {
@@ -179,8 +193,9 @@ function appOwnedTrustWarning(role: cdk.CfnResource, { service, statement }: Unc
  * Blocks Building Block or a compute, or created by the framework at stack
  * scope, still fail synth.
  *
- * Checks role trust policies only — not resource policies or KMS grants. Runs
- * as a construct validation, so it sees each trust policy after every block has
+ * Also registers {@link addKmsKeyPolicyCheck}, the same check for the key
+ * policies of the KMS keys in those scopes. Other resource policies and KMS
+ * grants are not checked. Runs as a construct validation, so it sees each trust policy after every block has
  * added its statements. The cross-region reference providers CDK adds while
  * preparing the app are reached after validation and are not checked; they are
  * Lambda execution roles.
@@ -208,6 +223,7 @@ export function addServicePrincipalTrustCheck(root: Construct): void {
 			},
 		});
 	});
+	addKmsKeyPolicyCheck(root);
 }
 
 /** Options for {@link sourceScopedConditions}. */
@@ -271,4 +287,161 @@ export function scopeProviderWaiterTrust(provider: Construct): void {
 		'AssumeRolePolicyDocument.Statement.0.Condition',
 		sourceScopedConditions(cdk.Stack.of(provider), 'states', 'stateMachine:*'),
 	);
+}
+
+/**
+ * Service principals that may use an AWS Blocks KMS key without any of the
+ * {@link KEY_POLICY_SCOPES}. Empty: add a principal only with a code comment
+ * citing the AWS documentation that says the service sends none of those keys.
+ */
+const KEY_POLICY_UNCONDITIONED_SERVICES: ReadonlySet<string> = new Set<string>();
+
+/**
+ * The condition-key sets that scope a service principal's use of a KMS key in a
+ * key policy statement. The statement is scoped when it carries every key of at
+ * least one set (keys compared case-insensitively, see {@link isScopingOperator}
+ * for the operators that count):
+ *
+ * - `aws:SourceAccount`, or `aws:SourceArn`: the global condition keys AWS KMS
+ *   documents for limiting a service principal in a key policy to requests made
+ *   on behalf of a given account or resource
+ *   (https://docs.aws.amazon.com/kms/latest/developerguide/conditions-aws.html).
+ *   Either one alone names this account or this account's resource.
+ * - `kms:EncryptionContext:aws:logs:arn`, for the CloudWatch Logs principal
+ *   (`logs.<region>.amazonaws.com`): CloudWatch Logs documents it as the
+ *   condition that limits the key to a log group
+ *   (https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/encrypt-log-data-kms.html).
+ * - `kms:ViaService` together with `kms:CallerAccount`: AWS KMS documents the
+ *   pair for limiting a key to requests an AWS service makes on behalf of
+ *   principals in a given account
+ *   (https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-via-service,
+ *   https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html#conditions-kms-caller-account).
+ */
+const KEY_POLICY_SCOPES: readonly { readonly principal?: RegExp; readonly keys: readonly string[] }[] = [
+	{ keys: ['aws:sourceaccount'] },
+	{ keys: ['aws:sourcearn'] },
+	{ principal: /^logs\.[a-z0-9-]+\.amazonaws\.com$/, keys: ['kms:encryptioncontext:aws:logs:arn'] },
+	{ keys: ['kms:viaservice', 'kms:calleraccount'] },
+];
+
+/**
+ * Whether a key under `operator` constrains the request. Not an `…IfExists`
+ * operator (which lets a request without the key through), `Null`, or a
+ * `ForAllValues:` set operator (both of which match a request without it).
+ */
+function isScopingOperator(operator: string): boolean {
+	return !/IfExists$/i.test(operator) && !/^Null$/i.test(operator) && !/^ForAllValues:/i.test(operator);
+}
+
+/** Whether `value` names something other than the wildcard `*` alone. */
+function isConstrainingValue(value: unknown): boolean {
+	const values = asArray(value);
+	return values.length > 0 && values.every((v) => v !== '*');
+}
+
+/** The condition keys (lowercased) a statement's `Condition` constrains. */
+function scopingKeys(condition: unknown): Set<string> {
+	const keys = new Set<string>();
+	if (!isObject(condition)) return keys;
+	for (const [operator, block] of Object.entries(condition)) {
+		if (!isObject(block) || !isScopingOperator(operator)) continue;
+		for (const [key, value] of Object.entries(block)) {
+			if (isConstrainingValue(value)) keys.add(key.toLowerCase());
+		}
+	}
+	return keys;
+}
+
+/** A service principal an unscoped key-policy statement names, with that statement's index. */
+interface UnscopedKeyPolicyGrant {
+	readonly service: string;
+	/** Index of the statement in `KeyPolicy.Statement`. */
+	readonly statement: number;
+}
+
+/**
+ * Every service principal (other than {@link KEY_POLICY_UNCONDITIONED_SERVICES})
+ * in an `Allow` statement of `key`'s rendered key policy that carries none of the
+ * {@link KEY_POLICY_SCOPES}, in statement order, each principal once.
+ */
+function unscopedKeyPolicyGrants(key: cdk.CfnResource): UnscopedKeyPolicyGrant[] {
+	const doc = renderedProperty(key, 'KeyPolicy');
+	if (!isObject(doc)) return [];
+	const found: UnscopedKeyPolicyGrant[] = [];
+	asArray(doc.Statement).forEach((statement, index) => {
+		if (!isObject(statement) || statement.Effect !== 'Allow' || !isObject(statement.Principal)) return;
+		const keys = scopingKeys(statement.Condition);
+		for (const service of asArray(statement.Principal.Service)) {
+			if (typeof service === 'string' && KEY_POLICY_UNCONDITIONED_SERVICES.has(service)) continue;
+			const scoped = KEY_POLICY_SCOPES.some(
+				(scope) =>
+					(!scope.principal || (typeof service === 'string' && scope.principal.test(service))) &&
+					scope.keys.every((k) => keys.has(k)),
+			);
+			if (scoped) continue;
+			const name = describe(service);
+			if (!found.some((f) => f.service === name)) found.push({ service: name, statement: index });
+		}
+	});
+	return found;
+}
+
+/**
+ * The service principals that `key`'s key policy lets use the key, in an `Allow`
+ * statement scoped by none of the {@link KEY_POLICY_SCOPES}.
+ *
+ * @internal
+ */
+export function unscopedKeyPolicyServicePrincipals(key: cdk.CfnResource): string[] {
+	return unscopedKeyPolicyGrants(key).map((g) => g.service);
+}
+
+function keyPolicyProblem(key: cdk.CfnResource, { service, statement }: UnscopedKeyPolicyGrant): string {
+	return (
+		`KMS key ${key.node.path} lets the service principal ${service} use it (key policy statement ${statement}) ` +
+		'without an aws:SourceAccount or aws:SourceArn condition. Add aws:SourceAccount (StringEquals, the stack ' +
+		"account) or aws:SourceArn (ArnLike, an ARN pattern for this account's resources of that service) to the " +
+		'statement. kms:EncryptionContext:aws:logs:arn (for CloudWatch Logs) or kms:ViaService with ' +
+		'kms:CallerAccount also count; IfExists operators do not.'
+	);
+}
+
+function appOwnedKeyPolicyWarning(key: cdk.CfnResource, grant: UnscopedKeyPolicyGrant): string {
+	return (
+		`${keyPolicyProblem(key, grant)} To keep the statement as it is, acknowledge this warning: ` +
+		`Annotations.of(key).acknowledgeWarning('${KMS_KEY_POLICY_WARNING_ID}'), or on the stack ` +
+		'to acknowledge it for every key in the stack.'
+	);
+}
+
+/**
+ * Fail synth when a KMS key AWS Blocks creates for `root` (the keys in the
+ * scopes {@link forEachBlocksKmsKey} covers, the same scopes as the role check)
+ * lets a service principal use it in an `Allow` key-policy statement scoped by
+ * none of the {@link KEY_POLICY_SCOPES}. A key the app creates
+ * ({@link isAppOwnedRole}) gets a synth warning instead (id
+ * {@link KMS_KEY_POLICY_WARNING_ID}). Checks key policies only, not KMS grants
+ * (`AWS::KMS::Grant` or `CreateGrant` calls).
+ *
+ * @internal
+ */
+export function addKmsKeyPolicyCheck(root: Construct): void {
+	forEachBlocksKmsKey(root, (key) => {
+		key.node.addValidation({
+			validate: () => {
+				const found = unscopedKeyPolicyGrants(key);
+				if (found.length === 0) return [];
+				if (isAppOwnedRole(root, key)) {
+					for (const grant of found) {
+						cdk.Annotations.of(key).addWarningV2(
+							KMS_KEY_POLICY_WARNING_ID,
+							appOwnedKeyPolicyWarning(key, grant),
+						);
+					}
+					return [];
+				}
+				return found.map((grant) => keyPolicyProblem(key, grant));
+			},
+		});
+	});
 }

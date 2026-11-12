@@ -12,17 +12,24 @@
  * AWS Blocks owns the role, as a warning when the app does. Prints one JSON
  * line: `{ errors, warnings, serviceRoles }`, each a list of role resource
  * paths (`serviceRoles` = every role with a non-Lambda service principal).
+ *
+ * KMS keys get the same treatment: the `Condition` of every key-policy statement
+ * that names a service principal is removed, the key-policy check reports each
+ * such key, and the JSON line also carries `keyErrors`, `keyWarnings` and
+ * `serviceKeys` (every key whose policy names a service principal).
  */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BlocksPresets, BlocksStack } from '@aws-blocks/blocks/cdk';
 import * as cdk from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import type { IConstruct } from 'constructs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LAMBDA_PRINCIPALS = new Set(['lambda.amazonaws.com', 'edgelambda.amazonaws.com']);
 const WARNING_ID = '@aws-blocks/core:serviceRoleTrustWithoutSourceCondition';
+const KEY_WARNING_ID = '@aws-blocks/core:kmsKeyPolicyWithoutSourceCondition';
 
 interface TrustStatement {
   Principal?: { Service?: string | string[] };
@@ -36,8 +43,21 @@ const stack = await BlocksStack.create(app, 'bb-test-role-ownership', {
 });
 
 const serviceRoles: string[] = [];
+const serviceKeys: string[] = [];
 cdk.Aspects.of(app).add({
   visit(node: IConstruct) {
+    if (cdk.CfnResource.isCfnResource(node) && node.cfnResourceType === 'AWS::KMS::Key') {
+      const key = node as kms.CfnKey;
+      const policy = cdk.Stack.of(key).resolve(key.keyPolicy) as { Statement?: TrustStatement[] };
+      let named = false;
+      (policy?.Statement ?? []).forEach((s, i) => {
+        if (s.Principal?.Service === undefined) return;
+        named = true;
+        key.addPropertyDeletionOverride(`KeyPolicy.Statement.${i}.Condition`);
+      });
+      if (named) serviceKeys.push(key.node.path);
+      return;
+    }
     if (!cdk.CfnResource.isCfnResource(node) || node.cfnResourceType !== 'AWS::IAM::Role') return;
     const role = node as iam.CfnRole;
     const doc = cdk.Stack.of(role).resolve(role.assumeRolePolicyDocument) as { Statement?: TrustStatement[] };
@@ -51,21 +71,26 @@ cdk.Aspects.of(app).add({
 });
 
 let errors: string[] = [];
+let keyErrors: string[] = [];
 try {
   app.synth();
 } catch (err) {
   if (!(err instanceof Error)) throw err;
-  errors = err.message
-    .split('\n')
-    .map((line) => /^\s*\[([^\]]+)\] IAM role /.exec(line)?.[1])
-    .filter((path): path is string => path !== undefined);
-  if (errors.length === 0) throw err;
+  const lines = err.message.split('\n');
+  const paths = (kind: RegExp) =>
+    lines.map((line) => kind.exec(line)?.[1]).filter((path): path is string => path !== undefined);
+  errors = paths(/^\s*\[([^\]]+)\] IAM role /);
+  keyErrors = [...new Set(paths(/^\s*\[([^\]]+)\] KMS key /))];
+  if (errors.length === 0 && keyErrors.length === 0) throw err;
 }
 
 // Synth stops at the validation errors, so read the warnings off the tree.
-const warnings = stack.node
-  .findAll()
-  .filter((n) => n.node.metadata.some((m) => m.type === 'aws:cdk:warning' && String(m.data).includes(WARNING_ID)))
-  .map((n) => n.node.path);
+const warnedWith = (id: string) =>
+  stack.node
+    .findAll()
+    .filter((n) => n.node.metadata.some((m) => m.type === 'aws:cdk:warning' && String(m.data).includes(id)))
+    .map((n) => n.node.path);
+const warnings = warnedWith(WARNING_ID);
+const keyWarnings = warnedWith(KEY_WARNING_ID);
 
-console.log(JSON.stringify({ errors, warnings, serviceRoles }));
+console.log(JSON.stringify({ errors, warnings, serviceRoles, keyErrors, keyWarnings, serviceKeys }));
