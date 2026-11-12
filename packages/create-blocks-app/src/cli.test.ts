@@ -933,6 +933,8 @@ describe('create-blocks-app auto-detection', () => {
       const construct =
         /^\s*(?:\/\/\s*)?const auth = new Auth\(scope, 'auth', \{([\s\S]*?)\n(?:\/\/ )?\}\);/m.exec(source);
       if (!construct) continue;
+      // A `store: 'builtin'` block creates no user pool, and rejects `users` options.
+      if (/store: 'builtin'/.test(construct[1])) continue;
       checked++;
       if (!/signInWith: \['email'\]/.test(construct[1]) || !/caseSensitive: false/.test(construct[1])) {
         offenders.push(name);
