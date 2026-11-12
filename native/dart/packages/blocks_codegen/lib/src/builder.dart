@@ -339,6 +339,11 @@ class CodegenModel {
   /// naming collisions). Callers (CLI / build_runner) surface these to the user.
   final List<String> warnings;
 
+  /// Old type names kept as deprecated typedefs, each to the type now named
+  /// for it: a union the spec names (`x-blocks-type-name`) was named after
+  /// its first namespace's method and param before.
+  final Map<String, String> deprecatedAliases;
+
   const CodegenModel({
     required this.title,
     required this.version,
@@ -346,6 +351,7 @@ class CodegenModel {
     required this.types,
     this.servers = const [],
     this.warnings = const [],
+    this.deprecatedAliases = const {},
   });
 }
 
@@ -416,6 +422,9 @@ class CodegenModelBuilder {
   final List<(SchemaReference, String)> _refs = [];
   // Non-fatal diagnostics produced during the build.
   final List<String> _warnings = [];
+  // Each param union named by its spec name (`x-blocks-type-name`), with the
+  // name it had before (`<Namespace><Method><Param>`).
+  final Map<SealedClassType, String> _hintedUnions = Map.identity();
   int _anonCounter = 0;
   // Whether an operation returns an `oidc/client` that names its providers,
   // directly or optionally: such a library gets a provider enum and names
@@ -435,6 +444,7 @@ class CodegenModelBuilder {
     _refs.clear();
     _warnings.clear();
     _bindings.clear();
+    _hintedUnions.clear();
     _anonCounter = 0;
     _hasTypedOidcResult = false;
     _warnUnmatchedOptOuts(rpc);
@@ -468,14 +478,27 @@ class CodegenModelBuilder {
       final nsPrefix = _namespacePrefix(method.name);
 
       final params = method.params.map((p) {
+        final computed =
+            '$nsPrefix${_capitalize(opName)}${_capitalize(p.name)}';
+        // A union the spec names (one shared by many namespaces, like
+        // `AuthActionInput`) takes that name, so it doesn't depend on which
+        // namespace comes first.
+        final typeName = switch (p.schema) {
+          DiscriminatedUnionRef(:final typeName) => typeName,
+          _ => null,
+        };
+        final type = _resolveType(
+          p.schema,
+          typeName ?? computed,
+          false,
+          '${method.name}#param:${p.name}',
+        );
+        if (type is SealedClassType && type.name == typeName) {
+          _hintedUnions.putIfAbsent(type, () => computed);
+        }
         return OperationParam(
           name: p.name,
-          type: _resolveType(
-            p.schema,
-            '$nsPrefix${_capitalize(opName)}${_capitalize(p.name)}',
-            false,
-            '${method.name}#param:${p.name}',
-          ),
+          type: type,
           isRequired: p.isRequired,
         );
       }).toList();
@@ -521,6 +544,8 @@ class CodegenModelBuilder {
           );
     }
 
+    _fallBackFromCollidingTypeNames();
+
     // Pass 3: detect (and resolve) display-name collisions among structurally
     // distinct types before generation.
     _resolveNamingCollisions();
@@ -561,6 +586,24 @@ class CodegenModelBuilder {
         .toList();
     _warnIdentifierCollisions(namespaces);
 
+    // The name each spec-named union had before, kept as a deprecated alias.
+    final finalNames = {
+      ..._typeAndArmNames(),
+      for (final ns in namespaces)
+        for (final op in ns.operations)
+          if (op.result
+              case TransferableType(providerEnum: final e?) ||
+                  NullableType(inner: TransferableType(providerEnum: final e?)))
+            e.name,
+    };
+    final deprecatedAliases = <String, String>{
+      for (final MapEntry(key: union, value: old) in _hintedUnions.entries)
+        if (dartIdentifiers([old], reserved: generatedTopLevelNames)[old]
+            case final alias?
+            when alias != union.name && !finalNames.contains(alias))
+          alias: union.name,
+    };
+
     return CodegenModel(
       title: rpc.title,
       version: rpc.version,
@@ -568,7 +611,57 @@ class CodegenModelBuilder {
       types: _types,
       servers: rpc.servers,
       warnings: List.of(_warnings),
+      deprecatedAliases: deprecatedAliases,
     );
+  }
+
+  /// A spec-named param union whose name another type already has keeps the
+  /// name it would have had without one (`<Namespace><Method><Param>`).
+  void _fallBackFromCollidingTypeNames() {
+    for (final MapEntry(key: union, value: old) in _hintedUnions.entries) {
+      final name = union.name;
+      final collides =
+          _schemaTypes.containsKey(name) ||
+          _origins.any(
+            (o) =>
+                !identical(o.type, union) &&
+                (o.name == name ||
+                    (o.type is SealedClassType &&
+                        (o.type as SealedClassType).variants.any(
+                          (v) => v.className == name,
+                        ))),
+          );
+      if (!collides) continue;
+      _renameType(union, old);
+      if (identical(_types[name], union)) _types.remove(name);
+      _types[old] = union;
+      _warnings.add(
+        'Naming conflict: union $name is generated as $old, since another '
+        'type is named $name.',
+      );
+    }
+    _hintedUnions.removeWhere((union, old) => union.name == old);
+  }
+
+  /// The final name of every declared type and union arm.
+  Set<String> _typeAndArmNames() {
+    final names = <String>{};
+    void addUnion(SealedClassType union) {
+      names.add(union.name);
+      for (final v in union.variants) {
+        names.add(v.className);
+        if (v.embeddedUnion case final embedded?) addUnion(embedded);
+      }
+    }
+
+    for (final type in _types.values) {
+      if (type is SealedClassType) {
+        addUnion(type);
+      } else if (_isDeclared(type)) {
+        names.add(_displayName(type));
+      }
+    }
+    return names;
   }
 
   ResolvedType _resolveType(

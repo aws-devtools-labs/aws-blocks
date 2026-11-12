@@ -3,8 +3,8 @@ import BlocksRuntime
 
 
 public nonisolated enum AuthenticatedUserGroups: String, Codable, Sendable {
-    case admins
     case users
+    case admins
 }
 
 public nonisolated enum AuthenticatedUserSignInProvider: String, Codable, Sendable {

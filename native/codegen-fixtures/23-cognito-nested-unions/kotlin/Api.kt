@@ -40,6 +40,12 @@ public class Api(
     @JsonClassDiscriminator("status")
     public sealed class Result {
       @Serializable
+      @SerialName("signedIn")
+      public data class SignedIn(
+        public val user: AuthenticatedUser,
+      ) : Result()
+
+      @Serializable
       @SerialName("continueSignIn")
       public data class ContinueSignIn(
         public val nextStep: ContinueSignIn.NextStep,
@@ -177,12 +183,6 @@ public class Api(
           ) : NextStep()
         }
       }
-
-      @Serializable
-      @SerialName("signedIn")
-      public data class SignedIn(
-        public val user: AuthenticatedUser,
-      ) : Result()
     }
   }
 
@@ -191,6 +191,12 @@ public class Api(
     @JsonClassDiscriminator("status")
     public sealed class Result {
       @Serializable
+      @SerialName("signedIn")
+      public data class SignedIn(
+        public val user: AuthenticatedUser,
+      ) : Result()
+
+      @Serializable
       @SerialName("continueSignIn")
       public data class ContinueSignIn(
         public val nextStep: ContinueSignIn.NextStep,
@@ -328,12 +334,6 @@ public class Api(
           ) : NextStep()
         }
       }
-
-      @Serializable
-      @SerialName("signedIn")
-      public data class SignedIn(
-        public val user: AuthenticatedUser,
-      ) : Result()
     }
   }
 }

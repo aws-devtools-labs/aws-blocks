@@ -64,8 +64,8 @@ class CodeDeliveryDetails {
 
 
 enum AuthenticatedUserGroups {
-  admins,
-  users
+  users,
+  admins
 ;
 
   String toJson() => name;
@@ -1423,45 +1423,11 @@ sealed class CognitoConfirmSignInResult {
   Map<String, dynamic> toJson();
   static CognitoConfirmSignInResult fromJson(Map<String, dynamic> json) {
     switch (json['status'] as String) {
-      case 'continueSignIn': return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       case 'signedIn': return SignedInCognitoConfirmSignInResult.fromJson(json);
+      case 'continueSignIn': return ContinueSignInCognitoConfirmSignInResult.fromJson(json);
       default: throw ArgumentError('Unknown status: ${json['status']}');
     }
   }
-}
-
-class ContinueSignInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
-  final ContinueSignInCognitoConfirmSignInResultNextStep nextStep;
-
-  const ContinueSignInCognitoConfirmSignInResult({
-    required this.nextStep,
-  });
-
-  factory ContinueSignInCognitoConfirmSignInResult.fromJson(Map<String, dynamic> json) {
-    return ContinueSignInCognitoConfirmSignInResult(
-      nextStep: ContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json['nextStep'] as Map<String, dynamic>),
-    );
-  }
-
-  @override
-  Map<String, dynamic> toJson() {
-    return {
-      'status': 'continueSignIn',
-      'nextStep': nextStep.toJson(),
-    };
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ContinueSignInCognitoConfirmSignInResult &&
-          nextStep == other.nextStep;
-
-  @override
-  int get hashCode => nextStep.hashCode;
-
-  @override
-  String toString() => 'ContinueSignInCognitoConfirmSignInResult(nextStep: $nextStep)';
 }
 
 class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
@@ -1498,30 +1464,16 @@ class SignedInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
   String toString() => 'SignedInCognitoConfirmSignInResult(user: $user)';
 }
 
+class ContinueSignInCognitoConfirmSignInResult extends CognitoConfirmSignInResult {
+  final ContinueSignInCognitoConfirmSignInResultNextStep nextStep;
 
-
-sealed class CognitoSignInResult {
-  const CognitoSignInResult();
-  Map<String, dynamic> toJson();
-  static CognitoSignInResult fromJson(Map<String, dynamic> json) {
-    switch (json['status'] as String) {
-      case 'continueSignIn': return ContinueSignInCognitoSignInResult.fromJson(json);
-      case 'signedIn': return SignedInCognitoSignInResult.fromJson(json);
-      default: throw ArgumentError('Unknown status: ${json['status']}');
-    }
-  }
-}
-
-class ContinueSignInCognitoSignInResult extends CognitoSignInResult {
-  final ContinueSignInCognitoSignInResultNextStep nextStep;
-
-  const ContinueSignInCognitoSignInResult({
+  const ContinueSignInCognitoConfirmSignInResult({
     required this.nextStep,
   });
 
-  factory ContinueSignInCognitoSignInResult.fromJson(Map<String, dynamic> json) {
-    return ContinueSignInCognitoSignInResult(
-      nextStep: ContinueSignInCognitoSignInResultNextStep.fromJson(json['nextStep'] as Map<String, dynamic>),
+  factory ContinueSignInCognitoConfirmSignInResult.fromJson(Map<String, dynamic> json) {
+    return ContinueSignInCognitoConfirmSignInResult(
+      nextStep: ContinueSignInCognitoConfirmSignInResultNextStep.fromJson(json['nextStep'] as Map<String, dynamic>),
     );
   }
 
@@ -1536,14 +1488,28 @@ class ContinueSignInCognitoSignInResult extends CognitoSignInResult {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      other is ContinueSignInCognitoSignInResult &&
+      other is ContinueSignInCognitoConfirmSignInResult &&
           nextStep == other.nextStep;
 
   @override
   int get hashCode => nextStep.hashCode;
 
   @override
-  String toString() => 'ContinueSignInCognitoSignInResult(nextStep: $nextStep)';
+  String toString() => 'ContinueSignInCognitoConfirmSignInResult(nextStep: $nextStep)';
+}
+
+
+
+sealed class CognitoSignInResult {
+  const CognitoSignInResult();
+  Map<String, dynamic> toJson();
+  static CognitoSignInResult fromJson(Map<String, dynamic> json) {
+    switch (json['status'] as String) {
+      case 'signedIn': return SignedInCognitoSignInResult.fromJson(json);
+      case 'continueSignIn': return ContinueSignInCognitoSignInResult.fromJson(json);
+      default: throw ArgumentError('Unknown status: ${json['status']}');
+    }
+  }
 }
 
 class SignedInCognitoSignInResult extends CognitoSignInResult {
@@ -1578,6 +1544,40 @@ class SignedInCognitoSignInResult extends CognitoSignInResult {
 
   @override
   String toString() => 'SignedInCognitoSignInResult(user: $user)';
+}
+
+class ContinueSignInCognitoSignInResult extends CognitoSignInResult {
+  final ContinueSignInCognitoSignInResultNextStep nextStep;
+
+  const ContinueSignInCognitoSignInResult({
+    required this.nextStep,
+  });
+
+  factory ContinueSignInCognitoSignInResult.fromJson(Map<String, dynamic> json) {
+    return ContinueSignInCognitoSignInResult(
+      nextStep: ContinueSignInCognitoSignInResultNextStep.fromJson(json['nextStep'] as Map<String, dynamic>),
+    );
+  }
+
+  @override
+  Map<String, dynamic> toJson() {
+    return {
+      'status': 'continueSignIn',
+      'nextStep': nextStep.toJson(),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ContinueSignInCognitoSignInResult &&
+          nextStep == other.nextStep;
+
+  @override
+  int get hashCode => nextStep.hashCode;
+
+  @override
+  String toString() => 'ContinueSignInCognitoSignInResult(nextStep: $nextStep)';
 }
 
 

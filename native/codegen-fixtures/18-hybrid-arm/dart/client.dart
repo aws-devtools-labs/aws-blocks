@@ -615,6 +615,9 @@ enum UpdateMfaPreferenceInputEmail {
 }
 
 
+@Deprecated('Use AuthActionInput')
+typedef AuthApiSetAuthStateInput = AuthActionInput;
+
 // --- API Namespaces ---
 
 class AuthState {
@@ -675,10 +678,10 @@ class AuthState {
 }
 
 
-sealed class AuthApiSetAuthStateInput {
-  const AuthApiSetAuthStateInput();
+sealed class AuthActionInput {
+  const AuthActionInput();
   Map<String, dynamic> toJson();
-  static AuthApiSetAuthStateInput fromJson(Map<String, dynamic> json) {
+  static AuthActionInput fromJson(Map<String, dynamic> json) {
     switch (json['action'] as String) {
       case 'signUp': return SignUpInput.fromJson(json);
       case 'resetPassword': return ResetPasswordInput.fromJson(json);
@@ -703,7 +706,7 @@ sealed class AuthApiSetAuthStateInput {
   }
 }
 
-class SignUpInput extends AuthApiSetAuthStateInput {
+class SignUpInput extends AuthActionInput {
   final String username;
   final String password;
   final Map<String, String> additionalProperties;
@@ -752,7 +755,7 @@ class SignUpInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignUpInput(username: $username, password: $password, additionalProperties: $additionalProperties)';
 }
 
-class ResetPasswordInput extends AuthApiSetAuthStateInput {
+class ResetPasswordInput extends AuthActionInput {
   final String username;
 
   const ResetPasswordInput({
@@ -786,7 +789,7 @@ class ResetPasswordInput extends AuthApiSetAuthStateInput {
   String toString() => 'ResetPasswordInput(username: $username)';
 }
 
-class SignInInput extends AuthApiSetAuthStateInput {
+class SignInInput extends AuthActionInput {
   final String username;
   final String password;
 
@@ -825,7 +828,7 @@ class SignInInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignInInput(username: $username, password: $password)';
 }
 
-class SignInWithPasskeyInput extends AuthApiSetAuthStateInput {
+class SignInWithPasskeyInput extends AuthActionInput {
   final String username;
 
   const SignInWithPasskeyInput({
@@ -859,7 +862,7 @@ class SignInWithPasskeyInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignInWithPasskeyInput(username: $username)';
 }
 
-class ConfirmSignUpInput extends AuthApiSetAuthStateInput {
+class ConfirmSignUpInput extends AuthActionInput {
   final String username;
   final String code;
   final String? password;
@@ -903,7 +906,7 @@ class ConfirmSignUpInput extends AuthApiSetAuthStateInput {
   String toString() => 'ConfirmSignUpInput(username: $username, code: $code, password: $password)';
 }
 
-class ResendSignUpCodeInput extends AuthApiSetAuthStateInput {
+class ResendSignUpCodeInput extends AuthActionInput {
   final String username;
 
   const ResendSignUpCodeInput({
@@ -937,7 +940,7 @@ class ResendSignUpCodeInput extends AuthApiSetAuthStateInput {
   String toString() => 'ResendSignUpCodeInput(username: $username)';
 }
 
-class SignOutInput extends AuthApiSetAuthStateInput {
+class SignOutInput extends AuthActionInput {
 
   const SignOutInput();
 
@@ -965,7 +968,7 @@ class SignOutInput extends AuthApiSetAuthStateInput {
   String toString() => 'SignOutInput()';
 }
 
-class ConfirmResetPasswordInput extends AuthApiSetAuthStateInput {
+class ConfirmResetPasswordInput extends AuthActionInput {
   final String username;
   final String code;
   final String newPassword;
@@ -1009,7 +1012,7 @@ class ConfirmResetPasswordInput extends AuthApiSetAuthStateInput {
   String toString() => 'ConfirmResetPasswordInput(username: $username, code: $code, newPassword: $newPassword)';
 }
 
-class AutoSignInInput extends AuthApiSetAuthStateInput {
+class AutoSignInInput extends AuthActionInput {
   final String username;
 
   const AutoSignInInput({
@@ -1045,7 +1048,7 @@ class AutoSignInInput extends AuthApiSetAuthStateInput {
 
 
 
-class ConfirmSignInInput extends AuthApiSetAuthStateInput {
+class ConfirmSignInInput extends AuthActionInput {
   final String session;
   final ConfirmSignInInputChallenge challenge;
 
@@ -1084,7 +1087,7 @@ class ConfirmSignInInput extends AuthApiSetAuthStateInput {
   String toString() => 'ConfirmSignInInput(session: $session, challenge: $challenge)';
 }
 
-class StartPasskeyRegistrationInput extends AuthApiSetAuthStateInput {
+class StartPasskeyRegistrationInput extends AuthActionInput {
 
   const StartPasskeyRegistrationInput();
 
@@ -1112,7 +1115,7 @@ class StartPasskeyRegistrationInput extends AuthApiSetAuthStateInput {
   String toString() => 'StartPasskeyRegistrationInput()';
 }
 
-class CompletePasskeyRegistrationInput extends AuthApiSetAuthStateInput {
+class CompletePasskeyRegistrationInput extends AuthActionInput {
   final String credential;
 
   const CompletePasskeyRegistrationInput({
@@ -1146,7 +1149,7 @@ class CompletePasskeyRegistrationInput extends AuthApiSetAuthStateInput {
   String toString() => 'CompletePasskeyRegistrationInput(credential: $credential)';
 }
 
-class ListPasskeysInput extends AuthApiSetAuthStateInput {
+class ListPasskeysInput extends AuthActionInput {
 
   const ListPasskeysInput();
 
@@ -1174,7 +1177,7 @@ class ListPasskeysInput extends AuthApiSetAuthStateInput {
   String toString() => 'ListPasskeysInput()';
 }
 
-class DeletePasskeyInput extends AuthApiSetAuthStateInput {
+class DeletePasskeyInput extends AuthActionInput {
   final String credentialId;
 
   const DeletePasskeyInput({
@@ -1208,7 +1211,7 @@ class DeletePasskeyInput extends AuthApiSetAuthStateInput {
   String toString() => 'DeletePasskeyInput(credentialId: $credentialId)';
 }
 
-class SetUpTotpInput extends AuthApiSetAuthStateInput {
+class SetUpTotpInput extends AuthActionInput {
 
   const SetUpTotpInput();
 
@@ -1236,7 +1239,7 @@ class SetUpTotpInput extends AuthApiSetAuthStateInput {
   String toString() => 'SetUpTotpInput()';
 }
 
-class VerifyTotpSetupInput extends AuthApiSetAuthStateInput {
+class VerifyTotpSetupInput extends AuthActionInput {
   final String code;
 
   const VerifyTotpSetupInput({
@@ -1270,7 +1273,7 @@ class VerifyTotpSetupInput extends AuthApiSetAuthStateInput {
   String toString() => 'VerifyTotpSetupInput(code: $code)';
 }
 
-class GetMfaPreferenceInput extends AuthApiSetAuthStateInput {
+class GetMfaPreferenceInput extends AuthActionInput {
 
   const GetMfaPreferenceInput();
 
@@ -1298,7 +1301,7 @@ class GetMfaPreferenceInput extends AuthApiSetAuthStateInput {
   String toString() => 'GetMfaPreferenceInput()';
 }
 
-class UpdateMfaPreferenceInput extends AuthApiSetAuthStateInput {
+class UpdateMfaPreferenceInput extends AuthActionInput {
   final UpdateMfaPreferenceInputSms? sms;
   final UpdateMfaPreferenceInputTotp? totp;
   final UpdateMfaPreferenceInputEmail? email;
@@ -1348,7 +1351,7 @@ class AuthApiApi {
   final BlocksClient _client;
   AuthApiApi(this._client);
 
-  Future<AuthState> setAuthState({required AuthApiSetAuthStateInput input}) async {
+  Future<AuthState> setAuthState({required AuthActionInput input}) async {
     final params = <dynamic>[
       input.toJson(),
     ];

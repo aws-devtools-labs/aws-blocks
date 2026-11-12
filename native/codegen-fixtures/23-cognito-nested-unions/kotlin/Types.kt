@@ -20,10 +20,10 @@ public data class AuthenticatedUser(
 ) {
   @Serializable
   public enum class Groups {
-    @SerialName("admins")
-    Admins,
     @SerialName("users")
     Users,
+    @SerialName("admins")
+    Admins,
   }
 
   @Serializable

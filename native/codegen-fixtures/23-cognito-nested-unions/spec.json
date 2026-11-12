@@ -33,6 +33,24 @@
                 "status": {
                   "type": "string",
                   "enum": [
+                    "signedIn"
+                  ]
+                },
+                "user": {
+                  "$ref": "#/components/schemas/AuthenticatedUser"
+                }
+              },
+              "required": [
+                "status",
+                "user"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
                     "continueSignIn"
                   ]
                 },
@@ -390,26 +408,9 @@
                 "status",
                 "nextStep"
               ]
-            },
-            {
-              "type": "object",
-              "properties": {
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "signedIn"
-                  ]
-                },
-                "user": {
-                  "$ref": "#/components/schemas/AuthenticatedUser"
-                }
-              },
-              "required": [
-                "status",
-                "user"
-              ]
             }
-          ]
+          ],
+          "x-blocks-type-name": "SignInResult"
         }
       }
     },
@@ -441,6 +442,24 @@
                 "status": {
                   "type": "string",
                   "enum": [
+                    "signedIn"
+                  ]
+                },
+                "user": {
+                  "$ref": "#/components/schemas/AuthenticatedUser"
+                }
+              },
+              "required": [
+                "status",
+                "user"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": [
                     "continueSignIn"
                   ]
                 },
@@ -798,26 +817,9 @@
                 "status",
                 "nextStep"
               ]
-            },
-            {
-              "type": "object",
-              "properties": {
-                "status": {
-                  "type": "string",
-                  "enum": [
-                    "signedIn"
-                  ]
-                },
-                "user": {
-                  "$ref": "#/components/schemas/AuthenticatedUser"
-                }
-              },
-              "required": [
-                "status",
-                "user"
-              ]
             }
-          ]
+          ],
+          "x-blocks-type-name": "SignInResult"
         }
       }
     }
@@ -859,8 +861,8 @@
             "items": {
               "type": "string",
               "enum": [
-                "admins",
-                "users"
+                "users",
+                "admins"
               ]
             }
           },

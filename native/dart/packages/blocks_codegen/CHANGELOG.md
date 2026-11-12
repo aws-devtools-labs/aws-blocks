@@ -55,6 +55,14 @@
   `OidcProvider` is a generation error, as for every other public
   `blocks_runtime` type, because the generated library imports the runtime
   wholesale and the name would be ambiguous.
+- **Breaking:** the input of every `Auth` namespace's `setAuthState` is now
+  the class `AuthActionInput`, named after the spec's `x-blocks-type-name`.
+  It used to be named after the first `Auth` namespace in the spec
+  (`AuthBasicApiSetAuthStateInput`), so adding or renaming an `Auth` block
+  renamed it. The old name stays as a deprecated typedef of
+  `AuthActionInput`, so existing code compiles with a deprecation warning.
+  Any parameter union the spec names this way takes the name, unless another
+  generated type already has it.
 
 ## 0.2.0
 

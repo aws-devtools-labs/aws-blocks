@@ -43,9 +43,14 @@ final class HybridArmTests: XCTestCase {
         let rpcModel = try OpenRPCParser().parse(data: data)
         let codegenModel = CodegenModelBuilder().build(from: rpcModel)
 
-        // Find the input union in the operation's nested types or param type.
+        // The input is the shared `AuthActionInput` (the spec names it with `x-blocks-type-name`), declared once
+        // at the top level of Models.swift.
         let operation = codegenModel.apiNamespaces.flatMap { $0.operations }.first { $0.name == "setAuthState" }!
-        let inputType = operation.parameters.first?.type
+        guard case .typeReference("AuthActionInput") = operation.parameters.first?.type else {
+            XCTFail("setAuthState input should be the shared AuthActionInput")
+            return
+        }
+        let inputType = codegenModel.sharedTypes.first { $0.name == "AuthActionInput" }?.type
         guard case .union(_, let variants, _) = inputType else {
             XCTFail("Top-level setAuthState input is not a union")
             return
