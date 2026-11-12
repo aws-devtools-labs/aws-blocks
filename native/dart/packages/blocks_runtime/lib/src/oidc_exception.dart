@@ -40,9 +40,13 @@ class OidcRequestException extends OidcException {
 
   /// The error name the server sent in its JSON body (`{"name": …}`), such
   /// as `SignOutIncompleteException`, or null when it sent none.
-  final String? name;
+  final String? errorName;
 
-  OidcRequestException(super.message, {required this.statusCode, this.name});
+  OidcRequestException(
+    super.message, {
+    required this.statusCode,
+    this.errorName,
+  });
 }
 
 /// The user dismissed / cancelled the sign-in flow.
