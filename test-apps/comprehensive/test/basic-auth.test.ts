@@ -4,6 +4,8 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert';
 import { readFileSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { AuthErrors, isAuthError } from '@aws-blocks/bb-auth';
 import type { api as apiType } from 'aws-blocks';
 import { codePoller, type PollForCodeOptions } from './poll-for-code.js';
@@ -40,17 +42,46 @@ interface RpcResponse {
 /**
  * One raw JSON-RPC call with an optional MANUAL `Cookie` header, returning the
  * JSON-RPC body and any `Set-Cookie` headers. Bypasses the shared cookie jar so
- * a captured session cookie can be replayed verbatim (the auth-cookie-attrs
- * technique).
+ * a captured session cookie can be replayed verbatim.
+ *
+ * Sent over `node:http(s)`, not the global `fetch`: `installCookieJar()` wraps
+ * that `fetch`, and the wrapper overwrites the request's `Cookie` header with
+ * the jar's cookies whenever the jar holds any, and stores every response's
+ * `Set-Cookie`. Through it, a test whose shared client is signed in would send
+ * the jar's session instead of the cookie passed here.
  */
-async function rpcRaw(baseUrl: string, method: string, args: unknown[], cookie?: string): Promise<RpcResponse> {
-  const resp = await fetch(`${baseUrl}/aws-blocks/api`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(cookie ? { Cookie: cookie } : {}) },
-    body: JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 }),
+function rpcRaw(baseUrl: string, method: string, args: unknown[], cookie?: string): Promise<RpcResponse> {
+  const url = new URL('/aws-blocks/api', baseUrl);
+  const payload = JSON.stringify({ jsonrpc: '2.0', method: `api.${method}`, params: args, id: 1 });
+  const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+  return new Promise((resolve, reject) => {
+    const req = send(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('error', reject);
+        res.on('end', () => {
+          try {
+            const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            resolve({ result: body.result, error: body.error, setCookies: res.headers['set-cookie'] ?? [] });
+          } catch (e) {
+            reject(e);
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end(payload);
   });
-  const body = await resp.json();
-  return { result: body.result, error: body.error, setCookies: resp.headers.getSetCookie?.() ?? [] };
 }
 
 function uniqueUser() {
