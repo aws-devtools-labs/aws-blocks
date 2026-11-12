@@ -45,6 +45,12 @@ emails the codes instead: the hook never runs there and `getLastCode` returns
   `auth.requireRole(context, 'editors')` (see `editorsOnly` / `readersOnly`), a
   custom `department` attribute, and attribute update / verification methods
   (`updateEmail`, `confirmAttribute`, …).
+- **Optional MFA with an authenticator app** — `mfa: { mode: 'optional',
+  types: ['TOTP'] }`. A user who sets one up (the `setUpTotp` and
+  `verifyTotpSetup` actions of `authApi`) is asked for its 6-digit code at
+  sign-in; everyone else signs in with their password alone. Locally,
+  `totpVerification: 'rfc6238'` checks the codes as Cognito does, so a wrong
+  setup key fails in `npm run dev` too.
 - **Session management** — `changePassword`, `listDevices`,
   `forgetCurrentDevice`, `signOutEverywhere`.
 - **Deny by default** — `api` is defined with `auth.protect(scope, 'api', {
