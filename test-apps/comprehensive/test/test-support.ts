@@ -37,9 +37,9 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import type { api as apiType, testSupport as testSupportExport } from 'aws-blocks';
 import { codePoller } from './poll-for-code.js';
+import { testApiUrl } from './api-url.js';
 
 const ENV = process.env.BLOCKS_TEST_ENV || 'local';
 
@@ -138,7 +138,7 @@ export async function callRpc(method: string, params: unknown[]): Promise<{
   result?: unknown;
   error?: { code: number; message: string };
 }> {
-  const { apiUrl } = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
+  const apiUrl = testApiUrl();
   const resp = await fetch(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

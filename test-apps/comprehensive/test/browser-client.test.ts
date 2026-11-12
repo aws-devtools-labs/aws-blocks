@@ -22,22 +22,18 @@
  */
 
 import assert from 'node:assert';
-import { readFileSync } from 'node:fs';
 import { describe, test } from 'node:test';
 import { AuthErrors } from '@aws-blocks/bb-auth';
 import { createAuthClient, type AuthClientEnvironment } from '@aws-blocks/bb-auth/browser-client';
 import { isBlocksError } from '@aws-blocks/core';
+import { testBaseUrl } from './api-url.js';
 
 const SPA = 'http://127.0.0.1:5173';
 const RETURN_PAGE = `${SPA}/return`;
 const BASE = '/aws-blocks/auth/web';
 const stubSkip = process.env.BLOCKS_TEST_ENV === 'production' && 'stub IdP is sandbox-only';
 
-function getBaseUrl(): string {
-  const config = JSON.parse(readFileSync('.blocks-sandbox/config.json', 'utf-8'));
-  const apiUrl: string = config.apiUrl;
-  return apiUrl.replace(/\/aws-blocks\/api$/, '');
-}
+const getBaseUrl = testBaseUrl;
 
 /** Test plumbing: one tab of the frontend. */
 class Page {
