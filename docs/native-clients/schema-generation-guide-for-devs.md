@@ -190,7 +190,7 @@ Both shapes — the map and the derived union — are exported. Customer code th
 
 ### String literal unions in results are open in native clients
 
-A string literal union (`'pending' | 'done'`) emits as a string `enum`. When a method's result can carry it, native clients generate it open: a value they don't know decodes to an unknown case holding the string, rather than failing (see [codegen-design.md](./codegen-design.md#open-enums-values-a-client-doesnt-know)). So adding a value to a result's enum doesn't break shipped clients, though their exhaustive `switch`/`when` falls through to the unknown case for it. Removing or renaming a value is still breaking. Enums only used in parameters stay closed, so native clients can't send a value the server never declared.
+A string literal union (`'pending' | 'done'`) emits as a string `enum`. When a method's result can carry it, native clients generate it open: a value they don't know decodes to an unknown case holding the string, rather than failing (see [codegen-design.md](./codegen-design.md#open-enums-values-a-client-doesnt-know)). So adding a value to a result's enum doesn't break shipped clients, though their exhaustive `switch`/`when` falls through to the unknown case for it. Removing or renaming a value is still breaking. An enum used only in parameters stays closed, so native clients can't build a value the server never declared. An enum used in both a result and a parameter is open in both, so a client can send back a value it received; the server validates it as usual.
 
 ### `Record<K, V>` emits `additionalProperties`
 
