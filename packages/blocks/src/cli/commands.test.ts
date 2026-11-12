@@ -2067,6 +2067,59 @@ await import(${JSON.stringify(pathToFileURL(runnerPath(runner)).href)});
 	});
 });
 
+describe('cdk-blocks dashboard', () => {
+	it('serves the app it is run from, as a long-running child', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dashboard'], { cwd: join(root, 'aws-blocks') });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const [spec] = run.spawned;
+		assert.strictEqual(spec.args[2], runnerPath('dashboard'));
+		assert.deepStrictEqual(runnerOptions(spec, 'dashboard'), { projectRoot: root, argv: [] });
+		// Ctrl-C ends the session, so a zero exit is not a completed operation.
+		assert.strictEqual(spec.longRunning, true);
+		assert.strictEqual(spec.cwd, root);
+	});
+
+	it('passes the port, the browser choice and every allowed origin', async () => {
+		const root = fixtureApp();
+		const argv = ['dashboard', '--port', '4500', '--no-open', '--allow-origin', 'https://a.test', '--allow-origin', 'https://b.test'];
+		const run = await runCli(argv, { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		assert.deepStrictEqual(runnerOptions(run.spawned[0], 'dashboard'), {
+			projectRoot: root,
+			argv: [],
+			port: 4500,
+			open: false,
+			allowOrigins: ['https://a.test', 'https://b.test'],
+		});
+	});
+
+	it('runs doctor as the subcommand, and not as a long-running child', async () => {
+		const root = fixtureApp();
+		const run = await runCli(['dashboard', 'doctor'], { cwd: root });
+		assert.strictEqual(run.code, 0, run.stderr);
+		const [spec] = run.spawned;
+		assert.deepStrictEqual(runnerOptions(spec, 'dashboard'), { projectRoot: root, argv: ['doctor'] });
+		assert.strictEqual(spec.longRunning ?? false, false);
+	});
+
+	it('refuses a port that is not a port, and spawns nothing', async () => {
+		const root = fixtureApp();
+		for (const port of ['abc', '0', '70000']) {
+			const run = await runCli(['dashboard', '--port', port], { cwd: root });
+			assert.strictEqual(run.code, 2, `--port ${port}: ${run.stderr}`);
+			assert.strictEqual(run.spawned.length, 0, `--port ${port}`);
+		}
+	});
+
+	it('says that it prints text, rather than half-answering --output json', async () => {
+		const run = await runCli(['dashboard', '--output', 'json'], { cwd: fixtureApp() });
+		assert.strictEqual(run.code, 2, run.stderr);
+		assert.match(run.stderr, /--output json is not supported for "cdk-blocks dashboard": it prints text only\./);
+		assert.strictEqual(run.spawned.length, 0);
+	});
+});
+
 describe('cdk-blocks dev stop', () => {
 	/** A core whose stopDevServer records the ports it is asked to stop, and finds nothing running. */
 	function stopCore() {

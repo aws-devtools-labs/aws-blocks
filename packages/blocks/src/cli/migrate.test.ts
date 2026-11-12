@@ -658,9 +658,10 @@ describe('cdk-blocks migrate', () => {
 			const current = JSON.parse(readFileSync(join(TEMPLATES_DIR, template, 'package.json'), 'utf-8'));
 			const migrated = readPkg(root);
 			// spec, vendorize, prebuild and test:e2e run no wrapper (bins, or the app's own test), and the
-			// templates have changed them since; migrate leaves them as they are. config is new in the
-			// templates and no released app had it or a wrapper for it, so migrate adds nothing for it.
-			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config'];
+			// templates have changed them since; migrate leaves them as they are. config and dashboard are
+			// new in the templates and no released app had either or a wrapper for them, so migrate adds
+			// nothing for them.
+			const omit = ['spec', 'vendorize', 'prebuild', 'test:e2e', 'config', 'dashboard'];
 			const pick = (scripts: Record<string, string>) =>
 				Object.fromEntries(Object.entries(scripts).filter(([name]) => !omit.includes(name)));
 			const expected = pick(current.scripts);

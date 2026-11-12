@@ -155,6 +155,7 @@ const RENAMED_ALIASES: ReadonlySet<string> = new Set([
 	'cdk-blocks generate client',
 	'cdk-blocks generate spec',
 	'cdk-blocks config',
+	'cdk-blocks dashboard',
 	'cdk-blocks vendorize',
 ]);
 

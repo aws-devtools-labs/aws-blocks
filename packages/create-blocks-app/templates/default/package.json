@@ -16,6 +16,7 @@
     "dev:server": "cdk-blocks dev",
     "dev": "cdk-blocks dev",
     "dev:stop": "cdk-blocks dev stop",
+    "dashboard": "cdk-blocks dashboard",
     "sandbox": "cdk-blocks sandbox",
     "sandbox:deploy": "cdk-blocks sandbox deploy",
     "sandbox:preview": "cdk-blocks sandbox preview",
