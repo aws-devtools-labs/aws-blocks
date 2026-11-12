@@ -12,7 +12,9 @@
 /// For each it signs in through the relay, checks an authenticated RPC,
 /// restores the session on a fresh client that shares the cookie store, signs
 /// out (which returns the stub IdP's logout URL), and checks that `restore()`
-/// is null afterwards.
+/// is null afterwards. Then, on one cookie store shared by both blocks, it
+/// checks that they stay separate: `auth-sso` refuses an `auth-oidc` session,
+/// and signing out of `auth-sso` leaves `auth-oidc` signed in.
 ///
 /// Like oidc_test.dart, it needs a headless IdP: it runs against the local dev
 /// server, and against a deployed backend only with `RUN_OIDC=1`.
@@ -73,8 +75,73 @@ void main() async {
     requireAuth: (blocks) async => (await blocks.api.ssoRequireAuth()).provider,
   );
 
+  await _blocksStaySeparate(
+    rpcUrl: rpcUrl,
+    httpClient: httpClient,
+    launcher: launcher,
+  );
+
   httpClient.close();
   printResults();
+}
+
+Future<void> _blocksStaySeparate({
+  required String rpcUrl,
+  required http.Client httpClient,
+  required HttpRelayLauncher launcher,
+}) async {
+  final session = InMemorySessionStore();
+  final client = BlocksClient(
+    baseUrl: rpcUrl,
+    client: httpClient,
+    sessionStore: session,
+  );
+  final oidc = OidcClient.forAuth(
+    client,
+    providers: const ['google', 'github2'],
+    relayTo: _relayTo,
+  );
+  final sso = OidcClient.forAuth(
+    client,
+    providers: const ['corp'],
+    relayTo: _relayTo,
+    callbackPath: '/aws-blocks/auth/sso/callback',
+    signOutPath: '/aws-blocks/auth/sso/signout',
+  );
+  final blocks = Blocks(baseUrl: rpcUrl, sessionStore: session);
+
+  group('OIDC forAuth: auth-sso refuses an auth-oidc session');
+  try {
+    await oidc.signInRelay('github2', launcher: launcher);
+    await expectErrorNamed(
+      () => blocks.api.ssoRequireAuth(),
+      AuthErrorNames.notAuthenticated,
+      label: 'api.ssoRequireAuth throws with only auth-oidc signed in',
+    );
+    final ssoUser = await blocks.api.ssoGetCurrentUser();
+    check(
+      ssoUser == null,
+      'api.ssoGetCurrentUser is null (got: ${ssoUser?.userId})',
+    );
+  } catch (e) {
+    check(false, 'auth-sso refuses an auth-oidc session threw: $e');
+  }
+
+  group('OIDC forAuth: signing out of auth-sso leaves auth-oidc signed in');
+  try {
+    await sso.signInRelay('corp', launcher: launcher);
+    await sso.signOut();
+    final ssoAfter = await sso.restore();
+    check(ssoAfter == null, 'auth-sso restore() is null after its sign-out');
+    final oidcAfter = await blocks.api.oidcRequireAuth();
+    check(
+      oidcAfter.provider == 'github2',
+      'auth-oidc is still signed in (provider=${oidcAfter.provider})',
+    );
+    await oidc.signOut();
+  } catch (e) {
+    check(false, 'signing out of auth-sso only threw: $e');
+  }
 }
 
 Future<void> _signInRestoreSignOut({
